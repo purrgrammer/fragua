@@ -1,0 +1,21 @@
+{
+  "name": "@swarm/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "swarm execution environments — local, worktree, blocklist, env-leak gate",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@swarm/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

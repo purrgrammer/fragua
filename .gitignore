@@ -1,0 +1,37 @@
+# Reference repos cloned for research — never committed
+/attractor/
+/Archon/
+/pi-mono/
+
+# Swarm runtime state (event logs, worktrees, checkpoints)
+/.swarm/runs/
+/.swarm/worktrees/
+
+# Node / Bun
+node_modules/
+*.tsbuildinfo
+dist/
+build/
+.turbo/
+
+# Editor / OS
+.DS_Store
+.vscode/settings.json
+.idea/
+*.swp
+
+# Logs / test output
+coverage/
+*.log
+.nyc_output/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Temp
+tmp/
+temp/
+*.tmp
