@@ -80,6 +80,23 @@ git clone https://github.com/badlogic/pi-mono.git
 - Every non-trivial change updates a test. If the change is infeasible to test, say so explicitly in the commit body.
 - `git commit --no-verify` is banned. Fix the hook, don't skip it.
 
-## Self-hosting target
+## Self-hosting
 
-Once Phase 3 lands, new features ship via `swarm run workflows/build-feature.dot --input="…"`. Hand-writing code after that point is a regression we track.
+swarm can implement its own new features. To drive a feature change through the harness:
+
+```sh
+# Phase 2 default: real Claude Haiku via ANTHROPIC_API_KEY
+export ANTHROPIC_API_KEY=sk-...
+bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
+  --input="add a local:list_dir tool that lists files in a directory"
+
+# Replay the run afterwards
+bun run packages/cli/bin/swarm.ts replay .swarm/runs/<id>/events.jsonl
+```
+
+Related:
+- `examples/hello.dot` — tiny smoke workflow (greet + verify)
+- `workflows/build-feature.dot` — plan → implement → verify → summarize
+- `.swarm/config.yaml` — per-project defaults + workflow shortcuts
+
+The agent writing code on swarm's behalf has full access to `local:read_file`, `local:write_file`, and `local:bash`. The command blocklist in `.swarm/config.yaml` refuses the most dangerous patterns even in unsafe mode. Everything emitted to `.swarm/runs/<id>/events.jsonl` is an immutable audit trail.

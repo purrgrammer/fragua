@@ -29,6 +29,12 @@ export interface CodergenInput {
   thread_id: string | undefined;
   fidelity: FidelityMode;
   signal: AbortSignal;
+  /** Run id + workflow sha in case the backend emits events itself. */
+  run_id: string;
+  workflow_sha: string;
+  /** Optional sink bridge — backends call this to emit sub-events
+   * (agent.*, llm.*, tool.execution_*) during the node's execution. */
+  emit?: (type: EventType, data: Record<string, unknown>) => Promise<void>;
 }
 
 export interface HandlerContext {
@@ -89,6 +95,18 @@ const codergenHandler: Handler = async (ctx) => {
   const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
   const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
 
+  const emit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
+    const ev: Event = {
+      run_id: ctx.run_id,
+      node_id: ctx.node.id,
+      type,
+      timestamp: ctx.now(),
+      workflow_sha: ctx.workflow_sha,
+      data,
+    };
+    await ctx.sink.append(ev);
+  };
+
   try {
     return await ctx.backend.run({
       node: ctx.node,
@@ -97,6 +115,9 @@ const codergenHandler: Handler = async (ctx) => {
       thread_id,
       fidelity,
       signal: ctx.signal,
+      run_id: ctx.run_id,
+      workflow_sha: ctx.workflow_sha,
+      emit,
     });
   } catch (err) {
     return fail(`codergen crashed: ${err instanceof Error ? err.message : String(err)}`);

@@ -1,0 +1,46 @@
+# swarm project configuration
+#
+# This file is loaded automatically by the CLI when running commands from
+# the repo root. Overrides apply unless --flag provides an explicit value.
+#
+# See docs/SPEC.md for what each field means.
+
+project:
+  name: swarm
+  runs_dir: .swarm/runs
+
+defaults:
+  # Model used for codergen nodes that don't override it. Claude Haiku 4.5
+  # is the cheap-and-fast default; per-node `model="claude-sonnet-4-5"` (or
+  # opus) unlocks heavier reasoning when needed.
+  provider: anthropic
+  model: claude-haiku-4-5
+
+  # Tool permission mode. Phase 2 supports unsafe only. Phase 6 will add
+  # classifier + interactive.
+  permissions: unsafe
+
+# Command blocklist applied even in unsafe mode. Matched as literal substrings
+# against the shell command. Zero-cost safety floor.
+blocklist:
+  - "rm -rf /"
+  - "rm -rf ~"
+  - "rm -rf ."
+  - "rm -rf .."
+  - "sudo "
+  - "curl | sh"
+  - "curl|sh"
+  - "wget | sh"
+  - "wget|sh"
+  - "git push --force origin main"
+  - "git push --force origin master"
+
+# Workflows the user can invoke by name (e.g. `swarm run build-feature`).
+# Values are paths relative to the repo root.
+workflows:
+  hello:         examples/hello.dot
+  build-feature: workflows/build-feature.dot
+
+# Skills / playbooks (Phase 6).
+# skills:
+#   - .swarm/skills/*/SKILL.md

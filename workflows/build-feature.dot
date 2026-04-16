@@ -1,0 +1,77 @@
+// build-feature.dot — swarm builds a feature on its own codebase.
+//
+// This is the critical Phase 3 workflow: it lets swarm implement new features
+// in swarm using swarm. Run:
+//
+//   bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
+//     --input="add local:list_dir tool that lists files in a directory"
+//
+// The workflow stages:
+//   1. explore  — read the repo, identify the target package + tests
+//   2. plan     — produce a concrete change list + test plan
+//   3. implement— edit source + tests to realize the plan
+//   4. verify   — run `bun run ci` and iterate on failures
+//   5. summarize— write a PR-style summary to .swarm/runs/<id>/summary.md
+//
+// Guards: max_retries on implement + verify. Goal gate on verify so the
+// pipeline can't exit without a passing CI run.
+
+digraph build_feature {
+  graph [
+    goal        = "Land a reviewable feature change on swarm. Human merges the diff."
+    label       = "swarm self-hosting: build-feature"
+    default_fidelity = "compact"
+    default_max_retries = 1
+    retry_target = "implement"
+  ]
+
+  start [shape=Mdiamond]
+
+  explore [
+    prompt = "You are a senior engineer working on swarm (a universal AI agent orchestrator).\n\nTask from user: $ARGUMENTS\n\nStep 1 — Explore:\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - Read CLAUDE.md for conventions.\n  - Use local:bash to run `git ls-files | head -40` to understand layout.\n  - Identify which package(s) should change and which tests already cover similar ground.\n  - Output a short summary under 600 words describing what you found."
+    allowed_tools = "local:read_file, local:bash"
+    fidelity = "compact"
+  ]
+
+  plan [
+    depends_on = "explore"
+    prompt = "Based on your exploration ($explore.output), produce a concrete plan as a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Any constraints you want to flag before implementation.\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`. Do not call any tools in this node."
+    fidelity = "compact"
+    model = "claude-sonnet-4-5"
+  ]
+
+  implement [
+    depends_on = "plan"
+    prompt = "Implement the plan ($plan.output). Rules:\n  - Use local:read_file, local:write_file, local:bash (for `git` and `bun`).\n  - Stay inside the package(s) named in the plan.\n  - After editing files, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package.\n  - Fix any TypeScript errors before moving on.\n  - Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan explicitly says to.\n\nWhen finished, output a concise summary of what you changed."
+    allowed_tools = "local:read_file, local:write_file, local:bash"
+    max_retries = 2
+    fidelity = "compact"
+    model = "claude-sonnet-4-5"
+    thread_id = "dev"
+  ]
+
+  verify [
+    depends_on = "implement"
+    prompt = "Run `bun run ci` and report the result. If anything fails, read the error, fix the code with local:write_file, and run again. Max 3 iterations. When green, emit the literal string `CI_GREEN` in your final reply."
+    allowed_tools = "local:read_file, local:write_file, local:bash"
+    max_retries = 2
+    goal_gate = true
+    fidelity = "compact"
+    model = "claude-sonnet-4-5"
+    thread_id = "dev"
+  ]
+
+  summarize [
+    depends_on = "verify"
+    prompt = "Write a PR-style summary of the change to .swarm/runs/${context.graph.run_id}/summary.md. Include:\n  - What changed (bullet list of files + one line each)\n  - Why (cite the user's request: $ARGUMENTS)\n  - Test evidence (from the verify step)\n\nUse local:write_file. Keep it under 400 words."
+    allowed_tools = "local:write_file"
+    fidelity = "truncate"
+  ]
+
+  done [shape=Msquare]
+
+  start -> explore -> plan -> implement -> verify
+  verify -> summarize [condition="outcome=success"]
+  verify -> done [condition="outcome=fail"]
+  summarize -> done
+}

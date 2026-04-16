@@ -17,6 +17,7 @@
         "@mariozechner/pi-ai": "0.67.6",
         "@swarm/core": "workspace:*",
         "@swarm/events": "workspace:*",
+        "@swarm/workspace": "workspace:*",
       },
       "devDependencies": {
         "typescript": "5.7.3",
@@ -38,6 +39,10 @@
       },
       "devDependencies": {
         "typescript": "5.7.3",
+      },
+      "peerDependencies": {
+        "@mariozechner/pi-agent-core": "0.67.6",
+        "@mariozechner/pi-ai": "0.67.6",
       },
     },
     "packages/core": {
@@ -66,6 +71,7 @@
       "name": "@swarm/workspace",
       "version": "0.0.0",
       "dependencies": {
+        "@sinclair/typebox": "0.34.41",
         "@swarm/core": "workspace:*",
       },
       "devDependencies": {
