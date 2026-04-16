@@ -32,12 +32,16 @@
     "rules": {
       "recommended": true,
       "style": {
-        "noNonNullAssertion": "warn",
+        "noNonNullAssertion": "off",
         "useImportType": "error",
         "useConst": "error"
       },
+      "complexity": {
+        "useLiteralKeys": "off"
+      },
       "suspicious": {
-        "noExplicitAny": "warn"
+        "noExplicitAny": "warn",
+        "noTemplateCurlyInString": "off"
       },
       "correctness": {
         "noUnusedVariables": "warn",
