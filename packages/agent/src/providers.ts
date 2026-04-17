@@ -28,8 +28,10 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     name: "anthropic",
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     description: "Claude models direct from Anthropic",
-    defaultModel: "claude-haiku-4-5",
-    exampleModels: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
+    // 4.7 is latest (opus tier); haiku tops out at 4-5, sonnet at 4-6.
+    // Override with --model for cheaper runs (e.g. --model claude-haiku-4-5).
+    defaultModel: "claude-opus-4-7",
+    exampleModels: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
   },
   {
     name: "openai",
@@ -49,11 +51,11 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     name: "openrouter",
     envVars: ["OPENROUTER_API_KEY"],
     description: "OpenRouter gateway — one key for 300+ models across every major provider",
-    defaultModel: "anthropic/claude-haiku-4.5",
+    defaultModel: "anthropic/claude-opus-4.7",
     exampleModels: [
-      "anthropic/claude-haiku-4.5",
-      "anthropic/claude-sonnet-4.5",
       "anthropic/claude-opus-4.7",
+      "anthropic/claude-sonnet-4.6",
+      "anthropic/claude-haiku-4.5",
       "google/gemini-2.5-pro",
       "openai/gpt-4o",
     ],
@@ -90,8 +92,8 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     name: "vercel-ai-gateway",
     envVars: ["AI_GATEWAY_API_KEY"],
     description: "Vercel AI Gateway (routes across providers with failover)",
-    defaultModel: "anthropic/claude-haiku-4.5",
-    exampleModels: ["anthropic/claude-haiku-4.5", "openai/gpt-4o"],
+    defaultModel: "anthropic/claude-opus-4.7",
+    exampleModels: ["anthropic/claude-opus-4.7", "openai/gpt-4o"],
   },
   {
     name: "github-copilot",

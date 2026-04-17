@@ -40,7 +40,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.env = opts.env;
     // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded with KnownProvider; we intentionally accept any string so custom/faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
-    this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-haiku-4-5" };
+    this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-4-7" };
     this.systemPrompt = opts.systemPrompt ?? "";
     this.runsDir = opts.runsDir;
     this.steeringPollMs = opts.steeringPollMs ?? 500;

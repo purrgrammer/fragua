@@ -20,7 +20,7 @@ cli
   )
   .option(
     "--model <id>",
-    "Model id (e.g. `claude-haiku-4-5` for anthropic, `anthropic/claude-haiku-4.5` for openrouter). Defaults per provider; see `swarm providers`.",
+    "Model id (e.g. `claude-opus-4-7` for anthropic, `anthropic/claude-opus-4.7` for openrouter). Defaults per provider; see `swarm providers`.",
   )
   .option(
     "--provider <name>",

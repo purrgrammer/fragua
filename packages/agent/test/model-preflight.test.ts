@@ -31,10 +31,10 @@ describe("resolveModelOrNull — pre-flight model resolution", () => {
 describe("defaultModelFor — per-provider default", () => {
   test("returns a valid model id for each known provider", () => {
     const info = getProviderInfo("anthropic");
-    expect(info?.defaultModel).toBe("claude-haiku-4-5");
+    expect(info?.defaultModel).toBe("claude-opus-4-7");
 
     const router = getProviderInfo("openrouter");
-    expect(router?.defaultModel).toBe("anthropic/claude-haiku-4.5");
+    expect(router?.defaultModel).toBe("anthropic/claude-opus-4.7");
 
     // Every provider's defaultModel + every exampleModels entry must resolve
     // in pi-ai. This is the invariant that prevents runaway retry loops when

@@ -34,7 +34,7 @@ export interface RunCommandOptions {
   runsDir?: string;
   /** Use the faux provider (no API calls) — requires scripted responses, rarely useful from CLI. */
   mock?: boolean;
-  /** Override the initial model, e.g. claude-haiku-4-5. */
+  /** Override the initial model, e.g. claude-opus-4-7. */
   model?: string;
   /** Override the provider, e.g. anthropic / openai / google. */
   provider?: string;
@@ -112,7 +112,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   } else {
     const provider = opts.provider ?? "anthropic";
     const info = getProviderInfo(provider);
-    const model = opts.model ?? defaultModelFor(provider) ?? "claude-haiku-4-5";
+    const model = opts.model ?? defaultModelFor(provider) ?? "claude-opus-4-7";
     if (!hasProviderCredentials(provider)) {
       const hint = info
         ? `set one of: ${info.envVars.join(", ")}`
@@ -182,7 +182,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       workflow_sha,
       input: mergedInput,
       provider: opts.provider ?? "anthropic",
-      model: opts.model ?? "claude-haiku-4-5",
+      model: opts.model ?? "claude-opus-4-7",
       mock: opts.mock === true,
       worktree_path: worktree?.worktreePath,
       branch: worktree?.branch,

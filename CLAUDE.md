@@ -93,7 +93,7 @@ bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
 # OpenRouter (one key → 300+ models across every major provider)
 export OPENROUTER_API_KEY=sk-or-...
 bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
-  --provider openrouter --model "anthropic/claude-sonnet-4.5" \
+  --provider openrouter --model "anthropic/claude-opus-4.7" \
   --input="..."
 
 # Any of: openai, google, groq, cerebras, xai, mistral, vercel-ai-gateway,
@@ -145,7 +145,7 @@ Assign models/providers by selector instead of repeating per node:
 
 ```dot
 digraph {
-  model_stylesheet = "[shape=box] { model: claude-haiku-4-5 } .heavy { model: claude-opus-4-7; reasoning_effort: high } #explore { model: claude-sonnet-4-7 }"
+  model_stylesheet = "[shape=box] { model: claude-haiku-4-5 } .heavy { model: claude-opus-4-7; reasoning_effort: high } #explore { model: claude-sonnet-4-6 }"
   ...
 }
 ```
@@ -198,10 +198,10 @@ Examples:
 
 ```sh
 # Direct Anthropic API — bare model id
---provider anthropic --model claude-haiku-4-5
+--provider anthropic --model claude-opus-4-7
 
 # OpenRouter serving Anthropic — namespaced id
---provider openrouter --model anthropic/claude-haiku-4.5
+--provider openrouter --model anthropic/claude-opus-4.7
 
 # OpenRouter serving Google
 --provider openrouter --model google/gemini-2.5-pro
