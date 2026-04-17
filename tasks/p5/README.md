@@ -33,9 +33,9 @@ Update this table after each task merges. `run_id` is printed by `swarm run`;
 | #  | Title                                   | Depends        | Status  | run_id | merged_in |
 |----|-----------------------------------------|----------------|---------|--------|-----------|
 | 01 | @swarm/server scaffold + SSE events     | —              | merged  | 1776427940185-izjn3k | 163a378   |
-| 02 | Server REST: pipelines CRUD             | 01             | merged (variant; POST/DELETE deferred to 04) | 1776441042341-o8z8ac | 35baa10   |
+| 02 | Server REST: pipelines CRUD             | 01             | merged (variant; POST/DELETE launcher still open) | 1776441042341-o8z8ac | 35baa10   |
 | 03 | Server: graph SVG + interview endpoints | 02             | merged (delivered alongside 02) | 1776441042341-o8z8ac | 35baa10   |
-| 04 | `swarm serve` CLI command               | 01             | pending |        |           |
+| 04 | `swarm serve` CLI command               | 01             | merged  | (manual) | b754cba   |
 | 05 | @swarm/web scaffold (Vite/React/Tailwind)| 01            | pending |        |           |
 | 06 | Web: graph view + active-node highlight | 05, 02         | pending |        |           |
 | 07 | Web: event timeline + filter + cost     | 05, 01         | pending |        |           |
