@@ -1,8 +1,8 @@
 // `swarm run <workflow.dot>` — execute a workflow end-to-end.
 
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCodergenBackend } from "@swarm/agent";
 import type { CodergenBackend } from "@swarm/core";
 import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
@@ -119,6 +119,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   }
   console.log("");
 
+  const startedAt = Date.now();
   try {
     const res = await execute({
       graph,
@@ -128,13 +129,29 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       backend,
       initial_context: opts.input !== undefined ? { $ARGUMENTS: opts.input, input: opts.input } : {},
     });
+    const durationMs = Date.now() - startedAt;
+
+    await writeRunSummary({
+      summaryPath: resolve(dirname(eventsPath), "summary.md"),
+      run_id,
+      workflow: absoluteWorkflow,
+      workflow_sha,
+      input: opts.input,
+      provider: opts.provider ?? "anthropic",
+      model: opts.model ?? "claude-haiku-4-5",
+      mock: opts.mock === true,
+      worktree_path: worktree?.worktreePath,
+      branch: worktree?.branch,
+      result: res,
+      durationMs,
+    });
 
     console.log("");
     if (res.outcome.status === "success") {
       console.log(chalk.green(`SUCCESS: ${res.outcome.notes || ""}`));
+      console.log(chalk.dim(`  summary: ${dirname(eventsPath)}/summary.md`));
       return 0;
     }
-    // Summarize failed nodes
     const failures = Object.entries(res.node_outcomes)
       .filter(([, o]) => o.status === "fail")
       .map(([id, o]) => ({ id, reason: o.failure_reason ?? o.notes ?? "" }));
@@ -146,11 +163,83 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
         console.log(chalk.red(`  ${f.id} — ${f.reason.slice(0, 200)}`));
       }
     }
-    console.log(chalk.dim(`\nReplay: bun run packages/cli/bin/swarm.ts replay ${eventsPath}`));
+    console.log(chalk.dim(`\nReplay:  bun run packages/cli/bin/swarm.ts replay ${eventsPath}`));
+    console.log(chalk.dim(`Summary: ${dirname(eventsPath)}/summary.md`));
     return 1;
   } finally {
     await sink.close();
     mockHandle?.dispose();
     if (worktree) await worktree.dispose();
   }
+}
+
+interface SummaryArgs {
+  summaryPath: string;
+  run_id: string;
+  workflow: string;
+  workflow_sha: string;
+  input: string | undefined;
+  provider: string;
+  model: string;
+  mock: boolean;
+  worktree_path: string | undefined;
+  branch: string | undefined;
+  result: Awaited<ReturnType<typeof execute>>;
+  durationMs: number;
+}
+
+async function writeRunSummary(args: SummaryArgs): Promise<void> {
+  const lines: string[] = [];
+  lines.push(`# swarm run ${args.run_id}`);
+  lines.push("");
+  lines.push(`- **status:** \`${args.result.outcome.status}\``);
+  lines.push(`- **duration:** ${(args.durationMs / 1000).toFixed(1)}s`);
+  lines.push(`- **workflow:** ${args.workflow} (sha \`${args.workflow_sha.slice(0, 12)}\`)`);
+  lines.push(`- **provider:** ${args.mock ? "mock (pi-ai faux)" : `${args.provider}/${args.model}`}`);
+  if (args.input !== undefined) lines.push(`- **input:** \`${args.input}\``);
+  if (args.worktree_path !== undefined) {
+    lines.push(`- **worktree:** \`${args.worktree_path}\``);
+    lines.push(`- **branch:** \`${args.branch}\``);
+  }
+  lines.push(`- **nodes completed:** ${args.result.completed_nodes.length}`);
+  lines.push(`- **goal gates satisfied:** ${args.result.goal_gates_satisfied}`);
+  lines.push("");
+
+  if (args.result.outcome.status !== "success" && args.result.outcome.failure_reason) {
+    lines.push(`## Failure reason`);
+    lines.push("");
+    lines.push(`> ${args.result.outcome.failure_reason}`);
+    lines.push("");
+  }
+
+  const failures = Object.entries(args.result.node_outcomes).filter(([, o]) => o.status === "fail");
+  if (failures.length > 0) {
+    lines.push(`## Failed nodes`);
+    lines.push("");
+    for (const [id, o] of failures) {
+      const reason = o.failure_reason ?? o.notes ?? "";
+      lines.push(`- \`${id}\` — ${reason.slice(0, 400)}`);
+    }
+    lines.push("");
+  }
+
+  lines.push(`## Node timeline`);
+  lines.push("");
+  lines.push("| # | node | status | notes |");
+  lines.push("|---|---|---|---|");
+  args.result.completed_nodes.forEach((id, i) => {
+    const o = args.result.node_outcomes[id];
+    const status = o?.status ?? "?";
+    const note = ((o?.failure_reason ?? o?.notes ?? "") as string).replace(/\|/g, "\\|").slice(0, 120);
+    lines.push(`| ${i + 1} | \`${id}\` | ${status} | ${note} |`);
+  });
+  lines.push("");
+
+  lines.push(`## Debugging`);
+  lines.push("");
+  lines.push(`- Events: \`${dirname(args.summaryPath)}/events.jsonl\``);
+  lines.push(`- Replay: \`bun run packages/cli/bin/swarm.ts replay ${dirname(args.summaryPath)}/events.jsonl\``);
+
+  await mkdir(dirname(args.summaryPath), { recursive: true });
+  await writeFile(args.summaryPath, `${lines.join("\n")}\n`, "utf8");
 }

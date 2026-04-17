@@ -2,6 +2,7 @@
 // swarm CLI entry — dispatches subcommands.
 
 import cac from "cac";
+import { listCommand } from "../src/commands/list.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
 import { runCommand } from "../src/commands/run.ts";
@@ -21,6 +22,8 @@ cli
   .option("-v, --verbose", "Stream tool calls + LLM events as they happen (level 2)")
   .option("-q, --quiet", "Suppress per-node progress output (level 0)")
   .option("--allow-env-keys", "Bypass the .env secret scanner (use with caution)")
+  .option("--worktree", "Run in an isolated git worktree (branch swarm/<run-id>)")
+  .option("--keep-worktree", "Keep the worktree after the run for post-mortem (implies --worktree)")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -41,6 +44,8 @@ cli
           ? { verbosity: 0 as const }
           : {}),
       ...(options["allow-env-keys"] === true ? { allowEnvKeys: true } : {}),
+      ...(options["worktree"] === true ? { worktree: true } : {}),
+      ...(options["keep-worktree"] === true ? { keepWorktree: true } : {}),
     });
     process.exit(code);
   });
@@ -60,6 +65,22 @@ cli
 cli.command("providers", "List supported LLM providers and which ones have credentials").action(() => {
   process.exit(providersCommand());
 });
+
+cli
+  .command("list", "List recent runs with outcome + failed nodes")
+  .option("--limit <n>", "How many recent runs to show (default 20)")
+  .option("--runs-dir <path>", "Directory to scan (default .swarm/runs)")
+  .action(async (options: Record<string, unknown>) => {
+    const limitRaw = options["limit"];
+    const runsDirRaw = options["runs-dir"];
+    const code = await listCommand({
+      ...(typeof limitRaw === "string" || typeof limitRaw === "number"
+        ? { limit: Number.parseInt(String(limitRaw), 10) }
+        : {}),
+      ...(typeof runsDirRaw === "string" ? { runsDir: runsDirRaw } : {}),
+    });
+    process.exit(code);
+  });
 
 cli.help();
 cli.version("0.0.0");
