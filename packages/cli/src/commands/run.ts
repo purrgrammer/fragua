@@ -6,9 +6,11 @@ import { dirname, resolve } from "node:path";
 import {
   createPiMockBackend,
   createSubagentTool,
+  defaultModelFor,
   getProviderInfo,
   hasProviderCredentials,
   PiCodergenBackend,
+  resolveModelOrNull,
 } from "@swarm/agent";
 import type { CodergenBackend, Interviewer } from "@swarm/core";
 import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
@@ -109,13 +111,28 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     backend = h.backend;
   } else {
     const provider = opts.provider ?? "anthropic";
-    const model = opts.model ?? "claude-haiku-4-5";
+    const info = getProviderInfo(provider);
+    const model = opts.model ?? defaultModelFor(provider) ?? "claude-haiku-4-5";
     if (!hasProviderCredentials(provider)) {
-      const info = getProviderInfo(provider);
       const hint = info
         ? `set one of: ${info.envVars.join(", ")}`
         : "unknown provider — check spelling or run `swarm providers` to list supported ones";
       console.error(chalk.red(`no credentials found for provider "${provider}" — ${hint}`));
+      return 2;
+    }
+    // Preflight: fail fast if (provider, model) doesn't resolve in pi-ai,
+    // rather than letting every node retry the same unresolvable model.
+    if (resolveModelOrNull(provider, model) === null) {
+      console.error(chalk.red(`model "${provider}/${model}" is not in pi-ai's registry.`));
+      if (info?.exampleModels && info.exampleModels.length > 0) {
+        console.error(chalk.dim(`  valid ${provider} models include:`));
+        for (const m of info.exampleModels) console.error(chalk.dim(`    ${m}`));
+      }
+      console.error(
+        chalk.dim(
+          `  Note: aggregator providers (openrouter / vercel-ai-gateway / bedrock / vertex) use namespaced ids like "anthropic/claude-haiku-4.5". Direct providers (anthropic / openai / google) use bare ids like "claude-haiku-4-5".`,
+        ),
+      );
       return 2;
     }
     backend = new PiCodergenBackend({

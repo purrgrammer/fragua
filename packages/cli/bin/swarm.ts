@@ -18,8 +18,14 @@ cli
     "--input-file <path>",
     "File whose contents become the input (repeatable; each file prefixed with `===== <path> =====`)",
   )
-  .option("--model <id>", "Override the default LLM model")
-  .option("--provider <name>", "Override the default provider")
+  .option(
+    "--model <id>",
+    "Model id (e.g. `claude-haiku-4-5` for anthropic, `anthropic/claude-haiku-4.5` for openrouter). Defaults per provider; see `swarm providers`.",
+  )
+  .option(
+    "--provider <name>",
+    "Inference provider / API endpoint: anthropic | openai | openrouter | google | groq | cerebras | xai | mistral | vercel-ai-gateway | github-copilot | amazon-bedrock | google-vertex",
+  )
   .option("--run-id <id>", "Use a specific run id (default auto-generated)")
   .option("--runs-dir <path>", "Directory for event logs (default .swarm/runs)")
   .option("--cwd <path>", "Working directory for tools")

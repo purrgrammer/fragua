@@ -84,6 +84,10 @@ export interface GraphAttrs {
   default_max_retries?: number;
   retry_target?: string;
   fallback_retry_target?: string;
+  /** Cap how many times a failing goal gate routes back to `retry_target`.
+   * Default 3. Prevents runaway retry loops when the retry target itself
+   * keeps failing for the same reason. */
+  max_goal_gate_retries?: number;
   model_stylesheet?: string;
   thread_id?: string;
   "tool_hooks.pre"?: string;

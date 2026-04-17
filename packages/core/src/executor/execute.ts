@@ -778,6 +778,9 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
 
   let current: Node = findStart(graph);
   let finalOutcome: Outcome = ok({ notes: "pipeline completed" });
+  let goalGateRetries = 0;
+  const maxGoalGateRetries =
+    typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3;
 
   while (true) {
     const result = await runLoop({
@@ -805,14 +808,18 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       const unsat = unsatisfiedGoalGates(graph, node_outcomes);
       if (unsat.length > 0) {
         const retryTarget = graph.attrs.retry_target ?? graph.attrs.fallback_retry_target;
-        if (retryTarget && graph.nodes[retryTarget]) {
+        if (retryTarget && graph.nodes[retryTarget] && goalGateRetries < maxGoalGateRetries) {
+          goalGateRetries++;
           current = graph.nodes[retryTarget]!;
           continue;
         }
+        const exhausted = retryTarget && goalGateRetries >= maxGoalGateRetries;
         finalOutcome = {
           ...result.finalOutcome,
           status: "fail",
-          failure_reason: `goal gate(s) unsatisfied: ${unsat.join(", ")}`,
+          failure_reason: exhausted
+            ? `goal gate(s) unsatisfied after ${maxGoalGateRetries} retries to "${retryTarget}": ${unsat.join(", ")}`
+            : `goal gate(s) unsatisfied: ${unsat.join(", ")}`,
         };
         break;
       }
