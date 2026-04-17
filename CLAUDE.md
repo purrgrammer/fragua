@@ -85,14 +85,35 @@ git clone https://github.com/badlogic/pi-mono.git
 swarm can implement its own new features. To drive a feature change through the harness:
 
 ```sh
-# Phase 2 default: real Claude Haiku via ANTHROPIC_API_KEY
+# Default: Claude Haiku via ANTHROPIC_API_KEY
 export ANTHROPIC_API_KEY=sk-...
 bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
   --input="add a local:list_dir tool that lists files in a directory"
 
+# OpenRouter (one key → 300+ models across every major provider)
+export OPENROUTER_API_KEY=sk-or-...
+bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
+  --provider openrouter --model "anthropic/claude-sonnet-4.5" \
+  --input="..."
+
+# Any of: openai, google, groq, cerebras, xai, mistral, vercel-ai-gateway,
+# github-copilot, amazon-bedrock, google-vertex — see `swarm providers`.
+
 # Replay the run afterwards
 bun run packages/cli/bin/swarm.ts replay .swarm/runs/<id>/events.jsonl
 ```
+
+### Multi-provider
+
+swarm is provider-agnostic via [pi-ai](https://github.com/badlogic/pi-mono). Every provider that ships with pi-ai works out of the box — including cross-provider handoffs mid-session (thinking blocks translated, tool-call IDs normalized automatically).
+
+- List all supported providers and which ones have credentials:
+  ```sh
+  bun run packages/cli/bin/swarm.ts providers
+  ```
+- Override per-run via `--provider <name> --model <id>`.
+- Override per-node inside the workflow: `myNode [provider="openrouter", model="google/gemini-2.5-pro"]`.
+- API keys are picked up from standard env vars automatically (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, etc.). The CLI refuses to run against a provider whose env var is missing and prints the exact variable name you need.
 
 Related:
 - `examples/hello.dot` — tiny smoke workflow (greet + verify)

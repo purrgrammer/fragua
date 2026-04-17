@@ -2,6 +2,7 @@
 // swarm CLI entry — dispatches subcommands.
 
 import cac from "cac";
+import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { validateCommand } from "../src/commands/validate.ts";
@@ -46,6 +47,10 @@ cli
     const code = await replayCommand(eventsPath);
     process.exit(code);
   });
+
+cli.command("providers", "List supported LLM providers and which ones have credentials").action(() => {
+  process.exit(providersCommand());
+});
 
 cli.help();
 cli.version("0.0.0");

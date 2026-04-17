@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createPiMockBackend, PiCodergenBackend } from "@swarm/agent";
+import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCodergenBackend } from "@swarm/agent";
 import type { CodergenBackend } from "@swarm/core";
 import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { JsonlSink } from "@swarm/events";
@@ -48,14 +48,17 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     mockHandle = h;
     backend = h.backend;
   } else {
-    backend = new PiCodergenBackend({
-      registry,
-      env,
-      defaultModel: {
-        provider: opts.provider ?? "anthropic",
-        model: opts.model ?? "claude-haiku-4-5",
-      },
-    });
+    const provider = opts.provider ?? "anthropic";
+    const model = opts.model ?? "claude-haiku-4-5";
+    if (!hasProviderCredentials(provider)) {
+      const info = getProviderInfo(provider);
+      const hint = info
+        ? `set one of: ${info.envVars.join(", ")}`
+        : "unknown provider — check spelling or run `swarm providers` to list supported ones";
+      console.error(chalk.red(`no credentials found for provider "${provider}" — ${hint}`));
+      return 2;
+    }
+    backend = new PiCodergenBackend({ registry, env, defaultModel: { provider, model } });
   }
 
   const sink = new JsonlSink({ filePath: eventsPath });

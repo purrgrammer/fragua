@@ -31,13 +31,14 @@ digraph build_feature {
     prompt = "You are a senior engineer working on swarm (a universal AI agent orchestrator).\n\nTask from user: $ARGUMENTS\n\nStep 1 — Explore:\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - Read CLAUDE.md for conventions.\n  - Use local:bash to run `git ls-files | head -40` to understand layout.\n  - Identify which package(s) should change and which tests already cover similar ground.\n  - Output a short summary under 600 words describing what you found."
     allowed_tools = "local:read_file, local:bash"
     fidelity = "compact"
+    model = "claude-opus-4-7"
   ]
 
   plan [
     depends_on = "explore"
     prompt = "Based on your exploration ($explore.output), produce a concrete plan as a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Any constraints you want to flag before implementation.\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`. Do not call any tools in this node."
     fidelity = "compact"
-    model = "claude-sonnet-4-5"
+    model = "claude-opus-4-7"
   ]
 
   implement [
@@ -46,7 +47,7 @@ digraph build_feature {
     allowed_tools = "local:read_file, local:write_file, local:bash"
     max_retries = 2
     fidelity = "compact"
-    model = "claude-sonnet-4-5"
+    model = "claude-opus-4-7"
     thread_id = "dev"
   ]
 
@@ -57,7 +58,7 @@ digraph build_feature {
     max_retries = 2
     goal_gate = true
     fidelity = "compact"
-    model = "claude-sonnet-4-5"
+    model = "claude-sonnet-4-7"
     thread_id = "dev"
   ]
 
@@ -65,6 +66,7 @@ digraph build_feature {
     depends_on = "verify"
     prompt = "Write a PR-style summary of the change to .swarm/runs/${context.graph.run_id}/summary.md. Include:\n  - What changed (bullet list of files + one line each)\n  - Why (cite the user's request: $ARGUMENTS)\n  - Test evidence (from the verify step)\n\nUse local:write_file. Keep it under 400 words."
     allowed_tools = "local:write_file"
+    model = "claude-sonnet-4-7"
     fidelity = "truncate"
   ]
 
