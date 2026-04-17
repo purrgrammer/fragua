@@ -6,7 +6,7 @@
 import { type EdgeSelection, selectEdge } from "../engine/edge-selection.ts";
 import { resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
 import { applyStylesheet } from "../engine/stylesheet.ts";
-import { type NodeOutput, substitute } from "../engine/substitution.ts";
+import { type NodeOutput, substitute, type SubstitutionArgs } from "../engine/substitution.ts";
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";
@@ -51,6 +51,8 @@ export interface HandlerContext {
   now: () => string;
   random: () => number;
   node_outputs: Map<string, NodeOutput>;
+  /** Positional args / built-in vars for prompt substitution ($ARGUMENTS, $1..$9). */
+  args: SubstitutionArgs;
 }
 
 export type Handler = (ctx: HandlerContext) => Promise<Outcome>;
@@ -134,6 +136,7 @@ const codergenHandler: Handler = async (ctx) => {
   const prompt = substitute(ctx.node.attrs.prompt ?? "", {
     context: ctx.context,
     nodeOutputs: ctx.node_outputs,
+    args: ctx.args,
   });
   const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
   const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
@@ -186,6 +189,7 @@ const loopHandler: Handler = async (ctx) => {
   const basePrompt = substitute(ctx.node.attrs.prompt ?? "", {
     context: ctx.context,
     nodeOutputs: ctx.node_outputs,
+    args: ctx.args,
   });
 
   const accumulatedUpdates: Record<string, ContextValue> = {};
@@ -281,6 +285,7 @@ const waitHumanHandler: Handler = async (ctx) => {
 
   const prompt = substitute(ctx.node.attrs.prompt ?? "(human gate — no prompt set)", {
     context: ctx.context,
+    args: ctx.args,
     nodeOutputs: ctx.node_outputs,
   });
   const idleTimeoutMs = typeof ctx.node.attrs.idle_timeout === "number" ? ctx.node.attrs.idle_timeout : undefined;
@@ -392,6 +397,7 @@ const parallelHandler: Handler = async (ctx) => {
       completed_nodes: [],
       node_outcomes: {},
       retry_counts: {},
+      args: ctx.args,
     });
     // Diff branch context against parent to capture cross-node updates the
     // branch made. Engine-managed and per-branch keys are filtered out.
@@ -561,6 +567,7 @@ interface LoopArgs {
   completed_nodes: string[];
   node_outcomes: Record<string, Outcome>;
   retry_counts: Record<string, number>;
+  args: SubstitutionArgs;
 }
 
 type StopReason = "terminal" | "stop_at" | "no_edge" | "max_steps" | "aborted" | "error";
@@ -637,6 +644,7 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       random: args.random,
       node_outputs: args.node_outputs,
       retry_counts: args.retry_counts,
+      args: args.args,
     });
     lastOutcome = outcome;
 
@@ -735,6 +743,14 @@ export interface ExecuteOptions {
   run_id?: string;
   /** Starting context values. `graph.*` keys are mirrored automatically. */
   initial_context?: Record<string, unknown>;
+  /**
+   * Positional arguments for prompt substitution. Reach any node that uses
+   * `$ARGUMENTS` / `$1..$9` / `$ARTIFACTS_DIR` / etc. This is distinct from
+   * `initial_context`: context keys are read via `${context.<key>}`, while
+   * positional args are read via `$ARGUMENTS`. The CLI's `--input` /
+   * `--input-file` flags flow here.
+   */
+  args?: SubstitutionArgs;
   sink?: EventSink;
   interviewer?: Interviewer;
   backend?: CodergenBackend;
@@ -773,6 +789,7 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const completed_nodes: string[] = [];
   const node_outcomes: Record<string, Outcome> = {};
   const retry_counts: Record<string, number> = {};
+  const substitutionArgs: SubstitutionArgs = opts.args ?? {};
 
   const emit = async (type: EventType, node: Node | undefined, data: Record<string, unknown>): Promise<void> => {
     const ev: Event = {
@@ -816,6 +833,7 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       completed_nodes,
       node_outcomes,
       retry_counts,
+      args: substitutionArgs,
     });
 
     // If we stopped at a terminal Msquare, check goal gates + maybe retry.

@@ -177,7 +177,11 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       sink,
       backend,
       interviewer,
-      initial_context: mergedInput !== undefined ? { $ARGUMENTS: mergedInput, input: mergedInput } : {},
+      // `$ARGUMENTS` is read via prompt substitution's `args` channel, not
+      // the context map. We also mirror into context.input so prompts that
+      // read `${context.input}` continue to work.
+      ...(mergedInput !== undefined ? { args: { $ARGUMENTS: mergedInput } } : {}),
+      initial_context: mergedInput !== undefined ? { input: mergedInput } : {},
     });
     const durationMs = Date.now() - startedAt;
 

@@ -85,8 +85,15 @@ function formatEvent(event: Event, level: 1 | 2): string | undefined {
     }
     case "node.failed":
       return `✗ ${tag} FAILED — ${String(data["reason"] ?? "")}`;
-    case "node.retrying":
-      return `↻ ${tag} retry ${String(data["attempt"] ?? "?")}/${String(data["max_retries"] ?? "?")} in ${String(data["delay_ms"] ?? "?")}ms`;
+    case "node.retrying": {
+      // `attempt` counts retries (1 = second try), `max_retries` is the
+      // retry budget. Humans prefer "attempt N/total" over "retry N/M",
+      // so we display the attempt number (attempt + 1) over total tries
+      // (max_retries + 1) instead of the raw retry counters.
+      const attemptNum = typeof data["attempt"] === "number" ? data["attempt"] + 1 : "?";
+      const totalTries = typeof data["max_retries"] === "number" ? data["max_retries"] + 1 : "?";
+      return `↻ ${tag} attempt ${attemptNum}/${totalTries} in ${String(data["delay_ms"] ?? "?")}ms`;
+    }
     case "edge.selected":
       return level >= 2 ? `  → ${String(data["to"] ?? "")}` : undefined;
     case "tool.execution_start":
