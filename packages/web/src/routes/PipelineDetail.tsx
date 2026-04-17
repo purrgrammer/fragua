@@ -113,7 +113,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
       {state.kind !== "error" && (
         <div
           data-testid="conversation-region"
-          className="min-h-[60vh] xl:min-h-[calc(100vh-14rem)] border rounded-md overflow-hidden bg-background"
+          className="h-[60vh] xl:h-[calc(100vh-14rem)] border rounded-md overflow-hidden bg-background"
         >
           <PipelineConversation
             conversation={conversation}
