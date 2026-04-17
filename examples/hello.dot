@@ -11,6 +11,7 @@ digraph hello {
 
   start  [shape=Mdiamond]
   greet  [
+    goal_gate = true
     prompt = "Write a friendly one-line greeting to greeting.txt for $ARGUMENTS. Keep it under 60 characters. Use the local:write_file tool."
     allowed_tools = "local:write_file"
   ]
@@ -18,7 +19,7 @@ digraph hello {
     prompt = "Read greeting.txt with local:read_file and confirm it was written."
     allowed_tools = "local:read_file"
   ]
-  done   [shape=Msquare, goal_gate=true]
+  done   [shape=Msquare]
 
   start -> greet -> verify -> done [condition="outcome=success"]
   greet -> done [condition="outcome=fail"]

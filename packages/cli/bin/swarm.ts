@@ -18,6 +18,8 @@ cli
   .option("--runs-dir <path>", "Directory for event logs (default .swarm/runs)")
   .option("--cwd <path>", "Working directory for tools")
   .option("--mock", "Use the faux LLM provider (no scripted responses → most runs will fail)")
+  .option("-v, --verbose", "Stream tool calls + LLM events as they happen (level 2)")
+  .option("-q, --quiet", "Suppress per-node progress output (level 0)")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -32,6 +34,11 @@ cli
       ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(options["mock"] === true ? { mock: true } : {}),
+      ...(options["verbose"] === true
+        ? { verbosity: 2 as const }
+        : options["quiet"] === true
+          ? { verbosity: 0 as const }
+          : {}),
     });
     process.exit(code);
   });

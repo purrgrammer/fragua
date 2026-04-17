@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCodergenBackend } from "@swarm/agent";
 import type { CodergenBackend } from "@swarm/core";
 import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
-import { JsonlSink } from "@swarm/events";
+import { ConsoleSink, JsonlSink } from "@swarm/events";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 
@@ -23,6 +23,8 @@ export interface RunCommandOptions {
   runId?: string;
   /** Override the working directory. */
   cwd?: string;
+  /** Log detail: 0=quiet, 1=default (node-level), 2=verbose (tool calls + LLM). */
+  verbosity?: 0 | 1 | 2;
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -61,12 +63,14 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     backend = new PiCodergenBackend({ registry, env, defaultModel: { provider, model } });
   }
 
-  const sink = new JsonlSink({ filePath: eventsPath });
+  const jsonl = new JsonlSink({ filePath: eventsPath });
+  const sink = new ConsoleSink({ inner: jsonl, level: opts.verbosity ?? 1 });
 
   console.log(chalk.bold(`swarm run ${absoluteWorkflow}`));
   console.log(chalk.dim(`  run_id: ${run_id}`));
   console.log(chalk.dim(`  events: ${eventsPath}`));
   console.log(chalk.dim(`  sha:    ${workflow_sha.slice(0, 12)}`));
+  console.log("");
 
   try {
     const res = await execute({
@@ -78,13 +82,25 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       initial_context: opts.input !== undefined ? { $ARGUMENTS: opts.input, input: opts.input } : {},
     });
 
-    console.log(
-      chalk[res.outcome.status === "success" ? "green" : "red"](
-        `\n${res.outcome.status.toUpperCase()}: ${res.outcome.notes || res.outcome.failure_reason || ""}`,
-      ),
-    );
-    if (res.outcome.status === "fail") return 1;
-    return 0;
+    console.log("");
+    if (res.outcome.status === "success") {
+      console.log(chalk.green(`SUCCESS: ${res.outcome.notes || ""}`));
+      return 0;
+    }
+    // Summarize failed nodes
+    const failures = Object.entries(res.node_outcomes)
+      .filter(([, o]) => o.status === "fail")
+      .map(([id, o]) => ({ id, reason: o.failure_reason ?? o.notes ?? "" }));
+    const reason = res.outcome.failure_reason ?? res.outcome.notes ?? "unknown failure";
+    console.log(chalk.red(`FAIL: ${reason}`));
+    if (failures.length > 0) {
+      console.log(chalk.red("\nFailed nodes:"));
+      for (const f of failures) {
+        console.log(chalk.red(`  ${f.id} — ${f.reason.slice(0, 200)}`));
+      }
+    }
+    console.log(chalk.dim(`\nReplay: bun run packages/cli/bin/swarm.ts replay ${eventsPath}`));
+    return 1;
   } finally {
     await sink.close();
     mockHandle?.dispose();

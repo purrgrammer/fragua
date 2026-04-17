@@ -38,7 +38,22 @@ export class PiCodergenBackend implements CodergenBackend {
   async run(input: CodergenInput): Promise<Outcome> {
     const provider = input.node.attrs.provider ?? this.defaultModel.provider;
     const modelId = input.node.attrs.model ?? this.defaultModel.model;
-    const model = this.resolveModel(provider, modelId);
+    let model: Model<string> | undefined;
+    try {
+      model = this.resolveModel(provider, modelId);
+    } catch (err) {
+      return fail(`unknown model "${provider}/${modelId}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!model) {
+      return fail(
+        `model "${provider}/${modelId}" is not registered in pi-ai. ` +
+          "Check spelling (OpenRouter uses dotted IDs like `anthropic/claude-opus-4.7`; Anthropic-direct uses hyphens like `claude-opus-4-7`). " +
+          "Run `swarm providers` to list supported providers.",
+      );
+    }
+    if (typeof model.api !== "string" || model.api === "" || model.api === "unknown") {
+      return fail(`model "${provider}/${modelId}" has no valid API binding (api="${String(model.api)}").`);
+    }
 
     const selectOpts: { allow?: string[]; deny?: string[] } = {};
     const allow = input.node.attrs.allowed_tools as string[] | undefined;
