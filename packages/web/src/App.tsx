@@ -1,28 +1,37 @@
-// Top-level layout for the web UI. At task-05 scope this is just a shell
-// with a server-health badge that proves the React app can reach the Hono
-// server through the Vite dev proxy. Subsequent tasks add the pipelines
-// sidebar, graph view, timeline, and drilldown panes.
+// Top-level layout for the web UI. Hosts a persistent header (swarm brand
+// + health badge) and mounts the router for the pipelines list / detail
+// routes. The router is injectable so tests can swap in `createMemoryRouter`.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { type ApiClient, createApiClient } from "./lib/api.ts";
+import { createRoutes } from "./lib/router.tsx";
 
 export type HealthStatus = "loading" | "connected" | "error";
 
 export interface AppProps {
   /** Injectable client so tests can stub `fetch` without touching globals. */
   apiClient?: ApiClient;
+  /**
+   * Injectable router so tests can drive routing with `createMemoryRouter`.
+   * When omitted, we build a browser router from the standard route table.
+   */
+  router?: ReturnType<typeof createBrowserRouter>;
 }
 
-export function App({ apiClient }: AppProps = {}): JSX.Element {
+export function App({ apiClient, router }: AppProps = {}): JSX.Element {
   const [status, setStatus] = useState<HealthStatus>("loading");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Re-create the client inside the effect when none is injected so SSR-
-    // style env swaps (e.g. happy-dom bootstrapping) are honoured.
-    const client = apiClient ?? createApiClient();
-    let cancelled = false;
+  // Stable client reference — avoids re-running the health effect per render
+  // and lets the router share the same client instance.
+  const client = useMemo(() => apiClient ?? createApiClient(), [apiClient]);
 
+  // Build the router once per client. If the caller injects one, prefer it.
+  const activeRouter = useMemo(() => router ?? createBrowserRouter(createRoutes({ api: client })), [router, client]);
+
+  useEffect(() => {
+    let cancelled = false;
     client
       .health()
       .then((res) => {
@@ -35,22 +44,19 @@ export function App({ apiClient }: AppProps = {}): JSX.Element {
         setStatus("error");
         setError(err instanceof Error ? err.message : String(err));
       });
-
     return () => {
       cancelled = true;
     };
-  }, [apiClient]);
+  }, [client]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 p-8 font-sans">
-      <header className="flex items-center justify-between border-b border-slate-200 pb-4 mb-6">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <header className="flex items-center justify-between border-b border-slate-200 px-8 py-4 bg-white">
         <h1 className="text-2xl font-semibold tracking-tight">swarm</h1>
         <HealthBadge status={status} error={error} />
       </header>
-      <main>
-        <p className="text-slate-600 text-sm">
-          Web UI scaffold. Pipelines, graph, and timeline land in follow-up tasks.
-        </p>
+      <main className="p-8">
+        <RouterProvider router={activeRouter} />
       </main>
     </div>
   );
@@ -63,7 +69,6 @@ interface HealthBadgeProps {
 
 function HealthBadge({ status, error }: HealthBadgeProps): JSX.Element {
   const label = status === "loading" ? "connecting…" : status === "connected" ? "connected" : "error";
-  // Colour tokens picked so the badge is legible without extra plugins.
   const tone =
     status === "connected"
       ? "bg-emerald-100 text-emerald-800 border-emerald-300"

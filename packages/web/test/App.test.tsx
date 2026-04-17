@@ -1,7 +1,4 @@
-// Smoke test for the web scaffold: render <App/> with a stubbed ApiClient
-// and assert the health badge transitions from "connecting…" → "connected"
-// on a successful `/health` response. Failure path is a separate test so a
-// regression pinpoints which branch broke.
+// Smoke test for the web scaffold + router mount.
 //
 // Why no `screen` import:
 //   `@testing-library/dom` initializes its global `screen` object at module
@@ -12,12 +9,39 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { createMemoryRouter } from "react-router-dom";
 import { App } from "../src/App.tsx";
-import type { ApiClient } from "../src/lib/api.ts";
+import type { ApiClient, PipelineDetail, PipelineSummary } from "../src/lib/api.ts";
+import { createRoutes } from "../src/lib/router.tsx";
 import { useDom } from "./setup.ts";
 
-function stubClient(impl: ApiClient["health"]): ApiClient {
-  return { health: impl };
+type Overrides = Partial<ApiClient>;
+
+function stubClient(overrides: Overrides = {}): ApiClient {
+  const baseUrl = overrides.baseUrl ?? "/api";
+  const graphUrl = overrides.getPipelineGraphUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/graph.svg`);
+  const eventsUrl = overrides.getPipelineEventsUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/events`);
+  return {
+    baseUrl,
+    health: overrides.health ?? (async () => ({ ok: true })),
+    listPipelines: overrides.listPipelines ?? (async (): Promise<PipelineSummary[]> => []),
+    getPipeline:
+      overrides.getPipeline ??
+      (async (id: string): Promise<PipelineDetail> => ({
+        runId: id,
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "unknown",
+        lastEventSeq: 0,
+        nodes: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      })),
+    getPipelineGraph: overrides.getPipelineGraph ?? (async () => "<svg></svg>"),
+    getPipelineGraphUrl: graphUrl,
+    getPipelineEventsUrl: eventsUrl,
+    pipelineEventsUrl: overrides.pipelineEventsUrl ?? eventsUrl,
+  };
 }
 
 describe("App", () => {
@@ -28,11 +52,10 @@ describe("App", () => {
   });
 
   it("renders the connected badge when /health returns ok", async () => {
-    const client = stubClient(async () => ({ ok: true }));
+    const client = stubClient();
     const { container } = render(<App apiClient={client} />);
     const q = within(container);
 
-    // Immediate loading state is visible until the effect resolves.
     expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("loading");
 
     await waitFor(() => {
@@ -42,8 +65,10 @@ describe("App", () => {
   });
 
   it("renders the error badge when /health rejects", async () => {
-    const client = stubClient(async () => {
-      throw new Error("boom");
+    const client = stubClient({
+      health: async () => {
+        throw new Error("boom");
+      },
     });
     const { container } = render(<App apiClient={client} />);
     const q = within(container);
@@ -53,18 +78,42 @@ describe("App", () => {
     });
     const badge = q.getByTestId("health-badge");
     expect(badge.textContent).toContain("error");
-    // The underlying error message rides along via the title attr for
-    // hover diagnostics; assert it's surfaced so regressions are loud.
     expect(badge.getAttribute("title")).toBe("boom");
   });
 
   it("renders the error badge when /health reports ok:false", async () => {
-    const client = stubClient(async () => ({ ok: false }));
+    const client = stubClient({ health: async () => ({ ok: false }) });
     const { container } = render(<App apiClient={client} />);
     const q = within(container);
 
     await waitFor(() => {
       expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("error");
     });
+  });
+
+  it("renders the pipelines list at the default `/` route", async () => {
+    const client = stubClient({
+      listPipelines: async () => [
+        {
+          runId: "run-1",
+          workflow: "wf",
+          startedAt: "2024-01-01T00:00:00Z",
+          status: "success",
+          eventCount: 10,
+          costUsd: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      ],
+    });
+    // Use an injected MemoryRouter to avoid depending on happy-dom's
+    // default URL ("about:blank") — BrowserRouter resolves to "/blank"
+    // under happy-dom, which doesn't match any of our routes.
+    const router = createMemoryRouter(createRoutes({ api: client }), { initialEntries: ["/"] });
+    const { container } = render(<App apiClient={client} router={router} />);
+    await waitFor(() => {
+      expect(within(container).getByTestId("pipelines-table")).toBeTruthy();
+    });
+    expect(within(container).getByText("run-1")).toBeTruthy();
   });
 });

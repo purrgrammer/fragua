@@ -27,6 +27,7 @@ The current phase and its verification bar live in `docs/PLAN.md`. Do not start 
 - **LLM client:** `@mariozechner/pi-ai`
 - **Logging:** `pino` with `{domain}.{action}_{state}` naming
 - **Property-based tests:** `fast-check`
+- **Web client:** React 18 + Vite 5 + Tailwind 3 + react-router v7, Radix primitives for a11y, lucide-react for icons
 
 ## Commands
 
@@ -52,10 +53,13 @@ bun run swarm replay <events.jsonl>
 │   ├── core/              # pure orchestrator (no I/O)
 │   ├── agent/             # pi-mono wrapper
 │   ├── workspace/         # ExecutionEnvironment adapters
-│   ├── events/            # EventSink adapters
-│   └── cli/               # single-command entry
+│   ├── events/            # EventSink adapters + shared cost accumulator
+│   ├── cli/               # single-command entry (run, serve, replay, …)
+│   ├── server/            # Hono HTTP + SSE (Phase 5)
+│   └── web/               # React + Vite dashboard (Phase 5)
 ├── examples/              # demo workflows
 ├── workflows/             # swarm's own workflows (self-hosting)
+├── scripts/               # one-shot maintenance scripts (e.g. event backfill)
 └── .swarm/runs/           # runtime event logs (gitignored)
 ```
 
@@ -104,11 +108,15 @@ Flags: `--port <n>` (default 3000; `0` picks an ephemeral port for tests),
 triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
 front if exposing beyond localhost.
 
-### Web UI (scaffold)
+### Web UI
 
-The React + Vite client lives in `packages/web/`. At this phase it's a
-scaffold that renders a server-health badge; pipelines, graph view, and
-drilldown land in subsequent tasks.
+The React + Vite client lives in `packages/web/`. Current surface: a
+pipelines list (landing route) and a per-run detail view with a
+Graphviz-wasm graph rendering + active-node highlight. Metrics (cost,
+input/output tokens, duration) are derived server-side from
+`cost.recorded` events and rendered in both the list and the detail
+header. The live event timeline (P5.07) and node drilldown (P5.08) are
+still pending.
 
 ```sh
 # Terminal A — start the HTTP/SSE server
@@ -121,6 +129,24 @@ bun run --filter='@swarm/web' dev
 Open http://localhost:5173 — the header badge flips to **connected** once
 the proxy reaches `/health`. Build a static bundle with
 `bun run --filter='@swarm/web' build` → `packages/web/dist/`.
+
+**Dev proxy configuration.** The Vite dev server proxies `/api/**` to the
+swarm server. The target defaults to `http://localhost:3000`; override
+with `SWARM_SERVER_URL` if the server is on a different port or host:
+
+```sh
+SWARM_SERVER_URL=http://localhost:4000 bun run --filter='@swarm/web' dev
+```
+
+The client code always uses the relative `/api/...` prefix (see
+`packages/web/src/lib/api.ts` — the URL discipline comment there is
+load-bearing). See `packages/web/README.md` for more detail.
+
+**User-facing timestamps and numbers** flow through the locale-aware
+helpers in `packages/web/src/lib/time.ts` (dates, relative "3 min ago")
+and `packages/web/src/lib/format.ts` (USD cost, token counts via
+`Intl.NumberFormat`). Never render a raw ISO string or bare number to
+the user — add a helper there if one is missing.
 
 ### Mid-run steering
 

@@ -1,7 +1,12 @@
-// GET /api/runs/:id/events — Server-Sent Events tail of a run's JSONL.
+// GET /pipelines/:runId/events — Server-Sent Events tail of a run's JSONL.
+//
+// Route lives under `/pipelines/**` (not the earlier `/api/runs/**`) so the
+// web client can reach it through the same `/api` → root Vite proxy used
+// by every other pipeline endpoint. The `runId` path param matches the
+// naming used by sibling routes (`/pipelines/:runId`, `/pipelines/:runId/graph.svg`).
 //
 // Contract:
-//   - Each line of `<runsDir>/<id>/events.jsonl` is emitted as one SSE frame:
+//   - Each line of `<runsDir>/<runId>/events.jsonl` is emitted as one SSE frame:
 //       event: <event.type>
 //       id:    <sequence number, 1-based>
 //       data:  <JSON of the Event>
@@ -22,19 +27,19 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
 export interface EventsRouteOptions {
-  /** Directory containing `<id>/events.jsonl` per run. */
+  /** Directory containing `<runId>/events.jsonl` per run. */
   runsDir: string;
 }
 
 export function eventsRoutes(opts: EventsRouteOptions): Hono {
   const app = new Hono();
 
-  app.get("/api/runs/:id/events", (c) => {
-    const id = c.req.param("id");
-    const filePath = join(opts.runsDir, id, "events.jsonl");
+  app.get("/pipelines/:runId/events", (c) => {
+    const runId = c.req.param("runId");
+    const filePath = join(opts.runsDir, runId, "events.jsonl");
 
     if (!existsSync(filePath)) {
-      return c.json({ error: "run not found", id }, 404);
+      return c.json({ error: "run not found", runId }, 404);
     }
 
     // Parse resume hint. SSE sends Last-Event-ID as a string; we used 1-based

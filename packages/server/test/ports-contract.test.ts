@@ -15,16 +15,31 @@ import {
 
 describe("schemas", () => {
   test("PipelineSummary accepts a minimal row and rejects bad status", () => {
+    // "Minimal" now includes the derived metrics (cost + tokens). They
+    // always accompany the response — the server fills them with zeros
+    // when no `cost.recorded` events were seen. See PipelineSummary's
+    // field comments for the default-0 contract.
     const ok = {
       runId: "r1",
       startedAt: "2024-01-01T00:00:00.000Z",
       status: "running",
       eventCount: 3,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
     };
     expect(Value.Check(PipelineSummary, ok)).toBe(true);
 
     const bad = { ...ok, status: "bogus" };
     expect(Value.Check(PipelineSummary, bad)).toBe(false);
+
+    // durationMs is optional: a 0- or 1-event run has no span to report.
+    const withDuration = { ...ok, durationMs: 1500 };
+    expect(Value.Check(PipelineSummary, withDuration)).toBe(true);
+
+    // Negative metrics are rejected (schema uses `minimum: 0`).
+    const negCost = { ...ok, costUsd: -0.01 };
+    expect(Value.Check(PipelineSummary, negCost)).toBe(false);
   });
 
   test("PipelineDetail validates node states", () => {
@@ -34,11 +49,18 @@ describe("schemas", () => {
       status: "success",
       lastEventSeq: 5,
       nodes: [{ nodeId: "a", state: "completed", lastEventSeq: 5 }],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
     };
     expect(Value.Check(PipelineDetail, detail)).toBe(true);
 
     const badNode = { ...detail, nodes: [{ nodeId: "a", state: "frozen", lastEventSeq: 1 }] };
     expect(Value.Check(PipelineDetail, badNode)).toBe(false);
+
+    // A realistic filled-in detail with metrics also validates.
+    const withMetrics = { ...detail, costUsd: 0.42, inputTokens: 2500, outputTokens: 500, durationMs: 75_000 };
+    expect(Value.Check(PipelineDetail, withMetrics)).toBe(true);
   });
 
   test("NodeState rejects non-integer seq", () => {

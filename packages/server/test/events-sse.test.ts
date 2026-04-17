@@ -1,4 +1,4 @@
-// Integration test for GET /api/runs/:id/events.
+// Integration test for GET /pipelines/:runId/events.
 //
 // Strategy: don't bind to a port — Hono's `app.request()` gives us a Response
 // whose body is the live ReadableStream. We parse SSE frames off it directly,
@@ -95,7 +95,7 @@ function parseFrame(raw: string): Frame | undefined {
   return out;
 }
 
-describe("GET /api/runs/:id/events (SSE)", () => {
+describe("GET /pipelines/:runId/events (SSE)", () => {
   let dir: string;
   let runsDir: string;
   let file: string;
@@ -115,7 +115,7 @@ describe("GET /api/runs/:id/events (SSE)", () => {
     await writeFile(file, line(ev("a")) + line(ev("b")));
     const app = createServer({ runsDir });
 
-    const res = await app.request("/api/runs/r1/events");
+    const res = await app.request("/pipelines/r1/events");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
     expect(res.body).toBeDefined();
@@ -144,7 +144,7 @@ describe("GET /api/runs/:id/events (SSE)", () => {
     await writeFile(file, line(ev("a")) + line(ev("b")) + line(ev("c")));
     const app = createServer({ runsDir });
 
-    const res = await app.request("/api/runs/r1/events", {
+    const res = await app.request("/pipelines/r1/events", {
       headers: { "Last-Event-ID": "2" },
     });
     expect(res.status).toBe(200);
@@ -161,7 +161,7 @@ describe("GET /api/runs/:id/events (SSE)", () => {
 
   test("returns 404 for an unknown run", async () => {
     const app = createServer({ runsDir });
-    const res = await app.request("/api/runs/does-not-exist/events");
+    const res = await app.request("/pipelines/does-not-exist/events");
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("run not found");
@@ -171,7 +171,7 @@ describe("GET /api/runs/:id/events (SSE)", () => {
     await writeFile(file, line(ev("a")));
     const app = createServer({ runsDir });
 
-    const res = await app.request("/api/runs/r1/events");
+    const res = await app.request("/pipelines/r1/events");
     const ac = new AbortController();
     const pending = readFrames(res.body as ReadableStream<Uint8Array>, 1, ac.signal);
     const frames = await withTimeout(pending, 2000);

@@ -48,6 +48,44 @@ describe("execute — linear pipeline", () => {
     expect(counts["node.completed"]).toBe(3);
   });
 
+  test("pipeline.started carries workflow_path and workflow_source when provided", async () => {
+    const source = `
+      digraph {
+        s [shape=Mdiamond]
+        done [shape=Msquare]
+        s -> done
+      }
+    `;
+    const graph = parseDotSource(source);
+    const sink = new InMemorySink();
+    await execute({
+      graph,
+      sink,
+      workflow_path: "workflows/w.dot",
+      workflow_source: source,
+    });
+    const started = sink.snapshot().find((e) => e.type === "pipeline.started");
+    expect(started).toBeDefined();
+    const data = started!.data as { workflow_path?: string; workflow_source?: string };
+    expect(data.workflow_path).toBe("workflows/w.dot");
+    expect(data.workflow_source).toBe(source);
+  });
+
+  test("pipeline.started omits workflow_source when not provided", async () => {
+    const graph = parseDotSource(`
+      digraph {
+        s [shape=Mdiamond]
+        done [shape=Msquare]
+        s -> done
+      }
+    `);
+    const sink = new InMemorySink();
+    await execute({ graph, sink });
+    const started = sink.snapshot().find((e) => e.type === "pipeline.started");
+    expect(started).toBeDefined();
+    expect((started!.data as Record<string, unknown>)["workflow_source"]).toBeUndefined();
+  });
+
   test("context.run_id and graph.* mirrored into context", async () => {
     const graph = parseDotSource(`
       digraph {

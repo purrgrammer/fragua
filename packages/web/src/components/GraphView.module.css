@@ -1,0 +1,53 @@
+/*
+ * Scoped styles for GraphView. Using CSS Modules (not Tailwind @apply)
+ * because the SVG we inject via dangerouslySetInnerHTML needs descendant
+ * selectors keyed on `data-node-id`, which Tailwind's JIT can't generate.
+ */
+
+.container {
+  position: relative;
+  width: 100%;
+  min-height: 320px;
+  overflow: auto;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+
+.inner {
+  /* Anchor for absolutely-positioned overlays (fallback messages, badges). */
+  position: relative;
+  display: inline-block;
+  min-width: 100%;
+  padding: 16px;
+}
+
+/* Inject a default cursor + hover outline on any node the SVG tagged. */
+.inner :global([data-node-id]) {
+  cursor: pointer;
+}
+
+.inner :global([data-node-id]:hover) > :global(*) {
+  filter: brightness(0.95);
+}
+
+.inner :global([data-node-id][data-active="true"]) > :global(*) {
+  /* A subtle ring without replacing whatever stroke the DOT renderer picked. */
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.fallback {
+  padding: 24px;
+  color: #6b7280;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.error {
+  padding: 16px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 4px;
+  font-size: 0.875rem;
+}

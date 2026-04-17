@@ -171,6 +171,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     const res = await execute({
       graph,
       workflow_sha,
+      workflow_path: opts.workflow,
+      workflow_source: source,
       run_id,
       sink,
       backend,

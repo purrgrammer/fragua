@@ -2,6 +2,7 @@
 // Wraps another sink so the JSONL audit trail is always preserved.
 
 import type { Event, EventSink } from "@swarm/core";
+import { accumulateCost, type CostTotals, emptyCostTotals } from "./cost.ts";
 
 type Writer = (line: string) => void;
 
@@ -32,8 +33,14 @@ export class ConsoleSink implements EventSink {
   private readonly write: Writer;
   private readonly level: 0 | 1 | 2;
 
-  /** Accumulated cost summary usable after close(). */
-  readonly totals = { cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 };
+  /**
+   * Accumulated cost summary usable after close(). Shape is kept
+   * backwards-compatible with the pre-extraction implementation — callers
+   * (CLI `run` summary printer) read `totals.cost_usd` etc. The folding
+   * itself is delegated to `accumulateCost` from ./cost.ts so the same
+   * arithmetic is shared with the REST server's `deriveSummary`.
+   */
+  readonly totals: CostTotals = emptyCostTotals();
 
   constructor(opts: ConsoleSinkOptions) {
     this.inner = opts.inner;
@@ -43,17 +50,7 @@ export class ConsoleSink implements EventSink {
 
   async append(event: Event): Promise<void> {
     await this.inner.append(event);
-    if (event.type === "cost.recorded") {
-      const d = event.data as {
-        cost_usd?: number;
-        input_tokens?: number;
-        output_tokens?: number;
-      };
-      this.totals.cost_usd += Number(d.cost_usd ?? 0);
-      this.totals.input_tokens += Number(d.input_tokens ?? 0);
-      this.totals.output_tokens += Number(d.output_tokens ?? 0);
-      this.totals.calls++;
-    }
+    accumulateCost(this.totals, event);
     if (this.level === 0) return;
     const line = formatEvent(event, this.level);
     if (line !== undefined) this.write(line);

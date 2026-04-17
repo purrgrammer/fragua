@@ -719,6 +719,18 @@ export interface ExecuteOptions {
   graph: Graph;
   /** Optional pre-computed SHA of the workflow source. Stored on every event. */
   workflow_sha?: string;
+  /**
+   * Path of the workflow source file (as given, usually relative). Emitted
+   * on `pipeline.started` so downstream tooling can display a human-readable
+   * name without keeping the SHA→path mapping out-of-band.
+   */
+  workflow_path?: string;
+  /**
+   * Raw DOT text of the workflow source. Emitted on `pipeline.started` so
+   * the server can re-render the graph to SVG without needing filesystem
+   * access to `workflow_path`. Omitted from the event when not provided.
+   */
+  workflow_source?: string;
   /** Opaque id for this run. If omitted, a deterministic one is generated. */
   run_id?: string;
   /** Starting context values. `graph.*` keys are mirrored automatically. */
@@ -774,7 +786,10 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
     await sink.append(ev);
   };
 
-  await emit("pipeline.started", undefined, { graph_id: graph.id });
+  const startedData: Record<string, unknown> = { graph_id: graph.id };
+  if (opts.workflow_path) startedData["workflow_path"] = opts.workflow_path;
+  if (opts.workflow_source) startedData["workflow_source"] = opts.workflow_source;
+  await emit("pipeline.started", undefined, startedData);
 
   let current: Node = findStart(graph);
   let finalOutcome: Outcome = ok({ notes: "pipeline completed" });
