@@ -17,6 +17,15 @@ export interface ExecutionEnvironment {
   exists(path: string): Promise<boolean>;
   /** Execute a shell command. Returns stdout/stderr/exit code. */
   exec(command: string, opts?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> }): Promise<ExecResult>;
+  /** List entries in a directory (non-recursive). */
+  listDir(path: string): Promise<DirEntry[]>;
+  /** Glob against env.cwd() (or override via opts.cwd). Returns sorted, cwd-relative paths. */
+  glob(pattern: string, opts?: { cwd?: string }): Promise<string[]>;
+}
+
+export interface DirEntry {
+  name: string;
+  kind: "file" | "directory" | "symlink" | "other";
 }
 
 export interface ExecResult {

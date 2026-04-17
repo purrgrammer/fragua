@@ -7,7 +7,7 @@ import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCoderge
 import type { CodergenBackend } from "@swarm/core";
 import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { ConsoleSink, JsonlSink } from "@swarm/events";
-import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, formatLeaks, LocalEnvironment, scanDotenv, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 
 export interface RunCommandOptions {
@@ -25,6 +25,8 @@ export interface RunCommandOptions {
   cwd?: string;
   /** Log detail: 0=quiet, 1=default (node-level), 2=verbose (tool calls + LLM). */
   verbosity?: 0 | 1 | 2;
+  /** Bypass the .env secret-scanning gate. */
+  allowEnvKeys?: boolean;
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -33,6 +35,22 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const source = await readFile(absoluteWorkflow, "utf8");
   const graph = parseDotSource(source);
   validateOrThrow(graph);
+
+  // Env-leak gate: scan ./.env in the target cwd before giving an agent keys.
+  if (!opts.allowEnvKeys && !opts.mock) {
+    const cwd = opts.cwd ?? process.cwd();
+    const envPath = resolve(cwd, ".env");
+    try {
+      const envContents = await readFile(envPath, "utf8");
+      const leaks = scanDotenv(envContents);
+      if (leaks.length > 0) {
+        console.error(chalk.red(formatLeaks(leaks)));
+        return 3;
+      }
+    } catch {
+      // no .env → nothing to scan
+    }
+  }
 
   const workflow_sha = createHash("sha256").update(source).digest("hex");
   const run_id = opts.runId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

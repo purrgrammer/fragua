@@ -20,6 +20,7 @@ cli
   .option("--mock", "Use the faux LLM provider (no scripted responses → most runs will fail)")
   .option("-v, --verbose", "Stream tool calls + LLM events as they happen (level 2)")
   .option("-q, --quiet", "Suppress per-node progress output (level 0)")
+  .option("--allow-env-keys", "Bypass the .env secret scanner (use with caution)")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -39,6 +40,7 @@ cli
         : options["quiet"] === true
           ? { verbosity: 0 as const }
           : {}),
+      ...(options["allow-env-keys"] === true ? { allowEnvKeys: true } : {}),
     });
     process.exit(code);
   });

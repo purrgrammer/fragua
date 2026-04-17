@@ -1,0 +1,51 @@
+// add-tool.dot — drop in a new @swarm/workspace tool end-to-end.
+//
+// Narrower than build-feature.dot: fixed to editing packages/workspace.
+// Run:
+//   bun run packages/cli/bin/swarm.ts run workflows/add-tool.dot \
+//     --input="add local:touch that creates an empty file"
+
+digraph add_tool {
+  graph [
+    goal        = "Add a new tool to @swarm/workspace with tests, passing CI."
+    label       = "swarm: add-tool"
+    default_fidelity = "compact"
+    default_max_retries = 1
+    retry_target = "implement"
+  ]
+
+  start [shape=Mdiamond]
+
+  inspect [
+    prompt = "We're adding a new tool to @swarm/workspace.\n\nUser request: $ARGUMENTS\n\nRead:\n  - packages/workspace/src/tools.ts (the existing tool definitions)\n  - packages/workspace/src/types.ts (Tool interface + ExecutionEnvironment)\n  - packages/workspace/test/new-tools.test.ts (testing patterns)\n  - packages/workspace/src/index.ts\n\nThen use local:list_dir and local:grep as needed to confirm the target spots. Output under 400 words describing: (1) the exact file+location to add the tool, (2) what ExecutionEnvironment methods it needs (add if missing — note it in your plan), (3) the Attractor-style truncation policy you'll use, and (4) test cases you will add."
+    allowed_tools = "local:read_file, local:list_dir, local:grep, local:glob"
+  ]
+
+  implement [
+    prompt = "Implement the plan from $inspect.output.\n\nRules:\n  - Edit packages/workspace/src/tools.ts with local:edit_file. Include enough surrounding context that old_string is unique.\n  - Add the tool to the CORE_TOOLS array at the bottom of that file.\n  - Add tests to packages/workspace/test/new-tools.test.ts.\n  - Run `bun run --filter='@swarm/workspace' typecheck` after every batch of edits with local:bash.\n  - If the ExecutionEnvironment interface needs a new method, add it in types.ts AND implement it in local-env.ts AND cover it in existing env tests.\n\nDo not edit any file outside packages/workspace.\n\nWhen finished, output a summary of what you changed."
+    allowed_tools = "local:read_file, local:edit_file, local:write_file, local:bash, local:grep, local:glob"
+    max_retries = 2
+    thread_id = "dev"
+  ]
+
+  verify [
+    prompt = "Run `bun test ./packages/workspace` with local:bash. Report results. If anything fails, inspect, fix with local:edit_file, and re-run. When every test passes, emit the literal string `WORKSPACE_GREEN` in your final reply."
+    allowed_tools = "local:read_file, local:edit_file, local:bash"
+    max_retries = 2
+    goal_gate = true
+    thread_id = "dev"
+  ]
+
+  summarize [
+    prompt = "Write a PR-style summary to .swarm/runs/${context.graph.run_id}/summary.md:\n  - Tool added: name + description\n  - Files changed (bullet list)\n  - Why ($ARGUMENTS)\n  - Tests added\n\nUse local:write_file. Under 300 words."
+    allowed_tools = "local:write_file"
+    fidelity = "truncate"
+  ]
+
+  done [shape=Msquare]
+
+  start -> inspect -> implement -> verify
+  verify -> summarize [condition="outcome=success"]
+  verify -> done [condition="outcome=fail"]
+  summarize -> done
+}
