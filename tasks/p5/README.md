@@ -39,11 +39,11 @@ Update this table after each task merges. `run_id` is printed by `swarm run`;
 | 04 | `swarm serve` CLI command                   | 01             | merged  | (manual) | b754cba   |
 | 05 | @swarm/web scaffold (Vite/React/Tailwind)   | 01             | merged  | 1776443702735-gbvwjr | 11aff10   |
 | 06 | Web: graph view + active-node highlight     | 05, 02         | merged (addendum — data-first DOT parse on client — folded into P5.12 commit 1f4bbff) | 1776447451676-vqde47 | 74714a7   |
-| 07 | Web: event timeline + filter + cost         | 05, 01, 12     | pending |        |           |
-| 08 | Web: pipeline conversation (AI Elements)    | 07, 12         | pending (spec rewritten around PipelineConversation; graph demoted to map) |        |           |
+| ~~07~~ | ~~Web: event timeline + filter + cost~~ | — | **dropped** — superseded by P5.08 conversation view | — | — |
+| 08 | Web: pipeline conversation (AI Elements)    | 12             | merged (landed directly on main: reducer f6c750e, conversation 1ef4d89, tool blocks 513ae83) | — | 513ae83 |
 | 09 | CLI Ink TUI (`swarm dashboard`)             | —              | pending |        |           |
 | 10 | `swarm replay` feeds TUI + web              | 09, 06         | pending |        |           |
-| 11 | Visual regression + cost reconciliation     | 06, 07, 08     | pending |        |           |
+| 11 | Visual regression + cost reconciliation     | 06, 08         | pending |        |           |
 | 12 | Adopt Vercel AI Elements across web surface | 06             | merged (Workflow family in; Conversation/Tool/Reasoning components staged for P5.08) | (manual) | 1f4bbff   |
 | 13 | Web: dashboard shell (sidepanel + home)     | 06, 12         | partial (server `/workflows` endpoint + FsWorkflowReader shipped in 1f4bbff; web AppShell/Home/Workflows/Settings still to build) |        |           |
 

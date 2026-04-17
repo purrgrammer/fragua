@@ -15,8 +15,6 @@ per-node "focus" toggle is a nice-to-have and can ship as a flag.
 ## Depends on
 - P5.05 (web scaffold — shipped)
 - P5.06 (pipelines list + detail — shipped)
-- P5.07 (event timeline + filter + cost ticker — timeline stays as the raw
-  firehose/debug view; this task is the AI-native rendering alongside it)
 - P5.12 (AI Elements adoption — the library, paths alias, shadcn/ui, and
   Tailwind 4 setup are in place before this task runs)
 
@@ -89,10 +87,6 @@ per-node "focus" toggle is a nice-to-have and can ship as a flag.
        to that node's section (`document.getElementById(`node-section-${id}`)`).
     4. When the graph panel is collapsed, show a thin "Open map" trigger
        with the run's node-state summary (e.g. `3 completed · 1 running`).
-    5. Keep the `"Timeline arrives in task 07."` placeholder untouched if
-       07 hasn't merged; otherwise replace it with whatever 07 shipped.
-       The raw timeline (P5.07) is a tertiary view — accessible via a
-       small toggle in the header, not rendered by default.
   - `packages/web/src/lib/api.ts` — no API shape change; this task
     consumes the existing `PipelineDetail` + SSE `/pipelines/:id/events`.
 

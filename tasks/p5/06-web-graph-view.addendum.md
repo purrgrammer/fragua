@@ -88,9 +88,9 @@ A prior run added `workflow_path` plumbing. Do not reinvent it:
 
 ## Out of scope for this run (still — don't creep)
 
-- The event timeline (task 07) and drilldown (task 08) remain out of
-  scope. Keep the existing `PipelineDetail.tsx` placeholder comment
-  honest: render GraphView, leave room below, but do not implement 07/08.
+- The pipeline conversation view (task 08) remains out of scope. Keep
+  the existing `PipelineDetail.tsx` placeholder comment honest: render
+  GraphView, leave room below, but do not implement 08.
 - The CLI dashboard (task 09) is a separate track. Do not touch
   `packages/cli/src/commands/dashboard.ts` or invent Ink code here.
 

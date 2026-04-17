@@ -47,8 +47,7 @@ wired.
 ## Out of scope
 
 - Graph view (task 06)
-- Event timeline (task 07)
-- Step drilldown (task 08)
+- Pipeline conversation view (task 08)
 - Routing — stay on a single page for now
 
 ## Reusable patterns

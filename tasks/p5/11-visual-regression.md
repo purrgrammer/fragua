@@ -7,16 +7,14 @@ is the verification gate for the P5 deliverables.
 
 ## Depends on
 - P5.06 (Graph view)
-- P5.07 (Timeline)
-- P5.08 (Drilldown)
+- P5.08 (Pipeline conversation)
 
 ## Scope
 
 - Files to create:
   - `packages/web/playwright.config.ts`
   - `packages/web/e2e/graph-view.spec.ts` — launch a mock pipeline, screenshot, compare baseline
-  - `packages/web/e2e/timeline.spec.ts`
-  - `packages/web/e2e/drilldown.spec.ts`
+  - `packages/web/e2e/conversation.spec.ts`
   - `packages/web/e2e/fixtures/` — reusable mock events + DOT sources
   - `packages/web/e2e/baselines/*.png` — committed screenshot baselines
   - `packages/agent/test/cost-reconciliation.test.ts` — synthetic usage → cost via `calculateCost`, assert match against known Anthropic + OpenAI + OpenRouter prices within 1%
@@ -30,10 +28,9 @@ is the verification gate for the P5 deliverables.
 
 - `graph-view.spec.ts`: fixture pipeline, screenshot matches baseline within
   0.5% pixel difference
-- `timeline.spec.ts`: screenshot after 50 events streamed; filter toggle
-  changes the visible count
-- `drilldown.spec.ts`: click a node, screenshot the conversation with thinking
-  blocks visible
+- `conversation.spec.ts`: screenshot the full pipeline conversation after
+  a mock run streams (assistant messages, reasoning, tool blocks, checkpoints
+  between node sections)
 - `cost-reconciliation.test.ts`:
   - Mock 1M input / 500K output tokens on `claude-haiku-4-5` → expected cost
     matches Anthropic's published price table

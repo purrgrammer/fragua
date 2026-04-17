@@ -81,8 +81,7 @@ data shape is the stable contract.
   console is clean — no request for the retired endpoint.
 
 ## Out of scope
-- Timeline (task 07 — separately uses AI Elements).
-- Node drilldown (task 08 — AI Elements Chatbot family).
+- Pipeline conversation view (task 08 — AI Elements Chatbot family).
 - Steering UI (task 14 — AI Elements human-in-the-loop set).
 - CLI dashboard (task 09 — Ink-based, not AI Elements).
 

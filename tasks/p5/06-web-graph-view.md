@@ -67,7 +67,6 @@ considered — AI Elements is the web surface's UI vocabulary (see P5.12).
 - **Server-rendered SVG** — the server returns JSON only (task 03). Client owns visual layout.
 - **graphviz-wasm in the browser bundle** — not needed; we render from structured data.
 - Drilldown pane (task 08 uses the `selectedNodeId` emitted here).
-- Cost panel / event timeline (task 07).
 - Editable graphs (no DAG mutation UI).
 
 ## Reusable patterns
