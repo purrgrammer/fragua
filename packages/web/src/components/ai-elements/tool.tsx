@@ -7,9 +7,13 @@ import {
   ChevronDownIcon,
   CircleIcon,
   ClockIcon,
+  FilePlusIcon,
+  FileSearchIcon,
   FileTextIcon,
+  FolderIcon,
   type LucideIcon,
   PencilIcon,
+  SearchIcon,
   TerminalIcon,
   WrenchIcon,
   XCircleIcon,
@@ -69,37 +73,70 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
   </Badge>
 );
 
-/** Map a tool name → header icon. Kept small + hard-coded: swarm has a
- * stable core tool set, and reaching for a full icon registry would be
- * overkill. Unknown tools fall back to a generic wrench. */
-function iconForTool(toolName: string | undefined): LucideIcon {
-  if (!toolName) return WrenchIcon;
-  // Accept either swarm's native `local:bash` form or the AI-SDK-style
-  // `tool-local_bash` slug we ship via `toolTypeFromName`.
-  const normalized = toolName.replace(/^tool-/, "").replace(/_/g, ":");
-  switch (normalized) {
-    case "local:bash":
-      return TerminalIcon;
-    case "local:read_file":
-      return FileTextIcon;
-    case "local:write_file":
-      return PencilIcon;
-    case "local:subagent":
-      return BotIcon;
-    default:
-      return WrenchIcon;
+/** Built-in swarm tool registry — header icon + human-readable label,
+ * keyed by canonical `domain:name` (see `packages/workspace/src/tools.ts`).
+ * Unknown tools fall back to a generic wrench and a title-cased slug. */
+interface ToolPresentation {
+  icon: LucideIcon;
+  label: string;
+}
+
+export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
+  "local:bash": { icon: TerminalIcon, label: "Bash" },
+  "local:read_file": { icon: FileTextIcon, label: "Read File" },
+  "local:write_file": { icon: FilePlusIcon, label: "Write File" },
+  "local:edit_file": { icon: PencilIcon, label: "Edit File" },
+  "local:list_dir": { icon: FolderIcon, label: "List Directory" },
+  "local:glob": { icon: FileSearchIcon, label: "Glob" },
+  "local:grep": { icon: SearchIcon, label: "Grep" },
+  "local:subagent": { icon: BotIcon, label: "Subagent" },
+};
+
+/** Resolve a tool name to its registry entry. Accepts either the
+ * canonical `local:bash` form or the AI-SDK slug (`tool-local_bash`)
+ * emitted by `toolTypeFromName`. Only the first underscore is the
+ * domain separator — tool names themselves may contain underscores
+ * (e.g. `read_file`), so a blanket `_`→`:` replace is wrong. */
+function lookupTool(toolName: string | undefined): ToolPresentation | undefined {
+  if (!toolName) return undefined;
+  const direct = TOOL_PRESENTATION[toolName];
+  if (direct) return direct;
+  const stripped = toolName.replace(/^tool-/, "");
+  const sep = stripped.indexOf("_");
+  if (sep !== -1) {
+    const canonical = `${stripped.slice(0, sep)}:${stripped.slice(sep + 1)}`;
+    return TOOL_PRESENTATION[canonical];
   }
+  return undefined;
+}
+
+/** Title-case an unknown tool's name part so `custom:do_thing` renders
+ * as "Do Thing" instead of leaking the raw slug. */
+function humanizeToolName(toolName: string): string {
+  const stripped = toolName.replace(/^tool-/, "");
+  const namePart = stripped.includes(":") ? stripped.split(":").slice(1).join(":") : stripped;
+  return namePart
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
 export const ToolHeader = ({ className, title, type, state, toolName, ...props }: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
-  const Icon = iconForTool(title ?? derivedName);
+  // `title` carries the canonical tool name (e.g. `local:bash`) when the
+  // caller has it; fall back to the derived slug. Look up the registry
+  // for icon + human-readable label, and humanize unknown tools.
+  const raw = title ?? derivedName;
+  const entry = lookupTool(raw);
+  const Icon = entry?.icon ?? WrenchIcon;
+  const label = entry?.label ?? humanizeToolName(raw);
 
   return (
     <CollapsibleTrigger className={cn("flex w-full items-center justify-between gap-4 p-3", className)} {...props}>
       <div className="flex items-center gap-2">
         <Icon className="size-4 text-muted-foreground" />
-        <span className="font-medium text-sm">{title ?? derivedName}</span>
+        <span className="font-medium text-sm">{label}</span>
         {getStatusBadge(state)}
       </div>
       <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />

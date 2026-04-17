@@ -138,8 +138,10 @@ describe("PipelineConversation", () => {
     const { container } = render(<PipelineConversation conversation={conv} />);
     const toolBlock = within(container).getByTestId("tool-call_read");
     expect(toolBlock).toBeTruthy();
-    // Header shows the unmangled name via the `title` prop.
-    expect(toolBlock.textContent ?? "").toContain("local:read_file");
+    // Header shows the human-readable label from the TOOL_PRESENTATION
+    // registry, not the raw `local:read_file` canonical name.
+    expect(toolBlock.textContent ?? "").toContain("Read File");
+    expect(toolBlock.textContent ?? "").not.toContain("local:read_file");
     // And the badge reports "Completed" for output-available.
     expect(toolBlock.textContent ?? "").toContain("Completed");
   });

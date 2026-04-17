@@ -291,10 +291,12 @@ function PartView({ part }: { part: Part }): ReactNode {
     return <MessageResponse>{part.text}</MessageResponse>;
   }
   if (part.type === "tool_call") {
-    const defaultOpen = part.state === "output-available" || part.state === "output-error";
+    // Tools render collapsed by default — the full conversation is already
+    // dense, and expanded tool I/O dwarfs the assistant text around it.
+    // Users can click the header to drill in when they want the details.
     const title = part.toolName || "tool";
     return (
-      <Tool data-testid={`tool-${part.toolCallId || `idx-${part.contentIndex ?? 0}`}`} defaultOpen={defaultOpen}>
+      <Tool data-testid={`tool-${part.toolCallId || `idx-${part.contentIndex ?? 0}`}`}>
         <ToolHeader type={toolTypeFromName(part.toolName || "unknown")} state={part.state} title={title} />
         <ToolContent>
           <ToolInput input={part.input} />
