@@ -27,6 +27,8 @@ import chalk from "chalk";
 export interface RunCommandOptions {
   workflow: string;
   input?: string;
+  /** Files whose contents are concatenated into the input with `===== <path> =====` headers. */
+  inputFiles?: string[];
   runsDir?: string;
   /** Use the faux provider (no API calls) — requires scripted responses, rarely useful from CLI. */
   mock?: boolean;
@@ -55,6 +57,11 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const source = await readFile(absoluteWorkflow, "utf8");
   const graph = parseDotSource(source);
   validateOrThrow(graph);
+
+  // Merge --input with --input-file contents. Raw --input goes first; each file
+  // follows as `===== <path> =====\n<content>` so the model can cite sources.
+  const mergedInput = await buildMergedInput(opts);
+  if (mergedInput === "error") return 1;
 
   // Env-leak gate: scan ./.env in the target cwd before giving an agent keys.
   if (!opts.allowEnvKeys && !opts.mock) {
@@ -147,7 +154,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       sink,
       backend,
       interviewer,
-      initial_context: opts.input !== undefined ? { $ARGUMENTS: opts.input, input: opts.input } : {},
+      initial_context: mergedInput !== undefined ? { $ARGUMENTS: mergedInput, input: mergedInput } : {},
     });
     const durationMs = Date.now() - startedAt;
 
@@ -156,7 +163,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       run_id,
       workflow: absoluteWorkflow,
       workflow_sha,
-      input: opts.input,
+      input: mergedInput,
       provider: opts.provider ?? "anthropic",
       model: opts.model ?? "claude-haiku-4-5",
       mock: opts.mock === true,
@@ -279,4 +286,30 @@ async function writeRunSummary(args: SummaryArgs): Promise<void> {
 
   await mkdir(dirname(args.summaryPath), { recursive: true });
   await writeFile(args.summaryPath, `${lines.join("\n")}\n`, "utf8");
+}
+
+/** Combine --input and --input-file(s). Files are prefixed with `===== <path> =====`
+ * so the model can cite the source. Returns the merged string, `undefined` if both
+ * were empty, or `"error"` if a file failed to load (caller should exit 1). */
+export async function buildMergedInput(opts: RunCommandOptions): Promise<string | undefined | "error"> {
+  const files = opts.inputFiles ?? [];
+  if (opts.input === undefined && files.length === 0) return undefined;
+
+  const parts: string[] = [];
+  if (opts.input !== undefined) parts.push(opts.input);
+
+  const cwd = opts.cwd ?? process.cwd();
+  for (const path of files) {
+    const abs = resolve(cwd, path);
+    try {
+      const body = await readFile(abs, "utf8");
+      parts.push(`===== ${path} =====\n${body}`);
+    } catch (err) {
+      console.error(
+        chalk.red(`--input-file: cannot read "${path}": ${err instanceof Error ? err.message : String(err)}`),
+      );
+      return "error";
+    }
+  }
+  return parts.join("\n\n");
 }

@@ -14,6 +14,10 @@ const cli = cac("swarm");
 cli
   .command("run <workflow>", "Execute a workflow end-to-end")
   .option("--input <text>", "Prompt / argument passed to the pipeline")
+  .option(
+    "--input-file <path>",
+    "File whose contents become the input (repeatable; each file prefixed with `===== <path> =====`)",
+  )
   .option("--model <id>", "Override the default LLM model")
   .option("--provider <name>", "Override the default provider")
   .option("--run-id <id>", "Use a specific run id (default auto-generated)")
@@ -31,9 +35,16 @@ cli
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
+    const pickArray = (key: string): string[] | undefined => {
+      const v = options[key];
+      if (typeof v === "string") return [v];
+      if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+      return undefined;
+    };
     const code = await runCommand({
       workflow,
       ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
+      ...(pickArray("input-file") !== undefined ? { inputFiles: pickArray("input-file")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("run-id") !== undefined ? { runId: pick("run-id")! } : {}),
