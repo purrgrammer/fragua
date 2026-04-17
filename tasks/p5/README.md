@@ -36,7 +36,7 @@ Update this table after each task merges. `run_id` is printed by `swarm run`;
 | 02 | Server REST: pipelines CRUD             | 01             | merged (variant; POST/DELETE launcher still open) | 1776441042341-o8z8ac | 35baa10   |
 | 03 | Server: graph SVG + interview endpoints | 02             | merged (delivered alongside 02) | 1776441042341-o8z8ac | 35baa10   |
 | 04 | `swarm serve` CLI command               | 01             | merged  | (manual) | b754cba   |
-| 05 | @swarm/web scaffold (Vite/React/Tailwind)| 01            | pending |        |           |
+| 05 | @swarm/web scaffold (Vite/React/Tailwind)| 01            | merged  | 1776443702735-gbvwjr | 11aff10   |
 | 06 | Web: graph view + active-node highlight | 05, 02         | pending |        |           |
 | 07 | Web: event timeline + filter + cost     | 05, 01         | pending |        |           |
 | 08 | Web: step drilldown (AI Elements)       | 07             | pending |        |           |
