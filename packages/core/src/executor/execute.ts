@@ -326,8 +326,13 @@ interface RetryInput extends HandlerContext {
   retry_counts: Record<string, number>;
 }
 
+/** Exponential backoff parameters. Overridable via graph/node attrs later. */
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_MAX_MS = 30_000;
+const BACKOFF_FACTOR = 2;
+
 async function runWithRetry(input: RetryInput): Promise<Outcome> {
-  const { handler, node, graph, context, retry_counts } = input;
+  const { handler, node, graph, context, retry_counts, random, signal, sink, run_id, workflow_sha, now } = input;
   const maxRetries = resolveMaxRetries(graph, node);
 
   let attempt = 0;
@@ -348,6 +353,30 @@ async function runWithRetry(input: RetryInput): Promise<Outcome> {
       attempt++;
       retry_counts[node.id] = attempt;
       context[retryCountKey(node.id)] = attempt;
+
+      // Exponential backoff with ±50% jitter. Gives the API room to recover from
+      // 429s / transient network errors without hammering.
+      const base = Math.min(BACKOFF_BASE_MS * BACKOFF_FACTOR ** (attempt - 1), BACKOFF_MAX_MS);
+      const jitter = 1 + (random() - 0.5);
+      const delayMs = Math.max(0, Math.round(base * jitter));
+
+      await sink.append({
+        run_id,
+        type: "node.retrying",
+        timestamp: now(),
+        workflow_sha,
+        node_id: node.id,
+        data: {
+          attempt,
+          max_retries: maxRetries,
+          delay_ms: delayMs,
+          reason: outcome.failure_reason ?? "",
+        },
+      });
+
+      if (delayMs > 0 && !signal.aborted) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
       continue;
     }
     return outcome;

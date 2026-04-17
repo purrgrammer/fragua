@@ -74,6 +74,8 @@ function formatEvent(event: Event, level: 1 | 2): string | undefined {
     }
     case "node.failed":
       return `✗ ${tag} FAILED — ${String(data["reason"] ?? "")}`;
+    case "node.retrying":
+      return `↻ ${tag} retry ${String(data["attempt"] ?? "?")}/${String(data["max_retries"] ?? "?")} in ${String(data["delay_ms"] ?? "?")}ms`;
     case "edge.selected":
       return level >= 2 ? `  → ${String(data["to"] ?? "")}` : undefined;
     case "tool.execution_start":
