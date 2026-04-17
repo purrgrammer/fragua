@@ -204,7 +204,6 @@ Omit `--model` and swarm uses that provider's default (see `swarm providers`). T
 - Goal-gate retries are capped at 3 by default; override with `graph [max_goal_gate_retries = N]` in a workflow.
 
 Related:
-- `examples/hello.dot` — tiny smoke workflow (greet + verify)
 - `workflows/build-feature.dot` — plan → implement_and_review loop → verify → summarize
 - `.swarm/config.yaml` — per-project defaults + workflow shortcuts
 
