@@ -111,12 +111,16 @@ front if exposing beyond localhost.
 ### Web UI
 
 The React + Vite client lives in `packages/web/`. Current surface: a
-pipelines list (landing route) and a per-run detail view with a
-Graphviz-wasm graph rendering + active-node highlight. Metrics (cost,
-input/output tokens, duration) are derived server-side from
-`cost.recorded` events and rendered in both the list and the detail
-header. The live event timeline (P5.07) and node drilldown (P5.08) are
-still pending.
+pipelines list (landing route) and a per-run detail view with a graph
+rendering + active-node highlight. Metrics (cost, input/output tokens,
+duration) are derived server-side from `cost.recorded` events and rendered
+in both the list and the detail header.
+
+The web surface standardizes on **Vercel AI Elements** end-to-end
+(`Workflow` for the graph, Chatbot family for drilldown, human-in-the-loop
+set for steering). The currently-shipped Graphviz-wasm renderer is being
+swapped for AI Elements' `Workflow` in P5.12; the event timeline (P5.07),
+drilldown (P5.08) and dashboard shell (P5.13) are still pending.
 
 ```sh
 # Terminal A — start the HTTP/SSE server

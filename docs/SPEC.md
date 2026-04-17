@@ -374,12 +374,13 @@ Ink-based terminal UI. Top pane: live DOT graph with active node highlighted. Bo
 
 ### 5.4 Web UI (Phase 5)
 
-React + Vite + Tailwind. Uses **Vercel AI Elements** components for:
-- Live conversation rendering (`<Message>`, `<Response>`, `<Reasoning>`, `<ToolCall>`)
-- Per-step drilldown with full conversation log, tool inputs / outputs, cost breakdown
-- Streaming visualization with progressive disclosure
+React + Vite + Tailwind. The web surface standardizes on **Vercel AI Elements** end-to-end:
+- **Graph view** — AI Elements `Workflow` (`Canvas` / `Node` / `Edge` / `Connection` / `Controls` / `Panel` / `Toolbar`) with active-node highlight and clickable nodes
+- **Step drilldown** — AI Elements `Conversation`, `Message`, `Response`, `Reasoning`, `Tool`, `Task`, `Chain of Thought`, `Sources` reconstruct each node's full session (turns, thinking, tool calls, results)
+- **Steering / human-in-the-loop** — AI Elements `Checkpoint`, `Confirmation`, `Suggestion`, `Queue`, `Prompt Input`
+- **Dashboard shell** — persistent sidepanel (Home / Workflows / Pipelines / Settings) + cost panel; streaming visualization with progressive disclosure
 
-Top-level view: DOT graph rendered via `graphviz-wasm` → SVG, nodes clickable. Click drills into that node's full session (all turns, all tool calls, all events) using AI Elements' conversation components.
+The `Graph` data shape (from `@swarm/core`) is the stable contract; the renderer is an AI Elements component and replaceable without touching the data layer.
 
 **Real-time updates** via Server-Sent Events from `@swarm/server` (`GET /api/runs/:id/events`).
 
@@ -437,11 +438,10 @@ Every `AssistantMessage` from pi-ai carries `usage.cost` (input / output / cache
 | `chalk` | Terminal output | 2 |
 | `fast-check` | Property-based fuzz testing | 1 |
 | `cac` | CLI framework | 2 |
-| `graphviz-wasm` | DOT → SVG rendering | 5 |
 | `ink` + `ink-spinner` + `ink-big-text` | TUI | 5 |
 | `hono` + Bun adapter | HTTP server | 5 |
 | `react`, `react-dom`, `vite` | Web UI | 5 |
-| Vercel **AI Elements** | Conversation UI components | 5 |
+| Vercel **AI Elements** | End-to-end web UI vocabulary: `Workflow` graph, Chatbot drilldown, human-in-the-loop steering | 5 |
 | `tailwindcss`, `@shadcn/ui`, `zustand` | Web UI support | 5 |
 | `pg` | Postgres adapter | 6 |
 | `@modelcontextprotocol/sdk` | MCP adapter | 6 |

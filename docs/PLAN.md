@@ -142,10 +142,12 @@ Goal: the UI humans actually use.
 
 **Deliverables:**
 - `@swarm/server`: Hono HTTP + SSE event stream, endpoints per Attractor spec (POST /pipelines, GET /pipelines/:id, cancel, graph SVG, questions, answer)
-- `@swarm/web`: React + Vite + Tailwind + **Vercel AI Elements**
-  - **Graph view**: Graphviz-wasm → SVG with active-node highlight; clickable nodes
-  - **Step drilldown**: AI Elements `<Conversation>`, `<Message>`, `<Response>`, `<Reasoning>`, `<ToolCall>`, `<ToolResult>` to render the full conversation log of the selected node
+- `@swarm/web`: React + Vite + Tailwind + **Vercel AI Elements** (used end-to-end for the web UI)
+  - **Dashboard shell**: persistent sidepanel (Home / Workflows / Pipelines / Settings) + Home surface with running pipelines and overall stats
+  - **Graph view**: AI Elements `Workflow` (`Canvas` / `Node` / `Edge` / `Connection` / `Controls` / `Panel` / `Toolbar`) with active-node highlight; clickable nodes
+  - **Step drilldown**: AI Elements `Conversation`, `Message`, `Response`, `Reasoning`, `Tool`, `Task`, `Chain of Thought` render the full conversation log of the selected node
   - **Live event timeline**: streaming via SSE, filterable by event type
+  - **Steering**: AI Elements `Checkpoint`, `Confirmation`, `Suggestion`, `Queue`, `Prompt Input` for human-in-the-loop operations
   - **Cost panel**: per run / node / model / tool breakdown
 - Ink-based TUI (`swarm dashboard`): live graph ASCII + streaming text + cost ticker
 - `swarm serve [--port=3000]` launches HTTP + web

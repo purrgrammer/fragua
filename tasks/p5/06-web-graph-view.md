@@ -30,15 +30,19 @@ node emits `selectedNodeId` for the drilldown pane (task 08).
   - `packages/web/src/App.tsx` — mount `<GraphView runId=… />` when a run is selected
   - `packages/web/src/styles/globals.css` — highlight styles per node state
 
-## Rendering choice (defer to implementation)
+## Rendering choice
 
-AI Elements ships workflow/task primitives that may fit this use case
-directly; investigate first. If AI Elements doesn't provide a suitable
-graph primitive, fall back to a minimal layout integration (candidates,
-ranked by maintenance burden): `@xyflow/react` (React Flow) ≥ `elkjs` +
-custom SVG ≥ hand-rolled dagre. Whatever is picked, it must consume the
-`Graph` data structure verbatim — the data shape is the stable contract;
-the renderer is replaceable.
+**Vercel AI Elements `Workflow`** (`Canvas` / `Node` / `Edge` / `Connection`
+/ `Controls` / `Panel` / `Toolbar`). The data shape is the stable contract;
+the renderer consumes `Graph` (from `@swarm/core`) + the live
+`PipelineDetail.nodes[]` verbatim. No alternative rendering libs are
+considered — AI Elements is the web surface's UI vocabulary (see P5.12).
+
+> **Status note (2026-04-17):** the initial landing of P5.06 shipped a
+> Graphviz-wasm server-SVG renderer, which is being replaced by the AI
+> Elements `Workflow` family in **P5.12 (AI Elements adoption)**. The data
+> plumbing and component boundary documented below are correct and
+> permanent; the renderer internals move to AI Elements in P5.12.
 
 ## Tests
 

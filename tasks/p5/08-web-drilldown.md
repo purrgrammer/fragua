@@ -1,14 +1,16 @@
-# P5.08 — Web: step drilldown (Vercel AI Elements)
+# P5.08 — Web: step drilldown (AI Elements)
 
 ## Goal
 When the user clicks a node in the graph or a row in the timeline, open a
 detail pane that reconstructs that node's full agent conversation using
-Vercel AI Elements components: `<Conversation>`, `<Message>`, `<Response>`,
-`<Reasoning>`, `<ToolCall>`, `<ToolResult>`. Each turn, thinking block, tool
-call, and tool result is a first-class visual element.
+Vercel **AI Elements** components: `Conversation`, `Message`, `Response`,
+`Reasoning`, `Tool`, `Task`, `Chain of Thought`, `Sources`. Each turn,
+thinking block, tool call, and tool result is a first-class visual element.
 
 ## Depends on
 - P5.07 (Timeline — need the click-to-select wiring)
+- P5.12 (AI Elements adoption — the library is already installed and
+  configured by the time this task runs)
 
 ## Scope
 
@@ -25,7 +27,7 @@ call, and tool result is a first-class visual element.
   - `packages/web/src/components/GraphView.tsx` — expose `onNodeClick(id)`
   - `packages/web/src/components/EventTimeline.tsx` — expose `onEventClick(e)`
 - Dependencies:
-  - Add Vercel AI Elements — most likely via `ai` package or `@vercel/ai-elements` (check current package name at implementation time)
+  - AI Elements (added in P5.12 — no new dependency work here)
 
 ## Tests
 

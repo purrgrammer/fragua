@@ -21,28 +21,31 @@ done
 
 ## Goal of P5
 
-Ship the UI humans actually use: HTTP server with SSE event stream, React web
-UI (Graphviz-wasm SVG + Vercel AI Elements drilldown + cost panel), and an Ink
-TUI. See `docs/PLAN.md` Phase 5 for the full scope.
+Ship the UI humans actually use: HTTP server with SSE event stream, a React
+web UI built on **Vercel AI Elements** end-to-end (Workflow graph, Chatbot
+drilldown, human-in-the-loop steering, cost panel), and an Ink TUI. See
+`docs/PLAN.md` Phase 5 for the full scope.
 
 ## Status table
 
 Update this table after each task merges. `run_id` is printed by `swarm run`;
 `merged_in` is the short SHA of the squash-merge commit to main.
 
-| #  | Title                                   | Depends        | Status  | run_id | merged_in |
-|----|-----------------------------------------|----------------|---------|--------|-----------|
-| 01 | @swarm/server scaffold + SSE events     | —              | merged  | 1776427940185-izjn3k | 163a378   |
-| 02 | Server REST: pipelines CRUD             | 01             | merged (variant; POST/DELETE launcher still open) | 1776441042341-o8z8ac | 35baa10   |
-| 03 | Server: graph SVG + interview endpoints | 02             | merged (delivered alongside 02) | 1776441042341-o8z8ac | 35baa10   |
-| 04 | `swarm serve` CLI command               | 01             | merged  | (manual) | b754cba   |
-| 05 | @swarm/web scaffold (Vite/React/Tailwind)| 01            | merged  | 1776443702735-gbvwjr | 11aff10   |
-| 06 | Web: graph view + active-node highlight | 05, 02         | pending |        |           |
-| 07 | Web: event timeline + filter + cost     | 05, 01         | pending |        |           |
-| 08 | Web: step drilldown (AI Elements)       | 07             | pending |        |           |
-| 09 | CLI Ink TUI (`swarm dashboard`)         | —              | pending |        |           |
-| 10 | `swarm replay` feeds TUI + web          | 09, 06         | pending |        |           |
-| 11 | Visual regression + cost reconciliation | 06, 07, 08     | pending |        |           |
+| #  | Title                                       | Depends        | Status  | run_id | merged_in |
+|----|---------------------------------------------|----------------|---------|--------|-----------|
+| 01 | @swarm/server scaffold + SSE events         | —              | merged  | 1776427940185-izjn3k | 163a378   |
+| 02 | Server REST: pipelines CRUD                 | 01             | merged (variant; POST/DELETE launcher still open) | 1776441042341-o8z8ac | 35baa10   |
+| 03 | Server: graph + interview endpoints         | 02             | merged (delivered alongside 02) | 1776441042341-o8z8ac | 35baa10   |
+| 04 | `swarm serve` CLI command                   | 01             | merged  | (manual) | b754cba   |
+| 05 | @swarm/web scaffold (Vite/React/Tailwind)   | 01             | merged  | 1776443702735-gbvwjr | 11aff10   |
+| 06 | Web: graph view + active-node highlight     | 05, 02         | merged (renderer swaps to AI Elements in P5.12) | 1776447451676-vqde47 | 74714a7   |
+| 07 | Web: event timeline + filter + cost         | 05, 01, 12     | pending |        |           |
+| 08 | Web: step drilldown (AI Elements)           | 07, 12         | pending |        |           |
+| 09 | CLI Ink TUI (`swarm dashboard`)             | —              | pending |        |           |
+| 10 | `swarm replay` feeds TUI + web              | 09, 06         | pending |        |           |
+| 11 | Visual regression + cost reconciliation     | 06, 07, 08     | pending |        |           |
+| 12 | Adopt Vercel AI Elements across web surface | 06             | pending |        |           |
+| 13 | Web: dashboard shell (sidepanel + home)     | 06, 12         | pending |        |           |
 
 ## Task file template
 
@@ -84,9 +87,13 @@ All specs follow the same structure so the `explore` stage of
   so `parseDotSource` runs both server-side and in the browser bundle.
   Tasks that need a `Graph` import it from `@swarm/core` — no DOT parsing
   duplication.
-- **Render libraries are replaceable, data isn't.** If AI Elements ships a
-  workflow primitive that fits, use it. If not, reach for React Flow,
-  elkjs, or plain SVG. None of that leaks into the data layer.
+- **AI Elements is the web UI vocabulary.** The web surface standardizes on
+  Vercel AI Elements end-to-end: `Workflow` for the graph, the Chatbot
+  family (`Conversation` / `Message` / `Reasoning` / `Tool` / `Task` /
+  `Chain of Thought`) for node drilldown, and the human-in-the-loop set
+  (`Checkpoint` / `Confirmation` / `Suggestion` / `Queue` / `Prompt Input`)
+  for steering. No alternative rendering libs are used. None of this leaks
+  into the data layer — the `Graph` and event shapes remain the contract.
 
 ## Reusable patterns
 
