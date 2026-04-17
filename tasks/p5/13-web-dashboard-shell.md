@@ -58,11 +58,10 @@ steering) hangs off the same shell. Detail URLs stay permalinkable.
   - `packages/web/test/routes/Workflows.test.tsx`
   - `packages/web/test/components/AppShell.test.tsx`
   - `packages/web/test/lib/stats.test.ts`
-  - `packages/server/src/routes/workflows.ts` —
-    `GET /workflows` returning `[{ name, path, sha, label? }]`. Behind a
-    `WorkflowReader` port so tests inject fixtures. Reads the configured
-    workflows dir (`config.project?.workflows_dir ?? "workflows"`).
-  - `packages/server/test/workflows-list.test.ts`
+  - ~~`packages/server/src/routes/workflows.ts`~~ — **already shipped**
+    in commit `1f4bbff` (P5.12) along with `FsWorkflowReader`. Do not
+    rewrite; import and mount as-is. If the shape doesn't match what
+    Home needs, extend it; don't replace it.
   - `packages/server/src/routes/stats.ts` —
     `GET /stats` returning a server-side aggregate across ALL runs under
     `runsDir` (not just the first page). Shape:
@@ -313,10 +312,12 @@ Rules:
   (shadcn `chart` over recharts is the obvious default). This task ships
   only single-value tiles.
 - **Auth / multi-tenant** — not in P5.
-- **A separate `/stats` endpoint** — derive client-side for now.
 - **Conversation view** on the detail route — owned by P5.08.
 - **Graph "map" sidebar collapse behavior** on detail route — owned by
   P5.08.
+- ~~A separate `/stats` endpoint~~ — **now in scope** (see "Files to
+  create" above). Client-side reducer stays too, as a fallback + for
+  projections / tests.
 
 ## Reusable patterns
 
