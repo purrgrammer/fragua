@@ -1,137 +1,146 @@
-// Tests for the GraphView component.
+// GraphView tests — the AI-Elements / @xyflow/react path.
 //
-// What we cover:
-//   1. Direct `svg` prop path — the component injects the document and
-//      delegates clicks through `data-node-id`.
-//   2. Fetch-by-runId path — the URL used MUST be the relative
-//      `/api/pipelines/:id/graph.svg` string produced by the api helper.
-//      This is the enforcement point for the "no absolute URLs" rule:
-//      absolute URLs would hit Vite's dev server (5173) instead of the
-//      swarm server (3000) and silently 404.
-//   3. Malformed / empty SVG path → empty state (no throw, no raw error).
-//   4. Fetch failure (404) → empty state, raw message stays out of the DOM.
+// Pre-P5.13 this file exercised the server-rendered SVG injection. Those
+// cases are gone: the SVG route + `getPipelineGraph()` API surface were
+// deleted. What we assert now:
+//
+//   - `toFlowGraph()` (the pure transform) produces one FlowEdge per
+//     edge declared in the DOT source, anchored to the right source/
+//     target ids. This is the regression test for "GraphView stopped
+//     drawing edges" — the transform is the single source of truth and
+//     asserting on it sidesteps React-Flow's happy-dom layout gap.
+//   - Rendered output carries a `data-node-id` attribute per graph node
+//     (happy-dom CAN mount the custom Node component) so Playwright /
+//     unit tests targeting specific nodes keep working.
+//   - Lifecycle state flows through to `data-state` on each node.
+//   - With no workflowSource the component renders the purpose-built
+//     empty state rather than crashing.
+//   - `onNodeClick` fires with the clicked node id.
+//
+// Why we don't assert on `.react-flow__edge` DOM nodes: happy-dom can't
+// compute layout (no getBoundingClientRect values), and React-Flow
+// short-circuits edge rendering when source/target rects are zero. The
+// `toFlowGraph` unit test above covers the data path; visual regressions
+// get caught by the running dev server + Playwright (future).
 
 import { afterEach, describe, expect, it } from "bun:test";
+import { parseDotSource } from "@swarm/core";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
-import { GraphView } from "../../src/components/GraphView.tsx";
-import { createApiClient } from "../../src/lib/api.ts";
+import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
+import type { PipelineDetail } from "../../src/lib/api.ts";
 import { useDom } from "../setup.ts";
 
-// Register happy-dom once for all describes in this file. `useDom` is a
-// test-harness helper, not a React hook — the `use*` prefix is
-// coincidental. The directive below MUST stay on a single line for Biome
-// to attach it to the call on the next line.
-// biome-ignore lint/correctness/useHookAtTopLevel: useDom is a test-harness helper, not a React hook; the use* prefix is coincidental.
-useDom();
+const WORKFLOW_SOURCE = `digraph demo {
+  graph [ label = "demo" ]
+  start [shape=Mdiamond, label="start"]
+  middle [shape=box, label="middle"]
+  done [shape=Msquare, label="done"]
+  start -> middle
+  middle -> done
+}`;
 
-const SAMPLE_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <g data-node-id="n1"><rect x="0" y="0" width="40" height="20"/></g>
-  <g data-node-id="n2"><rect x="50" y="0" width="40" height="20"/></g>
-</svg>
-`;
+function makeDetail(overrides: Partial<PipelineDetail> = {}): PipelineDetail {
+  return {
+    runId: "r1",
+    startedAt: "2024-01-01T00:00:00.000Z",
+    status: "running",
+    lastEventSeq: 2,
+    nodes: [
+      { nodeId: "start", state: "completed", lastEventSeq: 1 },
+      { nodeId: "middle", state: "running", lastEventSeq: 2 },
+    ],
+    workflowSource: WORKFLOW_SOURCE,
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    ...overrides,
+  };
+}
 
-describe("GraphView — svg prop path", () => {
-  afterEach(() => cleanup());
+describe("toFlowGraph — pure transform", () => {
+  it("emits one FlowEdge per DOT edge, anchored to correct source/target", () => {
+    const graph = parseDotSource(WORKFLOW_SOURCE);
+    const { flowEdges, flowNodes } = toFlowGraph(makeDetail(), graph, null);
 
-  it("injects the SVG inside the wrapper and exposes node groups", () => {
-    const { container } = render(<GraphView svg={SAMPLE_SVG} />);
-    const host = within(container).getByTestId("graph-view");
-    // Both node groups should be present in the DOM.
-    expect(host.querySelector('[data-node-id="n1"]')).toBeTruthy();
-    expect(host.querySelector('[data-node-id="n2"]')).toBeTruthy();
-  });
+    // Both edges present, in source order.
+    expect(flowEdges.length).toBe(2);
+    expect(flowEdges[0]).toMatchObject({ source: "start", target: "middle" });
+    expect(flowEdges[1]).toMatchObject({ source: "middle", target: "done" });
 
-  it("delegates clicks through [data-node-id] to onNodeClick", () => {
-    const clicks: string[] = [];
-    const { container } = render(<GraphView svg={SAMPLE_SVG} onNodeClick={(id) => clicks.push(id)} />);
-    const host = within(container).getByTestId("graph-view");
-    const node = host.querySelector('[data-node-id="n2"]') as HTMLElement | null;
-    expect(node).toBeTruthy();
-    // Click on a child — closest() should walk up to the [data-node-id].
-    const child = node?.querySelector("rect") as HTMLElement | null;
-    fireEvent.click(child ?? (node as HTMLElement));
-    expect(clicks).toEqual(["n2"]);
-  });
-
-  it("renders the empty state (not a raw error) when the SVG is malformed", () => {
-    const { container } = render(<GraphView svg={"not an svg at all"} />);
-    expect(within(container).getByTestId("graph-empty")).toBeTruthy();
-    // Raw payload must NOT be visible to the user.
-    expect(container.textContent ?? "").not.toContain("not an svg at all");
-  });
-});
-
-describe("GraphView — fetch-by-runId path", () => {
-  afterEach(() => cleanup());
-
-  function makeClientWith(fetchImpl: typeof fetch) {
-    return createApiClient({ fetchImpl });
-  }
-
-  it("requests the RELATIVE /api/pipelines/:id/graph.svg URL (never absolute)", async () => {
-    const captured: { url?: string } = {};
-    const fetchImpl = (async (input: RequestInfo | URL) => {
-      captured.url = typeof input === "string" ? input : input.toString();
-      return new Response(SAMPLE_SVG, { status: 200, headers: { "content-type": "image/svg+xml" } });
-    }) as unknown as typeof fetch;
-    const api = makeClientWith(fetchImpl);
-
-    const { container } = render(<GraphView api={api} runId="abc" />);
-
-    await waitFor(() => {
-      expect(within(container).getByTestId("graph-view").querySelector('[data-node-id="n1"]')).toBeTruthy();
-    });
-
-    // The critical assertion: URL is relative, /api-prefixed, and never
-    // absolute / localhost-qualified — see api.ts comment block for why.
-    expect(captured.url).toBe("/api/pipelines/abc/graph.svg");
-    expect(captured.url?.startsWith("/api/")).toBe(true);
-    expect(captured.url).not.toMatch(/^https?:/);
-    expect(captured.url).not.toContain("localhost");
-  });
-
-  it("on 404 renders the empty state and does NOT leak the raw error message", async () => {
-    const origWarn = console.warn;
-    console.warn = () => {};
-    try {
-      const fetchImpl = (async () =>
-        new Response("run not found", { status: 404, statusText: "Not Found" })) as unknown as typeof fetch;
-      const api = makeClientWith(fetchImpl);
-
-      const { container } = render(<GraphView api={api} runId="missing" />);
-      await waitFor(() => {
-        expect(within(container).getByTestId("graph-empty")).toBeTruthy();
-      });
-      // Empty state shows the short runId for orientation, but not the
-      // raw HTTP error text.
-      const text = container.textContent ?? "";
-      expect(text).toContain("No graph available");
-      expect(text).not.toContain("404");
-      expect(text).not.toContain("Not Found");
-      expect(text).not.toContain("run not found");
-    } finally {
-      console.warn = origWarn;
+    // Every edge endpoint has a corresponding node in flowNodes.
+    const nodeIds = new Set(flowNodes.map((n) => n.id));
+    for (const e of flowEdges) {
+      expect(nodeIds.has(e.source)).toBe(true);
+      expect(nodeIds.has(e.target)).toBe(true);
     }
   });
 
-  it("applies data-active to the selected node id", async () => {
-    const fetchImpl = (async () =>
-      new Response(SAMPLE_SVG, {
-        status: 200,
-        headers: { "content-type": "image/svg+xml" },
-      })) as unknown as typeof fetch;
-    const api = makeClientWith(fetchImpl);
+  it("unions graph.nodes with detail.nodes so DOT-only nodes still render as pending", () => {
+    const graph = parseDotSource(WORKFLOW_SOURCE);
+    const { flowNodes } = toFlowGraph(makeDetail(), graph, null);
+    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { state: string; label?: string }]));
+    // `done` is only in topology (no lifecycle event yet).
+    expect(byId.get("done")?.state).toBe("pending");
+    expect(byId.get("start")?.state).toBe("completed");
+    expect(byId.get("middle")?.state).toBe("running");
+    // Labels come from DOT attrs.
+    expect(byId.get("done")?.label).toBe("done");
+  });
 
-    const { container } = render(<GraphView api={api} runId="r1" activeNodeId="n1" />);
+  it("marks the activeNodeId entry as active", () => {
+    const graph = parseDotSource(WORKFLOW_SOURCE);
+    const { flowNodes } = toFlowGraph(makeDetail(), graph, "middle");
+    const active = flowNodes.find((n) => n.id === "middle")?.data as { active: boolean };
+    expect(active.active).toBe(true);
+    const other = flowNodes.find((n) => n.id === "start")?.data as { active: boolean };
+    expect(other.active).toBe(false);
+  });
+});
 
-    await waitFor(() => {
-      const host = within(container).getByTestId("graph-view");
-      const n1 = host.querySelector('[data-node-id="n1"]');
-      expect(n1?.getAttribute("data-active")).toBe("true");
-      // Other node must not be marked active.
-      const n2 = host.querySelector('[data-node-id="n2"]');
-      expect(n2?.getAttribute("data-active")).toBeNull();
-    });
+describe("GraphView — rendering", () => {
+  useDom();
+  afterEach(() => cleanup());
+
+  it("renders a data-node-id per DOT node", async () => {
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const nodeAnchors = canvas.querySelectorAll("[data-node-id]");
+    const ids = new Set(Array.from(nodeAnchors).map((el) => el.getAttribute("data-node-id")));
+    expect(ids.has("start")).toBe(true);
+    expect(ids.has("middle")).toBe(true);
+    expect(ids.has("done")).toBe(true);
+  });
+
+  it("stamps data-state on each node so callers can style by lifecycle", async () => {
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const byId = new Map(
+      Array.from(canvas.querySelectorAll("[data-node-id]")).map((el) => [
+        el.getAttribute("data-node-id"),
+        el.getAttribute("data-state"),
+      ]),
+    );
+    expect(byId.get("start")).toBe("completed");
+    expect(byId.get("middle")).toBe("running");
+    expect(byId.get("done")).toBe("pending");
+  });
+
+  it("shows the purpose-built empty state when workflowSource is absent", () => {
+    const detail = makeDetail();
+    const withoutSource: PipelineDetail = { ...detail, workflowSource: undefined };
+    const { container } = render(<GraphView detail={withoutSource} />);
+    const empty = within(container).getByTestId("graphview-nograph");
+    expect(empty.textContent ?? "").toMatch(/No graph available/i);
+    expect(container.querySelector("[data-testid='graphview']")).toBeNull();
+  });
+
+  it("fires onNodeClick with the clicked node id", async () => {
+    const clicks: string[] = [];
+    const { container } = render(<GraphView detail={makeDetail()} onNodeClick={(id) => clicks.push(id)} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const startNode = canvas.querySelector('.react-flow__node[data-id="start"]');
+    expect(startNode).toBeTruthy();
+    fireEvent.click(startNode as Element);
+    expect(clicks).toEqual(["start"]);
   });
 });

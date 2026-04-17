@@ -49,7 +49,6 @@ export function EmptyState({
   "data-testid": testId = "empty-state",
 }: EmptyStateProps): JSX.Element {
   return (
-    // biome-ignore lint/a11y/useSemanticElements: <output> is form-oriented; role="status" on a div is the correct ARIA pattern for a generic empty/error card.
     <div
       data-testid={testId}
       role="status"

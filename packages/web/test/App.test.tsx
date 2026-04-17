@@ -19,12 +19,12 @@ type Overrides = Partial<ApiClient>;
 
 function stubClient(overrides: Overrides = {}): ApiClient {
   const baseUrl = overrides.baseUrl ?? "/api";
-  const graphUrl = overrides.getPipelineGraphUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/graph.svg`);
   const eventsUrl = overrides.getPipelineEventsUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/events`);
   return {
     baseUrl,
     health: overrides.health ?? (async () => ({ ok: true })),
     listPipelines: overrides.listPipelines ?? (async (): Promise<PipelineSummary[]> => []),
+    listWorkflows: overrides.listWorkflows ?? (async () => []),
     getPipeline:
       overrides.getPipeline ??
       (async (id: string): Promise<PipelineDetail> => ({
@@ -37,8 +37,6 @@ function stubClient(overrides: Overrides = {}): ApiClient {
         inputTokens: 0,
         outputTokens: 0,
       })),
-    getPipelineGraph: overrides.getPipelineGraph ?? (async () => "<svg></svg>"),
-    getPipelineGraphUrl: graphUrl,
     getPipelineEventsUrl: eventsUrl,
     pipelineEventsUrl: overrides.pipelineEventsUrl ?? eventsUrl,
   };

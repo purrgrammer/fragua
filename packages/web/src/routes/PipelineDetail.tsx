@@ -117,6 +117,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
           <GraphView
             api={api}
             runId={id}
+            {...(detail ? { detail } : {})}
             onNodeClick={setActiveNode}
             activeNodeId={activeNode}
             refetchKey={events.length}

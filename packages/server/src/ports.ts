@@ -1,7 +1,7 @@
 // Ports for @swarm/server. Route handlers depend on these interfaces; adapters
-// (filesystem, WASM Graphviz, in-memory interviewer) live in ./adapters/ and
-// plug in via `createServer`. Tests swap in fakes to keep assertions fast and
-// free of I/O. This mirrors the pattern used by @swarm/core.
+// (filesystem, in-memory interviewer) live in ./adapters/ and plug in via
+// `createServer`. Tests swap in fakes to keep assertions fast and free of
+// I/O. This mirrors the pattern used by @swarm/core.
 
 import type { Event, EventSink } from "@swarm/core";
 
@@ -18,12 +18,6 @@ export interface RunReader {
    * rather than distinguishing "missing" from "empty".
    */
   readEvents(runId: string): Promise<Event[] | undefined>;
-}
-
-/** Render a Graphviz DOT source string to a standalone SVG document. */
-export interface GraphRenderer {
-  /** Resolves to a full `<svg …>…</svg>` string. Must not throw synchronously. */
-  render(dotSource: string): Promise<string>;
 }
 
 /** A pending question tagged with its originating run for routing. */
@@ -55,11 +49,41 @@ export interface InterviewGateway {
   answer(runId: string, questionId: string, answer: { value: string; text?: string }): Promise<InterviewAnswerResult>;
 }
 
+/**
+ * One workflow source (usually a `.dot` file on disk) surfaced by
+ * `GET /workflows`. The server is authoritative for this shape; the web
+ * package re-declares a mirror in `lib/api.ts` so we don't leak a
+ * cross-package type dependency into the client bundle.
+ *
+ * Fields:
+ *   - `name`  — the filename without extension (`build-feature`). Used
+ *     as the primary label in list UIs.
+ *   - `path`  — the path the server read from, relative to the runtime
+ *     working directory. Displayed in small/monospace context so
+ *     operators can `cat` the source.
+ *   - `sha`   — first 7 hex chars of sha256 over the file contents. A
+ *     short hash is enough for "is this the workflow I expect?" at a
+ *     glance without bloating the row.
+ *   - `label` — optional best-effort extraction of a `label="…"` attr
+ *     from the DOT source. When absent the UI falls back to `name`.
+ */
+export interface WorkflowSummary {
+  name: string;
+  path: string;
+  sha: string;
+  label?: string;
+}
+
+/** Enumerate workflow definitions available on disk for `GET /workflows`. */
+export interface WorkflowReader {
+  list(): Promise<WorkflowSummary[]>;
+}
+
 /** Bundle of ports passed to `createServer`. All optional; defaults below. */
 export interface ServerPorts {
   runReader?: RunReader;
-  graphRenderer?: GraphRenderer;
   interviewGateway?: InterviewGateway;
+  workflowReader?: WorkflowReader;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
 }

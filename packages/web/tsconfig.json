@@ -3,7 +3,18 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
-    "types": ["bun-types", "@testing-library/jest-dom"]
+    "types": ["bun-types", "@testing-library/jest-dom"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    // Vendored AI Elements / shadcn components pass `prop={value ?? undefined}`
+    // and similar patterns that trip `exactOptionalPropertyTypes`. We adopt
+    // those components via the official CLI and don't hand-edit them, so
+    // relaxing this one flag here (rather than repo-wide) is the pragmatic
+    // boundary. All first-party code in this package still benefits from
+    // `strict: true` + `noUncheckedIndexedAccess` inherited from the root.
+    "exactOptionalPropertyTypes": false
   },
   "include": ["src/**/*", "test/**/*", "vite.config.ts"]
 }

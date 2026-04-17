@@ -2,11 +2,14 @@
 //   - URL shape (every call hits `${baseUrl}${path}`)
 //   - `ok` parsing / validation
 //   - The two generic failure branches (HTTP status, malformed body)
-//   - The Accept header on the SVG fetch
 //   - URL helpers are RELATIVE and always `/api`-prefixed — this is the
 //     single enforcement point for "no absolute URLs in the client", which
 //     matters because absolute URLs would land on Vite's dev server (5173)
 //     instead of the swarm server (3000).
+//   - GET /pipelines/:id surfaces `workflowSource` (the raw DOT string).
+//     There is NO `edges` field on PipelineDetail — topology is parsed
+//     client-side via @swarm/core's parseDotSource (see GraphView.tsx).
+//   - GET /workflows returns the listWorkflows() array.
 
 import { describe, expect, it } from "bun:test";
 import { ApiError, createApiClient } from "../src/lib/api.ts";
@@ -95,6 +98,38 @@ describe("createApiClient — /pipelines", () => {
     expect(res.runId).toBe("abc/weird");
   });
 
+  it("getPipeline surfaces workflowSource (raw DOT) when present", async () => {
+    const source = "digraph g { a -> b }";
+    const body = {
+      runId: "r1",
+      startedAt: "2024-01-01T00:00:00Z",
+      status: "running",
+      lastEventSeq: 2,
+      nodes: [],
+      workflowSource: source,
+    };
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify(body), { status: 200 })),
+    });
+    const res = await client.getPipeline("r1");
+    expect(res.workflowSource).toBe(source);
+  });
+
+  it("getPipeline accepts a response that omits workflowSource (older servers)", async () => {
+    const body = {
+      runId: "r1",
+      startedAt: "2024-01-01T00:00:00Z",
+      status: "unknown",
+      lastEventSeq: 0,
+      nodes: [],
+    };
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify(body), { status: 200 })),
+    });
+    const res = await client.getPipeline("r1");
+    expect(res.workflowSource).toBeUndefined();
+  });
+
   it("listPipelines rejects with ApiError on 5xx", async () => {
     const client = createApiClient({
       fetchImpl: mockFetch(new Response("boom", { status: 503, statusText: "Service Unavailable" })),
@@ -110,38 +145,29 @@ describe("createApiClient — /pipelines", () => {
   });
 });
 
-describe("createApiClient — /pipelines/:id/graph.svg", () => {
-  it("GETs /api/pipelines/:id/graph.svg with Accept: image/svg+xml and returns the SVG text", async () => {
+describe("createApiClient — /workflows", () => {
+  it("listWorkflows GETs /api/workflows and parses name/path/sha rows", async () => {
     const captured: Captured = {};
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    const rows = [
+      { name: "alpha", path: "workflows/alpha.dot", sha: "abc1234", label: "Alpha" },
+      { name: "beta", path: "workflows/beta.dot", sha: "def5678" },
+    ];
     const client = createApiClient({
-      fetchImpl: mockFetch(new Response(svg, { status: 200, headers: { "content-type": "image/svg+xml" } }), captured),
+      fetchImpl: mockFetch(new Response(JSON.stringify(rows), { status: 200 }), captured),
     });
-    const out = await client.getPipelineGraph("abc");
-    expect(captured.url).toBe("/api/pipelines/abc/graph.svg");
-    const headers = (captured.init?.headers ?? {}) as Record<string, string>;
-    expect(headers["Accept"]).toBe("image/svg+xml");
-    expect(out).toContain("<svg");
+    const out = await client.listWorkflows();
+    expect(captured.url).toBe("/api/workflows");
+    expect(out).toHaveLength(2);
+    expect(out[0]?.label).toBe("Alpha");
+    expect(out[1]?.label).toBeUndefined();
   });
 
-  it("rejects with ApiError when the server 404s", async () => {
+  it("rejects malformed workflow rows", async () => {
     const client = createApiClient({
-      fetchImpl: mockFetch(new Response("no such run", { status: 404, statusText: "Not Found" })),
+      // missing required `sha`
+      fetchImpl: mockFetch(new Response(JSON.stringify([{ name: "x", path: "x.dot" }]), { status: 200 })),
     });
-    try {
-      await client.getPipelineGraph("missing");
-      throw new Error("expected rejection");
-    } catch (err) {
-      expect(err).toBeInstanceOf(ApiError);
-      expect((err as ApiError).status).toBe(404);
-    }
-  });
-
-  it("rejects when response is not an SVG document", async () => {
-    const client = createApiClient({
-      fetchImpl: mockFetch(new Response("<html>nope</html>", { status: 200 })),
-    });
-    await expect(client.getPipelineGraph("abc")).rejects.toThrow(/not an SVG/);
+    await expect(client.listWorkflows()).rejects.toThrow(/malformed/);
   });
 });
 
@@ -153,15 +179,6 @@ describe("createApiClient — URL helpers are relative and /api-prefixed", () =>
 
   const client = createApiClient();
 
-  it("getPipelineGraphUrl returns a relative /api/pipelines/:id/graph.svg", () => {
-    const u = client.getPipelineGraphUrl("abc");
-    expect(u).toBe("/api/pipelines/abc/graph.svg");
-    expect(u.startsWith("/api/")).toBe(true);
-    expect(u).not.toMatch(/^https?:/);
-    expect(u).not.toContain("localhost");
-    expect(u).not.toContain("://");
-  });
-
   it("getPipelineEventsUrl returns a relative /api/pipelines/:id/events", () => {
     const u = client.getPipelineEventsUrl("abc");
     expect(u).toBe("/api/pipelines/abc/events");
@@ -171,7 +188,6 @@ describe("createApiClient — URL helpers are relative and /api-prefixed", () =>
   });
 
   it("URL helpers encode unsafe id chars", () => {
-    expect(client.getPipelineGraphUrl("a/b c")).toBe("/api/pipelines/a%2Fb%20c/graph.svg");
     expect(client.getPipelineEventsUrl("a/b c")).toBe("/api/pipelines/a%2Fb%20c/events");
   });
 
@@ -183,6 +199,6 @@ describe("createApiClient — URL helpers are relative and /api-prefixed", () =>
     expect(client.baseUrl).toBe("/api");
     const custom = createApiClient({ baseUrl: "/custom" });
     expect(custom.baseUrl).toBe("/custom");
-    expect(custom.getPipelineGraphUrl("z")).toBe("/custom/pipelines/z/graph.svg");
+    expect(custom.getPipelineEventsUrl("z")).toBe("/custom/pipelines/z/events");
   });
 });

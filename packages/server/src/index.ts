@@ -9,15 +9,15 @@
 // adapters so the production path stays zero-config.
 
 import { Hono } from "hono";
-import { createDotGraphRenderer } from "./adapters/dot-graph-renderer.ts";
 import { createEventInterviewGateway } from "./adapters/event-interview-gateway.ts";
 import { createFsRunReader } from "./adapters/fs-run-reader.ts";
-import type { GraphRenderer, InterviewGateway, RunReader, ServerPorts } from "./ports.ts";
+import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
+import type { InterviewGateway, RunReader, ServerPorts, WorkflowReader } from "./ports.ts";
 import { eventsRoutes } from "./routes/events.ts";
-import { graphRoutes } from "./routes/graph.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { interviewRoutes } from "./routes/interview.ts";
 import { pipelinesRoutes } from "./routes/pipelines.ts";
+import { workflowsRoutes } from "./routes/workflows.ts";
 
 export interface ServerOptions {
   /**
@@ -25,6 +25,12 @@ export interface ServerOptions {
    * Usually `.swarm/runs/` from the project root.
    */
   runsDir: string;
+  /**
+   * Directory containing `*.dot` workflow sources listed by
+   * `GET /workflows`. Defaults to `"workflows"` relative to the runtime
+   * working directory — matches the repo convention.
+   */
+  workflowsDir?: string;
   /** Optional port overrides. Any omitted port falls back to defaults. */
   ports?: ServerPorts;
 }
@@ -37,34 +43,36 @@ export interface ServerOptions {
  */
 export function createServer(opts: ServerOptions): Hono {
   const ports = opts.ports ?? {};
+  const workflowsDir = opts.workflowsDir ?? "workflows";
   const runReader: RunReader = ports.runReader ?? createFsRunReader({ runsDir: opts.runsDir });
-  const graphRenderer: GraphRenderer = ports.graphRenderer ?? createDotGraphRenderer();
   const interviewGateway: InterviewGateway =
     ports.interviewGateway ??
     createEventInterviewGateway({
       runReader,
       ...(ports.eventSink ? { eventSink: ports.eventSink } : {}),
     });
+  const workflowReader: WorkflowReader = ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
 
   const app = new Hono();
   app.route("/", healthRoutes());
   app.route("/", eventsRoutes({ runsDir: opts.runsDir }));
   app.route("/", pipelinesRoutes({ runReader }));
-  app.route("/", graphRoutes({ runReader, graphRenderer }));
   app.route("/", interviewRoutes({ runReader, interviewGateway }));
+  app.route("/", workflowsRoutes({ workflowReader }));
   return app;
 }
 
-export { createDotGraphRenderer } from "./adapters/dot-graph-renderer.ts";
 export { createEventInterviewGateway } from "./adapters/event-interview-gateway.ts";
 export { createFsRunReader } from "./adapters/fs-run-reader.ts";
+export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export type {
-  GraphRenderer,
   InterviewAnswerResult,
   InterviewGateway,
   PendingQuestion,
   RunReader,
   ServerPorts,
+  WorkflowReader,
+  WorkflowSummary,
 } from "./ports.ts";
 export type { EventsRouteOptions } from "./routes/events.ts";
 export { deriveDetail, deriveSummary } from "./routes/pipelines.ts";

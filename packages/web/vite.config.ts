@@ -12,9 +12,15 @@
 //     server. In prod the web bundle is served from the same origin as
 //     the swarm server so there's no proxy at all.
 //
+// Path alias:
+//   - `@/` → `src/`. Required by shadcn/ui + AI Elements components,
+//     which import from paths like `@/components/ui/button` and
+//     `@/lib/utils`. Kept in lockstep with `tsconfig.json#paths`.
+//
 // Build: emits a static bundle into `dist/` that `swarm serve` can host.
 // Test:  happy-dom (see test/setup.ts) keeps tests runtime-agnostic.
 
+import { fileURLToPath, URL } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -22,6 +28,11 @@ const serverTarget = "http://localhost:3000";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

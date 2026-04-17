@@ -15,16 +15,14 @@ import type { ApiClient, PipelineDetail as PipelineDetailT } from "../../src/lib
 import { createRoutes } from "../../src/lib/router.tsx";
 import { useDom } from "../setup.ts";
 
-const SAMPLE_SVG = '<svg xmlns="http://www.w3.org/2000/svg"><g data-node-id="n1"><rect/></g></svg>';
-
 function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   const baseUrl = overrides.baseUrl ?? "/api";
-  const graphUrl = overrides.getPipelineGraphUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/graph.svg`);
   const eventsUrl = overrides.getPipelineEventsUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/events`);
   return {
     baseUrl,
     health: async () => ({ ok: true }),
     listPipelines: async () => [],
+    listWorkflows: overrides.listWorkflows ?? (async () => []),
     getPipeline: async (id: string): Promise<PipelineDetailT> => ({
       runId: id,
       workflow: "build-feature.dot",
@@ -37,8 +35,6 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       inputTokens: 0,
       outputTokens: 0,
     }),
-    getPipelineGraph: async () => SAMPLE_SVG,
-    getPipelineGraphUrl: graphUrl,
     getPipelineEventsUrl: eventsUrl,
     pipelineEventsUrl: eventsUrl,
     ...overrides,
@@ -66,6 +62,7 @@ describe("PipelineDetail", () => {
           status: "running",
           lastEventSeq: 3,
           nodes: [],
+          workflowSource: "digraph g { n1 [shape=Mdiamond]; n2 [shape=box]; n1 -> n2 }",
           costUsd: 0,
           inputTokens: 0,
           outputTokens: 0,
@@ -86,7 +83,7 @@ describe("PipelineDetail", () => {
     expect(within(container).getByTestId("detail-event-count").textContent).toBe("3");
     // Graph renders.
     await waitFor(() => {
-      expect(within(container).getByTestId("graph-view").querySelector('[data-node-id="n1"]')).toBeTruthy();
+      expect(within(container).getByTestId("graphview").querySelector('[data-node-id="n1"]')).toBeTruthy();
     });
   });
 

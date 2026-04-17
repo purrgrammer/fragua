@@ -81,6 +81,15 @@ export const PipelineDetail = Type.Object({
   /** Monotonic sequence of the last event we've replayed. */
   lastEventSeq: Type.Integer({ minimum: 0 }),
   nodes: Type.Array(NodeState),
+  /**
+   * Raw DOT source, copied through from `pipeline.started.data.workflow_source`
+   * when present. The web UI parses this with `@swarm/core`'s `parseDotSource`
+   * to recover the full topology (nodes + edges + labels + attrs) for the
+   * graph canvas. Absent when the run predates source capture, the start
+   * event was partial, or source was redacted — UI layers show an empty
+   * state in that case rather than guessing edges from the event stream.
+   */
+  workflowSource: Type.Optional(Type.String()),
   // Mirror of the summary metrics — see PipelineSummary for semantics.
   costUsd: Type.Number({ minimum: 0, default: 0 }),
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),

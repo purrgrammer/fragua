@@ -1,9 +1,17 @@
 // GET /pipelines        → list of PipelineSummary
-// GET /pipelines/:runId → PipelineDetail (nodes + status derived from events)
+// GET /pipelines/:runId → PipelineDetail (node state replay + raw DOT source)
 //
 // Both handlers are thin adapters over a `RunReader` port. All replay logic
 // lives in `deriveSummary` / `deriveDetail` so we can property-test them in
 // isolation without spinning up a Hono app.
+//
+// On edges / graph topology:
+//   We do NOT parse DOT server-side. `deriveDetail` surfaces the raw
+//   `workflow_source` string on the first `pipeline.started` event (when
+//   present) so the web UI can call `@swarm/core`'s `parseDotSource` and
+//   get the full topology in-process. Keeping the parser out of the
+//   server boundary means one parse path, one set of semantics, zero
+//   risk of drift between "what the runtime sees" and "what the UI shows".
 
 import type { Event } from "@swarm/core";
 import { aggregateCost } from "@swarm/events";
@@ -84,7 +92,14 @@ export function deriveSummary(runId: string, events: Event[]): PipelineSummary {
   };
 }
 
-/** Pure reducer over events → detail (nodes + status). */
+/**
+ * Pure reducer over events → detail (nodes + status + raw DOT source).
+ *
+ * We deliberately do NOT try to parse the DOT here — we copy it through
+ * unchanged so the browser can call `@swarm/core`'s `parseDotSource` and
+ * reuse the same parser the runtime uses. That keeps one parser in one
+ * place; the server only ever has to worry about event replay.
+ */
 export function deriveDetail(runId: string, events: Event[]): PipelineDetail {
   const summary = deriveSummary(runId, events);
   const nodeStateById = new Map<string, NodeState>();
@@ -118,6 +133,8 @@ export function deriveDetail(runId: string, events: Event[]): PipelineDetail {
     nodeStateById.set(ev.node_id, next);
   });
 
+  const workflowSource = extractDotSource(events);
+
   return {
     runId,
     ...(summary.workflow !== undefined ? { workflow: summary.workflow } : {}),
@@ -126,11 +143,26 @@ export function deriveDetail(runId: string, events: Event[]): PipelineDetail {
     status: summary.status,
     lastEventSeq: events.length,
     nodes: [...nodeStateById.values()].sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1)),
+    ...(workflowSource !== undefined ? { workflowSource } : {}),
     costUsd: summary.costUsd,
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
     ...(summary.durationMs !== undefined ? { durationMs: summary.durationMs } : {}),
   };
+}
+
+/**
+ * Pull the raw DOT source off the earliest `pipeline.started` event.
+ * Older runs may not have recorded it — callers treat `undefined` as
+ * "no graph available" and render an empty state.
+ */
+function extractDotSource(events: Event[]): string | undefined {
+  for (const ev of events) {
+    if (ev.type !== "pipeline.started") continue;
+    const src = (ev.data as { workflow_source?: unknown }).workflow_source;
+    if (typeof src === "string" && src.length > 0) return src;
+  }
+  return undefined;
 }
 
 function deriveStatus(events: Event[]): PipelineSummary["status"] {

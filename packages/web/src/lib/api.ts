@@ -20,9 +20,8 @@
 //   - GET /health                              → health()
 //   - GET /pipelines                           → listPipelines()
 //   - GET /pipelines/:id                       → getPipeline(id)
-//   - GET /pipelines/:id/graph.svg             → getPipelineGraph(id)
-//                                                getPipelineGraphUrl(id)
 //   - GET /pipelines/:id/events  (SSE)         → getPipelineEventsUrl(id)
+//   - GET /workflows                           → listWorkflows()
 //
 // Test-injectable:
 //   - `fetchImpl` → swap in a mock fetch.
@@ -66,7 +65,19 @@ export interface NodeState {
   lastEventSeq: number;
 }
 
-/** Local mirror of the server's `PipelineDetail`. */
+/**
+ * Local mirror of the server's `PipelineDetail`.
+ *
+ * `workflowSource` — raw DOT string copied through from the first
+ * `pipeline.started` event. The web UI parses this with `@swarm/core`'s
+ * `parseDotSource` to recover the topology (nodes + edges + labels +
+ * attrs) for the graph canvas. Absent when the run predates source
+ * capture — consumers render an empty state instead of guessing edges
+ * from the event stream.
+ *
+ * NOTE: there is intentionally NO `edges` field here. Topology lives in
+ * the DOT source; the server is not a second parser.
+ */
 export interface PipelineDetail {
   runId: string;
   workflow?: string;
@@ -75,10 +86,25 @@ export interface PipelineDetail {
   status: "running" | "success" | "fail" | "unknown";
   lastEventSeq: number;
   nodes: NodeState[];
+  /** Raw DOT source when captured on `pipeline.started`; otherwise absent. */
+  workflowSource?: string;
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
   durationMs?: number;
+}
+
+/**
+ * Local mirror of the server's `WorkflowSummary` port. Declared here (rather
+ * than imported from `@swarm/server`) for the same reason as
+ * `PipelineSummary` — the web package deliberately keeps its dependency
+ * surface narrow.
+ */
+export interface WorkflowSummary {
+  name: string;
+  path: string;
+  sha: string;
+  label?: string;
 }
 
 /**
@@ -115,13 +141,11 @@ export interface ApiClient {
   health(): Promise<HealthResponse>;
   listPipelines(): Promise<PipelineSummary[]>;
   getPipeline(id: string): Promise<PipelineDetail>;
-  /** Returns the raw SVG document text. */
-  getPipelineGraph(id: string): Promise<string>;
+  listWorkflows(): Promise<WorkflowSummary[]>;
 
   // URL helpers — always return relative strings starting with the client's
   // `baseUrl` (default "/api"). Callers use these anywhere a URL is needed
   // as a string (fetch, EventSource, <img src>, <object data>, links).
-  getPipelineGraphUrl(id: string): string;
   getPipelineEventsUrl(id: string): string;
 
   /** @deprecated Use getPipelineEventsUrl. Kept for existing callers. */
@@ -150,7 +174,6 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
     return body;
   }
 
-  const getPipelineGraphUrl = (id: string): string => url(`/pipelines/${encodeURIComponent(id)}/graph.svg`);
   const getPipelineEventsUrl = (id: string): string => url(`/pipelines/${encodeURIComponent(id)}/events`);
 
   return {
@@ -172,23 +195,10 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
       return getJson(`/pipelines/${encodeURIComponent(id)}`, isPipelineDetail);
     },
 
-    async getPipelineGraph(id: string): Promise<string> {
-      // The server sends `image/svg+xml`; setting Accept makes intent
-      // explicit and lets a misconfigured proxy fail loudly instead of
-      // returning HTML.
-      const u = getPipelineGraphUrl(id);
-      const res = await fetchImpl(u, { headers: { Accept: "image/svg+xml" } });
-      if (!res.ok) {
-        throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
-      }
-      const text = await res.text();
-      if (!text.includes("<svg")) {
-        throw new Error(`GET ${u} → not an SVG document`);
-      }
-      return text;
+    async listWorkflows(): Promise<WorkflowSummary[]> {
+      return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
     },
 
-    getPipelineGraphUrl,
     getPipelineEventsUrl,
     // Back-compat alias. New callers should use getPipelineEventsUrl.
     pipelineEventsUrl: getPipelineEventsUrl,
@@ -235,6 +245,7 @@ function isPipelineDetail(v: unknown): v is PipelineDetail {
     status?: unknown;
     lastEventSeq?: unknown;
     nodes?: unknown;
+    workflowSource?: unknown;
     costUsd?: unknown;
     inputTokens?: unknown;
     outputTokens?: unknown;
@@ -246,9 +257,25 @@ function isPipelineDetail(v: unknown): v is PipelineDetail {
     typeof o.status === "string" &&
     typeof o.lastEventSeq === "number" &&
     Array.isArray(o.nodes) &&
+    (o.workflowSource === undefined || typeof o.workflowSource === "string") &&
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number")
+  );
+}
+
+/**
+ * Soft validator for `WorkflowSummary`. Accepts unknown extra fields so
+ * future server additions don't break older clients. `label` is optional.
+ */
+function isWorkflowSummary(v: unknown): v is WorkflowSummary {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { name?: unknown; path?: unknown; sha?: unknown; label?: unknown };
+  return (
+    typeof o.name === "string" &&
+    typeof o.path === "string" &&
+    typeof o.sha === "string" &&
+    (o.label === undefined || typeof o.label === "string")
   );
 }

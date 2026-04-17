@@ -6,7 +6,7 @@
 import { type EdgeSelection, selectEdge } from "../engine/edge-selection.ts";
 import { resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
 import { applyStylesheet } from "../engine/stylesheet.ts";
-import { type NodeOutput, substitute, type SubstitutionArgs } from "../engine/substitution.ts";
+import { type NodeOutput, type SubstitutionArgs, substitute } from "../engine/substitution.ts";
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";

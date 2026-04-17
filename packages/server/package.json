@@ -16,7 +16,6 @@
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
     "@swarm/events": "workspace:*",
-    "@viz-js/viz": "3.26.0",
     "hono": "4.12.14"
   },
   "devDependencies": {

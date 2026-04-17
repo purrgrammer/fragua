@@ -11,12 +11,12 @@ import { useDom } from "../setup.ts";
 
 function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   const baseUrl = overrides.baseUrl ?? "/api";
-  const graphUrl = overrides.getPipelineGraphUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/graph.svg`);
   const eventsUrl = overrides.getPipelineEventsUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/events`);
   return {
     baseUrl,
     health: async () => ({ ok: true }),
     listPipelines: async (): Promise<PipelineSummary[]> => [],
+    listWorkflows: overrides.listWorkflows ?? (async () => []),
     getPipeline: async (id: string) => ({
       runId: id,
       startedAt: "2024-01-01T00:00:00Z",
@@ -27,8 +27,6 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       inputTokens: 0,
       outputTokens: 0,
     }),
-    getPipelineGraph: async () => "<svg></svg>",
-    getPipelineGraphUrl: graphUrl,
     getPipelineEventsUrl: eventsUrl,
     pipelineEventsUrl: eventsUrl,
     ...overrides,
