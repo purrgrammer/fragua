@@ -12,6 +12,15 @@
 //   in globals.css) because that's the default the `Nova` shadcn preset
 //   targets. `font-mono` stays on JetBrains Mono for code/ids/tabular
 //   readouts.
+//
+// Streamdown source:
+//   `node_modules/streamdown/dist/*.js` is included in `content` so the
+//   Tailwind JIT picks up the utility classes Streamdown emits at runtime
+//   (prose typography, code-fence styling, etc.) — without this line the
+//   AI Elements `MessageResponse` body would render unstyled. The spec
+//   for P5.08 specifies this via a Tailwind v4 `@source` directive in
+//   `globals.css`; we keep an equivalent comment there for forward-compat
+//   but the actual scan hook on v3 is this `content` entry.
 
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
@@ -32,7 +41,14 @@ const sansStack = ["Geist Variable", "ui-sans-serif", "system-ui", "sans-serif"]
 
 const config: Config = {
   darkMode: ["class"],
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: [
+    "./index.html",
+    "./src/**/*.{ts,tsx}",
+    // Streamdown (via AI Elements' MessageResponse) emits Tailwind classes
+    // at runtime; scan its compiled output so those classes survive JIT
+    // purging in production builds.
+    "../../node_modules/streamdown/dist/*.js",
+  ],
   theme: {
     container: {
       center: true,

@@ -13,6 +13,19 @@
  *     so classes like `bg-card` resolve correctly.
  *   - Both light and dark palettes are declared; toggling is a single
  *     `<html class="dark">` flip.
+ *
+ * Streamdown source:
+ *   The P5.08 spec calls for this Tailwind v4 directive so the JIT picks
+ *   up the classes Streamdown emits at runtime (via AI Elements'
+ *   `MessageResponse`):
+ *
+ *     @source "../../../../node_modules/streamdown/dist/*.js";
+ *
+ *   We're still on v3, where `@source` is a no-op; the actual scan hook
+ *   is an equivalent `content` glob in `tailwind.config.ts`. When we
+ *   migrate to v4, uncomment the line below and drop that glob.
+ *
+ *   // @source "../../../../node_modules/streamdown/dist/*.js";
  */
 
 @import "@fontsource-variable/geist";
