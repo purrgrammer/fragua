@@ -10,10 +10,6 @@ project:
   runs_dir: .swarm/runs
 
 defaults:
-  # Model used for codergen nodes that don't override it. Claude Haiku 4.5
-  # is the cheap-and-fast default; per-node `model="claude-sonnet-4-7"` (or
-  # opus) unlocks heavier reasoning when needed.
-  #
   # Multi-provider: swap to any provider pi-ai supports — see `swarm providers`.
   # Examples:
   #   provider: anthropic       | ANTHROPIC_API_KEY
@@ -21,8 +17,8 @@ defaults:
   #   provider: openrouter      | OPENROUTER_API_KEY   (300+ models, one key)
   #   provider: google          | GEMINI_API_KEY
   #   provider: groq            | GROQ_API_KEY
-  provider: anthropic
-  model: claude-haiku-4-5
+  provider: openrouter
+  model: anthropic/claude-opus-4.7
 
   # Tool permission mode. Phase 2 supports unsafe only. Phase 6 will add
   # classifier + interactive.

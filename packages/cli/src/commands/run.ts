@@ -25,6 +25,7 @@ import {
   WorktreeEnvironment,
 } from "@swarm/workspace";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
 
 export interface RunCommandOptions {
   workflow: string;
@@ -54,6 +55,9 @@ export interface RunCommandOptions {
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
+  const cwd = opts.cwd ?? process.cwd();
+  const config = await loadConfig(cwd);
+
   const absoluteWorkflow = resolve(opts.workflow);
   await stat(absoluteWorkflow); // throws if missing
   const source = await readFile(absoluteWorkflow, "utf8");
@@ -67,7 +71,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
   // Env-leak gate: scan ./.env in the target cwd before giving an agent keys.
   if (!opts.allowEnvKeys && !opts.mock) {
-    const cwd = opts.cwd ?? process.cwd();
     const envPath = resolve(cwd, ".env");
     try {
       const envContents = await readFile(envPath, "utf8");
@@ -83,8 +86,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
   const workflow_sha = createHash("sha256").update(source).digest("hex");
   const run_id = opts.runId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const runsDir = opts.runsDir ?? ".swarm/runs";
-  const eventsPath = resolve(opts.cwd ?? process.cwd(), runsDir, run_id, "events.jsonl");
+  const runsDir = opts.runsDir ?? config.project?.runs_dir ?? ".swarm/runs";
+  const eventsPath = resolve(cwd, runsDir, run_id, "events.jsonl");
 
   const useWorktree = opts.worktree === true || opts.keepWorktree === true;
   let env: ExecutionEnvironment;
@@ -110,9 +113,10 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     mockHandle = h;
     backend = h.backend;
   } else {
-    const provider = opts.provider ?? "anthropic";
+    // Priority: CLI flag > .swarm/config.yaml > per-provider default > hard default.
+    const provider = opts.provider ?? config.defaults?.provider ?? "anthropic";
     const info = getProviderInfo(provider);
-    const model = opts.model ?? defaultModelFor(provider) ?? "claude-opus-4-7";
+    const model = opts.model ?? config.defaults?.model ?? defaultModelFor(provider) ?? "claude-opus-4-7";
     if (!hasProviderCredentials(provider)) {
       const hint = info
         ? `set one of: ${info.envVars.join(", ")}`
