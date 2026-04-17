@@ -1,4 +1,7 @@
-// Three built-in Interviewer implementations. See docs/SPEC.md §3.9.
+// Built-in Interviewer implementations. See docs/SPEC.md §3.9.
+
+export type { ConsoleInterviewerOptions } from "./console.ts";
+export { ConsoleInterviewer } from "./console.ts";
 
 import type { Answer, Interviewer, Question } from "../types/interviewer.ts";
 

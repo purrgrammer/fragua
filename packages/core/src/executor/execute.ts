@@ -12,7 +12,7 @@ import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/co
 import type { Event, EventType } from "../types/events.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import { type Graph, handlerOf, isTerminal, type Node } from "../types/graph.ts";
-import type { Interviewer } from "../types/interviewer.ts";
+import type { Interviewer, Question } from "../types/interviewer.ts";
 import { type ContextValue, fail, type Outcome, ok } from "../types/outcome.ts";
 
 // ---------------------------------------------------------------------------
@@ -212,12 +212,80 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Strip accelerator markers from an edge label: "[Y] Yes" / "Y) Yes" / "Y - Yes". */
+function extractAccelerator(label: string): { key: string; label: string } | undefined {
+  const trimmed = label.trim();
+  const brackets = /^\[([A-Za-z0-9])\]\s*(.*)$/.exec(trimmed);
+  if (brackets) return { key: brackets[1]!.toUpperCase(), label: brackets[2]! };
+  const paren = /^([A-Za-z0-9])\)\s*(.*)$/.exec(trimmed);
+  if (paren) return { key: paren[1]!.toUpperCase(), label: paren[2]! };
+  const dash = /^([A-Za-z0-9])\s*-\s*(.*)$/.exec(trimmed);
+  if (dash) return { key: dash[1]!.toUpperCase(), label: dash[2]! };
+  return undefined;
+}
+
+/** Wait for a human via the Interviewer. Choices derive from outgoing edge labels. */
+const waitHumanHandler: Handler = async (ctx) => {
+  const outgoing = ctx.graph.edges.filter((e) => e.from === ctx.node.id);
+  const options = outgoing
+    .map((e, i) => {
+      const raw = (e.attrs.label ?? "").trim();
+      const accel = extractAccelerator(raw);
+      if (accel) return { key: accel.key, label: accel.label || raw };
+      const fallback = raw || e.to;
+      return { key: String(i + 1), label: fallback };
+    })
+    .filter((o) => o.label.length > 0);
+
+  const prompt = substitute(ctx.node.attrs.prompt ?? "(human gate — no prompt set)", {
+    context: ctx.context,
+    nodeOutputs: ctx.node_outputs,
+  });
+  const idleTimeoutMs = typeof ctx.node.attrs.idle_timeout === "number" ? ctx.node.attrs.idle_timeout : undefined;
+  const emit = buildEmit(ctx);
+
+  const question: Question = {
+    text: prompt,
+    type: options.length > 0 ? "MULTIPLE_CHOICE" : "CONFIRMATION",
+    stage: ctx.node.id,
+    metadata: {},
+    ...(options.length > 0 ? { options } : {}),
+    ...(idleTimeoutMs !== undefined ? { timeout_seconds: idleTimeoutMs / 1000 } : {}),
+  };
+
+  await emit("interview.started", {
+    question_type: question.type,
+    option_count: options.length,
+  });
+
+  try {
+    const answer = await ctx.interviewer.ask(question);
+    await emit("interview.completed", { value: String(answer.value) });
+
+    const v = String(answer.value).toUpperCase();
+    if (v === "TIMEOUT") {
+      await emit("interview.timeout", {});
+      return fail("human gate timed out");
+    }
+    if (v === "NO") return fail("human declined");
+
+    const matchedLabel = answer.selected_option?.label ?? (typeof answer.value === "string" ? answer.value : "");
+    return ok({
+      notes: `human approved: ${matchedLabel}`,
+      preferred_label: matchedLabel,
+    });
+  } catch (err) {
+    return fail(`wait.human failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+
 export const HANDLERS: Record<string, Handler> = {
   start: startHandler,
   exit: exitHandler,
   conditional: conditionalHandler,
   codergen: codergenHandler,
   loop: loopHandler,
+  "wait.human": waitHumanHandler,
 };
 
 // ---------------------------------------------------------------------------

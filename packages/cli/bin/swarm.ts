@@ -24,6 +24,7 @@ cli
   .option("--allow-env-keys", "Bypass the .env secret scanner (use with caution)")
   .option("--worktree", "Run in an isolated git worktree (branch swarm/<run-id>)")
   .option("--keep-worktree", "Keep the worktree after the run for post-mortem (implies --worktree)")
+  .option("--interviewer <mode>", "Human-in-the-loop interviewer: auto | console (default: console if TTY)")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -46,6 +47,9 @@ cli
       ...(options["allow-env-keys"] === true ? { allowEnvKeys: true } : {}),
       ...(options["worktree"] === true ? { worktree: true } : {}),
       ...(options["keep-worktree"] === true ? { keepWorktree: true } : {}),
+      ...(pick("interviewer") === "auto" || pick("interviewer") === "console"
+        ? { interviewer: pick("interviewer") as "auto" | "console" }
+        : {}),
     });
     process.exit(code);
   });

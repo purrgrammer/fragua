@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCodergenBackend } from "@swarm/agent";
-import type { CodergenBackend } from "@swarm/core";
-import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
+import type { CodergenBackend, Interviewer } from "@swarm/core";
+import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { ConsoleSink, JsonlSink } from "@swarm/events";
 import type { ExecutionEnvironment } from "@swarm/workspace";
 import {
@@ -39,6 +39,8 @@ export interface RunCommandOptions {
   worktree?: boolean;
   /** Don't delete the worktree after the run (for post-mortem). Implies --worktree. */
   keepWorktree?: boolean;
+  /** Which interviewer to use for wait.human nodes. Default: console if stdin is a TTY, else auto. */
+  interviewer?: "auto" | "console";
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -106,6 +108,10 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     backend = new PiCodergenBackend({ registry, env, defaultModel: { provider, model } });
   }
 
+  const interviewerChoice = opts.interviewer ?? (process.stdin.isTTY && !opts.mock ? "console" : "auto");
+  const interviewer: Interviewer =
+    interviewerChoice === "console" ? new ConsoleInterviewer() : new AutoApproveInterviewer();
+
   const jsonl = new JsonlSink({ filePath: eventsPath });
   const console_sink = new ConsoleSink({ inner: jsonl, level: opts.verbosity ?? 1 });
   const sink = console_sink;
@@ -128,6 +134,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       run_id,
       sink,
       backend,
+      interviewer,
       initial_context: opts.input !== undefined ? { $ARGUMENTS: opts.input, input: opts.input } : {},
     });
     const durationMs = Date.now() - startedAt;
