@@ -14,11 +14,14 @@
 //     --input="..."
 //
 // Stages:
-//   1. explore  — read the repo, identify target package + tests
-//   2. plan     — produce a concrete change list + test plan
-//   3. implement— edit source + tests to realize the plan
-//   4. verify   — run `bun run ci` and iterate on failures
-//   5. summarize— write a PR-style summary to .swarm/runs/<id>/summary.md
+//   1. explore             — read the repo, identify target package + tests
+//   2. plan                — produce a concrete change list + test plan
+//   3. implement_and_review — trapezium loop: edit files, spawn a subagent
+//                             as read-only reviewer, iterate until the
+//                             reviewer emits <promise>APPROVED</promise>
+//                             or max_iterations=3 is hit
+//   4. verify              — run `bun run ci` and iterate on failures
+//   5. summarize           — write a PR-style summary to .swarm/runs/<id>/summary.md
 
 digraph build_feature {
   graph [
@@ -26,7 +29,7 @@ digraph build_feature {
     label       = "swarm self-hosting: build-feature"
     default_fidelity = "compact"
     default_max_retries = 1
-    retry_target = "implement"
+    retry_target = "implement_and_review"
   ]
 
   start [shape=Mdiamond]
@@ -41,10 +44,12 @@ digraph build_feature {
     fidelity = "compact"
   ]
 
-  implement [
-    prompt = "Implement the plan ($plan.output). Rules:\n  - Use local:read_file, local:write_file, local:bash (for `git` and `bun`).\n  - Stay inside the package(s) named in the plan.\n  - After editing files, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package.\n  - Fix any TypeScript errors before moving on.\n  - Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan explicitly says to.\n\nWhen finished, output a concise summary of what you changed."
-    allowed_tools = "local:read_file, local:write_file, local:bash"
-    max_retries = 2
+  implement_and_review [
+    shape = trapezium
+    until = "APPROVED"
+    max_iterations = 3
+    prompt = "You are implementing the plan ($plan.output).\n\nEach iteration, do all three steps in order:\n  (1) IMPLEMENT — apply any remaining plan items using local:read_file, local:write_file, local:bash. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n  (2) REVIEW — call local:subagent with: prompt = the full plan + a diff of what you changed (from `git diff`) + this instruction: \"You are a senior reviewer. Read the listed files and judge whether the implementation matches the plan, tests cover the new behavior, and there are no obvious bugs or scope creep. Respond with either \\\"APPROVE: <one-line reason>\\\" or \\\"REJECT: <numbered list of concrete fixes>\\\".\" Set allowed_tools to [\"local:read_file\",\"local:bash\"] (read-only reviewer).\n  (3) DECIDE — if the reviewer's verdict starts with APPROVE, emit exactly <promise>APPROVED</promise> as your final message (nothing else). If it starts with REJECT, acknowledge the fixes you will make next iteration and STOP (the loop will re-invoke you)."
+    allowed_tools = "local:read_file, local:write_file, local:bash, local:subagent"
     thread_id = "dev"
   ]
 
@@ -64,7 +69,7 @@ digraph build_feature {
 
   done [shape=Msquare]
 
-  start -> explore -> plan -> implement -> verify
+  start -> explore -> plan -> implement_and_review -> verify
   verify -> summarize [condition="outcome=success"]
   verify -> done [condition="outcome=fail"]
   summarize -> done
