@@ -17,6 +17,7 @@ import { eventsRoutes } from "./routes/events.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { interviewRoutes } from "./routes/interview.ts";
 import { pipelinesRoutes } from "./routes/pipelines.ts";
+import { statsRoutes } from "./routes/stats.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
 
 export interface ServerOptions {
@@ -57,6 +58,7 @@ export function createServer(opts: ServerOptions): Hono {
   app.route("/", healthRoutes());
   app.route("/", eventsRoutes({ runsDir: opts.runsDir }));
   app.route("/", pipelinesRoutes({ runReader }));
+  app.route("/", statsRoutes({ runReader }));
   app.route("/", interviewRoutes({ runReader, interviewGateway }));
   app.route("/", workflowsRoutes({ workflowReader }));
   return app;
@@ -83,4 +85,5 @@ export {
   NodeState,
   PipelineDetail,
   PipelineSummary,
+  StatsPayload,
 } from "./schemas.ts";

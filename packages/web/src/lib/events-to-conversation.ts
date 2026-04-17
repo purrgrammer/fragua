@@ -10,9 +10,11 @@
 //
 //   - We scope sections by `node_id`. Events missing `node_id` (pipeline
 //     lifecycle: `pipeline.*`, `edge.*`, `interview.*`, `checkpoint.*`,
-//     `steering.*`, ...) never produce conversation content — but
+//     `steering.requested`, ...) never produce conversation content — but
 //     `node.started|completed|failed|retrying|skipped` still drive the
-//     `NodeSection.status` projection.
+//     `NodeSection.status` projection. `steering.injected` *does* carry a
+//     `node_id` (stamped by the executor's `buildEmit`) and renders as a
+//     user message inside the active section/turn.
 //
 //   - Turns: one `Turn` per `agent.turn_start` within the current node
 //     section. A trapezium loop node that runs three iterations emits
@@ -516,6 +518,31 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
       break;
     }
 
+    // ----- Steering -----
+    // `steering.injected` fires from the backend poller the moment a
+    // steering.jsonl line is read, *before* pi-agent-core drains the queue
+    // and emits its own `agent.message_start(role=user)`. Render it as a
+    // user message in the current section/turn so the steer is visible
+    // immediately; pi's later user-message_start still fires and remains a
+    // structural marker (filtered out at render time as an empty shell).
+    case "steering.injected": {
+      if (!nodeId) break;
+      const message = data["message"];
+      if (typeof message !== "string" || message.length === 0) break;
+      state.activeNodeId = nodeId;
+      if (!state.activeTurn) state.activeTurn = openTurn(state, nodeId, ev.session_id ?? null);
+      state.messageCounter += 1;
+      const msg: Message = {
+        messageId: `${state.activeTurn.turnId}-m${state.messageCounter}`,
+        role: "user",
+        parts: [{ type: "text", text: message }],
+      };
+      state.activeTurn.messages.push(msg);
+      // Don't bind `activeMessage` — we don't want subsequent deltas to
+      // land here; this message is self-contained.
+      break;
+    }
+
     // ----- Cost attribution -----
     case "cost.recorded": {
       if (!state.activeTurn) break;
@@ -538,7 +565,7 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
 
     default:
       // Ignore events that don't affect the conversation projection
-      // (pipeline.*, edge.*, interview.*, steering.*, agent.start,
+      // (pipeline.*, edge.*, interview.*, steering.requested, agent.start,
       // agent.end, checkpoint.*).
       break;
   }

@@ -629,7 +629,11 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       };
     }
 
-    await emit("node.started", node, buildNodeStartedData(graph, node, args.context, args.node_outputs) as Record<string, unknown>);
+    await emit(
+      "node.started",
+      node,
+      buildNodeStartedData(graph, node, args.context, args.node_outputs) as Record<string, unknown>,
+    );
     const startAt = Date.now();
 
     const outcome = await runWithRetry({

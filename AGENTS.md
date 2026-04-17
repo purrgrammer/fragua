@@ -116,19 +116,37 @@ Flags: `--port <n>` (default 3000; `0` picks an ephemeral port for tests),
 triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
 front if exposing beyond localhost.
 
+REST surface at time of writing: `GET /health`, `GET /pipelines`,
+`GET /pipelines/:id`, `GET /stats` (aggregate tiles for the Home
+dashboard — total / running / succeeded / failed, success rate, total
+cost + tokens, avg duration), `GET /runs/:id/events` (SSE), plus the
+interview and workflows routes. Shapes live in
+`packages/server/src/schemas.ts`.
+
 ### Web UI
 
-The React + Vite client lives in `packages/web/`. Current surface: a
-pipelines list (landing route) and a per-run detail view with a graph
-rendering + active-node highlight. Metrics (cost, input/output tokens,
-duration) are derived server-side from `cost.recorded` events and rendered
-in both the list and the detail header.
+The React + Vite client lives in `packages/web/`. The app sits inside a
+persistent `AppShell` (sidebar + breadcrumb header + connection badge)
+and routes to:
+
+- `/` — Home dashboard (stats tiles from `GET /stats` + recent runs)
+- `/pipelines` — full pipelines list (the table-shaped view)
+- `/pipelines/:id` — per-run detail with graph + active-node highlight
+- `/workflows` — workflow catalog
+- `/settings` — client settings
+
+Metrics (cost, input/output tokens, duration) are derived server-side
+from `cost.recorded` events and rendered in both the list and the detail
+header. The sidebar reads connection status from `HealthContext`, so the
+route tree stays stable across health-status flips (tests rely on this).
 
 The web surface standardizes on **Vercel AI Elements** end-to-end
 (`Workflow` for the graph, Chatbot family for drilldown, human-in-the-loop
 set for steering). The currently-shipped Graphviz-wasm renderer is being
-swapped for AI Elements' `Workflow` in P5.12; the event timeline (P5.07),
-drilldown (P5.08) and dashboard shell (P5.13) are still pending.
+swapped for AI Elements' `Workflow` in P5.12; the event timeline (P5.07)
+and drilldown (P5.08) are still pending. The dashboard shell (P5.13) is
+partially landed — `AppShell` + Home/Workflows/Pipelines/Settings routes
+exist; individual tiles and workflow-catalog content are still filling in.
 
 ```sh
 # Terminal A — start the HTTP/SSE server
@@ -138,7 +156,7 @@ bun run packages/cli/bin/swarm.ts serve --port 3000
 bun run --filter='@swarm/web' dev
 ```
 
-Open http://localhost:5173 — the header badge flips to **connected** once
+Open http://localhost:5173 — the sidebar footer flips to **connected** once
 the proxy reaches `/health`. Build a static bundle with
 `bun run --filter='@swarm/web' build` → `packages/web/dist/`.
 
@@ -171,7 +189,9 @@ bun run packages/cli/bin/swarm.ts steer <run-id> "please also add a test"
 The message is appended to `.swarm/runs/<run-id>/steering.jsonl`. The running
 backend tails the file (≤500ms poll) and injects each line into the active
 agent via pi-agent-core's `agent.steer()`. A `steering.injected` event lands
-in the run's `events.jsonl` for audit.
+in the run's `events.jsonl` for audit, and the web UI renders it as a user
+message inside the active node's current turn so the steer is visible the
+moment it reaches the backend.
 
 ### Parallel branches + fan_in
 

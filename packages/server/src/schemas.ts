@@ -140,3 +140,33 @@ export const ErrorBody = Type.Object({
   details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 export type ErrorBody = Static<typeof ErrorBody>;
+
+/**
+ * Aggregate returned by `GET /stats`. One number per tile on the Home
+ * dashboard — derived server-side over every run under `runsDir` so the
+ * tiles stay accurate even after we add pagination to `GET /pipelines`.
+ *
+ * Conventions:
+ *   - `successRate` is `succeeded / (succeeded + failed)`; 0 when no
+ *     terminal runs exist (preferred over NaN so the wire shape stays
+ *     uniformly numeric).
+ *   - `avgDurationMs` is omitted (not zero) when no terminal runs exist
+ *     — same "absent vs zero" discipline as `PipelineSummary.durationMs`.
+ *   - `updatedAt` is the server's wall-clock at response time. The
+ *     client uses it to decide whether to refresh; we don't TTL-cache
+ *     yet so it's always "now", but exposing the field keeps the door
+ *     open for caching without a wire-shape change.
+ */
+export const StatsPayload = Type.Object({
+  totalRuns: Type.Integer({ minimum: 0 }),
+  running: Type.Integer({ minimum: 0 }),
+  succeeded: Type.Integer({ minimum: 0 }),
+  failed: Type.Integer({ minimum: 0 }),
+  successRate: Type.Number({ minimum: 0, maximum: 1 }),
+  totalCostUsd: Type.Number({ minimum: 0 }),
+  totalInputTokens: Type.Integer({ minimum: 0 }),
+  totalOutputTokens: Type.Integer({ minimum: 0 }),
+  avgDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  updatedAt: Type.String(),
+});
+export type StatsPayload = Static<typeof StatsPayload>;

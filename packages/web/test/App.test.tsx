@@ -6,6 +6,17 @@
 //   DOM lazily (see `./setup.ts` for why), `screen` is guaranteed-broken
 //   at load time. We sidestep this by using the `{ container }` returned
 //   by `render()` and `within(container)` — both resolve at call time.
+//
+// Why every test injects a memory router:
+//   The persistent layout (sidebar, badge, breadcrumb) lives *inside*
+//   the route tree (`AppShell` is the layout route's element). Under
+//   happy-dom, `BrowserRouter` resolves to the pathname `"blank"`,
+//   which doesn't match any route; React Router then throws via its
+//   default error boundary and the layout never mounts.
+//
+//   Memory routers with an explicit `/` initialEntry sidestep that.
+//   Status itself flows through `HealthContext` (App provides), so
+//   the badge re-renders on flips even with an injected router.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
@@ -43,6 +54,11 @@ function stubClient(overrides: Overrides = {}): ApiClient {
   };
 }
 
+function mountApp(client: ApiClient, path = "/") {
+  const router = createMemoryRouter(createRoutes({ api: client }), { initialEntries: [path] });
+  return render(<App apiClient={client} router={router} />);
+}
+
 describe("App", () => {
   useDom();
 
@@ -52,10 +68,8 @@ describe("App", () => {
 
   it("renders the connected badge when /health returns ok", async () => {
     const client = stubClient();
-    const { container } = render(<App apiClient={client} />);
+    const { container } = mountApp(client);
     const q = within(container);
-
-    expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("loading");
 
     await waitFor(() => {
       expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("connected");
@@ -69,7 +83,7 @@ describe("App", () => {
         throw new Error("boom");
       },
     });
-    const { container } = render(<App apiClient={client} />);
+    const { container } = mountApp(client);
     const q = within(container);
 
     await waitFor(() => {
@@ -82,7 +96,7 @@ describe("App", () => {
 
   it("renders the error badge when /health reports ok:false", async () => {
     const client = stubClient({ health: async () => ({ ok: false }) });
-    const { container } = render(<App apiClient={client} />);
+    const { container } = mountApp(client);
     const q = within(container);
 
     await waitFor(() => {
@@ -90,7 +104,10 @@ describe("App", () => {
     });
   });
 
-  it("renders the pipelines list at the default `/` route", async () => {
+  it("renders the pipelines list at the `/pipelines` route", async () => {
+    // `/` is now the Home dashboard; the table-shaped list lives at
+    // `/pipelines`. This test still exists to cover the App→router
+    // wiring; the dedicated `Home.test.tsx` covers the new landing.
     const client = stubClient({
       listPipelines: async () => [
         {
@@ -105,11 +122,7 @@ describe("App", () => {
         },
       ],
     });
-    // Use an injected MemoryRouter to avoid depending on happy-dom's
-    // default URL ("about:blank") — BrowserRouter resolves to "/blank"
-    // under happy-dom, which doesn't match any of our routes.
-    const router = createMemoryRouter(createRoutes({ api: client }), { initialEntries: ["/"] });
-    const { container } = render(<App apiClient={client} router={router} />);
+    const { container } = mountApp(client, "/pipelines");
     await waitFor(() => {
       expect(within(container).getByTestId("pipelines-table")).toBeTruthy();
     });

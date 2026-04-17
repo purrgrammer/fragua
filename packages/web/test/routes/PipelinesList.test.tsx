@@ -34,7 +34,7 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
   };
 }
 
-function mount(api: ApiClient, path = "/") {
+function mount(api: ApiClient, path = "/pipelines") {
   const router = createMemoryRouter(createRoutes({ api }), { initialEntries: [path] });
   return render(<RouterProvider router={router} />);
 }
@@ -236,7 +236,7 @@ describe("PipelinesList", () => {
         expect(within(container).getByTestId("pipelines-error")).toBeTruthy();
       });
       // Header still renders — no crash.
-      expect(within(container).getByText("Pipelines")).toBeTruthy();
+      expect(within(container).getByRole("heading", { name: "Pipelines" })).toBeTruthy();
       // Raw error message must NOT be surfaced to the user.
       expect(container.textContent ?? "").not.toContain("nope-should-not-render");
     } finally {

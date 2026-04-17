@@ -317,6 +317,31 @@ describe("eventsToConversation — synthetic sequences", () => {
     expect(s?.promptTemplate).toBe("hello ${context.greeting}");
   });
 
+  it("steering.injected renders as a user message in the active section/turn", () => {
+    const out = eventsToConversation([
+      ev("node.started", { node_id: "n1" }),
+      ev("agent.turn_start", { node_id: "n1" }),
+      // Assistant is mid-stream when user steers.
+      ev("agent.message_start", { node_id: "n1", data: { role: "assistant" } }),
+      ev("llm.text_delta", { node_id: "n1", data: { delta: "Working on it…" } }),
+      ev("steering.injected", { node_id: "n1", data: { message: "please focus on tests" } }),
+    ]);
+    const turn = out[0]?.turns[0];
+    expect(turn?.messages.map((m) => m.role)).toEqual(["assistant", "user"]);
+    const userMsg = turn?.messages[1];
+    expect(userMsg?.parts).toEqual([{ type: "text", text: "please focus on tests" }]);
+  });
+
+  it("steering.injected with no active turn opens one", () => {
+    const out = eventsToConversation([
+      ev("node.started", { node_id: "n1" }),
+      ev("steering.injected", { node_id: "n1", data: { message: "hello" } }),
+    ]);
+    const msg = out[0]?.turns[0]?.messages[0];
+    expect(msg?.role).toBe("user");
+    expect(msg?.parts).toEqual([{ type: "text", text: "hello" }]);
+  });
+
   it("records node.retrying / node.failed / node.skipped on the section", () => {
     const out = eventsToConversation([
       ev("node.started", { node_id: "x" }),
