@@ -52,6 +52,9 @@ export interface NodeAttrs {
   context?: ContextMode;
   allowed_tools?: string[];
   denied_tools?: string[];
+  /** Files read from the target project root and prepended to the agent's
+   * system prompt as `<project-conventions>` blocks. Comma-separated in DOT. */
+  context_files?: string[];
   class?: string;
   retry_target?: string;
   fallback_retry_target?: string;

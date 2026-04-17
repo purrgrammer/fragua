@@ -8,6 +8,7 @@ import type { CodergenBackend, CodergenInput, Outcome } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
+import { loadContextFiles, mergeSystemPrompt } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
@@ -73,8 +74,15 @@ export class PiCodergenBackend implements CodergenBackend {
     if (deny) selectOpts.deny = deny;
     const tools = this.registry.select(selectOpts).map((t) => toAgentTool(t, this.env));
 
+    const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
+    const { text: contextBlock, warnings } = await loadContextFiles(this.env, contextFiles);
+    if (input.emit) {
+      for (const msg of warnings) await input.emit("agent.warning", { message: msg });
+    }
+    const systemPrompt = mergeSystemPrompt(this.systemPrompt, contextBlock);
+
     const agent = new Agent({
-      initialState: { systemPrompt: this.systemPrompt, model, tools },
+      initialState: { systemPrompt, model, tools },
       ...(input.thread_id !== undefined ? { sessionId: input.thread_id } : {}),
     });
 

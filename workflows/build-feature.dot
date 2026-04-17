@@ -35,13 +35,15 @@ digraph build_feature {
   start [shape=Mdiamond]
 
   explore [
-    prompt = "You are a senior engineer working on swarm (a universal AI agent orchestrator).\n\nTask from user: $ARGUMENTS\n\nStep 1 — Explore:\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - Read CLAUDE.md for conventions.\n  - Use local:bash to run `git ls-files | head -40` to understand layout.\n  - Identify which package(s) should change and which tests already cover similar ground.\n  - Output a short summary under 600 words describing what you found."
+    prompt = "You are a senior engineer working on swarm (a universal AI agent orchestrator).\n\nTask from user: $ARGUMENTS\n\nStep 1 — Explore:\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - The repo conventions from AGENTS.md have been prepended as <project-conventions> above — follow them.\n  - Use local:bash to run `git ls-files | head -40` to understand layout.\n  - Identify which package(s) should change and which tests already cover similar ground.\n  - Output a short summary under 600 words describing what you found."
     allowed_tools = "local:read_file, local:bash"
+    context_files = "AGENTS.md"
   ]
 
   plan [
-    prompt = "Based on your exploration ($explore.output), produce a concrete plan as a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Any constraints you want to flag before implementation.\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`. Do not call any tools in this node."
+    prompt = "Based on your exploration ($explore.output), produce a concrete plan as a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Any constraints you want to flag before implementation.\n\nHonour the repo conventions in <project-conventions> (AGENTS.md) above — especially `pure core`, `spec-first`, and `no silent deps`.\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`. Do not call any tools in this node."
     fidelity = "compact"
+    context_files = "AGENTS.md"
   ]
 
   implement_and_review [

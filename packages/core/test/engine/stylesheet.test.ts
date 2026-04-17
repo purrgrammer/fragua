@@ -138,6 +138,34 @@ describe("applyStylesheet — fill in missing node attrs", () => {
     expect(graph.nodes["plain"]!.attrs.model).toBe("haiku");
   });
 
+  test("fills in context_files via shape selector", () => {
+    const graph = parseDotSource(`
+      digraph {
+        model_stylesheet = "[shape=box] { context_files: AGENTS.md, docs/SPEC.md }"
+        s [shape=Mdiamond]
+        a [shape=box, prompt="a"]
+        done [shape=Msquare]
+        s -> a -> done
+      }
+    `);
+    applyStylesheet(graph);
+    expect(graph.nodes["a"]!.attrs.context_files).toEqual(["AGENTS.md", "docs/SPEC.md"]);
+  });
+
+  test("node-level context_files wins over stylesheet", () => {
+    const graph = parseDotSource(`
+      digraph {
+        model_stylesheet = "[shape=box] { context_files: AGENTS.md }"
+        s [shape=Mdiamond]
+        a [shape=box, prompt="a", context_files="CONTRIBUTING.md"]
+        done [shape=Msquare]
+        s -> a -> done
+      }
+    `);
+    applyStylesheet(graph);
+    expect(graph.nodes["a"]!.attrs.context_files).toEqual(["CONTRIBUTING.md"]);
+  });
+
   test("no model_stylesheet attr → no-op", () => {
     const graph = parseDotSource(`
       digraph {

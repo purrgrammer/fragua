@@ -19,6 +19,7 @@ interface StyleDeclaration {
   model?: string;
   provider?: string;
   reasoning_effort?: ReasoningEffort;
+  context_files?: string[];
 }
 
 type StyleSelector =
@@ -71,13 +72,24 @@ function parseDeclarations(raw: string): StyleDeclaration {
     else if (key === "provider") out.provider = value;
     else if (key === "reasoning_effort" && (value === "low" || value === "medium" || value === "high")) {
       out.reasoning_effort = value;
+    } else if (key === "context_files") {
+      const files = value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (files.length > 0) out.context_files = files;
     }
   }
   return out;
 }
 
 function hasAnyDecl(d: StyleDeclaration): boolean {
-  return d.model !== undefined || d.provider !== undefined || d.reasoning_effort !== undefined;
+  return (
+    d.model !== undefined ||
+    d.provider !== undefined ||
+    d.reasoning_effort !== undefined ||
+    d.context_files !== undefined
+  );
 }
 
 function matches(node: Node, selector: StyleSelector): boolean {
@@ -106,12 +118,16 @@ export function applyStylesheet(graph: Graph): void {
     const hadModel = node.attrs.model !== undefined;
     const hadProvider = node.attrs.provider !== undefined;
     const hadEffort = node.attrs.reasoning_effort !== undefined;
+    const hadContextFiles = node.attrs.context_files !== undefined;
     for (const rule of rules) {
       if (!matches(node, rule.selector)) continue;
       if (!hadModel && rule.decl.model !== undefined) node.attrs.model = rule.decl.model;
       if (!hadProvider && rule.decl.provider !== undefined) node.attrs.provider = rule.decl.provider;
       if (!hadEffort && rule.decl.reasoning_effort !== undefined) {
         node.attrs.reasoning_effort = rule.decl.reasoning_effort;
+      }
+      if (!hadContextFiles && rule.decl.context_files !== undefined) {
+        node.attrs.context_files = [...rule.decl.context_files];
       }
     }
   }

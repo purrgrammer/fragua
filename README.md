@@ -9,7 +9,7 @@ A universal AI agent orchestrator. Declarative DOT workflows drive multi-provide
 - **[SPEC.md](docs/SPEC.md)** — what swarm is
 - **[PLAN.md](docs/PLAN.md)** — the phased build plan
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design decisions and rationale
-- **[CLAUDE.md](CLAUDE.md)** — conventions for AI agents working on this repo
+- **[AGENTS.md](AGENTS.md)** — conventions for AI agents working on this repo
 
 ## Quick tour (once Phase 2 ships)
 

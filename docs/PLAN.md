@@ -13,7 +13,7 @@
 - `bun test` configured
 - `.gitignore` including `attractor/`, `Archon/`, `pi-mono/` (reference repos kept for development but never committed), plus `.swarm/runs/`, `node_modules/`, `dist/`
 - `docs/SPEC.md` and `docs/PLAN.md` — resumability anchors
-- `CLAUDE.md` at repo root documenting conventions, where to find what, how to run tests
+- `AGENTS.md` at repo root documenting conventions, where to find what, how to run tests
 - `.github/workflows/ci.yml` — typecheck + lint + test on every push
 - Root `package.json` with Bun workspace config
 

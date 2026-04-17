@@ -384,7 +384,7 @@ const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "default_max_retri
 
 const NUMBER_KEYS: ReadonlySet<string> = new Set(["weight"]);
 
-const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools"]);
+const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files"]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {
   if (BOOLEAN_KEYS.has(key)) {

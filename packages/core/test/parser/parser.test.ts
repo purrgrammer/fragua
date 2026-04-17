@@ -87,6 +87,11 @@ describe("parseDotSource", () => {
     expect(g.nodes["n"]!.attrs.allowed_tools).toEqual(["read_file", "write_file", "bash"]);
   });
 
+  test("context_files parsed as string array", () => {
+    const g = parseDotSource(`digraph { n [context_files="AGENTS.md, docs/SPEC.md"] }`);
+    expect(g.nodes["n"]!.attrs.context_files).toEqual(["AGENTS.md", "docs/SPEC.md"]);
+  });
+
   test("subgraph contributes derived class to nodes", () => {
     const g = parseDotSource(`
       digraph {

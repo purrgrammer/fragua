@@ -16,7 +16,7 @@ on SIGINT. Users then open a browser to the printed URL.
 - Files to modify:
   - `packages/cli/bin/swarm.ts` — register the new subcommand
   - `packages/cli/package.json` — add `@swarm/server` as dep
-  - `CLAUDE.md` — add a short "Running the server" section under Self-hosting
+  - `AGENTS.md` — add a short "Running the server" section under Self-hosting
 - Public API:
   - `export async function serveCommand(opts: { port?: number; runsDir?: string; cwd?: string }): Promise<number>`
 

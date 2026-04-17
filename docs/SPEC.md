@@ -462,7 +462,7 @@ All adopted packages pinned to **exact** versions via `package.json`. `bun.lock`
 If any session is interrupted, the full project state is in:
 - `docs/SPEC.md` (this file) — what the system is
 - `docs/PLAN.md` — the phased build plan with verification bars
-- `CLAUDE.md` at the repo root — conventions and commands
+- `AGENTS.md` at the repo root — conventions and commands
 - Every run's `.swarm/runs/<id>/events.jsonl` — full audit trail of what was tried
 - `package.json` pinned versions — prevent drift
 

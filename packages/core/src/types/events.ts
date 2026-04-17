@@ -30,6 +30,7 @@ export type EventType =
   | "agent.message_start"
   | "agent.message_update"
   | "agent.message_end"
+  | "agent.warning"
   // LLM layer
   | "llm.start"
   | "llm.text_delta"
