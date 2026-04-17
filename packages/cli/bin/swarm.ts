@@ -6,6 +6,7 @@ import { listCommand } from "../src/commands/list.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
 import { runCommand } from "../src/commands/run.ts";
+import { serveCommand } from "../src/commands/serve.ts";
 import { steerCommand } from "../src/commands/steer.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
@@ -118,6 +119,27 @@ cli
         ? { limit: Number.parseInt(String(limitRaw), 10) }
         : {}),
       ...(typeof runsDirRaw === "string" ? { runsDir: runsDirRaw } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
+  .option("--port <n>", "TCP port to bind (default 3000; pass 0 for ephemeral)")
+  .option("--runs-dir <path>", "Runs directory to expose (default .swarm/runs)")
+  .option("--cwd <path>", "Base directory for resolving --runs-dir")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const portRaw = options["port"];
+    const portNum =
+      typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
+    const code = await serveCommand({
+      ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
     });
     process.exit(code);
   });

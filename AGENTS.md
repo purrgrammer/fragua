@@ -89,6 +89,21 @@ bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
 bun run packages/cli/bin/swarm.ts replay .swarm/runs/<id>/events.jsonl
 ```
 
+### Running the server
+
+Start the HTTP + SSE server for the web UI / TUI / any other client:
+
+```sh
+bun run packages/cli/bin/swarm.ts serve --port 3000
+# → swarm serve listening on http://localhost:3000
+curl http://localhost:3000/health   # {"ok":true}
+```
+
+Flags: `--port <n>` (default 3000; `0` picks an ephemeral port for tests),
+`--runs-dir <path>` (default `.swarm/runs`), `--cwd <path>`. `Ctrl-C`
+triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
+front if exposing beyond localhost.
+
 ### Mid-run steering
 
 Send a new user message into a running swarm process:
