@@ -59,20 +59,6 @@ bun run swarm replay <events.jsonl>
 └── .swarm/runs/           # runtime event logs (gitignored)
 ```
 
-## Reference material (not committed)
-
-Three repos live at the swarm root for research:
-- `attractor/` — the NLSpecs we implement (orchestrator, agent loop, LLM client)
-- `Archon/` — prior-art YAML-based harness we learn from
-- `pi-mono/` — the packages we adopt
-
-If any are missing, re-clone:
-```sh
-git clone https://github.com/strongdm/attractor.git
-git clone https://github.com/coleam00/Archon.git
-git clone https://github.com/badlogic/pi-mono.git
-```
-
 ## Commit conventions
 
 - Commit messages use imperative mood ("add X", not "added X").
@@ -219,7 +205,7 @@ Omit `--model` and swarm uses that provider's default (see `swarm providers`). T
 
 Related:
 - `examples/hello.dot` — tiny smoke workflow (greet + verify)
-- `workflows/build-feature.dot` — plan → implement → verify → summarize
+- `workflows/build-feature.dot` — plan → implement_and_review loop → verify → summarize
 - `.swarm/config.yaml` — per-project defaults + workflow shortcuts
 
 The agent writing code on swarm's behalf has full access to `local:read_file`, `local:write_file`, and `local:bash`. The command blocklist in `.swarm/config.yaml` refuses the most dangerous patterns even in unsafe mode. Everything emitted to `.swarm/runs/<id>/events.jsonl` is an immutable audit trail.

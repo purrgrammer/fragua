@@ -46,7 +46,6 @@ blocklist:
 # Workflows the user can invoke by name (e.g. `swarm run build-feature`).
 # Values are paths relative to the repo root.
 workflows:
-  hello:         examples/hello.dot
   build-feature: workflows/build-feature.dot
 
 # Skills / playbooks (Phase 6).
