@@ -104,6 +104,24 @@ Flags: `--port <n>` (default 3000; `0` picks an ephemeral port for tests),
 triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
 front if exposing beyond localhost.
 
+### Web UI (scaffold)
+
+The React + Vite client lives in `packages/web/`. At this phase it's a
+scaffold that renders a server-health badge; pipelines, graph view, and
+drilldown land in subsequent tasks.
+
+```sh
+# Terminal A — start the HTTP/SSE server
+bun run packages/cli/bin/swarm.ts serve --port 3000
+
+# Terminal B — start the Vite dev server on :5173 (proxies /api → :3000)
+bun run --filter='@swarm/web' dev
+```
+
+Open http://localhost:5173 — the header badge flips to **connected** once
+the proxy reaches `/health`. Build a static bundle with
+`bun run --filter='@swarm/web' build` → `packages/web/dist/`.
+
 ### Mid-run steering
 
 Send a new user message into a running swarm process:
