@@ -74,15 +74,30 @@ All specs follow the same structure so the `explore` stage of
 - <explicit non-goals>
 ```
 
+## Design principles
+
+- **Data-first, always.** The server exposes typed JSON; clients (web, TUI,
+  replay, future adapters) render from data. We never server-render SVG or
+  any other display format — the `Graph` shape from `@swarm/core` is the
+  contract, and that shape is serializable, diffable, and typeable.
+- **One parser, two runtimes.** `@swarm/core` is pure (no `node:` imports)
+  so `parseDotSource` runs both server-side and in the browser bundle.
+  Tasks that need a `Graph` import it from `@swarm/core` — no DOT parsing
+  duplication.
+- **Render libraries are replaceable, data isn't.** If AI Elements ships a
+  workflow primitive that fits, use it. If not, reach for React Flow,
+  elkjs, or plain SVG. None of that leaks into the data layer.
+
 ## Reusable patterns
 
 When writing a new task spec, point the agent at these existing primitives
 instead of letting it rebuild them:
 
+- **Graph type + parser** — `import { parseDotSource, type Graph, type Node, type Edge } from "@swarm/core"` (pure, browser-safe)
 - **Events** — `packages/core/src/types/events.ts` defines all 28 event types
+- **Event tail** — `@swarm/events` `tailJsonl` (shipped in P5.01, handles truncation)
 - **JSONL sink** — `packages/events/src/jsonl.ts:JsonlSink` (atomic append, mkdir parent)
 - **Cost totals** — `packages/events/src/console.ts:ConsoleSink.totals` (aggregated per run)
-- **DOT parsing** — `packages/core/src/parser/parser.ts:parseDotSource`
 - **Provider checks** — `packages/agent/src/providers.ts:hasProviderCredentials`
 - **Runs layout** — `.swarm/runs/<id>/{events.jsonl, summary.md, steering.jsonl, checkpoint.json}`
 

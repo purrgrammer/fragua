@@ -15,7 +15,10 @@ web tasks and used without a server.
 
 - Files to create:
   - `packages/cli/src/commands/dashboard.ts`
-  - `packages/cli/src/ui/AsciiGraph.tsx` — layout nodes in a simple top-down box grid; not pixel-perfect, just readable
+  - `packages/cli/src/ui/AsciiGraph.tsx` — takes a `Graph` (from
+    `@swarm/core`) and a `nodeStates` map, prints a simple top-down
+    box layout. Reads the same data structure the web UI does — no
+    DOT re-parsing, no duplicate layout logic.
   - `packages/cli/src/ui/StreamPane.tsx` — tails events, formats as chalked lines, auto-scrolls
   - `packages/cli/src/ui/CostBar.tsx`
   - `packages/cli/src/ui/KeyHandler.ts` — keypress dispatch
@@ -46,6 +49,7 @@ web tasks and used without a server.
 
 ## Reusable patterns
 
-- Event tail: reuse the file-watch approach from `packages/agent/src/backend.ts:startSteeringPoller` (stat + offset read)
-- Cost totals: `packages/events/src/console.ts:ConsoleSink.totals`
-- Run id discovery: if `--run-id` omitted, pick the newest directory in `.swarm/runs/`
+- **Graph data structure**: `import { parseDotSource, type Graph } from "@swarm/core"` — parse the workflow DOT once, feed the resulting `Graph` straight to `AsciiGraph`. This is the same shape the web UI renders (task 06); node-state reducer (task 06's `lib/node-state.ts`) can also be reused verbatim.
+- **Event tail**: the `tailJsonl` iterator in `@swarm/events` (shipped in P5.01) — same primitive the SSE route uses.
+- **Cost totals**: `packages/events/src/console.ts:ConsoleSink.totals`.
+- **Run id discovery**: if `--run-id` omitted, pick the newest directory in `.swarm/runs/`.
