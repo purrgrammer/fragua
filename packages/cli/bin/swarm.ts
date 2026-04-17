@@ -48,14 +48,16 @@ cli
       if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
       return undefined;
     };
+    // cac camelCases hyphenated flags: `--input-file` lands on `options.inputFile`.
+    // Reading `options["input-file"]` returns undefined and silently drops the flag.
     const code = await runCommand({
       workflow,
       ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
-      ...(pickArray("input-file") !== undefined ? { inputFiles: pickArray("input-file")! } : {}),
+      ...(pickArray("inputFile") !== undefined ? { inputFiles: pickArray("inputFile")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
-      ...(pick("run-id") !== undefined ? { runId: pick("run-id")! } : {}),
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("runId") !== undefined ? { runId: pick("runId")! } : {}),
+      ...(pick("runsDir") !== undefined ? { runsDir: pick("runsDir")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(options["mock"] === true ? { mock: true } : {}),
       ...(options["verbose"] === true
@@ -63,9 +65,9 @@ cli
         : options["quiet"] === true
           ? { verbosity: 0 as const }
           : {}),
-      ...(options["allow-env-keys"] === true ? { allowEnvKeys: true } : {}),
+      ...(options["allowEnvKeys"] === true ? { allowEnvKeys: true } : {}),
       ...(options["worktree"] === true ? { worktree: true } : {}),
-      ...(options["keep-worktree"] === true ? { keepWorktree: true } : {}),
+      ...(options["keepWorktree"] === true ? { keepWorktree: true } : {}),
       ...(pick("interviewer") === "auto" || pick("interviewer") === "console"
         ? { interviewer: pick("interviewer") as "auto" | "console" }
         : {}),
