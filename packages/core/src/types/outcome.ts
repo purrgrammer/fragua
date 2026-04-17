@@ -23,6 +23,13 @@ export const OutcomeSchema = Type.Object(
     failure_reason: Type.Optional(Type.String()),
     /** Bypass edge selection entirely; jump to this node next. */
     next_node_override: Type.Optional(Type.String()),
+    /**
+     * When true, an unrecovered failure must NOT trigger a goal-gate retry
+     * via `graph.attrs.retry_target`. Used for intentional aborts (e.g. a
+     * node can't proceed because the task target is missing) so we don't
+     * burn tokens re-running the pipeline after an explicit stop.
+     */
+    non_retryable: Type.Optional(Type.Boolean()),
   },
   { $id: "Outcome" },
 );

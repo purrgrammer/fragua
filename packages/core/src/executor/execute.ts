@@ -820,6 +820,15 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
 
     // If we stopped at a terminal Msquare, check goal gates + maybe retry.
     if (result.stopped === "terminal" && result.lastNode?.shape === "Msquare") {
+      // Honour `outcome.non_retryable`: a node emitted an intentional abort
+      // (e.g. "task target is missing"), so the goal-gate retry machinery
+      // should stay out of the way. Keep the original fail reason rather
+      // than overwriting it with a "goal gate(s) unsatisfied" message.
+      const aborted = Object.values(node_outcomes).find((o) => o.status === "fail" && o.non_retryable === true);
+      if (aborted) {
+        finalOutcome = aborted;
+        break;
+      }
       const unsat = unsatisfiedGoalGates(graph, node_outcomes);
       if (unsat.length > 0) {
         const retryTarget = graph.attrs.retry_target ?? graph.attrs.fallback_retry_target;

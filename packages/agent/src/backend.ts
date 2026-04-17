@@ -113,7 +113,18 @@ export class PiCodergenBackend implements CodergenBackend {
       });
     }
 
-    return ok({ notes: summarizeMessage(last) });
+    // Self-abort: an agent may decide its task is unreachable (missing target,
+    // contradictory constraints, external blocker) and emit `<abort>reason</abort>`.
+    // Treating that as a `fail` outcome lets workflows wire an early-exit edge
+    // with `condition="outcome=fail"` instead of forwarding the whole pipeline
+    // through a no-op plan → implement → verify chain. We also flag it
+    // `non_retryable` so the goal-gate retry machinery doesn't relaunch the
+    // pipeline after an explicit stop.
+    const notes = summarizeMessage(last);
+    const aborted = parseAbortMarker(notes);
+    if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
+
+    return ok({ notes });
   }
 
   /** Tail the steering file and inject new lines as user messages.
@@ -180,4 +191,24 @@ function summarizeMessage(message: { role: string; content?: unknown }): string 
     .map((p) => p.text)
     .join("\n")
     .slice(0, 4_000);
+}
+
+/**
+ * Parse the final assistant text for a self-abort marker. The agent signals
+ * "I cannot proceed" by emitting `<abort>reason</abort>` anywhere in its
+ * final message. The reason is trimmed and clamped to a single line so it
+ * can be surfaced as a `failure_reason` without dragging in kilobytes of
+ * reasoning. Returns `null` when no marker is present.
+ *
+ * Exported so workflows (and tests) can rely on the exact contract without
+ * reimplementing regex matching.
+ */
+export function parseAbortMarker(text: string): { reason: string } | null {
+  if (!text) return null;
+  const m = text.match(/<abort>([\s\S]*?)<\/abort>/i);
+  if (!m) return null;
+  const raw = (m[1] ?? "").trim();
+  // Collapse any internal newlines; cap length.
+  const oneLine = raw.replace(/\s+/g, " ").slice(0, 400);
+  return { reason: oneLine.length > 0 ? oneLine : "agent aborted without a reason" };
 }

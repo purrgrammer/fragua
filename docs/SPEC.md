@@ -241,9 +241,13 @@ Every handler returns an `Outcome`:
   preferred_label: string,      // for edge selection by label match
   suggested_next_ids: string[], // for edge selection by target match
   notes: string,
-  failure_reason?: string
+  failure_reason?: string,
+  next_node_override?: string,  // bypass edge selection entirely
+  non_retryable?: boolean       // fail must NOT trigger a goal-gate retry
 }
 ```
+
+**Agent self-abort (`<abort>…</abort>`).** Agent-backed nodes can signal an intentional stop by emitting `<abort>reason</abort>` anywhere in their final message. The agent backend parses it and returns a `fail` outcome with `non_retryable: true` and `failure_reason = reason`. Workflows route aborts with `condition="outcome=fail"` edges to a terminal node; the `non_retryable` flag prevents the goal-gate retry machinery (§4) from relaunching the pipeline after an explicit stop. Use this for "target is missing / contradictory / blocked" situations — it's the machine-readable counterpart to human-readable markers like `PLAN_BLOCKED:` / `EXPLORE_BLOCKED:`.
 
 ### 3.8 Edge selection (5-step deterministic priority)
 
@@ -297,6 +301,10 @@ PARSE → TRANSFORM → VALIDATE → INITIALIZE → EXECUTE → FINALIZE
 ```
 loop:
   if is_terminal(current_node):
+    # `non_retryable` failures (e.g. agent <abort>) bypass goal-gate retry
+    # and propagate the original failure reason untouched.
+    if any_outcome.non_retryable and any_outcome.status == "fail":
+      return that_outcome
     if not goal_gates_ok():
       current_node = retry_target or fallback_retry_target
       continue

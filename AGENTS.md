@@ -93,6 +93,14 @@ bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
 bun run packages/cli/bin/swarm.ts replay .swarm/runs/<id>/events.jsonl
 ```
 
+If an agent-backed node decides its task is unreachable (missing target,
+contradictory constraints, external blocker) it emits
+`<abort>short reason</abort>` in its final message. The backend turns that
+into a non-retryable `fail` outcome; workflows wire
+`condition="outcome=fail"` edges to terminate the run immediately instead
+of forwarding to downstream no-op steps. See `docs/SPEC.md` §3.7 for the
+contract.
+
 ### Running the server
 
 Start the HTTP + SSE server for the web UI / TUI / any other client:
