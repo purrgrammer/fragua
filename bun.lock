@@ -67,6 +67,18 @@
         "typescript": "5.7.3",
       },
     },
+    "packages/server": {
+      "name": "@swarm/server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@swarm/core": "workspace:*",
+        "@swarm/events": "workspace:*",
+        "hono": "4.12.14",
+      },
+      "devDependencies": {
+        "typescript": "5.7.3",
+      },
+    },
     "packages/workspace": {
       "name": "@swarm/workspace",
       "version": "0.0.0",
@@ -294,6 +306,8 @@
 
     "@swarm/events": ["@swarm/events@workspace:packages/events"],
 
+    "@swarm/server": ["@swarm/server@workspace:packages/server"],
+
     "@swarm/workspace": ["@swarm/workspace@workspace:packages/workspace"],
 
     "@tootallnate/quickjs-emscripten": ["@tootallnate/quickjs-emscripten@0.23.0", "", {}, "sha512-C5Mc6rdnsaJDjO3UpGW/CQTHtCKaYlScZTly4JIu97Jxo/odCiH0ITnDXSJPTOrEKk/ycSZ0AOgTmkDtkOsvIA=="],
@@ -373,6 +387,8 @@
     "google-auth-library": ["google-auth-library@10.6.2", "", { "dependencies": { "base64-js": "^1.3.0", "ecdsa-sig-formatter": "^1.0.11", "gaxios": "^7.1.4", "gcp-metadata": "8.1.2", "google-logging-utils": "1.1.3", "jws": "^4.0.0" } }, "sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw=="],
 
     "google-logging-utils": ["google-logging-utils@1.1.3", "", {}, "sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA=="],
+
+    "hono": ["hono@4.12.14", "", {}, "sha512-am5zfg3yu6sqn5yjKBNqhnTX7Cv+m00ox+7jbaKkrLMRJ4rAdldd1xPd/JzbBWspqaQv6RSTrgFN95EsfhC+7w=="],
 
     "http-proxy-agent": ["http-proxy-agent@7.0.2", "", { "dependencies": { "agent-base": "^7.1.0", "debug": "^4.3.4" } }, "sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig=="],
 

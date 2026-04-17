@@ -64,7 +64,7 @@ describe("parseDotSource — fuzz", () => {
 
   test("multiple attribute blocks merge", () => {
     fc.assert(
-      fc.property(dotIdent, fc.integer({ min: 0, max: 99 }), quotedAttrValue, (id, weight, label) => {
+      fc.property(dotIdent, fc.integer({ min: 0, max: 99 }), quotedAttrValue, (id, _weight, label) => {
         const src = `digraph { ${id} [label="${label}"] [shape=diamond] }`;
         const g = parseDotSource(src);
         const node = g.nodes[id];
