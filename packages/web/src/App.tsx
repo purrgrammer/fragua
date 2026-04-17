@@ -50,12 +50,16 @@ export function App({ apiClient, router }: AppProps = {}): JSX.Element {
   }, [client]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="h-dvh flex flex-col bg-slate-50 text-slate-900 font-sans">
       <header className="flex items-center justify-between border-b border-slate-200 px-8 py-4 bg-white">
         <h1 className="text-2xl font-semibold tracking-tight">swarm</h1>
         <HealthBadge status={status} error={error} />
       </header>
-      <main className="p-8">
+      {/* `flex-1 min-h-0` lets routes opt into full-height layouts (e.g. the
+          pipeline-detail conversation); `overflow-auto` keeps long list pages
+          (PipelinesList) scrolling normally when their content exceeds the
+          viewport. */}
+      <main className="flex-1 min-h-0 overflow-auto p-8">
         <RouterProvider router={activeRouter} />
       </main>
     </div>

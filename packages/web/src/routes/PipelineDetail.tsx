@@ -84,7 +84,11 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
   const isLive = convStatus === "live" || convStatus === "loading";
 
   return (
-    <section className="max-w-6xl mx-auto space-y-4">
+    // Full-height flex column so the conversation region can consume all
+    // remaining space via `flex-1 min-h-0` rather than hard-coding a
+    // viewport fraction. `min-h-0` is the critical bit — without it the
+    // flex child refuses to shrink and overflows its parent.
+    <section className="max-w-6xl mx-auto h-full flex flex-col gap-4">
       <header className="flex items-baseline justify-between">
         <div>
           <Link to="/" className="text-xs text-blue-700 hover:underline">
@@ -113,7 +117,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
       {state.kind !== "error" && (
         <div
           data-testid="conversation-region"
-          className="h-[60vh] xl:h-[calc(100vh-14rem)] border rounded-md overflow-hidden bg-background"
+          className="flex-1 min-h-0 border rounded-md overflow-hidden bg-background"
         >
           <PipelineConversation
             conversation={conversation}
