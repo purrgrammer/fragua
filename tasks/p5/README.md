@@ -32,7 +32,7 @@ Update this table after each task merges. `run_id` is printed by `swarm run`;
 
 | #  | Title                                   | Depends        | Status  | run_id | merged_in |
 |----|-----------------------------------------|----------------|---------|--------|-----------|
-| 01 | @swarm/server scaffold + SSE events     | —              | pending |        |           |
+| 01 | @swarm/server scaffold + SSE events     | —              | merged  | 1776427940185-izjn3k | 163a378   |
 | 02 | Server REST: pipelines CRUD             | 01             | pending |        |           |
 | 03 | Server: graph SVG + interview endpoints | 02             | pending |        |           |
 | 04 | `swarm serve` CLI command               | 01             | pending |        |           |
