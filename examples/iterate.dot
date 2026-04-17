@@ -1,0 +1,29 @@
+// iterate.dot — loop handler (trapezium) demo.
+//
+// Iterates "refine" until the assistant replies with <promise>DONE</promise>,
+// or gives up after 4 iterations. Good for exploration / plan-refinement
+// phases where a single turn rarely produces the final artifact.
+//
+// Run:
+//   bun run packages/cli/bin/swarm.ts run examples/iterate.dot \
+//     --provider openrouter --model "anthropic/claude-sonnet-4.7" \
+//     --input="summarise what /etc/hostname contains in one line"
+
+digraph iterate {
+  graph [
+    goal = "Converge on a single-line answer, iterating as needed."
+    default_fidelity = "compact"
+  ]
+
+  start  [shape=Mdiamond]
+  refine [
+    shape = trapezium
+    until = "DONE"
+    max_iterations = 4
+    prompt = "Task: $ARGUMENTS\n\nProduce a single-line answer. Use local:read_file / local:bash as needed. When you're satisfied with the answer, put it on its own line followed by the literal string <promise>DONE</promise>. If you need another iteration, explain why and continue exploring."
+    allowed_tools = "local:read_file, local:bash"
+  ]
+  done   [shape=Msquare]
+
+  start -> refine -> done
+}

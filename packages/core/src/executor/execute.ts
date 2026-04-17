@@ -87,15 +87,8 @@ const exitHandler: Handler = async () => ok({ notes: "exit" });
 /** Pass-through; edge conditions are evaluated by the executor. */
 const conditionalHandler: Handler = async () => ok({ notes: "conditional" });
 
-const codergenHandler: Handler = async (ctx) => {
-  const prompt = substitute(ctx.node.attrs.prompt ?? "", {
-    context: ctx.context,
-    nodeOutputs: ctx.node_outputs,
-  });
-  const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
-  const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
-
-  const emit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
+function buildEmit(ctx: HandlerContext): (type: EventType, data: Record<string, unknown>) => Promise<void> {
+  return async (type, data) => {
     const ev: Event = {
       run_id: ctx.run_id,
       node_id: ctx.node.id,
@@ -106,6 +99,15 @@ const codergenHandler: Handler = async (ctx) => {
     };
     await ctx.sink.append(ev);
   };
+}
+
+const codergenHandler: Handler = async (ctx) => {
+  const prompt = substitute(ctx.node.attrs.prompt ?? "", {
+    context: ctx.context,
+    nodeOutputs: ctx.node_outputs,
+  });
+  const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
+  const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
 
   try {
     return await ctx.backend.run({
@@ -117,18 +119,105 @@ const codergenHandler: Handler = async (ctx) => {
       signal: ctx.signal,
       run_id: ctx.run_id,
       workflow_sha: ctx.workflow_sha,
-      emit,
+      emit: buildEmit(ctx),
     });
   } catch (err) {
     return fail(`codergen crashed: ${err instanceof Error ? err.message : String(err)}`);
   }
 };
 
+const PROMISE_TAG_RE = /<promise>\s*([A-Z0-9_]+)\s*<\/promise>/g;
+
+/** Loop handler: re-run the codergen body until the assistant's reply contains
+ * `<promise>${until}</promise>` or max_iterations is exhausted. Archon-style.
+ * The completion tag is stripped from the outcome's `notes`. */
+const loopHandler: Handler = async (ctx) => {
+  const untilTag = typeof ctx.node.attrs.until === "string" ? ctx.node.attrs.until : undefined;
+  if (!untilTag) return fail('loop node missing required attr "until"');
+  const maxIter = typeof ctx.node.attrs.max_iterations === "number" ? ctx.node.attrs.max_iterations : 10;
+  const fresh = ctx.node.attrs.fresh_context === true;
+
+  const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
+  const threadBase = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
+  const emit = buildEmit(ctx);
+
+  const basePrompt = substitute(ctx.node.attrs.prompt ?? "", {
+    context: ctx.context,
+    nodeOutputs: ctx.node_outputs,
+  });
+
+  const accumulatedUpdates: Record<string, ContextValue> = {};
+  let lastOutcome: Outcome = ok();
+
+  for (let i = 1; i <= maxIter; i++) {
+    if (ctx.signal.aborted) return fail("aborted");
+
+    await emit("node.retrying", {
+      attempt: i,
+      max_retries: maxIter,
+      delay_ms: 0,
+      reason: "loop iteration",
+    });
+
+    const iterPrompt =
+      i === 1
+        ? basePrompt
+        : `${basePrompt}\n\n(iteration ${i}/${maxIter} — continue toward <promise>${untilTag}</promise>)`;
+    // fresh_context → distinct thread per iteration; otherwise reuse the loop's thread
+    const thread_id = fresh ? `${ctx.node.id}:iter-${i}` : threadBase;
+
+    let outcome: Outcome;
+    try {
+      outcome = await ctx.backend.run({
+        node: ctx.node,
+        prompt: iterPrompt,
+        context: ctx.context,
+        thread_id,
+        fidelity,
+        signal: ctx.signal,
+        run_id: ctx.run_id,
+        workflow_sha: ctx.workflow_sha,
+        emit,
+      });
+    } catch (err) {
+      return fail(`loop iteration ${i} crashed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    lastOutcome = outcome;
+    Object.assign(accumulatedUpdates, outcome.context_updates);
+
+    if (outcome.status === "fail") {
+      // Failing a single iteration doesn't abort the loop — give the next one a chance.
+      continue;
+    }
+
+    const tag = new RegExp(`<promise>\\s*${escapeRegex(untilTag)}\\s*</promise>`, "i");
+    if (tag.test(outcome.notes)) {
+      return {
+        ...outcome,
+        status: "success",
+        notes: outcome.notes.replace(PROMISE_TAG_RE, "").trim(),
+        context_updates: accumulatedUpdates,
+      };
+    }
+  }
+
+  return fail(`loop "${ctx.node.id}" did not emit <promise>${untilTag}</promise> within ${maxIter} iterations`, {
+    notes: lastOutcome.notes,
+    context_updates: accumulatedUpdates,
+  });
+};
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export const HANDLERS: Record<string, Handler> = {
   start: startHandler,
   exit: exitHandler,
   conditional: conditionalHandler,
   codergen: codergenHandler,
+  loop: loopHandler,
 };
 
 // ---------------------------------------------------------------------------

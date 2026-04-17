@@ -57,6 +57,10 @@ export interface NodeAttrs {
   fallback_retry_target?: string;
   auto_status?: boolean;
   allow_partial?: boolean;
+  /** Loop-node config (trapezium shape). */
+  until?: string;
+  max_iterations?: number;
+  fresh_context?: boolean;
   [extra: string]: AttrScalar | undefined;
 }
 
