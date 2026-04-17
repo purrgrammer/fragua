@@ -1,11 +1,11 @@
 // PiCodergenBackend — CodergenBackend backed by pi-agent-core + pi-ai.
 
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
-import { getModel, type Model } from "@mariozechner/pi-ai";
+import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, Outcome } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
-import { bridgeAgentEvent } from "./event-bridge.ts";
+import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
@@ -69,8 +69,9 @@ export class PiCodergenBackend implements CodergenBackend {
 
     const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
       const bridged = bridgeAgentEvent(event);
-      if (bridged && input.emit) {
-        await input.emit(bridged.type, bridged.data);
+      if (bridged && input.emit) await input.emit(bridged.type, bridged.data);
+      if (event.type === "message_end" && event.message.role === "assistant" && input.emit) {
+        await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
       }
     });
 

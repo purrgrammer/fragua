@@ -107,7 +107,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   }
 
   const jsonl = new JsonlSink({ filePath: eventsPath });
-  const sink = new ConsoleSink({ inner: jsonl, level: opts.verbosity ?? 1 });
+  const console_sink = new ConsoleSink({ inner: jsonl, level: opts.verbosity ?? 1 });
+  const sink = console_sink;
 
   console.log(chalk.bold(`swarm run ${absoluteWorkflow}`));
   console.log(chalk.dim(`  run_id: ${run_id}`));
@@ -144,9 +145,18 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       branch: worktree?.branch,
       result: res,
       durationMs,
+      cost: console_sink.totals,
     });
 
     console.log("");
+    const t = console_sink.totals;
+    if (t.calls > 0) {
+      console.log(
+        chalk.dim(
+          `cost: $${t.cost_usd.toFixed(4)} · ${t.calls} LLM call${t.calls === 1 ? "" : "s"} · ${t.input_tokens}in / ${t.output_tokens}out tokens`,
+        ),
+      );
+    }
     if (res.outcome.status === "success") {
       console.log(chalk.green(`SUCCESS: ${res.outcome.notes || ""}`));
       console.log(chalk.dim(`  summary: ${dirname(eventsPath)}/summary.md`));
@@ -186,6 +196,7 @@ interface SummaryArgs {
   branch: string | undefined;
   result: Awaited<ReturnType<typeof execute>>;
   durationMs: number;
+  cost: { cost_usd: number; input_tokens: number; output_tokens: number; calls: number };
 }
 
 async function writeRunSummary(args: SummaryArgs): Promise<void> {
@@ -203,6 +214,13 @@ async function writeRunSummary(args: SummaryArgs): Promise<void> {
   }
   lines.push(`- **nodes completed:** ${args.result.completed_nodes.length}`);
   lines.push(`- **goal gates satisfied:** ${args.result.goal_gates_satisfied}`);
+  if (args.cost.calls > 0) {
+    lines.push(
+      `- **cost:** $${args.cost.cost_usd.toFixed(4)} across ${args.cost.calls} LLM call${
+        args.cost.calls === 1 ? "" : "s"
+      } (${args.cost.input_tokens} in / ${args.cost.output_tokens} out tokens)`,
+    );
+  }
   lines.push("");
 
   if (args.result.outcome.status !== "success" && args.result.outcome.failure_reason) {

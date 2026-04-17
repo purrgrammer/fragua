@@ -2,11 +2,27 @@
 // See docs/SPEC.md §3.5.
 
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { EventType } from "@swarm/core";
 
 export interface BridgedEvent {
   type: EventType;
   data: Record<string, unknown>;
+}
+
+/** Extract an AssistantMessage's usage + cost into a cost.recorded payload. */
+export function costPayload(msg: AssistantMessage): Record<string, unknown> {
+  return {
+    provider: msg.provider,
+    model: msg.model,
+    stop_reason: msg.stopReason,
+    input_tokens: msg.usage.input,
+    output_tokens: msg.usage.output,
+    cache_read_tokens: msg.usage.cacheRead,
+    cache_write_tokens: msg.usage.cacheWrite,
+    total_tokens: msg.usage.totalTokens,
+    cost_usd: msg.usage.cost.total,
+  };
 }
 
 /** Map a pi AgentEvent to a swarm Event envelope payload. Returns undefined for

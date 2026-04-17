@@ -32,6 +32,9 @@ export class ConsoleSink implements EventSink {
   private readonly write: Writer;
   private readonly level: 0 | 1 | 2;
 
+  /** Accumulated cost summary usable after close(). */
+  readonly totals = { cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 };
+
   constructor(opts: ConsoleSinkOptions) {
     this.inner = opts.inner;
     this.write = opts.writer ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -40,6 +43,17 @@ export class ConsoleSink implements EventSink {
 
   async append(event: Event): Promise<void> {
     await this.inner.append(event);
+    if (event.type === "cost.recorded") {
+      const d = event.data as {
+        cost_usd?: number;
+        input_tokens?: number;
+        output_tokens?: number;
+      };
+      this.totals.cost_usd += Number(d.cost_usd ?? 0);
+      this.totals.input_tokens += Number(d.input_tokens ?? 0);
+      this.totals.output_tokens += Number(d.output_tokens ?? 0);
+      this.totals.calls++;
+    }
     if (this.level === 0) return;
     const line = formatEvent(event, this.level);
     if (line !== undefined) this.write(line);
@@ -84,6 +98,12 @@ function formatEvent(event: Event, level: 1 | 2): string | undefined {
       return level >= 2 && data["is_error"] === true ? `  ⚙ ${String(data["tool_name"] ?? "")} error` : undefined;
     case "llm.error":
       return `! ${tag} LLM error: ${String(data["message"] ?? "")}`;
+    case "cost.recorded":
+      return level >= 2
+        ? `  $ ${(Number(data["cost_usd"] ?? 0)).toFixed(4)} — ${String(data["provider"] ?? "?")}/${String(
+            data["model"] ?? "?",
+          )} in=${String(data["input_tokens"] ?? 0)} out=${String(data["output_tokens"] ?? 0)}`
+        : undefined;
     default:
       return undefined;
   }
