@@ -63,6 +63,35 @@ steering) hangs off the same shell. Detail URLs stay permalinkable.
     `WorkflowReader` port so tests inject fixtures. Reads the configured
     workflows dir (`config.project?.workflows_dir ?? "workflows"`).
   - `packages/server/test/workflows-list.test.ts`
+  - `packages/server/src/routes/stats.ts` —
+    `GET /stats` returning a server-side aggregate across ALL runs under
+    `runsDir` (not just the first page). Shape:
+    ```ts
+    type StatsPayload = {
+      totalRuns: number;
+      running: number;
+      succeeded: number;
+      failed: number;
+      successRate: number;         // 0..1; 0 when totalRuns === 0
+      totalCostUsd: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      avgDurationMs?: number;      // omitted when no terminal runs
+      updatedAt: string;           // ISO — lets the client decide whether to poll
+    };
+    ```
+    Derive by streaming each run's events and reusing `aggregateCost`
+    from `@swarm/events` + the existing `deriveSummary` status logic
+    (`packages/server/src/routes/pipelines.ts`). Behind the existing
+    `RunReader` port — no new port method needed; iterate `listRuns()` +
+    `readEvents(id)`. Short-term fine to re-compute on each request;
+    cache with a TTL in a later task if it matters. Optional query
+    param `?workflow=<name>` filters by workflow name (match against
+    `deriveWorkflowName` output) — scaffold the arg but default to all.
+  - `packages/server/test/stats.test.ts` — inject a `RunReader` fixture
+    with 0 / 1 / N runs and a mix of statuses; assert aggregates match
+    the client-side `lib/stats.ts` reducer given the same inputs
+    (parity test keeps the two honest against each other).
 
 - Files to modify:
   - `packages/web/src/App.tsx` — wrap routes in `<AppShell>`, drop the
