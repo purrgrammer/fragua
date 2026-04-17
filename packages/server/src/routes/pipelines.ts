@@ -54,6 +54,26 @@ export function pipelinesRoutes(opts: PipelinesRouteOptions): Hono {
     return c.json(deriveDetail(runId, events));
   });
 
+  // Bulk historical events — companion to the SSE stream at the same
+  // /pipelines/:runId/events path. The `.jsonl` extension differentiates by
+  // content-type: the SSE route handles `GET /events` with
+  // `text/event-stream`, this one returns the full array as JSON. The UI
+  // calls it once on mount to bootstrap the conversation reducer, then
+  // resumes from `lastSeq` via SSE — avoids keeping a 23K-event ring
+  // buffer in the browser for long runs.
+  //
+  // Shape: `{ events: Event[], lastSeq: number }`. `lastSeq` is the 1-based
+  // sequence id of the final event (matches the SSE `id:` frames), suitable
+  // for passing as `Last-Event-ID` to the stream endpoint.
+  app.get("/pipelines/:runId/events.json", async (c) => {
+    const runId = c.req.param("runId");
+    const events = await opts.runReader.readEvents(runId);
+    if (!events) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    return c.json({ events, lastSeq: events.length });
+  });
+
   return app;
 }
 

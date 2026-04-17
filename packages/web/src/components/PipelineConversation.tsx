@@ -1,39 +1,24 @@
-// PipelineConversation — the primary surface of `/pipelines/:id` in P5.08.
+// PipelineConversation — the primary surface of `/pipelines/:id`.
 //
 // Renders the full pipeline run as a single scrollable conversation,
-// using Vercel AI Elements end-to-end: `Conversation`, `Message`,
-// `MessageResponse`, `Reasoning`, `Tool`, `Checkpoint`, `Task`, `Shimmer`.
+// using Vercel AI Elements: `Conversation`, `Message`, `MessageResponse`,
+// `Reasoning`, `Tool`, `Shimmer`. No nesting, no per-section collapse —
+// one continuous thread with lightweight step markers.
 //
 // Data flow: the route hands us the parsed `PipelineConversation` tree
-// (from `events-to-conversation.ts`) plus a map of node states from the
-// API's `PipelineDetail.nodes` (so section status reflects the server's
-// authoritative view even when the reducer hasn't seen the
-// node.completed event yet — happens on reconnect mid-run).
-//
-// Collapse behaviour:
-//   - Default: all sections expanded.
-//   - Long runs (> LONG_RUN_TURNS turns): sections default collapsed
-//     with an "Expand all" button in the header. Threshold is
-//     deliberately generous (200) — a normal build-feature.dot run is
-//     well under that.
-//   - Per-section toggle: click the section header to flip that one.
-//   - Loop nodes (>1 turn, e.g. `implement_and_review`, `verify`): each
-//     iteration is wrapped in an AI Elements <Task> so it can be
-//     collapsed independently; the first iteration stays open.
+// (from `events-to-conversation.ts`) plus the server-side node states
+// from `PipelineDetail.nodes`. When both disagree, the server wins —
+// handles the replay / reconnect mid-run case where the reducer hasn't
+// seen the close event yet.
 //
 // `data-testid` hooks (stable for Playwright / unit tests):
-//   - `node-section-<nodeId>`     — the <section> element per node.
-//   - `turn-<turnId>`             — one per agent turn within a section.
-//   - `tool-<toolCallId>`         — one per tool_call part.
-//   - `reasoning-<messageId>`     — one per reasoning block.
-//   - `expand-all`                — the "Expand all" button (long runs).
-//   - `conversation-empty`        — empty-state marker.
-//
-// Formatting discipline (AGENTS.md): cost via `formatUsd`, tokens via
-// `formatTokensCompact`. No inline `Intl.*`.
+//   - `node-section-<nodeId>`  — the <section> element per node.
+//   - `turn-<turnId>`          — one per agent turn within a section.
+//   - `tool-<toolCallId>`      — one per tool_call part.
+//   - `reasoning-<messageId>`  — one per reasoning block.
+//   - `conversation-empty`     — empty-state marker.
 
-import { type ReactNode, useMemo, useState } from "react";
-import { Checkpoint, CheckpointIcon, CheckpointTrigger } from "@/components/ai-elements/checkpoint";
+import { type ReactNode, useMemo } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -43,10 +28,7 @@ import {
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { Task, TaskContent, TaskTrigger } from "@/components/ai-elements/task";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import type { NodeState } from "@/lib/api";
 import {
   type PipelineConversation as ConversationTree,
@@ -55,10 +37,8 @@ import {
   type Part,
   toolTypeFromName,
 } from "@/lib/events-to-conversation";
-import { formatTokensCompact, formatUsd, statusLabel } from "@/lib/format";
+import { statusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-export const LONG_RUN_TURNS = 200;
 
 export interface PipelineConversationProps {
   /** Parsed conversation tree (from `eventsToConversation`). */
@@ -67,6 +47,10 @@ export interface PipelineConversationProps {
   nodeStates?: readonly NodeState[];
   /** Whether the SSE stream is still live; drives the live-streaming pill. */
   isLive?: boolean;
+  /** Whether we're still bootstrapping events. Suppresses the empty
+   * state during the REST-fetch phase so the user doesn't briefly see
+   * "No conversation yet" before the events arrive. */
+  isLoading?: boolean;
   className?: string;
 }
 
@@ -74,6 +58,7 @@ export function PipelineConversation({
   conversation,
   nodeStates,
   isLive = false,
+  isLoading = false,
   className,
 }: PipelineConversationProps): JSX.Element {
   // Merge: server state wins when present (handles replay / reconnect
@@ -87,33 +72,17 @@ export function PipelineConversation({
     });
   }, [conversation, nodeStates]);
 
-  const turnCount = useMemo(() => sections.reduce((n, s) => n + s.turns.length, 0), [sections]);
-  const isLongRun = turnCount > LONG_RUN_TURNS;
-
-  // Per-node collapse state. Keys: nodeId. Default depends on isLongRun.
-  const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
-  const [allExpanded, setAllExpanded] = useState(false);
-
-  const defaultCollapsed = isLongRun && !allExpanded;
-
-  function isCollapsed(nodeId: string): boolean {
-    const override = collapsedOverrides[nodeId];
-    return override === undefined ? defaultCollapsed : override;
-  }
-
-  function toggle(nodeId: string): void {
-    setCollapsedOverrides((prev) => ({
-      ...prev,
-      [nodeId]: !isCollapsed(nodeId),
-    }));
-  }
-
-  function expandAll(): void {
-    setAllExpanded(true);
-    setCollapsedOverrides({});
-  }
-
   if (sections.length === 0) {
+    // Suppress the empty state while events are still being fetched —
+    // an empty surface is better than "No conversation yet" flashing
+    // for a second and then getting replaced with a populated tree.
+    if (isLoading) {
+      return (
+        <Conversation className={cn("h-full", className)}>
+          <ConversationContent>{null}</ConversationContent>
+        </Conversation>
+      );
+    }
     return (
       <Conversation className={cn("h-full", className)}>
         <ConversationContent>
@@ -130,24 +99,8 @@ export function PipelineConversation({
   return (
     <Conversation className={cn("h-full", className)}>
       <ConversationContent>
-        {isLongRun && !allExpanded && (
-          <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            <span>Long run ({turnCount} turns). Sections are collapsed by default.</span>
-            <Button data-testid="expand-all" size="sm" variant="outline" onClick={expandAll}>
-              Expand all
-            </Button>
-          </div>
-        )}
-
         {sections.map((section, idx) => (
-          <SectionBlock
-            key={section.nodeId}
-            section={section}
-            isLive={isLive}
-            collapsed={isCollapsed(section.nodeId)}
-            onToggle={() => toggle(section.nodeId)}
-            isFirst={idx === 0}
-          />
+          <SectionBlock key={section.nodeId} section={section} isLive={isLive} isFirst={idx === 0} />
         ))}
       </ConversationContent>
       <ConversationScrollButton />
@@ -162,70 +115,40 @@ export function PipelineConversation({
 interface SectionBlockProps {
   section: NodeSection;
   isLive: boolean;
-  collapsed: boolean;
-  onToggle: () => void;
   isFirst: boolean;
 }
 
-function SectionBlock({ section, isLive, collapsed, onToggle, isFirst }: SectionBlockProps): JSX.Element {
-  const isLoop = section.turns.length > 1;
+function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Element {
   const isRunning = section.status === "running" || section.status === "retrying";
 
+  // Flat layout — the step header is at the same visual level as the
+  // messages that follow it, not a collapsible wrapper. The user wanted
+  // the whole run to read as one continuous thread with lightweight
+  // step markers, not nested drawers.
   return (
     <section
       id={`node-section-${section.nodeId}`}
       data-testid={`node-section-${section.nodeId}`}
       data-status={section.status}
-      className="scroll-mt-4"
+      className={cn("scroll-mt-4", isFirst ? "mt-0" : "mt-1")}
     >
-      {/* Checkpoint divider between sections (and above the first one,
-          which also doubles as a visual anchor for graph-click scrolls).
-          `CheckpointTrigger` is rendered disabled — "restore run to
-          this node" is out of scope for P5.08. */}
-      <Checkpoint className={cn(isFirst ? "mt-0" : "mt-6")}>
-        <CheckpointIcon />
-        <CheckpointTrigger disabled className="cursor-default pointer-events-none">
-          Node: {section.nodeId}
-        </CheckpointTrigger>
-      </Checkpoint>
-
-      <div className="mt-3 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="text-sm font-medium text-foreground hover:underline"
-          aria-expanded={!collapsed}
-          aria-controls={`node-section-body-${section.nodeId}`}
-        >
-          {collapsed ? "▸" : "▾"} {section.nodeId}
-        </button>
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium text-foreground">{section.nodeId}</span>
         <StatusChip status={section.status} />
         {/* Shimmer sibling next to the status chip while live. */}
         {isRunning && isLive && <Shimmer className="text-xs">streaming…</Shimmer>}
-        {isLoop && <span className="text-[10px] text-muted-foreground">({section.turns.length} iterations)</span>}
       </div>
 
-      <Collapsible open={!collapsed}>
-        <CollapsibleContent id={`node-section-body-${section.nodeId}`} className="mt-2">
-          {isLoop
-            ? // Loop nodes (e.g. `implement_and_review`, `verify`): each
-              // iteration is its own collapsible <Task>. First iteration
-              // stays open so the latest progress is immediately visible;
-              // earlier iterations collapse to a one-line summary.
-              section.turns.map((turn, i) => (
-                <Task key={turn.turnId} defaultOpen={i === section.turns.length - 1} className="mt-3 first:mt-0">
-                  <TaskTrigger title={`Iteration ${i + 1} of ${section.turns.length}`} />
-                  <TaskContent>
-                    <TurnBlock turn={turn} isLive={isLive} />
-                  </TaskContent>
-                </Task>
-              ))
-            : section.turns.map((turn) => <TurnBlock key={turn.turnId} turn={turn} isLive={isLive} />)}
-          {section.turns.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">(no agent turns for this node)</p>
-          )}
-        </CollapsibleContent>
-      </Collapsible>
+      <div id={`node-section-body-${section.nodeId}`} className="mt-1">
+        {/* Turns render as a flat list — no per-iteration grouping.
+            Loop nodes just emit multiple turns in encounter order.
+            Empty sections (pipeline-lifecycle-only nodes like `start` /
+            `done`, or a node we haven't seen events for yet) render
+            just the header — no placeholder text. */}
+        {section.turns.map((turn) => (
+          <TurnBlock key={turn.turnId} turn={turn} isLive={isLive} />
+        ))}
+      </div>
     </section>
   );
 }
@@ -271,8 +194,11 @@ interface TurnBlockProps {
 }
 
 function TurnBlock({ turn, isLive }: TurnBlockProps): JSX.Element {
+  // No left border / indent — the step marker upstream separates turns
+  // at the same level as messages, and a vertical rule just added
+  // visual noise.
   return (
-    <div data-testid={`turn-${turn.turnId}`} className="space-y-3 border-l-2 border-muted pl-3 py-2">
+    <div data-testid={`turn-${turn.turnId}`} className="space-y-3">
       {turn.messages.map((msg) => (
         <MessageBlock key={msg.messageId} message={msg} isLive={isLive} />
       ))}
@@ -297,7 +223,7 @@ interface MessageBlockProps {
   isLive: boolean;
 }
 
-function MessageBlock({ message, isLive }: MessageBlockProps): JSX.Element {
+function MessageBlock({ message, isLive }: MessageBlockProps): JSX.Element | null {
   const role = (
     message.role === "user" || message.role === "assistant" || message.role === "system" ? message.role : "assistant"
   ) as "user" | "assistant" | "system";
@@ -309,6 +235,14 @@ function MessageBlock({ message, isLive }: MessageBlockProps): JSX.Element {
   const otherParts = message.parts.filter((p) => p.type !== "reasoning");
 
   const hasStreaming = message.parts.some((p) => (p.type === "text" || p.type === "reasoning") && p.streaming);
+
+  // Skip empty messages. pi-agent-core emits `agent.message_start(role=user)`
+  // as a structural marker when feeding tool results back into the loop;
+  // the visible content lives on the prior assistant message's
+  // `tool_call` part, so the user shell has no parts. Rendering it would
+  // leak AI Elements' user-bubble styling as an empty gray pill.
+  const hasVisibleText = otherParts.some((p) => p.type !== "text" || p.text.trim().length > 0);
+  if (reasoningParts.length === 0 && !hasVisibleText) return null;
 
   return (
     <AIMessage from={role}>
@@ -332,15 +266,11 @@ function MessageBlock({ message, isLive }: MessageBlockProps): JSX.Element {
 
         {isLive && hasStreaming && <Shimmer className="mt-1 text-[10px]">streaming…</Shimmer>}
 
-        {(message.costUsd !== undefined || message.modelId) && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-            {message.modelId && <span>model: {message.modelId}</span>}
-            {message.costUsd !== undefined && <span>cost: {formatUsd(message.costUsd)}</span>}
-            {(message.inputTokens !== undefined || message.outputTokens !== undefined) && (
-              <span>tokens: {formatTokensCompact((message.inputTokens ?? 0) + (message.outputTokens ?? 0))}</span>
-            )}
-          </div>
-        )}
+        {/* TODO: re-enable cost/model/tokens byline once we find a layout
+            that reads cleanly. Prior attempts (trailing footer, leading
+            byline, border-separated strip) all looked orphaned between
+            messages. The data stays on the Message object so the render
+            is a one-liner swap when we come back to it. */}
       </MessageContent>
     </AIMessage>
   );

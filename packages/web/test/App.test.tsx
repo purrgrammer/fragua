@@ -25,6 +25,7 @@ function stubClient(overrides: Overrides = {}): ApiClient {
     health: overrides.health ?? (async () => ({ ok: true })),
     listPipelines: overrides.listPipelines ?? (async (): Promise<PipelineSummary[]> => []),
     listWorkflows: overrides.listWorkflows ?? (async () => []),
+    getPipelineEvents: overrides.getPipelineEvents ?? (async () => ({ events: [], lastSeq: 0 })),
     getPipeline:
       overrides.getPipeline ??
       (async (id: string): Promise<PipelineDetail> => ({

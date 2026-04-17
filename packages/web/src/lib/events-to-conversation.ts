@@ -148,316 +148,351 @@ export function parseSSEEvents(events: readonly SSEEvent[]): RawEvent[] {
 }
 
 /**
- * Fold `events` into a `PipelineConversation`. Pure — same input produces
- * a deep-equal tree. Input order is authoritative (JSONL is append-only).
+ * Opaque reducer state — holds the in-progress tree plus active-turn /
+ * active-message pointers. Callers should treat this as a black box and
+ * round-trip it through `createReducerState`, `applyEvent`, and
+ * `toConversation`. Fields are exposed so tests can assert against them
+ * but are not part of the stable public API.
+ *
+ * State is mutated in place by `applyEvent`. The conversation tree is the
+ * only thing we keep around — raw events can be dropped after folding,
+ * which is how we handle unbounded-length runs on the client.
+ */
+export interface ReducerState {
+  sections: Map<string, NodeSection>;
+  activeNodeId: string | null;
+  activeTurn: Turn | null;
+  activeMessage: Message | null;
+  turnCounter: number;
+  messageCounter: number;
+}
+
+/** Fresh, empty reducer state. */
+export function createReducerState(): ReducerState {
+  return {
+    sections: new Map(),
+    activeNodeId: null,
+    activeTurn: null,
+    activeMessage: null,
+    turnCounter: 0,
+    messageCounter: 0,
+  };
+}
+
+/** Project the reducer state into the public `PipelineConversation` tree.
+ * Always returns a fresh array; state is not aliased into the output so
+ * callers can hand it to React without fear of mutation after the fact. */
+export function toConversation(state: ReducerState): PipelineConversation {
+  return Array.from(state.sections.values());
+}
+
+function sectionFor(state: ReducerState, nodeId: string): NodeSection {
+  let s = state.sections.get(nodeId);
+  if (!s) {
+    s = { nodeId, status: "pending", turns: [] };
+    state.sections.set(nodeId, s);
+  }
+  return s;
+}
+
+function openTurn(state: ReducerState, nodeId: string, sessionId: string | null | undefined): Turn {
+  state.turnCounter += 1;
+  const turn: Turn = {
+    turnId: `${nodeId}-t${state.turnCounter}`,
+    messages: [],
+  };
+  if (sessionId) turn.sessionId = sessionId;
+  sectionFor(state, nodeId).turns.push(turn);
+  return turn;
+}
+
+function openMessage(state: ReducerState, role: Message["role"]): Message {
+  if (!state.activeTurn) {
+    // Defensive: message_start before any turn_start. Synthesize one.
+    if (!state.activeNodeId) {
+      // Hard-drop: no node context at all. Allocate a synthetic bucket.
+      state.activeNodeId = "__prelude__";
+    }
+    state.activeTurn = openTurn(state, state.activeNodeId, null);
+  }
+  state.messageCounter += 1;
+  const msg: Message = {
+    messageId: `${state.activeTurn.turnId}-m${state.messageCounter}`,
+    role,
+    parts: [],
+  };
+  state.activeTurn.messages.push(msg);
+  return msg;
+}
+
+function lastPart<T extends Part["type"]>(msg: Message, type: T): Extract<Part, { type: T }> | undefined {
+  for (let i = msg.parts.length - 1; i >= 0; i--) {
+    const p = msg.parts[i];
+    if (p && p.type === type) return p as Extract<Part, { type: T }>;
+  }
+  return undefined;
+}
+
+function appendTextDelta(state: ReducerState, delta: string): void {
+  if (!state.activeMessage) state.activeMessage = openMessage(state, "assistant");
+  const last = lastPart(state.activeMessage, "text");
+  if (last?.streaming) {
+    last.text += delta;
+    return;
+  }
+  state.activeMessage.parts.push({ type: "text", text: delta, streaming: true });
+}
+
+function appendReasoningDelta(state: ReducerState, delta: string): void {
+  if (!state.activeMessage) state.activeMessage = openMessage(state, "assistant");
+  // Consolidate: always append to the single reasoning part if it exists,
+  // regardless of whether newer parts (text / tool) were interleaved.
+  // Matches the "one Reasoning block per Message" rule.
+  const existing = lastPart(state.activeMessage, "reasoning");
+  if (existing) {
+    existing.text += delta;
+    existing.streaming = true;
+    return;
+  }
+  state.activeMessage.parts.push({ type: "reasoning", text: delta, streaming: true });
+}
+
+function appendToolcallDelta(state: ReducerState, contentIndex: number, delta: string): void {
+  if (!state.activeMessage) state.activeMessage = openMessage(state, "assistant");
+  // Look for an existing tool_call part at this content_index in the
+  // current message. If present, accumulate; otherwise allocate.
+  let slot: ToolCallPart | undefined;
+  for (let i = state.activeMessage.parts.length - 1; i >= 0; i--) {
+    const p = state.activeMessage.parts[i];
+    if (p && p.type === "tool_call" && p.contentIndex === contentIndex) {
+      slot = p;
+      break;
+    }
+  }
+  if (!slot) {
+    slot = {
+      type: "tool_call",
+      contentIndex,
+      toolCallId: "",
+      toolName: "",
+      input: undefined,
+      state: "input-streaming",
+    };
+    state.activeMessage.parts.push(slot);
+  }
+  // Stash the raw accumulated JSON on `input` as a string while we stream.
+  // Replaced with the parsed `args` on `tool.execution_start`.
+  if (typeof slot.input === "string") slot.input = slot.input + delta;
+  else if (slot.input === undefined) slot.input = delta;
+}
+
+function flushStreamingInMessage(msg: Message): void {
+  for (const p of msg.parts) {
+    if (p.type === "text" || p.type === "reasoning") {
+      if (p.streaming) p.streaming = false;
+    }
+  }
+}
+
+function findUnboundToolCallInTurn(turn: Turn): ToolCallPart | undefined {
+  // Scan from the most recent message backwards: the next tool execution
+  // targets the latest pending placeholder.
+  for (let i = turn.messages.length - 1; i >= 0; i--) {
+    const m = turn.messages[i];
+    if (!m) continue;
+    for (let j = m.parts.length - 1; j >= 0; j--) {
+      const p = m.parts[j];
+      if (p && p.type === "tool_call" && !p.toolCallId) return p;
+    }
+  }
+  return undefined;
+}
+
+function findToolCallByIdInSection(section: NodeSection, toolCallId: string): ToolCallPart | undefined {
+  for (const t of section.turns) {
+    for (const m of t.messages) {
+      for (const p of m.parts) {
+        if (p.type === "tool_call" && p.toolCallId === toolCallId) return p;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Apply a single event to the reducer state (mutates in place).
+ * Order of events is authoritative — callers must feed events in the
+ * same order they were produced. Safe to call across multiple sources
+ * as long as the sequencing matches JSONL order.
+ */
+export function applyEvent(state: ReducerState, ev: RawEvent): void {
+  const nodeId = ev.node_id ?? null;
+  const data = ev.data ?? {};
+
+  switch (ev.type) {
+    // ----- Node lifecycle: drive section.status -----
+    case "node.started":
+      if (nodeId) {
+        const s = sectionFor(state, nodeId);
+        s.status = "running";
+        state.activeNodeId = nodeId;
+        state.activeTurn = null;
+        state.activeMessage = null;
+      }
+      break;
+    case "node.completed":
+      if (nodeId) {
+        const s = sectionFor(state, nodeId);
+        const outcome = (data["outcome"] as string | undefined) ?? "pass";
+        s.status = outcome === "fail" ? "failed" : "completed";
+      }
+      break;
+    case "node.failed":
+      if (nodeId) sectionFor(state, nodeId).status = "failed";
+      break;
+    case "node.retrying":
+      if (nodeId) sectionFor(state, nodeId).status = "retrying";
+      break;
+    case "node.skipped":
+      if (nodeId) sectionFor(state, nodeId).status = "skipped";
+      break;
+
+    // ----- Agent / turn / message -----
+    case "agent.turn_start":
+      if (nodeId) {
+        state.activeNodeId = nodeId;
+        state.activeTurn = openTurn(state, nodeId, ev.session_id ?? null);
+        state.activeMessage = null;
+      }
+      break;
+    case "agent.turn_end":
+      // Flush any lingering streaming flags; close out the turn.
+      if (state.activeMessage) flushStreamingInMessage(state.activeMessage);
+      state.activeMessage = null;
+      state.activeTurn = null;
+      break;
+    case "agent.message_start": {
+      const role = ((data["role"] as string | undefined) ?? "assistant") as Message["role"];
+      state.activeMessage = openMessage(state, role);
+      break;
+    }
+    case "agent.message_end":
+      if (state.activeMessage) flushStreamingInMessage(state.activeMessage);
+      state.activeMessage = null;
+      break;
+
+    // ----- LLM deltas -----
+    case "llm.start":
+      if (state.activeMessage) {
+        const modelId = data["model"] as string | undefined;
+        if (modelId) state.activeMessage.modelId = modelId;
+      }
+      break;
+    case "llm.text_delta": {
+      const delta = (data["delta"] as string | undefined) ?? "";
+      if (delta) appendTextDelta(state, delta);
+      break;
+    }
+    case "llm.thinking_delta": {
+      const delta = (data["delta"] as string | undefined) ?? "";
+      if (delta) appendReasoningDelta(state, delta);
+      break;
+    }
+    case "llm.toolcall_delta": {
+      const delta = (data["delta"] as string | undefined) ?? "";
+      const contentIndex = (data["content_index"] as number | undefined) ?? 0;
+      appendToolcallDelta(state, contentIndex, delta);
+      break;
+    }
+    case "llm.done":
+      if (state.activeMessage) flushStreamingInMessage(state.activeMessage);
+      break;
+
+    // ----- Tool execution -----
+    case "tool.execution_start": {
+      if (!nodeId) break;
+      const section = sectionFor(state, nodeId);
+      const toolCallId = String(data["tool_call_id"] ?? "");
+      const toolName = String(data["tool_name"] ?? "");
+      const args = data["args"] ?? null;
+      // Prefer binding to an unresolved placeholder in the active turn;
+      // fall back to appending a new part on the active message (replay
+      // of a JSONL without deltas).
+      const turn = state.activeTurn ?? section.turns[section.turns.length - 1];
+      let slot: ToolCallPart | undefined = turn ? findUnboundToolCallInTurn(turn) : undefined;
+      if (!slot) {
+        if (!state.activeMessage) state.activeMessage = openMessage(state, "assistant");
+        slot = {
+          type: "tool_call",
+          toolCallId: "",
+          toolName: "",
+          input: undefined,
+          state: "input-streaming",
+        };
+        state.activeMessage.parts.push(slot);
+      }
+      slot.toolCallId = toolCallId;
+      slot.toolName = toolName;
+      slot.input = args;
+      slot.state = "input-available";
+      break;
+    }
+    case "tool.execution_end": {
+      if (!nodeId) break;
+      const section = sectionFor(state, nodeId);
+      const toolCallId = String(data["tool_call_id"] ?? "");
+      const isError = Boolean(data["is_error"]);
+      const result = data["result"];
+      const slot = findToolCallByIdInSection(section, toolCallId);
+      if (!slot) break;
+      if (isError) {
+        slot.state = "output-error";
+        slot.errorText = stringifyToolError(result, data["err"]);
+      } else {
+        slot.state = "output-available";
+        slot.output = result;
+      }
+      break;
+    }
+
+    // ----- Cost attribution -----
+    case "cost.recorded": {
+      if (!state.activeTurn) break;
+      // Attach to the most recent *assistant* message in the current turn.
+      for (let i = state.activeTurn.messages.length - 1; i >= 0; i--) {
+        const m = state.activeTurn.messages[i];
+        if (!m || m.role !== "assistant") continue;
+        const cost = data["cost_usd"];
+        const inTok = data["input_tokens"];
+        const outTok = data["output_tokens"];
+        const model = data["model"];
+        if (typeof cost === "number") m.costUsd = cost;
+        if (typeof inTok === "number") m.inputTokens = inTok;
+        if (typeof outTok === "number") m.outputTokens = outTok;
+        if (typeof model === "string" && !m.modelId) m.modelId = model;
+        break;
+      }
+      break;
+    }
+
+    default:
+      // Ignore events that don't affect the conversation projection
+      // (pipeline.*, edge.*, interview.*, steering.*, agent.start,
+      // agent.end, checkpoint.*).
+      break;
+  }
+}
+
+/**
+ * Batch convenience: fold an entire event array into a fresh conversation
+ * tree. Implemented as a thin loop over `applyEvent` so live / replay
+ * paths share the exact same semantics — same input, same output, bit
+ * for bit. Keep this signature stable; tests depend on it.
  */
 export function eventsToConversation(events: readonly RawEvent[]): PipelineConversation {
-  // Sections preserve encounter order.
-  const sections = new Map<string, NodeSection>();
-
-  // Active-turn / message / node pointers.
-  let activeNodeId: string | null = null;
-  let activeTurn: Turn | null = null;
-  let activeMessage: Message | null = null;
-  let turnCounter = 0;
-  let messageCounter = 0;
-
-  function sectionFor(nodeId: string): NodeSection {
-    let s = sections.get(nodeId);
-    if (!s) {
-      s = { nodeId, status: "pending", turns: [] };
-      sections.set(nodeId, s);
-    }
-    return s;
-  }
-
-  function openTurn(nodeId: string, sessionId: string | null | undefined): Turn {
-    turnCounter += 1;
-    const turn: Turn = {
-      turnId: `${nodeId}-t${turnCounter}`,
-      messages: [],
-    };
-    if (sessionId) turn.sessionId = sessionId;
-    sectionFor(nodeId).turns.push(turn);
-    return turn;
-  }
-
-  function openMessage(role: Message["role"]): Message {
-    if (!activeTurn) {
-      // Defensive: message_start before any turn_start. Synthesize one.
-      if (!activeNodeId) {
-        // Hard-drop: no node context at all. Allocate a synthetic
-        // "<pre>" bucket rather than crash.
-        activeNodeId = "__prelude__";
-      }
-      activeTurn = openTurn(activeNodeId, null);
-    }
-    messageCounter += 1;
-    const msg: Message = {
-      messageId: `${activeTurn.turnId}-m${messageCounter}`,
-      role,
-      parts: [],
-    };
-    activeTurn.messages.push(msg);
-    return msg;
-  }
-
-  function lastPart<T extends Part["type"]>(msg: Message, type: T): Extract<Part, { type: T }> | undefined {
-    for (let i = msg.parts.length - 1; i >= 0; i--) {
-      const p = msg.parts[i];
-      if (p && p.type === type) return p as Extract<Part, { type: T }>;
-    }
-    return undefined;
-  }
-
-  function appendTextDelta(delta: string): void {
-    if (!activeMessage) activeMessage = openMessage("assistant");
-    const last = lastPart(activeMessage, "text");
-    if (last?.streaming) {
-      last.text += delta;
-      return;
-    }
-    activeMessage.parts.push({ type: "text", text: delta, streaming: true });
-  }
-
-  function appendReasoningDelta(delta: string): void {
-    if (!activeMessage) activeMessage = openMessage("assistant");
-    // Consolidate: always append to the single reasoning part if it
-    // exists, regardless of whether newer parts (text / tool) were
-    // interleaved. Matches the "one Reasoning block per Message" rule.
-    const existing = lastPart(activeMessage, "reasoning");
-    if (existing) {
-      existing.text += delta;
-      existing.streaming = true;
-      return;
-    }
-    activeMessage.parts.push({ type: "reasoning", text: delta, streaming: true });
-  }
-
-  function appendToolcallDelta(contentIndex: number, delta: string): void {
-    if (!activeMessage) activeMessage = openMessage("assistant");
-    // Look for an existing tool_call part at this content_index in the
-    // current message. If present, accumulate; otherwise allocate.
-    let slot: ToolCallPart | undefined;
-    for (let i = activeMessage.parts.length - 1; i >= 0; i--) {
-      const p = activeMessage.parts[i];
-      if (p && p.type === "tool_call" && p.contentIndex === contentIndex) {
-        slot = p;
-        break;
-      }
-    }
-    if (!slot) {
-      slot = {
-        type: "tool_call",
-        contentIndex,
-        toolCallId: "",
-        toolName: "",
-        input: undefined,
-        state: "input-streaming",
-      };
-      activeMessage.parts.push(slot);
-    }
-    // Stash the raw accumulated JSON on `input` as a string while we
-    // stream. Replaced with the parsed `args` on `tool.execution_start`.
-    if (typeof slot.input === "string") slot.input = slot.input + delta;
-    else if (slot.input === undefined) slot.input = delta;
-  }
-
-  function flushStreamingInMessage(msg: Message): void {
-    for (const p of msg.parts) {
-      if (p.type === "text" || p.type === "reasoning") {
-        if (p.streaming) p.streaming = false;
-      }
-    }
-  }
-
-  function findUnboundToolCallInTurn(turn: Turn): ToolCallPart | undefined {
-    // Scan from the most recent message backwards: the next tool
-    // execution targets the latest pending placeholder.
-    for (let i = turn.messages.length - 1; i >= 0; i--) {
-      const m = turn.messages[i];
-      if (!m) continue;
-      for (let j = m.parts.length - 1; j >= 0; j--) {
-        const p = m.parts[j];
-        if (p && p.type === "tool_call" && !p.toolCallId) return p;
-      }
-    }
-    return undefined;
-  }
-
-  function findToolCallByIdInSection(section: NodeSection, toolCallId: string): ToolCallPart | undefined {
-    for (const t of section.turns) {
-      for (const m of t.messages) {
-        for (const p of m.parts) {
-          if (p.type === "tool_call" && p.toolCallId === toolCallId) return p;
-        }
-      }
-    }
-    return undefined;
-  }
-
-  // ------------------------------------------------------------------
-  // Main fold.
-  // ------------------------------------------------------------------
-  for (const ev of events) {
-    const nodeId = ev.node_id ?? null;
-    const data = ev.data ?? {};
-
-    switch (ev.type) {
-      // ----- Node lifecycle: drive section.status -----
-      case "node.started":
-        if (nodeId) {
-          const s = sectionFor(nodeId);
-          s.status = "running";
-          activeNodeId = nodeId;
-          activeTurn = null;
-          activeMessage = null;
-        }
-        break;
-      case "node.completed":
-        if (nodeId) {
-          const s = sectionFor(nodeId);
-          const outcome = (data["outcome"] as string | undefined) ?? "pass";
-          s.status = outcome === "fail" ? "failed" : "completed";
-        }
-        break;
-      case "node.failed":
-        if (nodeId) sectionFor(nodeId).status = "failed";
-        break;
-      case "node.retrying":
-        if (nodeId) sectionFor(nodeId).status = "retrying";
-        break;
-      case "node.skipped":
-        if (nodeId) sectionFor(nodeId).status = "skipped";
-        break;
-
-      // ----- Agent / turn / message -----
-      case "agent.turn_start":
-        if (nodeId) {
-          activeNodeId = nodeId;
-          activeTurn = openTurn(nodeId, ev.session_id ?? null);
-          activeMessage = null;
-        }
-        break;
-      case "agent.turn_end":
-        // Flush any lingering streaming flags; close out the turn.
-        if (activeMessage) flushStreamingInMessage(activeMessage);
-        activeMessage = null;
-        activeTurn = null;
-        break;
-      case "agent.message_start": {
-        const role = ((data["role"] as string | undefined) ?? "assistant") as Message["role"];
-        activeMessage = openMessage(role);
-        break;
-      }
-      case "agent.message_end":
-        if (activeMessage) flushStreamingInMessage(activeMessage);
-        activeMessage = null;
-        break;
-
-      // ----- LLM deltas -----
-      case "llm.start":
-        if (activeMessage) {
-          const modelId = data["model"] as string | undefined;
-          if (modelId) activeMessage.modelId = modelId;
-        }
-        break;
-      case "llm.text_delta": {
-        const delta = (data["delta"] as string | undefined) ?? "";
-        if (delta) appendTextDelta(delta);
-        break;
-      }
-      case "llm.thinking_delta": {
-        const delta = (data["delta"] as string | undefined) ?? "";
-        if (delta) appendReasoningDelta(delta);
-        break;
-      }
-      case "llm.toolcall_delta": {
-        const delta = (data["delta"] as string | undefined) ?? "";
-        const contentIndex = (data["content_index"] as number | undefined) ?? 0;
-        appendToolcallDelta(contentIndex, delta);
-        break;
-      }
-      case "llm.done":
-        if (activeMessage) flushStreamingInMessage(activeMessage);
-        break;
-
-      // ----- Tool execution -----
-      case "tool.execution_start": {
-        if (!nodeId) break;
-        const section = sectionFor(nodeId);
-        const toolCallId = String(data["tool_call_id"] ?? "");
-        const toolName = String(data["tool_name"] ?? "");
-        const args = data["args"] ?? null;
-        // Prefer binding to an unresolved placeholder in the active
-        // turn; fall back to appending a new part on the active
-        // message (replay of a JSONL without deltas).
-        const turn = activeTurn ?? section.turns[section.turns.length - 1];
-        let slot: ToolCallPart | undefined = turn ? findUnboundToolCallInTurn(turn) : undefined;
-        if (!slot) {
-          if (!activeMessage) activeMessage = openMessage("assistant");
-          slot = {
-            type: "tool_call",
-            toolCallId: "",
-            toolName: "",
-            input: undefined,
-            state: "input-streaming",
-          };
-          activeMessage.parts.push(slot);
-        }
-        slot.toolCallId = toolCallId;
-        slot.toolName = toolName;
-        slot.input = args;
-        slot.state = "input-available";
-        break;
-      }
-      case "tool.execution_end": {
-        if (!nodeId) break;
-        const section = sectionFor(nodeId);
-        const toolCallId = String(data["tool_call_id"] ?? "");
-        const isError = Boolean(data["is_error"]);
-        const result = data["result"];
-        const slot = findToolCallByIdInSection(section, toolCallId);
-        if (!slot) break;
-        if (isError) {
-          slot.state = "output-error";
-          slot.errorText = stringifyToolError(result, data["err"]);
-        } else {
-          slot.state = "output-available";
-          slot.output = result;
-        }
-        break;
-      }
-
-      // ----- Cost attribution -----
-      case "cost.recorded": {
-        if (!activeTurn) break;
-        // Attach to the most recent *assistant* message in the current turn.
-        for (let i = activeTurn.messages.length - 1; i >= 0; i--) {
-          const m = activeTurn.messages[i];
-          if (!m || m.role !== "assistant") continue;
-          const cost = data["cost_usd"];
-          const inTok = data["input_tokens"];
-          const outTok = data["output_tokens"];
-          const model = data["model"];
-          if (typeof cost === "number") m.costUsd = cost;
-          if (typeof inTok === "number") m.inputTokens = inTok;
-          if (typeof outTok === "number") m.outputTokens = outTok;
-          if (typeof model === "string" && !m.modelId) m.modelId = model;
-          break;
-        }
-        break;
-      }
-
-      default:
-        // Ignore events that don't affect the conversation projection
-        // (pipeline.*, edge.*, interview.*, steering.*, agent.start,
-        // agent.end, checkpoint.*).
-        break;
-    }
-  }
-
-  return Array.from(sections.values());
+  const state = createReducerState();
+  for (const ev of events) applyEvent(state, ev);
+  return toConversation(state);
 }
 
 function stringifyToolError(result: unknown, err: unknown): string {

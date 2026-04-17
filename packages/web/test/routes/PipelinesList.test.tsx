@@ -17,6 +17,7 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     health: async () => ({ ok: true }),
     listPipelines: async (): Promise<PipelineSummary[]> => [],
     listWorkflows: overrides.listWorkflows ?? (async () => []),
+    getPipelineEvents: overrides.getPipelineEvents ?? (async () => ({ events: [], lastSeq: 0 })),
     getPipeline: async (id: string) => ({
       runId: id,
       startedAt: "2024-01-01T00:00:00Z",

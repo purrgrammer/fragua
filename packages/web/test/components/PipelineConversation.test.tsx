@@ -18,8 +18,8 @@
 // contract check across reducer + component.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
-import { LONG_RUN_TURNS, PipelineConversation } from "../../src/components/PipelineConversation.tsx";
+import { cleanup, render, within } from "@testing-library/react";
+import { PipelineConversation } from "../../src/components/PipelineConversation.tsx";
 import {
   type PipelineConversation as ConversationTree,
   eventsToConversation,
@@ -105,17 +105,23 @@ describe("PipelineConversation", () => {
     expect(within(container).getByTestId("node-section-done")).toBeTruthy();
   });
 
-  it("renders a Checkpoint marker at/above every section", () => {
+  it("renders a step header at the same level as messages, not as a collapsible", () => {
     const conv = buildConversation();
     const { container } = render(<PipelineConversation conversation={conv} />);
-    // AI Elements' CheckpointTrigger is a <button> with text "Node: <id>".
-    // One per section; three sections → three triggers.
-    const triggers = container.querySelectorAll("button");
-    const nodeTriggers = Array.from(triggers).filter((b) => (b.textContent ?? "").startsWith("Node: "));
-    expect(nodeTriggers).toHaveLength(3);
-    // All are disabled (restore-state is out of scope for P5.08).
-    for (const b of nodeTriggers) {
-      expect((b as HTMLButtonElement).disabled).toBe(true);
+    // Three sections expected (start / explore / done); each has a plain
+    // node-id label, not the old "Node: <id>" checkpoint trigger.
+    const sections = container.querySelectorAll("[data-testid^='node-section-']");
+    expect(sections).toHaveLength(3);
+    for (const s of Array.from(sections)) {
+      expect(s.textContent ?? "").not.toContain("Node: ");
+    }
+    // And no per-section collapse toggle — the section body is an
+    // inline <div>, not a Radix Collapsible, so its id isn't bound to
+    // an aria-expanded trigger anywhere in this component's chrome.
+    for (const s of Array.from(sections)) {
+      const nodeId = s.getAttribute("data-testid")?.replace(/^node-section-/, "") ?? "";
+      const toggle = s.querySelector(`[aria-controls='node-section-body-${nodeId}']`);
+      expect(toggle).toBeNull();
     }
   });
 
@@ -148,12 +154,16 @@ describe("PipelineConversation", () => {
     expect(id).toMatch(/^turn-explore-t\d+$/);
   });
 
-  it("shows cost/tokens/model on the assistant message when present", () => {
+  it("does NOT show cost/tokens/model inline — the byline is hidden for now", () => {
+    // The data still flows into the reducer (other surfaces read it),
+    // but inline rendering looked orphaned between messages and was
+    // commented out. Re-enable this assertion when the byline comes
+    // back in a layout that reads cleanly.
     const conv = buildConversation();
     const { container } = render(<PipelineConversation conversation={conv} />);
     const body = container.textContent ?? "";
-    expect(body).toContain("claude-haiku-4-5");
-    expect(body).toMatch(/\$0\.00(1[012])/); // formatUsd renders cents precision
+    expect(body).not.toContain("claude-haiku-4-5");
+    expect(body).not.toMatch(/\$0\.00/);
   });
 
   it("renders an empty state when there are no sections", () => {
@@ -171,53 +181,6 @@ describe("PipelineConversation", () => {
     );
     const section = within(container).getByTestId("node-section-explore");
     expect(section.getAttribute("data-status")).toBe("failed");
-  });
-
-  describe("long-run behaviour", () => {
-    function buildLongConversation(): ConversationTree {
-      const events: RawEvent[] = [ev("node.started", { node_id: "loop" })];
-      // Produce > LONG_RUN_TURNS agent turns in one section.
-      for (let i = 0; i <= LONG_RUN_TURNS; i++) {
-        events.push(
-          ev("agent.turn_start", { node_id: "loop" }),
-          ev("agent.message_start", {
-            node_id: "loop",
-            data: { role: "assistant" },
-          }),
-          ev("llm.text_delta", {
-            node_id: "loop",
-            data: { delta: `t${i}`, content_index: 0 },
-          }),
-          ev("llm.done", { node_id: "loop" }),
-          ev("agent.message_end", { node_id: "loop" }),
-          ev("agent.turn_end", { node_id: "loop" }),
-        );
-      }
-      events.push(ev("node.completed", { node_id: "loop", data: { outcome: "pass" } }));
-      return eventsToConversation(events);
-    }
-
-    it("collapses sections by default and surfaces the Expand all button", () => {
-      const conv = buildLongConversation();
-      const { container } = render(<PipelineConversation conversation={conv} />);
-      const section = within(container).getByTestId("node-section-loop");
-      // The section body should be hidden: the Radix Collapsible keeps its
-      // children mounted but sets data-state="closed" on the content.
-      const body = section.querySelector(`#node-section-body-loop`);
-      expect(body?.getAttribute("data-state")).toBe("closed");
-      // Expand-all button is present.
-      expect(within(container).getByTestId("expand-all")).toBeTruthy();
-    });
-
-    it("clicking Expand all un-collapses the default-hidden sections", () => {
-      const conv = buildLongConversation();
-      const { container } = render(<PipelineConversation conversation={conv} />);
-      const btn = within(container).getByTestId("expand-all");
-      fireEvent.click(btn);
-      const section = within(container).getByTestId("node-section-loop");
-      const body = section.querySelector(`#node-section-body-loop`);
-      expect(body?.getAttribute("data-state")).toBe("open");
-    });
   });
 
   it("renders a streaming Shimmer pill when isLive=true and a part is still streaming", () => {

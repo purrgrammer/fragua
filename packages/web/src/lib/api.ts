@@ -134,6 +134,21 @@ export interface ApiClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Bulk historical-events payload. Mirrors the server's
+ * `GET /pipelines/:id/events.json`. Every raw event from the run's
+ * `events.jsonl` is included verbatim; we leave shape validation to the
+ * reducer (which only reads fields it recognises and tolerates the rest).
+ *
+ * `lastSeq` matches the SSE `id:` frames — pass it back as
+ * `Last-Event-ID` when opening the stream so SSE resumes where the
+ * bootstrap left off.
+ */
+export interface PipelineEventsPayload {
+  events: unknown[];
+  lastSeq: number;
+}
+
 export interface ApiClient {
   /** Current baseUrl, exposed so URL helpers stay consistent with fetches. */
   readonly baseUrl: string;
@@ -142,6 +157,12 @@ export interface ApiClient {
   listPipelines(): Promise<PipelineSummary[]>;
   getPipeline(id: string): Promise<PipelineDetail>;
   listWorkflows(): Promise<WorkflowSummary[]>;
+  /**
+   * Fetch the full historical event array for a run. Used to bootstrap
+   * the conversation reducer before subscribing to the SSE stream — the
+   * UI never keeps a raw-event buffer in memory past the fold.
+   */
+  getPipelineEvents(id: string): Promise<PipelineEventsPayload>;
 
   // URL helpers — always return relative strings starting with the client's
   // `baseUrl` (default "/api"). Callers use these anywhere a URL is needed
@@ -197,6 +218,17 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 
     async listWorkflows(): Promise<WorkflowSummary[]> {
       return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
+    },
+
+    async getPipelineEvents(id: string): Promise<PipelineEventsPayload> {
+      return getJson(
+        `/pipelines/${encodeURIComponent(id)}/events.json`,
+        (v): v is PipelineEventsPayload =>
+          typeof v === "object" &&
+          v !== null &&
+          Array.isArray((v as { events?: unknown }).events) &&
+          typeof (v as { lastSeq?: unknown }).lastSeq === "number",
+      );
     },
 
     getPipelineEventsUrl,

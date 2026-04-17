@@ -1,7 +1,19 @@
 "use client";
 
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
-import { CheckCircleIcon, ChevronDownIcon, CircleIcon, ClockIcon, WrenchIcon, XCircleIcon } from "lucide-react";
+import {
+  BotIcon,
+  CheckCircleIcon,
+  ChevronDownIcon,
+  CircleIcon,
+  ClockIcon,
+  FileTextIcon,
+  type LucideIcon,
+  PencilIcon,
+  TerminalIcon,
+  WrenchIcon,
+  XCircleIcon,
+} from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -57,13 +69,36 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
   </Badge>
 );
 
+/** Map a tool name → header icon. Kept small + hard-coded: swarm has a
+ * stable core tool set, and reaching for a full icon registry would be
+ * overkill. Unknown tools fall back to a generic wrench. */
+function iconForTool(toolName: string | undefined): LucideIcon {
+  if (!toolName) return WrenchIcon;
+  // Accept either swarm's native `local:bash` form or the AI-SDK-style
+  // `tool-local_bash` slug we ship via `toolTypeFromName`.
+  const normalized = toolName.replace(/^tool-/, "").replace(/_/g, ":");
+  switch (normalized) {
+    case "local:bash":
+      return TerminalIcon;
+    case "local:read_file":
+      return FileTextIcon;
+    case "local:write_file":
+      return PencilIcon;
+    case "local:subagent":
+      return BotIcon;
+    default:
+      return WrenchIcon;
+  }
+}
+
 export const ToolHeader = ({ className, title, type, state, toolName, ...props }: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
+  const Icon = iconForTool(title ?? derivedName);
 
   return (
     <CollapsibleTrigger className={cn("flex w-full items-center justify-between gap-4 p-3", className)} {...props}>
       <div className="flex items-center gap-2">
-        <WrenchIcon className="size-4 text-muted-foreground" />
+        <Icon className="size-4 text-muted-foreground" />
         <span className="font-medium text-sm">{title ?? derivedName}</span>
         {getStatusBadge(state)}
       </div>
@@ -77,7 +112,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-2 px-4 pt-2 pb-1 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
       className,
     )}
     {...props}

@@ -37,6 +37,7 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     }),
     getPipelineEventsUrl: eventsUrl,
     pipelineEventsUrl: eventsUrl,
+    getPipelineEvents: overrides.getPipelineEvents ?? (async () => ({ events: [], lastSeq: 0 })),
     ...overrides,
   };
 }
@@ -50,7 +51,7 @@ describe("PipelineDetail", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("fetches the pipeline for the :id from the URL and renders header + graph", async () => {
+  it("fetches the pipeline for the :id from the URL and renders the conversation region", async () => {
     let fetchedId: string | undefined;
     const api = makeClient({
       getPipeline: async (id) => {
@@ -62,7 +63,6 @@ describe("PipelineDetail", () => {
           status: "running",
           lastEventSeq: 3,
           nodes: [],
-          workflowSource: "digraph g { n1 [shape=Mdiamond]; n2 [shape=box]; n1 -> n2 }",
           costUsd: 0,
           inputTokens: 0,
           outputTokens: 0,
@@ -81,10 +81,10 @@ describe("PipelineDetail", () => {
     expect(h2?.getAttribute("title")).toBe("abc12345xyz");
     // Event count reflects lastEventSeq.
     expect(within(container).getByTestId("detail-event-count").textContent).toBe("3");
-    // Graph renders.
-    await waitFor(() => {
-      expect(within(container).getByTestId("graphview").querySelector('[data-node-id="n1"]')).toBeTruthy();
-    });
+    // Conversation is the primary surface; the graph + timeline are gone.
+    expect(within(container).getByTestId("conversation-region")).toBeTruthy();
+    expect(within(container).queryByTestId("graph-panel")).toBeNull();
+    expect(within(container).queryByTestId("timeline-placeholder")).toBeNull();
   });
 
   it("renders cost + tokens + duration in the header when metrics are present", async () => {
