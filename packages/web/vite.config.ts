@@ -1,16 +1,17 @@
 // Vite config for @swarm/web.
 //
 // Dev proxy model:
-//   - `/api/**` is the canonical prefix the client uses (see src/lib/api.ts).
+//   - `/api/**` is the ONLY prefix the client uses (see src/lib/api.ts).
 //     We strip the prefix on the way out so `/api/health` → `/health` at
 //     the server. Every client URL goes through `createApiClient` so this
 //     is the only rule that matters in practice.
-//   - The bare-prefix entries below (`/pipelines`, `/health`) are a dev-
-//     only safety net: if any code path accidentally ships a non-prefixed
-//     URL (or pastes from docs, or a hot-reload edge case), the request
-//     still reaches the server instead of 404ing against the Vite dev
-//     server. In prod the web bundle is served from the same origin as
-//     the swarm server so there's no proxy at all.
+//   - We deliberately do NOT proxy the bare `/pipelines` or `/health`
+//     prefixes. `/pipelines/:id` is also a client-side route (see
+//     src/lib/router.tsx); proxying the bare prefix would forward a
+//     full-page reload on `/pipelines/<id>` to the API server, which
+//     returns JSON and bypasses React Router entirely. In prod the web
+//     bundle is served from the same origin as the swarm server so there
+//     is no proxy at all.
 //
 // Path alias:
 //   - `@/` → `src/`. Required by shadcn/ui + AI Elements components,
@@ -41,9 +42,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
-      // Safety-net: unprefixed server paths forwarded as-is.
-      "/pipelines": { target: serverTarget, changeOrigin: true },
-      "/health": { target: serverTarget, changeOrigin: true },
     },
   },
   build: {

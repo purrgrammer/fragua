@@ -123,7 +123,7 @@ describe("PipelinesList", () => {
     expect(row.getAttribute("title")).toBe("2024-01-01T00:00:00.000Z");
   });
 
-  it("renders the usage cell in compact form with a long-form tooltip", async () => {
+  it("renders cost and tokens in separate columns with long-form tooltips", async () => {
     const rows: PipelineSummary[] = [
       {
         runId: "rUsage",
@@ -143,21 +143,23 @@ describe("PipelinesList", () => {
       expect(q.getByTestId("pipelines-table")).toBeTruthy();
     });
 
-    const cell = q.getByTestId("usage-rUsage");
-    const text = cell.textContent ?? "";
-    // Compact: USD formatted + "tok" suffix, never raw fixed-digits.
-    expect(text).toContain("$0.123");
-    expect(text).toContain("tok");
-    expect(text).toMatch(/4(\.2)?K/); // 3500+700 = 4200 → "4.2K" in en-US
+    // Cost column: USD formatted on its own, with a tooltip repeating it
+    // in long form for copy/paste.
+    const costCell = q.getByTestId("cost-rUsage");
+    expect((costCell.textContent ?? "").trim()).toBe("$0.123");
+    const costTitle = (costCell.closest("td") as HTMLElement).getAttribute("title") ?? "";
+    expect(costTitle).toContain("$0.123");
 
-    // Tooltip has the long-form breakdown.
-    const td = cell.closest("td") as HTMLElement;
-    const title = td.getAttribute("title") ?? "";
-    expect(title).toContain("input 3,500");
-    expect(title).toContain("output 700");
+    // Tokens column: compact total, tooltip holds the input/output split.
+    const tokensCell = q.getByTestId("tokens-rUsage");
+    expect(tokensCell.textContent ?? "").toMatch(/4(\.2)?K/); // 3500+700 = 4200
+    expect(tokensCell.textContent ?? "").not.toContain("tok"); // no unit in compact cell
+    const tokensTitle = (tokensCell.closest("td") as HTMLElement).getAttribute("title") ?? "";
+    expect(tokensTitle).toContain("input 3,500");
+    expect(tokensTitle).toContain("output 700");
   });
 
-  it("renders '—' in the usage cell when no LLM usage is reported", async () => {
+  it("renders '—' in both cost and tokens cells when no LLM usage is reported", async () => {
     const rows: PipelineSummary[] = [
       {
         runId: "rEmpty",
@@ -175,8 +177,34 @@ describe("PipelinesList", () => {
     await waitFor(() => {
       expect(q.getByTestId("pipelines-table")).toBeTruthy();
     });
-    const cell = q.getByTestId("usage-rEmpty");
-    expect((cell.textContent ?? "").trim()).toBe("—");
+    expect((q.getByTestId("cost-rEmpty").textContent ?? "").trim()).toBe("—");
+    expect((q.getByTestId("tokens-rEmpty").textContent ?? "").trim()).toBe("—");
+  });
+
+  it("does not render an Events column", async () => {
+    const rows: PipelineSummary[] = [
+      {
+        runId: "rNoEvents",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "success",
+        eventCount: 42,
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    ];
+    const api = makeClient({ listPipelines: async () => rows });
+    const { container } = mount(api);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("pipelines-table")).toBeTruthy();
+    });
+    const headers = Array.from(q.getByTestId("pipelines-table").querySelectorAll("thead th")).map((th) =>
+      (th.textContent ?? "").trim(),
+    );
+    expect(headers).not.toContain("Events");
+    expect(headers).toContain("Cost");
+    expect(headers).toContain("Tokens");
   });
 
   it("shows a loading indicator while pending", async () => {

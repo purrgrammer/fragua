@@ -13,12 +13,17 @@
 //     goes through `formatUsd`, tokens through `formatTokensCompact`
 //     (lib/format.ts). The full values are always reachable via the `title`
 //     attribute so operators can hover for precise values.
+//   - Cost and tokens live in their own columns — operators scanning the
+//     list usually want to compare one or the other in isolation (cheapest
+//     runs vs largest runs), and a merged "Usage" column fought the eye.
+//     Event count column is intentionally omitted — `lastEventSeq` on the
+//     detail page is the right surface for that.
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { ApiClient, PipelineSummary } from "../lib/api.ts";
-import { formatTokensCompact, formatTokensLong, formatUsd } from "../lib/format.ts";
+import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
 import { formatRelative, toIsoTitle } from "../lib/time.ts";
 
 export interface PipelinesListProps {
@@ -86,8 +91,8 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
               <th className="py-2 pr-4 font-medium">Workflow</th>
               <th className="py-2 pr-4 font-medium">Status</th>
               <th className="py-2 pr-4 font-medium">Started</th>
-              <th className="py-2 pr-4 font-medium">Events</th>
-              <th className="py-2 pr-4 font-medium text-right">Usage</th>
+              <th className="py-2 pr-4 font-medium text-right">Cost</th>
+              <th className="py-2 pr-4 font-medium text-right">Tokens</th>
             </tr>
           </thead>
           <tbody>
@@ -119,14 +124,20 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
                 >
                   {formatRelative(row.startedAt)}
                 </td>
-                <td className="py-2 pr-4 text-slate-600 tabular-nums">{row.eventCount}</td>
                 <td
                   className="py-2 pr-4 text-slate-600 tabular-nums text-right whitespace-nowrap"
-                  // Long form on hover; compact form rendered.
-                  title={usageTooltip(row)}
-                  data-testid={`usage-${row.runId}`}
+                  title={costTooltip(row)}
+                  data-testid={`cost-${row.runId}`}
                 >
-                  {formatUsage(row)}
+                  {row.costUsd === 0 ? "—" : formatUsd(row.costUsd)}
+                </td>
+                <td
+                  className="py-2 pr-4 text-slate-600 tabular-nums text-right whitespace-nowrap"
+                  // Long-form input/output split on hover; compact total rendered.
+                  title={tokensTooltip(row)}
+                  data-testid={`tokens-${row.runId}`}
+                >
+                  {formatTokensCell(row)}
                 </td>
               </tr>
             ))}
@@ -142,26 +153,24 @@ function shortenRunId(runId: string): string {
   return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
 }
 
-/**
- * Compact usage cell — "$0.12 · 4.2K tok". We combine cost and total
- * tokens (input+output) because horizontal space is tight in the table;
- * the tooltip breaks them out. When both are zero we render "—" rather
- * than "$0.00 · 0 tok", which would be visual clutter in the common case
- * of a run with no LLM calls yet.
- */
-function formatUsage(row: PipelineSummary): string {
+/** Tokens cell — compact input + output total. "—" when no LLM calls yet. */
+function formatTokensCell(row: PipelineSummary): string {
   const total = row.inputTokens + row.outputTokens;
-  if (row.costUsd === 0 && total === 0) return "—";
-  return `${formatUsd(row.costUsd)} · ${formatTokensCompact(total)} tok`;
+  if (total === 0) return "—";
+  return formatTokensCompact(total);
 }
 
-/** Long-form breakdown for the title tooltip. */
-function usageTooltip(row: PipelineSummary): string {
+/** Cost cell tooltip — precise USD, or a note when the run made no LLM calls. */
+function costTooltip(row: PipelineSummary): string {
+  if (row.costUsd === 0) return "no LLM usage reported";
+  return `cost ${formatUsd(row.costUsd)}`;
+}
+
+/** Tokens cell tooltip — input / output split at long precision. */
+function tokensTooltip(row: PipelineSummary): string {
   const total = row.inputTokens + row.outputTokens;
-  if (row.costUsd === 0 && total === 0) return "no LLM usage reported";
-  return `cost ${formatUsd(row.costUsd)} · input ${formatTokensLong(row.inputTokens)} · output ${formatTokensLong(
-    row.outputTokens,
-  )} tokens`;
+  if (total === 0) return "no LLM usage reported";
+  return `input ${formatTokensLong(row.inputTokens)} · output ${formatTokensLong(row.outputTokens)} tokens`;
 }
 
 function StatusPill({ status }: { status: PipelineSummary["status"] }): JSX.Element {
@@ -182,7 +191,7 @@ function StatusPill({ status }: { status: PipelineSummary["status"] }): JSX.Elem
       data-testid={`status-${status}`}
       className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
     >
-      {status}
+      {statusLabel(status)}
     </span>
   );
 }

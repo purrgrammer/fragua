@@ -72,6 +72,22 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
   return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
 }
 
+/**
+ * User-facing label for a pipeline status. Mapping lives here (not in
+ * components) so the raw wire value (`"fail"`) stays intact on the data
+ * layer while the copy reads naturally. `data-testid` / `data-status`
+ * attributes continue to use the raw value; only visible text goes
+ * through this helper.
+ */
+export function statusLabel(status: string): string {
+  switch (status) {
+    case "fail":
+      return "failure";
+    default:
+      return status;
+  }
+}
+
 // Re-export the TimeInput type via a narrow helper so callers with
 // mixed "when was this" concerns only need one import site. Kept here to
 // avoid a circular concern with time.ts (which is the canonical home).
