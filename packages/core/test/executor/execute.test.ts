@@ -86,6 +86,39 @@ describe("execute — linear pipeline", () => {
     expect((started!.data as Record<string, unknown>)["workflow_source"]).toBeUndefined();
   });
 
+  test("node.started carries static input snapshot (template, model, context_keys)", async () => {
+    const graph = parseDotSource(`
+      digraph {
+        s [shape=Mdiamond]
+        do_work [prompt="hello \${context.greeting}", model="claude-opus-4-7", provider="anthropic", allowed_tools="local:bash,local:read_file"]
+        done [shape=Msquare]
+        s -> do_work -> done
+      }
+    `);
+    const sink = new InMemorySink();
+    await execute({
+      graph,
+      sink,
+      backend: new MockCodergenBackend(() => ok({ notes: "done" })),
+      initial_context: { greeting: "world" },
+    });
+    const started = sink.snapshot().find((e) => e.type === "node.started" && e.node_id === "do_work");
+    expect(started).toBeDefined();
+    const d = started!.data as Record<string, unknown>;
+    // Template captured verbatim, pre-substitution.
+    expect(d["prompt_template"]).toBe("hello ${context.greeting}");
+    expect(d["node_type"]).toBe("codergen");
+    expect(d["model"]).toBe("claude-opus-4-7");
+    expect(d["provider"]).toBe("anthropic");
+    // Allow-list flows through as an array.
+    expect(d["allowed_tools"]).toEqual(["local:bash", "local:read_file"]);
+    // User-facing context keys surface; engine-managed ones (graph.*, run_id) don't.
+    const keys = d["context_keys"] as string[];
+    expect(keys).toContain("greeting");
+    expect(keys.every((k) => !k.startsWith("graph."))).toBe(true);
+    expect(keys.every((k) => !k.startsWith("internal."))).toBe(true);
+  });
+
   test("context.run_id and graph.* mirrored into context", async () => {
     const graph = parseDotSource(`
       digraph {

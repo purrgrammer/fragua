@@ -210,6 +210,15 @@ Immutable records of everything that happens. The event log is the system's back
 }
 ```
 
+**Observability invariant:** the event log is the single source of truth. Everything a debugger or replayer needs must be on an event — no out-of-band state. Two payloads carry the LLM-call inputs so nothing is "in memory only":
+
+- `node.started.data` — static, pre-substitution inputs (`node_type`, `prompt_template`, `context_keys`, `node_outputs_in_scope`, `model`, `provider`, `thread_id`, `fidelity`, `allowed_tools`, `denied_tools`, `context_files`). One per node execution.
+- `llm.start.data` — the resolved call snapshot emitted by the backend before `agent.prompt()`: `{ provider, model, prompt, system_prompt, thread_id, allowed_tools, denied_tools, iteration? }`. Fires once per `backend.run()` — that means once per codergen node and N times for a loop node with N iterations.
+
+`node.started` deliberately does NOT carry the resolved prompt, because loop handlers resolve a different prompt per iteration; the resolved text belongs on `llm.start`. `context_keys` lists scope keys without values to keep payloads bounded and avoid accidental secret leaks — debug modes can opt into value capture.
+
+**Duplication policy:** events are optimised for stateless replay, so some redundancy is tolerated — `duration_ms` on `node.completed` is derivable from timestamps, `retry_count` from counting prior `node.retrying` events, both kept for reader ergonomics. `outcome.notes` duplicates the agent's final assistant text that also streams through `llm.text_delta` / `agent.message_*`; the duplication is load-bearing because `$nodeId.output` substitution and `<promise>` / `<abort>` markers run against `notes`. UIs that render a conversation should read from the message stream, not from `notes`.
+
 ### 3.6 Checkpoint
 
 Written atomically after every node transition to `.swarm/runs/<run-id>/checkpoint.json`. Enables crash recovery and resume-from-arbitrary-point debugging.

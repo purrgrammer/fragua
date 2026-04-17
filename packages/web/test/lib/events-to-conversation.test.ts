@@ -268,6 +268,55 @@ describe("eventsToConversation — synthetic sequences", () => {
     expect(a).toEqual(b);
   });
 
+  it("captures node.started input snapshot on the section (template, model, context_keys)", () => {
+    const out = eventsToConversation([
+      ev("node.started", {
+        node_id: "do_work",
+        data: {
+          node_type: "codergen",
+          prompt_template: "hello ${context.greeting}",
+          model: "claude-opus-4-7",
+          provider: "anthropic",
+          context_keys: ["greeting"],
+          allowed_tools: ["local:bash"],
+        },
+      }),
+    ]);
+    const s = out[0];
+    expect(s?.nodeType).toBe("codergen");
+    expect(s?.promptTemplate).toBe("hello ${context.greeting}");
+    expect(s?.model).toBe("claude-opus-4-7");
+    expect(s?.provider).toBe("anthropic");
+    expect(s?.contextKeys).toEqual(["greeting"]);
+    expect(s?.allowedTools).toEqual(["local:bash"]);
+  });
+
+  it("captures llm.start resolved prompt + system prompt on the section", () => {
+    const out = eventsToConversation([
+      ev("node.started", {
+        node_id: "do_work",
+        data: { node_type: "codergen", prompt_template: "hello ${context.greeting}" },
+      }),
+      ev("llm.start", {
+        node_id: "do_work",
+        data: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          prompt: "hello world",
+          system_prompt: "You are a helpful assistant.",
+          thread_id: "t-42",
+        },
+      }),
+    ]);
+    const s = out[0];
+    expect(s?.prompt).toBe("hello world");
+    expect(s?.systemPrompt).toBe("You are a helpful assistant.");
+    expect(s?.model).toBe("claude-opus-4-7");
+    expect(s?.threadId).toBe("t-42");
+    // Template stays distinct from resolved prompt.
+    expect(s?.promptTemplate).toBe("hello ${context.greeting}");
+  });
+
   it("records node.retrying / node.failed / node.skipped on the section", () => {
     const out = eventsToConversation([
       ev("node.started", { node_id: "x" }),

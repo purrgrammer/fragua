@@ -86,7 +86,11 @@ type AssistantStreamEvent = Extract<AgentEvent, { type: "message_update" }>["ass
 function bridgeMessageUpdate(e: AssistantStreamEvent): BridgedEvent | undefined {
   switch (e.type) {
     case "start":
-      return { type: "llm.start", data: {} };
+      // swarm's `llm.start` fires once per `backend.run()` with the resolved
+      // prompt + system prompt (see PiCodergenBackend.run). Don't duplicate
+      // it on every pi-agent message_start — `agent.message_start` already
+      // marks message boundaries inside a turn.
+      return undefined;
     case "text_delta":
       return { type: "llm.text_delta", data: { delta: e.delta, content_index: e.contentIndex } };
     case "thinking_delta":

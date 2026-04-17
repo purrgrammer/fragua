@@ -1,6 +1,7 @@
 // Event types. Immutable records written to the EventSink.
 // See docs/SPEC.md §3.5.
 
+import type { FidelityMode } from "./fidelity.ts";
 import type { Outcome } from "./outcome.ts";
 
 export type EventType =
@@ -65,6 +66,63 @@ export interface NodeCompletedData {
   outcome: Outcome;
   duration_ms: number;
   retry_count: number;
+}
+
+/**
+ * Static inputs to a node — everything knowable before any substitution or
+ * LLM call. Captured on `node.started` so a debugger can see the node's
+ * configuration without re-parsing the DOT source. The *resolved* prompt
+ * (post-substitution) is intentionally NOT here — it lives on `llm.start`
+ * because loop/retry nodes resolve a different prompt per iteration.
+ *
+ * Values are optional because handlers without templates / context / tools
+ * (start, exit, conditional, fan_in) simply omit them.
+ */
+export interface NodeStartedData {
+  /** Handler key — `codergen`, `loop`, `wait.human`, `parallel`, ... */
+  node_type?: string;
+  /** Raw `node.attrs.prompt` before any substitution. */
+  prompt_template?: string;
+  /** Keys present in the ContextMap at the moment the handler starts.
+   * Values elided to avoid payload blow-up and accidental secret leaks. */
+  context_keys?: string[];
+  /** Upstream node ids whose outputs are available for substitution. */
+  node_outputs_in_scope?: string[];
+  /** Model hint from `node.attrs.model` — authoritative binding is on `llm.start`. */
+  model?: string;
+  /** Provider hint from `node.attrs.provider`. */
+  provider?: string;
+  /** Resolved thread id (see engine/fidelity.ts). */
+  thread_id?: string;
+  /** Resolved fidelity mode (see engine/fidelity.ts). */
+  fidelity?: FidelityMode;
+  /** Tool allowlist from `node.attrs.allowed_tools`. */
+  allowed_tools?: string[];
+  /** Tool denylist from `node.attrs.denied_tools`. */
+  denied_tools?: string[];
+  /** `node.attrs.context_files` — paths loaded into the system prompt. */
+  context_files?: string[];
+}
+
+/**
+ * Per-LLM-call record. Fires once per actual `backend.run()` invocation —
+ * that means once for a codergen node, N times for a loop node with N
+ * iterations, and zero times for non-LLM handlers. Carries the snapshot
+ * of what the agent was actually asked.
+ */
+export interface LlmStartData {
+  provider?: string;
+  model?: string;
+  /** Fully substituted user prompt sent to the LLM. */
+  prompt?: string;
+  /** System prompt (context_files + configured system prompt) assembled
+   * for this call. */
+  system_prompt?: string;
+  thread_id?: string;
+  allowed_tools?: string[];
+  denied_tools?: string[];
+  /** Loop iteration metadata when the call originates from a loop handler. */
+  iteration?: { n: number; max: number };
 }
 
 export interface EdgeSelectedData {

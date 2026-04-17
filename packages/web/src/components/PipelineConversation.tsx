@@ -18,7 +18,7 @@
 //   - `reasoning-<messageId>`  — one per reasoning block.
 //   - `conversation-empty`     — empty-state marker.
 
-import { type ReactNode, useMemo } from "react";
+import { Fragment, type ReactNode, useMemo } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -140,6 +140,7 @@ function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Elem
       </div>
 
       <div id={`node-section-body-${section.nodeId}`} className="mt-1">
+        <NodeInputBlock section={section} />
         {/* Turns render as a flat list — no per-iteration grouping.
             Loop nodes just emit multiple turns in encounter order.
             Empty sections (pipeline-lifecycle-only nodes like `start` /
@@ -150,6 +151,84 @@ function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Elem
         ))}
       </div>
     </section>
+  );
+}
+
+// --------------------------------------------------------------------
+// Node input — collapsible snapshot of what the agent was asked.
+// --------------------------------------------------------------------
+
+/**
+ * Render a `<details>` block with the resolved prompt, system prompt, and
+ * model binding for this section. Collapsed by default — the conversation
+ * is dense, and most readers want the agent's reply, not the input. Only
+ * renders when something interesting exists (prompt or template); otherwise
+ * returns null so non-LLM sections (start / exit / conditional) stay bare.
+ */
+function NodeInputBlock({ section }: { section: NodeSection }): JSX.Element | null {
+  const hasPrompt = Boolean(section.prompt || section.promptTemplate);
+  const hasMeta = Boolean(section.model || section.systemPrompt);
+  if (!hasPrompt && !hasMeta) return null;
+
+  const modelLabel = section.provider && section.model ? `${section.provider}/${section.model}` : section.model;
+
+  return (
+    <details
+      data-testid={`node-input-${section.nodeId}`}
+      className="mb-2 rounded-md border border-border/60 bg-muted/30 text-xs"
+    >
+      <summary className="cursor-pointer select-none px-2 py-1 text-muted-foreground hover:text-foreground">
+        <span className="font-medium">input</span>
+        {modelLabel && <span className="ml-2 font-mono text-[10px] opacity-70">{modelLabel}</span>}
+        {section.threadId && <span className="ml-2 font-mono text-[10px] opacity-70">thread:{section.threadId}</span>}
+      </summary>
+      <div className="space-y-3 border-t border-border/60 px-3 py-2">
+        {section.prompt && (
+          <InputField label="prompt (resolved)" value={section.prompt} testId={`node-input-prompt-${section.nodeId}`} />
+        )}
+        {section.promptTemplate && section.promptTemplate !== section.prompt && (
+          <InputField label="prompt template" value={section.promptTemplate} />
+        )}
+        {section.systemPrompt && <InputField label="system prompt" value={section.systemPrompt} />}
+        <InputMetaGrid section={section} />
+      </div>
+    </details>
+  );
+}
+
+function InputField({ label, value, testId }: { label: string; value: string; testId?: string }): JSX.Element {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <pre
+        {...(testId ? { "data-testid": testId } : {})}
+        className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-foreground"
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+function InputMetaGrid({ section }: { section: NodeSection }): JSX.Element | null {
+  const rows: Array<[string, string]> = [];
+  if (section.nodeType) rows.push(["type", section.nodeType]);
+  if (section.fidelity) rows.push(["fidelity", section.fidelity]);
+  if (section.allowedTools?.length) rows.push(["allowed_tools", section.allowedTools.join(", ")]);
+  if (section.deniedTools?.length) rows.push(["denied_tools", section.deniedTools.join(", ")]);
+  if (section.contextFiles?.length) rows.push(["context_files", section.contextFiles.join(", ")]);
+  if (section.contextKeys?.length) rows.push(["context_keys", section.contextKeys.join(", ")]);
+  if (section.nodeOutputsInScope?.length) rows.push(["node_outputs", section.nodeOutputsInScope.join(", ")]);
+  if (rows.length === 0) return null;
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-[10px]">
+      {rows.map(([k, v]) => (
+        <Fragment key={k}>
+          <dt className="uppercase tracking-wide text-muted-foreground">{k}</dt>
+          <dd className="break-words font-mono text-foreground">{v}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 

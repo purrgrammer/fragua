@@ -63,6 +63,25 @@ export interface NodeSection {
   nodeId: string;
   status: NodeSectionStatus;
   turns: Turn[];
+  /** Node-level observability — populated from `node.started` and (for
+   * LLM-driven handlers) the resolved LLM call on `llm.start`. All
+   * optional so non-LLM sections (start / exit / conditional) stay bare. */
+  nodeType?: string;
+  promptTemplate?: string;
+  /** Fully substituted prompt sent to the LLM. For loop nodes, this is
+   * the most recent iteration's prompt — earlier iterations flow through
+   * as new `llm.start` events that overwrite this slot. */
+  prompt?: string;
+  systemPrompt?: string;
+  model?: string;
+  provider?: string;
+  threadId?: string;
+  fidelity?: string;
+  allowedTools?: string[];
+  deniedTools?: string[];
+  contextFiles?: string[];
+  contextKeys?: string[];
+  nodeOutputsInScope?: string[];
 }
 
 export interface Turn {
@@ -335,6 +354,30 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
       if (nodeId) {
         const s = sectionFor(state, nodeId);
         s.status = "running";
+        // Project node.started.data onto the section for introspection.
+        // All fields optional: non-LLM handlers emit only node_type.
+        const nt = data["node_type"];
+        if (typeof nt === "string") s.nodeType = nt;
+        const pt = data["prompt_template"];
+        if (typeof pt === "string") s.promptTemplate = pt;
+        const model = data["model"];
+        if (typeof model === "string") s.model = model;
+        const provider = data["provider"];
+        if (typeof provider === "string") s.provider = provider;
+        const threadId = data["thread_id"];
+        if (typeof threadId === "string") s.threadId = threadId;
+        const fidelity = data["fidelity"];
+        if (typeof fidelity === "string") s.fidelity = fidelity;
+        const allow = data["allowed_tools"];
+        if (Array.isArray(allow)) s.allowedTools = allow as string[];
+        const deny = data["denied_tools"];
+        if (Array.isArray(deny)) s.deniedTools = deny as string[];
+        const ctxFiles = data["context_files"];
+        if (Array.isArray(ctxFiles)) s.contextFiles = ctxFiles as string[];
+        const ctxKeys = data["context_keys"];
+        if (Array.isArray(ctxKeys)) s.contextKeys = ctxKeys as string[];
+        const nos = data["node_outputs_in_scope"];
+        if (Array.isArray(nos)) s.nodeOutputsInScope = nos as string[];
         state.activeNodeId = nodeId;
         state.activeTurn = null;
         state.activeMessage = null;
@@ -383,6 +426,24 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
 
     // ----- LLM deltas -----
     case "llm.start":
+      // Enriched by PiCodergenBackend before each call: resolved prompt +
+      // system prompt + model. Attach to the section so the UI can show
+      // exactly what the agent was asked (template + substitution result).
+      // For loop nodes this fires once per iteration — last write wins,
+      // which matches "show what the agent was most recently asked".
+      if (state.activeNodeId) {
+        const s = sectionFor(state, state.activeNodeId);
+        const prompt = data["prompt"];
+        if (typeof prompt === "string") s.prompt = prompt;
+        const sysp = data["system_prompt"];
+        if (typeof sysp === "string") s.systemPrompt = sysp;
+        const model = data["model"];
+        if (typeof model === "string") s.model = model;
+        const provider = data["provider"];
+        if (typeof provider === "string") s.provider = provider;
+        const threadId = data["thread_id"];
+        if (typeof threadId === "string") s.threadId = threadId;
+      }
       if (state.activeMessage) {
         const modelId = data["model"] as string | undefined;
         if (modelId) state.activeMessage.modelId = modelId;

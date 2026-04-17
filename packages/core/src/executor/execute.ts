@@ -10,7 +10,7 @@ import { type NodeOutput, type SubstitutionArgs, substitute } from "../engine/su
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";
-import type { Event, EventType } from "../types/events.ts";
+import type { Event, EventType, NodeStartedData } from "../types/events.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import { type Graph, handlerOf, isTerminal, type Node } from "../types/graph.ts";
 import type { Interviewer, Question } from "../types/interviewer.ts";
@@ -438,7 +438,10 @@ const parallelHandler: Handler = async (ctx) => {
     context: { ...ctx.context, ...merged },
   };
   const emitFanIn = buildEmit(fanInCtx);
-  await emitFanIn("node.started", {});
+  await emitFanIn(
+    "node.started",
+    buildNodeStartedData(ctx.graph, fanInNode, fanInCtx.context, ctx.node_outputs) as Record<string, unknown>,
+  );
   const startAt = Date.now();
   const fanInOutcome = await fanInHandler(fanInCtx);
   const duration_ms = Date.now() - startAt;
@@ -626,7 +629,7 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       };
     }
 
-    await emit("node.started", node, {});
+    await emit("node.started", node, buildNodeStartedData(graph, node, args.context, args.node_outputs) as Record<string, unknown>);
     const startAt = Date.now();
 
     const outcome = await runWithRetry({
@@ -963,6 +966,43 @@ function resolveMaxRetries(graph: Graph, node: Node): number {
   if (typeof node.attrs.max_retries === "number") return node.attrs.max_retries;
   if (typeof graph.attrs.default_max_retries === "number") return graph.attrs.default_max_retries;
   return 0;
+}
+
+/**
+ * Build the `node.started` payload from everything we know *before* the
+ * handler runs. Deliberately excludes the resolved prompt — that's a
+ * per-LLM-call concern and lives on `llm.start` (resolved once per loop
+ * iteration). Values that aren't set on the node are simply omitted so
+ * test fixtures stay tight and JSONL replay stays cheap.
+ */
+function buildNodeStartedData(
+  graph: Graph,
+  node: Node,
+  context: ContextMap,
+  nodeOutputs: Map<string, NodeOutput>,
+): NodeStartedData {
+  const data: NodeStartedData = { node_type: handlerOf(node) };
+  if (typeof node.attrs.prompt === "string" && node.attrs.prompt.length > 0) {
+    data.prompt_template = node.attrs.prompt;
+  }
+  // Context keys only — values can be arbitrarily large and sensitive.
+  // Engine-managed keys (`graph.*`, retry counters, last_stage, etc.)
+  // are noisy; strip them so the UI shows user-facing scope only.
+  const keys = Object.keys(context).filter((k) => !isEngineKey(k));
+  if (keys.length > 0) data.context_keys = keys.sort();
+  if (nodeOutputs.size > 0) data.node_outputs_in_scope = [...nodeOutputs.keys()].sort();
+  if (typeof node.attrs.model === "string") data.model = node.attrs.model;
+  if (typeof node.attrs.provider === "string") data.provider = node.attrs.provider;
+  const threadId = resolveThreadId({ graph, edge: undefined, targetNode: node });
+  if (threadId) data.thread_id = threadId;
+  data.fidelity = resolveFidelity({ graph, edge: undefined, targetNode: node });
+  const allow = node.attrs.allowed_tools;
+  if (Array.isArray(allow) && allow.length > 0) data.allowed_tools = allow as string[];
+  const deny = node.attrs.denied_tools;
+  if (Array.isArray(deny) && deny.length > 0) data.denied_tools = deny as string[];
+  const ctxFiles = node.attrs.context_files;
+  if (Array.isArray(ctxFiles) && ctxFiles.length > 0) data.context_files = ctxFiles as string[];
+  return data;
 }
 
 function findStart(graph: Graph): Node {

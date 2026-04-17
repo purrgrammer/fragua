@@ -86,6 +86,25 @@ export class PiCodergenBackend implements CodergenBackend {
       ...(input.thread_id !== undefined ? { sessionId: input.thread_id } : {}),
     });
 
+    // Emit the resolved LLM-call snapshot. This is the one durable record of
+    // what the agent was actually asked — resolved user prompt + assembled
+    // system prompt + model binding. Fires once per backend.run(), which
+    // means once for a codergen node and N times for a loop node with N
+    // iterations. Downstream observability (UI, JSONL debugging) depends
+    // on this payload; keep it compact but authoritative.
+    if (input.emit) {
+      const llmStart: Record<string, unknown> = {
+        provider,
+        model: modelId,
+        prompt: input.prompt,
+        system_prompt: systemPrompt,
+      };
+      if (input.thread_id) llmStart["thread_id"] = input.thread_id;
+      if (allow) llmStart["allowed_tools"] = allow;
+      if (deny) llmStart["denied_tools"] = deny;
+      await input.emit("llm.start", llmStart);
+    }
+
     const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
       const bridged = bridgeAgentEvent(event);
       if (bridged && input.emit) await input.emit(bridged.type, bridged.data);
