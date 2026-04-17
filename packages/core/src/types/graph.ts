@@ -61,6 +61,9 @@ export interface NodeAttrs {
   until?: string;
   max_iterations?: number;
   fresh_context?: boolean;
+  /** Parallel-node config (component shape). */
+  fan_in?: string;
+  join_policy?: "wait_all" | "first_success";
   [extra: string]: AttrScalar | undefined;
 }
 

@@ -6,6 +6,7 @@ import { listCommand } from "../src/commands/list.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
 import { runCommand } from "../src/commands/run.ts";
+import { steerCommand } from "../src/commands/steer.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
 const cli = cac("swarm");
@@ -69,6 +70,24 @@ cli
 cli.command("providers", "List supported LLM providers and which ones have credentials").action(() => {
   process.exit(providersCommand());
 });
+
+cli
+  .command("steer <run-id> <message>", "Inject a steering message into a running swarm process")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--cwd <path>", "Base directory")
+  .action(async (runId: string, message: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await steerCommand({
+      runId,
+      message,
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
 
 cli
   .command("list", "List recent runs with outcome + failed nodes")

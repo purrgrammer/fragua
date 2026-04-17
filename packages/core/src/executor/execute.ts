@@ -3,8 +3,9 @@
 //
 // See docs/SPEC.md §4.
 
-import { selectEdge } from "../engine/edge-selection.ts";
+import { type EdgeSelection, selectEdge } from "../engine/edge-selection.ts";
 import { resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
+import { applyStylesheet } from "../engine/stylesheet.ts";
 import { type NodeOutput, substitute } from "../engine/substitution.ts";
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
@@ -87,6 +88,34 @@ const exitHandler: Handler = async () => ok({ notes: "exit" });
 /** Pass-through; edge conditions are evaluated by the executor. */
 const conditionalHandler: Handler = async () => ok({ notes: "conditional" });
 
+/** Parse a timeout attr — accepts a number (ms) or a string like "30s" / "2m" / "500ms". */
+function parseTimeoutMs(raw: unknown): number | undefined {
+  if (typeof raw === "number") return raw > 0 ? raw : undefined;
+  if (typeof raw !== "string") return undefined;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m)?\s*$/i.exec(raw);
+  if (!match) return undefined;
+  const n = Number.parseFloat(match[1]!);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  const unit = (match[2] ?? "ms").toLowerCase();
+  return unit === "m" ? n * 60_000 : unit === "s" ? n * 1_000 : n;
+}
+
+/** Return an AbortSignal that fires when either the parent aborts or `ms` elapses. */
+function signalWithTimeout(parent: AbortSignal, ms: number): { signal: AbortSignal; cancel: () => void } {
+  const ctrl = new AbortController();
+  const onParent = (): void => ctrl.abort();
+  if (parent.aborted) ctrl.abort();
+  else parent.addEventListener("abort", onParent, { once: true });
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return {
+    signal: ctrl.signal,
+    cancel: () => {
+      clearTimeout(timer);
+      parent.removeEventListener("abort", onParent);
+    },
+  };
+}
+
 function buildEmit(ctx: HandlerContext): (type: EventType, data: Record<string, unknown>) => Promise<void> {
   return async (type, data) => {
     const ev: Event = {
@@ -109,20 +138,33 @@ const codergenHandler: Handler = async (ctx) => {
   const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
   const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
 
+  const timeoutMs = parseTimeoutMs(ctx.node.attrs.timeout);
+  const { signal, cancel } =
+    timeoutMs !== undefined ? signalWithTimeout(ctx.signal, timeoutMs) : { signal: ctx.signal, cancel: () => {} };
+
   try {
-    return await ctx.backend.run({
+    const outcome = await ctx.backend.run({
       node: ctx.node,
       prompt,
       context: ctx.context,
       thread_id,
       fidelity,
-      signal: ctx.signal,
+      signal,
       run_id: ctx.run_id,
       workflow_sha: ctx.workflow_sha,
       emit: buildEmit(ctx),
     });
+    if (signal.aborted && !ctx.signal.aborted && timeoutMs !== undefined) {
+      return fail(`node "${ctx.node.id}" timed out after ${timeoutMs}ms`, { notes: outcome.notes });
+    }
+    return outcome;
   } catch (err) {
+    if (signal.aborted && !ctx.signal.aborted && timeoutMs !== undefined) {
+      return fail(`node "${ctx.node.id}" timed out after ${timeoutMs}ms`);
+    }
     return fail(`codergen crashed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    cancel();
   }
 };
 
@@ -279,6 +321,212 @@ const waitHumanHandler: Handler = async (ctx) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Parallel + fan_in
+
+/** Aggregates branch outcomes already merged into context by the parallel handler.
+ * Succeeds if ≥1 branch succeeded; partial if some failed; fail if all failed. */
+const fanInHandler: Handler = async (ctx) => {
+  const total = typeof ctx.context["parallel.count"] === "number" ? ctx.context["parallel.count"] : 0;
+  const successes = typeof ctx.context["parallel.successes"] === "number" ? ctx.context["parallel.successes"] : 0;
+
+  if (total === 0) return ok({ notes: "fan_in: no branches" });
+  if (successes === 0) {
+    return fail(`fan_in: all ${total} branches failed`, { notes: `0/${total} branches succeeded` });
+  }
+  if (successes < total) {
+    return {
+      ...ok({ notes: `fan_in: ${successes}/${total} branches succeeded` }),
+      status: "partial_success",
+    };
+  }
+  return ok({ notes: `fan_in: ${successes}/${total} branches succeeded` });
+};
+
+const parallelHandler: Handler = async (ctx) => {
+  const outgoing = ctx.graph.edges.filter((e) => e.from === ctx.node.id);
+  if (outgoing.length === 0) return fail(`parallel node "${ctx.node.id}" has no outgoing branches`);
+
+  const fanInId =
+    ctx.node.attrs.fan_in ??
+    inferFanIn(
+      ctx.graph,
+      outgoing.map((e) => e.to),
+    );
+  if (!fanInId) {
+    return fail(`parallel "${ctx.node.id}": fan_in not specified and cannot be inferred`);
+  }
+  const fanInNode = ctx.graph.nodes[fanInId];
+  if (!fanInNode) return fail(`parallel "${ctx.node.id}": fan_in "${fanInId}" not found`);
+  if (fanInNode.shape !== "tripleoctagon") {
+    return fail(`parallel "${ctx.node.id}": fan_in "${fanInId}" must be tripleoctagon (got ${fanInNode.shape})`);
+  }
+
+  const policy = ctx.node.attrs.join_policy ?? "wait_all";
+
+  const branchPromises = outgoing.map(async (edge, idx) => {
+    const start = ctx.graph.nodes[edge.to];
+    if (!start) {
+      return { idx, outcome: fail(`branch target "${edge.to}" not found`), nodeId: edge.to, updates: {} };
+    }
+    const branchCtx: ContextMap = { ...ctx.context };
+    branchCtx["parallel.branch_idx"] = idx;
+    branchCtx["parallel.branch_from"] = edge.to;
+
+    const result = await runLoop({
+      graph: ctx.graph,
+      start_at: start,
+      stop_at: fanInId,
+      context: branchCtx,
+      handlers: HANDLERS,
+      sink: ctx.sink,
+      interviewer: ctx.interviewer,
+      backend: ctx.backend,
+      signal: ctx.signal,
+      now: ctx.now,
+      random: ctx.random,
+      run_id: ctx.run_id,
+      workflow_sha: ctx.workflow_sha,
+      max_steps: 500,
+      node_outputs: ctx.node_outputs,
+      completed_nodes: [],
+      node_outcomes: {},
+      retry_counts: {},
+    });
+    // Diff branch context against parent to capture cross-node updates the
+    // branch made. Engine-managed and per-branch keys are filtered out.
+    const updates: Record<string, ContextValue> = {};
+    for (const [k, v] of Object.entries(branchCtx)) {
+      if (isEngineKey(k) || k.startsWith("parallel.branch_")) continue;
+      if (ctx.context[k] !== v) updates[k] = v as ContextValue;
+    }
+    return { idx, outcome: result.finalOutcome, nodeId: edge.to, updates };
+  });
+
+  let branchResults: Array<{ idx: number; outcome: Outcome; nodeId: string; updates: Record<string, ContextValue> }>;
+  if (policy === "first_success") {
+    branchResults = await raceFirstSuccess(branchPromises);
+  } else {
+    branchResults = await Promise.all(branchPromises);
+  }
+
+  const merged: Record<string, ContextValue> = {};
+  for (const br of branchResults) {
+    Object.assign(merged, br.updates);
+    Object.assign(merged, br.outcome.context_updates);
+  }
+  const succeeded = branchResults.filter(
+    (r) => r.outcome.status === "success" || r.outcome.status === "partial_success",
+  );
+  merged["parallel.count"] = branchResults.length;
+  merged["parallel.successes"] = succeeded.length;
+  merged["parallel.branch_results"] = branchResults.map((r) => ({
+    id: r.nodeId,
+    status: r.outcome.status,
+    notes: r.outcome.notes,
+  })) as ContextValue;
+
+  const fanInCtx: HandlerContext = {
+    ...ctx,
+    node: fanInNode,
+    context: { ...ctx.context, ...merged },
+  };
+  const emitFanIn = buildEmit(fanInCtx);
+  await emitFanIn("node.started", {});
+  const startAt = Date.now();
+  const fanInOutcome = await fanInHandler(fanInCtx);
+  const duration_ms = Date.now() - startAt;
+  await emitFanIn("node.completed", { outcome: fanInOutcome, duration_ms, retry_count: 0 });
+
+  const selection = selectEdge({
+    graph: ctx.graph,
+    source: fanInNode,
+    outcome: fanInOutcome,
+    context: fanInCtx.context,
+  });
+
+  const out: Outcome = {
+    ...fanInOutcome,
+    context_updates: { ...merged, ...fanInOutcome.context_updates },
+  };
+  if (selection) out.next_node_override = selection.edge.to;
+  return out;
+};
+
+/** Race branches; resolve as soon as one succeeds (cancel others implicitly
+ * via parent AbortSignal eventually). If all finish without success, returns
+ * all results so the fan_in can report failure. */
+async function raceFirstSuccess<T extends { outcome: Outcome }>(promises: Promise<T>[]): Promise<T[]> {
+  const results: T[] = [];
+  let settled = 0;
+  return await new Promise<T[]>((resolve) => {
+    if (promises.length === 0) return resolve([]);
+    for (const p of promises) {
+      p.then((r) => {
+        results.push(r);
+        settled++;
+        if (r.outcome.status === "success" || r.outcome.status === "partial_success") {
+          resolve([...results]);
+        } else if (settled === promises.length) {
+          resolve(results);
+        }
+      }).catch(() => {
+        settled++;
+        if (settled === promises.length) resolve(results);
+      });
+    }
+  });
+}
+
+/** Infer fan_in: the nearest shared tripleoctagon descendant of all branch starts. */
+function inferFanIn(graph: Graph, branchStarts: string[]): string | undefined {
+  if (branchStarts.length === 0) return undefined;
+  const sets = branchStarts.map((id) => descendantsIncluding(graph, id));
+  const common = intersectAll(sets);
+  const candidates = [...common].filter((id) => graph.nodes[id]?.shape === "tripleoctagon");
+  if (candidates.length === 0) return undefined;
+  // Pick the "nearest" — lexical tiebreak on id (deterministic).
+  candidates.sort();
+  return candidates[0];
+}
+
+const ENGINE_KEY_SET = new Set<string>([
+  ENGINE_CONTEXT_KEYS.outcome,
+  ENGINE_CONTEXT_KEYS.preferred_label,
+  ENGINE_CONTEXT_KEYS.current_node,
+  ENGINE_CONTEXT_KEYS.last_stage,
+  ENGINE_CONTEXT_KEYS.last_response,
+]);
+
+function isEngineKey(key: string): boolean {
+  return ENGINE_KEY_SET.has(key) || key.startsWith("internal.retry_count.") || key.startsWith("graph.");
+}
+
+function intersectAll(sets: Set<string>[]): Set<string> {
+  if (sets.length === 0) return new Set();
+  const smallest = sets.reduce((a, b) => (a.size <= b.size ? a : b));
+  const out = new Set<string>();
+  outer: for (const x of smallest) {
+    for (const s of sets) {
+      if (!s.has(x)) continue outer;
+    }
+    out.add(x);
+  }
+  return out;
+}
+
+function descendantsIncluding(graph: Graph, start: string): Set<string> {
+  const visited = new Set<string>();
+  const stack = [start];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const e of graph.edges) if (e.from === id) stack.push(e.to);
+  }
+  return visited;
+}
+
 export const HANDLERS: Record<string, Handler> = {
   start: startHandler,
   exit: exitHandler,
@@ -286,7 +534,183 @@ export const HANDLERS: Record<string, Handler> = {
   codergen: codergenHandler,
   loop: loopHandler,
   "wait.human": waitHumanHandler,
+  parallel: parallelHandler,
+  "parallel.fan_in": fanInHandler,
 };
+
+// ---------------------------------------------------------------------------
+// Loop core — shared by execute() and branches inside parallel handlers.
+
+interface LoopArgs {
+  graph: Graph;
+  start_at: Node;
+  /** If set, stop when reaching this node id (exclusive). Used by parallel branches. */
+  stop_at?: string;
+  context: ContextMap;
+  handlers: Record<string, Handler>;
+  sink: EventSink;
+  interviewer: Interviewer;
+  backend: CodergenBackend;
+  signal: AbortSignal;
+  now: () => string;
+  random: () => number;
+  run_id: string;
+  workflow_sha: string;
+  max_steps: number;
+  node_outputs: Map<string, NodeOutput>;
+  completed_nodes: string[];
+  node_outcomes: Record<string, Outcome>;
+  retry_counts: Record<string, number>;
+}
+
+type StopReason = "terminal" | "stop_at" | "no_edge" | "max_steps" | "aborted" | "error";
+
+interface LoopResult {
+  finalOutcome: Outcome;
+  stopped: StopReason;
+  lastNode: Node | null;
+}
+
+async function runLoop(args: LoopArgs): Promise<LoopResult> {
+  const { graph, handlers, sink, signal, now, workflow_sha, run_id } = args;
+  let current: Node | null = args.start_at;
+  let steps = 0;
+  let lastOutcome: Outcome = ok({ notes: "pipeline completed" });
+
+  const emit = async (type: EventType, node: Node | undefined, data: Record<string, unknown>): Promise<void> => {
+    const ev: Event = {
+      run_id,
+      type,
+      timestamp: now(),
+      workflow_sha,
+      data,
+      ...(node ? { node_id: node.id } : {}),
+    };
+    await sink.append(ev);
+  };
+
+  while (current) {
+    if (args.stop_at !== undefined && current.id === args.stop_at) {
+      return { finalOutcome: lastOutcome, stopped: "stop_at", lastNode: current };
+    }
+    if (steps++ >= args.max_steps) {
+      return {
+        finalOutcome: { ...lastOutcome, status: "fail", failure_reason: `exceeded max_steps=${args.max_steps}` },
+        stopped: "max_steps",
+        lastNode: current,
+      };
+    }
+    if (signal.aborted) {
+      return {
+        finalOutcome: { ...lastOutcome, status: "fail", failure_reason: "aborted" },
+        stopped: "aborted",
+        lastNode: current,
+      };
+    }
+
+    const node: Node = current;
+    const handler = handlers[handlerOf(node)];
+    if (!handler) {
+      await emit("node.failed", node, { reason: `no handler for "${node.shape}"` });
+      return {
+        finalOutcome: { ...lastOutcome, status: "fail", failure_reason: `no handler for shape "${node.shape}"` },
+        stopped: "error",
+        lastNode: node,
+      };
+    }
+
+    await emit("node.started", node, {});
+    const startAt = Date.now();
+
+    const outcome = await runWithRetry({
+      handler,
+      node,
+      graph,
+      context: args.context,
+      run_id,
+      workflow_sha,
+      sink,
+      interviewer: args.interviewer,
+      backend: args.backend,
+      signal,
+      now,
+      random: args.random,
+      node_outputs: args.node_outputs,
+      retry_counts: args.retry_counts,
+    });
+    lastOutcome = outcome;
+
+    const duration_ms = Date.now() - startAt;
+
+    for (const [k, v] of Object.entries(outcome.context_updates)) args.context[k] = v;
+    args.context[ENGINE_CONTEXT_KEYS.outcome] = outcome.status;
+    if (outcome.preferred_label) args.context[ENGINE_CONTEXT_KEYS.preferred_label] = outcome.preferred_label;
+    args.context[ENGINE_CONTEXT_KEYS.current_node] = node.id;
+    args.context[ENGINE_CONTEXT_KEYS.last_stage] = node.id;
+
+    if (outcome.status === "success" || outcome.status === "partial_success") {
+      args.node_outputs.set(node.id, { success: true, output: outcome.notes, timestamp: Date.now() });
+    }
+
+    args.completed_nodes.push(node.id);
+    args.node_outcomes[node.id] = outcome;
+
+    await emit("node.completed", node, {
+      outcome,
+      duration_ms,
+      retry_count: args.retry_counts[node.id] ?? 0,
+    });
+
+    // Terminal node reached: stop; caller decides next step (goal gates etc.)
+    if (isTerminal(node) && node.shape === "Msquare") {
+      return { finalOutcome: outcome, stopped: "terminal", lastNode: node };
+    }
+
+    // Explicit next-node override (used by parallel handler to skip past fan_in)
+    if (outcome.next_node_override) {
+      const next = graph.nodes[outcome.next_node_override];
+      if (!next) {
+        return {
+          finalOutcome: { ...outcome, status: "fail", failure_reason: `missing node "${outcome.next_node_override}"` },
+          stopped: "error",
+          lastNode: node,
+        };
+      }
+      current = next;
+      continue;
+    }
+
+    const selection: EdgeSelection | undefined = selectEdge({
+      graph,
+      source: node,
+      outcome,
+      context: args.context,
+    });
+    if (!selection) {
+      const final = outcome.status === "fail" ? outcome : ok({ notes: "pipeline completed (no outgoing edge)" });
+      return { finalOutcome: final, stopped: "no_edge", lastNode: node };
+    }
+
+    await emit("edge.selected", node, {
+      from: selection.edge.from,
+      to: selection.edge.to,
+      rule: selection.rule,
+      ...(selection.matched !== undefined ? { matched: selection.matched } : {}),
+    });
+
+    const next = graph.nodes[selection.edge.to];
+    if (!next) {
+      return {
+        finalOutcome: { ...lastOutcome, status: "fail", failure_reason: `missing node "${selection.edge.to}"` },
+        stopped: "error",
+        lastNode: node,
+      };
+    }
+    current = next;
+  }
+
+  return { finalOutcome: lastOutcome, stopped: "no_edge", lastNode: null };
+}
 
 // ---------------------------------------------------------------------------
 // Execute
@@ -315,6 +739,7 @@ export interface ExecuteOptions {
 
 export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const graph = opts.graph;
+  applyStylesheet(graph);
   const sink: EventSink = opts.sink ?? new InMemorySink();
   const interviewer: Interviewer = opts.interviewer ?? new AutoApproveInterviewer();
   const backend: CodergenBackend = opts.backend ?? new MockCodergenBackend();
@@ -351,70 +776,32 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
 
   await emit("pipeline.started", undefined, { graph_id: graph.id });
 
-  let current: Node | null = findStart(graph);
-  let steps = 0;
+  let current: Node = findStart(graph);
   let finalOutcome: Outcome = ok({ notes: "pipeline completed" });
 
-  while (current) {
-    if (steps++ >= max_steps) {
-      finalOutcome = { ...finalOutcome, status: "fail", failure_reason: `exceeded max_steps=${max_steps}` };
-      break;
-    }
-    if (signal.aborted) {
-      finalOutcome = { ...finalOutcome, status: "fail", failure_reason: "aborted" };
-      break;
-    }
-
-    const node: Node = current;
-    const handler = handlers[handlerOf(node)];
-    if (!handler) {
-      finalOutcome = { ...finalOutcome, status: "fail", failure_reason: `no handler for shape "${node.shape}"` };
-      await emit("node.failed", node, { reason: `no handler for "${node.shape}"` });
-      break;
-    }
-
-    await emit("node.started", node, {});
-    const startAt = Date.now();
-
-    const outcome = await runWithRetry({
-      handler,
-      node,
+  while (true) {
+    const result = await runLoop({
       graph,
+      start_at: current,
       context,
-      run_id,
-      workflow_sha,
+      handlers,
       sink,
       interviewer,
       backend,
       signal,
       now,
       random,
+      run_id,
+      workflow_sha,
+      max_steps,
       node_outputs,
+      completed_nodes,
+      node_outcomes,
       retry_counts,
     });
 
-    const duration_ms = Date.now() - startAt;
-
-    for (const [k, v] of Object.entries(outcome.context_updates)) context[k] = v;
-    context[ENGINE_CONTEXT_KEYS.outcome] = outcome.status;
-    if (outcome.preferred_label) context[ENGINE_CONTEXT_KEYS.preferred_label] = outcome.preferred_label;
-    context[ENGINE_CONTEXT_KEYS.current_node] = node.id;
-    context[ENGINE_CONTEXT_KEYS.last_stage] = node.id;
-
-    if (outcome.status === "success" || outcome.status === "partial_success") {
-      node_outputs.set(node.id, { success: true, output: outcome.notes, timestamp: Date.now() });
-    }
-
-    completed_nodes.push(node.id);
-    node_outcomes[node.id] = outcome;
-
-    await emit("node.completed", node, {
-      outcome,
-      duration_ms,
-      retry_count: retry_counts[node.id] ?? 0,
-    });
-
-    if (isTerminal(node) && node.shape === "Msquare") {
+    // If we stopped at a terminal Msquare, check goal gates + maybe retry.
+    if (result.stopped === "terminal" && result.lastNode?.shape === "Msquare") {
       const unsat = unsatisfiedGoalGates(graph, node_outcomes);
       if (unsat.length > 0) {
         const retryTarget = graph.attrs.retry_target ?? graph.attrs.fallback_retry_target;
@@ -423,7 +810,7 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
           continue;
         }
         finalOutcome = {
-          ...finalOutcome,
+          ...result.finalOutcome,
           status: "fail",
           failure_reason: `goal gate(s) unsatisfied: ${unsat.join(", ")}`,
         };
@@ -433,25 +820,8 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       break;
     }
 
-    const selection = selectEdge({ graph, source: node, outcome, context });
-    if (!selection) {
-      finalOutcome = outcome.status === "fail" ? outcome : ok({ notes: "pipeline completed (no outgoing edge)" });
-      break;
-    }
-
-    await emit("edge.selected", node, {
-      from: selection.edge.from,
-      to: selection.edge.to,
-      rule: selection.rule,
-      ...(selection.matched !== undefined ? { matched: selection.matched } : {}),
-    });
-
-    const next = graph.nodes[selection.edge.to];
-    if (!next) {
-      finalOutcome = { ...finalOutcome, status: "fail", failure_reason: `missing node "${selection.edge.to}"` };
-      break;
-    }
-    current = next;
+    finalOutcome = result.finalOutcome;
+    break;
   }
 
   const goal_gates_satisfied = unsatisfiedGoalGates(graph, node_outcomes).length === 0;

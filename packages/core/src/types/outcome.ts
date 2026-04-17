@@ -21,6 +21,8 @@ export const OutcomeSchema = Type.Object(
     suggested_next_ids: Type.Array(Type.String()),
     notes: Type.String(),
     failure_reason: Type.Optional(Type.String()),
+    /** Bypass edge selection entirely; jump to this node next. */
+    next_node_override: Type.Optional(Type.String()),
   },
   { $id: "Outcome" },
 );

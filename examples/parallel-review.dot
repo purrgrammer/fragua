@@ -1,0 +1,48 @@
+// Parallel code review: 3 reviewers examine different aspects, fan_in synthesizes.
+// Run: swarm run examples/parallel-review.dot --input="review src/auth.ts"
+
+digraph parallel_review {
+  goal = "produce a consolidated review of the target file"
+
+  start [shape=Mdiamond]
+
+  fan_out [
+    shape=component,
+    fan_in="synthesize",
+    join_policy="wait_all"
+  ]
+
+  security [
+    shape=box,
+    prompt="Review ${context.input} for security issues: injection, auth, secrets, unsafe deserialization. Report findings."
+  ]
+
+  performance [
+    shape=box,
+    prompt="Review ${context.input} for performance issues: N+1, hot paths, unbounded memory, blocking I/O. Report findings."
+  ]
+
+  style [
+    shape=box,
+    prompt="Review ${context.input} for style issues: naming, organization, dead code, redundancy. Report findings."
+  ]
+
+  synthesize [shape=tripleoctagon]
+
+  report [
+    shape=box,
+    prompt="Consolidate the three reviews into a single prioritized report. Branch results: ${context.parallel.branch_results}"
+  ]
+
+  done [shape=Msquare]
+
+  start -> fan_out
+  fan_out -> security
+  fan_out -> performance
+  fan_out -> style
+  security -> synthesize
+  performance -> synthesize
+  style -> synthesize
+  synthesize -> report
+  report -> done
+}

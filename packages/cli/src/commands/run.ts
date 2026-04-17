@@ -3,7 +3,13 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCodergenBackend } from "@swarm/agent";
+import {
+  createPiMockBackend,
+  createSubagentTool,
+  getProviderInfo,
+  hasProviderCredentials,
+  PiCodergenBackend,
+} from "@swarm/agent";
 import type { CodergenBackend, Interviewer } from "@swarm/core";
 import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { ConsoleSink, JsonlSink } from "@swarm/events";
@@ -105,7 +111,13 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       console.error(chalk.red(`no credentials found for provider "${provider}" — ${hint}`));
       return 2;
     }
-    backend = new PiCodergenBackend({ registry, env, defaultModel: { provider, model } });
+    backend = new PiCodergenBackend({
+      registry,
+      env,
+      defaultModel: { provider, model },
+      runsDir: resolve(opts.cwd ?? process.cwd(), runsDir),
+    });
+    registry.register(createSubagentTool({ registry, env, defaultModel: { provider, model } }));
   }
 
   const interviewerChoice = opts.interviewer ?? (process.stdin.isTTY && !opts.mock ? "console" : "auto");

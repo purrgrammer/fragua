@@ -148,6 +148,43 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E007: parallel node (component) must have a valid fan_in (explicit or inferable)
+  for (const n of nodes) {
+    if (n.shape !== "component") continue;
+    const out = graph.edges.filter((e) => e.from === n.id);
+    if (out.length === 0) {
+      diags.push({
+        severity: "error",
+        code: "E007",
+        message: `parallel node "${n.id}" has no outgoing branches`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+      continue;
+    }
+    const fanInAttr = n.attrs.fan_in;
+    if (typeof fanInAttr === "string") {
+      const fi = graph.nodes[fanInAttr];
+      if (!fi) {
+        diags.push({
+          severity: "error",
+          code: "E007",
+          message: `parallel "${n.id}" fan_in="${fanInAttr}" not found`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      } else if (fi.shape !== "tripleoctagon") {
+        diags.push({
+          severity: "error",
+          code: "E007",
+          message: `parallel "${n.id}" fan_in="${fanInAttr}" must be tripleoctagon (got ${fi.shape})`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
+    }
+  }
+
   // W005: duplicate edges (same from/to pair with identical attributes)
   const seen = new Map<string, Edge>();
   for (const e of graph.edges) {
