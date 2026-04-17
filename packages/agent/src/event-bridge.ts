@@ -4,6 +4,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { EventType } from "@swarm/core";
+import { unsanitizeToolName } from "./tool-adapter.ts";
 
 export interface BridgedEvent {
   type: EventType;
@@ -54,14 +55,14 @@ export function bridgeAgentEvent(event: AgentEvent): BridgedEvent | undefined {
     case "tool_execution_start":
       return {
         type: "tool.execution_start",
-        data: { tool_call_id: event.toolCallId, tool_name: event.toolName, args: event.args },
+        data: { tool_call_id: event.toolCallId, tool_name: unsanitizeToolName(event.toolName), args: event.args },
       };
     case "tool_execution_update":
       return {
         type: "tool.execution_update",
         data: {
           tool_call_id: event.toolCallId,
-          tool_name: event.toolName,
+          tool_name: unsanitizeToolName(event.toolName),
           partial: event.partialResult,
         },
       };
@@ -70,7 +71,7 @@ export function bridgeAgentEvent(event: AgentEvent): BridgedEvent | undefined {
         type: "tool.execution_end",
         data: {
           tool_call_id: event.toolCallId,
-          tool_name: event.toolName,
+          tool_name: unsanitizeToolName(event.toolName),
           is_error: event.isError,
           result: event.result,
         },

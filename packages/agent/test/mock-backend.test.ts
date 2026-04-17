@@ -32,8 +32,10 @@ describe("PiMockBackend — end-to-end with faux provider", () => {
   });
 
   test("scripted single-turn: writes greeting and terminates", async () => {
+    // Scripted responses must use the sanitized wire name — real LLMs receive
+    // and return `local__write_file` (`:` is rejected by Anthropic/etc.).
     mock.setResponses([
-      fauxAssistantMessage([fauxToolCall("local:write_file", { path: "hi.txt", contents: "hello swarm" })], {
+      fauxAssistantMessage([fauxToolCall("local__write_file", { path: "hi.txt", contents: "hello swarm" })], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage("wrote greeting", { stopReason: "stop" }),
