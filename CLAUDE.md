@@ -103,6 +103,26 @@ bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
 bun run packages/cli/bin/swarm.ts replay .swarm/runs/<id>/events.jsonl
 ```
 
+### Worktree isolation
+
+`--worktree` spawns a git worktree under `.swarm/worktrees/<run-id>/` on a
+branch named `swarm/<run-id>`. The agent runs entirely inside it; your
+working copy and current branch stay untouched. On success, `git checkout
+swarm/<run-id>` to review + merge; on failure (or always if you want
+post-mortem access) add `--keep-worktree` to preserve the directory + branch
+after the run:
+
+```sh
+bun run packages/cli/bin/swarm.ts run workflows/add-tool.dot \
+  --input="add local:touch tool" \
+  --worktree
+```
+
+`node_modules` is symlinked from the main repo into the worktree so
+`bun test` / `bun run ci` work without a reinstall. Caveat: `bun install`
+inside the worktree mutates the shared cache — swarm will still run, but
+you may see `bun.lock` changes bleed back to the main repo.
+
 ### Multi-provider
 
 swarm is provider-agnostic via [pi-ai](https://github.com/badlogic/pi-mono). Every provider that ships with pi-ai works out of the box — including cross-provider handoffs mid-session (thinking blocks translated, tool-call IDs normalized automatically).

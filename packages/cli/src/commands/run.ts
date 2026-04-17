@@ -7,7 +7,15 @@ import { createPiMockBackend, getProviderInfo, hasProviderCredentials, PiCoderge
 import type { CodergenBackend } from "@swarm/core";
 import { execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { ConsoleSink, JsonlSink } from "@swarm/events";
-import { CORE_TOOLS, formatLeaks, LocalEnvironment, scanDotenv, ToolRegistry } from "@swarm/workspace";
+import type { ExecutionEnvironment } from "@swarm/workspace";
+import {
+  CORE_TOOLS,
+  formatLeaks,
+  LocalEnvironment,
+  scanDotenv,
+  ToolRegistry,
+  WorktreeEnvironment,
+} from "@swarm/workspace";
 import chalk from "chalk";
 
 export interface RunCommandOptions {
@@ -27,6 +35,10 @@ export interface RunCommandOptions {
   verbosity?: 0 | 1 | 2;
   /** Bypass the .env secret-scanning gate. */
   allowEnvKeys?: boolean;
+  /** Run in an isolated git worktree (branch swarm/<run-id>). */
+  worktree?: boolean;
+  /** Don't delete the worktree after the run (for post-mortem). Implies --worktree. */
+  keepWorktree?: boolean;
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -57,7 +69,20 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const runsDir = opts.runsDir ?? ".swarm/runs";
   const eventsPath = resolve(opts.cwd ?? process.cwd(), runsDir, run_id, "events.jsonl");
 
-  const env = new LocalEnvironment(opts.cwd !== undefined ? { cwd: opts.cwd } : {});
+  const useWorktree = opts.worktree === true || opts.keepWorktree === true;
+  let env: ExecutionEnvironment;
+  let worktree: WorktreeEnvironment | undefined;
+  if (useWorktree) {
+    worktree = new WorktreeEnvironment({
+      ...(opts.cwd !== undefined ? { repoRoot: opts.cwd } : {}),
+      runId: run_id,
+      ...(opts.keepWorktree === true ? { keepAfterDispose: true } : {}),
+    });
+    await worktree.init();
+    env = worktree;
+  } else {
+    env = new LocalEnvironment(opts.cwd !== undefined ? { cwd: opts.cwd } : {});
+  }
   const registry = new ToolRegistry();
   registry.registerAll(CORE_TOOLS);
 
@@ -88,6 +113,10 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   console.log(chalk.dim(`  run_id: ${run_id}`));
   console.log(chalk.dim(`  events: ${eventsPath}`));
   console.log(chalk.dim(`  sha:    ${workflow_sha.slice(0, 12)}`));
+  if (worktree) {
+    console.log(chalk.dim(`  worktree: ${worktree.worktreePath}`));
+    console.log(chalk.dim(`  branch:   ${worktree.branch}`));
+  }
   console.log("");
 
   try {
@@ -122,5 +151,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   } finally {
     await sink.close();
     mockHandle?.dispose();
+    if (worktree) await worktree.dispose();
   }
 }
