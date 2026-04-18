@@ -15,7 +15,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 - [x] packages/web/src/components/ui/separator.tsx
 - [x] packages/web/src/components/ui/input.tsx
 - [x] packages/web/src/components/ui/input-group.tsx
-- [ ] packages/web/src/components/ui/textarea.tsx
+- [x] packages/web/src/components/ui/textarea.tsx
 - [ ] packages/web/src/components/ui/spinner.tsx
 - [ ] packages/web/src/components/ui/skeleton.tsx
 - [ ] packages/web/src/components/ui/tooltip.tsx
