@@ -30,10 +30,14 @@ describe("llm.start capture — Wave 1 fields", () => {
   test("single-turn captures prompt, system_prompt, model, provider, tools", async () => {
     mock.setResponses([fauxAssistantMessage("done", { stopReason: "stop" })]);
     const sink = new InMemorySink();
+    // fidelity=full suppresses the Wave-2 fidelity seed so we can assert
+    // the raw prompt lands as-is. Default (compact) prepends a
+    // <swarm-context> block — exercised in the dedicated fidelity-apply
+    // tests below.
     const graph = parseDotSource(`
       digraph {
         s [shape=Mdiamond]
-        t [prompt="hello world", allowed_tools=""]
+        t [prompt="hello world", fidelity="full", allowed_tools=""]
         done [shape=Msquare]
         s -> t -> done
       }

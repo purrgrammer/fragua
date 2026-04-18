@@ -40,6 +40,11 @@ export interface NodeAttrs {
   shape?: NodeShape;
   type?: string;
   prompt?: string;
+  /** Per-node system-prompt override. When set, replaces the backend's
+   * global system prompt for this call — the context_files block is
+   * still prepended. Use for reviewer / planner subagents that need a
+   * different persona than the rest of the workflow. */
+  system_prompt?: string;
   model?: string;
   provider?: string;
   fidelity?: FidelityMode;

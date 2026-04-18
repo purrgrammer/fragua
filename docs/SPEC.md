@@ -135,7 +135,25 @@ Controls how much conversation history flows from one node to the next. Six mode
 
 **Resolution chain** (highest priority wins): edge attr → target node attr → graph default → hard default (`compact`).
 
-**Summarizer config** (Phase 6): separate model (defaults to Haiku / mini), configurable per project, saves ~90% vs. using the node's Opus / GPT-5 for summarization.
+**Session model.** pi-agent-core's `sessionId` is a provider-cache hint only; it does not restore messages. swarm owns a per-backend `MessageStore` (keyed by `thread_id`) that performs the actual transcript hydration:
+
+| Fidelity | Hydrate from store | Persist to store | `sessionId` bucket (cache) |
+|---|---|---|---|
+| `full` | yes | yes | `thread_id` |
+| `truncate` | no | no | `thread_id:truncate` |
+| `compact` | no | no | `thread_id:compact` |
+| `summary:low` | no | no | `thread_id:summary:low` |
+| `summary:medium` | no | no | `thread_id:summary:medium` |
+| `summary:high` | no | no | `thread_id:summary:high` |
+
+Non-`full` modes are fresh sessions, so they neither read nor write the store. They do still receive a deterministic **fidelity seed** prepended to the user prompt — a `<swarm-context>` block carrying `graph.goal`, `run_id`, and (for `compact` / `summary:*`) a digest of the prior transcript the thread would have restored. Seeds are pure and deterministic in Wave 2; `summary:medium` and `summary:high` emit a soft `agent.warning` and fall back to `summary:low` behaviour until the summariser backend lands (Wave 2b).
+
+**Node-level overrides:**
+
+- `context = "fresh"` — hard opt-out of any cross-node transcript sharing, even when `fidelity=full` and `thread_id` match. Neither hydrates nor persists; `sessionId` is omitted so the call stands entirely alone.
+- `system_prompt = "…"` — replaces the backend's global system prompt for this call (the `<project-conventions>` block from `context_files` is still prepended). Use for reviewer / planner subagents that need a different persona.
+
+**Summarizer config** (Wave 2b): separate model (defaults to Haiku / mini), configurable per project, saves ~90 % vs. using the node's Opus / GPT-5 for summarization. Until it ships, `summary:medium` / `summary:high` are functionally `summary:low`.
 
 **Thread ID resolution:** edge → node → graph-level default → subgraph-derived class → previous node ID.
 

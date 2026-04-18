@@ -829,6 +829,18 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   let goalGateRetries = 0;
   const maxGoalGateRetries =
     typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3;
+  // Two-phase goal-gate retry: primary `retry_target` (or `fallback_retry_target`
+  // when no primary is set), then switch to a distinct `fallback_retry_target`
+  // with a fresh budget if the primary exhausts. `phaseUsedFallback` flips once
+  // the switch happens and stays flipped for the rest of the pipeline.
+  let phaseUsedFallback = false;
+  const primaryRetryTarget = graph.attrs.retry_target ?? graph.attrs.fallback_retry_target;
+  const distinctFallbackRetryTarget =
+    graph.attrs.retry_target &&
+    graph.attrs.fallback_retry_target &&
+    graph.attrs.retry_target !== graph.attrs.fallback_retry_target
+      ? graph.attrs.fallback_retry_target
+      : undefined;
 
   while (true) {
     const result = await runLoop({
@@ -865,18 +877,48 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       }
       const unsat = unsatisfiedGoalGates(graph, node_outcomes);
       if (unsat.length > 0) {
-        const retryTarget = graph.attrs.retry_target ?? graph.attrs.fallback_retry_target;
-        if (retryTarget && graph.nodes[retryTarget] && goalGateRetries < maxGoalGateRetries) {
+        // Phase-aware retry. Primary phase spends up to maxGoalGateRetries on
+        // `primaryRetryTarget`. When that's exhausted AND a distinct
+        // `fallback_retry_target` exists, we reset the budget and switch to
+        // the fallback for a fresh round. Both exhausted → pipeline fails.
+        let jumpTarget: string | undefined;
+        if (
+          !phaseUsedFallback &&
+          primaryRetryTarget &&
+          graph.nodes[primaryRetryTarget] &&
+          goalGateRetries < maxGoalGateRetries
+        ) {
+          jumpTarget = primaryRetryTarget;
+        } else if (!phaseUsedFallback && distinctFallbackRetryTarget && graph.nodes[distinctFallbackRetryTarget]) {
+          phaseUsedFallback = true;
+          goalGateRetries = 0;
+          jumpTarget = distinctFallbackRetryTarget;
+        } else if (
+          phaseUsedFallback &&
+          distinctFallbackRetryTarget &&
+          graph.nodes[distinctFallbackRetryTarget] &&
+          goalGateRetries < maxGoalGateRetries
+        ) {
+          jumpTarget = distinctFallbackRetryTarget;
+        }
+
+        if (jumpTarget) {
           goalGateRetries++;
-          current = graph.nodes[retryTarget]!;
+          current = graph.nodes[jumpTarget]!;
           continue;
         }
-        const exhausted = retryTarget && goalGateRetries >= maxGoalGateRetries;
+
+        const exhaustedTarget = phaseUsedFallback ? distinctFallbackRetryTarget : primaryRetryTarget;
+        const exhausted = exhaustedTarget && goalGateRetries >= maxGoalGateRetries;
         finalOutcome = {
           ...result.finalOutcome,
           status: "fail",
           failure_reason: exhausted
-            ? `goal gate(s) unsatisfied after ${maxGoalGateRetries} retries to "${retryTarget}": ${unsat.join(", ")}`
+            ? `goal gate(s) unsatisfied after ${maxGoalGateRetries} retries to "${exhaustedTarget}"${
+                phaseUsedFallback && distinctFallbackRetryTarget
+                  ? ` (fallback after primary "${primaryRetryTarget}" exhausted)`
+                  : ""
+              }: ${unsat.join(", ")}`
             : `goal gate(s) unsatisfied: ${unsat.join(", ")}`,
         };
         break;

@@ -2,13 +2,15 @@
 
 import { open as openFile, stat as statFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
-import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, Outcome } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import { loadContextFiles, mergeSystemPrompt } from "./system-prompt.ts";
+import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
+import { MessageStore } from "./message-store.ts";
+import { buildSystemPrompt, loadContextFiles } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
@@ -35,6 +37,11 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly systemPrompt: string;
   private readonly runsDir: string | undefined;
   private readonly steeringPollMs: number;
+  /** Per-backend transcript store keyed by `thread_id`. Scoped to the
+   * backend instance so tests that spin up a fresh backend get a clean
+   * store. The executor creates one backend per run today, which means
+   * two concurrent runs already get isolated stores — no cross-run leak. */
+  private readonly messageStore: MessageStore;
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -45,6 +52,13 @@ export class PiCodergenBackend implements CodergenBackend {
     this.systemPrompt = opts.systemPrompt ?? "";
     this.runsDir = opts.runsDir;
     this.steeringPollMs = opts.steeringPollMs ?? 500;
+    this.messageStore = new MessageStore();
+  }
+
+  /** Direct access to the transcript store. Exposed for tests and, later,
+   * for a checkpoint writer that serialises it into `pi_sessions`. */
+  get messages(): MessageStore {
+    return this.messageStore;
   }
 
   async run(input: CodergenInput): Promise<Outcome> {
@@ -79,47 +93,72 @@ export class PiCodergenBackend implements CodergenBackend {
     if (input.emit) {
       for (const msg of warnings) await input.emit("agent.warning", { message: msg });
     }
-    const systemPrompt = mergeSystemPrompt(this.systemPrompt, contextBlock);
+    const perNodeSystemPrompt =
+      typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
+    const systemPrompt = buildSystemPrompt({ global: this.systemPrompt, perNode: perNodeSystemPrompt, contextBlock });
+
+    // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out
+    // of any cross-node transcript sharing — it wins over thread_id and
+    // fidelity=full alike. Anything else follows the per-mode rules in
+    // ./fidelity.ts.
+    const isFresh = input.node.attrs["context"] === "fresh";
+    const threadId = input.thread_id;
+    const hydrate = shouldHydrateFromStore(input.fidelity, isFresh);
+    const persist = shouldPersistToStore(input.fidelity, isFresh);
+    const storedForThread: AgentMessage[] = !isFresh && threadId ? this.messageStore.get(threadId) : [];
+    const hydrateMessages: AgentMessage[] = hydrate && threadId ? storedForThread : [];
+
+    // Build the fidelity seed prepended to the user prompt for non-full
+    // modes. `full` returns "" and the user prompt is unchanged. `truncate`
+    // / `compact` / `summary:*` produce a <swarm-context> block framing
+    // the agent with goal + run + digest of priorMessages.
+    const graphGoalRaw = input.context["graph.goal"];
+    const graphGoal = typeof graphGoalRaw === "string" && graphGoalRaw.length > 0 ? graphGoalRaw : undefined;
+    const { seed, warnings: fidelityWarnings } = buildFidelitySeed({
+      fidelity: input.fidelity,
+      graphGoal,
+      runId: input.run_id,
+      priorMessages: storedForThread,
+    });
+    if (input.emit) {
+      for (const msg of fidelityWarnings) await input.emit("agent.warning", { message: msg });
+    }
+    const effectivePrompt = seed.length > 0 ? `${seed}\n\n${input.prompt}` : input.prompt;
+
+    // sessionId is a provider-cache hint (not a message restore). Pick
+    // the right bucket so cache hits work and different fidelities don't
+    // clobber each other's cache under the same thread.
+    const sessionId = resolveSessionId({ fidelity: input.fidelity, threadId, isFresh });
 
     const agent = new Agent({
-      initialState: { systemPrompt, model, tools },
-      ...(input.thread_id !== undefined ? { sessionId: input.thread_id } : {}),
+      initialState: {
+        systemPrompt,
+        model,
+        tools,
+        ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
+      },
+      ...(sessionId !== undefined ? { sessionId } : {}),
     });
 
-    // Emit the resolved LLM-call snapshot. This is the one durable record of
-    // what the agent was actually asked — resolved user prompt + assembled
-    // system prompt + model binding + prior messages + settings + context
-    // file hashes. Fires once per backend.run() (once for a codergen node,
-    // N times for a loop node with N iterations). Everything a UI / replay
-    // consumer needs to reconstruct "what the agent saw at step N" lives
-    // here. Adding fields is additive — schema_version on the envelope
-    // only bumps on incompatible renames/removals.
+    // Emit the resolved LLM-call snapshot. See docs/SPEC.md §3.5 for the
+    // contract. Adding fields is additive — schema_version on the
+    // envelope only bumps on incompatible renames/removals.
     if (input.emit) {
       const llmStart: Record<string, unknown> = {
         provider,
         model: modelId,
-        prompt: input.prompt,
+        prompt: effectivePrompt,
         system_prompt: systemPrompt,
       };
-      if (input.thread_id) llmStart["thread_id"] = input.thread_id;
+      if (threadId) llmStart["thread_id"] = threadId;
       if (allow) llmStart["allowed_tools"] = allow;
       if (deny) llmStart["denied_tools"] = deny;
       if (input.iteration) llmStart["iteration"] = input.iteration;
-      // Snapshot the transcript the agent is starting with. For a fresh
-      // session this is []; for a thread_id that restored a prior
-      // pi-agent-core session, this holds the prior turns the agent will
-      // see alongside the new user prompt. JSON round-trip both detaches
-      // from the live state and forces JSON-safety (images/tool-results
-      // pass through as whatever shape they already serialise to).
-      const priorMessages = agent.state.messages.map((m) => jsonSafe(m));
-      if (priorMessages.length > 0) llmStart["messages"] = priorMessages;
+      const priorSnapshot = agent.state.messages.map((m) => jsonSafe(m));
+      if (priorSnapshot.length > 0) llmStart["messages"] = priorSnapshot;
       const settings = captureSettings(input.node.attrs);
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
-      // Wave 1 placeholder: the ledger that populates real cumulative
-      // values lands in Wave 4. Today we surface only the per-node /
-      // per-run ceilings when a workflow author sets them, so UIs can
-      // start rendering the "budget used / budget cap" strip.
       const budget = captureBudget(input.node.attrs);
       if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
@@ -136,11 +175,19 @@ export class PiCodergenBackend implements CodergenBackend {
     const steeringStop = this.runsDir ? await this.startSteeringPoller(agent, input.run_id, input.emit) : () => {};
 
     try {
-      await agent.prompt(input.prompt);
+      await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
     } finally {
       steeringStop();
       unsubscribe();
+    }
+
+    // Persist the final transcript for `full` fidelity on a shared thread
+    // so subsequent nodes with the same thread_id actually see it. Every
+    // other mode is explicitly fresh (SPEC §3.3) and must not contaminate
+    // the full-mode cache under the same thread.
+    if (persist && threadId) {
+      this.messageStore.set(threadId, agent.state.messages);
     }
 
     const last = agent.state.messages[agent.state.messages.length - 1];

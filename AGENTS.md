@@ -148,6 +148,39 @@ JSONL omits the field; validators must treat `undefined` as `1`. Use
 `validateEvent(raw, { checkPayload })` from `@swarm/events` to check
 event shapes at boundaries (replay harnesses, ingestion).
 
+### Fidelity modes (what each one actually does)
+
+swarm owns a per-backend `MessageStore` keyed by `thread_id`
+(`packages/agent/src/message-store.ts`). pi-agent-core's `sessionId` is
+only a provider-cache hint — the store is what makes `fidelity=full`
+restore prior turns across nodes.
+
+| Mode | Prior turns restored | Seed prepended to user prompt | sessionId bucket |
+|---|---|---|---|
+| `full` | yes (from store) | none | `thread_id` |
+| `truncate` | no | goal + run_id only | `thread_id:truncate` |
+| `compact` | no | digest (role census + latest assistant text, ≤1.5 KB) | `thread_id:compact` |
+| `summary:low` | no | deterministic template (≤600 char tail) | `thread_id:summary:low` |
+| `summary:medium` | no | same as `summary:low` + `agent.warning` | `thread_id:summary:medium` |
+| `summary:high` | no | same as `summary:low` + `agent.warning` | `thread_id:summary:high` |
+
+Resolution chain: edge attr → target node attr → `graph.default_fidelity`
+→ hard default `compact`.
+
+Node-level overrides that ride on top of fidelity:
+
+- `context = "fresh"` — hard opt-out. Ignores store, doesn't persist,
+  omits `sessionId` entirely. Useful for one-off diagnostic nodes that
+  must not see the rest of the run.
+- `system_prompt = "…"` — per-node system-prompt override (e.g. a
+  reviewer / planner persona). Context-files block is still prepended.
+
+Goal-gate retry is **two-phase**: `retry_target` spends up to
+`max_goal_gate_retries`, then — if a *distinct* `fallback_retry_target`
+is set — the budget resets and the fallback gets its own round. When
+`retry_target` is unset but `fallback_retry_target` is, it's used as
+the primary (single phase).
+
 ### Web UI
 
 The React + Vite client lives in `packages/web/`. The app sits inside a

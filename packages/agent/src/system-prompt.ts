@@ -97,6 +97,29 @@ export function mergeSystemPrompt(base: string, extension: string): string {
   return `${extension}\n\n${base}`;
 }
 
+export interface BuildSystemPromptInput {
+  /** Global system prompt configured on the backend (e.g. a project-wide
+   * "you are the coding agent" preamble). Becomes the fallback when no
+   * node-level override is set. */
+  global: string;
+  /** Optional per-node override from `node.attrs.system_prompt`. When set,
+   * this replaces `global` — a reviewer subagent or a planner node can
+   * therefore swap the whole persona without hacking `context_files`. */
+  perNode: string | undefined;
+  /** Context-files block returned by `loadContextFiles`. Prepended so
+   * repo conventions frame whatever the base prompt says. */
+  contextBlock: string;
+}
+
+/** Assemble the final system prompt for a single agent call. Isolated from
+ * the backend so tests can round-trip the combinator without standing up
+ * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
+ * compose it without duplicating the merge rules. */
+export function buildSystemPrompt({ global, perNode, contextBlock }: BuildSystemPromptInput): string {
+  const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
+  return mergeSystemPrompt(base, contextBlock);
+}
+
 function escapeAttr(value: string): string {
   return value.replace(/"/g, "&quot;");
 }
