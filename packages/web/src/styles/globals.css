@@ -1,5 +1,7 @@
+/* Skill: .swarm/skills/design/SKILL.md — Typography, Borders & elevation sections */
+
 /*
- * Theme tokens for the swarm web UI.
+ * Global stylesheet for the Swarm web UI.
  *
  * Shape:
  *   - `@tailwind base/components/utilities` is required because we run
@@ -13,6 +15,8 @@
  *     so classes like `bg-card` resolve correctly.
  *   - Both light and dark palettes are declared; toggling is a single
  *     `<html class="dark">` flip.
+ *   - Swarm design-language tokens live in theme.css (--sw-* namespace)
+ *     and are imported below.
  *
  * Streamdown source:
  *   The P5.08 spec calls for this Tailwind v4 directive so the JIT picks
@@ -27,6 +31,9 @@
  *
  *   // @source "../../../../node_modules/streamdown/dist/*.js";
  */
+
+/* Swarm design-language tokens (--sw-* namespace). */
+@import "./theme.css";
 
 @import "@fontsource-variable/geist";
 @tailwind base;
@@ -100,6 +107,10 @@
 
   * {
     @apply border-border;
+    /* Elevation: none. No box-shadow. (SKILL.md § Borders & elevation) */
+    box-shadow: none;
+    /* Default border-radius: 2px. Cards/drawers override to 4px. */
+    border-radius: var(--sw-radius-default, 2px);
   }
   body {
     @apply bg-background text-foreground;
@@ -107,13 +118,23 @@
 }
 
 /*
- * Monospace-first typography. Set on :root via a CSS variable so non-
- * Tailwind surfaces inherit it. Tailwind's `font-sans` is rebound to the
- * same stack in tailwind.config.ts for per-element overrides.
+ * Monospace-first typography. (SKILL.md § Typography)
+ *
+ * Stack: "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+ *        SFMono-Regular, Menlo, monospace
+ *
+ * Set on :root via a CSS variable so non-Tailwind surfaces inherit it.
+ * Tailwind's `font-mono` is rebound to the same stack in tailwind.config.ts.
  */
 :root {
   --font-mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    "Berkeley Mono",
+    "JetBrains Mono",
+    "IBM Plex Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
 }
 
 /*
@@ -136,8 +157,20 @@ body {
   overflow: hidden;
 }
 
+/*
+ * Monospace stack, tabular figures, base type scale. (SKILL.md § Typography)
+ *
+ * font-size: 12px (--sw-text-sm, the "sm / default body" token)
+ * line-height: 1.4 body
+ * font-variant-numeric + font-feature-settings "tnum": tabular figures, global
+ * font-feature-settings: extended to keep "calt" and "liga" from the
+ *   original so JetBrains Mono ligatures still render correctly.
+ */
 html,
 body {
   font-family: var(--font-mono);
-  font-feature-settings: "calt" 1, "liga" 1;
+  font-size: var(--sw-text-sm, 0.75rem); /* 12px */
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "calt" 1, "liga" 1;
 }

@@ -1,0 +1,157 @@
+/* Skill: .swarm/skills/design/SKILL.md — Color, Typography, Spacing tables */
+
+/*
+ * Swarm design-language tokens.
+ *
+ * Every property here maps to a named entry in the SKILL.md token tables.
+ * Values are restrained guesses in oklch(); reviewers will tune the
+ * lightness/chroma pairs. The 15–30% desaturation rule is applied: first
+ * instinct chroma was reduced before committing.
+ *
+ * Theme structure:
+ *   :root          → light (default — skill says "light is the default")
+ *   .dark          → dark peer (intentionally designed, not auto-inverted)
+ *
+ * Naming: --sw-<token> so Swarm tokens never collide with shadcn vars.
+ * Components reference these via var(--sw-*); Tailwind can alias them in
+ * tailwind.config.ts when needed.
+ */
+
+/* ─── LIGHT (default) ──────────────────────────────────────────────────── */
+:root {
+  /* — Surface tokens ——————————————————————————————————————————————————— */
+
+  /* bg: near-paper — page, root */
+  --sw-bg: oklch(0.98 0 0);
+
+  /* surface: one notch off bg, barely perceptible — cards, panels, drawers */
+  --sw-surface: oklch(0.96 0 0);
+
+  /* border: hairline, visible but quiet — section edges */
+  --sw-border: oklch(0.88 0 0);
+
+  /* — Text tokens ————————————————————————————————————————————————————— */
+
+  /* text: high legibility, never pure black — copy, numerics */
+  --sw-text: oklch(0.18 0 0);
+
+  /* muted: dimmed, still readable — labels, secondary metadata */
+  --sw-muted: oklch(0.52 0 0);
+
+  /* — Accent / state tokens ——————————————————————————————————————————— */
+
+  /* accent.success: calm green, not lime — done, healthy, passed */
+  --sw-accent-success: oklch(0.52 0.10 148);
+
+  /* accent.error: serious red, not neon — failure, blocker, over-budget */
+  --sw-accent-error: oklch(0.50 0.14 25);
+
+  /* accent.thinking: warm amber — processing, awaiting, streaming */
+  --sw-accent-thinking: oklch(0.62 0.10 68);
+
+  /* accent.idle: neutral gray — queued, paused */
+  --sw-accent-idle: oklch(0.60 0 0);
+
+  /* accent.warn: muted orange — resource pressure, soft threshold */
+  --sw-accent-warn: oklch(0.60 0.10 48);
+
+  /* — Typography scale ————————————————————————————————————————————————
+   * Hierarchy via weight/case/spacing — NOT size.
+   * xs=11px  sm=12px(default body)  base=13px  md=15px  lg=18px
+   * ——————————————————————————————————————————————————————————————————— */
+  --sw-text-xs:   0.6875rem;  /* 11px */
+  --sw-text-sm:   0.75rem;    /* 12px — default body */
+  --sw-text-base: 0.8125rem;  /* 13px — emphasized body, primary metrics */
+  --sw-text-md:   0.9375rem;  /* 15px — section headings */
+  --sw-text-lg:   1.125rem;   /* 18px — page title, one per screen */
+
+  /* — Spacing (4px base, fixed steps only) ————————————————————————————
+   * 0.5=2px  1=4px  2=8px  3=12px  4=16px  6=24px  8=32px
+   * ——————————————————————————————————————————————————————————————————— */
+  --sw-space-05: 0.125rem;  /* 2px  — icon-to-label */
+  --sw-space-1:  0.25rem;   /* 4px  — row gap, button padding-y */
+  --sw-space-2:  0.5rem;    /* 8px  — card padding, input padding-x */
+  --sw-space-3:  0.75rem;   /* 12px — card padding-y, section internal gap */
+  --sw-space-4:  1rem;      /* 16px — card-to-card, panel padding */
+  --sw-space-6:  1.5rem;    /* 24px — page gutter */
+  --sw-space-8:  2rem;      /* 32px — large region separation */
+
+  /* — Radius —————————————————————————————————————————————————————————— */
+  --sw-radius-default: 2px;   /* default — most elements */
+  --sw-radius-card:    4px;   /* cards, drawers */
+  --sw-radius-none:    0px;   /* table rows, dense stacks */
+
+  /* — Motion —————————————————————————————————————————————————————————— */
+  --sw-duration-hover:  120ms;
+  --sw-duration-enter:  200ms;
+  --sw-duration-status: 160ms;
+  --sw-duration-press:   80ms;
+  --sw-duration-pulse: 1800ms;
+}
+
+/* ─── DARK (peer — intentionally designed, not auto-inverted) ──────────── */
+.dark {
+  /* — Surface tokens ——————————————————————————————————————————————————— */
+
+  /* bg: near-ink */
+  --sw-bg: oklch(0.13 0 0);
+
+  /* surface: one notch off near-ink bg, barely perceptible */
+  --sw-surface: oklch(0.17 0 0);
+
+  /* border: hairline — quieter at low luminance */
+  --sw-border: oklch(0.26 0 0);
+
+  /* — Text tokens ————————————————————————————————————————————————————— */
+
+  /* text: high legibility, never pure white */
+  --sw-text: oklch(0.93 0 0);
+
+  /* muted: dimmed but readable in dark context */
+  --sw-muted: oklch(0.58 0 0);
+
+  /* — Accent / state tokens ——————————————————————————————————————————— */
+
+  /* accent.success: calm green, slightly brightened for dark bg */
+  --sw-accent-success: oklch(0.60 0.11 148);
+
+  /* accent.error: serious red, lifted for dark bg legibility */
+  --sw-accent-error: oklch(0.60 0.14 25);
+
+  /* accent.thinking: warm amber, slightly lifted */
+  --sw-accent-thinking: oklch(0.68 0.10 68);
+
+  /* accent.idle: neutral gray — slightly lighter on dark */
+  --sw-accent-idle: oklch(0.50 0 0);
+
+  /* accent.warn: muted orange — lifted slightly */
+  --sw-accent-warn: oklch(0.66 0.10 48);
+
+  /* Typography scale tokens are theme-independent (rem values, not colors).
+   * Re-declared to make dark block self-contained for readability; values
+   * are identical to :root. */
+  --sw-text-xs:   0.6875rem;
+  --sw-text-sm:   0.75rem;
+  --sw-text-base: 0.8125rem;
+  --sw-text-md:   0.9375rem;
+  --sw-text-lg:   1.125rem;
+
+  /* Spacing and radius: theme-independent, re-declared for completeness. */
+  --sw-space-05: 0.125rem;
+  --sw-space-1:  0.25rem;
+  --sw-space-2:  0.5rem;
+  --sw-space-3:  0.75rem;
+  --sw-space-4:  1rem;
+  --sw-space-6:  1.5rem;
+  --sw-space-8:  2rem;
+
+  --sw-radius-default: 2px;
+  --sw-radius-card:    4px;
+  --sw-radius-none:    0px;
+
+  --sw-duration-hover:  120ms;
+  --sw-duration-enter:  200ms;
+  --sw-duration-status: 160ms;
+  --sw-duration-press:   80ms;
+  --sw-duration-pulse: 1800ms;
+}
