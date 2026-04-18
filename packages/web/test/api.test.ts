@@ -202,3 +202,70 @@ describe("createApiClient — URL helpers are relative and /api-prefixed", () =>
     expect(custom.getPipelineEventsUrl("z")).toBe("/custom/pipelines/z/events");
   });
 });
+
+describe("createApiClient — control channel", () => {
+  it("steerRun POSTs to /pipelines/:id/steer with a message body and returns { id }", async () => {
+    const captured: Captured = {};
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ id: "abc-123" }), { status: 202 }), captured),
+    });
+    const res = await client.steerRun("run-7", "focus on tests");
+    expect(res).toEqual({ id: "abc-123" });
+    expect(captured.url).toBe("/api/pipelines/run-7/steer");
+    expect(captured.init?.method).toBe("POST");
+    expect(JSON.parse(captured.init?.body as string)).toEqual({ message: "focus on tests" });
+  });
+
+  it("pauseRun omits body when reason is undefined", async () => {
+    const captured: Captured = {};
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ id: "p1" }), { status: 202 }), captured),
+    });
+    await client.pauseRun("run-7");
+    expect(captured.url).toBe("/api/pipelines/run-7/pause");
+    expect(captured.init?.method).toBe("POST");
+    expect(captured.init?.body).toBeUndefined();
+  });
+
+  it("pauseRun includes reason when provided", async () => {
+    const captured: Captured = {};
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ id: "p2" }), { status: 202 }), captured),
+    });
+    await client.pauseRun("run-7", "stepping out");
+    expect(JSON.parse(captured.init?.body as string)).toEqual({ reason: "stepping out" });
+  });
+
+  it("resumeRun POSTs with no body", async () => {
+    const captured: Captured = {};
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ id: "r1" }), { status: 202 }), captured),
+    });
+    await client.resumeRun("run-7");
+    expect(captured.url).toBe("/api/pipelines/run-7/resume");
+    expect(captured.init?.body).toBeUndefined();
+  });
+
+  it("cancelRun propagates reason and url-encodes the id", async () => {
+    const captured: Captured = {};
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ id: "c1" }), { status: 202 }), captured),
+    });
+    await client.cancelRun("a/b c", "wrong branch");
+    expect(captured.url).toBe("/api/pipelines/a%2Fb%20c/cancel");
+    expect(JSON.parse(captured.init?.body as string)).toEqual({ reason: "wrong branch" });
+  });
+
+  it("non-2xx responses throw ApiError with the status", async () => {
+    const client = createApiClient({
+      fetchImpl: mockFetch(new Response(JSON.stringify({ error: "run not found" }), { status: 404 })),
+    });
+    try {
+      await client.steerRun("ghost", "hi");
+      throw new Error("expected ApiError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(404);
+    }
+  });
+});

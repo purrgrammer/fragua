@@ -10,9 +10,11 @@
 
 import { Hono } from "hono";
 import { createEventInterviewGateway } from "./adapters/event-interview-gateway.ts";
+import { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 import { createFsRunReader } from "./adapters/fs-run-reader.ts";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
-import type { InterviewGateway, RunReader, ServerPorts, WorkflowReader } from "./ports.ts";
+import type { ControlGateway, InterviewGateway, RunReader, ServerPorts, WorkflowReader } from "./ports.ts";
+import { controlRoutes } from "./routes/control.ts";
 import { eventsRoutes } from "./routes/events.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { interviewRoutes } from "./routes/interview.ts";
@@ -53,6 +55,8 @@ export function createServer(opts: ServerOptions): Hono {
       ...(ports.eventSink ? { eventSink: ports.eventSink } : {}),
     });
   const workflowReader: WorkflowReader = ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
+  const controlGateway: ControlGateway =
+    ports.controlGateway ?? createFsControlGateway({ runsDir: opts.runsDir, runReader });
 
   const app = new Hono();
   app.route("/", healthRoutes());
@@ -61,13 +65,17 @@ export function createServer(opts: ServerOptions): Hono {
   app.route("/", statsRoutes({ runReader }));
   app.route("/", interviewRoutes({ runReader, interviewGateway }));
   app.route("/", workflowsRoutes({ workflowReader }));
+  app.route("/", controlRoutes({ controlGateway }));
   return app;
 }
 
 export { createEventInterviewGateway } from "./adapters/event-interview-gateway.ts";
+export { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 export { createFsRunReader } from "./adapters/fs-run-reader.ts";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export type {
+  ControlGateway,
+  ControlSubmitResult,
   InterviewAnswerResult,
   InterviewGateway,
   PendingQuestion,
@@ -79,6 +87,10 @@ export type {
 export type { EventsRouteOptions } from "./routes/events.ts";
 export { deriveDetail, deriveSummary } from "./routes/pipelines.ts";
 export {
+  ControlAccepted,
+  ControlCancelBody,
+  ControlPauseBody,
+  ControlSteerBody,
   ErrorBody,
   InterviewAnswer,
   InterviewQuestion,

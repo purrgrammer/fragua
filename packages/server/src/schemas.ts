@@ -45,6 +45,16 @@ export const PipelineSummary = Type.Object({
   /** Sum of `data.output_tokens`. */
   outputTokens: Type.Integer({ minimum: 0, default: 0 }),
   /**
+   * Sum of `data.cache_read_tokens` — cached prompt tokens reused from
+   * prior calls (Anthropic prompt caching et al). Kept separate from
+   * `inputTokens` because providers typically bill cache hits at a
+   * fraction of fresh input. Zero when no cost.recorded events carry
+   * the field (older runs or providers that don't report it).
+   */
+  cacheReadTokens: Type.Integer({ minimum: 0, default: 0 }),
+  /** Sum of `data.cache_write_tokens` — first-time cache priming. */
+  cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
+  /**
    * Run wall-clock duration in milliseconds, computed as
    * `lastEvent.timestamp − firstEvent.timestamp`. Optional because a run
    * with fewer than two events (or unparseable timestamps) has no
@@ -108,6 +118,8 @@ export const PipelineDetail = Type.Object({
   costUsd: Type.Number({ minimum: 0, default: 0 }),
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),
   outputTokens: Type.Integer({ minimum: 0, default: 0 }),
+  cacheReadTokens: Type.Integer({ minimum: 0, default: 0 }),
+  cacheWriteTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Auto-generated title — see PipelineSummary.title. */
   title: Type.Optional(Type.String()),
@@ -148,6 +160,42 @@ export const InterviewAnswer = Type.Object({
   /** Optional free-form commentary. */
   text: Type.Optional(Type.String()),
 });
+
+// ───── Control channel ──────────────────────────────────────────────────
+// Bodies for `POST /pipelines/:runId/{steer,pause,resume,cancel}`.
+// Each endpoint returns `{ id: <uuid> }` on success (202) — the id
+// matches the `control.requested.data.id` the run's event stream will
+// carry, so the caller can correlate without re-reading the control
+// file.
+
+/** Body of `POST /pipelines/:runId/steer`. */
+export const ControlSteerBody = Type.Object({
+  /** User message to inject at the agent's next turn boundary. */
+  message: Type.String({ minLength: 1 }),
+});
+export type ControlSteerBody = Static<typeof ControlSteerBody>;
+
+/** Body of `POST /pipelines/:runId/pause`. `reason` surfaces on the
+ * `control.requested.data.payload.reason` event for audit. */
+export const ControlPauseBody = Type.Object({
+  reason: Type.Optional(Type.String()),
+});
+export type ControlPauseBody = Static<typeof ControlPauseBody>;
+
+/** Body of `POST /pipelines/:runId/cancel`. Mirrors `ControlPauseBody`;
+ * kept distinct so schema docs stay per-endpoint readable. */
+export const ControlCancelBody = Type.Object({
+  reason: Type.Optional(Type.String()),
+});
+export type ControlCancelBody = Static<typeof ControlCancelBody>;
+
+/** Response body for any accepted control request. */
+export const ControlAccepted = Type.Object({
+  /** The uuid assigned to this control request. Echoed on the
+   * `control.requested` / `control.applied` events for correlation. */
+  id: Type.String(),
+});
+export type ControlAccepted = Static<typeof ControlAccepted>;
 export type InterviewAnswer = Static<typeof InterviewAnswer>;
 
 /** Uniform error envelope. All non-2xx responses conform to this. */
@@ -214,6 +262,8 @@ export const StepSnapshotCost = Type.Object(
     input_tokens: Type.Number({ minimum: 0 }),
     output_tokens: Type.Number({ minimum: 0 }),
     total_tokens: Type.Optional(Type.Number({ minimum: 0 })),
+    cache_read_tokens: Type.Optional(Type.Number({ minimum: 0 })),
+    cache_write_tokens: Type.Optional(Type.Number({ minimum: 0 })),
     cost_usd: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: true },
@@ -271,6 +321,14 @@ export const StatsPayload = Type.Object({
   totalCostUsd: Type.Number({ minimum: 0 }),
   totalInputTokens: Type.Integer({ minimum: 0 }),
   totalOutputTokens: Type.Integer({ minimum: 0 }),
+  /**
+   * Aggregate cache-hit tokens across every run. Useful for tracking
+   * prompt-cache efficiency: a healthy archive should see this number
+   * growing roughly in line with `totalInputTokens` once workloads
+   * stabilise. Zero on archives that predate cache-token capture.
+   */
+  totalCacheReadTokens: Type.Integer({ minimum: 0 }),
+  totalCacheWriteTokens: Type.Integer({ minimum: 0 }),
   avgDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   updatedAt: Type.String(),
 });

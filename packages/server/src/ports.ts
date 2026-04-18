@@ -109,11 +109,38 @@ export interface WorkflowReader {
   list(): Promise<WorkflowSummary[]>;
 }
 
+/** Result of submitting a control request. The id is the uuid the gateway
+ * assigned (clients don't supply one — the gateway owns idempotency
+ * keys so callers can't collide). `not_found` means the run doesn't
+ * exist in the runs archive; route handlers translate to 404. */
+export type ControlSubmitResult = { ok: true; id: string } | { ok: false; code: "not_found" };
+
+/** Control channel gateway. REST routes for `/pipelines/:runId/steer`,
+ * `/pipelines/:runId/pause`, `/pipelines/:runId/resume`, and
+ * `/pipelines/:runId/cancel` all funnel through this one port. The
+ * default adapter (`createFsControlGateway`) writes a `ControlRequest`
+ * line to `<runsDir>/<runId>/control.jsonl` so the executor's control
+ * loop picks it up. A future daemon-backed gateway will route through
+ * HTTP instead of a shared filesystem — the REST surface doesn't
+ * care. */
+export interface ControlGateway {
+  /** Submit a steer request. `message` is the user text to inject at
+   * the active agent's next turn boundary. */
+  steer(runId: string, message: string): Promise<ControlSubmitResult>;
+  /** Request a soft pause. The run finishes its current node then gates. */
+  pause(runId: string, reason?: string): Promise<ControlSubmitResult>;
+  /** Wake a paused run. No-ops (rejected at the executor) if not paused. */
+  resume(runId: string): Promise<ControlSubmitResult>;
+  /** Graceful cancel. Emits `pipeline.canceled` as the terminal event. */
+  cancel(runId: string, reason?: string): Promise<ControlSubmitResult>;
+}
+
 /** Bundle of ports passed to `createServer`. All optional; defaults below. */
 export interface ServerPorts {
   runReader?: RunReader;
   interviewGateway?: InterviewGateway;
   workflowReader?: WorkflowReader;
+  controlGateway?: ControlGateway;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
 }

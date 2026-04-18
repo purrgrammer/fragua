@@ -34,6 +34,10 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     }),
     getPipelineEventsUrl: eventsUrl,
     getPipelineSteps: async () => [],
+    steerRun: async () => ({ id: "stub" }),
+    pauseRun: async () => ({ id: "stub" }),
+    resumeRun: async () => ({ id: "stub" }),
+    cancelRun: async () => ({ id: "stub" }),
     pipelineEventsUrl: eventsUrl,
     ...overrides,
   };

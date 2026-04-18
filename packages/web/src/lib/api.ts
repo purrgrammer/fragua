@@ -54,6 +54,13 @@ export interface PipelineSummary {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Prompt-cache read tokens reused from prior calls. Optional for
+   * back-compat with older server builds that didn't aggregate the field.
+   */
+  cacheReadTokens?: number;
+  /** First-time cache priming tokens. Optional same as cacheReadTokens. */
+  cacheWriteTokens?: number;
   /** ms between first and last event; undefined if not computable. */
   durationMs?: number;
   /** Auto-generated pipeline title (Wave 2b). Falls back to `input` then
@@ -97,6 +104,10 @@ export interface PipelineDetail {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  /** Prompt-cache read tokens reused from prior calls. Optional for older servers. */
+  cacheReadTokens?: number;
+  /** First-time cache priming tokens. */
+  cacheWriteTokens?: number;
   durationMs?: number;
   /** Auto-generated pipeline title — see PipelineSummary.title. */
   title?: string;
@@ -164,6 +175,8 @@ export interface StepSnapshot {
     input_tokens: number;
     output_tokens: number;
     total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
     cost_usd: number;
   };
   finalText: string;
@@ -235,6 +248,24 @@ export interface ApiClient {
    */
   getPipelineSteps(id: string): Promise<StepSnapshot[]>;
 
+  // ── Control channel ────────────────────────────────────────────────
+  // Each method POSTs a ControlRequest to the run's control.jsonl and
+  // returns the assigned uuid. The id matches what will appear on the
+  // run's `control.requested` / `control.applied` events — callers can
+  // correlate acknowledgment through the SSE stream they're already
+  // watching without polling control.jsonl directly. Errors propagate
+  // as `ApiError` with the server's status (404 for unknown runs,
+  // 400 for invalid bodies, etc.).
+
+  /** Inject a user message at the active agent's next turn boundary. */
+  steerRun(id: string, message: string): Promise<{ id: string }>;
+  /** Soft-pause at the next node boundary. Optional free-form reason. */
+  pauseRun(id: string, reason?: string): Promise<{ id: string }>;
+  /** Wake a paused run. Rejected server-side if not paused. */
+  resumeRun(id: string): Promise<{ id: string }>;
+  /** Graceful cancel; run emits `pipeline.canceled` as terminal event. */
+  cancelRun(id: string, reason?: string): Promise<{ id: string }>;
+
   // URL helpers — always return relative strings starting with the client's
   // `baseUrl` (default "/api"). Callers use these anywhere a URL is needed
   // as a string (fetch, EventSource, <img src>, <object data>, links).
@@ -265,6 +296,33 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
     }
     return body;
   }
+
+  /** POST a JSON body; parse + validate the response as `T`. `body` is
+   * optional because pause/resume/cancel can be empty. */
+  async function postJson<T>(
+    path: string,
+    body: Record<string, unknown> | undefined,
+    validate: (v: unknown) => v is T,
+  ): Promise<T> {
+    const u = url(path);
+    const init: RequestInit = { method: "POST" };
+    if (body !== undefined) {
+      init.headers = { "content-type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    const res = await fetchImpl(u, init);
+    if (!res.ok) {
+      throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u);
+    }
+    const payload = (await res.json()) as unknown;
+    if (!validate(payload)) {
+      throw new Error(`POST ${u} → malformed response`);
+    }
+    return payload;
+  }
+
+  const isAcceptedId = (v: unknown): v is { id: string } =>
+    typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
 
   const getPipelineEventsUrl = (id: string): string => url(`/pipelines/${encodeURIComponent(id)}/events`);
 
@@ -309,6 +367,24 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
       );
     },
 
+    async steerRun(id: string, message: string): Promise<{ id: string }> {
+      return postJson(`/pipelines/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
+    },
+
+    async pauseRun(id: string, reason?: string): Promise<{ id: string }> {
+      const body = reason !== undefined ? { reason } : undefined;
+      return postJson(`/pipelines/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
+    },
+
+    async resumeRun(id: string): Promise<{ id: string }> {
+      return postJson(`/pipelines/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
+    },
+
+    async cancelRun(id: string, reason?: string): Promise<{ id: string }> {
+      const body = reason !== undefined ? { reason } : undefined;
+      return postJson(`/pipelines/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
+    },
+
     getPipelineEventsUrl,
     // Back-compat alias. New callers should use getPipelineEventsUrl.
     pipelineEventsUrl: getPipelineEventsUrl,
@@ -332,6 +408,8 @@ function isPipelineSummary(v: unknown): v is PipelineSummary {
     costUsd?: unknown;
     inputTokens?: unknown;
     outputTokens?: unknown;
+    cacheReadTokens?: unknown;
+    cacheWriteTokens?: unknown;
     durationMs?: unknown;
   };
   return (
@@ -343,6 +421,8 @@ function isPipelineSummary(v: unknown): v is PipelineSummary {
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
+    (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
+    (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number")
   );
 }
@@ -359,6 +439,8 @@ function isPipelineDetail(v: unknown): v is PipelineDetail {
     costUsd?: unknown;
     inputTokens?: unknown;
     outputTokens?: unknown;
+    cacheReadTokens?: unknown;
+    cacheWriteTokens?: unknown;
     durationMs?: unknown;
   };
   return (
@@ -371,6 +453,8 @@ function isPipelineDetail(v: unknown): v is PipelineDetail {
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
+    (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
+    (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number")
   );
 }

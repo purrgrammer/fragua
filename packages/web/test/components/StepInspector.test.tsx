@@ -29,6 +29,10 @@ function makeClient(steps: StepSnapshot[]): ApiClient {
     getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
     getPipelineSteps: async () => steps,
     getPipelineEventsUrl: eventsUrl,
+    steerRun: async () => ({ id: "stub" }),
+    pauseRun: async () => ({ id: "stub" }),
+    resumeRun: async () => ({ id: "stub" }),
+    cancelRun: async () => ({ id: "stub" }),
     pipelineEventsUrl: eventsUrl,
   };
 }
