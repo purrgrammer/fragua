@@ -59,14 +59,3 @@ blocklist:
 # Values are paths relative to the repo root.
 workflows:
   build-feature: workflows/build-feature.dot
-
-# Skills (agentskills.io progressive-disclosure model).
-#
-# `paths` pins discovery to the listed directories and disables the
-# well-known auto-discovery paths (~/.agents/skills, ~/.claude/skills,
-# etc.) — so only this repo's .agents/skills/ is scanned. Drop the
-# `paths` block and the whole `skills:` section to turn auto-discovery
-# back on.
-skills:
-  paths:
-    - .agents/skills

@@ -19,7 +19,6 @@
 //     want. Read the live port from `.swarm/daemon/daemon.json`; if the
 //     pidfile isn't there yet, fall back to the daemon's default port
 //     (3737) so starting the daemon after Vite just works on reload.
-//     Override with SWARM_API_TARGET.
 //
 // Path alias:
 //   - `@/` → `src/`. Required by shadcn/ui + AI Elements components,
@@ -32,11 +31,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 function resolveServerTarget(): string {
-  if (process.env.SWARM_API_TARGET) return process.env.SWARM_API_TARGET;
   // Walk up from the web package to find the repo root's daemon state.
   // The config file lives at `packages/web/vite.config.ts`; the daemon
   // writes its pidfile at `<repo>/.swarm/daemon/daemon.json`.
@@ -55,7 +54,7 @@ function resolveServerTarget(): string {
 const serverTarget = resolveServerTarget();
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -363,10 +363,10 @@ function PartView({ part }: { part: Part }): ReactNode {
   if (part.type === "text") {
     // Assistant text flows through AI Elements' `MessageResponse`
     // (streamdown-backed) so markdown renders styled and partial /
-    // mid-stream markdown doesn't crash rendering. The streamdown source
-    // hint in `tailwind.config.ts` (`content` glob) keeps its utility
-    // classes alive through the JIT. See the P5.08 spec's "AI Elements
-    // reference → message" section.
+    // mid-stream markdown doesn't crash rendering. The Tailwind v4
+    // `@source` directive in `globals.css` keeps streamdown's runtime
+    // utility classes alive through the JIT. See the P5.08 spec's
+    // "AI Elements reference → message" section.
     return <MessageResponse>{part.text}</MessageResponse>;
   }
   if (part.type === "tool_call") {

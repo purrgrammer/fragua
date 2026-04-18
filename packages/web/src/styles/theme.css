@@ -10,8 +10,9 @@
  *   .dark          → dark peer (intentionally designed, not auto-inverted)
  *
  * Naming: --sw-<token> so Swarm tokens never collide with shadcn vars.
- * Components reference these via var(--sw-*); Tailwind can alias them in
- * tailwind.config.ts when needed.
+ * Components reference these either via `var(--sw-*)` directly or via the
+ * Tailwind utilities we expose from them in `globals.css`'s `@theme inline`
+ * block (`bg-sw-surface`, `text-sw-muted`, `rounded-sw-card`, ...).
  */
 
 /* ─── LIGHT (default) ──────────────────────────────────────────────────── */
@@ -54,13 +55,13 @@
 
   /* — Typography scale ————————————————————————————————————————————————
    * Hierarchy via weight/case/spacing — NOT size.
-   * xs=11px  sm=12px(default body)  base=13px  md=15px  lg=18px
+   * xs=13px  sm=15px(default body)  base=16px  md=18px  lg=22px
    * ——————————————————————————————————————————————————————————————————— */
-  --sw-text-xs:   0.6875rem;  /* 11px */
-  --sw-text-sm:   0.75rem;    /* 12px — default body */
-  --sw-text-base: 0.8125rem;  /* 13px — emphasized body, primary metrics */
-  --sw-text-md:   0.9375rem;  /* 15px — section headings */
-  --sw-text-lg:   1.125rem;   /* 18px — page title, one per screen */
+  --sw-text-xs:   0.8125rem;  /* 13px */
+  --sw-text-sm:   0.9375rem;  /* 15px — default body */
+  --sw-text-base: 1rem;       /* 16px — emphasized body, primary metrics */
+  --sw-text-md:   1.125rem;   /* 18px — section headings */
+  --sw-text-lg:   1.375rem;   /* 22px — page title, one per screen */
 
   /* — Spacing (4px base, fixed steps only) ————————————————————————————
    * 0.5=2px  1=4px  2=8px  3=12px  4=16px  6=24px  8=32px
@@ -127,11 +128,11 @@
   /* Typography scale tokens are theme-independent (rem values, not colors).
    * Re-declared to make dark block self-contained for readability; values
    * are identical to :root. */
-  --sw-text-xs:   0.6875rem;
-  --sw-text-sm:   0.75rem;
-  --sw-text-base: 0.8125rem;
-  --sw-text-md:   0.9375rem;
-  --sw-text-lg:   1.125rem;
+  --sw-text-xs:   0.8125rem;
+  --sw-text-sm:   0.9375rem;
+  --sw-text-base: 1rem;
+  --sw-text-md:   1.125rem;
+  --sw-text-lg:   1.375rem;
 
   /* Spacing and radius: theme-independent, re-declared for completeness. */
   --sw-space-05: 0.125rem;

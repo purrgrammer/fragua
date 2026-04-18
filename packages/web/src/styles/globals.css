@@ -1,42 +1,37 @@
 /*
- * Global stylesheet for the Swarm web UI.
+ * Global stylesheet for the Swarm web UI (Tailwind v4).
  *
  * Shape:
- *   - `@tailwind base/components/utilities` is required because we run
- *     Tailwind v3 (not the v4 single-import model the AI Elements CLI
- *     assumes). The CLI-injected `@import "shadcn/tailwind.css"` and
- *     `@import "tw-animate-css"` lines are therefore removed — those are
- *     v4-only idioms.
- *   - Colour tokens use `oklch(...)` (shadcn "radix-nova") and are
- *     consumed directly via `var(--name)` rather than the older
- *     `hsl(var(--name))` wrapper. Our `tailwind.config.ts` mirrors this
- *     so classes like `bg-card` resolve correctly.
- *   - Both light and dark palettes are declared; toggling is a single
- *     `<html class="dark">` flip.
+ *   - `@import "tailwindcss"` is the v4 single-entry replacement for the
+ *     old `@tailwind base/components/utilities` triple.
+ *   - `@import "tw-animate-css"` loads the v4-compatible replacement for
+ *     `tailwindcss-animate` (powers the shadcn accordion/dialog keyframes).
+ *   - Colour tokens use oklch() (shadcn "radix-nova") and are declared as
+ *     plain CSS vars in `@layer base`. The `@theme inline` block maps them
+ *     onto Tailwind color/radius tokens so classes like `bg-card`,
+ *     `text-foreground`, `border-border` resolve against the live CSS vars
+ *     (the `inline` keyword keeps the var reference, so flipping dark mode
+ *     at runtime works without a rebuild).
+ *   - Dark mode is class-based: the `@custom-variant dark` wires `dark:`
+ *     utilities to `.dark` (on <html> or any ancestor).
  *   - Swarm design-language tokens live in theme.css (--sw-* namespace)
- *     and are imported below.
- *
- * Streamdown source:
- *   The P5.08 spec calls for this Tailwind v4 directive so the JIT picks
- *   up the classes Streamdown emits at runtime (via AI Elements'
- *   `MessageResponse`):
- *
- *     @source "../../../../node_modules/streamdown/dist/*.js";
- *
- *   We're still on v3, where `@source` is a no-op; the actual scan hook
- *   is an equivalent `content` glob in `tailwind.config.ts`. When we
- *   migrate to v4, uncomment the line below and drop that glob.
- *
- *   // @source "../../../../node_modules/streamdown/dist/*.js";
+ *     and are imported first; globals.css exposes the subset we want as
+ *     Tailwind utilities (colors, radii, fonts).
+ *   - Streamdown (via AI Elements' `MessageResponse`) emits Tailwind
+ *     classes at runtime — `@source` tells the v4 scanner to include its
+ *     compiled output so those classes survive JIT purging in prod.
  */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
 
 /* Swarm design-language tokens (--sw-* namespace). */
 @import "./theme.css";
 
-@import "@fontsource-variable/geist";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@source "../../../../node_modules/streamdown/dist/*.js";
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -116,23 +111,92 @@
 }
 
 /*
- * Monospace-first typography.
+ * Tailwind v4 theme mapping.
  *
- * Stack: "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
- *        SFMono-Regular, Menlo, monospace
+ *   The `inline` keyword tells v4 to reference the CSS variable at the
+ *   point of use instead of inlining its value at build time — required
+ *   for dark-mode class switching to re-resolve utilities at runtime.
  *
- * Set on :root via a CSS variable so non-Tailwind surfaces inherit it.
- * Tailwind's `font-mono` is rebound to the same stack in tailwind.config.ts.
+ *   Colors: shadcn baseline tokens (no prefix) are exposed as Tailwind
+ *   color utilities (`bg-card`, `text-muted-foreground`, ...). Swarm
+ *   state tokens (--sw-*) are exposed under the `sw-*` namespace so
+ *   `bg-sw-surface`, `text-sw-muted`, `border-sw-border` all work.
+ *
+ *   Radius: `rounded-sw-default`, `rounded-sw-card`, `rounded-sw-none`.
+ *
+ *   Fonts: `font-mono` is the monospace stack (Swarm voice);
+ *   `font-sans` is Geist, bound this way only so shadcn internals that
+ *   default to sans render their intended face — do not reach for it
+ *   on product surfaces.
+ *
+ *   Text size: the whole scale is exposed as Tailwind sizes
+ *   (`text-sw-sm`, ...) as well. `--text-base` is rebound to our
+ *   default body size so stray `text-base` on a surface inherits the
+ *   Swarm scale rather than Tailwind's 16px default.
  */
-:root {
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Swarm state / surface palette. */
+  --color-sw-bg: var(--sw-bg);
+  --color-sw-surface: var(--sw-surface);
+  --color-sw-border: var(--sw-border);
+  --color-sw-text: var(--sw-text);
+  --color-sw-muted: var(--sw-muted);
+  --color-sw-accent-success: var(--sw-accent-success);
+  --color-sw-accent-error: var(--sw-accent-error);
+  --color-sw-accent-thinking: var(--sw-accent-thinking);
+  --color-sw-accent-idle: var(--sw-accent-idle);
+  --color-sw-accent-warn: var(--sw-accent-warn);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-sw-default: var(--sw-radius-default);
+  --radius-sw-card: var(--sw-radius-card);
+  --radius-sw-none: var(--sw-radius-none);
+
   --font-mono:
-    "Berkeley Mono",
-    "JetBrains Mono",
-    "IBM Plex Mono",
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
+    "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+    SFMono-Regular, Menlo, monospace;
+  --font-sans:
+    "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --text-sw-xs: var(--sw-text-xs);
+  --text-sw-sm: var(--sw-text-sm);
+  --text-sw-base: var(--sw-text-base);
+  --text-sw-md: var(--sw-text-md);
+  --text-sw-lg: var(--sw-text-lg);
+
+  /* Rebind Tailwind's default body size onto the Swarm scale so stray
+   * `text-base` matches the rest of the app rather than 16px. */
+  --text-base: var(--sw-text-sm);
 }
 
 /*
@@ -158,16 +222,17 @@ body {
 /*
  * Monospace stack, tabular figures, base type scale.
  *
- * font-size: 12px (--sw-text-sm, the "sm / default body" token)
- * line-height: 1.4 body
- * font-variant-numeric + font-feature-settings "tnum": tabular figures, global
- * font-feature-settings: extended to keep "calt" and "liga" from the
- *   original so JetBrains Mono ligatures still render correctly.
+ *   font-family: --font-mono (Berkeley Mono → JetBrains Mono → …)
+ *   font-size:   --sw-text-sm (the "sm / default body" token, 13px)
+ *   line-height: 1.4 body
+ *   font-variant-numeric + "tnum": tabular figures, global
+ *   font-feature-settings: "calt" and "liga" stay on so JetBrains Mono
+ *     ligatures still render.
  */
 html,
 body {
   font-family: var(--font-mono);
-  font-size: var(--sw-text-sm, 0.75rem); /* 12px */
+  font-size: var(--sw-text-sm);
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1, "calt" 1, "liga" 1;
