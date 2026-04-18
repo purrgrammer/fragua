@@ -259,12 +259,23 @@ export class PiCodergenBackend implements CodergenBackend {
     this.activeAgent = agent;
     for (const buffered of this.pendingSteers.splice(0)) this.injectSteer(agent, buffered);
 
+    // Wire the executor's abort signal to agent.abort() so control.cancel
+    // actually stops the in-flight LLM stream / tool loop. Without this the
+    // executor trips its AbortController but the Agent keeps running to
+    // completion, leaving the run streaming minutes after cancel landed.
+    const abortListener = () => agent.abort();
+    if (input.signal) {
+      if (input.signal.aborted) agent.abort();
+      else input.signal.addEventListener("abort", abortListener, { once: true });
+    }
+
     try {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
     } finally {
       this.activeAgent = undefined;
       unsubscribe();
+      if (input.signal) input.signal.removeEventListener("abort", abortListener);
     }
 
     // Persist the final transcript for `full` fidelity on a shared thread
