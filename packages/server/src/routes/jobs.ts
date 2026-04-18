@@ -14,13 +14,17 @@
 
 import { Value } from "@sinclair/typebox/value";
 import { Hono } from "hono";
-import type { JobQueue, JobRow, JobStatus } from "../ports.ts";
+import type { ControlGateway, JobQueue, JobRow, JobStatus } from "../ports.ts";
 import { JobEnqueueBody, type JobRowSchema } from "../schemas.ts";
 
 export interface JobsRouteOptions {
   /** Optional — undefined when the server runs without a daemon (e.g.
    * plain `swarm serve` for dev). Routes return 503 when unset. */
   jobQueue?: JobQueue;
+  /** ControlGateway for forwarding cancel requests to running workers.
+   * Same instance the `/pipelines/:id/cancel` route uses. When unset,
+   * cancel of running jobs returns 501. */
+  controlGateway?: ControlGateway;
 }
 
 export function jobsRoutes(opts: JobsRouteOptions): Hono {
@@ -77,11 +81,13 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
     return c.json(toWire(row));
   });
 
-  // DELETE /jobs/:id — full semantics land in phase 5 (cancel + control
-  // channel forwarding for running jobs). For now, queued rows are
-  // removable so POST+DELETE at least round-trips; running/terminal rows
-  // return 501 so clients get an explicit "not yet" rather than a silent
-  // no-op.
+  // DELETE /jobs/:id
+  //   queued      → remove from queue outright, 200
+  //   running     → forward cancel to the control gateway, 202
+  //                 (the child emits pipeline.canceled → scheduler
+  //                  reconciles the job row to status='canceled')
+  //   terminal    → 409
+  //   not found   → 404
   app.delete("/jobs/:id", async (c) => {
     if (!queue) return noQueue(c);
     const row = await queue.get(c.req.param("id"));
@@ -91,10 +97,26 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
       return c.json({ status: "removed", jobId: row.id }, 200);
     }
     if (row.status === "running") {
-      return c.json(
-        { error: "cancel of running jobs lands in phase 5", code: "not_implemented" },
-        501,
-      );
+      if (!opts.controlGateway) {
+        return c.json(
+          { error: "cancel of running jobs requires a control gateway", code: "not_implemented" },
+          501,
+        );
+      }
+      const reason = c.req.query("reason");
+      const result = await opts.controlGateway.cancel(row.runId, reason);
+      if (!result.ok) {
+        if (result.code === "not_found") {
+          // Rare but possible: job exists in DB but .swarm/runs/<runId>/
+          // hasn't been created yet (worker crashed before emitting any
+          // events). Treat as a no-op cancel — mark the job canceled
+          // directly so the caller isn't blocked.
+          await queue.markTerminal(row.id, "canceled", "canceled before worker wrote events");
+          return c.json({ status: "canceled", jobId: row.id }, 200);
+        }
+        return c.json({ error: "cancel failed", code: "internal" }, 500);
+      }
+      return c.json({ status: "canceling", jobId: row.id, requestId: result.id }, 202);
     }
     return c.json(
       { error: `cannot delete job in terminal state '${row.status}'`, code: "conflict" },

@@ -84,7 +84,13 @@ export function createServer(opts: ServerOptions): Hono {
   app.route("/", workflowsRoutes({ workflowReader }));
   app.route("/", controlRoutes({ controlGateway }));
   app.route("/", skillsRoutes({ skillReader, runReader }));
-  app.route("/", jobsRoutes(ports.jobQueue !== undefined ? { jobQueue: ports.jobQueue } : {}));
+  app.route(
+    "/",
+    jobsRoutes({
+      ...(ports.jobQueue !== undefined ? { jobQueue: ports.jobQueue } : {}),
+      controlGateway,
+    }),
+  );
   return app;
 }
 

@@ -8,10 +8,14 @@
 // before the cancel forwarding lands.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Event } from "@swarm/core";
 import { createServer } from "../src/index.ts";
 import { createSqliteJobQueue } from "../src/adapters/sqlite-job-queue.ts";
 import type { JobQueue } from "../src/ports.ts";
-import { memoryRunReader } from "./helpers.ts";
+import { ev, memoryRunReader } from "./helpers.ts";
 
 describe("POST /jobs", () => {
   let queue: JobQueue;
@@ -244,12 +248,45 @@ describe("DELETE /jobs/:id", () => {
     expect(res.status).toBe(404);
   });
 
-  test("running row → 501 (phase 5 adds cancel forwarding)", async () => {
+  test("running row with run dir present → 202 + canceling (cancel forwarded)", async () => {
+    // Plant events.jsonl so the control gateway's run-existence check succeeds.
+    const runsDir = await mkdtemp(join(tmpdir(), "swarm-cancel-"));
+    try {
+      await mkdir(join(runsDir, "r1"), { recursive: true });
+      await writeFile(join(runsDir, "r1", "events.jsonl"), `${JSON.stringify({ type: "pipeline.started", seq: 0 })}\n`);
+      const placeholder: Event = ev({ type: "pipeline.started" });
+      const app = createServer({
+        runsDir,
+        ports: { jobQueue: queue, runReader: memoryRunReader({ r1: [placeholder] }) },
+      });
+      await queue.enqueue({ id: "j1", runId: "r1", workflow: "w.dot" });
+      await queue.claimNext();
+      const res = await app.request("/jobs/j1", { method: "DELETE" });
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { status: string; jobId: string; requestId: string };
+      expect(body.status).toBe("canceling");
+      expect(body.jobId).toBe("j1");
+      expect(typeof body.requestId).toBe("string");
+      // control.jsonl should carry a cancel request now.
+      const control = await readFile(join(runsDir, "r1", "control.jsonl"), "utf8");
+      expect(control).toContain(`"command":"cancel"`);
+    } finally {
+      await rm(runsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("running row when run dir missing → marks job canceled directly", async () => {
+    // No events.jsonl → control gateway returns not_found → fast-path
+    // marks the row as canceled without waiting for the worker.
     const app = mount();
     await queue.enqueue({ id: "j1", runId: "r1", workflow: "w.dot" });
     await queue.claimNext();
     const res = await app.request("/jobs/j1", { method: "DELETE" });
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe("canceled");
+    const row = await queue.get("j1");
+    expect(row?.status).toBe("canceled");
   });
 
   test("terminal row → 409", async () => {
