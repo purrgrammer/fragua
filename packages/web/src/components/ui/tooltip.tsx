@@ -5,32 +5,6 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/*
- * Tooltip — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens. Tooltip inverts surface/text
- *                           (sw-text bg, sw-bg fg) to read as a transient
- *                           overlay rather than a card; the hairline is
- *                           omitted because the inversion is the edge.
- *   § Typography          — monospace inherited; xs (11px) is the "dense
- *                           metadata" tier, which is exactly what tooltips
- *                           carry. tabular-nums comes from globals.
- *   § Spacing             — --sw-space-2 / --sw-space-1 (8/4px). The
- *                           previous 12/6/6px values were off-scale.
- *   § Borders & elevation — radius default (2px). No box-shadow; the
- *                           inversion provides separation.
- *   § Motion              — "Drawer / panel enter-exit → Slide + fade,
- *                           200ms ease-out". Tooltip is a paired hover
- *                           overlay; same easing/duration. Zoom removed:
- *                           it was decorative and losing it loses no
- *                           information. Slide-from-side stays — it
- *                           signals which side opened, which IS info.
- *
- * Behavioural API (Provider, Root, Trigger, Content + sideOffset, kbd
- * slot support) preserved.
- */
-
 function TooltipProvider({ delayDuration = 0, ...props }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
   return <TooltipPrimitive.Provider data-slot="tooltip-provider" delayDuration={delayDuration} {...props} />;
 }

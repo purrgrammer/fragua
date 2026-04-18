@@ -3,28 +3,6 @@ import { Slot } from "radix-ui";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
-/*
- * ButtonGroup — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "Radius: 2px default" — group corners snap
- *                           to --sw-radius-default to match Button, not
- *                           Tailwind's `rounded-lg` (8px).
- *   § Spacing              — "These steps only — no arbitrary px" —
- *                            inter-group gap and inset text padding use
- *                            --sw-space-* tokens (no `gap-2`/`px-2.5`).
- *   § Color                — "Components reference theme tokens" —
- *                            inline text label uses --sw-surface /
- *                            --sw-border / --sw-text; the separator
- *                            slot rides on --sw-border (the hairline
- *                            tone), never the legacy shadcn --input.
- *   § Typography           — monospace voice, 12px (--sw-text-sm) body;
- *                            no font-family override here.
- *
- * Behavioural API (orientation, asChild, props passthrough, slot
- * structure for adjacent-rounding overrides) preserved.
- */
-
 const buttonGroupVariants = cva(
   [
     "group/button-group flex w-fit items-stretch",

@@ -16,25 +16,6 @@ import { Shimmer } from "./shimmer";
 
 /**
  * Reasoning — collapsible "thinking" disclosure for streaming model output.
- *
- * Styling notes (see .agents/skills/design/SKILL.md):
- *   - Token-only colour, spacing, motion. No shadcn aliases
- *     (`text-muted-foreground`, `text-sm`, `hover:text-foreground`),
- *     no raw tailwind spacing (`gap-2`, `mt-4`, `mb-4`, `size-4`).
- *     § Authoring checklist; § Spacing ("These steps only").
- *   - Body prose uses `--sw-text` (the legibility token), not `--sw-muted`
- *     (which is reserved for labels / secondary metadata). § Color tokens.
- *   - Trigger label is muted; hover lifts to `--sw-text`. Hover motion is
- *     colour-only, 120ms ease. § Motion: "Hover, color shift … 120ms ease".
- *   - Chevron rotation and content open/close share `--sw-duration-enter`
- *     ease-out — paired easing per § Motion: "paired elements … share
- *     easing and duration". (Chevron uses status duration to settle a hair
- *     before content finishes — both are status-class transforms.)
- *   - "Thinking" state is carried by `<Shimmer>` (opacity pulse on
- *     `--sw-accent-thinking`, 1800ms floor). § Motion: "Pulse is slow.
- *     1800ms floor"; § Color: accent.thinking is the alive colour.
- *   - Slide distance reduced from 8px → 4px (`slide-…-top-1`) to keep the
- *     transform within the spacing scale. § Spacing.
  */
 
 interface ReasoningContextValue {

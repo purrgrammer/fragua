@@ -1,9 +1,6 @@
-/* Skill: .agents/skills/design/SKILL.md — Color, Typography, Spacing tables */
-
 /*
  * Swarm design-language tokens.
  *
- * Every property here maps to a named entry in the SKILL.md token tables.
  * Values are restrained guesses in oklch(); reviewers will tune the
  * lightness/chroma pairs. The 15–30% desaturation rule is applied: first
  * instinct chroma was reduced before committing.

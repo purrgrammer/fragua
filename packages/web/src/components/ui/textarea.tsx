@@ -2,27 +2,6 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/*
- * Textarea — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only", "Radius: 2px default"; no shadow;
- *                           focus ring is instant and 1px (matches Input).
- *   § Typography           — monospace voice (inherited), default body
- *                            12px (--sw-text-sm). No size-jump hierarchy
- *                            between mobile/desktop.
- *   § Spacing              — input padding-x = --sw-space-2 (8px),
- *                            padding-y = --sw-space-1 (4px). All values
- *                            land on the 4px grid.
- *   § Color                — accents = state. aria-invalid maps to
- *                            --sw-accent-error; border/text use --sw-*
- *                            tokens. Dark theme is the peer; tokens carry
- *                            the values, no auto-inverted dark overrides.
- *   § Motion               — hover/focus colour shift is 120ms ease;
- *                            only background/border/color animate.
- *
- * Behavioural API is preserved — every prop spreads through unchanged.
- */
 function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
   return (
     <textarea

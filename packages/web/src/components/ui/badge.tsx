@@ -1,31 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/cn.ts";
 
-/*
- * Badge — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color                — accents communicate state; no brand "primary";
- *                            state variants resolve to --sw-accent-* tokens
- *                            via color-mix tints (no hex, no Tailwind
- *                            palette literals).
- *   § Borders & elevation  — 1px hairline, 2px default radius. "Pills only
- *                            where the pill *is* the status shape." Badges
- *                            are labels, not status shapes → square corners.
- *                            No box-shadow.
- *   § Typography           — monospace, weight + case for hierarchy. Uses
- *                            xs (11px) so badges sit quietly inline with
- *                            12px body without becoming the loudest thing
- *                            on the row.
- *   § Spacing              — 4px scale only (--sw-space-*).
- *   § Motion               — 120ms ease hover; instant 1px focus ring.
- *
- * Behavioural API (variants, BadgeProps) is preserved. The legacy `info`
- * variant is removed because violet had no state mapping; callers can use
- * `secondary` for neutral tags. `default` is no longer a brand-coloured
- * solid — it is now an outlined neutral, since "default" is not a state.
- */
-
 const badgeVariants = cva(
   [
     // structure

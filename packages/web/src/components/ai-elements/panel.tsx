@@ -10,21 +10,6 @@ import { cn } from "@/lib/utils";
  * sitting above the canvas surface — same hairline + radius rules as
  * Card; no shadow.
  *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only, `border` token", "Radius … 4px
- *                           cards/drawers", "Elevation: none."
- *   § Spacing            — token scale only; `--sw-space-4` is the
- *                           designated "card-to-card, panel padding"
- *                           step (used here as outer margin from the
- *                           canvas edge). Inner padding is
- *                           `--sw-space-2` so the framed control sits
- *                           tight to the hairline.
- *   § Color              — `--sw-*` tokens only; `--sw-surface` is one
- *                           notch off `--sw-bg`, separation is the
- *                           hairline not a value jump.
- *   § Anti-pattern       — no shadow, no gradient (canvas already
- *                           provides ambient contrast).
- *
  * Behavioural API (ReactFlow Panel passthrough) preserved.
  */
 

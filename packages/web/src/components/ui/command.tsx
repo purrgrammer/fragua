@@ -5,38 +5,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
 
-/*
- * Command — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens; shadcn aliases
- *                           (bg-popover, bg-muted, text-foreground,
- *                           border-input, bg-border…) removed. Selection
- *                           uses --sw-surface (one-notch separation),
- *                           never opacity-faded "input" colours.
- *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers."
- *                           Container/dialog → --sw-radius-card; items →
- *                           --sw-radius-default. No box-shadow; the
- *                           leftover `shadow-none!` override is dropped.
- *   § Layout              — sections separated by a hairline (separator
- *                           uses --sw-border, not bg-border).
- *   § Typography          — monospace inherited; sizes from --sw-text-*
- *                           scale; group headings use UPPERCASE +
- *                           ~0.06em tracking (the only place letter-
- *                           spacing is permitted). Shortcut text drops
- *                           `tracking-widest` (decorative).
- *   § Spacing             — token scale only. Off-scale `p-1`, `pb-0`,
- *                           `py-1.5`, `py-6`, `px-2 py-1.5` replaced with
- *                           --sw-space-* (4/8/12/24).
- *   § Motion              — only colour transitions on item hover/select,
- *                           120ms ease via --sw-duration-hover. No
- *                           transform/opacity decoration on mount.
- *
- * Behavioural API (Command, CommandDialog + title/description/className/
- * showCloseButton, CommandInput, CommandList, CommandEmpty, CommandGroup,
- * CommandItem, CommandShortcut, CommandSeparator) preserved unchanged.
- */
-
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
   return (
     <CommandPrimitive

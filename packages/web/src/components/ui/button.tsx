@@ -4,27 +4,6 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/*
- * Button — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only", "Radius: 2px default"; no shadow.
- *   § Typography           — monospace voice, hierarchy via weight + case,
- *                            not size; size variants here only adjust the
- *                            hit-area footprint, never the type scale.
- *   § Spacing              — 4px base, fixed steps only (--sw-space-*).
- *   § Color                — accents = state only. `destructive` maps to
- *                            --sw-accent-error; `link` is text + underline,
- *                            no brand colour.
- *   § Motion               — only transform + opacity animate. Hover is a
- *                            120ms colour shift (ease); press is a 80ms
- *                            scale(0.97) (ease-out). Focus ring is instant
- *                            and 1px.
- *
- * Behavioural API (variants, sizes, asChild, data-slot) is preserved so
- * downstream consumers (button-group, sidebar, etc.) keep working.
- */
-
 const buttonVariants = cva(
   [
     // structure

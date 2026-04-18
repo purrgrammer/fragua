@@ -1,9 +1,9 @@
 // Banner shown above the main outlet when the connected server isn't a
 // daemon (i.e. `/health` didn't carry a `daemon` key).
 //
-// Per the design skill: hairline border, subtle surface, no background
-// shade for hierarchy, monospace, sentence case, amber accent for a
-// "something to know about" state — not error-red.
+// Hairline border, subtle surface, no background shade for hierarchy,
+// monospace, sentence case, amber accent for a "something to know about"
+// state — not error-red.
 
 import { Zap } from "lucide-react";
 

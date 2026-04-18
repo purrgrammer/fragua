@@ -1,31 +1,5 @@
 "use client";
 
-/*
- * Message — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Layout              — "sections separated by a hairline — never by a
- *                           different background shade". The user bubble
- *                           rides on `--sw-surface` + 1px `--sw-border`
- *                           hairline rather than a darker shade.
- *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers" — bubble
- *                           uses `--sw-radius-card` (4px). No `box-shadow`
- *                           anywhere; the legacy `shadow-none` defensive
- *                           override on `MessageBranchPage` was removed.
- *   § Spacing             — "These steps only — no arbitrary px" — every
- *                           gap/padding/margin maps to a `--sw-space-*`
- *                           token. The arbitrary `max-w-[95%]` cap was
- *                           removed; width is the parent container's job.
- *   § Typography          — monospace voice (inherited), `--sw-text-sm`
- *                           (12px) for body, tabular-nums global.
- *   § Color               — `--sw-surface`, `--sw-text`, `--sw-muted`,
- *                           `--sw-border`. No legacy `bg-secondary` /
- *                           `text-foreground` aliases.
- *
- * Behaviour preserved: branch context, memoised `MessageResponse`,
- * Streamdown plugins, every exported prop type and slot.
- */
-
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";

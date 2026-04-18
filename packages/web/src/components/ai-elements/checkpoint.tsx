@@ -10,18 +10,6 @@ import { cn } from "@/lib/utils";
 
 /**
  * Checkpoint — inline marker + optional action for a saved point in a run.
- *
- * Styling notes (see .agents/skills/design/SKILL.md):
- *   - Token-only colour and spacing, no shadcn aliases (`text-muted-foreground`
- *     → `text-[var(--sw-muted)]`). § Color: "Components reference theme tokens".
- *   - Gap snaps to the 4px scale via `--sw-space-05` (2px icon-to-label).
- *     § Spacing: "These steps only — no arbitrary px".
- *   - Icon sized off the type scale, not Tailwind's `size-4`. The checkpoint
- *     mark sits next to body text, so it tracks `--sw-text-base` (13px).
- *     § Typography: hierarchy via tokens.
- *   - Trigger inherits Button's already-revamped tokens; tooltip carries
- *     secondary copy off the row. § Calm control: "secondary actions live
- *     behind hover, tooltip, or drawer".
  */
 
 export type CheckpointProps = HTMLAttributes<HTMLDivElement>;

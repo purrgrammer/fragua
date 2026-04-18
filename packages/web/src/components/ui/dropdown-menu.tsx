@@ -3,56 +3,6 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
-/*
- * DropdownMenu — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens. shadcn aliases
- *                           (bg-popover, text-popover-foreground,
- *                           bg-accent, text-accent-foreground,
- *                           text-muted-foreground, text-destructive,
- *                           bg-destructive/10|20, bg-border) replaced.
- *                           Selection highlight uses --sw-bg (one-notch
- *                           contrast against the --sw-surface popover),
- *                           matching select.tsx and command.tsx.
- *   § Themes              — "every token has both values, both
- *                           intentionally designed, not auto-inverted."
- *                           dark:data-[variant=destructive]:focus:
- *                           bg-destructive/20 opacity flip removed; the
- *                           single --sw-accent-error token resolves both
- *                           themes.
- *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers";
- *                           "Elevation: none. No box-shadow"; "1px
- *                           only". rounded-lg / rounded-md / shadow-md
- *                           / shadow-lg / ring-1 ring-foreground/10
- *                           replaced with hairline --sw-border + the
- *                           --sw-radius-* token scale.
- *   § Layout              — separator is a 1px hairline (--sw-border).
- *   § Typography          — sizes from --sw-text-* scale. Group label
- *                           tier is xs (11px) muted UPPERCASE +
- *                           0.06em tracking — the only place tracking
- *                           is permitted (matches select/command).
- *                           Shortcut is data, not a label: muted, no
- *                           tracking, tabular figures inherited.
- *   § Spacing             — token scale only (2/4/8/12). Off-scale
- *                           gap-1.5, px-1.5, py-1, pr-8, pl-7, p-1,
- *                           my-1, -mx-1, right-2, min-w-32, min-w-[96px]
- *                           replaced with --sw-space-* and the 4px grid.
- *   § Motion              — color/background transitions only via
- *                           --sw-duration-hover (120ms ease) on items.
- *                           Decorative radix zoom + multi-axis slide
- *                           enter/exit reduced to a single opacity
- *                           fade at --sw-duration-enter (200ms ease-out)
- *                           per the Drawer / panel enter-exit row of the
- *                           Motion table. duration-100 (off-scale)
- *                           replaced with the token.
- *
- * Behavioural API preserved (Root, Portal, Trigger, Content, Group,
- * Item w/ inset+variant, CheckboxItem, RadioGroup, RadioItem, Label
- * w/ inset, Separator, Shortcut, Sub, SubTrigger w/ inset,
- * SubContent).
- */
-
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
 }

@@ -5,38 +5,6 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/*
- * HoverCard — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens. Unlike Tooltip (which
- *                           inverts to read as a transient label), the
- *                           hover-card is a richer disclosure surface,
- *                           so it stays on --sw-surface with a hairline
- *                           — matching the "drawers separate via …
- *                           hairline" rule.
- *   § Typography          — monospace inherited; sm (12px) is the
- *                           default body tier, appropriate for a
- *                           multi-line preview popover. tabular-nums
- *                           comes from globals.
- *   § Spacing             — --sw-space-3 (12px) card padding-y. The
- *                           previous p-2.5 (10px) was off-scale.
- *   § Borders & elevation — radius-card (4px) per "4px cards/drawers".
- *                           1px hairline on --sw-border. shadow-md and
- *                           the ring-1 ring-foreground/10 (a faux
- *                           border) deleted: "Elevation: none. No
- *                           box-shadow … 1px only, border token."
- *   § Motion              — "Drawer / panel enter-exit → Slide + fade,
- *                           200ms ease-out". Zoom removed: decorative
- *                           and losing it loses no information (mirrors
- *                           the precedent set in tooltip.tsx). Slide-
- *                           from-side stays — it signals which side
- *                           opened, which IS information.
- *
- * Behavioural API (Root, Trigger, Content + align/sideOffset)
- * preserved.
- */
-
 function HoverCard({ ...props }: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
   return <HoverCardPrimitive.Root data-slot="hover-card" {...props} />;
 }

@@ -21,52 +21,6 @@
 // Keyboard: `⌘ + b` (mac) / `Ctrl + b` (everywhere else) toggles the
 // sidebar — wired in `SidebarProvider`. Same shortcut shadcn ships
 // upstream so existing muscle memory carries over.
-//
-// Skill citations (.agents/skills/design/SKILL.md):
-//   § Color               — only --sw-* tokens. shadcn aliases
-//                           (bg-sidebar, text-sidebar-foreground,
-//                           bg-sidebar-accent, bg-sidebar-accent-fg,
-//                           border-sidebar-border, ring-sidebar-ring,
-//                           bg-background) replaced. Active-row
-//                           highlight uses --sw-bg (one-notch contrast
-//                           against the --sw-surface rail), matching
-//                           dropdown/select/command. Accent state
-//                           tokens are *not* used for nav selection —
-//                           "Accents reserved for state — not branding".
-//   § Themes              — both light + dark resolve through the same
-//                           --sw-* tokens; no auto-inversion, no
-//                           opacity-tinted colors (text-…/70 dropped
-//                           in favour of --sw-muted).
-//   § Borders & elevation — "1px only"; "Radius: 2px default … 0px
-//                           for table rows and dense stacks". Nav rows
-//                           are a dense stack, so menu buttons +
-//                           group labels use --sw-radius-default (2px).
-//                           No box-shadow anywhere (global reset).
-//   § Layout              — rail separator is a 1px hairline
-//                           (--sw-border) — never a background shade.
-//                           Padding snaps to --sw-space-* tokens.
-//   § Typography          — sizes from --sw-text-* scale. Group label
-//                           tier is xs (11px) muted UPPERCASE +
-//                           0.06em tracking — the one place tracking
-//                           is permitted. Active row is differentiated
-//                           by weight (500) + subtle bg, not size.
-//   § Spacing             — token scale only (4/8/12). gap-1/2,
-//                           p-2, mx-2 mapped to --sw-space-1/2.
-//   § Motion              — width morph and label fade use
-//                           --sw-duration-enter (200ms) ease-out per
-//                           the "Drawer / panel enter-exit" Motion
-//                           table row — *not* `linear` (which the
-//                           skill reserves for constant-motion
-//                           indicators, "never for color"). Color +
-//                           bg shifts on hover use --sw-duration-hover
-//                           (120ms ease). The off-spec
-//                           transition-[width,height,padding] on
-//                           menu rows is dropped: the only animated
-//                           property is the rail's `width`, which
-//                           covers the visual change, and
-//                           "Animations touch only `transform` and
-//                           `opacity`" leaves padding/height jumps
-//                           instantaneous.
 
 "use client";
 

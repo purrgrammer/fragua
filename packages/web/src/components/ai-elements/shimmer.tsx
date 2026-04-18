@@ -10,8 +10,8 @@ export interface TextShimmerProps {
   className?: string;
   /**
    * Pulse duration in seconds. Floored to the design system's pulse
-   * token (1.8s) — anything faster reads as error (SKILL.md § Motion:
-   * "Pulse is slow. 1800ms floor; a fast pulse reads as error").
+   * token (1.8s) — anything faster reads as error. Pulse is slow;
+   * 1800ms floor, a fast pulse reads as error.
    */
   duration?: number;
   /**
@@ -23,7 +23,7 @@ export interface TextShimmerProps {
   spread?: number;
 }
 
-// SKILL.md § Motion — "Pulse is slow. 1800ms floor."
+// Pulse is slow. 1800ms floor.
 const MIN_PULSE_MS = 1800;
 
 const ShimmerComponent = ({
@@ -37,11 +37,10 @@ const ShimmerComponent = ({
   const requested = duration ? duration * 1000 : MIN_PULSE_MS;
   const pulseMs = Math.max(MIN_PULSE_MS, requested);
 
-  // SKILL.md § Color — accent.thinking is the canonical "alive" colour
-  // for processing / awaiting / streaming. SKILL.md § Motion — the
-  // `.sw-pulse` class (opacity 1.0 → 0.55 → 1.0, ease-in-out, infinite)
-  // is the canonical processing motion and ships with a reduced-motion
-  // fallback in globals.css.
+  // accent.thinking is the canonical "alive" colour for processing /
+  // awaiting / streaming. The `.sw-pulse` class (opacity 1.0 → 0.55 →
+  // 1.0, ease-in-out, infinite) is the canonical processing motion and
+  // ships with a reduced-motion fallback in globals.css.
   return createElement(
     Component,
     {

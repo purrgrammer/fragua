@@ -2,23 +2,13 @@
 // nothing meaningful (404, 500, empty list) and we'd rather show a
 // purpose-built card than leak a stack trace to the user.
 //
-// Design (Swarm — .agents/skills/design/SKILL.md):
-//   § Borders & elevation — "1px only, `border` token", "Radius … 4px
-//                           cards/drawers". Solid hairline, no dashed
-//                           ornament; dashed read as a decorative cue
-//                           that violates "data as decor."
-//   § Anti-patterns        — "Background shade for hierarchy → same
-//                           surface, hairline." We sit on --sw-surface,
-//                           not a tinted muted variant.
-//   § Layout               — "Consistent padding inside every cell."
-//                           Padding snaps to --sw-space-4 (panel
-//                           padding token).
-//   § Typography           — monospace inherited; hierarchy via weight,
-//                           never size jumps. Title uses --sw-text-base
-//                           weight 500; description uses --sw-text-sm
-//                           in --sw-muted.
-//   § Color                — only --sw-* tokens; muted carries
-//                           secondary info, no opacity dimming steps.
+// Solid 1px hairline via the `border` token, 4px card radius — no
+// dashed ornament (dashed reads as decorative). Sits on --sw-surface
+// rather than a tinted muted variant; hierarchy comes from the hairline,
+// not a background shade. Padding snaps to --sw-space-4. Typography is
+// monospace (inherited); hierarchy via weight, not size jumps — title
+// uses --sw-text-base weight 500, description uses --sw-text-sm in
+// --sw-muted. Only --sw-* tokens; no opacity dimming steps.
 //
 // Real errors (caught in the parent) should be `console.warn`'d by the
 // caller before rendering this; the UI stays clean while devs keep full

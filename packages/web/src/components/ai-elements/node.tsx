@@ -19,27 +19,6 @@ import { cn } from "@/lib/utils";
  * flush header/footer layout (no inter-slot gap so the hairline carries
  * the separation).
  *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only", "Radius … 4px cards/drawers",
- *                           "Elevation: none". Radius comes from Card's
- *                           --sw-radius-card; no local rounded-md.
- *   § Anti-patterns       — "Background shade for hierarchy → same
- *                           surface, hairline." Header and footer sit on
- *                           the same surface as the body; separation is
- *                           a single hairline (border-b / border-t).
- *                           No bg-secondary layer.
- *   § Layout              — "Consistent padding inside every cell —
- *                           spacing.3 … Don't vary by 'importance.'"
- *                           All slots land on --sw-space-3 by default
- *                           (Card's own header/content/footer padding).
- *                           We do NOT re-declare padding here — that
- *                           avoids `p-3!` overrides and lets Card own
- *                           the token.
- *   § Color               — "only --sw-* tokens". Explicit border token.
- *   § Principle 1 (calm)  — gap-0 between slots so the node reads as
- *                           three flush bands, not a stack of padded
- *                           boxes; the hairline is the only rhythm.
- *
  * Behavioural API (slots, xyflow Handles, props passthrough) preserved.
  */
 

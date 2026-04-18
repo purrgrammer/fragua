@@ -7,28 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-/*
- * InputGroup — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only" / "Radius: 2px default";
- *                           focus ring is 1px and instant (matches Input).
- *                           No shadow, no ring-3.
- *   § Typography           — monospace (inherited); body = --sw-text-sm
- *                            (12px); secondary text uses --sw-muted, not
- *                            font-medium ornament.
- *   § Spacing              — 4px base; only --sw-space-* steps. No 1.5/2.5
- *                            half-steps, no arbitrary negative margins.
- *   § Color                — accents = state; --sw-* tokens only. No
- *                            shadcn aliases (border-input, ring-ring, etc).
- *                            Dark is a peer via tokens, not auto-inverted
- *                            opacity overrides.
- *   § Motion               — colour-class transitions only, 120ms ease.
- *
- * Behavioural API is preserved — every prop spreads through unchanged;
- * data-slot attributes and align variants are kept intact.
- */
-
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div

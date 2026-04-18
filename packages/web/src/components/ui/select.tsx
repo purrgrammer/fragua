@@ -3,54 +3,6 @@ import { Select as SelectPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
-/*
- * Select — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens. shadcn aliases
- *                           (bg-popover, bg-accent, border-input,
- *                           bg-input, border-destructive, ring-destructive,
- *                           text-muted-foreground) replaced. Selection
- *                           highlight uses --sw-bg (one-notch contrast
- *                           against the --sw-surface popover), matching
- *                           command.tsx.
- *   § Themes              — "every token has both values, both
- *                           intentionally designed, not auto-inverted."
- *                           dark:bg-input/30 / dark:hover:bg-input/50
- *                           opacity-fades removed; both themes resolve
- *                           via the same --sw-* variables.
- *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers";
- *                           "Elevation: none. No box-shadow"; "1px only".
- *                           rounded-lg / rounded-md / shadow-md /
- *                           ring-1 ring-foreground/10 / ring-3 focus +
- *                           aria-invalid rings all replaced with hairline
- *                           border + --sw-radius-* tokens. Focus is a
- *                           border-color swap (Motion: "Focus ring —
- *                           Instant").
- *   § Layout              — separator is a 1px hairline (--sw-border),
- *                           not a tinted band.
- *   § Typography          — sizes from --sw-text-* scale. Item label is
- *                           sm (12px) body; group label is xs (11px) +
- *                           muted, the only place UPPERCASE+0.06em
- *                           tracking is permitted (matches command.tsx).
- *   § Spacing             — token scale only (4/8/12). Off-scale py-2,
- *                           pr-2, pl-2.5, gap-1.5, px-1.5, py-1, pr-8,
- *                           p-1, my-1, -mx-1 replaced with --sw-space-*.
- *                           Trigger heights (h-7=28px, h-8=32px) are on
- *                           the 4px grid and preserved.
- *   § Motion              — color/background transitions only, 120ms
- *                           ease via --sw-duration-hover. Decorative
- *                           radix zoom + multi-axis slide enter/exit
- *                           reduced to a single fade at
- *                           --sw-duration-enter (200ms ease-out per
- *                           Motion table: "Drawer / panel enter-exit").
- *
- * Behavioural API preserved (Select, SelectGroup, SelectValue,
- * SelectTrigger w/ size, SelectContent w/ position+align,
- * SelectLabel, SelectItem, SelectSeparator,
- * SelectScrollUpButton, SelectScrollDownButton).
- */
-
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }

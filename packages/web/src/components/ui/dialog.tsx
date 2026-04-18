@@ -4,38 +4,6 @@ import type * as React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/*
- * Dialog — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Color               — only --sw-* tokens. Surface is --sw-surface
- *                           (one notch off bg, barely perceptible);
- *                           overlay scrim derives from --sw-text so
- *                           both themes get an explicit, designed dim.
- *   § Borders & elevation — "Elevation: none. No box-shadow. Drawers
- *                           separate via backdrop scrim + hairline."
- *                           ring-1 (pseudo-shadow) → 1px hairline.
- *                           Radius: --sw-radius-card (4px) for drawers.
- *   § Layout              — "sections separated by a hairline — never
- *                           by a different background shade." Footer
- *                           drops bg-muted/50 in favor of a top hairline.
- *   § Typography          — "Monospace only. Hierarchy via weight, case,
- *                           and spacing — never size jumps." Title at
- *                           md (15px) weight 500; description at sm.
- *                           font-heading (sans) removed.
- *   § Spacing             — token scale only: padding-4 (16px), gap-3,
- *                           inset-2 for the close button.
- *   § Motion              — enter/exit "Slide + fade (paired with scrim),
- *                           200ms ease-out". Zoom removed — decorative;
- *                           losing it loses no information. Only
- *                           transform + opacity animated. Overlay and
- *                           content share duration & easing (paired).
- *
- * Behavioural API (Root, Trigger, Portal, Close, Overlay, Content +
- * showCloseButton, Header, Footer + showCloseButton, Title, Description)
- * preserved.
- */
-
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }

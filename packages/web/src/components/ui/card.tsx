@@ -2,31 +2,6 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/*
- * Card — Swarm design language.
- *
- * Skill citations (.agents/skills/design/SKILL.md):
- *   § Borders & elevation — "1px only, `border` token", "Radius … 4px
- *                           cards/drawers", "Elevation: none". A ring is
- *                           an offset outline (shadow-flavoured); we use
- *                           a hairline border instead.
- *   § Layout              — "Consistent padding inside every cell —
- *                           spacing.3 for a status card and a log card
- *                           alike. Don't vary by 'importance.'" Padding
- *                           snaps to --sw-space-3.
- *   § Typography          — monospace only; hierarchy via weight/case,
- *                           never size jumps. Title is sentence-case at
- *                           the default body size, weight 500. The size
- *                           variant adjusts padding only — never type.
- *   § Color               — only --sw-* tokens; surfaces nearly
- *                           indistinguishable from bg.
- *   § Anti-pattern        — "Background shade for hierarchy → same
- *                           surface, hairline." Footer keeps the card
- *                           surface; separation is a top hairline only.
- *
- * Behavioural API (slots, size variant, props passthrough) preserved.
- */
-
 function Card({ className, size = "default", ...props }: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
   return (
     <div

@@ -7,17 +7,6 @@ import { cn } from "@/lib/utils";
 
 /**
  * Task — disclosure block for an in-flight or completed agent task.
- *
- * Styling notes (see .agents/skills/design/SKILL.md):
- *   - Token-only colour, spacing, radius (no shadcn aliases, no hex,
- *     no off-scale px). § Authoring checklist.
- *   - File chips render as quiet 2px-radius surface pills, hairline
- *     border, no shadow. § Borders: "1px only", "Radius: 2px default".
- *   - Disclosure motion is transform/opacity only, paired easing with
- *     the chevron rotation, `--sw-duration-enter`, `ease-out`.
- *     § Motion: "Drawer / panel enter-exit … 200ms ease-out";
- *     "paired elements share easing and duration".
- *   - Indent rail is a 1px hairline, not a 2px bar. § Borders.
  */
 
 export type TaskItemFileProps = ComponentProps<"div">;
