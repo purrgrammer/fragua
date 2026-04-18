@@ -6,6 +6,16 @@
 // "map" panel and the timeline placeholder have been removed; the
 // conversation is the main view, period.
 //
+// Layout:
+//   - Section is `h-full flex flex-col min-w-0` — no arbitrary
+//     `max-w-*` clamp, so the page fills the main region at any
+//     viewport width.
+//   - The h2 is `truncate` inside a `min-w-0` parent so a long
+//     auto-generated title shortens with an ellipsis instead of
+//     stretching the header row.
+//   - The conversation region uses `flex-1 min-h-0` to absorb all
+//     remaining vertical space without overflowing.
+//
 // Data flow:
 //   - `useRunConversation(api, id)` owns the event pipeline end-to-end:
 //     a REST bootstrap fetches the full history, then SSE delivers new
@@ -91,22 +101,23 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
   return (
     // Full-height flex column so the conversation region can consume all
     // remaining space via `flex-1 min-h-0` rather than hard-coding a
-    // viewport fraction. `min-h-0` is the critical bit — without it the
-    // flex child refuses to shrink and overflows its parent.
-    <section className="max-w-6xl mx-auto h-full flex flex-col gap-4">
-      <header className="flex items-baseline justify-between">
-        <div>
+    // viewport fraction. `min-h-0` + `min-w-0` are both load-bearing —
+    // without them the flex child refuses to shrink and long titles or
+    // wide content overflow their parent.
+    <section className="flex h-full w-full min-w-0 flex-col gap-4">
+      <header className="flex min-w-0 items-baseline justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <Link to="/" className="text-xs text-blue-700 hover:underline">
             ← all pipelines
           </Link>
           <h2
-            className="text-lg font-semibold mt-1"
+            className="mt-1 truncate text-lg font-semibold"
             title={detail && hasTitleOrInput(detail) ? headingTooltip(detail) : id}
           >
             {detail ? headingText(detail) : shortenRunId(id)}
           </h2>
           {detail && (detail.title || detail.input) && (
-            <p className="text-xs text-slate-500 font-mono mt-0.5" title={id}>
+            <p className="mt-0.5 truncate font-mono text-xs text-slate-500" title={id}>
               {shortenRunId(id)}
             </p>
           )}
@@ -153,7 +164,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
           </div>
           <div
             data-testid={view === "conversation" ? "conversation-region" : "steps-region"}
-            className="flex-1 min-h-0 border rounded-md overflow-y-auto bg-background"
+            className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-background"
           >
             {view === "conversation" ? (
               <PipelineConversation
@@ -182,7 +193,7 @@ function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
   const workflowLabel = detail.workflowName ?? detail.workflow;
 
   return (
-    <p className="text-xs text-slate-600 mt-1 flex flex-wrap gap-x-2 gap-y-1 items-baseline">
+    <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-slate-600">
       <span>
         status: <span data-testid="detail-status">{statusLabel(detail.status)}</span>
       </span>
@@ -224,7 +235,9 @@ function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
       {workflowLabel && (
         <>
           <span>·</span>
-          <span title={detail.workflow ?? ""}>workflow: {workflowLabel}</span>
+          <span className="max-w-[16rem] truncate" title={detail.workflow ?? ""}>
+            workflow: {workflowLabel}
+          </span>
         </>
       )}
     </p>

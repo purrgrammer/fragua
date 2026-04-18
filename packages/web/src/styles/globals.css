@@ -116,6 +116,26 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+/*
+ * Fill the viewport. The app shell is a flex layout that relies on its
+ * parent chain being at 100% height; without this, `h-svh` on the
+ * provider still works (it's viewport-relative) but `h-full` anywhere
+ * below falls back to content-height and breaks the "sidebar + inset
+ * fill the screen" invariant. `overflow-hidden` on body prevents
+ * accidental horizontal scroll when an inner pane miscomputes its
+ * width — all real scrolling happens inside `<main>` / specific panes.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
 html,
 body {
   font-family: var(--font-mono);

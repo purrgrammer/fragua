@@ -12,6 +12,12 @@
 //   - `"compact"` — single-line link card used in Home's recent-runs
 //     list. Renders an `<a>` so the whole row is one click target;
 //     status is pinned right via `ml-auto`.
+//
+// Truncation: both variants clamp the title with `truncate` inside a
+// `min-w-0` parent. Without `min-w-0` flex/grid children refuse to
+// shrink below their intrinsic content width and long titles blow
+// out the row, which is how we used to get horizontal scroll on
+// the Pipelines list.
 
 import { Link } from "react-router-dom";
 import type { PipelineSummary } from "../lib/api.ts";
@@ -39,16 +45,22 @@ function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50">
-      <td className="py-2 pr-4">
+      <td className="py-2 pr-4 max-w-0">
         <Link
           to={`/pipelines/${row.runId}`}
           title={displayTooltip(row)}
-          className="font-medium text-blue-700 hover:underline"
+          className="block truncate font-medium text-blue-700 hover:underline"
         >
           {displayTitle(row)}
         </Link>
       </td>
-      <td className="py-2 pr-4">{wf ? <Badge variant="muted">{wf}</Badge> : null}</td>
+      <td className="py-2 pr-4 max-w-0">
+        {wf ? (
+          <Badge variant="muted" className="max-w-full truncate">
+            {wf}
+          </Badge>
+        ) : null}
+      </td>
       <td className="py-2 pr-4 text-right">
         <StatusPill status={row.status} />
       </td>
@@ -66,10 +78,14 @@ function CompactRow({ row }: { row: PipelineSummary }): JSX.Element {
       to={`/pipelines/${row.runId}`}
       title={displayTooltip(row)}
       data-testid={`recent-run-${row.runId}`}
-      className="flex items-center gap-3 rounded-md border border-border/60 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+      className="flex w-full min-w-0 items-center gap-3 rounded-md border border-border/60 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
     >
       <span className="flex-1 min-w-0 truncate font-medium">{displayTitle(row)}</span>
-      {wf ? <Badge variant="muted">{wf}</Badge> : null}
+      {wf ? (
+        <Badge variant="muted" className="max-w-[12rem] shrink-0 truncate">
+          {wf}
+        </Badge>
+      ) : null}
       <StatusPill status={row.status} />
     </Link>
   );
@@ -124,7 +140,7 @@ export function StatusPill({ status }: { status: PipelineSummary["status"] }): J
   return (
     <span
       data-testid={`status-${status}`}
-      className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
+      className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tone}`}
     >
       {statusLabel(status)}
     </span>

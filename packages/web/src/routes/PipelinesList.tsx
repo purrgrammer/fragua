@@ -10,6 +10,10 @@
 //   - Loading, empty, and error states all render as purpose-built
 //     components — we never dump a raw fetch error into the UI. Devs get
 //     the underlying message via `console.warn` for diagnostics.
+//   - The section is full-bleed — we dropped the historical
+//     `max-w-5xl mx-auto` clamp so the table uses the real main-column
+//     width; long titles truncate inside the row rather than forcing
+//     horizontal scroll or shrinking into a narrow column.
 
 import { useEffect, useState } from "react";
 import { PipelineRow } from "../components/PipelineRow.tsx";
@@ -45,8 +49,8 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
   }, [api]);
 
   return (
-    <section className="max-w-5xl mx-auto">
-      <h2 className="text-lg font-semibold mb-4">Pipelines</h2>
+    <section className="flex w-full min-w-0 flex-col gap-3">
+      <h2 className="font-heading text-base font-semibold">Pipelines</h2>
       {state.kind === "loading" && (
         <p className="text-slate-500 text-sm" data-testid="pipelines-loading">
           Loading…
@@ -71,20 +75,22 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
         />
       )}
       {state.kind === "ready" && state.rows.length > 0 && (
-        <table className="w-full text-sm border-collapse" data-testid="pipelines-table">
-          <thead>
-            <tr className="text-left text-slate-600 border-b border-slate-200">
-              <th className="py-2 pr-4 font-medium">Title</th>
-              <th className="py-2 pr-4 font-medium">Workflow</th>
-              <th className="py-2 pr-4 font-medium text-right">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.rows.map((row) => (
-              <PipelineRow key={row.runId} row={row} variant="default" />
-            ))}
-          </tbody>
-        </table>
+        <div className="w-full min-w-0 overflow-x-auto">
+          <table className="w-full table-fixed text-sm border-collapse" data-testid="pipelines-table">
+            <thead>
+              <tr className="text-left text-slate-600 border-b border-slate-200">
+                <th className="py-2 pr-4 font-medium">Title</th>
+                <th className="py-2 pr-4 font-medium w-40">Workflow</th>
+                <th className="py-2 pr-4 font-medium text-right w-28">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.rows.map((row) => (
+                <PipelineRow key={row.runId} row={row} variant="default" />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

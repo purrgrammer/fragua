@@ -31,7 +31,7 @@ export function Settings({ api }: SettingsProps): JSX.Element {
   const swarmEnv = collectSwarmEnv(import.meta.env as Record<string, unknown>);
 
   return (
-    <div className="flex flex-col gap-4 max-w-2xl" data-testid="settings-page">
+    <div className="flex w-full min-w-0 max-w-3xl flex-col gap-4" data-testid="settings-page">
       <h2 className="font-heading text-base font-semibold">Settings</h2>
 
       <Card size="sm">
@@ -91,9 +91,9 @@ export function Settings({ api }: SettingsProps): JSX.Element {
 
 function Row({ label, value }: { label: string; value: React.ReactNode }): JSX.Element {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-muted-foreground text-xs">{label}</span>
-      <span className="text-right">{value}</span>
+    <div className="flex min-w-0 items-center justify-between gap-3">
+      <span className="shrink-0 text-muted-foreground text-xs">{label}</span>
+      <span className="min-w-0 truncate text-right">{value}</span>
     </div>
   );
 }
