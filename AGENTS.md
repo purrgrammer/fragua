@@ -40,9 +40,10 @@ bun run lint             # biome check
 bun run format           # biome format --write
 bun run ci               # typecheck + lint + test (what CI runs)
 
-bun run swarm run <workflow.dot>       # once @swarm/cli exists (Phase 2+)
-bun run swarm validate <workflow.dot>
-bun run swarm replay <events.jsonl>
+bun run swarm daemon start             # long-lived supervisor for runs
+bun run swarm run <workflow.dot>       # fire-and-forget: POST /jobs → exit 0
+bun run swarm validate <workflow.dot>  # parse + lint, no execution
+bun run swarm replay <events.jsonl>    # print one-shot summary of a past run
 ```
 
 ## Repository layout
@@ -102,20 +103,68 @@ into a non-retryable `fail` outcome; workflows wire
 of forwarding to downstream no-op steps. See `docs/SPEC.md` §3.7 for the
 contract.
 
-### Running the server
+### Running the daemon (canonical path) and the dev server
 
-Start the HTTP + SSE server for the web UI / TUI / any other client:
+`swarm run` is a fire-and-forget client: it POSTs to the daemon's
+`/jobs` endpoint and exits immediately. The daemon owns workflow
+execution, writes `events.jsonl`, exposes HTTP + SSE, and supervises
+concurrent runs. One daemon per repo.
 
 ```sh
-bun run packages/cli/bin/swarm.ts serve --port 3000
-# → swarm serve listening on http://localhost:3000
-curl http://localhost:3000/health   # {"ok":true}
+bun run packages/cli/bin/swarm.ts daemon start          # detaches, rendezvous at .swarm/daemon/
+bun run packages/cli/bin/swarm.ts daemon status         # JSON: pid + port + queue counters
+bun run packages/cli/bin/swarm.ts daemon logs -f        # tail .swarm/daemon/daemon.log
+bun run packages/cli/bin/swarm.ts daemon stop           # SIGTERM + grace → SIGKILL
+bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot --input "…"
+# → queued: <jobId>
+#     run:  <runId>
+#     view: http://127.0.0.1:3737/pipelines/<runId>
 ```
 
-Flags: `--port <n>` (default 3000; `0` picks an ephemeral port for tests),
-`--runs-dir <path>` (default `.swarm/runs`), `--cwd <path>`. `Ctrl-C`
-triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
-front if exposing beyond localhost.
+`swarm run` auto-starts a daemon if none is running; pass
+`--no-autostart` to fail fast instead (useful for CI). Workflows run
+in an isolated git worktree (`swarm/<runId>`) by default — pass
+`--no-worktree` to opt out.
+
+`.swarm/daemon/` layout:
+- `daemon.json` — rendezvous `{ pid, port, startedAt, version }`, atomic write.
+- `queue.db` — SQLite job queue (WAL mode, `UPDATE…RETURNING` for `claimNext`).
+- `daemon.log` — stdout/stderr of the daemon, size-capped rotation on
+  start (→ `daemon.log.1` at 10MB).
+
+REST surface added by the daemon (on top of the existing `/pipelines/*`
++ `/workflows` + `/stats` + control routes):
+- `POST /jobs { workflow, input?, model?, worktree?, runId? }` → 202
+  `{ jobId, runId }`.
+- `GET /jobs[?status=…&limit=N]` → `JobRow[]`.
+- `GET /jobs/:id` → one row, 404 on miss.
+- `DELETE /jobs/:id` — queued rows are removed (200); running rows
+  get their cancel forwarded through the existing `ControlGateway`
+  (202 + `{ requestId }`); terminal rows return 409.
+- `GET /health` carries a `daemon: {...}` snapshot (pid, port,
+  startedAt, version, concurrency, inflight, queued). Absent when a
+  plain `swarm serve` is what's running — the web UI's banner reads
+  this to distinguish live vs. read-only.
+
+**Orphan recovery.** On start the daemon scans every `status='running'`
+row in the queue: alive child pids are adopted via a small watcher;
+dead children reconcile against the last terminal event in
+`events.jsonl` (`pipeline.completed` → success, canceled, otherwise
+failed with a "daemon restart" note).
+
+`swarm serve` still exists for read-only dev use — it starts the HTTP
+server in the foreground with no queue wired up (so `/jobs` returns
+503). Prefer `swarm daemon start` for anything but one-off debugging.
+
+```sh
+bun run packages/cli/bin/swarm.ts serve --port 3000     # foreground, no queue
+curl http://localhost:3000/health   # {"ok":true}  ← note: no `daemon` key
+```
+
+Flags: `--port <n>` (default 3000 for `serve`, 3737 for the daemon;
+`0` picks an ephemeral port), `--runs-dir <path>`, `--cwd <path>`. No
+auth / HTTPS — the daemon binds `127.0.0.1` only; put a reverse proxy
+in front for anything else.
 
 REST surface at time of writing: `GET /health`, `GET /pipelines`,
 `GET /pipelines/:id`, `GET /pipelines/:id/steps` (Wave 5 —
@@ -302,11 +351,14 @@ route tree stays stable across health-status flips (tests rely on this).
 
 The web surface standardizes on **Vercel AI Elements** end-to-end
 (`Workflow` for the graph, Chatbot family for drilldown, human-in-the-loop
-set for steering). The currently-shipped Graphviz-wasm renderer is being
-swapped for AI Elements' `Workflow` in P5.12; the event timeline (P5.07)
-and drilldown (P5.08) are still pending. The dashboard shell (P5.13) is
-partially landed — `AppShell` + Home/Workflows/Pipelines/Settings routes
-exist; individual tiles and workflow-catalog content are still filling in.
+set for steering). P5.08 (pipeline Conversation view) and P5.12 (AI
+Elements adoption) are landed; P5.07 (raw event timeline) was dropped in
+favour of the Conversation view. P5.13 (dashboard shell) is landed —
+`AppShell`, `AppSidebar`, Home (with running strip, stats tiles, recent
+runs), Workflows, Settings routes all exist, backed by server-side
+`GET /stats` and `GET /workflows`. Remaining P5 work: P5.09 (Ink TUI),
+P5.10 (`swarm replay` feeds TUI + web), P5.11 (Playwright visual
+regression + cost reconciliation).
 
 ```sh
 # Terminal A — start the HTTP/SSE server
@@ -537,7 +589,8 @@ Omit `--model` and swarm uses that provider's default (see `swarm providers`). T
 - Goal-gate retries are capped at 3 by default; override with `graph [max_goal_gate_retries = N]` in a workflow.
 
 Related:
-- `workflows/build-feature.dot` — plan → implement_and_review loop → verify → summarize
+- `workflows/build-feature.dot` — explore → plan → implement_and_review → verify → update_docs → commit → merge. The final `merge` node rebases the worktree branch onto main and fast-forwards main via a compare-and-swap on `refs/heads/main`, so concurrent parallel runs serialize safely (loser re-rebases). Skips cleanly when the run is not inside a linked worktree (i.e. you invoked without `--worktree`).
+- `scripts/parallel-p5.sh` — fans out the remaining P5 task specs over the self-hosting workflow in isolated worktrees; invoke as `scripts/parallel-p5.sh` (all pending) or `scripts/parallel-p5.sh 09 11` (subset). Logs land in `.swarm/parallel-logs/p5.<id>.log`.
 - `.swarm/config.yaml` — per-project defaults + workflow shortcuts
 
 The agent writing code on swarm's behalf has full access to `local:read_file`, `local:write_file`, and `local:bash`. The command blocklist in `.swarm/config.yaml` refuses the most dangerous patterns even in unsafe mode. Everything emitted to `.swarm/runs/<id>/events.jsonl` is an immutable audit trail.
