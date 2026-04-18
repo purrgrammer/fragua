@@ -147,6 +147,9 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
     runningJobs: db.prepare<JobDbRow, []>(
       `SELECT * FROM jobs WHERE status = 'running' ORDER BY enqueued_at ASC`,
     ),
+    count: db.prepare<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM jobs WHERE status = ?`,
+    ),
   };
 
   return {
@@ -219,6 +222,11 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
 
     async runningJobs(): Promise<JobRow[]> {
       return stmts.runningJobs.all().map(rowToJob);
+    },
+
+    async count(status): Promise<number> {
+      const row = stmts.count.get(status);
+      return row?.n ?? 0;
     },
 
     async close(): Promise<void> {

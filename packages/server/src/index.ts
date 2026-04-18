@@ -76,7 +76,7 @@ export function createServer(opts: ServerOptions): Hono {
     });
 
   const app = new Hono();
-  app.route("/", healthRoutes());
+  app.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   app.route("/", eventsRoutes({ runsDir: opts.runsDir }));
   app.route("/", pipelinesRoutes({ runReader }));
   app.route("/", statsRoutes({ runReader }));
@@ -104,6 +104,7 @@ export {
   removeRendezvous,
   writeRendezvous,
 } from "./rendezvous.ts";
+export type { HealthDaemonInfo } from "./routes/health.ts";
 export type {
   ControlGateway,
   ControlSubmitResult,

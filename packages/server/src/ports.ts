@@ -246,6 +246,9 @@ export interface JobQueue {
   delete(jobId: string): Promise<void>;
   /** All rows currently in `running` — used for orphan recovery on daemon startup. */
   runningJobs(): Promise<JobRow[]>;
+  /** Fast count for a given status. Used by `/health` to report inflight +
+   * queued without loading the rows. */
+  count(status: JobStatus): Promise<number>;
   /** Release DB resources. Tests use this to avoid leaking file handles. */
   close(): Promise<void>;
 }
@@ -260,4 +263,8 @@ export interface ServerPorts {
   jobQueue?: JobQueue;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
+  /** Per-request provider for daemon metadata merged into `/health` under
+   * the `daemon` key. Present only when the server runs inside the
+   * swarm daemon; absent for plain `swarm serve`. */
+  daemonInfo?: () => import("./routes/health.ts").HealthDaemonInfo | Promise<import("./routes/health.ts").HealthDaemonInfo>;
 }

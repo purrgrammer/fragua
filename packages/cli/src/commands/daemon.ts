@@ -34,9 +34,13 @@ import {
   removeRendezvous,
   writeRendezvous,
 } from "@swarm/server";
-import type { JobQueue } from "@swarm/server";
+import type { HealthDaemonInfo, JobQueue } from "@swarm/server";
 import chalk from "chalk";
 import { startServer } from "./serve.ts";
+
+/** Global concurrency cap. Phase 4 will source this from
+ * `.swarm/config.yaml`; for now a sensible default. */
+const DEFAULT_CONCURRENCY = 2;
 
 /** Bumped manually when the rendezvous shape or daemon protocol changes. */
 const DAEMON_VERSION = "0.0.0";
@@ -318,6 +322,21 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
     return 1;
   }
 
+  const startedAt = new Date().toISOString();
+  const concurrency = DEFAULT_CONCURRENCY;
+  // Captured in a closure so `/health` sees live counters. `handle.port`
+  // is filled in after `startServer` returns; we reference it lazily.
+  let boundPort = port;
+  const daemonInfo = async (): Promise<HealthDaemonInfo> => ({
+    pid: process.pid,
+    port: boundPort,
+    startedAt,
+    version: DAEMON_VERSION,
+    concurrency,
+    inflight: await jobQueue.count("running"),
+    queued: await jobQueue.count("queued"),
+  });
+
   let handle: Awaited<ReturnType<typeof startServer>>;
   try {
     handle = await startServer({
@@ -325,8 +344,9 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
       hostname: "127.0.0.1",
       cwd,
       ...(opts.runsDir !== undefined ? { runsDir: opts.runsDir } : {}),
-      ports: { jobQueue },
+      ports: { jobQueue, daemonInfo },
     });
+    boundPort = handle.port;
   } catch (err) {
     await jobQueue.close().catch(() => {});
     const e = err as { code?: string; message?: string };
@@ -342,7 +362,7 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
   await writeRendezvous(cwd, {
     pid: process.pid,
     port: handle.port,
-    startedAt: new Date().toISOString(),
+    startedAt,
     version: DAEMON_VERSION,
   });
 

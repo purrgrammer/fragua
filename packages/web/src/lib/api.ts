@@ -29,6 +29,20 @@
 
 export interface HealthResponse {
   ok: boolean;
+  /**
+   * Present when the server runs as the swarm daemon (exposes a job
+   * queue + process supervisor). Absent for plain `swarm serve`, which
+   * the UI treats as a read-only archive view.
+   */
+  daemon?: {
+    pid: number;
+    port: number;
+    startedAt: string;
+    version: string;
+    concurrency: number;
+    inflight: number;
+    queued: number;
+  };
 }
 
 /**
