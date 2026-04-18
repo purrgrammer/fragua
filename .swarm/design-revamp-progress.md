@@ -26,7 +26,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 - [x] packages/web/src/components/ui/dropdown-menu.tsx
 - [x] packages/web/src/components/ui/breadcrumb.tsx
 - [x] packages/web/src/components/ui/button-group.tsx
-- [ ] packages/web/src/components/ui/scroll-area.tsx
+- [x] packages/web/src/components/ui/scroll-area.tsx
 - [ ] packages/web/src/components/ui/collapsible.tsx
 - [ ] packages/web/src/components/ui/table.tsx
 - [ ] packages/web/src/components/ui/sidebar.tsx
