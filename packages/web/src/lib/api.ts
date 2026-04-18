@@ -117,6 +117,31 @@ export interface WorkflowSummary {
   label?: string;
 }
 
+/** Local mirror of the server's `SkillSummary` port. */
+export interface SkillSummary {
+  name: string;
+  description: string;
+  version?: string;
+  allowed_tools?: string[];
+  location: string;
+  skill_dir: string;
+  sha256: string;
+  bytes: number;
+  scope: "project" | "user";
+  source_dir: string;
+  /** When set, the skill was discovered but excluded from the agent's
+   * tier-1 catalog. The UI renders it greyed out with this tooltip. */
+  disabled_reason?: string;
+}
+
+/** Local mirror of the server's `SkillDetail` port. `usage` is present
+ * when the server was configured with a `runReader` so
+ * `GET /skills/:name` could fold `local:load_skill` activations. */
+export interface SkillDetail extends SkillSummary {
+  body: string;
+  usage?: { runs: string[]; count: number };
+}
+
 /**
  * Wave 5: local mirror of the server's `StepSnapshot`. One element per
  * `llm.start` event in a run, carrying the fully-assembled context the
@@ -153,6 +178,14 @@ export interface StepSnapshot {
     truncated: boolean;
     status: string;
     error?: string;
+  }>;
+  skills: Array<{
+    name: string;
+    location: string;
+    sha256: string;
+    bytes: number;
+    scope: "project" | "user";
+    source_dir: string;
   }>;
   budget?: {
     cumulative_cost_usd: number;
@@ -220,6 +253,11 @@ export interface ApiClient {
   listPipelines(): Promise<PipelineSummary[]>;
   getPipeline(id: string): Promise<PipelineDetail>;
   listWorkflows(): Promise<WorkflowSummary[]>;
+  /** List all installed skills (`GET /skills`). `refresh: true` forces the
+   * server to re-scan the filesystem instead of using its short TTL cache. */
+  listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]>;
+  /** Full SKILL.md body + metadata (`GET /skills/:name`). 404 throws ApiError. */
+  getSkill(name: string): Promise<SkillDetail>;
   /**
    * Fetch the full historical event array for a run. Used to bootstrap
    * the conversation reducer before subscribing to the SSE stream — the
@@ -289,6 +327,15 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
 
     async listWorkflows(): Promise<WorkflowSummary[]> {
       return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
+    },
+
+    async listSkills(listOpts?: { refresh?: boolean }): Promise<SkillSummary[]> {
+      const qs = listOpts?.refresh ? "?refresh=1" : "";
+      return getJson(`/skills${qs}`, (v): v is SkillSummary[] => Array.isArray(v) && v.every(isSkillSummary));
+    },
+
+    async getSkill(name: string): Promise<SkillDetail> {
+      return getJson(`/skills/${encodeURIComponent(name)}`, isSkillDetail);
     },
 
     async getPipelineEvents(id: string): Promise<PipelineEventsPayload> {
@@ -388,6 +435,33 @@ function isWorkflowSummary(v: unknown): v is WorkflowSummary {
     typeof o.sha === "string" &&
     (o.label === undefined || typeof o.label === "string")
   );
+}
+
+function isSkillSummary(v: unknown): v is SkillSummary {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as {
+    name?: unknown;
+    description?: unknown;
+    location?: unknown;
+    sha256?: unknown;
+    bytes?: unknown;
+    scope?: unknown;
+    source_dir?: unknown;
+  };
+  return (
+    typeof o.name === "string" &&
+    typeof o.description === "string" &&
+    typeof o.location === "string" &&
+    typeof o.sha256 === "string" &&
+    typeof o.bytes === "number" &&
+    (o.scope === "project" || o.scope === "user") &&
+    typeof o.source_dir === "string"
+  );
+}
+
+function isSkillDetail(v: unknown): v is SkillDetail {
+  if (!isSkillSummary(v)) return false;
+  return typeof (v as { body?: unknown }).body === "string";
 }
 
 /**

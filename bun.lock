@@ -139,6 +139,7 @@
       "dependencies": {
         "@sinclair/typebox": "0.34.41",
         "@swarm/core": "workspace:*",
+        "yaml": "2.7.0",
       },
       "devDependencies": {
         "typescript": "5.7.3",

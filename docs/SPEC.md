@@ -177,10 +177,21 @@ Each `llm.start` event carries the real cumulative snapshot on `data.budget`: `c
 
 Agnostic execution primitives exposed to agents. Tools are registered in a **namespaced registry** to prevent collisions:
 
-- `local:*` — built-in tools (read_file, write_file, bash, grep, glob, edit_file, apply_patch)
+- `local:*` — built-in tools (read_file, write_file, bash, grep, glob, edit_file, apply_patch, **load_skill**)
 - `mcp:*` — loaded from MCP servers (Phase 6)
-- `skill:*` — loaded from Claude SKILL.md playbooks (Phase 6)
 - `custom:*` — user-registered
+
+**Skills** follow the agentskills.io progressive-disclosure model
+(https://agentskills.io/client-implementation/adding-skills-support) rather
+than a dedicated tool namespace. A tier-1 catalog (`name` + `description`)
+is prepended to the agent's system prompt; a tier-2 `local:load_skill`
+tool returns the SKILL.md body on demand; tier-3 resources (scripts,
+references) are loaded via `local:read_file`. Auto-discovery scans
+`.swarm/skills`, `.agents/skills`, `.claude/skills` under both `<cwd>`
+and `$HOME`; `.swarm/config.yaml → skills.paths` pins an explicit list.
+Per-step skill catalog is durable on `llm.start.skills[]` (sha256 per
+SKILL.md) so replay can detect drift. Node-level `skills=…` /
+`skills_disabled=true` narrow the catalog visible to a single node.
 
 **Tool contract (illustrative — TypeBox in code):**
 ```

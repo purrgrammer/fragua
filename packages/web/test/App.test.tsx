@@ -51,6 +51,12 @@ function stubClient(overrides: Overrides = {}): ApiClient {
       })),
     getPipelineEventsUrl: eventsUrl,
     getPipelineSteps: async () => [],
+    listSkills: overrides.listSkills ?? (async () => []),
+    getSkill:
+      overrides.getSkill ??
+      (async () => {
+        throw new Error("getSkill not stubbed");
+      }),
     pipelineEventsUrl: overrides.pipelineEventsUrl ?? eventsUrl,
   };
 }

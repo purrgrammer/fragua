@@ -219,6 +219,18 @@ export const StepSnapshotCost = Type.Object(
   { additionalProperties: true },
 );
 
+export const StepSnapshotSkill = Type.Object(
+  {
+    name: Type.String(),
+    location: Type.String(),
+    sha256: Type.String(),
+    bytes: Type.Integer({ minimum: 0 }),
+    scope: Type.Union([Type.Literal("project"), Type.Literal("user")]),
+    source_dir: Type.String(),
+  },
+  { additionalProperties: true },
+);
+
 export const StepSnapshot = Type.Object({
   stepIdx: Type.Integer({ minimum: 0 }),
   nodeId: Type.String(),
@@ -239,6 +251,7 @@ export const StepSnapshot = Type.Object({
   settings: Type.Optional(StepSnapshotSettings),
   messages: Type.Array(StepSnapshotMessage),
   contextFiles: Type.Array(StepSnapshotContextFile),
+  skills: Type.Array(StepSnapshotSkill),
   budget: Type.Optional(StepSnapshotBudget),
   cost: Type.Optional(StepSnapshotCost),
   finalText: Type.String(),
@@ -275,3 +288,36 @@ export const StatsPayload = Type.Object({
   updatedAt: Type.String(),
 });
 export type StatsPayload = Static<typeof StatsPayload>;
+
+/** One row of `GET /skills`. Catalog metadata only — bodies are lazy. */
+export const SkillSummarySchema = Type.Object({
+  name: Type.String(),
+  description: Type.String(),
+  version: Type.Optional(Type.String()),
+  allowed_tools: Type.Optional(Type.Array(Type.String())),
+  location: Type.String(),
+  skill_dir: Type.String(),
+  sha256: Type.String(),
+  bytes: Type.Integer({ minimum: 0 }),
+  scope: Type.Union([Type.Literal("project"), Type.Literal("user")]),
+  source_dir: Type.String(),
+  disabled_reason: Type.Optional(Type.String()),
+});
+export type SkillSummarySchema = Static<typeof SkillSummarySchema>;
+
+/** Detail payload for `GET /skills/:name`. `usage` is present when the
+ * server was configured with a `runReader` so the route can fold
+ * `local:load_skill` tool-call events into a recent-runs list. */
+export const SkillDetailSchema = Type.Intersect([
+  SkillSummarySchema,
+  Type.Object({
+    body: Type.String(),
+    usage: Type.Optional(
+      Type.Object({
+        runs: Type.Array(Type.String()),
+        count: Type.Integer({ minimum: 0 }),
+      }),
+    ),
+  }),
+]);
+export type SkillDetailSchema = Static<typeof SkillDetailSchema>;

@@ -163,6 +163,22 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
             </ul>
           </Section>
         )}
+        {step.skills && step.skills.length > 0 && (
+          <Section title={`Skills catalog (${step.skills.length})`}>
+            <ul data-testid={`step-${step.stepIdx}-skills`} className="flex flex-col gap-1">
+              {step.skills.map((s) => (
+                <li key={s.name} className="font-mono text-xs flex items-center gap-2">
+                  <a href={`/skills/${encodeURIComponent(s.name)}`} className="hover:underline">
+                    {s.name}
+                  </a>
+                  <span className="text-muted-foreground">{s.scope}</span>
+                  <span className="text-muted-foreground">{s.bytes}B</span>
+                  <span className="text-muted-foreground">{s.sha256.slice(0, 12)}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
         {step.settings && Object.keys(step.settings).length > 0 && (
           <Section title="Settings">
             <pre className="whitespace-pre-wrap font-mono text-xs">{JSON.stringify(step.settings, null, 2)}</pre>

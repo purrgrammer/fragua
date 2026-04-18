@@ -8,7 +8,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { Drone, Home, ListChecks, Settings, Workflow } from "lucide-react";
+import { BookOpen, Drone, Home, ListChecks, Settings, Workflow } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
@@ -30,6 +30,7 @@ const NAV = [
   { to: "/", label: "Home", icon: Home, end: true },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
   { to: "/pipelines", label: "Pipelines", icon: ListChecks, end: false },
+  { to: "/skills", label: "Skills", icon: BookOpen, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
 

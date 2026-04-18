@@ -109,15 +109,26 @@ export interface BuildSystemPromptInput {
   /** Context-files block returned by `loadContextFiles`. Prepended so
    * repo conventions frame whatever the base prompt says. */
   contextBlock: string;
+  /** Tier-1 skills catalog block (empty when no visible skills). Prepended
+   * before `contextBlock` so skill advertisements frame the whole call —
+   * order: skills → project-conventions → base. */
+  skillsCatalog?: string;
 }
 
 /** Assemble the final system prompt for a single agent call. Isolated from
  * the backend so tests can round-trip the combinator without standing up
  * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
  * compose it without duplicating the merge rules. */
-export function buildSystemPrompt({ global, perNode, contextBlock }: BuildSystemPromptInput): string {
+export function buildSystemPrompt({ global, perNode, contextBlock, skillsCatalog }: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
-  return mergeSystemPrompt(base, contextBlock);
+  const catalog = skillsCatalog ?? "";
+  // Prepend order: skills (first, so the model sees capabilities up-front),
+  // then context-files, then the base persona prompt. Each non-empty block
+  // is joined with a blank line.
+  let out = base;
+  out = mergeSystemPrompt(out, contextBlock);
+  out = mergeSystemPrompt(out, catalog);
+  return out;
 }
 
 function escapeAttr(value: string): string {

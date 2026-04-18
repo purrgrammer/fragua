@@ -400,9 +400,59 @@ without polluting the main conversation:
 local:subagent({
   prompt: "find which files import FooBar",
   timeout_ms: 30000,
-  allowed_tools: ["local:grep", "local:read_file"]
+  allowed_tools: ["local:grep", "local:read_file"],
+  preload_skills: ["code-search"]   // optional: pre-activate named skills
 })
 ```
+
+The child re-runs skill discovery so its tier-1 catalog matches the
+parent's, but activated SKILL.md bodies do NOT propagate unless listed
+in `preload_skills`. Fresh-context invariant wins.
+
+### Skills (agentskills.io)
+
+swarm implements the
+[agentskills.io progressive-disclosure spec](https://agentskills.io/client-implementation/adding-skills-support).
+Drop a directory with a `SKILL.md` into any of these well-known paths
+and it's auto-discovered:
+
+```
+<cwd>/.swarm/skills/<name>/SKILL.md    <cwd>/.agents/skills/<name>/SKILL.md
+<cwd>/.claude/skills/<name>/SKILL.md   ~/.swarm/skills/<name>/SKILL.md
+~/.agents/skills/<name>/SKILL.md       ~/.claude/skills/<name>/SKILL.md
+```
+
+Three tiers of disclosure:
+
+1. **Catalog** — `name` + `description` per skill prepended to the system
+   prompt inside `<available_skills>`. Tells the model what exists without
+   paying the body cost.
+2. **Instructions** — the agent calls `local:load_skill({name})` to pull
+   the full SKILL.md body (frontmatter stripped, resources listed).
+3. **Resources** — `scripts/*`, `references/*` are read on demand via
+   the existing `local:read_file` tool.
+
+Per-node scoping via `NodeAttrs`:
+
+```dot
+narrow [skills="pdf-processing,csv-parsing"]   // intersection only
+noSkills [skills_disabled=true]                // no catalog, no load_skill
+```
+
+Config override in `.swarm/config.yaml` (see `docs/skills.md`):
+
+```yaml
+skills:
+  paths: [.swarm/skills, vendor/agent-skills]   # disables auto-discovery
+  disabled: [legacy-thing]                       # hide names from catalog
+  trust_project: true                            # default
+```
+
+`llm.start.skills[]` durably captures the catalog (sha256 per SKILL.md)
+so replay detects drift. `GET /skills` / `GET /skills/:name` expose the
+catalog to the web UI at `/skills` (list) and `/skills/:name` (detail +
+"used in recent runs" reconstructed from `local:load_skill` tool-call
+events). Full author guide: `docs/skills.md`.
 
 ### Worktree isolation
 

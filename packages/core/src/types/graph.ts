@@ -80,6 +80,13 @@ export interface NodeAttrs {
   /** Wave 4: per-node total-token ceiling (input + output). Same
    * enforcement shape as `max_cost_usd`. */
   max_tokens?: number;
+  /** Scope the skills catalog visible to this node. Unset = all discovered
+   * skills. Set = only these names appear in `<available_skills>` and as
+   * valid `local:load_skill` args. Comma-separated in DOT. */
+  skills?: string[];
+  /** Hard opt-out — no skills catalog in the system prompt and no
+   * `local:load_skill` tool for this node. */
+  skills_disabled?: boolean;
   [extra: string]: AttrScalar | undefined;
 }
 

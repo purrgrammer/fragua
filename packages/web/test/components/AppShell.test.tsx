@@ -33,6 +33,10 @@ function makeClient(): ApiClient {
     getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
     getPipelineEventsUrl: eventsUrl,
     getPipelineSteps: async () => [],
+    listSkills: async () => [],
+    getSkill: async () => {
+      throw new Error("getSkill not stubbed");
+    },
     pipelineEventsUrl: eventsUrl,
   };
 }
@@ -53,19 +57,20 @@ describe("AppShell + AppSidebar", () => {
     }
   });
 
-  it("renders the four nav entries", () => {
+  it("renders the five nav entries", () => {
     const { container } = mount("/");
     const q = within(container);
     expect(q.getByTestId("nav-home")).toBeTruthy();
     expect(q.getByTestId("nav-workflows")).toBeTruthy();
     expect(q.getByTestId("nav-pipelines")).toBeTruthy();
+    expect(q.getByTestId("nav-skills")).toBeTruthy();
     expect(q.getByTestId("nav-settings")).toBeTruthy();
   });
 
   it("renders a lucide icon next to each nav label", () => {
     const { container } = mount("/");
     // Each nav entry contains an SVG (lucide icons render as SVG).
-    for (const id of ["nav-home", "nav-workflows", "nav-pipelines", "nav-settings"]) {
+    for (const id of ["nav-home", "nav-workflows", "nav-pipelines", "nav-skills", "nav-settings"]) {
       const link = within(container).getByTestId(id);
       expect(link.querySelector("svg")).not.toBeNull();
     }

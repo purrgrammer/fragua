@@ -60,6 +60,22 @@ blocklist:
 workflows:
   build-feature: workflows/build-feature.dot
 
-# Skills / playbooks (Phase 6).
+# Skills (agentskills.io progressive-disclosure model).
+#
+# Auto-discovery (the default when this block is omitted) scans these
+# well-known paths, project before user, stopping at the first SKILL.md
+# in each immediate subdirectory:
+#
+#   <cwd>/.swarm/skills/          <cwd>/.agents/skills/
+#   <cwd>/.claude/skills/         ~/.swarm/skills/
+#   ~/.agents/skills/             ~/.claude/skills/
+#
+# Uncomment to pin to an explicit list (disables auto-discovery):
 # skills:
-#   - .swarm/skills/*/SKILL.md
+#   paths:
+#     - .swarm/skills
+#     - vendor/agent-skills
+#   disabled:                 # hide names from the tier-1 catalog
+#     - legacy-thing
+#   trust_project: true       # default; flip to false to hide project-
+#                             # scope skills until reviewed

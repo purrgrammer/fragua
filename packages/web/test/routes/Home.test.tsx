@@ -39,6 +39,10 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     getPipelineEvents: overrides.getPipelineEvents ?? (async () => ({ events: [], lastSeq: 0 })),
     getPipelineEventsUrl: eventsUrl,
     getPipelineSteps: async () => [],
+    listSkills: async () => [],
+    getSkill: async () => {
+      throw new Error("getSkill not stubbed");
+    },
     pipelineEventsUrl: eventsUrl,
     ...overrides,
   };

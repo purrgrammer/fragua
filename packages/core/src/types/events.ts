@@ -211,6 +211,23 @@ export interface LlmStartData {
   context_files?: ContextFileCapture[];
   /** Read-only budget snapshot. See `BudgetSnapshot`. */
   budget?: BudgetSnapshot;
+  /** Tier-1 skill catalog shown to the model for this step. Parallel to
+   * `context_files`: a per-SKILL.md sha256 + bytes record lets replay
+   * detect drift. This is what was *advertised* — which skills the model
+   * actually loaded lives in the `tool.call` events for `local:load_skill`. */
+  skills?: SkillCatalogCapture[];
+}
+
+/** Per-skill capture record carried on `llm.start.skills[]`. Mirrors the
+ * `ContextFileCapture` shape. `skill_dir` / `allowed_tools` etc. stay off
+ * the wire — the replay harness can re-derive them from `location`. */
+export interface SkillCatalogCapture {
+  name: string;
+  location: string;
+  sha256: string;
+  bytes: number;
+  scope: "project" | "user";
+  source_dir: string;
 }
 
 /** Why a summariser call was made. Added in Wave 2b.

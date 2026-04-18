@@ -109,11 +109,49 @@ export interface WorkflowReader {
   list(): Promise<WorkflowSummary[]>;
 }
 
+/**
+ * One skill surfaced by `GET /skills`. Metadata only — the heavy SKILL.md
+ * body is fetched via `GET /skills/:name` and read on demand. Mirrors the
+ * `Skill` shape in @swarm/workspace but re-declared server-side so the
+ * web package has a stable wire contract without importing workspace.
+ */
+export interface SkillSummary {
+  name: string;
+  description: string;
+  version?: string;
+  allowed_tools?: string[];
+  location: string;
+  skill_dir: string;
+  sha256: string;
+  bytes: number;
+  scope: "project" | "user";
+  source_dir: string;
+  /** When set, the skill was discovered but excluded from the tier-1
+   * catalog the agent sees. The UI shows it greyed out with this tooltip. */
+  disabled_reason?: string;
+}
+
+/** Full skill detail for `GET /skills/:name` — summary + SKILL.md body. */
+export interface SkillDetail extends SkillSummary {
+  /** SKILL.md body with YAML frontmatter stripped. */
+  body: string;
+}
+
+/** Port for discovering + reading skills. Implementations live in
+ * ./adapters/ — the default scans the local filesystem via
+ * `@swarm/workspace` `discoverSkills`. Tests inject fakes. */
+export interface SkillReader {
+  list(opts?: { refresh?: boolean }): Promise<SkillSummary[]>;
+  /** Returns `undefined` when the skill is not found so the route can 404. */
+  read(name: string): Promise<SkillDetail | undefined>;
+}
+
 /** Bundle of ports passed to `createServer`. All optional; defaults below. */
 export interface ServerPorts {
   runReader?: RunReader;
   interviewGateway?: InterviewGateway;
   workflowReader?: WorkflowReader;
+  skillReader?: SkillReader;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
 }

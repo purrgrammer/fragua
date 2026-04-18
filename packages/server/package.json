@@ -16,6 +16,7 @@
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
     "@swarm/events": "workspace:*",
+    "@swarm/workspace": "workspace:*",
     "hono": "4.12.14"
   },
   "devDependencies": {
