@@ -1,0 +1,73 @@
+// design-revamp.dot — component-by-component audit-and-revamp of packages/web
+// against .swarm/skills/design/SKILL.md. One commit per component.
+//
+// Usage:
+//   bun run packages/cli/bin/swarm.ts run workflows/design-revamp.dot \
+//     --input="$(cat workflows/design-revamp.prompt.md)"
+//
+// Progress state lives in .swarm/design-revamp-progress.md (checkboxes).
+// Deleting that file resets the run. Re-running resumes where it stopped.
+//
+// Stages:
+//   1. discover     — load skill, enumerate packages/web, write worklist
+//   2. foundation   — theme-token module + globals.css substrate
+//   3. revamp_loop  — trapezium: pick next [ ] item, audit, change,
+//                     subagent-review, typecheck, commit, tick. Repeats
+//                     until every item is [x].
+//   4. verify       — bun run ci, fix failures
+//
+// Every node that makes design decisions attaches the skill as context_files
+// so the yardstick is always in the prompt, not subject to load_skill calls.
+
+digraph design_revamp {
+  graph [
+    goal  = "Align packages/web with .swarm/skills/design/SKILL.md, component by component."
+    label = "design revamp: packages/web"
+    default_fidelity = "compact"
+  ]
+
+  start [shape=Mdiamond]
+
+  discover [
+    prompt = "You are the design-revamp driver.\n\nMission (authoritative — user input): $ARGUMENTS\n\nIf $ARGUMENTS is empty or the skill file is missing, emit `<abort>empty mission or missing skill</abort>` and stop.\n\nSteps:\n  1. Confirm the attached skill is .swarm/skills/design/SKILL.md. Quote its six principle titles back as a compact bullet list — this is your yardstick for the rest of the run.\n  2. local:bash `git ls-files packages/web/src` — enumerate every .tsx, .ts, and .css under packages/web.\n  3. Build an ordered worklist. Exclude foundation files (styles/globals.css, styles/theme.*) — they are handled by the next node. Order: (a) shared primitives under components/ui/ and components/ai-elements/; (b) shell files (AppShell, AppSidebar, routes shell); (c) top-level routes by apparent traffic (Home, PipelinesList, PipelineDetail, etc.); (d) leaf components (rows, cards, inspectors) last. One line per item, path-qualified from repo root.\n  4. local:write_file .swarm/design-revamp-progress.md with this exact structure:\n\n       # Design revamp progress\n       Mission: <one-sentence paraphrase of $ARGUMENTS>\n       Skill sha: <sha256 — `shasum -a 256 .swarm/skills/design/SKILL.md`>\n\n       ## Foundation\n       - [ ] theme tokens + globals.css\n\n       ## Components\n       - [ ] packages/web/src/components/...\n       - [ ] packages/web/src/routes/...\n       ...\n\n  5. Emit `<promise>WORKLIST_READY</promise>`."
+    allowed_tools = "local:read_file, local:bash, local:write_file"
+    context_files = ".swarm/skills/design/SKILL.md"
+    model = "anthropic/claude-haiku-4.5"
+    reasoning_effort = "low"
+  ]
+
+  foundation [
+    prompt = "Foundation pass — build the theme substrate before any component work.\n\nDeliverables:\n  1. A theme-token source at packages/web/src/styles/theme.css (or .ts if the project already uses CSS-in-JS — check existing imports in globals.css first). Expose CSS custom properties for every token named in the skill's Color, Typography, and Spacing tables. Define BOTH light (default, on :root) and dark (on [data-theme='dark'] or @media (prefers-color-scheme: dark)) with every token having an explicit dark counterpart — do not auto-invert. Your values are a first restrained guess; reviewers will tune. Desaturate 15–30% from the first instinct per the skill's color rule.\n  2. packages/web/src/styles/globals.css: set the monospace stack on body, enable `font-variant-numeric: tabular-nums` and `font-feature-settings: 'tnum' 1` globally, base font-size 12px (the `sm` token), base line-height 1.4, border-radius reset to 2px, strip any default box-shadow.\n  3. A one-line header comment in each file linking back to .swarm/skills/design/SKILL.md.\n\nDo NOT touch any component files.\n\nAfter writing: `bun run --filter='@swarm/web' typecheck`; fix failures (max 2 retries). Stage touched files explicitly and commit with subject `[design] foundation: theme tokens + globals` and a body citing the skill sections consumed. Tick the Foundation checkbox in .swarm/design-revamp-progress.md in the same commit.\n\nEmit `<promise>FOUNDATION_READY</promise>`."
+    allowed_tools = "local:read_file, local:write_file, local:bash"
+    context_files = ".swarm/skills/design/SKILL.md"
+    model = "anthropic/claude-sonnet-4.6"
+  ]
+
+  revamp_loop [
+    shape = trapezium
+    until = "WORKLIST_EMPTY"
+    max_iterations = 40
+    fresh_context = true
+    prompt = "One component per iteration. Mission: $ARGUMENTS.\n\nThe skill is attached as context on every invocation — use it verbatim. Re-scan the six principles at the start of each iteration.\n\nSTEP 0 — PICK NEXT. Read .swarm/design-revamp-progress.md. Find the first `- [ ]` item under `## Components`. If none remain, emit exactly `<promise>WORKLIST_EMPTY</promise>` and stop.\n\nSTEP 1 — AUDIT. Read the target file. Read any sibling files it imports from packages/web. Produce a violations table with columns: Violation | Skill rule (section + short quote) | Proposed change. Cover at minimum: hex literals vs tokens, off-scale spacing, box-shadow / gradients / borders ≥2px, non-mono fonts, numerics without tabular figures, always-on secondary metadata, Title Case, decorative or wrong-eased motion, color used for non-state meaning. If the file is already clean, state that plainly and go to STEP 4 (tick-only commit).\n\nSTEP 2 — APPLY. Minimum diff. Use only tokens from the foundation pass. Preserve component behavior and props — visual/structural refactor only. If the skill's `calm control & progressive disclosure` principle is violated (too much always-on secondary info), hide it behind hover or drawer and note the change explicitly in the commit body.\n\nSTEP 3 — REVIEW. local:subagent with allowed_tools=[\"local:read_file\",\"local:bash\"], prompt = \"You are a strict design reviewer. Read .swarm/skills/design/SKILL.md, then `git diff HEAD -- <files>` and the current state of the changed files. For each change, cite the specific skill section that justifies it. Respond APPROVE: <one-line reason> or REJECT: <numbered fixes>.\" If REJECT, apply the fixes and re-invoke the reviewer once. If still REJECT, proceed to STEP 4 but include a `REVIEW_NOTES:` trailer in the commit body listing the unresolved items — do not stall the loop.\n\nSTEP 4 — TYPECHECK + COMMIT + TICK.\n  - `bun run --filter='@swarm/web' typecheck`; fix errors root-cause.\n  - Stage touched files explicitly. Never `git add .`.\n  - Flip the item to `- [x]` in .swarm/design-revamp-progress.md; stage that file too.\n  - Commit per AGENTS.md §Commit conventions. Subject: `[design] revamp: <short path>` (≤72 chars). Body: top 3–5 violations resolved, one line each, no marketing language. No `--no-verify`. No `--amend`.\n  - If the pre-commit hook fails, fix the root cause and make a NEW commit.\n\nSTEP 5 — End the iteration with a one-line status: `REVAMPED: <path> (<n> violations)`. The harness will re-invoke you for the next item. Do NOT emit WORKLIST_EMPTY here — only STEP 0 of a fresh iteration may do that."
+    allowed_tools = "local:read_file, local:write_file, local:bash, local:subagent"
+    context_files = ".swarm/skills/design/SKILL.md"
+  ]
+
+  verify [
+    prompt = "Run `bun run ci`. Prefer narrowing first: `bun run --filter='@swarm/web' typecheck`, then `test`, then `build` to isolate. Max 3 iterations.\n\nIf a visual snapshot test fails because a component's appearance changed and the change is justified by .swarm/skills/design/SKILL.md, update the snapshot and cite the specific rule in the commit body.\n\nCommit any fixes as `[design] fix: <area> (ci)` — one commit per fix. When ci is green, emit `CI_GREEN`."
+    allowed_tools = "local:read_file, local:write_file, local:bash"
+    context_files = ".swarm/skills/design/SKILL.md"
+    model = "anthropic/claude-sonnet-4.6"
+    max_retries = 2
+    goal_gate = true
+  ]
+
+  done [shape=Msquare]
+
+  start -> discover
+  discover -> done [condition="outcome=fail"]
+  discover -> foundation
+  foundation -> revamp_loop
+  revamp_loop -> verify
+  verify -> done
+}

@@ -140,7 +140,7 @@ describe("PipelineConversation", () => {
     expect(toolBlock).toBeTruthy();
     // Header shows the human-readable label from the TOOL_PRESENTATION
     // registry, not the raw `local:read_file` canonical name.
-    expect(toolBlock.textContent ?? "").toContain("Read File");
+    expect(toolBlock.textContent ?? "").toContain("Read file");
     expect(toolBlock.textContent ?? "").not.toContain("local:read_file");
     // And the badge reports "Completed" for output-available.
     expect(toolBlock.textContent ?? "").toContain("Completed");
