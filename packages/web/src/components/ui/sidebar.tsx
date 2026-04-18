@@ -1,4 +1,4 @@
-// shadcn/ui — Sidebar.
+// shadcn/ui — Sidebar (Swarm design language).
 //
 // Vendored, slimmed-down adaptation of the canonical shadcn `sidebar`
 // primitive. The full upstream version ships ~600 lines covering
@@ -21,6 +21,52 @@
 // Keyboard: `⌘ + b` (mac) / `Ctrl + b` (everywhere else) toggles the
 // sidebar — wired in `SidebarProvider`. Same shortcut shadcn ships
 // upstream so existing muscle memory carries over.
+//
+// Skill citations (.swarm/skills/design/SKILL.md):
+//   § Color               — only --sw-* tokens. shadcn aliases
+//                           (bg-sidebar, text-sidebar-foreground,
+//                           bg-sidebar-accent, bg-sidebar-accent-fg,
+//                           border-sidebar-border, ring-sidebar-ring,
+//                           bg-background) replaced. Active-row
+//                           highlight uses --sw-bg (one-notch contrast
+//                           against the --sw-surface rail), matching
+//                           dropdown/select/command. Accent state
+//                           tokens are *not* used for nav selection —
+//                           "Accents reserved for state — not branding".
+//   § Themes              — both light + dark resolve through the same
+//                           --sw-* tokens; no auto-inversion, no
+//                           opacity-tinted colors (text-…/70 dropped
+//                           in favour of --sw-muted).
+//   § Borders & elevation — "1px only"; "Radius: 2px default … 0px
+//                           for table rows and dense stacks". Nav rows
+//                           are a dense stack, so menu buttons +
+//                           group labels use --sw-radius-default (2px).
+//                           No box-shadow anywhere (global reset).
+//   § Layout              — rail separator is a 1px hairline
+//                           (--sw-border) — never a background shade.
+//                           Padding snaps to --sw-space-* tokens.
+//   § Typography          — sizes from --sw-text-* scale. Group label
+//                           tier is xs (11px) muted UPPERCASE +
+//                           0.06em tracking — the one place tracking
+//                           is permitted. Active row is differentiated
+//                           by weight (500) + subtle bg, not size.
+//   § Spacing             — token scale only (4/8/12). gap-1/2,
+//                           p-2, mx-2 mapped to --sw-space-1/2.
+//   § Motion              — width morph and label fade use
+//                           --sw-duration-enter (200ms) ease-out per
+//                           the "Drawer / panel enter-exit" Motion
+//                           table row — *not* `linear` (which the
+//                           skill reserves for constant-motion
+//                           indicators, "never for color"). Color +
+//                           bg shifts on hover use --sw-duration-hover
+//                           (120ms ease). The off-spec
+//                           transition-[width,height,padding] on
+//                           menu rows is dropped: the only animated
+//                           property is the rail's `width`, which
+//                           covers the visual change, and
+//                           "Animations touch only `transform` and
+//                           `opacity`" leaves padding/height jumps
+//                           instantaneous.
 
 "use client";
 
@@ -129,7 +175,7 @@ export function SidebarProvider({
               ...style,
             } as React.CSSProperties
           }
-          className={cn("group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar", className)}
+          className={cn("group/sidebar-wrapper flex min-h-svh w-full bg-[var(--sw-bg)]", className)}
           {...props}
         >
           {children}
@@ -159,7 +205,16 @@ export function Sidebar({ collapsible = "icon", className, children, ...props }:
         // Width animates between full and icon-only widths driven by
         // CSS variables defined on the wrapper. Hidden overflow keeps
         // labels from spilling during the transition.
-        "group/sidebar relative flex h-svh shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border transition-[width] duration-200 ease-linear",
+        // Surface = --sw-surface (one notch off bg, the standard panel
+        // tone). Hairline right edge — "sections separated by a
+        // hairline" (§ Layout).
+        "group/sidebar relative flex h-svh shrink-0 flex-col",
+        "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+        "border-r border-[var(--sw-border)]",
+        // Motion: 200ms ease-out (§ Motion, Drawer / panel enter-exit).
+        // Replaces `ease-linear`, which the skill reserves for constant-
+        // motion indicators only.
+        "transition-[width] duration-[var(--sw-duration-enter)] ease-out",
         collapsible === "none"
           ? "w-(--sidebar-width)"
           : state === "expanded"
@@ -205,7 +260,13 @@ export function SidebarRail({ className, ...props }: React.ComponentProps<"butto
       onClick={toggleSidebar}
       title="Toggle sidebar"
       className={cn(
-        "absolute inset-y-0 right-0 z-20 hidden w-2 -translate-x-1/2 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-px hover:after:bg-sidebar-border sm:flex",
+        // Hairline drag-handle. Hover surfaces the 1px line in
+        // --sw-border. No `transition-all ease-linear` — only the
+        // hover color shift is animated, at --sw-duration-hover.
+        "absolute inset-y-0 right-0 z-20 hidden w-2 -translate-x-1/2 sm:flex",
+        "after:absolute after:inset-y-0 after:left-1/2 after:w-px",
+        "after:transition-colors after:duration-[var(--sw-duration-hover)] after:ease-[ease]",
+        "hover:after:bg-[var(--sw-border)]",
         className,
       )}
       {...props}
@@ -217,23 +278,39 @@ export function SidebarInset({ className, ...props }: React.ComponentProps<"main
   return (
     <main
       data-slot="sidebar-inset"
-      className={cn("relative flex min-h-svh flex-1 flex-col bg-background", className)}
+      className={cn("relative flex min-h-svh flex-1 flex-col bg-[var(--sw-bg)]", className)}
       {...props}
     />
   );
 }
 
 export function SidebarHeader({ className, ...props }: React.ComponentProps<"div">): JSX.Element {
-  return <div data-slot="sidebar-header" className={cn("flex flex-col gap-2 p-2", className)} {...props} />;
+  return (
+    <div
+      data-slot="sidebar-header"
+      className={cn("flex flex-col gap-[var(--sw-space-2)] p-[var(--sw-space-2)]", className)}
+      {...props}
+    />
+  );
 }
 
 export function SidebarFooter({ className, ...props }: React.ComponentProps<"div">): JSX.Element {
-  return <div data-slot="sidebar-footer" className={cn("mt-auto flex flex-col gap-2 p-2", className)} {...props} />;
+  return (
+    <div
+      data-slot="sidebar-footer"
+      className={cn("mt-auto flex flex-col gap-[var(--sw-space-2)] p-[var(--sw-space-2)]", className)}
+      {...props}
+    />
+  );
 }
 
 export function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof Separator>): JSX.Element {
   return (
-    <Separator data-slot="sidebar-separator" className={cn("mx-2 w-auto bg-sidebar-border", className)} {...props} />
+    <Separator
+      data-slot="sidebar-separator"
+      className={cn("mx-[var(--sw-space-2)] w-auto bg-[var(--sw-border)]", className)}
+      {...props}
+    />
   );
 }
 
@@ -242,7 +319,8 @@ export function SidebarContent({ className, ...props }: React.ComponentProps<"di
     <div
       data-slot="sidebar-content"
       className={cn(
-        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]/sidebar:overflow-hidden",
+        "flex min-h-0 flex-1 flex-col gap-[var(--sw-space-2)] overflow-auto",
+        "group-data-[collapsible=icon]/sidebar:overflow-hidden",
         className,
       )}
       {...props}
@@ -252,7 +330,11 @@ export function SidebarContent({ className, ...props }: React.ComponentProps<"di
 
 export function SidebarGroup({ className, ...props }: React.ComponentProps<"div">): JSX.Element {
   return (
-    <div data-slot="sidebar-group" className={cn("relative flex w-full min-w-0 flex-col p-2", className)} {...props} />
+    <div
+      data-slot="sidebar-group"
+      className={cn("relative flex w-full min-w-0 flex-col p-[var(--sw-space-2)]", className)}
+      {...props}
+    />
   );
 }
 
@@ -261,7 +343,18 @@ export function SidebarGroupLabel({ className, ...props }: React.ComponentProps<
     <div
       data-slot="sidebar-group-label"
       className={cn(
-        "flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 outline-none transition-[margin,opacity] duration-200 ease-linear group-data-[collapsible=icon]/sidebar:-mt-8 group-data-[collapsible=icon]/sidebar:opacity-0",
+        // Group label tier — UPPERCASE + 0.06em tracking + muted, the
+        // one place tracking is permitted (§ Typography, "section
+        // labels and column headers"). Matches dropdown/select/command.
+        "flex h-8 shrink-0 items-center px-[var(--sw-space-2)] outline-none",
+        "text-[length:var(--sw-text-xs)] font-medium uppercase tracking-[0.06em]",
+        "text-[var(--sw-muted)]",
+        "rounded-[var(--sw-radius-default)]",
+        // Collapse: fade out to 0 + slide above the cell. 200ms
+        // ease-in-out per the on-screen morph row of the Motion table
+        // (replaces ease-linear).
+        "transition-[margin,opacity] duration-[var(--sw-duration-enter)] ease-in-out",
+        "group-data-[collapsible=icon]/sidebar:-mt-8 group-data-[collapsible=icon]/sidebar:opacity-0",
         className,
       )}
       {...props}
@@ -270,11 +363,23 @@ export function SidebarGroupLabel({ className, ...props }: React.ComponentProps<
 }
 
 export function SidebarGroupContent({ className, ...props }: React.ComponentProps<"div">): JSX.Element {
-  return <div data-slot="sidebar-group-content" className={cn("w-full text-sm", className)} {...props} />;
+  return (
+    <div
+      data-slot="sidebar-group-content"
+      className={cn("w-full text-[length:var(--sw-text-sm)]", className)}
+      {...props}
+    />
+  );
 }
 
 export function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">): JSX.Element {
-  return <ul data-slot="sidebar-menu" className={cn("flex w-full min-w-0 flex-col gap-1", className)} {...props} />;
+  return (
+    <ul
+      data-slot="sidebar-menu"
+      className={cn("flex w-full min-w-0 flex-col gap-[var(--sw-space-1)]", className)}
+      {...props}
+    />
+  );
 }
 
 export function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">): JSX.Element {
@@ -282,7 +387,34 @@ export function SidebarMenuItem({ className, ...props }: React.ComponentProps<"l
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground group-data-[collapsible=icon]/sidebar:size-8! group-data-[collapsible=icon]/sidebar:p-2! [&>svg]:size-4 [&>svg]:shrink-0",
+  cn(
+    // structure
+    "peer/menu-button flex w-full items-center select-none outline-none",
+    "gap-[var(--sw-space-2)] p-[var(--sw-space-2)]",
+    "text-left text-[length:var(--sw-text-sm)]",
+    // 2px default radius — nav rows are a dense stack, not a card.
+    "rounded-[var(--sw-radius-default)]",
+    // Hover/focus: --sw-bg gives one-notch contrast against the
+    // surrounding --sw-surface rail (matches dropdown/select/command).
+    // 120ms ease color shift per § Motion.
+    "transition-[background-color,color] duration-[var(--sw-duration-hover)] ease-[ease]",
+    "hover:bg-[var(--sw-bg)] hover:text-[var(--sw-text)]",
+    "focus-visible:ring-1 focus-visible:ring-[var(--sw-border)]",
+    "active:bg-[var(--sw-bg)] active:text-[var(--sw-text)]",
+    // Disabled
+    "disabled:pointer-events-none disabled:opacity-50",
+    "aria-disabled:pointer-events-none aria-disabled:opacity-50",
+    // Active row — selection state, NOT a status accent. Weight 500 +
+    // subtle --sw-bg fill is the discriminator (§ Typography:
+    // "Hierarchy via weight, case, and spacing — never size jumps").
+    "data-[active=true]:bg-[var(--sw-bg)] data-[active=true]:text-[var(--sw-text)]",
+    "data-[active=true]:font-medium",
+    // Collapsed rail: square 32px hit target, no padding overrides.
+    "group-data-[collapsible=icon]/sidebar:size-8! group-data-[collapsible=icon]/sidebar:p-[var(--sw-space-2)]!",
+    // Icon sizing — neutral, no decorative tint.
+    "[&>svg]:size-4 [&>svg]:shrink-0",
+    "overflow-hidden",
+  ),
   {
     variants: {
       variant: {
@@ -290,7 +422,7 @@ const sidebarMenuButtonVariants = cva(
       },
       size: {
         default: "h-8",
-        sm: "h-7 text-xs",
+        sm: "h-7 text-[length:var(--sw-text-xs)]",
       },
     },
     defaultVariants: { variant: "default", size: "default" },
