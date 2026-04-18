@@ -1,5 +1,31 @@
 "use client";
 
+/*
+ * Message — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Layout              — "sections separated by a hairline — never by a
+ *                           different background shade". The user bubble
+ *                           rides on `--sw-surface` + 1px `--sw-border`
+ *                           hairline rather than a darker shade.
+ *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers" — bubble
+ *                           uses `--sw-radius-card` (4px). No `box-shadow`
+ *                           anywhere; the legacy `shadow-none` defensive
+ *                           override on `MessageBranchPage` was removed.
+ *   § Spacing             — "These steps only — no arbitrary px" — every
+ *                           gap/padding/margin maps to a `--sw-space-*`
+ *                           token. The arbitrary `max-w-[95%]` cap was
+ *                           removed; width is the parent container's job.
+ *   § Typography          — monospace voice (inherited), `--sw-text-sm`
+ *                           (12px) for body, tabular-nums global.
+ *   § Color               — `--sw-surface`, `--sw-text`, `--sw-muted`,
+ *                           `--sw-border`. No legacy `bg-secondary` /
+ *                           `text-foreground` aliases.
+ *
+ * Behaviour preserved: branch context, memoised `MessageResponse`,
+ * Streamdown plugins, every exported prop type and slot.
+ */
+
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
@@ -21,7 +47,7 @@ export type MessageProps = HTMLAttributes<HTMLDivElement> & {
 export const Message = ({ className, from, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full max-w-[95%] flex-col gap-2",
+      "group flex w-full flex-col gap-[var(--sw-space-2)]",
       from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
       className,
     )}
@@ -34,9 +60,14 @@ export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
 export const MessageContent = ({ children, className, ...props }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm",
-      "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
-      "group-[.is-assistant]:text-foreground",
+      "flex w-fit min-w-0 max-w-full flex-col gap-[var(--sw-space-2)] overflow-hidden",
+      "text-[length:var(--sw-text-sm)] text-[var(--sw-text)]",
+      // User bubble: hairline-on-surface, never a darker shade.
+      "group-[.is-user]:ml-auto",
+      "group-[.is-user]:rounded-[var(--sw-radius-card)]",
+      "group-[.is-user]:border group-[.is-user]:border-[var(--sw-border)]",
+      "group-[.is-user]:bg-[var(--sw-surface)]",
+      "group-[.is-user]:px-[var(--sw-space-3)] group-[.is-user]:py-[var(--sw-space-2)]",
       className,
     )}
     {...props}
@@ -48,7 +79,7 @@ export const MessageContent = ({ children, className, ...props }: MessageContent
 export type MessageActionsProps = ComponentProps<"div">;
 
 export const MessageActions = ({ className, children, ...props }: MessageActionsProps) => (
-  <div className={cn("flex items-center gap-1", className)} {...props}>
+  <div className={cn("flex items-center gap-[var(--sw-space-1)]", className)} {...props}>
     {children}
   </div>
 );
@@ -151,7 +182,7 @@ export const MessageBranch = ({ defaultBranch = 0, onBranchChange, className, ..
 
   return (
     <MessageBranchContext.Provider value={contextValue}>
-      <div className={cn("grid w-full gap-2 [&>div]:pb-0", className)} {...props} />
+      <div className={cn("grid w-full gap-[var(--sw-space-2)] [&>div]:pb-0", className)} {...props} />
     </MessageBranchContext.Provider>
   );
 };
@@ -171,7 +202,10 @@ export const MessageBranchContent = ({ children, ...props }: MessageBranchConten
 
   return childrenArray.map((branch, index) => (
     <div
-      className={cn("grid gap-2 overflow-hidden [&>div]:pb-0", index === currentBranch ? "block" : "hidden")}
+      className={cn(
+        "grid gap-[var(--sw-space-2)] overflow-hidden [&>div]:pb-0",
+        index === currentBranch ? "block" : "hidden",
+      )}
       key={branch.key}
       {...props}
     >
@@ -190,13 +224,9 @@ export const MessageBranchSelector = ({ className, ...props }: MessageBranchSele
     return null;
   }
 
-  return (
-    <ButtonGroup
-      className={cn("[&>*:not(:first-child)]:rounded-l-md [&>*:not(:last-child)]:rounded-r-md", className)}
-      orientation="horizontal"
-      {...props}
-    />
-  );
+  // ButtonGroup already snaps adjacent corners to --sw-radius-default;
+  // no per-child rounding override is needed (or wanted).
+  return <ButtonGroup className={className} orientation="horizontal" {...props} />;
 };
 
 export type MessageBranchPreviousProps = ComponentProps<typeof Button>;
@@ -246,7 +276,7 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
 
   return (
     <ButtonGroupText
-      className={cn("border-none bg-transparent text-muted-foreground shadow-none", className)}
+      className={cn("border-none bg-transparent text-[var(--sw-muted)]", className)}
       {...props}
     >
       {currentBranch + 1} of {totalBranches}
@@ -275,7 +305,13 @@ MessageResponse.displayName = "MessageResponse";
 export type MessageToolbarProps = ComponentProps<"div">;
 
 export const MessageToolbar = ({ className, children, ...props }: MessageToolbarProps) => (
-  <div className={cn("mt-4 flex w-full items-center justify-between gap-4", className)} {...props}>
+  <div
+    className={cn(
+      "mt-[var(--sw-space-4)] flex w-full items-center justify-between gap-[var(--sw-space-3)]",
+      className,
+    )}
+    {...props}
+  >
     {children}
   </div>
 );
