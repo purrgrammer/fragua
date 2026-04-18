@@ -2,13 +2,51 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
+/*
+ * Card — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Borders & elevation — "1px only, `border` token", "Radius … 4px
+ *                           cards/drawers", "Elevation: none". A ring is
+ *                           an offset outline (shadow-flavoured); we use
+ *                           a hairline border instead.
+ *   § Layout              — "Consistent padding inside every cell —
+ *                           spacing.3 for a status card and a log card
+ *                           alike. Don't vary by 'importance.'" Padding
+ *                           snaps to --sw-space-3.
+ *   § Typography          — monospace only; hierarchy via weight/case,
+ *                           never size jumps. Title is sentence-case at
+ *                           the default body size, weight 500. The size
+ *                           variant adjusts padding only — never type.
+ *   § Color               — only --sw-* tokens; surfaces nearly
+ *                           indistinguishable from bg.
+ *   § Anti-pattern        — "Background shade for hierarchy → same
+ *                           surface, hairline." Footer keeps the card
+ *                           surface; separation is a top hairline only.
+ *
+ * Behavioural API (slots, size variant, props passthrough) preserved.
+ */
+
 function Card({ className, size = "default", ...props }: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
   return (
     <div
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // structure: bento cell, content-driven height
+        "group/card flex flex-col overflow-hidden",
+        // surface + hairline (no ring, no shadow)
+        "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+        "border border-[var(--sw-border)] rounded-[var(--sw-radius-card)]",
+        // padding & gap — spacing.3 default, .2 for sm; consistent across slots
+        "py-[var(--sw-space-3)] gap-[var(--sw-space-3)]",
+        "data-[size=sm]:py-[var(--sw-space-2)] data-[size=sm]:gap-[var(--sw-space-2)]",
+        // footer flush-bottom when present (border-t handles separation)
+        "has-data-[slot=card-footer]:pb-0",
+        // image edges follow card radius
+        "has-[>img:first-child]:pt-0",
+        "*:[img:first-child]:rounded-t-[var(--sw-radius-card)]",
+        "*:[img:last-child]:rounded-b-[var(--sw-radius-card)]",
         className,
       )}
       {...props}
@@ -21,7 +59,12 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl px-4 group-data-[size=sm]/card:px-3 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-4 group-data-[size=sm]/card:[.border-b]:pb-3",
+        "group/card-header @container/card-header grid auto-rows-min items-start",
+        "gap-[var(--sw-space-1)]",
+        "px-[var(--sw-space-3)]",
+        "has-data-[slot=card-action]:grid-cols-[1fr_auto]",
+        "has-data-[slot=card-description]:grid-rows-[auto_auto]",
+        "[.border-b]:pb-[var(--sw-space-3)] [.border-b]:border-[var(--sw-border)]",
         className,
       )}
       {...props}
@@ -33,14 +76,22 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn("font-heading text-base leading-snug font-medium group-data-[size=sm]/card:text-sm", className)}
+      // monospace inherited; weight 500 carries the heading. No size jump
+      // between default and sm — hierarchy via weight + case, not size.
+      className={cn("font-medium leading-[1.2] text-[var(--sw-text)]", className)}
       {...props}
     />
   );
 }
 
 function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="card-description" className={cn("text-sm text-muted-foreground", className)} {...props} />;
+  return (
+    <div
+      data-slot="card-description"
+      className={cn("text-[var(--sw-muted)]", className)}
+      {...props}
+    />
+  );
 }
 
 function CardAction({ className, ...props }: React.ComponentProps<"div">) {
@@ -54,14 +105,28 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function CardContent({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="card-content" className={cn("px-4 group-data-[size=sm]/card:px-3", className)} {...props} />;
+  return (
+    <div
+      data-slot="card-content"
+      className={cn("px-[var(--sw-space-3)]", className)}
+      {...props}
+    />
+  );
 }
 
 function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
-      className={cn("flex items-center rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/card:p-3", className)}
+      // Same surface as card; separation is the top hairline only — no
+      // background-shade hierarchy. Padding consistent with body cells.
+      className={cn(
+        "flex items-center",
+        "border-t border-[var(--sw-border)]",
+        "px-[var(--sw-space-3)] py-[var(--sw-space-3)]",
+        "group-data-[size=sm]/card:px-[var(--sw-space-2)] group-data-[size=sm]/card:py-[var(--sw-space-2)]",
+        className,
+      )}
       {...props}
     />
   );

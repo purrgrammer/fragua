@@ -10,7 +10,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 
 ## UI Primitives (shared)
 - [x] packages/web/src/components/ui/button.tsx
-- [ ] packages/web/src/components/ui/card.tsx
+- [x] packages/web/src/components/ui/card.tsx
 - [ ] packages/web/src/components/ui/badge.tsx
 - [ ] packages/web/src/components/ui/separator.tsx
 - [ ] packages/web/src/components/ui/input.tsx
