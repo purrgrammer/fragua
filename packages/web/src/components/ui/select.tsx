@@ -3,12 +3,66 @@ import { Select as SelectPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
+/*
+ * Select — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Color               — only --sw-* tokens. shadcn aliases
+ *                           (bg-popover, bg-accent, border-input,
+ *                           bg-input, border-destructive, ring-destructive,
+ *                           text-muted-foreground) replaced. Selection
+ *                           highlight uses --sw-bg (one-notch contrast
+ *                           against the --sw-surface popover), matching
+ *                           command.tsx.
+ *   § Themes              — "every token has both values, both
+ *                           intentionally designed, not auto-inverted."
+ *                           dark:bg-input/30 / dark:hover:bg-input/50
+ *                           opacity-fades removed; both themes resolve
+ *                           via the same --sw-* variables.
+ *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers";
+ *                           "Elevation: none. No box-shadow"; "1px only".
+ *                           rounded-lg / rounded-md / shadow-md /
+ *                           ring-1 ring-foreground/10 / ring-3 focus +
+ *                           aria-invalid rings all replaced with hairline
+ *                           border + --sw-radius-* tokens. Focus is a
+ *                           border-color swap (Motion: "Focus ring —
+ *                           Instant").
+ *   § Layout              — separator is a 1px hairline (--sw-border),
+ *                           not a tinted band.
+ *   § Typography          — sizes from --sw-text-* scale. Item label is
+ *                           sm (12px) body; group label is xs (11px) +
+ *                           muted, the only place UPPERCASE+0.06em
+ *                           tracking is permitted (matches command.tsx).
+ *   § Spacing             — token scale only (4/8/12). Off-scale py-2,
+ *                           pr-2, pl-2.5, gap-1.5, px-1.5, py-1, pr-8,
+ *                           p-1, my-1, -mx-1 replaced with --sw-space-*.
+ *                           Trigger heights (h-7=28px, h-8=32px) are on
+ *                           the 4px grid and preserved.
+ *   § Motion              — color/background transitions only, 120ms
+ *                           ease via --sw-duration-hover. Decorative
+ *                           radix zoom + multi-axis slide enter/exit
+ *                           reduced to a single fade at
+ *                           --sw-duration-enter (200ms ease-out per
+ *                           Motion table: "Drawer / panel enter-exit").
+ *
+ * Behavioural API preserved (Select, SelectGroup, SelectValue,
+ * SelectTrigger w/ size, SelectContent w/ position+align,
+ * SelectLabel, SelectItem, SelectSeparator,
+ * SelectScrollUpButton, SelectScrollDownButton).
+ */
+
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }
 
 function SelectGroup({ className, ...props }: React.ComponentProps<typeof SelectPrimitive.Group>) {
-  return <SelectPrimitive.Group data-slot="select-group" className={cn("scroll-my-1 p-1", className)} {...props} />;
+  return (
+    <SelectPrimitive.Group
+      data-slot="select-group"
+      className={cn("scroll-my-[var(--sw-space-1)] p-[var(--sw-space-1)]", className)}
+      {...props}
+    />
+  );
 }
 
 function SelectValue({ ...props }: React.ComponentProps<typeof SelectPrimitive.Value>) {
@@ -28,14 +82,44 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-[min(var(--radius-md),10px)] *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        // structure
+        "flex w-fit items-center justify-between whitespace-nowrap select-none outline-none",
+        "gap-[var(--sw-space-2)]",
+        "px-[var(--sw-space-2)] py-[var(--sw-space-1)]",
+        // surface — same paper/ink as inputs; both themes designed.
+        "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+        // hairline border, default radius (2px).
+        "border border-[var(--sw-border)] rounded-[var(--sw-radius-default)]",
+        // body: sm (12px), monospace inherited.
+        "text-[length:var(--sw-text-sm)]",
+        // sizes — both heights live on the 4px grid (28px / 32px).
+        "data-[size=default]:h-8 data-[size=sm]:h-7",
+        // motion: 120ms color/border fade only.
+        "transition-[background-color,color,border-color]",
+        "duration-[var(--sw-duration-hover)] ease-[ease]",
+        // focus: hairline border swap to text token (Motion: focus is
+        // instant, no ring).
+        "focus-visible:border-[var(--sw-text)]",
+        // disabled
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        // invalid: hairline color shift to error accent — no ring.
+        "aria-invalid:border-[var(--sw-accent-error)]",
+        // placeholder text dims to muted.
+        "data-placeholder:text-[var(--sw-muted)]",
+        // value slot layout
+        "*:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex",
+        "*:data-[slot=select-value]:items-center",
+        "*:data-[slot=select-value]:gap-[var(--sw-space-2)]",
+        // svg sizing — neutral, no decorative tint.
+        "[&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "[&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
+        <ChevronDownIcon className="pointer-events-none size-4 text-[var(--sw-muted)]" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -54,9 +138,20 @@ function SelectContent({
         data-slot="select-content"
         data-align-trigger={position === "item-aligned"}
         className={cn(
-          "relative z-50 max-h-(--radix-select-content-available-height) min-w-36 origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          position === "popper" &&
-            "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+          // structure
+          "relative z-50 min-w-36 overflow-x-hidden overflow-y-auto",
+          "max-h-(--radix-select-content-available-height)",
+          "origin-(--radix-select-content-transform-origin)",
+          // surface + hairline + card radius (4px).
+          "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+          "border border-[var(--sw-border)] rounded-[var(--sw-radius-card)]",
+          // motion: enter/exit is a single fade (opacity only),
+          // 200ms ease-out per Motion table. Decorative zoom + multi-
+          // axis slide dropped.
+          "duration-[var(--sw-duration-enter)] ease-out",
+          "data-[align-trigger=true]:animate-none",
+          "data-open:animate-in data-open:fade-in-0",
+          "data-closed:animate-out data-closed:fade-out-0",
           className,
         )}
         position={position}
@@ -67,8 +162,9 @@ function SelectContent({
         <SelectPrimitive.Viewport
           data-position={position}
           className={cn(
-            "data-[position=popper]:h-(--radix-select-trigger-height) data-[position=popper]:w-full data-[position=popper]:min-w-(--radix-select-trigger-width)",
-            position === "popper" && "",
+            "data-[position=popper]:h-(--radix-select-trigger-height)",
+            "data-[position=popper]:w-full",
+            "data-[position=popper]:min-w-(--radix-select-trigger-width)",
           )}
         >
           {children}
@@ -83,7 +179,14 @@ function SelectLabel({ className, ...props }: React.ComponentProps<typeof Select
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn("px-1.5 py-1 text-xs text-muted-foreground", className)}
+      className={cn(
+        // Group label tier — UPPERCASE + ~0.06em tracking is the one
+        // place letter-spacing is permitted (§ Typography).
+        "px-[var(--sw-space-2)] py-[var(--sw-space-1)]",
+        "text-[length:var(--sw-text-xs)] font-medium uppercase tracking-[0.06em]",
+        "text-[var(--sw-muted)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -94,12 +197,33 @@ function SelectItem({ className, children, ...props }: React.ComponentProps<type
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        // structure
+        "relative flex w-full cursor-default items-center select-none outline-hidden",
+        "gap-[var(--sw-space-2)]",
+        "px-[var(--sw-space-2)] py-[var(--sw-space-1)] pr-[var(--sw-space-6)]",
+        // default radius (2px).
+        "rounded-[var(--sw-radius-default)]",
+        // body
+        "text-[length:var(--sw-text-sm)]",
+        // selection highlight — --sw-bg gives one-notch contrast against
+        // the surrounding --sw-surface popover (matches command.tsx).
+        "focus:bg-[var(--sw-bg)] focus:text-[var(--sw-text)]",
+        // disabled
+        "data-disabled:pointer-events-none data-disabled:opacity-50",
+        // motion: 120ms color fade on focus/hover (§ Motion).
+        "transition-[background-color,color]",
+        "duration-[var(--sw-duration-hover)] ease-[ease]",
+        // svg sizing
+        "[&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "[&_svg:not([class*='size-'])]:size-4",
+        // last span (value group) layout
+        "*:[span]:last:flex *:[span]:last:items-center",
+        "*:[span]:last:gap-[var(--sw-space-2)]",
         className,
       )}
       {...props}
     >
-      <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center">
+      <span className="pointer-events-none absolute right-[var(--sw-space-2)] flex size-4 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
           <CheckIcon className="pointer-events-none" />
         </SelectPrimitive.ItemIndicator>
@@ -113,7 +237,13 @@ function SelectSeparator({ className, ...props }: React.ComponentProps<typeof Se
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn("pointer-events-none -mx-1 my-1 h-px bg-border", className)}
+      className={cn(
+        // Hairline section break (§ Layout: "sections separated by a
+        // hairline").
+        "pointer-events-none h-px bg-[var(--sw-border)]",
+        "-mx-[var(--sw-space-1)] my-[var(--sw-space-1)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -124,7 +254,10 @@ function SelectScrollUpButton({ className, ...props }: React.ComponentProps<type
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center",
+        "py-[var(--sw-space-1)]",
+        "bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+        "[&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}
@@ -142,7 +275,10 @@ function SelectScrollDownButton({
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center",
+        "py-[var(--sw-space-1)]",
+        "bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+        "[&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}
