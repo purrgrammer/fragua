@@ -134,11 +134,14 @@ describe("PipelinesList", () => {
     expect(hrefs).toContain("/pipelines/r1");
     expect(hrefs).toContain("/pipelines/r2");
 
-    // Workflow is rendered inside a Badge (muted variant → slate classes).
+    // Workflow is rendered inside a Badge (muted variant). The design system
+    // uses --sw-* tokens instead of Tailwind palette literals, so we assert
+    // on the semantic data-variant attribute rather than a bg-* class name
+    // (SKILL.md § Color: "no hex literals — theme tokens only").
     const wfA = q.getByText("wf-A");
-    expect(wfA.className).toContain("bg-slate-100");
+    expect(wfA.getAttribute("data-variant")).toBe("muted");
     const wfB = q.getByText("wf-B");
-    expect(wfB.className).toContain("bg-slate-100");
+    expect(wfB.getAttribute("data-variant")).toBe("muted");
 
     // One StatusPill per row.
     expect(q.getByTestId("status-success")).toBeTruthy();
@@ -172,10 +175,11 @@ describe("PipelinesList", () => {
     });
 
     // The workflow cell exists (the <td> is always rendered for alignment)
-    // but it contains no muted-badge span.
+    // but it contains no muted-badge span. Assert via data-variant rather
+    // than a Tailwind class name (SKILL.md § Color: "theme tokens only").
     const titleLink = q.getByText("Ad-hoc run").closest("a") as HTMLElement;
     const tr = titleLink.closest("tr") as HTMLElement;
-    const badgesInRow = tr.querySelectorAll("span.bg-slate-100");
+    const badgesInRow = tr.querySelectorAll('span[data-variant="muted"]');
     expect(badgesInRow.length).toBe(0);
   });
 
