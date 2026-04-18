@@ -41,7 +41,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 - [x] packages/web/src/components/ai-elements/message.tsx
 - [x] packages/web/src/components/ai-elements/reasoning.tsx
 - [x] packages/web/src/components/ai-elements/suggestion.tsx
-- [ ] packages/web/src/components/ai-elements/tool.tsx
+- [x] packages/web/src/components/ai-elements/tool.tsx
 - [ ] packages/web/src/components/ai-elements/toolbar.tsx
 - [ ] packages/web/src/components/ai-elements/controls.tsx
 - [ ] packages/web/src/components/ai-elements/prompt-input.tsx

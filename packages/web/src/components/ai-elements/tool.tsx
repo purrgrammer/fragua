@@ -26,10 +26,46 @@ import { cn } from "@/lib/utils";
 
 import { CodeBlock } from "./code-block";
 
+/*
+ * Swarm design language — tool / tool-call card
+ *
+ *   § Color           — state colours mapped to `--sw-accent-*` tokens
+ *                       (success / error / warn / thinking / idle). The
+ *                       previous Tailwind palette literals (`text-yellow-600`,
+ *                       `text-green-600`, …) were brand colours, not state
+ *                       tokens, and broke "no hex literals — theme tokens
+ *                       only".
+ *   § Borders         — outer card uses `--sw-radius-card` (4px); the input /
+ *                       output panels switch from `bg-muted/50` background-
+ *                       shade hierarchy to a hairline on `--sw-surface`
+ *                       ("sections separated by a hairline — never by a
+ *                       different background shade").
+ *   § Typography      — sizes via `--sw-text-*`; section labels keep their
+ *                       UPPERCASE form with `0.06em` letter-spacing per the
+ *                       skill. Built-in tool labels are now Sentence case
+ *                       ("Read file", not "Read File") — the skill is
+ *                       explicit: "Never Title Case."
+ *   § Spacing         — paddings, gaps and stack rhythm snap to
+ *                       `--sw-space-*` tokens.
+ *   § Motion          — the running indicator uses the global `.sw-pulse`
+ *                       (1800ms ease-in-out, prefers-reduced-motion-aware)
+ *                       instead of Tailwind's `animate-pulse` (linear, no
+ *                       reduced-motion fallback).
+ */
+
 export type ToolProps = ComponentProps<typeof Collapsible>;
 
 export const Tool = ({ className, ...props }: ToolProps) => (
-  <Collapsible className={cn("group not-prose mb-4 w-full rounded-md border", className)} {...props} />
+  <Collapsible
+    className={cn(
+      "group not-prose w-full",
+      "mb-[var(--sw-space-4)]",
+      "rounded-[var(--sw-radius-card)] border border-[var(--sw-border)]",
+      "bg-[var(--sw-surface)]",
+      className,
+    )}
+    {...props}
+  />
 );
 
 export type ToolPart = ToolUIPart | DynamicToolUIPart;
@@ -47,7 +83,8 @@ export type ToolHeaderProps = {
 );
 
 const statusLabels: Record<ToolPart["state"], string> = {
-  "approval-requested": "Awaiting Approval",
+  // Sentence case only (skill: "Never Title Case anywhere.").
+  "approval-requested": "Awaiting approval",
   "approval-responded": "Responded",
   "input-available": "Running",
   "input-streaming": "Pending",
@@ -56,18 +93,50 @@ const statusLabels: Record<ToolPart["state"], string> = {
   "output-error": "Error",
 };
 
+// Icons carry state colour via `--sw-accent-*` tokens — no Tailwind palette
+// literals. The "running" icon pulses via the global `.sw-pulse` utility,
+// which honours `prefers-reduced-motion` and uses ease-in-out at 1800ms.
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
-  "approval-requested": <ClockIcon className="size-4 text-yellow-600" />,
-  "approval-responded": <CheckCircleIcon className="size-4 text-violet-600" />,
-  "input-available": <ClockIcon className="size-4 animate-pulse" />,
-  "input-streaming": <CircleIcon className="size-4" />,
-  "output-available": <CheckCircleIcon className="size-4 text-green-600" />,
-  "output-denied": <XCircleIcon className="size-4 text-orange-600" />,
-  "output-error": <XCircleIcon className="size-4 text-red-600" />,
+  "approval-requested": (
+    <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />
+  ),
+  "approval-responded": (
+    <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />
+  ),
+  "input-available": (
+    <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />
+  ),
+  "input-streaming": (
+    <CircleIcon className="size-4" style={{ color: "var(--sw-accent-idle)" }} />
+  ),
+  "output-available": (
+    <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />
+  ),
+  "output-denied": (
+    <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-warn)" }} />
+  ),
+  "output-error": (
+    <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-error)" }} />
+  ),
+};
+
+// Map state → Badge variant. Badge variants resolve to the same `--sw-accent-*`
+// tokens, so the dot/icon colour and the chip stay in sync without inversion.
+const statusVariants: Record<ToolPart["state"], "secondary" | "success" | "destructive" | "warning"> = {
+  "approval-requested": "warning",
+  "approval-responded": "success",
+  "input-available": "secondary",
+  "input-streaming": "secondary",
+  "output-available": "success",
+  "output-denied": "warning",
+  "output-error": "destructive",
 };
 
 export const getStatusBadge = (status: ToolPart["state"]) => (
-  <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
+  <Badge
+    className="gap-[var(--sw-space-1)]"
+    variant={statusVariants[status]}
+  >
     {statusIcons[status]}
     {statusLabels[status]}
   </Badge>
@@ -75,18 +144,19 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
 
 /** Built-in swarm tool registry — header icon + human-readable label,
  * keyed by canonical `domain:name` (see `packages/workspace/src/tools.ts`).
- * Unknown tools fall back to a generic wrench and a title-cased slug. */
+ * Unknown tools fall back to a generic wrench and a sentence-cased slug. */
 interface ToolPresentation {
   icon: LucideIcon;
   label: string;
 }
 
+// Sentence case (skill: "Never Title Case anywhere.").
 export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   "local:bash": { icon: TerminalIcon, label: "Bash" },
-  "local:read_file": { icon: FileTextIcon, label: "Read File" },
-  "local:write_file": { icon: FilePlusIcon, label: "Write File" },
-  "local:edit_file": { icon: PencilIcon, label: "Edit File" },
-  "local:list_dir": { icon: FolderIcon, label: "List Directory" },
+  "local:read_file": { icon: FileTextIcon, label: "Read file" },
+  "local:write_file": { icon: FilePlusIcon, label: "Write file" },
+  "local:edit_file": { icon: PencilIcon, label: "Edit file" },
+  "local:list_dir": { icon: FolderIcon, label: "List directory" },
   "local:glob": { icon: FileSearchIcon, label: "Glob" },
   "local:grep": { icon: SearchIcon, label: "Grep" },
   "local:subagent": { icon: BotIcon, label: "Subagent" },
@@ -110,16 +180,17 @@ function lookupTool(toolName: string | undefined): ToolPresentation | undefined 
   return undefined;
 }
 
-/** Title-case an unknown tool's name part so `custom:do_thing` renders
- * as "Do Thing" instead of leaking the raw slug. */
+/** Sentence-case an unknown tool's name part so `custom:do_thing` renders
+ * as "Do thing" instead of leaking the raw slug or producing Title Case
+ * (which the skill explicitly forbids). */
 function humanizeToolName(toolName: string): string {
   const stripped = toolName.replace(/^tool-/, "");
   const namePart = stripped.includes(":") ? stripped.split(":").slice(1).join(":") : stripped;
-  return namePart
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  const words = namePart.split(/[_\s]+/).filter(Boolean);
+  if (words.length === 0) return namePart;
+  const first = words[0] as string;
+  const rest = words.slice(1);
+  return [first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(), ...rest.map((w) => w.toLowerCase())].join(" ");
 }
 
 export const ToolHeader = ({ className, title, type, state, toolName, ...props }: ToolHeaderProps) => {
@@ -133,13 +204,23 @@ export const ToolHeader = ({ className, title, type, state, toolName, ...props }
   const label = entry?.label ?? humanizeToolName(raw);
 
   return (
-    <CollapsibleTrigger className={cn("flex w-full items-center justify-between gap-4 p-3", className)} {...props}>
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 text-muted-foreground" />
-        <span className="font-medium text-sm">{label}</span>
+    <CollapsibleTrigger
+      className={cn(
+        "flex w-full items-center justify-between",
+        "gap-[var(--sw-space-4)] p-[var(--sw-space-3)]",
+        className,
+      )}
+      {...props}
+    >
+      <div className="flex items-center gap-[var(--sw-space-2)]">
+        <Icon className="size-4" style={{ color: "var(--sw-muted)" }} />
+        <span className="font-medium text-[length:var(--sw-text-sm)]">{label}</span>
         {getStatusBadge(state)}
       </div>
-      <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      <ChevronDownIcon
+        className="size-4 transition-transform group-data-[state=open]:rotate-180"
+        style={{ color: "var(--sw-muted)" }}
+      />
     </CollapsibleTrigger>
   );
 };
@@ -149,7 +230,16 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-2 px-4 pt-2 pb-1 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+      // Drawer-like enter/exit: slide + fade, paired easing, ≤200ms.
+      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2",
+      "data-[state=open]:slide-in-from-top-2",
+      "data-[state=closed]:animate-out data-[state=open]:animate-in",
+      "outline-none",
+      // Hairline separates the disclosure from the header — no shade hierarchy.
+      "border-t border-[var(--sw-border)]",
+      "space-y-[var(--sw-space-3)]",
+      "px-[var(--sw-space-3)] py-[var(--sw-space-3)]",
+      "text-[var(--sw-text)]",
       className,
     )}
     {...props}
@@ -160,12 +250,20 @@ export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
 };
 
+// Section header style shared by Input/Output: UPPERCASE label with the
+// 0.06em letter-spacing the skill calls out for column / section labels.
+const SECTION_LABEL = cn(
+  "font-medium uppercase",
+  "text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
+  "tracking-[0.06em]",
+);
+
 export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
-  <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
-    <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Parameters</h4>
-    <div className="rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
-    </div>
+  <div className={cn("space-y-[var(--sw-space-2)] overflow-hidden", className)} {...props}>
+    <h4 className={SECTION_LABEL}>Parameters</h4>
+    {/* CodeBlock already renders its own hairline + surface — wrapping it in
+        another tinted background would create the shade-hierarchy anti-pattern. */}
+    <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
   </div>
 );
 
@@ -187,18 +285,33 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
     Output = <CodeBlock code={output} language="json" />;
   }
 
+  // Error state: tint the container with a low-chroma mix of the error
+  // accent (theme-aware, no opacity hack on a brand colour). Text uses the
+  // accent token directly so both themes stay legible without inversion.
   return (
-    <div className={cn("space-y-2", className)} {...props}>
-      <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        {errorText ? "Error" : "Result"}
-      </h4>
+    <div className={cn("space-y-[var(--sw-space-2)]", className)} {...props}>
+      <h4 className={SECTION_LABEL}>{errorText ? "Error" : "Result"}</h4>
       <div
         className={cn(
-          "overflow-x-auto rounded-md text-xs [&_table]:w-full",
-          errorText ? "bg-destructive/10 text-destructive" : "bg-muted/50 text-foreground",
+          "overflow-x-auto",
+          "rounded-[var(--sw-radius-default)] border",
+          "text-[length:var(--sw-text-xs)] [&_table]:w-full",
         )}
+        style={
+          errorText
+            ? {
+                borderColor: "color-mix(in oklch, var(--sw-accent-error) 30%, transparent)",
+                backgroundColor: "color-mix(in oklch, var(--sw-accent-error) 8%, transparent)",
+                color: "var(--sw-accent-error)",
+              }
+            : {
+                borderColor: "var(--sw-border)",
+                backgroundColor: "var(--sw-surface)",
+                color: "var(--sw-text)",
+              }
+        }
       >
-        {errorText && <div>{errorText}</div>}
+        {errorText && <div className="p-[var(--sw-space-3)]">{errorText}</div>}
         {Output}
       </div>
     </div>
