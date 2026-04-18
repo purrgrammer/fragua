@@ -4,6 +4,38 @@ import type * as React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+/*
+ * Dialog — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Color               — only --sw-* tokens. Surface is --sw-surface
+ *                           (one notch off bg, barely perceptible);
+ *                           overlay scrim derives from --sw-text so
+ *                           both themes get an explicit, designed dim.
+ *   § Borders & elevation — "Elevation: none. No box-shadow. Drawers
+ *                           separate via backdrop scrim + hairline."
+ *                           ring-1 (pseudo-shadow) → 1px hairline.
+ *                           Radius: --sw-radius-card (4px) for drawers.
+ *   § Layout              — "sections separated by a hairline — never
+ *                           by a different background shade." Footer
+ *                           drops bg-muted/50 in favor of a top hairline.
+ *   § Typography          — "Monospace only. Hierarchy via weight, case,
+ *                           and spacing — never size jumps." Title at
+ *                           md (15px) weight 500; description at sm.
+ *                           font-heading (sans) removed.
+ *   § Spacing             — token scale only: padding-4 (16px), gap-3,
+ *                           inset-2 for the close button.
+ *   § Motion              — enter/exit "Slide + fade (paired with scrim),
+ *                           200ms ease-out". Zoom removed — decorative;
+ *                           losing it loses no information. Only
+ *                           transform + opacity animated. Overlay and
+ *                           content share duration & easing (paired).
+ *
+ * Behavioural API (Root, Trigger, Portal, Close, Overlay, Content +
+ * showCloseButton, Header, Footer + showCloseButton, Title, Description)
+ * preserved.
+ */
+
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }
@@ -25,7 +57,20 @@ function DialogOverlay({ className, ...props }: React.ComponentProps<typeof Dial
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        [
+          // structure
+          "fixed inset-0 isolate z-50",
+
+          // scrim: --sw-text at low opacity reads as a designed dim in
+          // both themes (inverts naturally), no hex literal.
+          "bg-[var(--sw-text)]/10",
+          "supports-backdrop-filter:backdrop-blur-xs",
+
+          // motion: paired with content — 200ms ease-out, fade only
+          "duration-[var(--sw-duration-enter)] ease-out",
+          "data-open:animate-in data-open:fade-in-0",
+          "data-closed:animate-out data-closed:fade-out-0",
+        ].join(" "),
         className,
       )}
       {...props}
@@ -47,7 +92,29 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          [
+            // structure: centered, content-sized
+            "fixed top-1/2 left-1/2 z-50 grid -translate-x-1/2 -translate-y-1/2",
+            "w-full max-w-[calc(100%-2rem)] sm:max-w-sm",
+            "gap-[var(--sw-space-3)] p-[var(--sw-space-4)]",
+
+            // surface + hairline (no shadow, no ring elevation)
+            "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+            "border border-[var(--sw-border)]",
+            "rounded-[var(--sw-radius-card)]",
+
+            // typography: sm body (mono inherited)
+            "text-[length:var(--sw-text-sm)]",
+
+            // focus: outline already managed by primitive
+            "outline-none",
+
+            // motion: paired enter/exit — fade only. Zoom removed
+            // (decorative). Same easing/duration as overlay.
+            "duration-[var(--sw-duration-enter)] ease-out",
+            "data-open:animate-in data-open:fade-in-0",
+            "data-closed:animate-out data-closed:fade-out-0",
+          ].join(" "),
           className,
         )}
         {...props}
@@ -55,7 +122,11 @@ function DialogContent({
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
-            <Button variant="ghost" className="absolute top-2 right-2" size="icon-sm">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute top-[var(--sw-space-2)] right-[var(--sw-space-2)]"
+            >
               <XIcon />
               <span className="sr-only">Close</span>
             </Button>
@@ -67,7 +138,13 @@ function DialogContent({
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-header" className={cn("flex flex-col gap-2", className)} {...props} />;
+  return (
+    <div
+      data-slot="dialog-header"
+      className={cn("flex flex-col gap-[var(--sw-space-2)]", className)}
+      {...props}
+    />
+  );
 }
 
 function DialogFooter({
@@ -82,7 +159,16 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        [
+          // section separated by hairline — not a background shade.
+          // Negative margins pull the rule to the card edge so the
+          // 1px line aligns with the drawer outline (no double-stroke
+          // because radius is small).
+          "-mx-[var(--sw-space-4)] -mb-[var(--sw-space-4)] mt-[var(--sw-space-2)]",
+          "px-[var(--sw-space-4)] pt-[var(--sw-space-3)] pb-[var(--sw-space-4)]",
+          "border-t border-[var(--sw-border)]",
+          "flex flex-col-reverse gap-[var(--sw-space-2)] sm:flex-row sm:justify-end",
+        ].join(" "),
         className,
       )}
       {...props}
@@ -101,7 +187,13 @@ function DialogTitle({ className, ...props }: React.ComponentProps<typeof Dialog
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("font-heading text-base leading-none font-medium", className)}
+      className={cn(
+        // md tier (15px) is the section-heading slot; weight 500 carries
+        // hierarchy without size jumps. Mono inherited (font-heading
+        // removed — sans is a §Typography anti-pattern).
+        "text-[length:var(--sw-text-md)] font-medium leading-tight text-[var(--sw-text)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -112,7 +204,14 @@ function DialogDescription({ className, ...props }: React.ComponentProps<typeof 
     <DialogPrimitive.Description
       data-slot="dialog-description"
       className={cn(
-        "text-sm text-muted-foreground *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+        [
+          // sm body, muted secondary tier.
+          "text-[length:var(--sw-text-sm)] text-[var(--sw-muted)]",
+          // Inline link affordance: underline at offset, hover lifts to
+          // primary text. Token-only.
+          "*:[a]:underline *:[a]:underline-offset-[3px]",
+          "*:[a]:hover:text-[var(--sw-text)]",
+        ].join(" "),
         className,
       )}
       {...props}
