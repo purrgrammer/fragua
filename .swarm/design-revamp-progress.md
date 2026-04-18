@@ -34,7 +34,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 
 ## AI Elements (shared visual language)
 - [x] packages/web/src/components/ai-elements/shimmer.tsx
-- [ ] packages/web/src/components/ai-elements/spinner.tsx
+- [x] packages/web/src/components/ai-elements/spinner.tsx _(N/A — file does not exist; only `ui/spinner.tsx` exists, already revamped)_
 - [ ] packages/web/src/components/ai-elements/task.tsx
 - [ ] packages/web/src/components/ai-elements/checkpoint.tsx
 - [ ] packages/web/src/components/ai-elements/code-block.tsx
