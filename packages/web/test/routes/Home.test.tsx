@@ -57,6 +57,8 @@ function row(overrides: Partial<PipelineSummary> = {}): PipelineSummary {
     costUsd: overrides.costUsd ?? 0,
     inputTokens: overrides.inputTokens ?? 0,
     outputTokens: overrides.outputTokens ?? 0,
+    ...(overrides.cacheReadTokens !== undefined ? { cacheReadTokens: overrides.cacheReadTokens } : {}),
+    ...(overrides.cacheWriteTokens !== undefined ? { cacheWriteTokens: overrides.cacheWriteTokens } : {}),
     ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
     ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
     ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
@@ -106,11 +108,28 @@ describe("Home route", () => {
     expect(q.queryByTestId("running-card-done")).toBeNull();
   });
 
-  it("renders the five stats tiles populated from the reducer", async () => {
+  it("renders the six stats tiles populated from the reducer", async () => {
     const api = makeClient({
       listPipelines: async () => [
-        row({ runId: "a", status: "success", costUsd: 0.1, inputTokens: 100, outputTokens: 50, durationMs: 10_000 }),
-        row({ runId: "b", status: "fail", costUsd: 0.05, inputTokens: 50, outputTokens: 25, durationMs: 20_000 }),
+        row({
+          runId: "a",
+          status: "success",
+          costUsd: 0.1,
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 300,
+          cacheWriteTokens: 40,
+          durationMs: 10_000,
+        }),
+        row({
+          runId: "b",
+          status: "fail",
+          costUsd: 0.05,
+          inputTokens: 50,
+          outputTokens: 25,
+          cacheReadTokens: 100,
+          durationMs: 20_000,
+        }),
         row({ runId: "c", status: "running", costUsd: 0.01, inputTokens: 5, outputTokens: 5 }),
       ],
     });
@@ -126,6 +145,8 @@ describe("Home route", () => {
     expect(q.getByTestId("tile-spend").textContent).toMatch(/\$0\.16/);
     // Total tokens — 235 in long form (under 1000, no compact suffix).
     expect(q.getByTestId("tile-tokens").textContent).toContain("235");
+    // Cache hit rate: (300+100) / ((100+50+5) + (300+100)) = 400/555 → 72%.
+    expect(q.getByTestId("tile-cache").textContent).toContain("72%");
     // Avg duration is over terminal runs only: (10s + 20s) / 2 = 15s.
     expect(q.getByTestId("tile-duration").textContent).toContain("15s");
   });

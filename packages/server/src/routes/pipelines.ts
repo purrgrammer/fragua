@@ -177,6 +177,8 @@ export function deriveDetail(runId: string, events: Event[]): PipelineDetail {
     costUsd: summary.costUsd,
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
+    cacheReadTokens: summary.cacheReadTokens,
+    cacheWriteTokens: summary.cacheWriteTokens,
     ...(summary.durationMs !== undefined ? { durationMs: summary.durationMs } : {}),
     ...(summary.title !== undefined ? { title: summary.title } : {}),
     ...(summary.input !== undefined ? { input: summary.input } : {}),

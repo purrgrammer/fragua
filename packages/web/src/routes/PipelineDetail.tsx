@@ -190,6 +190,14 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
 function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
   const totalTokens = detail.inputTokens + detail.outputTokens;
   const hasUsage = detail.costUsd > 0 || totalTokens > 0;
+  const cacheRead = detail.cacheReadTokens ?? 0;
+  const cacheWrite = detail.cacheWriteTokens ?? 0;
+  const hasCache = cacheRead > 0 || cacheWrite > 0;
+  // Cache hit rate approximation: cache reads / (fresh input + cache reads).
+  // Providers that report cached tokens exclude them from `input_tokens`,
+  // so summing the two reconstructs the total prompt the model "saw".
+  const cacheDenom = detail.inputTokens + cacheRead;
+  const cacheHitRate = cacheDenom > 0 ? cacheRead / cacheDenom : undefined;
   const workflowLabel = detail.workflowName ?? detail.workflow;
 
   return (
@@ -232,6 +240,23 @@ function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
           "cost: — · tokens: —"
         )}
       </span>
+      {hasCache && (
+        <>
+          <span>·</span>
+          <span
+            data-testid="detail-cache"
+            title={`cache ${formatTokensLong(cacheRead)} read · ${formatTokensLong(cacheWrite)} written${
+              cacheHitRate !== undefined ? ` · hit rate ${(cacheHitRate * 100).toFixed(0)}%` : ""
+            }`}
+          >
+            cache:{" "}
+            <span data-testid="detail-cache-read">
+              {formatTokensCompact(cacheRead)}
+              {cacheHitRate !== undefined ? ` (${(cacheHitRate * 100).toFixed(0)}%)` : ""}
+            </span>
+          </span>
+        </>
+      )}
       {workflowLabel && (
         <>
           <span>·</span>

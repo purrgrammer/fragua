@@ -17,7 +17,14 @@ function makeEvent(partial: Partial<Event> & Pick<Event, "type">): Event {
 
 describe("emptyCostTotals", () => {
   test("returns all-zero totals", () => {
-    expect(emptyCostTotals()).toEqual({ cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 });
+    expect(emptyCostTotals()).toEqual({
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      calls: 0,
+    });
   });
 });
 
@@ -26,31 +33,75 @@ describe("accumulateCost", () => {
     const t = emptyCostTotals();
     accumulateCost(t, makeEvent({ type: "node.started" }));
     accumulateCost(t, makeEvent({ type: "pipeline.completed" }));
-    expect(t).toEqual({ cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 });
+    expect(t).toEqual({
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      calls: 0,
+    });
   });
 
   test("folds a cost.recorded event with full payload", () => {
     const t = emptyCostTotals();
     accumulateCost(
       t,
-      makeEvent({ type: "cost.recorded", data: { cost_usd: 0.25, input_tokens: 10, output_tokens: 5 } }),
+      makeEvent({
+        type: "cost.recorded",
+        data: {
+          cost_usd: 0.25,
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_tokens: 100,
+          cache_write_tokens: 20,
+        },
+      }),
     );
-    expect(t).toEqual({ cost_usd: 0.25, input_tokens: 10, output_tokens: 5, calls: 1 });
+    expect(t).toEqual({
+      cost_usd: 0.25,
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_read_tokens: 100,
+      cache_write_tokens: 20,
+      calls: 1,
+    });
   });
 
   test("missing numeric fields default to 0 (partial payloads don't crash)", () => {
     const t = emptyCostTotals();
     accumulateCost(t, makeEvent({ type: "cost.recorded", data: { cost_usd: 0.1 } }));
-    expect(t).toEqual({ cost_usd: 0.1, input_tokens: 0, output_tokens: 0, calls: 1 });
+    expect(t).toEqual({
+      cost_usd: 0.1,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      calls: 1,
+    });
   });
 
   test("is cumulative across multiple calls", () => {
     const t = emptyCostTotals();
-    accumulateCost(t, makeEvent({ type: "cost.recorded", data: { cost_usd: 0.1, input_tokens: 1, output_tokens: 2 } }));
-    accumulateCost(t, makeEvent({ type: "cost.recorded", data: { cost_usd: 0.2, input_tokens: 3, output_tokens: 4 } }));
+    accumulateCost(
+      t,
+      makeEvent({
+        type: "cost.recorded",
+        data: { cost_usd: 0.1, input_tokens: 1, output_tokens: 2, cache_read_tokens: 50, cache_write_tokens: 10 },
+      }),
+    );
+    accumulateCost(
+      t,
+      makeEvent({
+        type: "cost.recorded",
+        data: { cost_usd: 0.2, input_tokens: 3, output_tokens: 4, cache_read_tokens: 75, cache_write_tokens: 5 },
+      }),
+    );
     expect(t.cost_usd).toBeCloseTo(0.3, 10);
     expect(t.input_tokens).toBe(4);
     expect(t.output_tokens).toBe(6);
+    expect(t.cache_read_tokens).toBe(125);
+    expect(t.cache_write_tokens).toBe(15);
     expect(t.calls).toBe(2);
   });
 
@@ -63,21 +114,36 @@ describe("accumulateCost", () => {
 
 describe("aggregateCost", () => {
   test("empty iterable → all zeros", () => {
-    expect(aggregateCost([])).toEqual({ cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 });
+    expect(aggregateCost([])).toEqual({
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      calls: 0,
+    });
   });
 
   test("mixed stream folds only the cost events", () => {
     const events: Event[] = [
       makeEvent({ type: "pipeline.started" }),
-      makeEvent({ type: "cost.recorded", data: { cost_usd: 0.01, input_tokens: 10, output_tokens: 1 } }),
+      makeEvent({
+        type: "cost.recorded",
+        data: { cost_usd: 0.01, input_tokens: 10, output_tokens: 1, cache_read_tokens: 100, cache_write_tokens: 5 },
+      }),
       makeEvent({ type: "node.started", node_id: "a" }),
-      makeEvent({ type: "cost.recorded", data: { cost_usd: 0.02, input_tokens: 20, output_tokens: 2 } }),
+      makeEvent({
+        type: "cost.recorded",
+        data: { cost_usd: 0.02, input_tokens: 20, output_tokens: 2, cache_read_tokens: 200 },
+      }),
       makeEvent({ type: "pipeline.completed" }),
     ];
     const t = aggregateCost(events);
     expect(t.cost_usd).toBeCloseTo(0.03, 10);
     expect(t.input_tokens).toBe(30);
     expect(t.output_tokens).toBe(3);
+    expect(t.cache_read_tokens).toBe(300);
+    expect(t.cache_write_tokens).toBe(5);
     expect(t.calls).toBe(2);
   });
 });

@@ -37,6 +37,8 @@ interface StatsAccumulator {
   totalCostUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
   durationSum: number;
   durationCount: number;
 }
@@ -60,6 +62,8 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
       totalCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
       durationSum: 0,
       durationCount: 0,
     };
@@ -78,6 +82,8 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
         a.totalCostUsd += summary.costUsd;
         a.totalInputTokens += summary.inputTokens;
         a.totalOutputTokens += summary.outputTokens;
+        a.totalCacheReadTokens += summary.cacheReadTokens;
+        a.totalCacheWriteTokens += summary.cacheWriteTokens;
         // Avg duration only counts terminal runs — a long-running pipeline
         // would otherwise drag the average toward "in progress" rather
         // than "how long do runs take".
@@ -101,6 +107,8 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
       totalCostUsd: acc.totalCostUsd,
       totalInputTokens: acc.totalInputTokens,
       totalOutputTokens: acc.totalOutputTokens,
+      totalCacheReadTokens: acc.totalCacheReadTokens,
+      totalCacheWriteTokens: acc.totalCacheWriteTokens,
       ...(acc.durationCount > 0 ? { avgDurationMs: acc.durationSum / acc.durationCount } : {}),
       updatedAt: new Date().toISOString(),
     };

@@ -63,6 +63,8 @@ export function deriveSummary(runId: string, events: Event[]): PipelineSummary {
     costUsd: totals.cost_usd,
     inputTokens: totals.input_tokens,
     outputTokens: totals.output_tokens,
+    cacheReadTokens: totals.cache_read_tokens,
+    cacheWriteTokens: totals.cache_write_tokens,
     ...(durationMs !== undefined ? { durationMs } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(input !== undefined ? { input } : {}),

@@ -102,12 +102,15 @@ function formatEvent(event: Event, level: 1 | 2): string | undefined {
       return level >= 2 && data["is_error"] === true ? `  ⚙ ${String(data["tool_name"] ?? "")} error` : undefined;
     case "llm.error":
       return `! ${tag} LLM error: ${String(data["message"] ?? "")}`;
-    case "cost.recorded":
-      return level >= 2
-        ? `  $ ${(Number(data["cost_usd"] ?? 0)).toFixed(4)} — ${String(data["provider"] ?? "?")}/${String(
-            data["model"] ?? "?",
-          )} in=${String(data["input_tokens"] ?? 0)} out=${String(data["output_tokens"] ?? 0)}`
-        : undefined;
+    case "cost.recorded": {
+      if (level < 2) return undefined;
+      const cacheRead = Number(data["cache_read_tokens"] ?? 0);
+      const cacheWrite = Number(data["cache_write_tokens"] ?? 0);
+      const cacheSuffix = cacheRead > 0 || cacheWrite > 0 ? ` cache r=${cacheRead}/w=${cacheWrite}` : "";
+      return `  $ ${(Number(data["cost_usd"] ?? 0)).toFixed(4)} — ${String(data["provider"] ?? "?")}/${String(
+        data["model"] ?? "?",
+      )} in=${String(data["input_tokens"] ?? 0)} out=${String(data["output_tokens"] ?? 0)}${cacheSuffix}`;
+    }
     default:
       return undefined;
   }

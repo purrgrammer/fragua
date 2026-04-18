@@ -2,6 +2,7 @@
 //
 // The canonical shape of a `cost.recorded` event's `data` payload is:
 //   { cost_usd: number, input_tokens: number, output_tokens: number,
+//     cache_read_tokens?: number, cache_write_tokens?: number,
 //     provider?: string, model?: string }
 // (see the LLM adapter + ConsoleSink for emitters/consumers).
 //
@@ -18,13 +19,34 @@ export interface CostTotals {
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  /**
+   * Sum of `data.cache_read_tokens` — tokens served from the provider's
+   * prompt cache. High values here are good: the input_tokens figure
+   * already excludes cache hits on Anthropic, so `cache_read_tokens`
+   * is the additional context reused for free (ish — they bill at a
+   * reduced rate).
+   */
+  cache_read_tokens: number;
+  /**
+   * Sum of `data.cache_write_tokens` — tokens written into the cache
+   * on this call. First-time cache priming; reads on later turns show
+   * up in `cache_read_tokens`.
+   */
+  cache_write_tokens: number;
   /** Number of `cost.recorded` events folded in. */
   calls: number;
 }
 
 /** Zero value for a fresh totals accumulator. */
 export function emptyCostTotals(): CostTotals {
-  return { cost_usd: 0, input_tokens: 0, output_tokens: 0, calls: 0 };
+  return {
+    cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    calls: 0,
+  };
 }
 
 /**
@@ -41,10 +63,14 @@ export function accumulateCost(totals: CostTotals, event: Event): CostTotals {
     cost_usd?: number;
     input_tokens?: number;
     output_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
   };
   totals.cost_usd += Number(d.cost_usd ?? 0);
   totals.input_tokens += Number(d.input_tokens ?? 0);
   totals.output_tokens += Number(d.output_tokens ?? 0);
+  totals.cache_read_tokens += Number(d.cache_read_tokens ?? 0);
+  totals.cache_write_tokens += Number(d.cache_write_tokens ?? 0);
   totals.calls += 1;
   return totals;
 }

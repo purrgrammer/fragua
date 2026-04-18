@@ -35,6 +35,18 @@ export interface DashboardStats {
   totalCostUsd: number;
   /** Sum of `inputTokens + outputTokens` across every input row. */
   totalTokens: number;
+  /** Sum of `cacheReadTokens` — prompt-cache hits across every run. */
+  totalCacheReadTokens: number;
+  /** Sum of `cacheWriteTokens` — cache priming across every run. */
+  totalCacheWriteTokens: number;
+  /**
+   * Prompt-cache hit rate: `totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)`.
+   * Undefined when there's nothing to divide (no input tokens at all).
+   * Fresh `inputTokens` excludes cache hits on providers that track
+   * them separately (Anthropic), so this ratio approximates how much
+   * of the read context came from cache.
+   */
+  cacheHitRate?: number;
   /**
    * Average `durationMs` over terminal runs only. Omitted (not zero)
    * when no terminal runs have a measurable duration — keeps the wire
@@ -50,7 +62,10 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
   let succeeded = 0;
   let failed = 0;
   let totalCostUsd = 0;
-  let totalTokens = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheWriteTokens = 0;
   let durationSum = 0;
   let durationCount = 0;
 
@@ -60,7 +75,10 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
     else if (p.status === "fail") failed += 1;
 
     totalCostUsd += p.costUsd;
-    totalTokens += p.inputTokens + p.outputTokens;
+    totalInputTokens += p.inputTokens;
+    totalOutputTokens += p.outputTokens;
+    totalCacheReadTokens += p.cacheReadTokens ?? 0;
+    totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
 
     // Avg only over terminal runs — a long-running pipeline would
     // otherwise drag the average toward "in progress" rather than
@@ -73,6 +91,8 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
 
   const terminal = succeeded + failed;
   const successRate = terminal === 0 ? 0 : succeeded / terminal;
+  const readDenom = totalInputTokens + totalCacheReadTokens;
+  const cacheHitRate = readDenom > 0 ? totalCacheReadTokens / readDenom : undefined;
 
   return {
     totalRuns: pipelines.length,
@@ -81,7 +101,10 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
     failed,
     successRate,
     totalCostUsd,
-    totalTokens,
+    totalTokens: totalInputTokens + totalOutputTokens,
+    totalCacheReadTokens,
+    totalCacheWriteTokens,
+    ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),
     ...(durationCount > 0 ? { avgDurationMs: durationSum / durationCount } : {}),
   };
 }

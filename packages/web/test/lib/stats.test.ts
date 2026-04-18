@@ -21,6 +21,8 @@ function row(overrides: Partial<PipelineSummary> = {}): PipelineSummary {
     costUsd: overrides.costUsd ?? 0,
     inputTokens: overrides.inputTokens ?? 0,
     outputTokens: overrides.outputTokens ?? 0,
+    ...(overrides.cacheReadTokens !== undefined ? { cacheReadTokens: overrides.cacheReadTokens } : {}),
+    ...(overrides.cacheWriteTokens !== undefined ? { cacheWriteTokens: overrides.cacheWriteTokens } : {}),
     ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
     ...(overrides.workflow !== undefined ? { workflow: overrides.workflow } : {}),
     ...(overrides.workflowName !== undefined ? { workflowName: overrides.workflowName } : {}),
@@ -37,6 +39,9 @@ describe("computeStats", () => {
     expect(s.successRate).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.totalTokens).toBe(0);
+    expect(s.totalCacheReadTokens).toBe(0);
+    expect(s.totalCacheWriteTokens).toBe(0);
+    expect(s.cacheHitRate).toBeUndefined();
     expect(s.avgDurationMs).toBeUndefined();
   });
 
@@ -89,6 +94,22 @@ describe("computeStats", () => {
       row({ runId: "c", status: "running", durationMs: 999_999 }),
     ]);
     expect(s.avgDurationMs).toBe(15_000);
+  });
+
+  it("sums cache tokens and computes hit rate as reads / (input + reads)", () => {
+    const s = computeStats([
+      row({ runId: "a", inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 50 }),
+      row({ runId: "b", inputTokens: 200, cacheReadTokens: 100 }),
+    ]);
+    expect(s.totalCacheReadTokens).toBe(400);
+    expect(s.totalCacheWriteTokens).toBe(50);
+    // (300 + 100) / ((100 + 200) + (300 + 100)) = 400 / 700
+    expect(s.cacheHitRate).toBeCloseTo(400 / 700, 6);
+  });
+
+  it("cacheHitRate is undefined when no input or cache-read tokens were seen", () => {
+    const s = computeStats([row({ runId: "a", status: "running" })]);
+    expect(s.cacheHitRate).toBeUndefined();
   });
 
   it("avgDurationMs is omitted when no terminal run carries a duration", () => {

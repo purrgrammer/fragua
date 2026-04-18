@@ -13,7 +13,7 @@
 // without a network round-trip. Production callers always pass `api`
 // and let it default to `api.listPipelines()`.
 
-import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer } from "lucide-react";
+import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
@@ -178,7 +178,7 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
   return (
     <section data-testid="stats-tiles" className="flex flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Overview</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
         <StatTile
           label="Total runs"
           value={loading ? null : String(stats.totalRuns)}
@@ -204,6 +204,19 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           testId="tile-tokens"
         />
         <StatTile
+          label="Cache hit rate"
+          value={loading ? null : stats.cacheHitRate === undefined ? "—" : formatPercent(stats.cacheHitRate)}
+          hint={
+            loading
+              ? undefined
+              : `cached: ${formatTokensCompact(stats.totalCacheReadTokens)} read · ${formatTokensCompact(
+                  stats.totalCacheWriteTokens,
+                )} written`
+          }
+          icon={<Zap className="size-4" />}
+          testId="tile-cache"
+        />
+        <StatTile
           label="Avg duration"
           value={loading ? null : stats.avgDurationMs === undefined ? "—" : formatDuration(stats.avgDurationMs)}
           icon={<Timer className="size-4" />}
@@ -218,13 +231,15 @@ interface StatTileProps {
   label: string;
   /** `null` = loading; renders a skeleton in place of the number. */
   value: string | null;
+  /** Optional secondary line, rendered under the main value in muted text. */
+  hint?: string;
   icon: JSX.Element;
   testId: string;
 }
 
-function StatTile({ label, value, icon, testId }: StatTileProps): JSX.Element {
+function StatTile({ label, value, hint, icon, testId }: StatTileProps): JSX.Element {
   return (
-    <Card size="sm" data-testid={testId} className="ring-0">
+    <Card size="sm" data-testid={testId} className="ring-0" title={hint}>
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-xs font-medium text-muted-foreground">
           <span>{label}</span>

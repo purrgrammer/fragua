@@ -96,11 +96,19 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
   ]
     .filter(Boolean)
     .join(" · ");
+  const cacheRead = step.cost?.cache_read_tokens ?? 0;
+  const cacheWrite = step.cost?.cache_write_tokens ?? 0;
   const metrics = [
     step.durationMs !== undefined ? `⏱ ${formatDuration(step.durationMs)}` : undefined,
     step.cost !== undefined ? `💲 ${formatUsd(step.cost.cost_usd)}` : undefined,
     step.cost !== undefined
       ? `◎ ${formatTokensCompact(step.cost.total_tokens ?? step.cost.input_tokens + step.cost.output_tokens)}`
+      : undefined,
+    // Show cache stats only when the step actually reported any. Tooltip
+    // via the title attr on the containing span would be noise here —
+    // operators filter steps by eye, so short labels win.
+    cacheRead > 0 || cacheWrite > 0
+      ? `⚡ ${formatTokensCompact(cacheRead)}${cacheWrite > 0 ? `/+${formatTokensCompact(cacheWrite)}` : ""}`
       : undefined,
   ].filter(Boolean);
 

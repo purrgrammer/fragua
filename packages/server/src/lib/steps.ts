@@ -66,6 +66,10 @@ export interface StepSnapshot {
     input_tokens: number;
     output_tokens: number;
     total_tokens?: number;
+    /** Prompt-cache read tokens (reused from prior calls) when reported. */
+    cache_read_tokens?: number;
+    /** First-time cache priming tokens when reported. */
+    cache_write_tokens?: number;
     cost_usd: number;
   };
   /** Final assistant text stitched from llm.text_delta events. Empty when
@@ -288,5 +292,7 @@ function costField(data: unknown): StepSnapshot["cost"] | undefined {
     cost_usd: vv["cost_usd"] as number,
   };
   if (typeof vv["total_tokens"] === "number") out.total_tokens = vv["total_tokens"] as number;
+  if (typeof vv["cache_read_tokens"] === "number") out.cache_read_tokens = vv["cache_read_tokens"] as number;
+  if (typeof vv["cache_write_tokens"] === "number") out.cache_write_tokens = vv["cache_write_tokens"] as number;
   return out;
 }

@@ -27,6 +27,8 @@ describe("schemas", () => {
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     expect(Value.Check(PipelineSummary, ok)).toBe(true);
 
@@ -52,6 +54,8 @@ describe("schemas", () => {
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     };
     expect(Value.Check(PipelineDetail, detail)).toBe(true);
 
