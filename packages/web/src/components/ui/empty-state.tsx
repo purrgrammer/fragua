@@ -81,14 +81,8 @@ export function EmptyState({
           {icon}
         </div>
       )}
-      <p className="font-medium text-[var(--sw-text)] text-[length:var(--sw-text-base)]">
-        {title}
-      </p>
-      {description && (
-        <div className="text-[var(--sw-muted)] text-[length:var(--sw-text-sm)]">
-          {description}
-        </div>
-      )}
+      <p className="font-medium text-[var(--sw-text)] text-[length:var(--sw-text-base)]">{title}</p>
+      {description && <div className="text-[var(--sw-muted)] text-[length:var(--sw-text-sm)]">{description}</div>}
       {action && <div className="mt-[var(--sw-space-1)]">{action}</div>}
     </div>
   );

@@ -97,27 +97,13 @@ const statusLabels: Record<ToolPart["state"], string> = {
 // literals. The "running" icon pulses via the global `.sw-pulse` utility,
 // which honours `prefers-reduced-motion` and uses ease-in-out at 1800ms.
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
-  "approval-requested": (
-    <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />
-  ),
-  "approval-responded": (
-    <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />
-  ),
-  "input-available": (
-    <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />
-  ),
-  "input-streaming": (
-    <CircleIcon className="size-4" style={{ color: "var(--sw-accent-idle)" }} />
-  ),
-  "output-available": (
-    <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />
-  ),
-  "output-denied": (
-    <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-warn)" }} />
-  ),
-  "output-error": (
-    <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-error)" }} />
-  ),
+  "approval-requested": <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />,
+  "approval-responded": <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />,
+  "input-available": <ClockIcon className="size-4 sw-pulse" style={{ color: "var(--sw-accent-thinking)" }} />,
+  "input-streaming": <CircleIcon className="size-4" style={{ color: "var(--sw-accent-idle)" }} />,
+  "output-available": <CheckCircleIcon className="size-4" style={{ color: "var(--sw-accent-success)" }} />,
+  "output-denied": <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-warn)" }} />,
+  "output-error": <XCircleIcon className="size-4" style={{ color: "var(--sw-accent-error)" }} />,
 };
 
 // Map state → Badge variant. Badge variants resolve to the same `--sw-accent-*`
@@ -133,10 +119,7 @@ const statusVariants: Record<ToolPart["state"], "secondary" | "success" | "destr
 };
 
 export const getStatusBadge = (status: ToolPart["state"]) => (
-  <Badge
-    className="gap-[var(--sw-space-1)]"
-    variant={statusVariants[status]}
-  >
+  <Badge className="gap-[var(--sw-space-1)]" variant={statusVariants[status]}>
     {statusIcons[status]}
     {statusLabels[status]}
   </Badge>

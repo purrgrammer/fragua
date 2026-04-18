@@ -28,12 +28,7 @@ export type CheckpointProps = HTMLAttributes<HTMLDivElement>;
 
 export const Checkpoint = ({ className, children, ...props }: CheckpointProps) => (
   <div
-    className={cn(
-      "flex items-center overflow-hidden",
-      "gap-[var(--sw-space-05)]",
-      "text-[var(--sw-muted)]",
-      className,
-    )}
+    className={cn("flex items-center overflow-hidden", "gap-[var(--sw-space-05)]", "text-[var(--sw-muted)]", className)}
     {...props}
   >
     {children}
@@ -44,12 +39,7 @@ export const Checkpoint = ({ className, children, ...props }: CheckpointProps) =
 export type CheckpointIconProps = LucideProps;
 
 export const CheckpointIcon = ({ className, children, ...props }: CheckpointIconProps) =>
-  children ?? (
-    <BookmarkIcon
-      className={cn("size-[var(--sw-text-base)] shrink-0", className)}
-      {...props}
-    />
-  );
+  children ?? <BookmarkIcon className={cn("size-[var(--sw-text-base)] shrink-0", className)} {...props} />;
 
 export type CheckpointTriggerProps = ComponentProps<typeof Button> & {
   tooltip?: string;

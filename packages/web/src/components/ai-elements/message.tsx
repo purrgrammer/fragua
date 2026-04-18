@@ -275,10 +275,7 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
   const { currentBranch, totalBranches } = useMessageBranch();
 
   return (
-    <ButtonGroupText
-      className={cn("border-none bg-transparent text-[var(--sw-muted)]", className)}
-      {...props}
-    >
+    <ButtonGroupText className={cn("border-none bg-transparent text-[var(--sw-muted)]", className)} {...props}>
       {currentBranch + 1} of {totalBranches}
     </ButtonGroupText>
   );
@@ -306,10 +303,7 @@ export type MessageToolbarProps = ComponentProps<"div">;
 
 export const MessageToolbar = ({ className, children, ...props }: MessageToolbarProps) => (
   <div
-    className={cn(
-      "mt-[var(--sw-space-4)] flex w-full items-center justify-between gap-[var(--sw-space-3)]",
-      className,
-    )}
+    className={cn("mt-[var(--sw-space-4)] flex w-full items-center justify-between gap-[var(--sw-space-3)]", className)}
     {...props}
   >
     {children}

@@ -71,11 +71,7 @@ export const NodeHeader = ({ className, ...props }: NodeHeaderProps) => (
     // Same surface as the card body (no bg-secondary hierarchy).
     // Bottom hairline carries the separation. Padding y matches x,
     // both sourced from the spacing scale (--sw-space-3).
-    className={cn(
-      "gap-[var(--sw-space-05)] border-b border-[var(--sw-border)]",
-      "py-[var(--sw-space-3)]",
-      className,
-    )}
+    className={cn("gap-[var(--sw-space-05)] border-b border-[var(--sw-border)]", "py-[var(--sw-space-3)]", className)}
     {...props}
   />
 );

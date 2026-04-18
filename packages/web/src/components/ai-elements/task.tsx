@@ -43,10 +43,7 @@ export const TaskItemFile = ({ children, className, ...props }: TaskItemFileProp
 export type TaskItemProps = ComponentProps<"div">;
 
 export const TaskItem = ({ children, className, ...props }: TaskItemProps) => (
-  <div
-    className={cn("text-[length:var(--sw-text-sm)] text-[var(--sw-muted)]", className)}
-    {...props}
-  >
+  <div className={cn("text-[length:var(--sw-text-sm)] text-[var(--sw-muted)]", className)} {...props}>
     {children}
   </div>
 );

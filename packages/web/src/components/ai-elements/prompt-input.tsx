@@ -1152,7 +1152,13 @@ export type PromptInputTabLabelProps = HTMLAttributes<HTMLHeadingElement>;
 export const PromptInputTabLabel = ({ className, ...props }: PromptInputTabLabelProps) => (
   // Content provided via children in props
   // oxlint-disable-next-line eslint-plugin-jsx-a11y(heading-has-content)
-  <h3 className={cn("mb-2 px-3 font-medium text-[length:var(--sw-text-xs)] uppercase tracking-[0.06em] text-muted-foreground", className)} {...props} />
+  <h3
+    className={cn(
+      "mb-2 px-3 font-medium text-[length:var(--sw-text-xs)] uppercase tracking-[0.06em] text-muted-foreground",
+      className,
+    )}
+    {...props}
+  />
 );
 
 export type PromptInputTabBodyProps = HTMLAttributes<HTMLDivElement>;

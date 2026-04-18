@@ -24,10 +24,7 @@ export function Skeleton({ className, ...props }: React.ComponentProps<"div">): 
   return (
     <div
       data-slot="skeleton"
-      className={cn(
-        "sw-pulse rounded-[var(--sw-radius-default)] bg-[var(--sw-surface)]",
-        className,
-      )}
+      className={cn("sw-pulse rounded-[var(--sw-radius-default)] bg-[var(--sw-surface)]", className)}
       {...props}
     />
   );

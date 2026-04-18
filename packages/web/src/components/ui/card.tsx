@@ -85,13 +85,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-description"
-      className={cn("text-[var(--sw-muted)]", className)}
-      {...props}
-    />
-  );
+  return <div data-slot="card-description" className={cn("text-[var(--sw-muted)]", className)} {...props} />;
 }
 
 function CardAction({ className, ...props }: React.ComponentProps<"div">) {
@@ -105,13 +99,7 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function CardContent({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-content"
-      className={cn("px-[var(--sw-space-3)]", className)}
-      {...props}
-    />
-  );
+  return <div data-slot="card-content" className={cn("px-[var(--sw-space-3)]", className)} {...props} />;
 }
 
 function CardFooter({ className, ...props }: React.ComponentProps<"div">) {

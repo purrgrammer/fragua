@@ -58,8 +58,7 @@ const buttonVariants = cva(
       variant: {
         // default — solid foreground/background; no brand colour, only
         // ink-on-paper inversion. Light + dark both designed via tokens.
-        default:
-          "bg-primary text-primary-foreground hover:bg-primary/80",
+        default: "bg-primary text-primary-foreground hover:bg-primary/80",
 
         // outline — surface + hairline. Same treatment in both themes;
         // theme tokens supply the values.
@@ -67,12 +66,10 @@ const buttonVariants = cva(
           "border-[var(--sw-border)] bg-[var(--sw-surface)] text-[var(--sw-text)] hover:bg-[var(--sw-surface)]/60 aria-expanded:bg-[var(--sw-surface)]/60",
 
         // secondary — quieter than default, never brand-coloured.
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary",
+        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary",
 
         // ghost — chromeless until interaction.
-        ghost:
-          "text-[var(--sw-text)] hover:bg-[var(--sw-surface)] aria-expanded:bg-[var(--sw-surface)]",
+        ghost: "text-[var(--sw-text)] hover:bg-[var(--sw-surface)] aria-expanded:bg-[var(--sw-surface)]",
 
         // destructive — accent.error state token.
         destructive: [
@@ -87,7 +84,8 @@ const buttonVariants = cva(
       size: {
         // Footprint only — type scale is fixed by the base class above.
         // Heights snap to 4px grid; padding uses --sw-space-* tokens.
-        default: "h-8 gap-1 px-[var(--sw-space-2)] has-data-[icon=inline-end]:pr-[var(--sw-space-2)] has-data-[icon=inline-start]:pl-[var(--sw-space-2)]",
+        default:
+          "h-8 gap-1 px-[var(--sw-space-2)] has-data-[icon=inline-end]:pr-[var(--sw-space-2)] has-data-[icon=inline-start]:pl-[var(--sw-space-2)]",
         xs: "h-6 gap-1 px-[var(--sw-space-1)] text-[length:var(--sw-text-xs)] has-data-[icon=inline-end]:pr-[var(--sw-space-1)] has-data-[icon=inline-start]:pl-[var(--sw-space-1)] [&_svg:not([class*='size-'])]:size-3",
         sm: "h-7 gap-1 px-[var(--sw-space-2)] has-data-[icon=inline-end]:pr-[var(--sw-space-1)] has-data-[icon=inline-start]:pl-[var(--sw-space-1)] [&_svg:not([class*='size-'])]:size-3",
         lg: "h-9 gap-1 px-[var(--sw-space-3)] has-data-[icon=inline-end]:pr-[var(--sw-space-2)] has-data-[icon=inline-start]:pl-[var(--sw-space-2)]",

@@ -49,21 +49,17 @@ const badgeVariants = cva(
     variants: {
       variant: {
         // default — neutral outlined chip; not a brand colour.
-        default:
-          "border-[var(--sw-border)] bg-[var(--sw-surface)] text-[var(--sw-text)]",
+        default: "border-[var(--sw-border)] bg-[var(--sw-surface)] text-[var(--sw-text)]",
 
         // secondary — flatter, no border emphasis. Same visual weight as
         // default, used when sitting next to one for grouping.
-        secondary:
-          "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+        secondary: "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
 
         // outline — chromeless until interaction; for inline tags in copy.
-        outline:
-          "border-[var(--sw-border)] bg-transparent text-[var(--sw-text)]",
+        outline: "border-[var(--sw-border)] bg-transparent text-[var(--sw-text)]",
 
         // muted — quietest variant; metadata (paths, ids).
-        muted:
-          "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+        muted: "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
 
         // ── state variants (skill: "Accents communicate state.") ─────────
         // Background is a low-chroma tint of the accent so the dot/label
@@ -97,7 +93,14 @@ const badgeVariants = cva(
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, ...props }: BadgeProps): JSX.Element {
-  return <span data-slot="badge" data-variant={variant ?? "default"} className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return (
+    <span
+      data-slot="badge"
+      data-variant={variant ?? "default"}
+      className={cn(badgeVariants({ variant }), className)}
+      {...props}
+    />
+  );
 }
 
 export { badgeVariants };
