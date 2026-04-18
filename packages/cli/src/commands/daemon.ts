@@ -32,11 +32,18 @@ import {
   getDaemonDir,
   isPidAlive,
   readRendezvous,
+  recoverOrphans,
   removeRendezvous,
   startScheduler,
   writeRendezvous,
 } from "@swarm/server";
-import type { HealthDaemonInfo, JobQueue, ProcessSupervisor, SchedulerHandle } from "@swarm/server";
+import type {
+  HealthDaemonInfo,
+  JobQueue,
+  OrphanRecoveryResult,
+  ProcessSupervisor,
+  SchedulerHandle,
+} from "@swarm/server";
 import chalk from "chalk";
 import { startServer } from "./serve.ts";
 
@@ -386,6 +393,21 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
     version: DAEMON_VERSION,
   });
 
+  // Reconcile any leftover `status='running'` rows from a previous
+  // daemon that exited uncleanly. Runs BEFORE the scheduler so a
+  // freshly-claimed job never races an orphan for the same id.
+  const orphans: OrphanRecoveryResult = await recoverOrphans({
+    queue: jobQueue,
+    runsDir: handle.runsDir,
+  });
+  if (orphans.adopted > 0 || orphans.reconciled > 0) {
+    console.log(
+      chalk.dim(
+        `  orphans:     ${orphans.adopted} adopted · ${orphans.reconciled} reconciled`,
+      ),
+    );
+  }
+
   // Start the scheduler after the HTTP server so `/health` can report
   // `inflight:0` from the first request.
   const scheduler: SchedulerHandle = startScheduler({
@@ -412,6 +434,7 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
         // rendezvous. In-flight worker children are detached and
         // continue running — phase 6 orphan recovery adopts them on
         // the next startup.
+        orphans.stop();
         await scheduler
           .stop()
           .catch((err) => console.error(chalk.red(`daemon scheduler stop failed — ${(err as Error).message}`)));

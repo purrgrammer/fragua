@@ -101,7 +101,14 @@ export { createFsRunReader } from "./adapters/fs-run-reader.ts";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export { createSqliteJobQueue } from "./adapters/sqlite-job-queue.ts";
 export { createLocalProcessSupervisor } from "./adapters/local-process-supervisor.ts";
-export { startScheduler, type SchedulerHandle, type SchedulerOptions } from "./scheduler.ts";
+export {
+  recoverOrphans,
+  startScheduler,
+  type OrphanRecoveryOptions,
+  type OrphanRecoveryResult,
+  type SchedulerHandle,
+  type SchedulerOptions,
+} from "./scheduler.ts";
 export {
   DaemonRendezvous,
   type DaemonRendezvousT,

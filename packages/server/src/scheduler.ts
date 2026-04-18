@@ -18,7 +18,8 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JobQueue, JobRow, ProcessSupervisor } from "./ports.ts";
+import type { JobQueue, JobRow, JobStatus, ProcessSupervisor } from "./ports.ts";
+import { isPidAlive } from "./rendezvous.ts";
 
 export interface SchedulerOptions {
   queue: JobQueue;
@@ -161,6 +162,115 @@ export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
       return inflight.size;
     },
   };
+}
+
+/**
+ * One-shot orphan recovery pass. Call on daemon startup, before
+ * `startScheduler`. Scans every `status='running'` row in the queue:
+ *
+ * - **Pid alive** — the worker outlived the previous daemon. We
+ *   "adopt" it by spawning a poller that watches the pid; when it
+ *   dies, we reconcile against the run's terminal event (same path
+ *   the scheduler takes for its own children). The row stays
+ *   `running` in the meantime so the new daemon doesn't double-spawn.
+ *
+ * - **Pid dead** — the worker exited during the daemon outage. Read
+ *   the run's last terminal event and mark the job accordingly. If
+ *   no terminal event is present, mark the job failed with a
+ *   "daemon restart" note.
+ *
+ * Returns counts + a handle to stop any in-flight watchers (used by
+ * daemon shutdown so we don't leak timers).
+ */
+export interface OrphanRecoveryOptions {
+  queue: JobQueue;
+  runsDir: string;
+  /** How often to poll adopted-orphan pids for liveness. Default 1s. */
+  watcherPollIntervalMs?: number;
+  /** Optional hook — fires when a reconciled row transitions. */
+  onReconciled?: (jobId: string, status: JobStatus) => void;
+}
+
+export interface OrphanRecoveryResult {
+  /** Rows whose child pids were still alive; each has a watcher. */
+  adopted: number;
+  /** Rows whose child pids were dead; reconciled inline. */
+  reconciled: number;
+  /** Stop all watchers — called from daemon shutdown. */
+  stop(): void;
+}
+
+export async function recoverOrphans(opts: OrphanRecoveryOptions): Promise<OrphanRecoveryResult> {
+  const orphans = await opts.queue.runningJobs();
+  let adopted = 0;
+  let reconciled = 0;
+  const watchers: Array<{ stop(): void }> = [];
+
+  const reconcileDead = async (job: JobRow) => {
+    const terminal = await readTerminalEvent(opts.runsDir, job.runId);
+    const status = mapTerminalToStatus(terminal);
+    const error = terminal === undefined ? "daemon restart; worker exited without a terminal event" : undefined;
+    await opts.queue.markTerminal(job.id, status, error);
+    opts.onReconciled?.(job.id, status);
+  };
+
+  for (const job of orphans) {
+    if (job.childPid !== undefined && isPidAlive(job.childPid)) {
+      adopted++;
+      watchers.push(startOrphanWatcher(job, opts, reconcileDead));
+    } else {
+      reconciled++;
+      await reconcileDead(job);
+    }
+  }
+
+  return {
+    adopted,
+    reconciled,
+    stop() {
+      for (const w of watchers) w.stop();
+    },
+  };
+}
+
+/** Poll a pid for liveness; when it dies, reconcile the row. */
+function startOrphanWatcher(
+  job: JobRow,
+  opts: OrphanRecoveryOptions,
+  reconcileDead: (j: JobRow) => Promise<void>,
+): { stop(): void } {
+  const pollMs = opts.watcherPollIntervalMs ?? 1_000;
+  let stopped = false;
+  let handle: ReturnType<typeof setTimeout> | undefined;
+
+  const tick = async () => {
+    if (stopped) return;
+    if (job.childPid === undefined || !isPidAlive(job.childPid)) {
+      try {
+        await reconcileDead(job);
+      } catch {
+        // Best effort — don't crash the watcher.
+      }
+      return;
+    }
+    handle = setTimeout(tick, pollMs);
+  };
+  handle = setTimeout(tick, pollMs);
+
+  return {
+    stop() {
+      stopped = true;
+      if (handle !== undefined) clearTimeout(handle);
+    },
+  };
+}
+
+function mapTerminalToStatus(
+  terminal: "completed" | "failed" | "canceled" | undefined,
+): "success" | "failed" | "canceled" {
+  if (terminal === "canceled") return "canceled";
+  if (terminal === "completed") return "success";
+  return "failed";
 }
 
 /**
