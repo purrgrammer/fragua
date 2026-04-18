@@ -19,7 +19,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 - [x] packages/web/src/components/ui/spinner.tsx
 - [x] packages/web/src/components/ui/skeleton.tsx
 - [x] packages/web/src/components/ui/tooltip.tsx
-- [ ] packages/web/src/components/ui/hover-card.tsx
+- [x] packages/web/src/components/ui/hover-card.tsx
 - [ ] packages/web/src/components/ui/dialog.tsx
 - [ ] packages/web/src/components/ui/command.tsx
 - [ ] packages/web/src/components/ui/select.tsx
