@@ -11,6 +11,7 @@ import {
   daemonStatusCommand,
   daemonStopCommand,
 } from "../src/commands/daemon.ts";
+import { dashboardCommand } from "../src/commands/dashboard.tsx";
 import { listCommand } from "../src/commands/list.ts";
 import { pauseCommand } from "../src/commands/pause.ts";
 import { providersCommand } from "../src/commands/providers.ts";
@@ -184,6 +185,27 @@ cli
       runId,
       ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("dashboard", "Launch the Ink TUI for a running (or recent) pipeline")
+  .option("--run-id <id>", "Target run id (default: newest directory under runs-dir)")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--no-follow", "Print a one-shot snapshot instead of the live Ink TUI")
+  .option("--cwd <path>", "Base directory for resolving --runs-dir")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await dashboardCommand({
+      ...(pick("runId") !== undefined ? { runId: pick("runId")! } : {}),
+      ...(pick("runsDir") !== undefined ? { runsDir: pick("runsDir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      // cac renders `--no-follow` as `options.follow === false`.
+      ...(options["follow"] === false ? { follow: false } : {}),
     });
     process.exit(code);
   });

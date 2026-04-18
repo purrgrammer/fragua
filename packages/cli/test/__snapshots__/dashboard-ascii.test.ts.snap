@@ -1,0 +1,17 @@
+// Bun Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`renderAsciiGraph — small fixture (3 nodes, 2 edges) snapshot — full ASCII block for the 3-node fixture 1`] = `
+[
+  "┌───────┐",
+  "│ start │",
+  "└───────┘",
+  "    │",
+  "┌──────┐",
+  "│ work │",
+  "└──────┘",
+  "    │",
+  "┌──────┐",
+  "│ done │",
+  "└──────┘",
+]
+`;

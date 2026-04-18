@@ -356,9 +356,13 @@ Elements adoption) are landed; P5.07 (raw event timeline) was dropped in
 favour of the Conversation view. P5.13 (dashboard shell) is landed —
 `AppShell`, `AppSidebar`, Home (with running strip, stats tiles, recent
 runs), Workflows, Settings routes all exist, backed by server-side
-`GET /stats` and `GET /workflows`. Remaining P5 work: P5.09 (Ink TUI),
-P5.10 (`swarm replay` feeds TUI + web), P5.11 (Playwright visual
-regression + cost reconciliation).
+`GET /stats` and `GET /workflows`. P5.09 (Ink TUI) is landed —
+`swarm dashboard [--run-id <id>]` renders an ASCII graph with the active
+node highlighted, a cost/token ticker, and a rolling event stream, with
+`s` to steer, `a` to abort, `q` to quit (falls back to a one-shot
+snapshot on non-TTY stdout). Remaining P5 work: P5.10 (`swarm replay`
+feeds TUI + web), P5.11 (Playwright visual regression + cost
+reconciliation).
 
 ```sh
 # Terminal A — start the HTTP/SSE server
