@@ -11,13 +11,15 @@ const Temporary = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
     targetY,
   });
 
+  // Hairline (1px) in the Swarm border tone — quiet, structural, never ≥2px.
   return (
     <BaseEdge
-      className="stroke-1 stroke-ring"
       id={id}
       path={edgePath}
       style={{
+        stroke: "var(--sw-border)",
         strokeDasharray: "5, 5",
+        strokeWidth: 1,
       }}
     />
   );
@@ -102,13 +104,21 @@ const Animated = ({ id, source, target, markerEnd, style }: EdgeProps) => {
     targetY: ty,
   });
 
+  // "Active stream" state — pulse the edge itself in the thinking accent.
+  // Uses the shared `.sw-pulse` keyframe (1800ms ease-in-out, opacity-only,
+  // honors prefers-reduced-motion). No traveling ornament.
   return (
-    <>
-      <BaseEdge id={id} markerEnd={markerEnd} path={edgePath} style={style} />
-      <circle fill="var(--primary)" r="4">
-        <animateMotion dur="2s" path={edgePath} repeatCount="indefinite" />
-      </circle>
-    </>
+    <BaseEdge
+      className="sw-pulse"
+      id={id}
+      markerEnd={markerEnd}
+      path={edgePath}
+      style={{
+        stroke: "var(--sw-accent-thinking)",
+        strokeWidth: 1,
+        ...style,
+      }}
+    />
   );
 };
 
