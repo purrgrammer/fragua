@@ -131,6 +131,15 @@ export async function runCommandInProcess(opts: RunCommandOptions): Promise<numb
   const eventsPath = resolve(cwd, runsDir, run_id, "events.jsonl");
   const controlPath = resolve(cwd, runsDir, run_id, "control.jsonl");
 
+  // Touch the control file before the executor starts tailing it.
+  // `tailJsonlLines` silently dies if `watch()` throws ENOENT, so a
+  // cancel/pause/steer that lands before the first control request
+  // would never reach the worker — the tailer would already be gone.
+  // Creating the file empty means the watcher latches on fine and
+  // every subsequent append wakes it.
+  await mkdir(dirname(controlPath), { recursive: true });
+  await writeFile(controlPath, "", { flag: "a" });
+
   // Worktree defaults to true for daemon-spawned workers; in-process
   // direct calls (tests, debugging) can pass false to skip the git
   // dance. The CLI layer already collapses `--no-worktree` to
