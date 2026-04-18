@@ -48,7 +48,10 @@ export type EventType =
   | "steering.injected"
   // Summariser (Wave 2b) — each call rides as a synthetic node whose id is
   // `__summary.<purpose-or-caller>` so cost + drilldown bucket naturally.
+  // Wave 6 adds `summary.text_delta` for streaming mid-call so UIs can
+  // render the title / narrative as it arrives.
   | "summary.started"
+  | "summary.text_delta"
   | "summary.completed"
   | "pipeline.title_generated"
   // Budget (Wave 4) — emitted by the BudgetLedger when a per-node or
@@ -233,6 +236,19 @@ export interface SummaryStartedData {
   iteration?: { n: number; max: number };
   /** The fidelity mode that caused the call (e.g. `summary:medium`). */
   fidelity?: FidelityMode;
+}
+
+/** Streaming delta from a summariser call. Fires N times between
+ * `summary.started` and `summary.completed` so UIs can render the
+ * title / narrative as it arrives rather than waiting for the full
+ * call to resolve. Rides under the same synthetic node_id as its
+ * bookends. */
+export interface SummaryTextDeltaData {
+  purpose: SummaryPurpose;
+  delta: string;
+  /** Monotonic index within this summariser call so a late-arriving
+   * delta can be ordered correctly if the caller parallelises. */
+  content_index?: number;
 }
 
 /** Fires when the summariser call finishes. Carries its own cost fields so

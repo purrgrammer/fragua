@@ -40,6 +40,16 @@ export function runReaderFromSource(source: EventSource): RunReader {
   };
 }
 
+/** Inverse bridge — wrap a `RunReader` as an `EventSource`. Route code
+ * that wants `projectRun` / `foldAll` on an existing `opts.runReader`
+ * calls this once at the top of the handler. */
+export function sourceFromRunReader(reader: RunReader): EventSource {
+  return {
+    listRuns: () => reader.listRuns(),
+    readRun: (runId) => reader.readEvents(runId),
+  };
+}
+
 /** A pending question tagged with its originating run for routing. */
 export interface PendingQuestion {
   runId: string;

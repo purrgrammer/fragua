@@ -19,89 +19,89 @@
 // Reuses `deriveSummary` + `aggregateCost` so the wire shape stays in
 // lockstep with what `GET /pipelines` rows would total to.
 
-import { aggregateCost } from "@swarm/events";
+import { foldAll } from "@swarm/events";
 import { Hono } from "hono";
-import { deriveStatus, deriveSummary, deriveWorkflowName } from "../lib/summary.ts";
-import type { RunReader } from "../ports.ts";
+import { summaryProjection } from "../lib/summary.ts";
+import { type RunReader, sourceFromRunReader } from "../ports.ts";
 import type { StatsPayload } from "../schemas.ts";
 
 export interface StatsRouteOptions {
   runReader: RunReader;
 }
 
+interface StatsAccumulator {
+  totalRuns: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  durationSum: number;
+  durationCount: number;
+}
+
 export function statsRoutes(opts: StatsRouteOptions): Hono {
   const app = new Hono();
 
   app.get("/stats", async (c) => {
-    const workflow = c.req.query("workflow");
-    const ids = await opts.runReader.listRuns();
+    const workflowFilter = c.req.query("workflow");
+    // Adapt the route's RunReader into the canonical EventSource port so
+    // we can use the Wave-5 `foldAll` helper — one replay per run,
+    // cleanly delegated to `summaryProjection`. Avoids reimplementing
+    // status / cost / duration for the Nth time.
+    const source = sourceFromRunReader(opts.runReader);
 
-    let totalRuns = 0;
-    let running = 0;
-    let succeeded = 0;
-    let failed = 0;
-    let totalCostUsd = 0;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let durationSum = 0;
-    let durationCount = 0;
+    const init: StatsAccumulator = {
+      totalRuns: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      totalCostUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      durationSum: 0,
+      durationCount: 0,
+    };
 
-    for (const runId of ids) {
-      const events = await opts.runReader.readEvents(runId);
-      // Tolerate races with cleanup the same way /pipelines does.
-      if (!events) continue;
-
-      // Workflow filter: scaffolded but optional. We compare against the
-      // same `deriveWorkflowName` output the list rows use, so callers
-      // can pass exactly what they see in the UI.
-      if (workflow !== undefined) {
-        const first = events[0];
-        if (!first) continue;
-        const data = first.data as {
-          workflow?: string;
-          workflow_label?: string;
-          workflow_path?: string;
-          graph_id?: string;
-        };
-        const name = deriveWorkflowName(data, first.workflow_sha);
-        if (name !== workflow) continue;
-      }
-
-      totalRuns += 1;
-      const status = deriveStatus(events);
-      if (status === "running") running += 1;
-      else if (status === "success") succeeded += 1;
-      else if (status === "fail") failed += 1;
-
-      const totals = aggregateCost(events);
-      totalCostUsd += totals.cost_usd;
-      totalInputTokens += totals.input_tokens;
-      totalOutputTokens += totals.output_tokens;
-
-      // Avg duration only counts terminal runs — a long-running pipeline
-      // would otherwise drag the average toward "in progress" rather
-      // than "how long do runs take".
-      if (status === "success" || status === "fail") {
-        const summary = deriveSummary(runId, events);
-        if (summary.durationMs !== undefined) {
-          durationSum += summary.durationMs;
-          durationCount += 1;
+    const acc = await foldAll(
+      source,
+      summaryProjection,
+      (a, summary) => {
+        // Workflow filter: compares against the same `workflowName` the
+        // list rows show, so callers pass exactly what they see.
+        if (workflowFilter !== undefined && summary.workflowName !== workflowFilter) return a;
+        a.totalRuns += 1;
+        if (summary.status === "running") a.running += 1;
+        else if (summary.status === "success") a.succeeded += 1;
+        else if (summary.status === "fail") a.failed += 1;
+        a.totalCostUsd += summary.costUsd;
+        a.totalInputTokens += summary.inputTokens;
+        a.totalOutputTokens += summary.outputTokens;
+        // Avg duration only counts terminal runs — a long-running pipeline
+        // would otherwise drag the average toward "in progress" rather
+        // than "how long do runs take".
+        if ((summary.status === "success" || summary.status === "fail") && summary.durationMs !== undefined) {
+          a.durationSum += summary.durationMs;
+          a.durationCount += 1;
         }
-      }
-    }
+        return a;
+      },
+      init,
+    );
 
-    const terminal = succeeded + failed;
-    const successRate = terminal === 0 ? 0 : succeeded / terminal;
+    const terminal = acc.succeeded + acc.failed;
+    const successRate = terminal === 0 ? 0 : acc.succeeded / terminal;
     const payload: StatsPayload = {
-      totalRuns,
-      running,
-      succeeded,
-      failed,
+      totalRuns: acc.totalRuns,
+      running: acc.running,
+      succeeded: acc.succeeded,
+      failed: acc.failed,
       successRate,
-      totalCostUsd,
-      totalInputTokens,
-      totalOutputTokens,
-      ...(durationCount > 0 ? { avgDurationMs: durationSum / durationCount } : {}),
+      totalCostUsd: acc.totalCostUsd,
+      totalInputTokens: acc.totalInputTokens,
+      totalOutputTokens: acc.totalOutputTokens,
+      ...(acc.durationCount > 0 ? { avgDurationMs: acc.durationSum / acc.durationCount } : {}),
       updatedAt: new Date().toISOString(),
     };
     return c.json(payload);

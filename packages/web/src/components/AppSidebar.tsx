@@ -8,7 +8,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { Home, ListChecks, Settings, Workflow } from "lucide-react";
+import { Drone, Home, ListChecks, Settings, Workflow } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
@@ -45,9 +45,9 @@ export function AppSidebar(): JSX.Element {
           {/* Square keeps the brand visible at the icon-only width. */}
           <span
             aria-hidden="true"
-            className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-background text-xs font-bold"
+            className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-background"
           >
-            s
+            <Drone className="size-4" />
           </span>
           <span className="group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
         </div>

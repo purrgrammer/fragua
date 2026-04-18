@@ -1,5 +1,7 @@
-// Default SummariserBackend — wraps pi-ai's `completeSimple` for a
-// one-shot, no-tools compression call. Used by:
+// Default SummariserBackend — wraps pi-ai's `streamSimple` for a
+// one-shot, no-tools compression call. Wave 6 upgraded from
+// `completeSimple` to streaming so UIs can render titles / narratives
+// as they arrive. Used by:
 //
 //   - execute() to generate the async pipeline title from $ARGUMENTS
 //   - PiCodergenBackend to produce the tail for fidelity=summary:medium/high
@@ -7,10 +9,11 @@
 // Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).
 // Events are emitted via the `emit` callback on SummariseInput so the
 // envelope carries the synthetic node_id and a caller-side run_id /
-// workflow_sha. No state persists between calls — the backend is a pure
-// adapter.
+// workflow_sha. The per-call event sequence is:
+//   summary.started → summary.text_delta × N → cost.recorded → summary.completed
+// No state persists between calls — the backend is a pure adapter.
 
-import { type AssistantMessage, completeSimple, getModel, type Message, type Model } from "@mariozechner/pi-ai";
+import { type AssistantMessage, getModel, type Message, type Model, streamSimple } from "@mariozechner/pi-ai";
 import type { SummariseInput, SummariseOutput, SummariserBackend } from "@swarm/core";
 import { costPayload } from "./event-bridge.ts";
 
@@ -107,16 +110,40 @@ export class PiSummariserBackend implements SummariserBackend {
 
     const messages: Message[] = [{ role: "user", content: userContent, timestamp: Date.now() }];
 
-    let assistant: AssistantMessage;
+    // Stream the summariser call so deltas can fire as the model emits
+    // text. The `done` event carries the final AssistantMessage which
+    // is what we use for cost + stopReason attribution; `text_delta`
+    // events drive the UI's live rendering.
+    let assistant: AssistantMessage | undefined;
     try {
-      assistant = await completeSimple(
+      const stream = streamSimple(
         model,
         { systemPrompt, messages, tools: [] },
         // biome-ignore lint/suspicious/noExplicitAny: provider-specific maxTokens knob; pi-ai accepts it as an opaque options bag.
         { signal: input.signal, maxTokens: maxOutputTokens } as any,
       );
+      for await (const ev of stream) {
+        if (ev.type === "text_delta" && typeof ev.delta === "string" && ev.delta.length > 0) {
+          await emit(
+            "summary.text_delta",
+            dropUndefined({ purpose: input.purpose, delta: ev.delta, content_index: ev.contentIndex }),
+            input.synthetic_node_id,
+          );
+        } else if (ev.type === "done") {
+          assistant = ev.message;
+        } else if (ev.type === "error") {
+          // pi-ai stream.d.ts: error events carry the partial / errored
+          // AssistantMessage on `.error`, NOT `.final`. Shape matches
+          // the "streamSimple emits a final AssistantMessage with
+          // stopReason 'error'" contract from types.ts.
+          assistant = ev.error;
+        }
+      }
     } catch (err) {
       return this.failOut(input, started, `summariser call failed: ${stringifyErr(err)}`, emit);
+    }
+    if (!assistant) {
+      return this.failOut(input, started, "summariser stream produced no final message", emit);
     }
 
     const text = extractText(assistant).trim();

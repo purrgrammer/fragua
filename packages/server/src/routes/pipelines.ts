@@ -21,11 +21,12 @@
 // callers depend on the old import path.
 
 import type { Event } from "@swarm/core";
+import { foldAll, type Projection, projectRun } from "@swarm/events";
 import { Hono } from "hono";
 import { stepsProjection } from "../lib/steps.ts";
-import { deriveSummary } from "../lib/summary.ts";
-import type { RunReader } from "../ports.ts";
-import type { NodeState, PipelineDetail } from "../schemas.ts";
+import { deriveSummary, summaryProjection } from "../lib/summary.ts";
+import { type RunReader, sourceFromRunReader } from "../ports.ts";
+import type { NodeState, PipelineDetail, PipelineSummary } from "../schemas.ts";
 
 export interface PipelinesRouteOptions {
   runReader: RunReader;
@@ -35,15 +36,20 @@ export function pipelinesRoutes(opts: PipelinesRouteOptions): Hono {
   const app = new Hono();
 
   app.get("/pipelines", async (c) => {
-    const ids = await opts.runReader.listRuns();
-    const summaries = [];
-    for (const runId of ids) {
-      const events = await opts.runReader.readEvents(runId);
-      // `listRuns` and `readEvents` can disagree under a racing cleanup; skip
-      // torn entries rather than 500ing the whole list.
-      if (!events) continue;
-      summaries.push(deriveSummary(runId, events));
-    }
+    // Fold the `summaryProjection` (runId-agnostic) across every run and
+    // stitch the runId on inside the folder. Equivalent to the old
+    // manual loop but reads against the common abstraction — same
+    // numbers, same ordering, one less place the reducer logic lives.
+    const source = sourceFromRunReader(opts.runReader);
+    const summaries = await foldAll<Omit<PipelineSummary, "runId">, PipelineSummary[]>(
+      source,
+      summaryProjection,
+      (acc, partial, runId) => {
+        acc.push({ runId, ...partial } as PipelineSummary);
+        return acc;
+      },
+      [],
+    );
     // Newest-first ordering: by startedAt desc. Falls back to runId compare
     // so tests see a stable ordering even when timestamps collide.
     summaries.sort((a, b) => {
@@ -55,11 +61,16 @@ export function pipelinesRoutes(opts: PipelinesRouteOptions): Hono {
 
   app.get("/pipelines/:runId", async (c) => {
     const runId = c.req.param("runId");
-    const events = await opts.runReader.readEvents(runId);
-    if (!events) {
+    // projectRun collapses the readEvents → 404 check → project triple
+    // into one call; the route is now literally "not found or here's
+    // the projection result".
+    const detail = await projectRun(sourceFromRunReader(opts.runReader), runId, (events) =>
+      deriveDetail(runId, events as Event[]),
+    );
+    if (detail === undefined) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
-    return c.json(deriveDetail(runId, events));
+    return c.json(detail);
   });
 
   // Bulk historical events — companion to the SSE stream at the same
@@ -97,6 +108,18 @@ export function pipelinesRoutes(opts: PipelinesRouteOptions): Hono {
   });
 
   return app;
+}
+
+/** Stable projection key for future `MaterializedProjectionStore`
+ * adapters. Matches `stepsProjection`'s `STEPS_PROJECTION_KEY` shape. */
+export const DETAIL_PROJECTION_KEY = "detail";
+
+/** `deriveDetail` as a runId-aware `Projection`. Factory form — the
+ * caller binds runId because `deriveDetail` needs it to populate the
+ * envelope; foldAll-style consumers should inject it per-run via the
+ * folder. */
+export function detailProjection(runId: string): Projection<PipelineDetail> {
+  return (events) => deriveDetail(runId, events as Event[]);
 }
 
 /**

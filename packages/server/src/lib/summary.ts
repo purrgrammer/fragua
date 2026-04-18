@@ -11,8 +11,22 @@
 // tests deterministic without a clock fixture.
 
 import type { Event } from "@swarm/core";
-import { aggregateCost } from "@swarm/events";
+import { aggregateCost, type Projection } from "@swarm/events";
 import type { PipelineSummary } from "../schemas.ts";
+
+/** Stable projection key. Future `MaterializedProjectionStore` adapters
+ * cache summaries under this name. */
+export const SUMMARY_PROJECTION_KEY = "summary";
+
+/** `deriveSummary` as a `Projection` — runId-agnostic. The caller (a
+ * route or `foldAll` folder) stitches the runId on after the fact.
+ * Keeps the underlying event reducer closure-free so a DB adapter's
+ * materialised view never has to track "which runId did this come
+ * from" out of band — it's always the surrounding row. */
+export const summaryProjection: Projection<Omit<PipelineSummary, "runId">> = (events) => {
+  const { runId: _unused, ...rest } = deriveSummary("__projection__", events as Event[]);
+  return rest;
+};
 
 /** Pure reducer over events → summary. Exported for tests and reuse. */
 export function deriveSummary(runId: string, events: Event[]): PipelineSummary {

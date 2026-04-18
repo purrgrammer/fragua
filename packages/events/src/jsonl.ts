@@ -2,7 +2,7 @@
 // For production workloads we'd want a WriteStream with backpressure; for
 // Phase 2 the simple append model is sufficient.
 
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Event, EventSink } from "@swarm/core";
 
@@ -50,7 +50,6 @@ export class JsonlSink implements EventSink {
 
 /** Parse a JSONL file back into an array of events (one-shot, for replay). */
 export async function readJsonlEvents(filePath: string): Promise<Event[]> {
-  const { readFile } = await import("node:fs/promises");
   const raw = await readFile(filePath, "utf8");
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
   return lines.map((line) => JSON.parse(line) as Event);

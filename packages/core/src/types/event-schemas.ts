@@ -139,6 +139,15 @@ export const SummaryStartedDataSchema = Type.Object(
   { additionalProperties: true },
 );
 
+export const SummaryTextDeltaDataSchema = Type.Object(
+  {
+    purpose: SummaryPurposeSchema,
+    delta: Type.String(),
+    content_index: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: true },
+);
+
 export const SummaryCompletedDataSchema = Type.Object(
   {
     purpose: SummaryPurposeSchema,
@@ -202,6 +211,7 @@ export const PAYLOAD_SCHEMAS = {
   "node.started": NodeStartedDataSchema,
   "cost.recorded": CostRecordedDataSchema,
   "summary.started": SummaryStartedDataSchema,
+  "summary.text_delta": SummaryTextDeltaDataSchema,
   "summary.completed": SummaryCompletedDataSchema,
   "pipeline.title_generated": PipelineTitleGeneratedDataSchema,
   "budget.warn": BudgetBreachDataSchema,

@@ -15,6 +15,7 @@ The current phase and its verification bar live in `docs/PLAN.md`. Do not start 
 3. **No dependencies added silently.** Every new runtime dep goes through `package.json` with an exact version pin and a one-line rationale in the commit message.
 4. **Pure core.** `@swarm/core` imports nothing from `node:fs`, `node:child_process`, `node:net`, or anything that touches the outside world. Violation is a build failure.
 5. **Events are the source of truth.** Every non-trivial state transition emits a typed event. UI, replay, and cost reports all derive from the event log.
+6. **NO INLINE IMPORTS.** All `import` statements live at the top of the file — no `await import(…)` inside functions, no `require(…)` inside conditionals. Dynamic imports hide dependency graphs, break static analysis, and routinely produce the "why did this not get bundled?" bug during refactors. If you need lazy behaviour, hoist the import and guard the call instead. Rare exception: genuinely-circular module graphs that can't be broken up — document the cycle in a comment next to the dynamic import before shipping.
 
 ## Stack
 

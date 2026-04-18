@@ -91,18 +91,25 @@ export function eventsToSteps(events: readonly Event[]): StepSnapshot[] {
   const openStepByNode = new Map<string, number>();
 
   for (const ev of events) {
-    if (ev.type === "llm.start") {
+    if (ev.type === "llm.start" || ev.type === "summary.started") {
       const nodeId = ev.node_id ?? "__unknown";
+      // summary.started events don't carry a resolved prompt / system
+      // prompt — the summariser's input lives on `summary.completed.output_text`
+      // post-hoc, and the "user prompt" it was framed with is the
+      // summariser's internal system_prompt (not captured). The step
+      // row still renders useful: nodeId, provider/model, purpose,
+      // caller, iteration, streaming finalText as deltas arrive.
+      const isSummary = ev.type === "summary.started";
       const step: StepSnapshot = {
         stepIdx: steps.length,
         nodeId,
         startedAt: ev.timestamp,
-        prompt: stringField(ev.data, "prompt"),
-        systemPrompt: stringField(ev.data, "system_prompt"),
-        allowedTools: stringArrayField(ev.data, "allowed_tools"),
-        deniedTools: stringArrayField(ev.data, "denied_tools"),
-        messages: messageArrayField(ev.data, "messages"),
-        contextFiles: contextFilesField(ev.data, "context_files"),
+        prompt: isSummary ? "" : stringField(ev.data, "prompt"),
+        systemPrompt: isSummary ? "" : stringField(ev.data, "system_prompt"),
+        allowedTools: isSummary ? [] : stringArrayField(ev.data, "allowed_tools"),
+        deniedTools: isSummary ? [] : stringArrayField(ev.data, "denied_tools"),
+        messages: isSummary ? [] : messageArrayField(ev.data, "messages"),
+        contextFiles: isSummary ? [] : contextFilesField(ev.data, "context_files"),
         finalText: "",
       };
       const provider = stringField(ev.data, "provider");
@@ -130,7 +137,7 @@ export function eventsToSteps(events: readonly Event[]): StepSnapshot[] {
     if (idx === undefined) continue;
     const step = steps[idx]!;
 
-    if (ev.type === "llm.text_delta") {
+    if (ev.type === "llm.text_delta" || ev.type === "summary.text_delta") {
       const delta = stringField(ev.data, "delta");
       if (delta) step.finalText += delta;
       continue;
@@ -146,6 +153,22 @@ export function eventsToSteps(events: readonly Event[]): StepSnapshot[] {
         step.durationMs = endedMs - startedMs;
       }
       // Close the step so later events on the same node don't attach.
+      openStepByNode.delete(ev.node_id);
+      continue;
+    }
+
+    if (ev.type === "summary.completed") {
+      step.endedAt = ev.timestamp;
+      const startedMs = Date.parse(step.startedAt);
+      const endedMs = Date.parse(ev.timestamp);
+      if (Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs >= startedMs) {
+        step.durationMs = endedMs - startedMs;
+      }
+      // If streaming deltas didn't accumulate (some providers don't
+      // stream — the provider fell back to a single chunk), take the
+      // final output_text as the step's finalText.
+      const outputText = stringField(ev.data, "output_text");
+      if (outputText && step.finalText.length === 0) step.finalText = outputText;
       openStepByNode.delete(ev.node_id);
       continue;
     }
