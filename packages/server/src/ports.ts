@@ -172,6 +172,84 @@ export interface SkillReader {
   read(name: string): Promise<SkillDetail | undefined>;
 }
 
+/**
+ * Durable queue of workflow runs waiting to be dispatched + in-flight
+ * runs claimed by the daemon's scheduler. The default adapter is
+ * SQLite-backed (`createSqliteJobQueue`); hosted deployments will
+ * swap to a network DB later.
+ *
+ * Lifecycle of a row: `queued` → (claimNext) → `running` → (markTerminal)
+ * → one of `success` | `failed` | `canceled`. Only `queued` rows can be
+ * `delete`d outright; running rows go through the control channel.
+ *
+ * The queue owns the `run_id` column — one run id per job, unique across
+ * the table, surfaced in responses so the HTTP layer can deep-link into
+ * the existing `/pipelines/:runId/*` routes.
+ */
+export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
+
+export interface JobRow {
+  id: string;
+  runId: string;
+  workflow: string;
+  inputJson?: string;
+  model?: string;
+  status: JobStatus;
+  priority: number;
+  enqueuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  childPid?: number;
+  error?: string;
+}
+
+/** Fields a caller can pass to `enqueue`. The queue assigns id, run id,
+ * status, enqueued_at. */
+export interface EnqueueInput {
+  workflow: string;
+  inputJson?: string;
+  model?: string;
+  /** Optional client-supplied id. When omitted a uuid is generated.
+   * Used to keep tests deterministic and to let clients retry safely. */
+  id?: string;
+  /** Optional client-supplied run id. When omitted the queue generates
+   * one matching the existing `${Date.now()}-${random6}` format used
+   * by `swarm run`. */
+  runId?: string;
+  /** Priority tie-breaker. Higher runs first; ties break on enqueuedAt
+   * ascending. Default 0. */
+  priority?: number;
+}
+
+export interface JobListFilter {
+  status?: JobStatus;
+  /** Max rows to return. Default 50. */
+  limit?: number;
+  /** Opaque cursor from a prior `list` call. Not yet implemented — reserved. */
+  cursor?: string;
+}
+
+export interface JobQueue {
+  enqueue(input: EnqueueInput): Promise<JobRow>;
+  get(jobId: string): Promise<JobRow | undefined>;
+  list(filter?: JobListFilter): Promise<JobRow[]>;
+  /** Atomically claim the next queued row, moving it to `running`.
+   * Returns `undefined` when the queue is empty. */
+  claimNext(): Promise<JobRow | undefined>;
+  markRunning(jobId: string, childPid: number): Promise<void>;
+  markTerminal(
+    jobId: string,
+    status: "success" | "failed" | "canceled",
+    error?: string,
+  ): Promise<void>;
+  /** Remove a queued row. Throws if the row is in any other status. */
+  delete(jobId: string): Promise<void>;
+  /** All rows currently in `running` — used for orphan recovery on daemon startup. */
+  runningJobs(): Promise<JobRow[]>;
+  /** Release DB resources. Tests use this to avoid leaking file handles. */
+  close(): Promise<void>;
+}
+
 /** Bundle of ports passed to `createServer`. All optional; defaults below. */
 export interface ServerPorts {
   runReader?: RunReader;
@@ -179,6 +257,7 @@ export interface ServerPorts {
   workflowReader?: WorkflowReader;
   controlGateway?: ControlGateway;
   skillReader?: SkillReader;
+  jobQueue?: JobQueue;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
 }

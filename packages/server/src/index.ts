@@ -91,6 +91,7 @@ export { createEventInterviewGateway } from "./adapters/event-interview-gateway.
 export { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 export { createFsRunReader } from "./adapters/fs-run-reader.ts";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
+export { createSqliteJobQueue } from "./adapters/sqlite-job-queue.ts";
 export {
   DaemonRendezvous,
   type DaemonRendezvousT,
@@ -104,8 +105,13 @@ export {
 export type {
   ControlGateway,
   ControlSubmitResult,
+  EnqueueInput,
   InterviewAnswerResult,
   InterviewGateway,
+  JobListFilter,
+  JobQueue,
+  JobRow,
+  JobStatus,
   PendingQuestion,
   RunReader,
   ServerPorts,
