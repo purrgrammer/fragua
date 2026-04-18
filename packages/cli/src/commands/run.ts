@@ -453,15 +453,39 @@ interface EnqueueBody {
   worktree?: boolean;
 }
 
+// Accept either a direct path (`./workflows/build-feature.dot`,
+// `/abs/path.dot`) or a bare name (`build-feature`), matching what
+// `GET /workflows` returns. We probe the given argument first, then
+// fall back to `<cwd>/workflows/<name>[.dot]` — the same convention
+// the server's `fs-workflow-reader` uses. Returns the absolute path
+// on success, or `null` if nothing stats.
+async function resolveWorkflowPath(cwd: string, input: string): Promise<string | null> {
+  const candidates = [resolve(cwd, input)];
+  // Only try the `workflows/` fallback for bare names (no path separator).
+  // A user who typed `./foo.dot` that doesn't exist wants the straight error,
+  // not a surprise hit from `workflows/foo.dot`.
+  if (!input.includes("/") && !input.includes("\\")) {
+    const withExt = input.endsWith(".dot") ? input : `${input}.dot`;
+    candidates.push(resolve(cwd, "workflows", withExt));
+  }
+  for (const candidate of candidates) {
+    try {
+      await stat(candidate);
+      return candidate;
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
+
 export async function runCommandViaDaemon(opts: RunCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
 
   // Resolve workflow to an absolute path before POSTing so the daemon
   // can find it regardless of its own cwd.
-  const absoluteWorkflow = resolve(cwd, opts.workflow);
-  try {
-    await stat(absoluteWorkflow);
-  } catch {
+  const absoluteWorkflow = await resolveWorkflowPath(cwd, opts.workflow);
+  if (!absoluteWorkflow) {
     console.error(chalk.red(`run: workflow not found: ${opts.workflow}`));
     return 1;
   }

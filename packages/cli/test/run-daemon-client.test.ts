@@ -6,7 +6,7 @@
 // of Phase 7 is that `swarm run` returns immediately after POSTing.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRendezvous } from "@swarm/server";
@@ -97,6 +97,37 @@ describe("runCommandViaDaemon (fire-and-forget)", () => {
     } finally {
       console.error = origErr;
     }
+  });
+
+  test("bare workflow name resolves via ./workflows/<name>.dot", async () => {
+    // The UI + GET /workflows speak in bare names ("build-feature");
+    // the CLI should accept the same shape, not force users to type
+    // `./workflows/build-feature.dot`.
+    await mkdir(join(cwd!, "workflows"), { recursive: true });
+    await writeFile(join(cwd!, "workflows", "build-feature.dot"), TRIVIAL_DOT);
+
+    const origLog = console.log;
+    let captured = "";
+    console.log = (...args: unknown[]) => {
+      captured += `${args.join(" ")}\n`;
+    };
+    try {
+      const code = await runCommandViaDaemon({
+        workflow: "build-feature",
+        cwd: cwd!,
+        input: "hi",
+        noAutostart: true,
+      });
+      expect(code).toBe(0);
+      expect(captured).toContain("queued:");
+    } finally {
+      console.log = origLog;
+    }
+
+    const r = await readRendezvous(cwd!);
+    const res = await fetch(`http://127.0.0.1:${r!.port}/jobs`);
+    const rows = (await res.json()) as Array<{ workflow: string }>;
+    expect(rows.at(-1)?.workflow).toBe(join(cwd!, "workflows", "build-feature.dot"));
   });
 
   test("--no-autostart + no daemon → exit 1 with a start hint", async () => {
