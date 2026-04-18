@@ -14,9 +14,9 @@ import {
   PiSummariserBackend,
   resolveModelOrNull,
 } from "@swarm/agent";
-import type { CodergenBackend, Interviewer, SummariserBackend } from "@swarm/core";
+import type { CheckpointStore, CodergenBackend, Interviewer, SummariserBackend } from "@swarm/core";
 import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
-import { ConsoleSink, JsonlSink } from "@swarm/events";
+import { ConsoleSink, JsonlCheckpointStore, JsonlSink } from "@swarm/events";
 import type { ExecutionEnvironment } from "@swarm/workspace";
 import {
   CORE_TOOLS,
@@ -63,6 +63,16 @@ export interface RunCommandOptions {
   /** Override the summariser model (Wave 2b). Defaults to
    * `config.defaults.summariser.model` then per-provider cheap tier. */
   summariserModel?: string;
+  /** Wave 6: resume from the most recent checkpoint for `runId`. No-op
+   * when the checkpoint file is missing, so the same flag works for
+   * fresh runs (a new checkpoint gets written as the run progresses).
+   * Pair with `--run-id <original-id>` to target a specific earlier
+   * run; without it the generated id won't match any checkpoint. */
+  resume?: boolean;
+  /** Wave 6: disable checkpoint writes. Off by default outside of
+   * `--mock` so `--resume` on a later invocation has something to
+   * load. */
+  noCheckpoint?: boolean;
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -186,8 +196,22 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const console_sink = new ConsoleSink({ inner: jsonl, level: opts.verbosity ?? 1 });
   const sink = console_sink;
 
+  // Wave 6 checkpoint plumbing. Always on outside of --mock and
+  // --no-checkpoint so a later `swarm run --resume --run-id <id>` has
+  // something to load. Stored alongside events.jsonl under the same
+  // run directory.
+  const checkpointStore: CheckpointStore | undefined =
+    opts.mock || opts.noCheckpoint === true ? undefined : new JsonlCheckpointStore({ runsDir: resolve(cwd, runsDir) });
+  if (opts.resume === true && opts.runId === undefined) {
+    console.warn(
+      chalk.yellow(
+        "  --resume is set but --run-id wasn't — a fresh id was generated, so there's no checkpoint to load. Pass the original run id to resume an earlier crashed run.",
+      ),
+    );
+  }
+
   console.log(chalk.bold(`swarm run ${absoluteWorkflow}`));
-  console.log(chalk.dim(`  run_id: ${run_id}`));
+  console.log(chalk.dim(`  run_id: ${run_id}${opts.resume ? " (resume)" : ""}`));
   console.log(chalk.dim(`  events: ${eventsPath}`));
   console.log(chalk.dim(`  sha:    ${workflow_sha.slice(0, 12)}`));
   if (worktree) {
@@ -216,6 +240,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       // --no-auto-title hard-disables, otherwise config/graph take over.
       ...(opts.noAutoTitle === true ? { auto_title: "off" as const } : {}),
       ...(opts.noAutoTitle !== true && config.auto_title === "off" ? { auto_title: "off" as const } : {}),
+      ...(checkpointStore !== undefined ? { checkpointStore } : {}),
+      ...(opts.resume === true ? { resume: true as const } : {}),
     });
     const durationMs = Date.now() - startedAt;
 

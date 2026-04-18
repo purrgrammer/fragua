@@ -143,7 +143,10 @@ inverse of `EventSink`:
 - `CheckpointStore` port (`@swarm/core`) + `JsonlCheckpointStore`
   adapter — `save(runId, checkpoint)` / `load(runId)`. Enables resume
   via `execute({ checkpointStore, resume: true })`. See
-  `docs/SPEC.md §3.6` for the resume-degradation rule.
+  `docs/SPEC.md §3.6` for the resume-degradation rule. The CLI wires
+  this via `swarm run --resume --run-id <original-id>`; checkpoints
+  are written by default (disable with `--no-checkpoint`) so a later
+  `--resume` has something to load.
 
 The web `<StepInspector>` component fetches `StepSnapshot[]` and
 renders collapsible sections per step (prompt · system prompt ·

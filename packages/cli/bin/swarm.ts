@@ -49,6 +49,11 @@ cli
     "--summariser-model <id>",
     "Model for the summariser (defaults to .swarm/config.yaml defaults.summariser.model, then the provider's cheap-tier default)",
   )
+  .option(
+    "--resume",
+    "Resume from the latest checkpoint for the given --run-id. Silently no-ops on fresh runs where no checkpoint exists.",
+  )
+  .option("--no-checkpoint", "Disable checkpoint writes for this run (no resume possible later). Default: on.")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -87,6 +92,9 @@ cli
       ...(options["autoTitle"] === false ? { noAutoTitle: true } : {}),
       ...(pick("summariserProvider") !== undefined ? { summariserProvider: pick("summariserProvider")! } : {}),
       ...(pick("summariserModel") !== undefined ? { summariserModel: pick("summariserModel")! } : {}),
+      ...(options["resume"] === true ? { resume: true } : {}),
+      // cac renders `--no-checkpoint` as `options.checkpoint === false`.
+      ...(options["checkpoint"] === false ? { noCheckpoint: true } : {}),
     });
     process.exit(code);
   });
