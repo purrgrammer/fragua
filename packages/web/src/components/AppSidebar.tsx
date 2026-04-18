@@ -18,7 +18,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -39,22 +38,19 @@ export function AppSidebar(): JSX.Element {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div
-          className="flex h-10 items-center gap-2 px-2 font-heading text-lg font-semibold tracking-tight"
+          className="flex h-8 items-center gap-2 px-1 font-heading text-lg font-semibold tracking-tight"
           data-testid="sidebar-wordmark"
         >
-          {/* Square keeps the brand visible at the icon-only width. */}
-          <span
-            aria-hidden="true"
-            className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-background"
-          >
-            <Drone className="size-4" />
+          {/* Plain icon — no filled square — keeps the brand visible at
+              the icon-only width without a heavy block in the rail. */}
+          <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center text-foreground">
+            <Drone className="size-5" />
           </span>
-          <span className="group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
+          <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
         </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Surface</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV.map(({ to, label, icon: Icon, end }) => (
@@ -92,12 +88,12 @@ interface NavInnerProps {
 function NavInner({ Icon, label, isActive }: NavInnerProps): JSX.Element {
   return (
     <span
-      className="flex w-full items-center gap-2"
+      className="flex w-full min-w-0 items-center gap-2"
       data-active={isActive ? "true" : undefined}
       aria-current={isActive ? "page" : undefined}
     >
-      <Icon className="size-4" />
-      <span className="group-data-[collapsible=icon]/sidebar:hidden">{label}</span>
+      <Icon className="size-4 shrink-0" />
+      <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">{label}</span>
     </span>
   );
 }
@@ -106,7 +102,7 @@ function SidebarStatusBadge(): JSX.Element {
   const { state } = useSidebar();
   const { status, error } = useHealth();
   // Collapsed rail: render the dot only — the full badge text would
-  // overflow the 3rem-wide column. Expanded: render the existing
+  // overflow the icon-width column. Expanded: render the existing
   // HealthBadge component so the styling stays in lockstep with the
   // old top-bar version (single source of truth).
   if (state === "collapsed") {

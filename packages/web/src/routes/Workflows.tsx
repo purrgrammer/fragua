@@ -2,9 +2,11 @@
 // server's `GET /workflows`. Read-only for now; launching a workflow
 // is owned by P5.14.
 //
-// Columns: Name / Path / Short SHA. The path goes through `<code>` so
+// Columns: Name / Path / Short SHA. The path is shown in `<code>` so
 // operators can spot it at a glance and the SHA stays short to avoid
-// hijacking the row.
+// hijacking the row. Long paths truncate inside the cell rather than
+// wrapping or pushing the table wider than its container — the
+// `table-fixed` layout + `min-w-0` wrapper enforce this.
 
 import { FileCode2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -42,7 +44,7 @@ export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
   }, [api, fetcher]);
 
   return (
-    <section className="flex flex-col gap-3">
+    <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Workflows</h2>
       {state.kind === "loading" && (
         <p className="text-muted-foreground text-sm" data-testid="workflows-loading">
@@ -69,28 +71,36 @@ export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
         />
       )}
       {state.kind === "ready" && state.rows.length > 0 && (
-        <Table data-testid="workflows-table">
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Path</TableHead>
-              <TableHead>SHA</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {state.rows.map((row) => (
-              <TableRow key={row.path} data-testid={`workflow-row-${row.name}`}>
-                <TableCell className="font-medium">{row.label ?? row.name}</TableCell>
-                <TableCell>
-                  <code className="font-mono text-xs text-muted-foreground">{row.path}</code>
-                </TableCell>
-                <TableCell>
-                  <code className="font-mono text-xs">{shortSha(row.sha)}</code>
-                </TableCell>
+        <div className="w-full min-w-0 overflow-x-auto">
+          <Table data-testid="workflows-table" className="table-fixed">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-56">Name</TableHead>
+                <TableHead>Path</TableHead>
+                <TableHead className="w-24">SHA</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {state.rows.map((row) => (
+                <TableRow key={row.path} data-testid={`workflow-row-${row.name}`}>
+                  <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
+                    {row.label ?? row.name}
+                  </TableCell>
+                  <TableCell className="max-w-0">
+                    <code className="block truncate font-mono text-xs text-muted-foreground" title={row.path}>
+                      {row.path}
+                    </code>
+                  </TableCell>
+                  <TableCell>
+                    <code className="font-mono text-xs" title={row.sha}>
+                      {shortSha(row.sha)}
+                    </code>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </section>
   );

@@ -3,6 +3,17 @@
 // breadcrumb, connection status) stays mounted across navigations and
 // only the content swaps.
 //
+// Layout invariants (load-bearing — change with care):
+//   - The shell fills the viewport: `SidebarProvider` is `min-h-svh
+//     w-full`, `SidebarInset` is `flex-1 min-w-0` (the `min-w-0` is
+//     the fix for flex children refusing to shrink below their
+//     intrinsic content width, which was letting wide tables push
+//     the sidebar off-screen).
+//   - `<main>` is `flex-1 min-h-0 min-w-0 overflow-auto` so any
+//     oversized page content scrolls inside the main region instead
+//     of inflating the viewport. Pages that want to be full-bleed
+//     (e.g. the pipeline conversation) use `h-full` + `min-h-0`.
+//
 // Connection status is read from `HealthContext` (App is the
 // publisher). Pulling it via context — instead of threading it
 // through router options — means the sidebar badge re-renders on
@@ -31,13 +42,18 @@ export function AppShell(): JSX.Element {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
-        <header data-testid="app-shell-header" className="flex h-14 items-center gap-2 border-b border-border px-4">
+      <SidebarInset className="min-w-0">
+        <header
+          data-testid="app-shell-header"
+          className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3"
+        >
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
-          <RouteBreadcrumb />
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <RouteBreadcrumb />
+          </div>
         </header>
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-4">
           <Outlet />
         </main>
       </SidebarInset>
@@ -56,16 +72,18 @@ function RouteBreadcrumb(): JSX.Element {
   const crumbs = crumbsFor(pathname, params);
   return (
     <Breadcrumb>
-      <BreadcrumbList>
+      <BreadcrumbList className="flex-nowrap">
         {crumbs.map((c, i) => {
           const last = i === crumbs.length - 1;
           return (
             <span key={`${c.label}-${i}`} className="contents">
-              <BreadcrumbItem>
+              <BreadcrumbItem className="min-w-0">
                 {last || !c.href ? (
-                  <BreadcrumbPage>{c.label}</BreadcrumbPage>
+                  <BreadcrumbPage className="truncate">{c.label}</BreadcrumbPage>
                 ) : (
-                  <BreadcrumbLink href={c.href}>{c.label}</BreadcrumbLink>
+                  <BreadcrumbLink href={c.href} className="truncate">
+                    {c.label}
+                  </BreadcrumbLink>
                 )}
               </BreadcrumbItem>
               {!last && <BreadcrumbSeparator />}
