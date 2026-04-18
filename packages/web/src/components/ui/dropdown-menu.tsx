@@ -3,6 +3,56 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
+/*
+ * DropdownMenu — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Color               — only --sw-* tokens. shadcn aliases
+ *                           (bg-popover, text-popover-foreground,
+ *                           bg-accent, text-accent-foreground,
+ *                           text-muted-foreground, text-destructive,
+ *                           bg-destructive/10|20, bg-border) replaced.
+ *                           Selection highlight uses --sw-bg (one-notch
+ *                           contrast against the --sw-surface popover),
+ *                           matching select.tsx and command.tsx.
+ *   § Themes              — "every token has both values, both
+ *                           intentionally designed, not auto-inverted."
+ *                           dark:data-[variant=destructive]:focus:
+ *                           bg-destructive/20 opacity flip removed; the
+ *                           single --sw-accent-error token resolves both
+ *                           themes.
+ *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers";
+ *                           "Elevation: none. No box-shadow"; "1px
+ *                           only". rounded-lg / rounded-md / shadow-md
+ *                           / shadow-lg / ring-1 ring-foreground/10
+ *                           replaced with hairline --sw-border + the
+ *                           --sw-radius-* token scale.
+ *   § Layout              — separator is a 1px hairline (--sw-border).
+ *   § Typography          — sizes from --sw-text-* scale. Group label
+ *                           tier is xs (11px) muted UPPERCASE +
+ *                           0.06em tracking — the only place tracking
+ *                           is permitted (matches select/command).
+ *                           Shortcut is data, not a label: muted, no
+ *                           tracking, tabular figures inherited.
+ *   § Spacing             — token scale only (2/4/8/12). Off-scale
+ *                           gap-1.5, px-1.5, py-1, pr-8, pl-7, p-1,
+ *                           my-1, -mx-1, right-2, min-w-32, min-w-[96px]
+ *                           replaced with --sw-space-* and the 4px grid.
+ *   § Motion              — color/background transitions only via
+ *                           --sw-duration-hover (120ms ease) on items.
+ *                           Decorative radix zoom + multi-axis slide
+ *                           enter/exit reduced to a single opacity
+ *                           fade at --sw-duration-enter (200ms ease-out)
+ *                           per the Drawer / panel enter-exit row of the
+ *                           Motion table. duration-100 (off-scale)
+ *                           replaced with the token.
+ *
+ * Behavioural API preserved (Root, Portal, Trigger, Content, Group,
+ * Item w/ inset+variant, CheckboxItem, RadioGroup, RadioItem, Label
+ * w/ inset, Separator, Shortcut, Sub, SubTrigger w/ inset,
+ * SubContent).
+ */
+
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
 }
@@ -28,7 +78,22 @@ function DropdownMenuContent({
         sideOffset={sideOffset}
         align={align}
         className={cn(
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // structure
+          "z-50 min-w-36 overflow-x-hidden overflow-y-auto",
+          "max-h-(--radix-dropdown-menu-content-available-height)",
+          "w-(--radix-dropdown-menu-trigger-width)",
+          "origin-(--radix-dropdown-menu-content-transform-origin)",
+          "p-[var(--sw-space-1)]",
+          // surface + hairline + card radius (4px).
+          "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+          "border border-[var(--sw-border)] rounded-[var(--sw-radius-card)]",
+          // motion: enter/exit is a single opacity fade,
+          // 200ms ease-out per Motion table. Decorative zoom + multi-
+          // axis slide dropped.
+          "duration-[var(--sw-duration-enter)] ease-out",
+          "data-[state=closed]:overflow-hidden",
+          "data-open:animate-in data-open:fade-in-0",
+          "data-closed:animate-out data-closed:fade-out-0",
           className,
         )}
         {...props}
@@ -40,6 +105,30 @@ function DropdownMenuContent({
 function DropdownMenuGroup({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
   return <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />;
 }
+
+// Shared item className — used by Item, CheckboxItem, RadioItem,
+// SubTrigger so focus, motion, sizing, and inset behaviour stay in
+// lockstep.
+const itemBase = cn(
+  // structure
+  "relative flex cursor-default items-center select-none outline-hidden",
+  "gap-[var(--sw-space-2)]",
+  "px-[var(--sw-space-2)] py-[var(--sw-space-1)]",
+  // default radius (2px).
+  "rounded-[var(--sw-radius-default)]",
+  // body
+  "text-[length:var(--sw-text-sm)]",
+  // inset variant — reserves leading icon column on the 4px grid.
+  "data-inset:pl-[var(--sw-space-6)]",
+  // motion: 120ms color fade on hover/focus (§ Motion).
+  "transition-[background-color,color]",
+  "duration-[var(--sw-duration-hover)] ease-[ease]",
+  // disabled
+  "data-disabled:pointer-events-none data-disabled:opacity-50",
+  // svg sizing — neutral, no decorative tint.
+  "[&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "[&_svg:not([class*='size-'])]:size-4",
+);
 
 function DropdownMenuItem({
   className,
@@ -56,7 +145,16 @@ function DropdownMenuItem({
       data-inset={inset}
       data-variant={variant}
       className={cn(
-        "group/dropdown-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        "group/dropdown-menu-item",
+        itemBase,
+        // selection highlight — --sw-bg gives one-notch contrast against
+        // the surrounding --sw-surface popover (matches select.tsx).
+        "focus:bg-[var(--sw-bg)] focus:text-[var(--sw-text)]",
+        // destructive variant — error accent is the only colour used as
+        // a non-state signal here, and it *is* a state (§ Color).
+        "data-[variant=destructive]:text-[var(--sw-accent-error)]",
+        "data-[variant=destructive]:*:[svg]:text-[var(--sw-accent-error)]",
+        "data-[variant=destructive]:focus:text-[var(--sw-accent-error)]",
         className,
       )}
       {...props}
@@ -78,14 +176,17 @@ function DropdownMenuCheckboxItem({
       data-slot="dropdown-menu-checkbox-item"
       data-inset={inset}
       className={cn(
-        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        itemBase,
+        // reserve trailing column for indicator.
+        "pr-[var(--sw-space-6)]",
+        "focus:bg-[var(--sw-bg)] focus:text-[var(--sw-text)]",
         className,
       )}
       checked={checked}
       {...props}
     >
       <span
-        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        className="pointer-events-none absolute right-[var(--sw-space-2)] flex items-center justify-center"
         data-slot="dropdown-menu-checkbox-item-indicator"
       >
         <DropdownMenuPrimitive.ItemIndicator>
@@ -114,13 +215,15 @@ function DropdownMenuRadioItem({
       data-slot="dropdown-menu-radio-item"
       data-inset={inset}
       className={cn(
-        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        itemBase,
+        "pr-[var(--sw-space-6)]",
+        "focus:bg-[var(--sw-bg)] focus:text-[var(--sw-text)]",
         className,
       )}
       {...props}
     >
       <span
-        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        className="pointer-events-none absolute right-[var(--sw-space-2)] flex items-center justify-center"
         data-slot="dropdown-menu-radio-item-indicator"
       >
         <DropdownMenuPrimitive.ItemIndicator>
@@ -143,7 +246,15 @@ function DropdownMenuLabel({
     <DropdownMenuPrimitive.Label
       data-slot="dropdown-menu-label"
       data-inset={inset}
-      className={cn("px-1.5 py-1 text-xs font-medium text-muted-foreground data-inset:pl-7", className)}
+      className={cn(
+        // Group label tier — UPPERCASE + 0.06em tracking is the one
+        // place letter-spacing is permitted (§ Typography).
+        "px-[var(--sw-space-2)] py-[var(--sw-space-1)]",
+        "text-[length:var(--sw-text-xs)] font-medium uppercase tracking-[0.06em]",
+        "text-[var(--sw-muted)]",
+        "data-inset:pl-[var(--sw-space-6)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -153,7 +264,13 @@ function DropdownMenuSeparator({ className, ...props }: React.ComponentProps<typ
   return (
     <DropdownMenuPrimitive.Separator
       data-slot="dropdown-menu-separator"
-      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      className={cn(
+        // Hairline section break (§ Layout: "sections separated by a
+        // hairline").
+        "pointer-events-none h-px bg-[var(--sw-border)]",
+        "-mx-[var(--sw-space-1)] my-[var(--sw-space-1)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -164,7 +281,10 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground",
+        // Shortcut is data, not a label — muted monospace, tabular
+        // figures inherited globally. tracking-widest dropped (tracking
+        // is reserved for UPPERCASE labels per § Typography).
+        "ml-auto text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
         className,
       )}
       {...props}
@@ -189,7 +309,9 @@ function DropdownMenuSubTrigger({
       data-slot="dropdown-menu-sub-trigger"
       data-inset={inset}
       className={cn(
-        "flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-open:bg-accent data-open:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        itemBase,
+        "focus:bg-[var(--sw-bg)] focus:text-[var(--sw-text)]",
+        "data-open:bg-[var(--sw-bg)] data-open:text-[var(--sw-text)]",
         className,
       )}
       {...props}
@@ -208,7 +330,17 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
       className={cn(
-        "z-50 min-w-[96px] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+        // structure
+        "z-50 min-w-36 overflow-hidden",
+        "origin-(--radix-dropdown-menu-content-transform-origin)",
+        "p-[var(--sw-space-1)]",
+        // surface + hairline + card radius (4px).
+        "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+        "border border-[var(--sw-border)] rounded-[var(--sw-radius-card)]",
+        // motion: same single fade as Content (§ Motion).
+        "duration-[var(--sw-duration-enter)] ease-out",
+        "data-open:animate-in data-open:fade-in-0",
+        "data-closed:animate-out data-closed:fade-out-0",
         className,
       )}
       {...props}
