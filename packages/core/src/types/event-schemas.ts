@@ -43,6 +43,19 @@ export const ContextFileCaptureSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Per-skill catalog capture record (mirrors `SkillCatalogCapture`). */
+export const SkillCatalogCaptureSchema = Type.Object(
+  {
+    name: Type.String(),
+    location: Type.String(),
+    sha256: Type.String(),
+    bytes: Type.Number({ minimum: 0 }),
+    scope: Type.Union([Type.Literal("project"), Type.Literal("user")]),
+    source_dir: Type.String(),
+  },
+  { additionalProperties: true },
+);
+
 export const LlmSettingsSchema = Type.Object(
   {
     temperature: Type.Optional(Type.Number()),
@@ -98,6 +111,7 @@ export const LlmStartDataSchema = Type.Object(
     settings: Type.Optional(LlmSettingsSchema),
     context_files: Type.Optional(Type.Array(ContextFileCaptureSchema)),
     budget: Type.Optional(BudgetSnapshotSchema),
+    skills: Type.Optional(Type.Array(SkillCatalogCaptureSchema)),
   },
   { additionalProperties: true },
 );

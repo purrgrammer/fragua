@@ -4,7 +4,8 @@ import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agen
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
-import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
+import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
+import { buildLoadSkillTool, filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
@@ -24,6 +25,12 @@ export interface PiCodergenBackendOptions {
    * omitted those modes fall back to the deterministic `summary:low`
    * template with a soft warning — behaviour matches Wave 2. */
   summariser?: SummariserBackend;
+  /** Skills discovered by the CLI at startup (see @swarm/workspace
+   * `discoverSkills`). Filtered per-node via `node.attrs.skills` and
+   * `skills_disabled`. When the effective set is non-empty for a call,
+   * the backend renders a tier-1 catalog into the system prompt and
+   * adds a scoped `local:load_skill` tool to the run. */
+  skills?: Skill[];
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -44,6 +51,7 @@ export class PiCodergenBackend implements CodergenBackend {
    * two concurrent runs already get isolated stores — no cross-run leak. */
   private readonly messageStore: MessageStore;
   private readonly summariser: SummariserBackend | undefined;
+  private readonly skills: readonly Skill[];
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -54,6 +62,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.systemPrompt = opts.systemPrompt ?? "";
     this.messageStore = new MessageStore();
     this.summariser = opts.summariser;
+    this.skills = opts.skills ?? [];
   }
 
   /** Direct access to the transcript store. Exposed for tests and, later,
@@ -112,7 +121,28 @@ export class PiCodergenBackend implements CodergenBackend {
     const deny = input.node.attrs.denied_tools as string[] | undefined;
     if (allow) selectOpts.allow = allow;
     if (deny) selectOpts.deny = deny;
-    const tools = this.registry.select(selectOpts).map((t) => toAgentTool(t, this.env));
+    const selectedTools = this.registry.select(selectOpts);
+
+    // Resolve the skill catalog for this call. Filter by node attrs, render
+    // the catalog block for the system prompt, and mint a scoped
+    // `local:load_skill` tool whose `name` enum matches the filtered set.
+    // The tool is appended to the per-call tools list (not the registry) so
+    // concurrent runs with different node-level scopes don't fight over it.
+    const nodeSkills = input.node.attrs.skills as string[] | undefined;
+    const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {
+      skills_disabled: input.node.attrs.skills_disabled === true,
+    };
+    if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
+    const effectiveSkills = filterSkillsForNode(this.skills, skillFilter);
+    const skillsCatalog = renderSkillsCatalog(effectiveSkills);
+    const toolsIncludingSkill =
+      effectiveSkills.length > 0 &&
+      // Respect an explicit deny or a narrowing allow that omits load_skill.
+      !(deny?.includes("local:load_skill") === true) &&
+      !(allow && !allow.includes("local:load_skill"))
+        ? [...selectedTools, buildLoadSkillTool(effectiveSkills)]
+        : selectedTools;
+    const tools = toolsIncludingSkill.map((t) => toAgentTool(t, this.env));
 
     const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
     const { text: contextBlock, warnings, files: contextFileRecords } = await loadContextFiles(this.env, contextFiles);
@@ -121,7 +151,12 @@ export class PiCodergenBackend implements CodergenBackend {
     }
     const perNodeSystemPrompt =
       typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
-    const systemPrompt = buildSystemPrompt({ global: this.systemPrompt, perNode: perNodeSystemPrompt, contextBlock });
+    const systemPrompt = buildSystemPrompt({
+      global: this.systemPrompt,
+      perNode: perNodeSystemPrompt,
+      contextBlock,
+      skillsCatalog,
+    });
 
     // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out
     // of any cross-node transcript sharing — it wins over thread_id and
@@ -201,6 +236,7 @@ export class PiCodergenBackend implements CodergenBackend {
       const settings = captureSettings(input.node.attrs);
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
+      if (effectiveSkills.length > 0) llmStart["skills"] = effectiveSkills.map(toCatalogRecord);
       // Prefer the real cumulative snapshot the executor just handed us.
       // Fall back to the Wave-1 placeholder shape only when no BudgetLedger
       // is wired (runs without any budget attrs configured).

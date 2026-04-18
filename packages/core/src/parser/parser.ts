@@ -378,7 +378,13 @@ function toAttrPairs(attrs: Record<string, unknown>): AttrPairs {
 
 // ---- attribute coercion -----------------------------------------------
 
-const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate", "auto_status", "allow_partial", "loop_restart"]);
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
+  "goal_gate",
+  "auto_status",
+  "allow_partial",
+  "loop_restart",
+  "skills_disabled",
+]);
 
 const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "default_max_retries", "idle_timeout"]);
 
@@ -393,7 +399,7 @@ const NUMBER_KEYS: ReadonlySet<string> = new Set([
   "budget_tokens",
 ]);
 
-const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files"]);
+const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files", "skills"]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {
   if (BOOLEAN_KEYS.has(key)) {

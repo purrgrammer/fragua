@@ -17,6 +17,8 @@ import { Home } from "../routes/Home.tsx";
 import { PipelineDetail } from "../routes/PipelineDetail.tsx";
 import { PipelinesList } from "../routes/PipelinesList.tsx";
 import { Settings } from "../routes/Settings.tsx";
+import { SkillDetail } from "../routes/SkillDetail.tsx";
+import { SkillsList } from "../routes/SkillsList.tsx";
 import { Workflows } from "../routes/Workflows.tsx";
 import type { ApiClient } from "./api.ts";
 
@@ -35,6 +37,8 @@ export function createRoutes(opts: CreateRouterOptions): RouteObject[] {
         { path: "workflows", element: <Workflows api={opts.api} /> },
         { path: "pipelines", element: <PipelinesList api={opts.api} /> },
         { path: "pipelines/:id", element: <PipelineDetail api={opts.api} /> },
+        { path: "skills", element: <SkillsList api={opts.api} /> },
+        { path: "skills/:name", element: <SkillDetail api={opts.api} /> },
         { path: "settings", element: <Settings api={opts.api} /> },
         { path: "*", element: <NotFound /> },
       ],

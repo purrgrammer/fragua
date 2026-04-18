@@ -55,6 +55,16 @@ export interface StepSnapshot {
     status: string;
     error?: string;
   }>;
+  /** Tier-1 skill catalog advertised for this step. Mirrors
+   * `llm.start.skills[]`. Empty array when the step saw no skills. */
+  skills: Array<{
+    name: string;
+    location: string;
+    sha256: string;
+    bytes: number;
+    scope: "project" | "user";
+    source_dir: string;
+  }>;
   budget?: {
     cumulative_cost_usd: number;
     cumulative_tokens: number;
@@ -114,6 +124,7 @@ export function eventsToSteps(events: readonly Event[]): StepSnapshot[] {
         deniedTools: isSummary ? [] : stringArrayField(ev.data, "denied_tools"),
         messages: isSummary ? [] : messageArrayField(ev.data, "messages"),
         contextFiles: isSummary ? [] : contextFilesField(ev.data, "context_files"),
+        skills: isSummary ? [] : skillsField(ev.data, "skills"),
         finalText: "",
       };
       const provider = stringField(ev.data, "provider");
@@ -238,6 +249,28 @@ function contextFilesField(data: unknown, key: string): StepSnapshot["contextFil
       truncated: rr["truncated"] === true,
       status: typeof rr["status"] === "string" ? (rr["status"] as string) : "unknown",
       ...(typeof rr["error"] === "string" ? { error: rr["error"] as string } : {}),
+    });
+  }
+  return out;
+}
+
+function skillsField(data: unknown, key: string): StepSnapshot["skills"] {
+  if (!data || typeof data !== "object") return [];
+  const v = (data as Record<string, unknown>)[key];
+  if (!Array.isArray(v)) return [];
+  const out: StepSnapshot["skills"] = [];
+  for (const r of v) {
+    if (!r || typeof r !== "object") continue;
+    const rr = r as Record<string, unknown>;
+    const scope = rr["scope"];
+    if (scope !== "project" && scope !== "user") continue;
+    out.push({
+      name: typeof rr["name"] === "string" ? (rr["name"] as string) : "",
+      location: typeof rr["location"] === "string" ? (rr["location"] as string) : "",
+      sha256: typeof rr["sha256"] === "string" ? (rr["sha256"] as string) : "",
+      bytes: typeof rr["bytes"] === "number" ? (rr["bytes"] as number) : 0,
+      scope,
+      source_dir: typeof rr["source_dir"] === "string" ? (rr["source_dir"] as string) : "",
     });
   }
   return out;

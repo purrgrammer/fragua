@@ -30,6 +30,21 @@ export interface SwarmConfig {
   auto_title?: "on" | "off";
   blocklist?: string[];
   workflows?: Record<string, string>;
+  /** Skill discovery knobs. Absent / empty enables auto-discovery of the
+   * well-known paths (`.swarm/skills`, `.agents/skills`, `.claude/skills`
+   * under both project and user scopes). See `packages/workspace/src/skills`
+   * and docs/skills.md. */
+  skills?: {
+    /** Explicit directory list. When set, auto-discovery is disabled and
+     * only these directories are scanned (each expected to contain
+     * `<skill-name>/SKILL.md` subdirs). */
+    paths?: string[];
+    /** Names to hide from the tier-1 catalog. Still discovered so the UI
+     * can list them as disabled. */
+    disabled?: string[];
+    /** Trust gate for project-scope skills. Default true. */
+    trust_project?: boolean;
+  };
 }
 
 /** Load and parse `<cwd>/.swarm/config.yaml`. Returns `{}` if the file is

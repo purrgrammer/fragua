@@ -28,6 +28,10 @@ function makeClient(steps: StepSnapshot[]): ApiClient {
     }),
     getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
     getPipelineSteps: async () => steps,
+    listSkills: async () => [],
+    getSkill: async () => {
+      throw new Error("getSkill not stubbed");
+    },
     getPipelineEventsUrl: eventsUrl,
     steerRun: async () => ({ id: "stub" }),
     pauseRun: async () => ({ id: "stub" }),
@@ -48,6 +52,7 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
     deniedTools: [],
     messages: [],
     contextFiles: [],
+    skills: [],
     finalText: "",
     ...overrides,
   };

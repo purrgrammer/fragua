@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import {
   createPiMockBackend,
@@ -20,6 +21,7 @@ import { ConsoleSink, JsonlCheckpointStore, JsonlSink, tailControlRequests } fro
 import type { ExecutionEnvironment } from "@swarm/workspace";
 import {
   CORE_TOOLS,
+  discoverSkills,
   formatLeaks,
   LocalEnvironment,
   scanDotenv,
@@ -128,6 +130,18 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const registry = new ToolRegistry();
   registry.registerAll(CORE_TOOLS);
 
+  // Skill discovery runs once per CLI invocation against the run's cwd +
+  // the user's home directory. Matching catalog advertisement and the
+  // scoped `local:load_skill` tool happen per-node inside the backend,
+  // which lets node-level `skills=…` / `skills_disabled` override which
+  // entries the model sees without rebuilding the registry.
+  const { skills: discoveredSkills, warnings: skillWarnings } = await discoverSkills({
+    cwd,
+    homeDir: homedir(),
+    ...(config.skills !== undefined ? { config: config.skills } : {}),
+  });
+  for (const msg of skillWarnings) console.error(chalk.dim(`skills: ${msg}`));
+
   let backend: CodergenBackend;
   let mockHandle: { dispose: () => void } | undefined;
   let summariser: SummariserBackend | undefined;
@@ -184,8 +198,16 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       env,
       defaultModel: { provider, model },
       ...(summariser !== undefined ? { summariser } : {}),
+      ...(discoveredSkills.length > 0 ? { skills: discoveredSkills } : {}),
     });
-    registry.register(createSubagentTool({ registry, env, defaultModel: { provider, model } }));
+    registry.register(
+      createSubagentTool({
+        registry,
+        env,
+        defaultModel: { provider, model },
+        ...(discoveredSkills.length > 0 ? { skills: discoveredSkills } : {}),
+      }),
+    );
   }
 
   const interviewerChoice = opts.interviewer ?? (process.stdin.isTTY && !opts.mock ? "console" : "auto");

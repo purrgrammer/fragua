@@ -15,7 +15,8 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
-    "turndown": "7.2.4"
+    "turndown": "7.2.4",
+    "yaml": "2.7.0"
   },
   "devDependencies": {
     "@types/turndown": "5.0.6",
