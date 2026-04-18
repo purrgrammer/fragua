@@ -174,3 +174,38 @@ body {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1, "calt" 1, "liga" 1;
 }
+
+/*
+ * Canonical "thinking" pulse. (SKILL.md § Motion)
+ *
+ *   Processing / awaiting → opacity 1.0 → 0.55 → 1.0
+ *   1800ms infinite, ease-in-out
+ *
+ * This is the one and only motion primitive for "this is happening" —
+ * spinners, in-flight tool calls, streaming reasoning, etc. all share it
+ * so the cadence stays uniform across the app. Touches `opacity` only,
+ * per the rule "Animations touch only `transform` and `opacity`".
+ *
+ * `prefers-reduced-motion` swaps the animation for a static dimmed state
+ * (opacity 0.7), preserving the "alive" signal without motion.
+ */
+@keyframes sw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.sw-pulse {
+  animation: sw-pulse var(--sw-duration-pulse, 1800ms) ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sw-pulse {
+    animation: none;
+    opacity: 0.7;
+  }
+}
