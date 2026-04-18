@@ -28,6 +28,10 @@ describe("GET /pipelines", () => {
         ev({ type: "pipeline.failed", timestamp: "2024-01-02T00:00:03.000Z" }),
       ],
       gamma: [ev({ type: "pipeline.started", timestamp: "2024-01-03T00:00:00.000Z", data: { workflow: "x.dot" } })],
+      delta: [
+        ev({ type: "pipeline.started", timestamp: "2024-01-04T00:00:00.000Z", data: { workflow: "cancelme.dot" } }),
+        ev({ type: "pipeline.canceled", timestamp: "2024-01-04T00:00:02.000Z" }),
+      ],
     };
 
     const app = createServer({ runsDir: "/unused", ports: { runReader: memoryRunReader(runs) } });
@@ -35,7 +39,7 @@ describe("GET /pipelines", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as unknown[];
 
-    expect(body.length).toBe(3);
+    expect(body.length).toBe(4);
     for (const row of body) {
       expect(Value.Check(PipelineSummary, row)).toBe(true);
     }
@@ -44,6 +48,7 @@ describe("GET /pipelines", () => {
     expect(byId.get("alpha")?.["status"]).toBe("success");
     expect(byId.get("beta")?.["status"]).toBe("fail");
     expect(byId.get("gamma")?.["status"]).toBe("running");
+    expect(byId.get("delta")?.["status"]).toBe("canceled");
     expect(byId.get("alpha")?.["workflow"]).toBe("hello.dot");
     expect(byId.get("alpha")?.["eventCount"]).toBe(3);
   });

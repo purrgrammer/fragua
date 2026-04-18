@@ -26,6 +26,7 @@ describe("GET /stats", () => {
     expect(body["running"]).toBe(0);
     expect(body["succeeded"]).toBe(0);
     expect(body["failed"]).toBe(0);
+    expect(body["canceled"]).toBe(0);
     expect(body["successRate"]).toBe(0);
     expect(body["totalCostUsd"]).toBe(0);
     expect(body["totalInputTokens"]).toBe(0);
@@ -65,21 +66,29 @@ describe("GET /stats", () => {
           data: { cost_usd: 0.02, input_tokens: 50, output_tokens: 10 },
         }),
       ],
+      // canceled — counted in its own bucket, excluded from successRate
+      // and avgDuration so user-initiated terminations don't distort either.
+      d: [
+        ev({ type: "pipeline.started", timestamp: "2024-01-04T00:00:00.000Z" }),
+        ev({ type: "pipeline.canceled", timestamp: "2024-01-04T00:00:05.000Z" }),
+      ],
     };
 
     const app = createServer({ runsDir: "/unused", ports: { runReader: memoryRunReader(runs) } });
     const res = await app.request("/stats");
     const body = (await res.json()) as Record<string, unknown>;
 
-    expect(body["totalRuns"]).toBe(3);
+    expect(body["totalRuns"]).toBe(4);
     expect(body["running"]).toBe(1);
     expect(body["succeeded"]).toBe(1);
     expect(body["failed"]).toBe(1);
+    expect(body["canceled"]).toBe(1);
+    // 1 success / (1 success + 1 fail) — canceled is not in the denominator.
     expect(body["successRate"]).toBeCloseTo(0.5, 6);
     expect(body["totalCostUsd"]).toBeCloseTo(0.17, 6);
     expect(body["totalInputTokens"]).toBe(350);
     expect(body["totalOutputTokens"]).toBe(85);
-    // Avg only over a (60s) and b (30s) → 45s
+    // Avg only over a (60s) and b (30s) → 45s. Canceled d (5s) is excluded.
     expect(body["avgDurationMs"]).toBe(45_000);
   });
 
@@ -132,7 +141,7 @@ describe("GET /stats", () => {
     // (rather than cross-import) to keep the test free of a build-time
     // dep on @swarm/web.
     type Summary = {
-      status: "running" | "success" | "fail" | "unknown";
+      status: "running" | "success" | "fail" | "canceled" | "unknown";
       costUsd: number;
       inputTokens: number;
       outputTokens: number;
@@ -142,6 +151,7 @@ describe("GET /stats", () => {
       let running = 0;
       let succeeded = 0;
       let failed = 0;
+      let canceled = 0;
       let totalCostUsd = 0;
       let totalTokens = 0;
       let durationSum = 0;
@@ -150,6 +160,7 @@ describe("GET /stats", () => {
         if (r.status === "running") running += 1;
         else if (r.status === "success") succeeded += 1;
         else if (r.status === "fail") failed += 1;
+        else if (r.status === "canceled") canceled += 1;
         totalCostUsd += r.costUsd;
         totalTokens += r.inputTokens + r.outputTokens;
         if ((r.status === "success" || r.status === "fail") && r.durationMs !== undefined) {
@@ -163,6 +174,7 @@ describe("GET /stats", () => {
         running,
         succeeded,
         failed,
+        canceled,
         successRate: terminal === 0 ? 0 : succeeded / terminal,
         totalCostUsd,
         totalTokens,
@@ -184,6 +196,10 @@ describe("GET /stats", () => {
         ev({ type: "pipeline.started", timestamp: "2024-01-02T00:00:00.000Z" }),
         ev({ type: "pipeline.failed", timestamp: "2024-01-02T00:00:30.000Z" }),
       ],
+      c: [
+        ev({ type: "pipeline.started", timestamp: "2024-01-03T00:00:00.000Z" }),
+        ev({ type: "pipeline.canceled", timestamp: "2024-01-03T00:00:10.000Z" }),
+      ],
     };
 
     const app = createServer({ runsDir: "/unused", ports: { runReader: memoryRunReader(runs) } });
@@ -195,6 +211,7 @@ describe("GET /stats", () => {
     expect(serverRes["running"]).toBe(clientRes.running);
     expect(serverRes["succeeded"]).toBe(clientRes.succeeded);
     expect(serverRes["failed"]).toBe(clientRes.failed);
+    expect(serverRes["canceled"]).toBe(clientRes.canceled);
     expect(serverRes["successRate"]).toBeCloseTo(clientRes.successRate, 6);
     expect(serverRes["totalCostUsd"]).toBeCloseTo(clientRes.totalCostUsd, 6);
     expect((serverRes["totalInputTokens"] as number) + (serverRes["totalOutputTokens"] as number)).toBe(

@@ -86,12 +86,17 @@ export function deriveTitle(events: Event[]): string | undefined {
 /**
  * Most-recent-terminal-signal-wins status derivation. Walks backwards
  * so a successful retry-after-fail still reports `"success"`.
+ *
+ * `pipeline.canceled` maps to `"canceled"` rather than `"fail"` — user-initiated
+ * termination is a distinct outcome (no success-rate penalty, different UI
+ * affordance) even though both are terminal.
  */
 export function deriveStatus(events: Event[]): PipelineSummary["status"] {
   for (let i = events.length - 1; i >= 0; i--) {
     const t = events[i]?.type;
     if (t === "pipeline.completed") return "success";
     if (t === "pipeline.failed") return "fail";
+    if (t === "pipeline.canceled") return "canceled";
   }
   if (events.some((e) => e.type === "pipeline.started")) return "running";
   return events.length > 0 ? "running" : "unknown";

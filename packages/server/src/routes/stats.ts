@@ -34,6 +34,7 @@ interface StatsAccumulator {
   running: number;
   succeeded: number;
   failed: number;
+  canceled: number;
   totalCostUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -59,6 +60,7 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
       running: 0,
       succeeded: 0,
       failed: 0,
+      canceled: 0,
       totalCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
@@ -79,14 +81,16 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
         if (summary.status === "running") a.running += 1;
         else if (summary.status === "success") a.succeeded += 1;
         else if (summary.status === "fail") a.failed += 1;
+        else if (summary.status === "canceled") a.canceled += 1;
         a.totalCostUsd += summary.costUsd;
         a.totalInputTokens += summary.inputTokens;
         a.totalOutputTokens += summary.outputTokens;
         a.totalCacheReadTokens += summary.cacheReadTokens;
         a.totalCacheWriteTokens += summary.cacheWriteTokens;
-        // Avg duration only counts terminal runs — a long-running pipeline
-        // would otherwise drag the average toward "in progress" rather
-        // than "how long do runs take".
+        // Avg duration only counts runs that ran to completion. Canceled
+        // runs are excluded because they were cut short — including them
+        // would pull the average toward "how long until someone got bored"
+        // rather than "how long do runs take".
         if ((summary.status === "success" || summary.status === "fail") && summary.durationMs !== undefined) {
           a.durationSum += summary.durationMs;
           a.durationCount += 1;
@@ -96,6 +100,9 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
       init,
     );
 
+    // Success-rate denominator excludes canceled runs — a user bailing
+    // out is neither a success nor a failure, and rolling it into either
+    // bucket would distort the ratio.
     const terminal = acc.succeeded + acc.failed;
     const successRate = terminal === 0 ? 0 : acc.succeeded / terminal;
     const payload: StatsPayload = {
@@ -103,6 +110,7 @@ export function statsRoutes(opts: StatsRouteOptions): Hono {
       running: acc.running,
       succeeded: acc.succeeded,
       failed: acc.failed,
+      canceled: acc.canceled,
       successRate,
       totalCostUsd: acc.totalCostUsd,
       totalInputTokens: acc.totalInputTokens,

@@ -36,6 +36,7 @@ describe("computeStats", () => {
     expect(s.running).toBe(0);
     expect(s.succeeded).toBe(0);
     expect(s.failed).toBe(0);
+    expect(s.canceled).toBe(0);
     expect(s.successRate).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.totalTokens).toBe(0);
@@ -52,11 +53,25 @@ describe("computeStats", () => {
       row({ runId: "c", status: "fail", durationMs: 20_000 }),
       row({ runId: "d", status: "success", durationMs: 30_000 }),
       row({ runId: "e", status: "unknown" }),
+      row({ runId: "f", status: "canceled", durationMs: 5_000 }),
     ]);
-    expect(s.totalRuns).toBe(5);
+    expect(s.totalRuns).toBe(6);
     expect(s.running).toBe(1);
     expect(s.succeeded).toBe(2);
     expect(s.failed).toBe(1);
+    expect(s.canceled).toBe(1);
+  });
+
+  it("excludes canceled runs from successRate and avgDurationMs", () => {
+    const s = computeStats([
+      row({ runId: "a", status: "success", durationMs: 10_000 }),
+      row({ runId: "b", status: "fail", durationMs: 20_000 }),
+      // Canceled: shouldn't enter either numerator or denominator.
+      row({ runId: "c", status: "canceled", durationMs: 500 }),
+    ]);
+    expect(s.successRate).toBeCloseTo(0.5, 6);
+    expect(s.avgDurationMs).toBe(15_000);
+    expect(s.canceled).toBe(1);
   });
 
   it("computes successRate over terminal runs only", () => {

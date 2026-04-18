@@ -29,8 +29,17 @@ export const PipelineSummary = Type.Object({
   workflowName: Type.Optional(Type.String()),
   /** ISO-8601 of the first event, or the directory's ctime as a fallback. */
   startedAt: Type.String(),
-  /** Derived status: "running" | "success" | "fail" | "unknown". */
-  status: Type.Union([Type.Literal("running"), Type.Literal("success"), Type.Literal("fail"), Type.Literal("unknown")]),
+  /** Derived status: "running" | "success" | "fail" | "canceled" | "unknown".
+   * "canceled" is user-initiated termination (pipeline.canceled event); kept
+   * distinct from "fail" because the success-rate denominator and UI affordances
+   * differ (canceled runs aren't failures). */
+  status: Type.Union([
+    Type.Literal("running"),
+    Type.Literal("success"),
+    Type.Literal("fail"),
+    Type.Literal("canceled"),
+    Type.Literal("unknown"),
+  ]),
   /** Count of events seen — useful for quick activity glance in the UI. */
   eventCount: Type.Integer({ minimum: 0 }),
   // ── Derived metrics (task P5.06) ─────────────────────────────────────
@@ -101,7 +110,13 @@ export const PipelineDetail = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
-  status: Type.Union([Type.Literal("running"), Type.Literal("success"), Type.Literal("fail"), Type.Literal("unknown")]),
+  status: Type.Union([
+    Type.Literal("running"),
+    Type.Literal("success"),
+    Type.Literal("fail"),
+    Type.Literal("canceled"),
+    Type.Literal("unknown"),
+  ]),
   /** Monotonic sequence of the last event we've replayed. */
   lastEventSeq: Type.Integer({ minimum: 0 }),
   nodes: Type.Array(NodeState),
@@ -398,6 +413,9 @@ export const StatsPayload = Type.Object({
   running: Type.Integer({ minimum: 0 }),
   succeeded: Type.Integer({ minimum: 0 }),
   failed: Type.Integer({ minimum: 0 }),
+  /** User-initiated terminations. Not counted in `successRate` denominator
+   * — a canceled run is neither a success nor a failure. */
+  canceled: Type.Integer({ minimum: 0 }),
   successRate: Type.Number({ minimum: 0, maximum: 1 }),
   totalCostUsd: Type.Number({ minimum: 0 }),
   totalInputTokens: Type.Integer({ minimum: 0 }),

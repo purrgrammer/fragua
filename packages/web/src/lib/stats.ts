@@ -25,10 +25,14 @@ export interface DashboardStats {
   succeeded: number;
   /** Count of runs whose latest status is `"fail"`. */
   failed: number;
+  /** Count of runs whose latest status is `"canceled"` — user-initiated
+   * termination, excluded from `successRate`. */
+  canceled: number;
   /**
    * `succeeded / (succeeded + failed)`. Returns 0 when there are no
    * terminal runs (preferred over NaN so callers can `formatPercent`
-   * the value without a guard).
+   * the value without a guard). Canceled runs are excluded from the
+   * denominator — a user bailing out is neither a success nor a failure.
    */
   successRate: number;
   /** Sum of `costUsd` across every input row. */
@@ -61,6 +65,7 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
   let running = 0;
   let succeeded = 0;
   let failed = 0;
+  let canceled = 0;
   let totalCostUsd = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -73,6 +78,7 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
     if (p.status === "running") running += 1;
     else if (p.status === "success") succeeded += 1;
     else if (p.status === "fail") failed += 1;
+    else if (p.status === "canceled") canceled += 1;
 
     totalCostUsd += p.costUsd;
     totalInputTokens += p.inputTokens;
@@ -80,8 +86,9 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
     totalCacheReadTokens += p.cacheReadTokens ?? 0;
     totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
 
-    // Avg only over terminal runs — a long-running pipeline would
-    // otherwise drag the average toward "in progress" rather than
+    // Avg only over runs that ran to completion. Canceled runs are
+    // excluded because they were cut short — including them would pull
+    // the average toward "how long until someone got bored" rather than
     // "how long do runs take".
     if ((p.status === "success" || p.status === "fail") && p.durationMs !== undefined) {
       durationSum += p.durationMs;
@@ -99,6 +106,7 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
     running,
     succeeded,
     failed,
+    canceled,
     successRate,
     totalCostUsd,
     totalTokens: totalInputTokens + totalOutputTokens,

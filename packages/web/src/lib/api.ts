@@ -63,7 +63,7 @@ export interface PipelineSummary {
   /** Human-readable workflow name (basename, graph_id). Prefer for display. */
   workflowName?: string;
   startedAt: string;
-  status: "running" | "success" | "fail" | "unknown";
+  status: "running" | "success" | "fail" | "canceled" | "unknown";
   eventCount: number;
   costUsd: number;
   inputTokens: number;
@@ -110,7 +110,7 @@ export interface PipelineDetail {
   workflow?: string;
   workflowName?: string;
   startedAt: string;
-  status: "running" | "success" | "fail" | "unknown";
+  status: "running" | "success" | "fail" | "canceled" | "unknown";
   lastEventSeq: number;
   nodes: NodeState[];
   /** Raw DOT source when captured on `pipeline.started`; otherwise absent. */

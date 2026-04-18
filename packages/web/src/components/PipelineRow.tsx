@@ -141,7 +141,9 @@ export function StatusPill({ status }: { status: PipelineSummary["status"] }): J
         ? "bg-rose-100 text-rose-800 border-rose-300"
         : status === "running"
           ? "bg-violet-100 text-violet-800 border-violet-300"
-          : "bg-slate-100 text-slate-700 border-slate-300";
+          : status === "canceled"
+            ? "bg-amber-100 text-amber-800 border-amber-300"
+            : "bg-slate-100 text-slate-700 border-slate-300";
   return (
     <span
       data-testid={`status-${status}`}
