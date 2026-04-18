@@ -176,7 +176,6 @@ export function eventsToSteps(events: readonly Event[]): StepSnapshot[] {
     if (ev.type === "cost.recorded") {
       const cost = costField(ev.data);
       if (cost) step.cost = cost;
-      continue;
     }
 
     // summary.completed under a synthetic node: already its own step.
