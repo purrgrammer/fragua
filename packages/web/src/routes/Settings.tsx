@@ -16,17 +16,14 @@
 //      next person doesn't wonder why their bare `SWARM_FOO=bar`
 //      isn't showing up.
 
+import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { Separator } from "../components/ui/separator.tsx";
-import type { ApiClient } from "../lib/api.ts";
+import { BASE_URL } from "../lib/api.ts";
 import { type Theme, useTheme } from "../lib/theme.ts";
 
-export interface SettingsProps {
-  api: ApiClient;
-}
-
-export function Settings({ api }: SettingsProps): JSX.Element {
+export function Settings(): JSX.Element {
   const version = ((import.meta.env as Record<string, unknown>)["VITE_APP_VERSION"] as string | undefined) ?? "dev";
   // Vite only inlines env vars prefixed with `VITE_` at build time;
   // bare `SWARM_*` values from the operator's shell never reach the
@@ -76,11 +73,11 @@ export function Settings({ api }: SettingsProps): JSX.Element {
           <CardTitle className="text-sm">Server</CardTitle>
         </CardHeader>
         <CardContent className="text-sm">
-          <Row label="API base URL" value={<code className="font-mono">{api.baseUrl}</code>} />
+          <Row label="API base URL" value={<code className="font-mono">{BASE_URL}</code>} />
           <Separator className="my-3" />
           <Row
             label="Health endpoint"
-            value={<code className="font-mono text-muted-foreground">{api.baseUrl}/health</code>}
+            value={<code className="font-mono text-muted-foreground">{BASE_URL}/health</code>}
           />
         </CardContent>
       </Card>
@@ -126,7 +123,7 @@ export function Settings({ api }: SettingsProps): JSX.Element {
   );
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }): JSX.Element {
+function Row({ label, value }: { label: string; value: ReactNode }): JSX.Element {
   return (
     <div className="flex min-w-0 items-center justify-between gap-3">
       <span className="shrink-0 text-muted-foreground text-xs">{label}</span>

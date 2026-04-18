@@ -35,7 +35,7 @@
 // matters.
 
 import { useEffect, useRef, useState } from "react";
-import type { ApiClient } from "./api.ts";
+import { getPipelineEvents, getPipelineEventsUrl } from "./api.ts";
 import {
   applyEvent,
   createReducerState,
@@ -68,8 +68,6 @@ export interface UseRunConversationResult {
 export interface UseRunConversationOptions {
   /** EventSource constructor. Tests inject a fake to avoid network + timers. */
   eventSourceImpl?: typeof EventSource;
-  /** Fetch implementation. Tests inject a fake; default is `globalThis.fetch`. */
-  fetchImpl?: typeof fetch;
 }
 
 /** All swarm event types, mirrored from `@swarm/core` (packages/core/src/types/events.ts).
@@ -155,7 +153,6 @@ function coerceRawEvents(items: readonly unknown[]): RawEvent[] {
 }
 
 export function useRunConversation(
-  api: ApiClient,
   runId: string | null | undefined,
   opts: UseRunConversationOptions = {},
 ): UseRunConversationResult {
@@ -170,7 +167,7 @@ export function useRunConversation(
   const stateRef = useRef<ReducerState>(createReducerState());
   const lastSeqRef = useRef(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: opts.fetchImpl and opts.eventSourceImpl are test injections; the hook keys on runId only. Callers don't memoize opts.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opts.eventSourceImpl is a test injection; the hook keys on runId only. Callers don't memoize opts.
   useEffect(() => {
     // Reset on runId change or mount.
     stateRef.current = createReducerState();
@@ -189,8 +186,7 @@ export function useRunConversation(
     let cancelled = false;
 
     // ── Phase 1: bootstrap via REST ──────────────────────────────────
-    api
-      .getPipelineEvents(runId)
+    getPipelineEvents(runId)
       .then((payload) => {
         if (cancelled) return;
         const historical = coerceRawEvents(payload.events);
@@ -241,7 +237,7 @@ export function useRunConversation(
         setStatus("closed");
         return;
       }
-      const url = api.getPipelineEventsUrl(runId!);
+      const url = getPipelineEventsUrl(runId!);
       es = new Ctor(url);
       setStatus("live");
 
@@ -269,7 +265,7 @@ export function useRunConversation(
         es = null;
       }
     };
-  }, [api, runId]);
+  }, [runId]);
 
   return { conversation, status, lastSeq, revision, totalEvents };
 }

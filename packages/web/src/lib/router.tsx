@@ -21,27 +21,21 @@ import { Settings } from "../routes/Settings.tsx";
 import { SkillDetail } from "../routes/SkillDetail.tsx";
 import { SkillsList } from "../routes/SkillsList.tsx";
 import { Workflows } from "../routes/Workflows.tsx";
-import type { ApiClient } from "./api.ts";
 
-export interface CreateRouterOptions {
-  api: ApiClient;
-}
-
-/** Route table shared between browser and memory routers (tests use memory). */
-export function createRoutes(opts: CreateRouterOptions): RouteObject[] {
+export function createRoutes(): RouteObject[] {
   return [
     {
       path: "/",
       element: <AppShell />,
       children: [
-        { index: true, element: <Home api={opts.api} /> },
-        { path: "workflows", element: <Workflows api={opts.api} /> },
-        { path: "jobs", element: <Jobs api={opts.api} /> },
-        { path: "pipelines", element: <PipelinesList api={opts.api} /> },
-        { path: "pipelines/:id", element: <PipelineDetail api={opts.api} /> },
-        { path: "skills", element: <SkillsList api={opts.api} /> },
-        { path: "skills/:name", element: <SkillDetail api={opts.api} /> },
-        { path: "settings", element: <Settings api={opts.api} /> },
+        { index: true, element: <Home /> },
+        { path: "workflows", element: <Workflows /> },
+        { path: "jobs", element: <Jobs /> },
+        { path: "pipelines", element: <PipelinesList /> },
+        { path: "pipelines/:id", element: <PipelineDetail /> },
+        { path: "skills", element: <SkillsList /> },
+        { path: "skills/:name", element: <SkillDetail /> },
+        { path: "settings", element: <Settings /> },
         { path: "*", element: <NotFound /> },
       ],
     },
@@ -54,8 +48,8 @@ export function createRoutes(opts: CreateRouterOptions): RouteObject[] {
   ];
 }
 
-export function createAppRouter(opts: CreateRouterOptions): ReturnType<typeof createBrowserRouter> {
-  return createBrowserRouter(createRoutes(opts));
+export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
+  return createBrowserRouter(createRoutes());
 }
 
 function NotFound(): JSX.Element {

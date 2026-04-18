@@ -25,9 +25,10 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { parseDotSource } from "@swarm/core";
-import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { PipelineDetail } from "../../src/lib/api.ts";
+import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
 const WORKFLOW_SOURCE = `digraph demo {

@@ -1,103 +1,59 @@
 // /jobs — the daemon's job queue viewed through the web UI.
 //
-// Surfaces queued + running + recent terminal jobs. Polls `listJobs`
-// every 2s while mounted so the table reflects fresh state without a
-// full reload. Cancel buttons are shown for queued + running rows;
-// on click they fire `cancelJob` and optimistically refresh the list.
+// Surfaces queued + running + recent terminal jobs. The 2s poll lives
+// on `queries.jobs.list`. Cancel buttons are shown for queued + running
+// rows; on click they fire `cancelJob` via `useMutation` and invalidate
+// the jobs cache so the table reflects the new state.
 //
-// When the API returns 503 (the server is running without a daemon)
-// we render an informative empty state — the top-level DaemonBanner
-// already tells the user what's wrong; this just keeps the content
-// area from rendering a confusing "no jobs" when the truth is "no
-// daemon to have jobs".
+// When the API returns 503 (the server is running without a daemon) we
+// render an informative empty state — the top-level DaemonBanner
+// already tells the user what's wrong; this just keeps the content area
+// from rendering a confusing "no jobs" when the truth is "no daemon to
+// have jobs".
 
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Zap } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/badge.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import { ApiError, type ApiClient, type JobStatus, type JobSummary } from "../lib/api.ts";
+import { ApiError, cancelJob, type JobStatus } from "../lib/api.ts";
+import { queries } from "../lib/queries.ts";
 
-export interface JobsProps {
-  api: ApiClient;
-  /** Test override — defaults to `api.listJobs`. */
-  fetcher?: () => Promise<JobSummary[]>;
-  /** Test override — defaults to `api.cancelJob`. */
-  onCancel?: (jobId: string) => Promise<unknown>;
-  /** Test override; production uses 2s. Pass 0 to disable polling. */
-  pollIntervalMs?: number;
-}
+export function Jobs(): JSX.Element {
+  const qc = useQueryClient();
+  const { data: rows, isPending, error } = useQuery(queries.jobs.list({ limit: 100 }));
+  const noDaemon = error instanceof ApiError && error.status === 503;
+  const otherError = error && !noDaemon;
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ready"; rows: JobSummary[] }
-  | { kind: "no-daemon" }
-  | { kind: "error" };
-
-export function Jobs({ api, fetcher, onCancel, pollIntervalMs = 2000 }: JobsProps): JSX.Element {
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
-  const load = fetcher ?? (() => api.listJobs({ limit: 100 }));
-  const cancel = onCancel ?? ((id: string) => api.cancelJob(id));
-
-  const refresh = useCallback(async () => {
-    try {
-      const rows = await load();
-      setState({ kind: "ready", rows });
-    } catch (err) {
-      // Server without daemon → routes return 503. Surface that
-      // distinctly from a transport failure.
-      if (err instanceof ApiError && err.status === 503) {
-        setState({ kind: "no-daemon" });
-        return;
-      }
-      console.warn("[Jobs] failed to load jobs —", err instanceof Error ? err.message : String(err));
-      setState({ kind: "error" });
-    }
-  }, [load]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void refresh().then(() => {
-      if (cancelled) return;
-    });
-    if (pollIntervalMs <= 0) return;
-    const t = setInterval(() => {
-      if (cancelled) return;
-      void refresh();
-    }, pollIntervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [refresh, pollIntervalMs]);
-
-  const handleCancel = async (jobId: string) => {
-    try {
-      await cancel(jobId);
-      void refresh();
-    } catch (err) {
+  const cancel = useMutation({
+    mutationFn: (jobId: string) => cancelJob(jobId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queries.jobs.all() });
+      void qc.invalidateQueries({ queryKey: queries.pipelines.all() });
+    },
+    onError: (err, jobId) => {
       console.warn(`[Jobs] cancel ${jobId} failed —`, err instanceof Error ? err.message : String(err));
-    }
-  };
+    },
+  });
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Jobs</h2>
-      {state.kind === "loading" && (
+      {isPending && (
         <p className="text-muted-foreground text-sm" data-testid="jobs-loading">
           Loading…
         </p>
       )}
-      {state.kind === "error" && (
+      {otherError && (
         <EmptyState
           data-testid="jobs-error"
           title="Couldn't load jobs"
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {state.kind === "no-daemon" && (
+      {noDaemon && (
         <EmptyState
           data-testid="jobs-no-daemon"
           icon={<Zap className="size-6" />}
@@ -110,7 +66,7 @@ export function Jobs({ api, fetcher, onCancel, pollIntervalMs = 2000 }: JobsProp
           }
         />
       )}
-      {state.kind === "ready" && state.rows.length === 0 && (
+      {rows && rows.length === 0 && (
         <EmptyState
           data-testid="jobs-empty"
           icon={<Zap className="size-6" />}
@@ -123,7 +79,7 @@ export function Jobs({ api, fetcher, onCancel, pollIntervalMs = 2000 }: JobsProp
           }
         />
       )}
-      {state.kind === "ready" && state.rows.length > 0 && (
+      {rows && rows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           <Table data-testid="jobs-table" className="table-fixed">
             <TableHeader>
@@ -136,10 +92,14 @@ export function Jobs({ api, fetcher, onCancel, pollIntervalMs = 2000 }: JobsProp
               </TableRow>
             </TableHeader>
             <TableBody>
-              {state.rows.map((row) => (
+              {rows.map((row) => (
                 <TableRow key={row.id} data-testid={`job-row-${row.id}`}>
                   <TableCell className="max-w-0 truncate font-medium">
-                    <Link to={`/pipelines/${encodeURIComponent(row.runId)}`} className="hover:underline" title={row.runId}>
+                    <Link
+                      to={`/pipelines/${encodeURIComponent(row.runId)}`}
+                      className="hover:underline"
+                      title={row.runId}
+                    >
                       {shortId(row.runId)}
                     </Link>
                   </TableCell>
@@ -151,16 +111,15 @@ export function Jobs({ api, fetcher, onCancel, pollIntervalMs = 2000 }: JobsProp
                   <TableCell>
                     <StatusBadge status={row.status} />
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {formatAge(row.enqueuedAt)}
-                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{formatAge(row.enqueuedAt)}</TableCell>
                   <TableCell className="text-right">
                     {(row.status === "queued" || row.status === "running") && (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => void handleCancel(row.id)}
+                        onClick={() => cancel.mutate(row.id)}
+                        disabled={cancel.isPending}
                         data-testid={`job-cancel-${row.id}`}
                       >
                         Cancel

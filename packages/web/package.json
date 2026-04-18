@@ -22,6 +22,7 @@
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",
     "@swarm/core": "workspace:*",
+    "@tanstack/react-query": "5.99.1",
     "@xyflow/react": "12.10.2",
     "ai": "6.0.168",
     "class-variance-authority": "0.7.1",

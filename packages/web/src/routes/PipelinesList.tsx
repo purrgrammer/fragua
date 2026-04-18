@@ -15,55 +15,39 @@
 //     width; long titles truncate inside the row rather than forcing
 //     horizontal scroll or shrinking into a narrow column.
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { PipelineRow } from "../components/PipelineRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
-import type { ApiClient, PipelineSummary } from "../lib/api.ts";
+import { queries } from "../lib/queries.ts";
 
-export interface PipelinesListProps {
-  api: ApiClient;
-}
-
-type ListState = { kind: "loading" } | { kind: "ready"; rows: PipelineSummary[] } | { kind: "error" };
-
-export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
-  const [state, setState] = useState<ListState>({ kind: "loading" });
+export function PipelinesList(): JSX.Element {
+  const { data: rows, isPending, isError, error } = useQuery(queries.pipelines.list());
 
   useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    api
-      .listPipelines()
-      .then((rows) => {
-        if (!cancelled) setState({ kind: "ready", rows });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn("[PipelinesList] failed to load pipelines —", message);
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
+    if (error)
+      console.warn(
+        "[PipelinesList] failed to load pipelines —",
+        error instanceof Error ? error.message : String(error),
+      );
+  }, [error]);
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Pipelines</h2>
-      {state.kind === "loading" && (
+      {isPending && (
         <p className="text-slate-500 text-sm" data-testid="pipelines-loading">
           Loading…
         </p>
       )}
-      {state.kind === "error" && (
+      {isError && (
         <EmptyState
           data-testid="pipelines-error"
           title="Couldn't load pipelines"
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {state.kind === "ready" && state.rows.length === 0 && (
+      {rows && rows.length === 0 && (
         <EmptyState
           data-testid="pipelines-empty"
           title="No runs yet"
@@ -74,12 +58,12 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
           }
         />
       )}
-      {state.kind === "ready" && state.rows.length > 0 && (
+      {rows && rows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           {/* Raw <table> (not the shadcn Table primitive) so <PipelineRow> keeps
-              control of row layout. Header classes mirror TableHead's design-skill
-              treatment (§Typography: UPPERCASE + 0.06em tracking + text-xs + muted)
-              so list headers feel consistent across the app. */}
+              control of row layout. Header classes mirror TableHead's treatment
+              (UPPERCASE + 0.06em tracking + text-xs + muted) so list headers
+              feel consistent across the app. */}
           <table className="w-full table-fixed border-collapse" data-testid="pipelines-table">
             <thead>
               <tr className="border-b">
@@ -95,7 +79,7 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {state.rows.map((row) => (
+              {rows.map((row) => (
                 <PipelineRow key={row.runId} row={row} variant="default" />
               ))}
             </tbody>

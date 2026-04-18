@@ -15,13 +15,13 @@
 //     steps, well within unoptimised render budgets.
 //   - Pure display; no mutation, no state beyond the fetch.
 
-import { useEffect, useState } from "react";
-import type { ApiClient, StepSnapshot } from "../lib/api.ts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { getPipelineSteps, type StepSnapshot } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
 
 export interface StepInspectorProps {
-  api: ApiClient;
   runId: string;
   /** When set, total step count the parent can use for lazy-mount
    * decisions. Re-fetching on totalEvents changes keeps the panel
@@ -29,47 +29,38 @@ export interface StepInspectorProps {
   totalEvents?: number;
 }
 
-type FetchState = { kind: "loading" } | { kind: "ready"; steps: StepSnapshot[] } | { kind: "error"; message: string };
+export function StepInspector({ runId, totalEvents }: StepInspectorProps): JSX.Element {
+  const qc = useQueryClient();
+  const queryKey = ["pipelines", "steps", runId] as const;
+  const {
+    data: steps,
+    isPending,
+    isError,
+  } = useQuery({
+    queryKey,
+    queryFn: () => getPipelineSteps(runId),
+  });
 
-export function StepInspector({ api, runId, totalEvents }: StepInspectorProps): JSX.Element {
-  const [state, setState] = useState<FetchState>({ kind: "loading" });
-
-  // Refetch on totalEvents transitions so the inspector picks up new
-  // steps as they stream in. Cheap: the server replays from disk.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is an intentional re-fetch trigger.
   useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    api
-      .getPipelineSteps(runId)
-      .then((steps) => {
-        if (!cancelled) setState({ kind: "ready", steps });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setState({ kind: "error", message });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, runId, totalEvents]);
+    if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey });
+    // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
+  }, [totalEvents]);
 
-  if (state.kind === "loading") {
+  if (isPending) {
     return (
       <div data-testid="step-inspector-loading" className="text-xs text-slate-500 p-4">
         Loading steps…
       </div>
     );
   }
-  if (state.kind === "error") {
+  if (isError) {
     return (
       <div data-testid="step-inspector-error" className="text-xs text-rose-600 p-4">
         Failed to load steps.
       </div>
     );
   }
-  if (state.steps.length === 0) {
+  if (!steps || steps.length === 0) {
     return (
       <div data-testid="step-inspector-empty" className="text-xs text-slate-500 p-4">
         No agent steps recorded for this run yet.
@@ -79,7 +70,7 @@ export function StepInspector({ api, runId, totalEvents }: StepInspectorProps): 
 
   return (
     <div data-testid="step-inspector" className="flex flex-col gap-2 p-3">
-      {state.steps.map((step) => (
+      {steps.map((step) => (
         <StepCard key={step.stepIdx} step={step} />
       ))}
     </div>

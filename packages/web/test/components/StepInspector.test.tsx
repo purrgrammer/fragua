@@ -1,49 +1,13 @@
 // StepInspector renders the per-step panels (Prompt, System prompt,
 // Messages, Tools, Context files, Settings, Budget, Final text) from a
-// `StepSnapshot[]` pulled via `api.getPipelineSteps`.
+// `StepSnapshot[]` pulled via `getPipelineSteps`.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { cleanup, render, waitFor, within } from "@testing-library/react";
+import { cleanup, waitFor, within } from "@testing-library/react";
 import { StepInspector } from "../../src/components/StepInspector.tsx";
-import type { ApiClient, StepSnapshot } from "../../src/lib/api.ts";
+import type { StepSnapshot } from "../../src/lib/api.ts";
+import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
-
-function makeClient(steps: StepSnapshot[]): ApiClient {
-  const baseUrl = "/api";
-  const eventsUrl = (id: string) => `${baseUrl}/pipelines/${id}/events`;
-  return {
-    baseUrl,
-    health: async () => ({ ok: true }),
-    listPipelines: async () => [],
-    listWorkflows: async () => [],
-    getPipeline: async (id: string) => ({
-      runId: id,
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "unknown" as const,
-      lastEventSeq: 0,
-      nodes: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    }),
-    getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
-    getPipelineSteps: async () => steps,
-    listSkills: async () => [],
-    getSkill: async () => {
-      throw new Error("getSkill not stubbed");
-    },
-    getPipelineEventsUrl: eventsUrl,
-    steerRun: async () => ({ id: "stub" }),
-    pauseRun: async () => ({ id: "stub" }),
-    resumeRun: async () => ({ id: "stub" }),
-    cancelRun: async () => ({ id: "stub" }),
-    listJobs: async () => [],
-    getJob: async () => { throw new Error("getJob not stubbed"); },
-    cancelJob: async () => ({ status: "removed", jobId: "stub" }),
-    enqueueJob: async () => ({ jobId: "stub", runId: "stub" }),
-    pipelineEventsUrl: eventsUrl,
-  };
-}
 
 function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
   return {
@@ -62,6 +26,12 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
   };
 }
 
+function mount(runId: string, steps: StepSnapshot[]) {
+  const client = createTestQueryClient();
+  client.setQueryData(["pipelines", "steps", runId], steps);
+  return renderWithClient(<StepInspector runId={runId} />, { client });
+}
+
 describe("StepInspector", () => {
   useDom();
   afterEach(() => cleanup());
@@ -71,18 +41,32 @@ describe("StepInspector", () => {
       makeStep({ stepIdx: 0, nodeId: "plan" }),
       makeStep({ stepIdx: 1, nodeId: "implement", model: "claude-opus-4-7", provider: "anthropic" }),
     ];
-    const { container } = render(<StepInspector api={makeClient(steps)} runId="r1" />);
-    const q = within(container);
-    expect(q.getByTestId("step-inspector-loading")).toBeTruthy();
-    await waitFor(() => {
-      expect(q.getByTestId("step-inspector")).toBeTruthy();
+    const client = createTestQueryClient();
+    // Delay the mock fetch so the test sees the loading state.
+    let resolve: (r: Response) => void = () => {};
+    const mock = installFetchMock({
+      "/api/pipelines/r1/steps": () =>
+        new Promise<Response>((r) => {
+          resolve = r;
+        }),
     });
-    expect(q.getByTestId("step-0")).toBeTruthy();
-    expect(q.getByTestId("step-1")).toBeTruthy();
+    try {
+      const { container } = renderWithClient(<StepInspector runId="r1" />, { client });
+      const q = within(container);
+      expect(q.getByTestId("step-inspector-loading")).toBeTruthy();
+      resolve(json(steps));
+      await waitFor(() => {
+        expect(q.getByTestId("step-inspector")).toBeTruthy();
+      });
+      expect(q.getByTestId("step-0")).toBeTruthy();
+      expect(q.getByTestId("step-1")).toBeTruthy();
+    } finally {
+      mock.restore();
+    }
   });
 
   it("empty array → empty state (not an error)", async () => {
-    const { container } = render(<StepInspector api={makeClient([])} runId="r1" />);
+    const { container } = mount("r1", []);
     await waitFor(() => {
       expect(within(container).getByTestId("step-inspector-empty")).toBeTruthy();
     });
@@ -90,7 +74,7 @@ describe("StepInspector", () => {
 
   it("renders prompt + system prompt bodies verbatim inside the expandable step", async () => {
     const steps = [makeStep({ prompt: "what's the answer?", systemPrompt: "THE BASE SYSTEM PROMPT" })];
-    const { container } = render(<StepInspector api={makeClient(steps)} runId="r1" />);
+    const { container } = mount("r1", steps);
     const q = within(container);
     await waitFor(() => {
       expect(q.getByTestId("step-0")).toBeTruthy();
@@ -108,7 +92,7 @@ describe("StepInspector", () => {
         ],
       }),
     ];
-    const { container } = render(<StepInspector api={makeClient(steps)} runId="r1" />);
+    const { container } = mount("r1", steps);
     const q = within(container);
     await waitFor(() => {
       expect(q.getByTestId("step-0")).toBeTruthy();

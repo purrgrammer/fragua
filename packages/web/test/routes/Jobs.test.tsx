@@ -1,54 +1,25 @@
-// Route-level tests for /jobs. Mounts JobsList inside a memory
-// router with a stubbed ApiClient, asserts table rows + states.
+// Route-level tests for /jobs. Mount inside a memory router, seed the
+// react-query cache via `setQueryData` for happy-path renders, and use
+// a URL-routing fake `fetch` for the mutation + error paths.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { ApiError, type ApiClient, type JobSummary } from "../../src/lib/api.ts";
+import type { JobSummary } from "../../src/lib/api.ts";
+import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
-  const baseUrl = overrides.baseUrl ?? "/api";
-  const eventsUrl = overrides.getPipelineEventsUrl ?? ((id: string) => `${baseUrl}/pipelines/${id}/events`);
-  return {
-    baseUrl,
-    health: async () => ({ ok: true }),
-    listPipelines: async () => [],
-    listWorkflows: async () => [],
-    getPipeline: async (id: string) => ({
-      runId: id,
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "unknown" as const,
-      lastEventSeq: 0,
-      nodes: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    }),
-    getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
-    getPipelineSteps: async () => [],
-    getPipelineEventsUrl: eventsUrl,
-    steerRun: async () => ({ id: "stub" }),
-    pauseRun: async () => ({ id: "stub" }),
-    resumeRun: async () => ({ id: "stub" }),
-    cancelRun: async () => ({ id: "stub" }),
-    listJobs: overrides.listJobs ?? (async () => []),
-    getJob: overrides.getJob ?? (async () => { throw new Error("getJob not stubbed"); }),
-    cancelJob: overrides.cancelJob ?? (async () => ({ status: "removed", jobId: "stub" })),
-    enqueueJob: overrides.enqueueJob ?? (async () => ({ jobId: "stub", runId: "stub" })),
-    listSkills: async () => [],
-    getSkill: async () => { throw new Error("getSkill not stubbed"); },
-    pipelineEventsUrl: eventsUrl,
-    ...overrides,
-  };
+function mount(client = createTestQueryClient(), path = "/jobs") {
+  const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
+  return renderWithClient(<RouterProvider router={router} />, { client });
 }
 
-function mount(api: ApiClient, path = "/jobs") {
-  // pollIntervalMs=0 is injected via the route component prop default; for the
-  // tests we lean on the initial fetch only (polling is visual, not correctness).
-  const router = createMemoryRouter(createRoutes({ api }), { initialEntries: [path] });
-  return render(<RouterProvider router={router} />);
+function withJobs(rows: JobSummary[]) {
+  const client = createTestQueryClient();
+  client.setQueryData(queries.jobs.list({ limit: 100 }).queryKey, rows);
+  return client;
 }
 
 function job(overrides: Partial<JobSummary> = {}): JobSummary {
@@ -75,21 +46,18 @@ describe("Jobs route", () => {
       job({ id: "b", runId: "run-b", status: "running", workflow: "fix.dot" }),
       job({ id: "c", runId: "run-c", status: "success", workflow: "build.dot" }),
     ];
-    const api = makeClient({ listJobs: async () => rows });
-    const { container } = mount(api);
+    const { container } = mount(withJobs(rows));
     await waitFor(() => {
       expect(within(container).getByTestId("jobs-table")).toBeTruthy();
     });
     expect(within(container).getByTestId("job-row-a")).toBeTruthy();
     expect(within(container).getByTestId("job-row-b")).toBeTruthy();
     expect(within(container).getByTestId("job-row-c")).toBeTruthy();
-    // Links point at the pipeline detail page by runId.
     const links = Array.from(container.querySelectorAll("a[href]"));
     const hrefs = links.map((a) => a.getAttribute("href"));
     expect(hrefs).toContain("/pipelines/run-a");
     expect(hrefs).toContain("/pipelines/run-b");
     expect(hrefs).toContain("/pipelines/run-c");
-    // Status badges get testids so we can spot them.
     expect(within(container).getByTestId("job-status-queued")).toBeTruthy();
     expect(within(container).getByTestId("job-status-running")).toBeTruthy();
     expect(within(container).getByTestId("job-status-success")).toBeTruthy();
@@ -101,8 +69,7 @@ describe("Jobs route", () => {
       job({ id: "running", runId: "rr", status: "running" }),
       job({ id: "done", runId: "rd", status: "success" }),
     ];
-    const api = makeClient({ listJobs: async () => rows });
-    const { container } = mount(api);
+    const { container } = mount(withJobs(rows));
     const q = within(container);
     await waitFor(() => {
       expect(q.getByTestId("jobs-table")).toBeTruthy();
@@ -112,25 +79,29 @@ describe("Jobs route", () => {
     expect(q.queryByTestId("job-cancel-done")).toBeNull();
   });
 
-  it("calls cancelJob when the cancel button is clicked", async () => {
-    let cancelCalledWith = "";
-    const api = makeClient({
-      listJobs: async () => [job({ id: "j1", status: "queued" })],
-      cancelJob: async (id: string) => {
-        cancelCalledWith = id;
-        return { status: "removed", jobId: id };
+  it("calls DELETE /jobs/:id when the cancel button is clicked", async () => {
+    const client = withJobs([job({ id: "j1", status: "queued" })]);
+    const mock = installFetchMock({
+      "/api/jobs/j1": ({ method }) => {
+        if (method === "DELETE") return json({ status: "removed", jobId: "j1" });
+        return new Response("method not allowed", { status: 405 });
       },
     });
-    const { container } = mount(api);
-    const q = within(container);
-    await waitFor(() => expect(q.getByTestId("job-cancel-j1")).toBeTruthy());
-    fireEvent.click(q.getByTestId("job-cancel-j1"));
-    await waitFor(() => expect(cancelCalledWith).toBe("j1"));
+    try {
+      const { container } = mount(client);
+      const q = within(container);
+      await waitFor(() => expect(q.getByTestId("job-cancel-j1")).toBeTruthy());
+      fireEvent.click(q.getByTestId("job-cancel-j1"));
+      await waitFor(() => {
+        expect(mock.calls.some((c) => c.url === "/api/jobs/j1" && c.method === "DELETE")).toBe(true);
+      });
+    } finally {
+      mock.restore();
+    }
   });
 
   it("renders the empty state when the queue is empty", async () => {
-    const api = makeClient({ listJobs: async () => [] });
-    const { container } = mount(api);
+    const { container } = mount(withJobs([]));
     await waitFor(() => {
       expect(within(container).getByTestId("jobs-empty")).toBeTruthy();
     });
@@ -140,17 +111,16 @@ describe("Jobs route", () => {
   it("renders the 'daemon not running' state when the API returns 503", async () => {
     const origWarn = console.warn;
     console.warn = () => {};
+    const mock = installFetchMock({
+      "/api/jobs?limit=100": () => new Response("no daemon", { status: 503, statusText: "Service Unavailable" }),
+    });
     try {
-      const api = makeClient({
-        listJobs: async () => {
-          throw new ApiError("GET /api/jobs → 503", 503, "/api/jobs");
-        },
-      });
-      const { container } = mount(api);
+      const { container } = mount();
       await waitFor(() => {
         expect(within(container).getByTestId("jobs-no-daemon")).toBeTruthy();
       });
     } finally {
+      mock.restore();
       console.warn = origWarn;
     }
   });
@@ -158,18 +128,17 @@ describe("Jobs route", () => {
   it("renders a generic error state on transport failure", async () => {
     const origWarn = console.warn;
     console.warn = () => {};
+    const mock = installFetchMock({
+      "/api/jobs?limit=100": () => new Response("network down", { status: 500, statusText: "Internal Server Error" }),
+    });
     try {
-      const api = makeClient({
-        listJobs: async () => {
-          throw new Error("network down");
-        },
-      });
-      const { container } = mount(api);
+      const { container } = mount();
       await waitFor(() => {
         expect(within(container).getByTestId("jobs-error")).toBeTruthy();
       });
       expect(container.textContent ?? "").not.toContain("network down");
     } finally {
+      mock.restore();
       console.warn = origWarn;
     }
   });

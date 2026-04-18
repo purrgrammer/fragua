@@ -16,16 +16,11 @@
 //   helpers is the single audit point; no component should hand-build a
 //   "/api/..." string inline.
 //
-// Endpoints wired here:
-//   - GET /health                              → health()
-//   - GET /pipelines                           → listPipelines()
-//   - GET /pipelines/:id                       → getPipeline(id)
-//   - GET /pipelines/:id/events  (SSE)         → getPipelineEventsUrl(id)
-//   - GET /workflows                           → listWorkflows()
-//
-// Test-injectable:
-//   - `fetchImpl` → swap in a mock fetch.
-//   - `baseUrl`   → override "/api" (e.g. for preview-environment tests).
+// Tests mock at the `globalThis.fetch` boundary (spyOn) or at the module
+// boundary (`mock.module`) — both standard bun patterns, no in-module
+// injection seam required.
+
+export const BASE_URL = "/api";
 
 export interface HealthResponse {
   ok: boolean;
@@ -45,22 +40,9 @@ export interface HealthResponse {
   };
 }
 
-/**
- * Subset of `PipelineSummary` the UI cares about. We intentionally don't
- * re-import from `@swarm/server` to keep the web package's dep surface
- * narrow — a local mirror is cheap and easy to evolve.
- *
- * Derived-metric fields (`costUsd`, `inputTokens`, `outputTokens`,
- * `durationMs`) mirror the server schema one-for-one; see
- * `packages/server/src/schemas.ts` for semantics. Defaults are zero for
- * the numeric totals and undefined for durations that can't be computed
- * (fewer than two events, unparseable timestamps).
- */
 export interface PipelineSummary {
   runId: string;
-  /** Raw workflow identifier — may be a path, basename, or SHA. */
   workflow?: string;
-  /** Human-readable workflow name (basename, graph_id). Prefer for display. */
   workflowName?: string;
   startedAt: string;
   status: "running" | "success" | "fail" | "canceled" | "unknown";
@@ -68,24 +50,13 @@ export interface PipelineSummary {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
-  /**
-   * Prompt-cache read tokens reused from prior calls. Optional for
-   * back-compat with older server builds that didn't aggregate the field.
-   */
   cacheReadTokens?: number;
-  /** First-time cache priming tokens. Optional same as cacheReadTokens. */
   cacheWriteTokens?: number;
-  /** ms between first and last event; undefined if not computable. */
   durationMs?: number;
-  /** Auto-generated pipeline title (Wave 2b). Falls back to `input` then
-   * `workflowName` for display. */
   title?: string;
-  /** Raw `$ARGUMENTS` captured on `pipeline.started.data.input`. Display
-   * fallback when `title` is absent; also handy for tooltips. */
   input?: string;
 }
 
-/** Local mirror of the server's `NodeState`. */
 export interface NodeState {
   nodeId: string;
   state: "pending" | "running" | "completed" | "failed" | "skipped" | "retrying";
@@ -93,17 +64,11 @@ export interface NodeState {
 }
 
 /**
- * Local mirror of the server's `PipelineDetail`.
- *
- * `workflowSource` — raw DOT string copied through from the first
- * `pipeline.started` event. The web UI parses this with `@swarm/core`'s
- * `parseDotSource` to recover the topology (nodes + edges + labels +
- * attrs) for the graph canvas. Absent when the run predates source
- * capture — consumers render an empty state instead of guessing edges
- * from the event stream.
- *
- * NOTE: there is intentionally NO `edges` field here. Topology lives in
- * the DOT source; the server is not a second parser.
+ * `workflowSource` is the raw DOT captured on `pipeline.started`; absent
+ * when the run predates source capture. There is intentionally NO
+ * `edges` field — topology lives in the DOT source and is parsed
+ * client-side by `@swarm/core`'s `parseDotSource` so the server isn't a
+ * second parser.
  */
 export interface PipelineDetail {
   runId: string;
@@ -113,28 +78,17 @@ export interface PipelineDetail {
   status: "running" | "success" | "fail" | "canceled" | "unknown";
   lastEventSeq: number;
   nodes: NodeState[];
-  /** Raw DOT source when captured on `pipeline.started`; otherwise absent. */
   workflowSource?: string;
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
-  /** Prompt-cache read tokens reused from prior calls. Optional for older servers. */
   cacheReadTokens?: number;
-  /** First-time cache priming tokens. */
   cacheWriteTokens?: number;
   durationMs?: number;
-  /** Auto-generated pipeline title — see PipelineSummary.title. */
   title?: string;
-  /** Raw `$ARGUMENTS` — see PipelineSummary.input. */
   input?: string;
 }
 
-/**
- * Local mirror of the server's `WorkflowSummary` port. Declared here (rather
- * than imported from `@swarm/server`) for the same reason as
- * `PipelineSummary` — the web package deliberately keeps its dependency
- * surface narrow.
- */
 export interface WorkflowSummary {
   name: string;
   path: string;
@@ -142,7 +96,6 @@ export interface WorkflowSummary {
   label?: string;
 }
 
-/** Local mirror of the server's `SkillSummary` port. */
 export interface SkillSummary {
   name: string;
   description: string;
@@ -154,25 +107,14 @@ export interface SkillSummary {
   bytes: number;
   scope: "project" | "user";
   source_dir: string;
-  /** When set, the skill was discovered but excluded from the agent's
-   * tier-1 catalog. The UI renders it greyed out with this tooltip. */
   disabled_reason?: string;
 }
 
-/** Local mirror of the server's `SkillDetail` port. `usage` is present
- * when the server was configured with a `runReader` so
- * `GET /skills/:name` could fold `local:load_skill` activations. */
 export interface SkillDetail extends SkillSummary {
   body: string;
   usage?: { runs: string[]; count: number };
 }
 
-/**
- * Wave 5: local mirror of the server's `StepSnapshot`. One element per
- * `llm.start` event in a run, carrying the fully-assembled context the
- * agent saw for that call. Kept narrow (no method helpers, no deep
- * content typing) — the UI just displays these fields.
- */
 export interface StepSnapshot {
   stepIdx: number;
   nodeId: string;
@@ -230,10 +172,8 @@ export interface StepSnapshot {
   stopReason?: string;
 }
 
-/**
- * Thrown for any non-2xx HTTP response from the API. Callers can branch on
- * `.status` to render status-specific fallbacks (e.g. 404 → empty state).
- */
+/** Thrown for any non-2xx HTTP response. Callers can branch on `.status`
+ *  to render status-specific fallbacks (e.g. 404 → empty state). */
 export class ApiError extends Error {
   readonly status: number;
   readonly url: string;
@@ -245,38 +185,11 @@ export class ApiError extends Error {
   }
 }
 
-export interface ApiClientOptions {
-  /**
-   * Relative base prefix. Defaults to "/api" which is what the Vite dev
-   * proxy intercepts. Override only for tests — production builds are
-   * served from the same origin as the server, where the proxy doesn't
-   * matter but the prefix stays consistent.
-   */
-  baseUrl?: string;
-  /** Swap-in for tests. Defaults to `globalThis.fetch`. */
-  fetchImpl?: typeof fetch;
-}
-
-/**
- * Bulk historical-events payload. Mirrors the server's
- * `GET /pipelines/:id/events.json`. Every raw event from the run's
- * `events.jsonl` is included verbatim; we leave shape validation to the
- * reducer (which only reads fields it recognises and tolerates the rest).
- *
- * `lastSeq` matches the SSE `id:` frames — pass it back as
- * `Last-Event-ID` when opening the stream so SSE resumes where the
- * bootstrap left off.
- */
 export interface PipelineEventsPayload {
   events: unknown[];
   lastSeq: number;
 }
 
-/**
- * One row from `GET /jobs`. Mirrors `JobRowSchema` in @swarm/server.
- * The wire exposes `input` (string) and omits the internal storage
- * representation (`inputJson`).
- */
 export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
 
 export interface JobSummary {
@@ -297,267 +210,175 @@ export interface JobSummary {
   worktree: boolean;
 }
 
-export interface ApiClient {
-  /** Current baseUrl, exposed so URL helpers stay consistent with fetches. */
-  readonly baseUrl: string;
+// ── Private helpers ─────────────────────────────────────────────────
 
-  health(): Promise<HealthResponse>;
-  listPipelines(): Promise<PipelineSummary[]>;
-  getPipeline(id: string): Promise<PipelineDetail>;
-  listWorkflows(): Promise<WorkflowSummary[]>;
-  /** List all installed skills (`GET /skills`). `refresh: true` forces the
-   * server to re-scan the filesystem instead of using its short TTL cache. */
-  listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]>;
-  /** Full SKILL.md body + metadata (`GET /skills/:name`). 404 throws ApiError. */
-  getSkill(name: string): Promise<SkillDetail>;
-  /**
-   * Fetch the full historical event array for a run. Used to bootstrap
-   * the conversation reducer before subscribing to the SSE stream — the
-   * UI never keeps a raw-event buffer in memory past the fold.
-   */
-  getPipelineEvents(id: string): Promise<PipelineEventsPayload>;
-  /**
-   * Wave 5: per-step snapshots. Each element is the fully-assembled
-   * context for one `backend.run()` call (prompt, system prompt,
-   * messages, tools, settings, context files, budget, cost). The
-   * server computes this from the raw event stream; the UI just
-   * renders.
-   */
-  getPipelineSteps(id: string): Promise<StepSnapshot[]>;
+const url = (path: string): string => `${BASE_URL}${path}`;
 
-  // ── Control channel ────────────────────────────────────────────────
-  // Each method POSTs a ControlRequest to the run's control.jsonl and
-  // returns the assigned uuid. The id matches what will appear on the
-  // run's `control.requested` / `control.applied` events — callers can
-  // correlate acknowledgment through the SSE stream they're already
-  // watching without polling control.jsonl directly. Errors propagate
-  // as `ApiError` with the server's status (404 for unknown runs,
-  // 400 for invalid bodies, etc.).
-
-  // ── Jobs (daemon queue) ───────────────────────────────────────────
-  // Present on daemon-backed servers. When the server has no queue
-  // (plain `swarm serve`) these return 503 and throw `ApiError`.
-
-  /** List queued + running + recent terminal jobs. */
-  listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]>;
-  /** Fetch one job by id. */
-  getJob(id: string): Promise<JobSummary>;
-  /**
-   * Cancel a job. Queued rows are removed from the queue directly;
-   * running rows get a cancel request forwarded to the worker's
-   * control channel. Terminal rows reject with 409.
-   */
-  cancelJob(id: string): Promise<{ status: string; jobId: string }>;
-  /**
-   * Enqueue a new workflow run. Returns the assigned `jobId` and
-   * `runId`; use `runId` to deep-link into `/pipelines/:runId`. Phase
-   * 7 will make `swarm run` the canonical CLI client for this.
-   */
-  enqueueJob(input: {
-    workflow: string;
-    input?: string;
-    model?: string;
-    priority?: number;
-  }): Promise<{ jobId: string; runId: string }>;
-
-  /** Inject a user message at the active agent's next turn boundary. */
-  steerRun(id: string, message: string): Promise<{ id: string }>;
-  /** Soft-pause at the next node boundary. Optional free-form reason. */
-  pauseRun(id: string, reason?: string): Promise<{ id: string }>;
-  /** Wake a paused run. Rejected server-side if not paused. */
-  resumeRun(id: string): Promise<{ id: string }>;
-  /** Graceful cancel; run emits `pipeline.canceled` as terminal event. */
-  cancelRun(id: string, reason?: string): Promise<{ id: string }>;
-
-  // URL helpers — always return relative strings starting with the client's
-  // `baseUrl` (default "/api"). Callers use these anywhere a URL is needed
-  // as a string (fetch, EventSource, <img src>, <object data>, links).
-  getPipelineEventsUrl(id: string): string;
-
-  /** @deprecated Use getPipelineEventsUrl. Kept for existing callers. */
-  pipelineEventsUrl(id: string): string;
+async function getJson<T>(path: string, validate: (v: unknown) => v is T): Promise<T> {
+  const u = url(path);
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  const body = (await res.json()) as unknown;
+  if (!validate(body)) {
+    throw new Error(`GET ${u} → malformed response`);
+  }
+  return body;
 }
 
-export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
-  const baseUrl = opts.baseUrl ?? "/api";
-  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
-
-  // Centralised URL builder. Every method below goes through this so the
-  // `baseUrl` prefix lives in exactly one place. `path` must begin with
-  // "/"; we don't try to be clever about joining.
-  const url = (path: string): string => `${baseUrl}${path}`;
-
-  async function getJson<T>(path: string, validate: (v: unknown) => v is T): Promise<T> {
-    const u = url(path);
-    const res = await fetchImpl(u);
-    if (!res.ok) {
-      throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
-    }
-    const body = (await res.json()) as unknown;
-    if (!validate(body)) {
-      throw new Error(`GET ${u} → malformed response`);
-    }
-    return body;
+async function postJson<T>(
+  path: string,
+  body: Record<string, unknown> | undefined,
+  validate: (v: unknown) => v is T,
+): Promise<T> {
+  const u = url(path);
+  const init: RequestInit = { method: "POST" };
+  if (body !== undefined) {
+    init.headers = { "content-type": "application/json" };
+    init.body = JSON.stringify(body);
   }
-
-  /** POST a JSON body; parse + validate the response as `T`. `body` is
-   * optional because pause/resume/cancel can be empty. */
-  async function postJson<T>(
-    path: string,
-    body: Record<string, unknown> | undefined,
-    validate: (v: unknown) => v is T,
-  ): Promise<T> {
-    const u = url(path);
-    const init: RequestInit = { method: "POST" };
-    if (body !== undefined) {
-      init.headers = { "content-type": "application/json" };
-      init.body = JSON.stringify(body);
-    }
-    const res = await fetchImpl(u, init);
-    if (!res.ok) {
-      throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u);
-    }
-    const payload = (await res.json()) as unknown;
-    if (!validate(payload)) {
-      throw new Error(`POST ${u} → malformed response`);
-    }
-    return payload;
+  const res = await fetch(u, init);
+  if (!res.ok) {
+    throw new ApiError(`POST ${u} → ${res.status} ${res.statusText}`, res.status, u);
   }
+  const payload = (await res.json()) as unknown;
+  if (!validate(payload)) {
+    throw new Error(`POST ${u} → malformed response`);
+  }
+  return payload;
+}
 
-  const isAcceptedId = (v: unknown): v is { id: string } =>
-    typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
+const isAcceptedId = (v: unknown): v is { id: string } =>
+  typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
 
-  const getPipelineEventsUrl = (id: string): string => url(`/pipelines/${encodeURIComponent(id)}/events`);
+// ── URL helpers ─────────────────────────────────────────────────────
 
-  return {
-    baseUrl,
+export function getPipelineEventsUrl(id: string): string {
+  return url(`/pipelines/${encodeURIComponent(id)}/events`);
+}
 
-    async health(): Promise<HealthResponse> {
-      return getJson(
-        "/health",
-        (v): v is HealthResponse =>
-          typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean",
-      );
-    },
+// ── Endpoints ───────────────────────────────────────────────────────
 
-    async listPipelines(): Promise<PipelineSummary[]> {
-      return getJson("/pipelines", (v): v is PipelineSummary[] => Array.isArray(v) && v.every(isPipelineSummary));
-    },
+export async function health(): Promise<HealthResponse> {
+  return getJson(
+    "/health",
+    (v): v is HealthResponse => typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean",
+  );
+}
 
-    async getPipeline(id: string): Promise<PipelineDetail> {
-      return getJson(`/pipelines/${encodeURIComponent(id)}`, isPipelineDetail);
-    },
+export async function listPipelines(): Promise<PipelineSummary[]> {
+  return getJson("/pipelines", (v): v is PipelineSummary[] => Array.isArray(v) && v.every(isPipelineSummary));
+}
 
-    async listWorkflows(): Promise<WorkflowSummary[]> {
-      return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
-    },
+export async function getPipeline(id: string): Promise<PipelineDetail> {
+  return getJson(`/pipelines/${encodeURIComponent(id)}`, isPipelineDetail);
+}
 
-    async listSkills(listOpts?: { refresh?: boolean }): Promise<SkillSummary[]> {
-      const qs = listOpts?.refresh ? "?refresh=1" : "";
-      return getJson(`/skills${qs}`, (v): v is SkillSummary[] => Array.isArray(v) && v.every(isSkillSummary));
-    },
+export async function listWorkflows(): Promise<WorkflowSummary[]> {
+  return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
+}
 
-    async getSkill(name: string): Promise<SkillDetail> {
-      return getJson(`/skills/${encodeURIComponent(name)}`, isSkillDetail);
-    },
+export async function listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]> {
+  const qs = opts?.refresh ? "?refresh=1" : "";
+  return getJson(`/skills${qs}`, (v): v is SkillSummary[] => Array.isArray(v) && v.every(isSkillSummary));
+}
 
-    async getPipelineEvents(id: string): Promise<PipelineEventsPayload> {
-      return getJson(
-        `/pipelines/${encodeURIComponent(id)}/events.json`,
-        (v): v is PipelineEventsPayload =>
-          typeof v === "object" &&
-          v !== null &&
-          Array.isArray((v as { events?: unknown }).events) &&
-          typeof (v as { lastSeq?: unknown }).lastSeq === "number",
-      );
-    },
+export async function getSkill(name: string): Promise<SkillDetail> {
+  return getJson(`/skills/${encodeURIComponent(name)}`, isSkillDetail);
+}
 
-    async getPipelineSteps(id: string): Promise<StepSnapshot[]> {
-      return getJson(
-        `/pipelines/${encodeURIComponent(id)}/steps`,
-        (v): v is StepSnapshot[] => Array.isArray(v) && v.every(isStepSnapshot),
-      );
-    },
+export async function getPipelineEvents(id: string): Promise<PipelineEventsPayload> {
+  return getJson(
+    `/pipelines/${encodeURIComponent(id)}/events.json`,
+    (v): v is PipelineEventsPayload =>
+      typeof v === "object" &&
+      v !== null &&
+      Array.isArray((v as { events?: unknown }).events) &&
+      typeof (v as { lastSeq?: unknown }).lastSeq === "number",
+  );
+}
 
-    async listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]> {
-      const qs = new URLSearchParams();
-      if (filter?.status) qs.set("status", filter.status);
-      if (filter?.limit !== undefined) qs.set("limit", String(filter.limit));
-      const q = qs.toString();
-      return getJson(`/jobs${q ? `?${q}` : ""}`, (v): v is JobSummary[] => Array.isArray(v) && v.every(isJobSummary));
-    },
+export async function getPipelineSteps(id: string): Promise<StepSnapshot[]> {
+  return getJson(
+    `/pipelines/${encodeURIComponent(id)}/steps`,
+    (v): v is StepSnapshot[] => Array.isArray(v) && v.every(isStepSnapshot),
+  );
+}
 
-    async getJob(id: string): Promise<JobSummary> {
-      return getJson(`/jobs/${encodeURIComponent(id)}`, isJobSummary);
-    },
+export async function listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]> {
+  const qs = new URLSearchParams();
+  if (filter?.status) qs.set("status", filter.status);
+  if (filter?.limit !== undefined) qs.set("limit", String(filter.limit));
+  const q = qs.toString();
+  return getJson(`/jobs${q ? `?${q}` : ""}`, (v): v is JobSummary[] => Array.isArray(v) && v.every(isJobSummary));
+}
 
-    async cancelJob(id: string): Promise<{ status: string; jobId: string }> {
-      const u = url(`/jobs/${encodeURIComponent(id)}`);
-      const res = await fetchImpl(u, { method: "DELETE" });
-      if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
-      const payload = (await res.json()) as unknown;
-      if (
-        typeof payload !== "object" ||
-        payload === null ||
-        typeof (payload as { status?: unknown }).status !== "string" ||
-        typeof (payload as { jobId?: unknown }).jobId !== "string"
-      ) {
-        throw new Error(`DELETE ${u} → malformed response`);
-      }
-      return payload as { status: string; jobId: string };
-    },
+export async function getJob(id: string): Promise<JobSummary> {
+  return getJson(`/jobs/${encodeURIComponent(id)}`, isJobSummary);
+}
 
-    async enqueueJob(input: { workflow: string; input?: string; model?: string; priority?: number }): Promise<{
-      jobId: string;
-      runId: string;
-    }> {
-      const body = {
-        workflow: input.workflow,
-        ...(input.input !== undefined ? { input: input.input } : {}),
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.priority !== undefined ? { priority: input.priority } : {}),
-      };
-      return postJson(
-        "/jobs",
-        body,
-        (v): v is { jobId: string; runId: string } =>
-          typeof v === "object" &&
-          v !== null &&
-          typeof (v as { jobId?: unknown }).jobId === "string" &&
-          typeof (v as { runId?: unknown }).runId === "string",
-      );
-    },
+export async function cancelJob(id: string): Promise<{ status: string; jobId: string }> {
+  const u = url(`/jobs/${encodeURIComponent(id)}`);
+  const res = await fetch(u, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const payload = (await res.json()) as unknown;
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    typeof (payload as { status?: unknown }).status !== "string" ||
+    typeof (payload as { jobId?: unknown }).jobId !== "string"
+  ) {
+    throw new Error(`DELETE ${u} → malformed response`);
+  }
+  return payload as { status: string; jobId: string };
+}
 
-    async steerRun(id: string, message: string): Promise<{ id: string }> {
-      return postJson(`/pipelines/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
-    },
-
-    async pauseRun(id: string, reason?: string): Promise<{ id: string }> {
-      const body = reason !== undefined ? { reason } : undefined;
-      return postJson(`/pipelines/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
-    },
-
-    async resumeRun(id: string): Promise<{ id: string }> {
-      return postJson(`/pipelines/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
-    },
-
-    async cancelRun(id: string, reason?: string): Promise<{ id: string }> {
-      const body = reason !== undefined ? { reason } : undefined;
-      return postJson(`/pipelines/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
-    },
-
-    getPipelineEventsUrl,
-    // Back-compat alias. New callers should use getPipelineEventsUrl.
-    pipelineEventsUrl: getPipelineEventsUrl,
+export async function enqueueJob(input: {
+  workflow: string;
+  input?: string;
+  model?: string;
+  priority?: number;
+}): Promise<{ jobId: string; runId: string }> {
+  const body = {
+    workflow: input.workflow,
+    ...(input.input !== undefined ? { input: input.input } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.priority !== undefined ? { priority: input.priority } : {}),
   };
+  return postJson(
+    "/jobs",
+    body,
+    (v): v is { jobId: string; runId: string } =>
+      typeof v === "object" &&
+      v !== null &&
+      typeof (v as { jobId?: unknown }).jobId === "string" &&
+      typeof (v as { runId?: unknown }).runId === "string",
+  );
 }
 
-// ── Shape validators ─────────────────────────────────────────────────────
-// We soft-validate the new metric fields: older server builds (pre-P5.06)
-// may not include them, and rejecting those payloads would break the dev
-// UX for operators running mixed versions. The validators require the
-// core identity/status fields and coerce missing metrics to zero in the
-// normalisers below.
+export async function steerRun(id: string, message: string): Promise<{ id: string }> {
+  return postJson(`/pipelines/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
+}
+
+export async function pauseRun(id: string, reason?: string): Promise<{ id: string }> {
+  const body = reason !== undefined ? { reason } : undefined;
+  return postJson(`/pipelines/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
+}
+
+export async function resumeRun(id: string): Promise<{ id: string }> {
+  return postJson(`/pipelines/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
+}
+
+export async function cancelRun(id: string, reason?: string): Promise<{ id: string }> {
+  const body = reason !== undefined ? { reason } : undefined;
+  return postJson(`/pipelines/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
+}
+
+// ── Shape validators ────────────────────────────────────────────────
+// Soft-validate metric fields: older server builds may omit them. Rejecting
+// those payloads would break dev UX against mixed versions. Validators
+// require identity/status and coerce missing metrics to zero downstream.
 
 function isPipelineSummary(v: unknown): v is PipelineSummary {
   if (typeof v !== "object" || v === null) return false;
@@ -578,7 +399,6 @@ function isPipelineSummary(v: unknown): v is PipelineSummary {
     typeof o.startedAt === "string" &&
     typeof o.status === "string" &&
     typeof o.eventCount === "number" &&
-    // Metric fields: accept number OR undefined (older servers).
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
@@ -620,10 +440,6 @@ function isPipelineDetail(v: unknown): v is PipelineDetail {
   );
 }
 
-/**
- * Soft validator for `WorkflowSummary`. Accepts unknown extra fields so
- * future server additions don't break older clients. `label` is optional.
- */
 function isWorkflowSummary(v: unknown): v is WorkflowSummary {
   if (typeof v !== "object" || v === null) return false;
   const o = v as { name?: unknown; path?: unknown; sha?: unknown; label?: unknown };
@@ -686,13 +502,6 @@ function isSkillDetail(v: unknown): v is SkillDetail {
   return typeof (v as { body?: unknown }).body === "string";
 }
 
-/**
- * Soft validator for `StepSnapshot`. Required fields: the identity
- * triple (`stepIdx`, `nodeId`, `startedAt`) and the two strings the UI
- * would otherwise crash on (`prompt`, `systemPrompt`). Everything else
- * is optional / tolerated — a malformed nested field shouldn't bounce
- * the whole inspector.
- */
 function isStepSnapshot(v: unknown): v is StepSnapshot {
   if (typeof v !== "object" || v === null) return false;
   const o = v as {

@@ -1,97 +1,51 @@
 // Home dashboard — three projections of the same `GET /pipelines`
-// payload (running strip, stats tiles, recent runs). The single fetch
-// is intentional: every section is a derived view, so any drift
-// between sections would mean the projections themselves disagree —
-// which is the kind of bug operators won't catch but will frustrate
-// them.
+// payload (running strip, stats tiles, recent runs). A single query
+// feeds all three sections: every piece is a derived view, so any
+// drift between sections would mean the projections themselves
+// disagree — which is the kind of bug operators won't catch but will
+// frustrate them.
 //
-// Cadence: 5s polling matches the existing `PipelinesList` (P5.06).
-// We do not subscribe to a global event stream — there isn't one yet —
-// and a poll is fine for a single-user dev tool.
-//
-// Test injection: `fetcher` is optional so the test mounts the route
-// without a network round-trip. Production callers always pass `api`
-// and let it default to `api.listPipelines()`.
+// Cadence: the 5s poll lives on the query factory (`queries.pipelines.list`'s
+// `refetchInterval`). No local timer needed.
 
+import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
 import { displayTitle, displayTooltip, PipelineRow, shortenRunId } from "../components/PipelineRow.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
-import type { ApiClient, PipelineSummary } from "../lib/api.ts";
+import type { PipelineSummary } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd } from "../lib/format.ts";
+import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
 
-/** Polling cadence — matches the cadence Pipelines list uses. */
-const POLL_MS = 5_000;
-
-/** How many recent runs to render in the bottom section. */
 const RECENT_LIMIT = 10;
 
-export interface HomeProps {
-  api: ApiClient;
-  /**
-   * Optional override so tests can stub the fetch path without
-   * mocking the full ApiClient. Returns the raw row array; the
-   * route handles all derived projections.
-   */
-  fetcher?: () => Promise<PipelineSummary[]>;
-}
-
-type LoadState = { kind: "loading" } | { kind: "ready"; rows: PipelineSummary[] } | { kind: "error" };
-
-export function Home({ api, fetcher }: HomeProps): JSX.Element {
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
+export function Home(): JSX.Element {
+  const { data, isPending } = useQuery(queries.pipelines.list());
   const [now, setNow] = useState<number>(() => Date.now());
-  const fetchRef = useRef(fetcher ?? (() => api.listPipelines()));
 
-  // Refresh `fetchRef` on prop change so tests can swap `fetcher`.
-  useEffect(() => {
-    fetchRef.current = fetcher ?? (() => api.listPipelines());
-  }, [fetcher, api]);
-
-  // Poll loop — load on mount + every POLL_MS. Cancelled cleanly on
-  // unmount so the timer doesn't outlive the component.
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const rows = await fetchRef.current();
-        if (!cancelled) setState({ kind: "ready", rows });
-      } catch (err: unknown) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn("[Home] failed to load pipelines —", message);
-        setState({ kind: "error" });
-      }
-    }
-    void load();
-    const t = setInterval(() => void load(), POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
-
-  // Tick every second so "elapsed" on the running strip stays live.
+  // One-second ticker keeps the "elapsed" on the running strip live.
+  // Not a query — it's derived from `Date.now()`, which doesn't belong in
+  // the cache.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(t);
   }, []);
 
-  const rows = state.kind === "ready" ? state.rows : [];
+  const rows = data ?? [];
   const running = useMemo(() => rows.filter((r) => r.status === "running"), [rows]);
   const stats = useMemo(() => computeStats(rows), [rows]);
 
   return (
     <div className="flex flex-col gap-8">
-      <RunningStrip running={running} now={now} loading={state.kind === "loading"} />
-      <StatsTiles stats={stats} loading={state.kind === "loading"} />
-      <RecentRuns rows={rows.slice(0, RECENT_LIMIT)} loading={state.kind === "loading"} />
+      <RunningStrip running={running} now={now} loading={isPending} />
+      <StatsTiles stats={stats} loading={isPending} />
+      <RecentRuns rows={rows.slice(0, RECENT_LIMIT)} loading={isPending} />
     </div>
   );
 }
@@ -257,11 +211,6 @@ function StatTile({ label, value, hint, icon, testId }: StatTileProps): JSX.Elem
   );
 }
 
-/**
- * Format a 0..1 success rate as a whole percent. Locale-aware via
- * Intl.NumberFormat — kept inline (not in lib/format.ts) because Home
- * is the only caller today; promote when a second site needs it.
- */
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return "—";
   return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 0 }).format(value);

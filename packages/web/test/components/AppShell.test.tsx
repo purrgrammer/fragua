@@ -1,57 +1,20 @@
 // AppShell + AppSidebar tests:
-//   - Sidebar renders the four nav entries with lucide icons.
+//   - Sidebar renders the five nav entries with lucide icons.
 //   - Active route carries `aria-current="page"` (and `data-active`).
 //   - ⌘+B / Ctrl+B toggles the collapsed state, persisted via cookie.
 //   - Breadcrumb derivation matches the current route.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { crumbsFor } from "../../src/components/AppShell.tsx";
-import type { ApiClient } from "../../src/lib/api.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-function makeClient(): ApiClient {
-  const baseUrl = "/api";
-  const eventsUrl = (id: string) => `${baseUrl}/pipelines/${id}/events`;
-  return {
-    baseUrl,
-    health: async () => ({ ok: true }),
-    listPipelines: async () => [],
-    listWorkflows: async () => [],
-    getPipeline: async (id: string) => ({
-      runId: id,
-      startedAt: "2024-01-01T00:00:00Z",
-      status: "unknown" as const,
-      lastEventSeq: 0,
-      nodes: [],
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    }),
-    getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
-    getPipelineEventsUrl: eventsUrl,
-    getPipelineSteps: async () => [],
-    steerRun: async () => ({ id: "stub" }),
-    pauseRun: async () => ({ id: "stub" }),
-    resumeRun: async () => ({ id: "stub" }),
-    cancelRun: async () => ({ id: "stub" }),
-    listJobs: async () => [],
-    getJob: async () => { throw new Error("getJob not stubbed"); },
-    cancelJob: async () => ({ status: "removed", jobId: "stub" }),
-    enqueueJob: async () => ({ jobId: "stub", runId: "stub" }),
-    listSkills: async () => [],
-    getSkill: async () => {
-      throw new Error("getSkill not stubbed");
-    },
-    pipelineEventsUrl: eventsUrl,
-  };
-}
-
 function mount(path: string) {
-  const router = createMemoryRouter(createRoutes({ api: makeClient() }), { initialEntries: [path] });
-  return render(<RouterProvider router={router} />);
+  const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
+  return renderWithClient(<RouterProvider router={router} />);
 }
 
 describe("AppShell + AppSidebar", () => {
@@ -77,7 +40,6 @@ describe("AppShell + AppSidebar", () => {
 
   it("renders a lucide icon next to each nav label", () => {
     const { container } = mount("/");
-    // Each nav entry contains an SVG (lucide icons render as SVG).
     for (const id of ["nav-home", "nav-workflows", "nav-pipelines", "nav-skills", "nav-settings"]) {
       const link = within(container).getByTestId(id);
       expect(link.querySelector("svg")).not.toBeNull();
@@ -87,34 +49,23 @@ describe("AppShell + AppSidebar", () => {
   it("marks the link matching the current route with aria-current=page", () => {
     const { container } = mount("/workflows");
     const q = within(container);
-    // aria-current=page lives on the NavLink (`<a>`) itself — it's the
-    // semantically-correct element for the attribute, and it's what
-    // `SidebarMenuButton`'s `isActive` prop drives via `data-active`.
     const active = container.querySelector('[aria-current="page"]');
     expect(active).not.toBeNull();
-    // It's the Workflows link that's active.
     expect(q.getByTestId("nav-workflows").getAttribute("aria-current")).toBe("page");
-    // Non-active entries don't carry the attribute.
     expect(q.getByTestId("nav-home").getAttribute("aria-current")).toBeNull();
   });
 
   it("toggles the sidebar collapsed state on ⌘+B and persists via cookie", () => {
     mount("/");
 
-    // Default expanded.
     const wrapper = document.querySelector('[data-slot="sidebar-wrapper"]');
     expect(wrapper?.getAttribute("data-state")).toBe("expanded");
 
-    // ⌘+B toggles to collapsed. The shadcn provider also writes
-    // `sidebar:state` to document.cookie so the choice survives a
-    // reload — verified manually; happy-dom drops cookies without
-    // an origin, so we don't assert on it here.
     act(() => {
       fireEvent.keyDown(window, { key: "b", metaKey: true });
     });
     expect(wrapper?.getAttribute("data-state")).toBe("collapsed");
 
-    // ⌘+B again → expanded.
     act(() => {
       fireEvent.keyDown(window, { key: "b", metaKey: true });
     });

@@ -8,57 +8,37 @@
 // wrapping or pushing the table wider than its container — the
 // `table-fixed` layout + `min-w-0` wrapper enforce this.
 
+import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import type { ApiClient, WorkflowSummary } from "../lib/api.ts";
+import { queries } from "../lib/queries.ts";
 
-export interface WorkflowsProps {
-  api: ApiClient;
-  /** Test injection — same pattern as `Home.tsx`. */
-  fetcher?: () => Promise<WorkflowSummary[]>;
-}
-
-type LoadState = { kind: "loading" } | { kind: "ready"; rows: WorkflowSummary[] } | { kind: "error" };
-
-export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
+export function Workflows(): JSX.Element {
+  const { data: rows, isPending, isError, error } = useQuery(queries.workflows.list());
 
   useEffect(() => {
-    let cancelled = false;
-    const load = fetcher ?? (() => api.listWorkflows());
-    load()
-      .then((rows) => {
-        if (!cancelled) setState({ kind: "ready", rows });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn("[Workflows] failed to load workflows —", message);
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, fetcher]);
+    if (error)
+      console.warn("[Workflows] failed to load workflows —", error instanceof Error ? error.message : String(error));
+  }, [error]);
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Workflows</h2>
-      {state.kind === "loading" && (
+      {isPending && (
         <p className="text-muted-foreground text-sm" data-testid="workflows-loading">
           Loading…
         </p>
       )}
-      {state.kind === "error" && (
+      {isError && (
         <EmptyState
           data-testid="workflows-error"
           title="Couldn't load workflows"
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {state.kind === "ready" && state.rows.length === 0 && (
+      {rows && rows.length === 0 && (
         <EmptyState
           data-testid="workflows-empty"
           icon={<FileCode2 className="size-6" />}
@@ -70,7 +50,7 @@ export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
           }
         />
       )}
-      {state.kind === "ready" && state.rows.length > 0 && (
+      {rows && rows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           <Table data-testid="workflows-table" className="table-fixed">
             <TableHeader>
@@ -81,7 +61,7 @@ export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {state.rows.map((row) => (
+              {rows.map((row) => (
                 <TableRow key={row.path} data-testid={`workflow-row-${row.name}`}>
                   <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
                     {row.label ?? row.name}
@@ -106,7 +86,6 @@ export function Workflows({ api, fetcher }: WorkflowsProps): JSX.Element {
   );
 }
 
-/** First 7 chars — git's standard short-sha format. */
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
 }

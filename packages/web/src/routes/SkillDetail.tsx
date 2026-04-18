@@ -5,53 +5,28 @@
 // on `local:subagent`). Catalog-only advertisements don't count — see
 // `skillActivationsProjection` in @swarm/events.
 
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge } from "../components/ui/badge.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
-import { type ApiClient, ApiError, type SkillDetail as SkillDetailShape } from "../lib/api.ts";
+import { ApiError, type SkillDetail as SkillDetailShape } from "../lib/api.ts";
+import { queries } from "../lib/queries.ts";
 
-export interface SkillDetailRouteProps {
-  api: ApiClient;
-  /** Test injection. */
-  fetcher?: (name: string) => Promise<SkillDetailShape>;
-}
-
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ready"; skill: SkillDetailShape }
-  | { kind: "not_found" }
-  | { kind: "error" };
-
-export function SkillDetail({ api, fetcher }: SkillDetailRouteProps): JSX.Element {
+export function SkillDetail(): JSX.Element {
   const { name = "" } = useParams<{ name: string }>();
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const { data: skill, isPending, error } = useQuery({ ...queries.skills.detail(name), enabled: !!name });
 
   useEffect(() => {
-    let cancelled = false;
-    if (!name) {
-      setState({ kind: "not_found" });
-      return;
+    if (error && !(error instanceof ApiError && error.status === 404)) {
+      console.warn("[SkillDetail] load failed —", error instanceof Error ? error.message : String(error));
     }
-    const load = fetcher ?? ((n: string) => api.getSkill(n));
-    load(name)
-      .then((skill) => {
-        if (!cancelled) setState({ kind: "ready", skill });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setState({ kind: "not_found" });
-          return;
-        }
-        console.warn("[SkillDetail] load failed —", err instanceof Error ? err.message : String(err));
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, fetcher, name]);
+  }, [error]);
+
+  const notFound = !name || (error instanceof ApiError && error.status === 404);
+  const otherError = error && !(error instanceof ApiError && error.status === 404);
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-4">
@@ -62,26 +37,26 @@ export function SkillDetail({ api, fetcher }: SkillDetailRouteProps): JSX.Elemen
         </Link>
       </div>
 
-      {state.kind === "loading" && (
+      {name && isPending && (
         <p className="text-muted-foreground text-sm" data-testid="skill-loading">
           Loading…
         </p>
       )}
-      {state.kind === "not_found" && (
+      {notFound && (
         <EmptyState
           data-testid="skill-not-found"
           title="Skill not found"
           description={`No skill named "${name}" is installed.`}
         />
       )}
-      {state.kind === "error" && (
+      {otherError && (
         <EmptyState
           data-testid="skill-error"
           title="Couldn't load skill"
           description="The server didn't respond as expected. Check the console for details."
         />
       )}
-      {state.kind === "ready" && <Detail skill={state.skill} />}
+      {skill && <Detail skill={skill} />}
     </section>
   );
 }
@@ -159,7 +134,7 @@ function Detail({ skill }: { skill: SkillDetailShape }): JSX.Element {
   );
 }
 
-function Metadata({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+function Metadata({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>

@@ -6,79 +6,45 @@
 // "map" panel and the timeline placeholder have been removed; the
 // conversation is the main view, period.
 //
-// Layout:
-//   - Section is `h-full flex flex-col min-w-0` — no arbitrary
-//     `max-w-*` clamp, so the page fills the main region at any
-//     viewport width.
-//   - The h2 is `truncate` inside a `min-w-0` parent so a long
-//     auto-generated title shortens with an ellipsis instead of
-//     stretching the header row.
-//   - The conversation region uses `flex-1 min-h-0` to absorb all
-//     remaining vertical space without overflowing.
-//
 // Data flow:
-//   - `useRunConversation(api, id)` owns the event pipeline end-to-end:
-//     a REST bootstrap fetches the full history, then SSE delivers new
+//   - `useRunConversation(id)` owns the event pipeline end-to-end: a
+//     REST bootstrap fetches the full history, then SSE delivers new
 //     events. Events are folded into the conversation tree via
 //     `applyEvent` on arrival; the client never keeps a raw-event
 //     buffer, so memory scales with conversation content (KB) rather
 //     than event count (MB on a 23K-event run).
-//   - `getPipeline(id)` still drives the header metrics. We refetch on
-//     `totalEvents` changes so cost / tokens / duration stay live.
-//
-// Error policy: unchanged — bootstrap or detail fetch failures render
-// `EmptyState`, never a raw banner.
+//   - `queries.pipelines.detail(id)` drives the header metrics. We
+//     invalidate on `totalEvents` changes so cost / tokens / duration
+//     stay live.
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { PipelineConversation } from "../components/PipelineConversation.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
-import type { ApiClient, PipelineDetail as PipelineDetailT } from "../lib/api.ts";
+import type { PipelineDetail as PipelineDetailT } from "../lib/api.ts";
 import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
+import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { useRunConversation } from "../lib/useRunConversation.ts";
 
-export interface PipelineDetailProps {
-  api: ApiClient;
-}
-
-type DetailState = { kind: "loading" } | { kind: "ready"; detail: PipelineDetailT } | { kind: "error" };
-
-export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
+export function PipelineDetail(): JSX.Element {
   const { id = "" } = useParams();
-  const [state, setState] = useState<DetailState>({ kind: "loading" });
-  // Declared at the top — Rules of Hooks demands we not skip past any
-  // hook on an early return (the `if (!id) return <EmptyState/>` below
-  // would do exactly that if this sat after it).
   const [view, setView] = useState<"conversation" | "steps">("conversation");
 
-  // Bootstrap + live stream, folded into a conversation tree. No raw
-  // event buffer on the client — the reducer is the only state we keep.
-  const { conversation, status: convStatus, totalEvents } = useRunConversation(api, id || null);
+  const { conversation, status: convStatus, totalEvents } = useRunConversation(id || null);
   const isLoading = convStatus === "loading";
 
-  // Refetch run detail on every applied event so the header metrics stay
-  // live (cost, tokens, duration). Cheap; the handler is 404-safe.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is an intentional re-fetch trigger; its value is not read in the body.
+  const qc = useQueryClient();
+  const { data: detail, isError } = useQuery({ ...queries.pipelines.detail(id), enabled: !!id });
+
+  // Invalidate detail on totalEvents transitions so header metrics stay
+  // live with the conversation stream. Cheap — server replays from disk.
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    api
-      .getPipeline(id)
-      .then((d) => {
-        if (!cancelled) setState({ kind: "ready", detail: d });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn("[PipelineDetail] failed to load pipeline", id, "—", message);
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, id, totalEvents]);
+    if (id) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(id).queryKey });
+    // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and id are stable.
+  }, [totalEvents]);
 
   if (!id) {
     return (
@@ -95,15 +61,9 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
     );
   }
 
-  const detail = state.kind === "ready" ? state.detail : null;
   const isLive = convStatus === "live" || convStatus === "loading";
 
   return (
-    // Full-height flex column so the conversation region can consume all
-    // remaining space via `flex-1 min-h-0` rather than hard-coding a
-    // viewport fraction. `min-h-0` + `min-w-0` are both load-bearing —
-    // without them the flex child refuses to shrink and long titles or
-    // wide content overflow their parent.
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <header className="flex min-w-0 items-baseline justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -125,7 +85,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
         </div>
       </header>
 
-      {state.kind === "error" && (
+      {isError && !detail && (
         <EmptyState
           data-testid="detail-error"
           title="Couldn't load this run"
@@ -138,7 +98,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
         />
       )}
 
-      {state.kind !== "error" && (
+      {!(isError && !detail) && (
         <>
           <div role="tablist" aria-label="Detail view" className="flex gap-2 text-xs">
             <button
@@ -174,7 +134,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
                 isLoading={isLoading}
               />
             ) : (
-              <StepInspector api={api} runId={id} totalEvents={totalEvents} />
+              <StepInspector runId={id} totalEvents={totalEvents} />
             )}
           </div>
         </>
@@ -183,19 +143,15 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
   );
 }
 
-/**
- * Metadata strip rendered under the run-id heading. Unchanged from the
- * pre-P5.08 implementation — still a dense, tooltip-rich one-liner.
- */
 function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
   const totalTokens = detail.inputTokens + detail.outputTokens;
   const hasUsage = detail.costUsd > 0 || totalTokens > 0;
   const cacheRead = detail.cacheReadTokens ?? 0;
   const cacheWrite = detail.cacheWriteTokens ?? 0;
   const hasCache = cacheRead > 0 || cacheWrite > 0;
-  // Cache hit rate approximation: cache reads / (fresh input + cache reads).
-  // Providers that report cached tokens exclude them from `input_tokens`,
-  // so summing the two reconstructs the total prompt the model "saw".
+  // Cache hit rate approximation: providers that report cached tokens
+  // exclude them from input_tokens, so summing the two reconstructs the
+  // total prompt the model saw.
   const cacheDenom = detail.inputTokens + cacheRead;
   const cacheHitRate = cacheDenom > 0 ? cacheRead / cacheDenom : undefined;
   const workflowLabel = detail.workflowName ?? detail.workflow;
@@ -271,15 +227,10 @@ function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
 
 const RUN_ID_SHORT_LEN = 8;
 
-/** Mirror of PipelinesList's shortener so both surfaces truncate identically. */
 function shortenRunId(runId: string): string {
   return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
 }
 
-/** Heading priority for Wave-2b runs: title → raw input (clamped).
- * Legacy runs (no title, no input) fall through to the pre-Wave-2b
- * behaviour of showing the shortened run id so existing expectations —
- * and existing tests — don't shift. */
 function headingText(detail: PipelineDetailT): string {
   if (detail.title && detail.title.length > 0) return detail.title;
   if (detail.input && detail.input.length > 0) {

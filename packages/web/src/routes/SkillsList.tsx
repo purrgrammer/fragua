@@ -6,66 +6,46 @@
 // see them). A "N hidden by config" footer + toggle reveals them — the
 // detail page stays reachable via its direct URL either way.
 
+import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/badge.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import type { ApiClient, SkillSummary } from "../lib/api.ts";
+import { queries } from "../lib/queries.ts";
 
-export interface SkillsListProps {
-  api: ApiClient;
-  /** Test injection — mirrors Workflows/Home. */
-  fetcher?: () => Promise<SkillSummary[]>;
-}
-
-type LoadState = { kind: "loading" } | { kind: "ready"; rows: SkillSummary[] } | { kind: "error" };
-
-export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
+export function SkillsList(): JSX.Element {
+  const { data: rows, isPending, isError, error } = useQuery(queries.skills.list());
   const [showDisabled, setShowDisabled] = useState(false);
 
-  const { visibleRows, hiddenCount } = useMemo(() => {
-    if (state.kind !== "ready") return { visibleRows: [] as SkillSummary[], hiddenCount: 0 };
-    const hidden = state.rows.filter((r) => r.disabled_reason !== undefined);
-    const visible = showDisabled ? state.rows : state.rows.filter((r) => r.disabled_reason === undefined);
-    return { visibleRows: visible, hiddenCount: hidden.length };
-  }, [state, showDisabled]);
-
   useEffect(() => {
-    let cancelled = false;
-    const load = fetcher ?? (() => api.listSkills());
-    load()
-      .then((rows) => {
-        if (!cancelled) setState({ kind: "ready", rows });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        console.warn("[Skills] failed to load skills —", err instanceof Error ? err.message : String(err));
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, fetcher]);
+    if (error) console.warn("[Skills] failed to load skills —", error instanceof Error ? error.message : String(error));
+  }, [error]);
+
+  const { visibleRows, hiddenCount } = useMemo(() => {
+    if (!rows) return { visibleRows: [], hiddenCount: 0 };
+    const hidden = rows.filter((r) => r.disabled_reason !== undefined);
+    const visible = showDisabled ? rows : rows.filter((r) => r.disabled_reason === undefined);
+    return { visibleRows: visible, hiddenCount: hidden.length };
+  }, [rows, showDisabled]);
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Skills</h2>
-      {state.kind === "loading" && (
+      {isPending && (
         <p className="text-muted-foreground text-sm" data-testid="skills-loading">
           Loading…
         </p>
       )}
-      {state.kind === "error" && (
+      {isError && (
         <EmptyState
           data-testid="skills-error"
           title="Couldn't load skills"
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {state.kind === "ready" && visibleRows.length === 0 && hiddenCount === 0 && (
+      {rows && visibleRows.length === 0 && hiddenCount === 0 && (
         <EmptyState
           data-testid="skills-empty"
           icon={<BookOpen className="size-6" />}
@@ -79,7 +59,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           }
         />
       )}
-      {state.kind === "ready" && visibleRows.length === 0 && hiddenCount > 0 && (
+      {rows && visibleRows.length === 0 && hiddenCount > 0 && (
         <EmptyState
           data-testid="skills-all-disabled"
           icon={<BookOpen className="size-6" />}
@@ -87,7 +67,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           description={`${hiddenCount} skill${hiddenCount === 1 ? "" : "s"} hidden by .swarm/config.yaml.`}
         />
       )}
-      {state.kind === "ready" && visibleRows.length > 0 && (
+      {rows && visibleRows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           <Table data-testid="skills-table" className="table-fixed">
             <TableHeader>
@@ -137,7 +117,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           </Table>
         </div>
       )}
-      {state.kind === "ready" && hiddenCount > 0 && (
+      {rows && hiddenCount > 0 && (
         <button
           type="button"
           onClick={() => setShowDisabled((v) => !v)}

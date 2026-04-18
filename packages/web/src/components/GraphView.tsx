@@ -27,11 +27,13 @@
 // so existing tests (and any future Playwright) can target them.
 
 import { type Graph, parseDotSource } from "@swarm/core";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ApiClient, NodeState, PipelineDetail } from "../lib/api.ts";
+import { useCallback, useEffect, useMemo } from "react";
+import type { NodeState, PipelineDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { layoutDag } from "../lib/graph-layout.ts";
+import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
 import { Edge as AiEdge } from "./ai-elements/edge.tsx";
@@ -39,10 +41,8 @@ import { Node as AiNode, NodeContent, NodeDescription, NodeHeader, NodeTitle } f
 import { EmptyState } from "./ui/empty-state.tsx";
 
 export interface GraphViewProps {
-  /** When provided, we fetch `/pipelines/:runId` on mount. */
+  /** When provided, we fetch `/pipelines/:runId` via react-query. */
   runId?: string;
-  /** API client used to fetch the detail when `runId` is set. */
-  api?: ApiClient;
   /**
    * Pre-fetched detail. Takes precedence over `runId` — use this when
    * the parent is already loading the detail (e.g. PipelineDetail page).
@@ -53,64 +53,35 @@ export interface GraphViewProps {
   /** Highlight target. */
   activeNodeId?: string | null;
   /**
-   * When this value changes, we re-fetch the detail (if `runId` is set
-   * and `detail` was not supplied). Consumers pass e.g. `events.length`
-   * from `useSSE` so the graph stays in sync with live updates.
+   * When this value changes, invalidate the detail query so the graph
+   * refetches. Consumers pass e.g. `events.length` from SSE so the
+   * graph stays in sync with live updates.
    */
   refetchKey?: number | string;
 }
 
-type FetchState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; detail: PipelineDetail }
-  | { kind: "empty"; reason: string };
-
-/** Custom React-Flow node type key — registered in `nodeTypes` below. */
 const NODE_TYPE = "swarmNode";
-/** Custom React-Flow edge type key — registered in `edgeTypes` below. */
 const EDGE_TYPE = "swarmEdge";
 
 export function GraphView(props: GraphViewProps): JSX.Element {
-  const { runId, api, detail, onNodeClick, activeNodeId, refetchKey } = props;
-  const [fetchState, setFetchState] = useState<FetchState>(() => {
-    if (detail) return { kind: "ready", detail };
-    if (runId && api) return { kind: "loading" };
-    return { kind: "idle" };
+  const { runId, detail: detailProp, onNodeClick, activeNodeId, refetchKey } = props;
+
+  const qc = useQueryClient();
+  const query = useQuery({
+    ...queries.pipelines.detail(runId ?? ""),
+    enabled: !!runId && !detailProp,
   });
 
-  // External `detail` prop wins — sync into state so re-renders track it.
+  // `refetchKey` is a deliberate invalidation trigger. Single-line
+  // directive is load-bearing for biome.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refetchKey is the trigger.
   useEffect(() => {
-    if (detail) setFetchState({ kind: "ready", detail });
-  }, [detail]);
+    if (runId && !detailProp) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(runId).queryKey });
+  }, [refetchKey]);
 
-  // `refetchKey` is a deliberate trigger — bumping it re-runs the effect
-  // even though the value itself is unused inside the body. The directive
-  // below MUST remain a single line for Biome to attach it to the hook.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refetchKey is an intentional re-run trigger; its value is not read in the body.
-  useEffect(() => {
-    if (detail || !runId || !api) return;
-    let cancelled = false;
-    setFetchState({ kind: "loading" });
-    api
-      .getPipeline(runId)
-      .then((d) => {
-        if (!cancelled) setFetchState({ kind: "ready", detail: d });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn("[GraphView] failed to load detail for", runId, "—", message);
-        setFetchState({ kind: "empty", reason: message });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, runId, detail, refetchKey]);
-
-  // Parse DOT once per source change. Returning null means "no graph"
-  // (older runs, partial starts) — the render path shows an empty state.
-  const readyDetail = fetchState.kind === "ready" ? fetchState.detail : null;
+  const readyDetail = detailProp ?? query.data ?? null;
+  const isLoading = !detailProp && !!runId && query.isPending;
+  const fetchError = !detailProp && !!runId && query.error;
   const graph: Graph | null = useMemo(() => {
     if (!readyDetail?.workflowSource) return null;
     try {
@@ -138,7 +109,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     [onNodeClick],
   );
 
-  if (fetchState.kind === "loading") {
+  if (isLoading) {
     return (
       <div data-testid="graphview-loading" className="flex min-h-[320px] items-center justify-center">
         <p className="text-sm text-muted-foreground">Loading graph…</p>
@@ -146,17 +117,17 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     );
   }
 
-  if (fetchState.kind === "idle") {
+  if (!readyDetail && !runId) {
     return (
       <EmptyState
         data-testid="graphview-empty"
         title="No graph to display"
-        description="Pass a runId + api or a detail prop to render."
+        description="Pass a runId or a detail prop to render."
       />
     );
   }
 
-  if (fetchState.kind === "empty") {
+  if (fetchError) {
     return (
       <EmptyState
         data-testid="graphview-empty"
