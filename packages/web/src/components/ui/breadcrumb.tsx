@@ -5,6 +5,17 @@
 // pure styling shells around semantic `<nav>` / `<ol>` markup so screen
 // readers and search engines see an actual breadcrumb, not a sea of
 // divs.
+//
+// Swarm design alignment:
+//   § Color       — `--sw-muted` for the trail, `--sw-text` for the
+//                   current page. No shadcn `*-foreground` aliases.
+//   § Typography  — body sized at `--sw-text-sm` (12px). Weight (500)
+//                   distinguishes the current page; no size jump.
+//   § Spacing     — gaps snap to `--sw-space-2` (8px). Ellipsis box
+//                   shrinks to `--sw-space-6` (24px) — a breadcrumb is
+//                   dense chrome, not a tap target.
+//   § Motion      — link hover transitions only `color` over
+//                   `--sw-duration-hover` with `ease`. No transform.
 
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { Slot as SlotPrimitive } from "radix-ui";
@@ -21,7 +32,8 @@ function BreadcrumbList({ className, ...props }: React.ComponentProps<"ol">) {
     <ol
       data-slot="breadcrumb-list"
       className={cn(
-        "flex flex-wrap items-center gap-1.5 text-sm break-words text-muted-foreground sm:gap-2.5",
+        "flex flex-wrap items-center gap-[var(--sw-space-2)] break-words",
+        "text-[length:var(--sw-text-sm)] text-[var(--sw-muted)]",
         className,
       )}
       {...props}
@@ -30,13 +42,27 @@ function BreadcrumbList({ className, ...props }: React.ComponentProps<"ol">) {
 }
 
 function BreadcrumbItem({ className, ...props }: React.ComponentProps<"li">) {
-  return <li data-slot="breadcrumb-item" className={cn("inline-flex items-center gap-1.5", className)} {...props} />;
+  return (
+    <li
+      data-slot="breadcrumb-item"
+      className={cn("inline-flex items-center gap-[var(--sw-space-2)]", className)}
+      {...props}
+    />
+  );
 }
 
 function BreadcrumbLink({ asChild, className, ...props }: React.ComponentProps<"a"> & { asChild?: boolean }) {
   const Comp = asChild ? SlotPrimitive.Slot : "a";
   return (
-    <Comp data-slot="breadcrumb-link" className={cn("transition-colors hover:text-foreground", className)} {...props} />
+    <Comp
+      data-slot="breadcrumb-link"
+      className={cn(
+        "transition-[color] duration-[var(--sw-duration-hover)] ease-[ease]",
+        "hover:text-[var(--sw-text)]",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
@@ -54,7 +80,8 @@ function BreadcrumbPage({ className, ...props }: React.ComponentProps<"span">) {
       aria-disabled="true"
       aria-current="page"
       tabIndex={-1}
-      className={cn("font-normal text-foreground", className)}
+      // Weight (500) — not a size jump — marks the current page.
+      className={cn("font-medium text-[var(--sw-text)]", className)}
       {...props}
     />
   );
@@ -66,7 +93,7 @@ function BreadcrumbSeparator({ children, className, ...props }: React.ComponentP
       data-slot="breadcrumb-separator"
       role="presentation"
       aria-hidden="true"
-      className={cn("[&>svg]:size-3.5", className)}
+      className={cn("[&>svg]:size-3", className)}
       {...props}
     >
       {children ?? <ChevronRight />}
@@ -80,10 +107,10 @@ function BreadcrumbEllipsis({ className, ...props }: React.ComponentProps<"span"
       data-slot="breadcrumb-ellipsis"
       role="presentation"
       aria-hidden="true"
-      className={cn("flex size-9 items-center justify-center", className)}
+      className={cn("flex size-6 items-center justify-center", className)}
       {...props}
     >
-      <MoreHorizontal className="size-4" />
+      <MoreHorizontal className="size-3" />
       <span className="sr-only">More</span>
     </span>
   );
