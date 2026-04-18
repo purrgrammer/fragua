@@ -177,7 +177,7 @@ Each `llm.start` event carries the real cumulative snapshot on `data.budget`: `c
 
 Agnostic execution primitives exposed to agents. Tools are registered in a **namespaced registry** to prevent collisions:
 
-- `local:*` — built-in tools (read_file, write_file, bash, grep, glob, edit_file, apply_patch)
+- `local:*` — built-in tools (read_file, write_file, bash, grep, glob, edit_file, apply_patch, web_fetch)
 - `mcp:*` — loaded from MCP servers (Phase 6)
 - `skill:*` — loaded from Claude SKILL.md playbooks (Phase 6)
 - `custom:*` — user-registered
@@ -209,6 +209,7 @@ Agnostic execution primitives exposed to agents. Tools are registered in a **nam
 | `edit_file` | 10 000 | tail | — |
 | `apply_patch` | 10 000 | tail | — |
 | `write_file` | 1 000 | tail | — |
+| `web_fetch` | 50 000 | head_tail | — |
 
 ### 3.5 Events
 

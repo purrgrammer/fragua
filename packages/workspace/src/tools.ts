@@ -1,7 +1,9 @@
 // Built-in tools exposed to LLM agents.
 // Per-tool truncation defaults per Attractor Coding Agent Loop spec.
 
+import TurndownService from "turndown";
 import { Type } from "@sinclair/typebox";
+import { SsrfError, assertSafeUrl } from "./ssrf-guard.ts";
 import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool<{ path: string }, { path: string; size: number }> = {
@@ -232,6 +234,146 @@ export const editFileTool: Tool<
   },
 };
 
+const WEB_FETCH_DEFAULT_MAX_BYTES = 1_000_000;
+const WEB_FETCH_TIMEOUT_MS = 30_000;
+const WEB_FETCH_ACCEPT = "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.5";
+
+let _turndown: TurndownService | undefined;
+function getTurndown(): TurndownService {
+  if (_turndown) return _turndown;
+  const svc = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
+  svc.remove(["script", "style", "nav", "footer", "header", "aside", "noscript", "iframe"]);
+  _turndown = svc;
+  return svc;
+}
+
+export type WebFetchFn = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
+
+export interface WebFetchDeps {
+  fetch?: WebFetchFn;
+  lookup?: (host: string) => Promise<Array<{ address: string }>>;
+}
+
+export function createWebFetchTool(deps: WebFetchDeps = {}): Tool<
+  { url: string; format?: "auto" | "raw"; max_bytes?: number },
+  { status: number; content_type: string; bytes: number; final_url: string; converted: boolean; truncated: boolean }
+> {
+  const doFetch = deps.fetch ?? globalThis.fetch;
+  return {
+    name: "local:web_fetch",
+    description:
+      'Fetch a public URL via HTTP GET and return the body. For documentation sites, try fetching `<origin>/llms.txt` or `<origin>/llms-full.txt` first — many docs sites publish LLM-optimized content at these well-known paths (see llmstxt.org). Returns markdown by default: if the server responds with HTML, the body is converted to markdown; text/markdown and text/plain pass through unchanged. Pass `format: "raw"` to skip conversion. Rejects non-http(s) schemes and private/loopback addresses.',
+    parameters: Type.Object({
+      url: Type.String({ description: "Absolute http(s) URL" }),
+      format: Type.Optional(
+        Type.Union([Type.Literal("auto"), Type.Literal("raw")], {
+          description: 'Default "auto" (convert HTML to markdown). "raw" returns the untouched response body.',
+        }),
+      ),
+      max_bytes: Type.Optional(
+        Type.Integer({ minimum: 1, maximum: 10_000_000, description: "Cap on fetched body bytes (default 1_000_000)" }),
+      ),
+    }),
+    idempotent: true,
+    truncation: { max_chars: 50_000, mode: "head_tail" },
+    async execute(args) {
+      const format = args.format ?? "auto";
+      const maxBytes = args.max_bytes ?? WEB_FETCH_DEFAULT_MAX_BYTES;
+      let safeUrl: URL;
+      try {
+        safeUrl = await assertSafeUrl(args.url, deps.lookup ? { lookup: deps.lookup } : {});
+      } catch (err) {
+        const msg = err instanceof SsrfError ? err.message : err instanceof Error ? err.message : String(err);
+        return { text: msg, is_error: true };
+      }
+
+      let response: Response;
+      try {
+        response = await doFetch(safeUrl.toString(), {
+          method: "GET",
+          headers: { Accept: WEB_FETCH_ACCEPT },
+          redirect: "follow",
+          signal: AbortSignal.timeout(WEB_FETCH_TIMEOUT_MS),
+        });
+      } catch (err) {
+        return { text: `fetch failed: ${err instanceof Error ? err.message : String(err)}`, is_error: true };
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+      const { body, truncated } = await readWithCap(response, maxBytes);
+
+      if (!response.ok) {
+        return {
+          text: `HTTP ${response.status} ${response.statusText}\n${body.slice(0, 500)}`,
+          data: {
+            status: response.status,
+            content_type: contentType,
+            bytes: body.length,
+            final_url: response.url,
+            converted: false,
+            truncated,
+          },
+          is_error: true,
+        };
+      }
+
+      let text = body;
+      let converted = false;
+      if (format === "auto" && /text\/html/i.test(contentType)) {
+        try {
+          text = getTurndown().turndown(body);
+          converted = true;
+        } catch {
+          // fall back to raw body on conversion failure
+          text = body;
+        }
+      }
+      if (truncated) {
+        text += `\n\n[swarm: response truncated at ${maxBytes} bytes]`;
+      }
+
+      return {
+        text,
+        data: {
+          status: response.status,
+          content_type: contentType,
+          bytes: body.length,
+          final_url: response.url,
+          converted,
+          truncated,
+        },
+      };
+    },
+  };
+}
+
+async function readWithCap(response: Response, maxBytes: number): Promise<{ body: string; truncated: boolean }> {
+  const reader = response.body?.getReader();
+  if (!reader) return { body: await response.text(), truncated: false };
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let body = "";
+  let total = 0;
+  let truncated = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      const overflow = total - maxBytes;
+      const keep = value.byteLength - overflow;
+      if (keep > 0) body += decoder.decode(value.subarray(0, keep), { stream: false });
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+    body += decoder.decode(value, { stream: true });
+  }
+  if (!truncated) body += decoder.decode();
+  return { body, truncated };
+}
+
+export const webFetchTool = createWebFetchTool();
+
 export const CORE_TOOLS: Tool[] = [
   readFileTool,
   writeFileTool,
@@ -240,4 +382,5 @@ export const CORE_TOOLS: Tool[] = [
   globTool,
   grepTool,
   editFileTool,
+  webFetchTool,
 ];

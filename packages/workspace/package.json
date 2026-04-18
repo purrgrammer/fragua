@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.41",
-    "@swarm/core": "workspace:*"
+    "@swarm/core": "workspace:*",
+    "turndown": "7.2.4"
   },
   "devDependencies": {
+    "@types/turndown": "5.0.6",
     "typescript": "5.7.3"
   }
 }
