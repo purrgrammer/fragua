@@ -25,7 +25,16 @@
 import { openSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import { getDaemonDir, isPidAlive, readRendezvous, removeRendezvous, writeRendezvous } from "@swarm/server";
+import { join } from "node:path";
+import {
+  createSqliteJobQueue,
+  getDaemonDir,
+  isPidAlive,
+  readRendezvous,
+  removeRendezvous,
+  writeRendezvous,
+} from "@swarm/server";
+import type { JobQueue } from "@swarm/server";
 import chalk from "chalk";
 import { startServer } from "./serve.ts";
 
@@ -297,6 +306,18 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
     return 1;
   }
 
+  // SQLite-backed job queue lives under `.swarm/daemon/queue.db`. The
+  // daemon is the only writer; `swarm run` becomes a client that POSTs
+  // to `/jobs` (phase 7).
+  const dbPath = join(getDaemonDir(cwd), "queue.db");
+  let jobQueue: JobQueue | undefined;
+  try {
+    jobQueue = createSqliteJobQueue({ dbPath });
+  } catch (err) {
+    console.error(chalk.red(`swarm daemon: failed to open job queue — ${(err as Error).message}`));
+    return 1;
+  }
+
   let handle: Awaited<ReturnType<typeof startServer>>;
   try {
     handle = await startServer({
@@ -304,8 +325,10 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
       hostname: "127.0.0.1",
       cwd,
       ...(opts.runsDir !== undefined ? { runsDir: opts.runsDir } : {}),
+      ports: { jobQueue },
     });
   } catch (err) {
+    await jobQueue.close().catch(() => {});
     const e = err as { code?: string; message?: string };
     if (e.code === "EADDRINUSE") {
       console.error(chalk.red(`swarm daemon: port ${port} already in use`));
@@ -336,10 +359,14 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
       handle
         .close()
         .catch((err) => console.error(chalk.red(`daemon close failed — ${(err as Error).message}`)))
-        .finally(() => {
-          removeRendezvous(cwd)
-            .catch((err) => console.error(chalk.red(`daemon rendezvous cleanup failed — ${(err as Error).message}`)))
-            .finally(resolveShutdown);
+        .finally(async () => {
+          await jobQueue
+            ?.close()
+            .catch((err) => console.error(chalk.red(`daemon queue close failed — ${(err as Error).message}`)));
+          await removeRendezvous(cwd).catch((err) =>
+            console.error(chalk.red(`daemon rendezvous cleanup failed — ${(err as Error).message}`)),
+          );
+          resolveShutdown();
         });
     };
     process.once("SIGINT", () => stop("SIGINT"));

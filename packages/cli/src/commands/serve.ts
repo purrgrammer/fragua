@@ -13,7 +13,7 @@
 // which avoids adding `@hono/node-server` as a dependency.
 
 import { resolve } from "node:path";
-import { createServer } from "@swarm/server";
+import { createServer, type ServerPorts } from "@swarm/server";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
 
@@ -31,6 +31,13 @@ export interface ServeCommandOptions {
    * reachable off-box.
    */
   hostname?: string;
+  /**
+   * Optional port overrides forwarded to `createServer`. The daemon
+   * uses this to inject its SQLite `JobQueue`; the default `swarm
+   * serve` invocation leaves it empty and the server returns 503 on
+   * `/jobs` requests.
+   */
+  ports?: ServerPorts;
 }
 
 /**
@@ -70,6 +77,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     runsDir,
     cwd,
     ...(config.skills !== undefined ? { skillsConfig: config.skills } : {}),
+    ...(opts.ports !== undefined ? { ports: opts.ports } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
   // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire

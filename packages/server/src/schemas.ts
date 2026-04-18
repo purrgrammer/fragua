@@ -196,6 +196,69 @@ export const ControlAccepted = Type.Object({
   id: Type.String(),
 });
 export type ControlAccepted = Static<typeof ControlAccepted>;
+
+// ───── Jobs (daemon queue) ──────────────────────────────────────────────
+// Body + response shapes for `POST /jobs`, `GET /jobs`, `GET /jobs/:id`,
+// `DELETE /jobs/:id`. The daemon's SQLite queue is the only producer
+// of these rows; a server running in foreground mode (no daemon) has
+// no queue and returns 503 on the same URLs.
+
+/** Body of `POST /jobs`. Enqueues one workflow run. */
+export const JobEnqueueBody = Type.Object({
+  /** Path to the `.dot` workflow (relative to the daemon's repo root). */
+  workflow: Type.String({ minLength: 1 }),
+  /** Free-form user input passed through as `$ARGUMENTS`. Mirrors
+   * `swarm run --input` one-for-one. */
+  input: Type.Optional(Type.String()),
+  /** Optional model override; maps to `--model` on the worker. */
+  model: Type.Optional(Type.String()),
+  /** Higher runs first; default 0. */
+  priority: Type.Optional(Type.Integer()),
+  /** Client-supplied run id. Default auto-generated
+   * (`${Date.now()}-${random6}`) to match `swarm run`. */
+  runId: Type.Optional(Type.String({ minLength: 1 })),
+  /** Client-supplied job id (idempotency key). Default uuid. */
+  id: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type JobEnqueueBody = Static<typeof JobEnqueueBody>;
+
+/** Terminal + active statuses for a job row. Kept as a TypeBox literal
+ * union so OpenAPI generators + client validation pick it up. */
+export const JobStatusSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+  Type.Literal("success"),
+  Type.Literal("failed"),
+  Type.Literal("canceled"),
+]);
+export type JobStatusSchema = Static<typeof JobStatusSchema>;
+
+/** Wire shape of a single job. The internal `JobRow` type carries
+ * `inputJson` (serialized); on the wire we expose `input` so clients
+ * don't have to know about the storage representation. */
+export const JobRowSchema = Type.Object({
+  id: Type.String(),
+  runId: Type.String(),
+  workflow: Type.String(),
+  input: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
+  status: JobStatusSchema,
+  priority: Type.Integer(),
+  enqueuedAt: Type.String(),
+  startedAt: Type.Optional(Type.String()),
+  completedAt: Type.Optional(Type.String()),
+  childPid: Type.Optional(Type.Integer()),
+  error: Type.Optional(Type.String()),
+});
+export type JobRowSchema = Static<typeof JobRowSchema>;
+
+/** Response body for `POST /jobs`. `runId` is echoed so the caller can
+ * deep-link into `/pipelines/:runId/events` without a second round-trip. */
+export const JobAccepted = Type.Object({
+  jobId: Type.String(),
+  runId: Type.String(),
+});
+export type JobAccepted = Static<typeof JobAccepted>;
 export type InterviewAnswer = Static<typeof InterviewAnswer>;
 
 /** Uniform error envelope. All non-2xx responses conform to this. */

@@ -20,6 +20,7 @@ import { controlRoutes } from "./routes/control.ts";
 import { eventsRoutes } from "./routes/events.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { interviewRoutes } from "./routes/interview.ts";
+import { jobsRoutes } from "./routes/jobs.ts";
 import { pipelinesRoutes } from "./routes/pipelines.ts";
 import { skillsRoutes } from "./routes/skills.ts";
 import { statsRoutes } from "./routes/stats.ts";
@@ -83,6 +84,7 @@ export function createServer(opts: ServerOptions): Hono {
   app.route("/", workflowsRoutes({ workflowReader }));
   app.route("/", controlRoutes({ controlGateway }));
   app.route("/", skillsRoutes({ skillReader, runReader }));
+  app.route("/", jobsRoutes(ports.jobQueue !== undefined ? { jobQueue: ports.jobQueue } : {}));
   return app;
 }
 
@@ -131,6 +133,10 @@ export {
   ErrorBody,
   InterviewAnswer,
   InterviewQuestion,
+  JobAccepted,
+  JobEnqueueBody,
+  JobRowSchema,
+  JobStatusSchema,
   NodeState,
   PipelineDetail,
   PipelineSummary,
