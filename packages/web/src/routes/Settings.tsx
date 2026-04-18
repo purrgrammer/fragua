@@ -1,22 +1,26 @@
-// /settings — read-only diagnostic surface. The route exists so the
-// Settings nav entry isn't a dead link; richer config (provider keys,
-// run-archive paths) is out of scope for P5.13 and lands in a later
+// /settings — read-only diagnostic surface plus the one user-writable
+// preference we carry today: the UI theme. Richer config (provider
+// keys, run-archive paths) is still out of scope and lands in a later
 // task.
 //
-// Three card sections:
-//   1. Server URL — the same `/api` base the rest of the client
+// Card sections:
+//   1. Appearance — light / dark / system toggle. State lives in
+//      `lib/theme.ts`; this card is a thin Select binding.
+//   2. Server URL — the same `/api` base the rest of the client
 //      consumes, so what's shown here is what fetches actually use.
-//   2. Web bundle version — `import.meta.env.VITE_APP_VERSION` if the
+//   3. Web bundle version — `import.meta.env.VITE_APP_VERSION` if the
 //      build pipeline injects one, "dev" otherwise.
-//   3. Observed `SWARM_*` env vars — Vite only exposes variables
+//   4. Observed `SWARM_*` env vars — Vite only exposes variables
 //      prefixed with `VITE_`, so we surface anything starting with
 //      `VITE_SWARM_`. The prefix detail is documented inline so the
 //      next person doesn't wonder why their bare `SWARM_FOO=bar`
 //      isn't showing up.
 
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { Separator } from "../components/ui/separator.tsx";
 import type { ApiClient } from "../lib/api.ts";
+import { type Theme, useTheme } from "../lib/theme.ts";
 
 export interface SettingsProps {
   api: ApiClient;
@@ -29,10 +33,43 @@ export function Settings({ api }: SettingsProps): JSX.Element {
   // browser. We document the convention here so the next person
   // adding a knob knows to use the `VITE_SWARM_` prefix.
   const swarmEnv = collectSwarmEnv(import.meta.env as Record<string, unknown>);
+  const { theme, setTheme, resolved } = useTheme();
 
   return (
     <div className="flex w-full min-w-0 max-w-3xl flex-col gap-4" data-testid="settings-page">
       <h2 className="font-heading text-base font-semibold">Settings</h2>
+
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="text-sm">Appearance</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm" data-testid="settings-theme">
+          <Row
+            label="Theme"
+            value={
+              <Select value={theme} onValueChange={(v) => setTheme(v as Theme)}>
+                <SelectTrigger size="sm" className="w-36" data-testid="settings-theme-trigger">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="light">Light</SelectItem>
+                  <SelectItem value="dark">Dark</SelectItem>
+                  <SelectItem value="system">System</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+          />
+          {theme === "system" && (
+            <>
+              <Separator className="my-3" />
+              <Row
+                label="System preference"
+                value={<code className="font-mono text-muted-foreground">{resolved}</code>}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <Card size="sm">
         <CardHeader>
