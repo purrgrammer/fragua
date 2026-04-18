@@ -9,6 +9,23 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+/*
+ * Swarm design language — code-block
+ *   § Color           — theme tokens only (`var(--sw-*)`); shadcn `bg-muted` /
+ *                       `text-muted-foreground` swapped for `--sw-surface` /
+ *                       `--sw-muted`.
+ *   § Spacing         — padding snapped to the token scale (`--sw-space-2/3/4`);
+ *                       no raw `p-4` / `px-3` numbers.
+ *   § Typography      — sizes via `--sw-text-*` (sm = 12px, xs = 11px); the
+ *                       global stack is monospace, so redundant `font-mono` is
+ *                       removed. Tabular figures inherit globally.
+ *   § Borders         — hairline `border` token, `--sw-radius-card` for the
+ *                       container. No background-shade hierarchy on the header
+ *                       — separation is the existing `border-b` hairline.
+ *   § Anti-patterns   — opacity-dimmed gutter (`/50`) replaced with the muted
+ *                       token, which is already dimmed and theme-designed.
+ */
+
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // oxlint-disable-next-line eslint(no-bitwise)
 const isItalic = (fontStyle: number | undefined) => fontStyle && fontStyle & 1;
@@ -56,17 +73,19 @@ const TokenSpan = ({ token }: { token: ThemedToken }) => (
   </span>
 );
 
-// Line number styles using CSS counters
+// Line number styles using CSS counters.
+// Gutter widths and spacing snap to the spacing token scale; the numeral color
+// uses `--sw-muted` directly rather than an opacity-dimmed foreground so both
+// themes stay legible without auto-inversion.
 const LINE_NUMBER_CLASSES = cn(
   "block",
   "before:content-[counter(line)]",
   "before:inline-block",
   "before:[counter-increment:line]",
-  "before:w-8",
-  "before:mr-4",
+  "before:w-[var(--sw-space-8)]",
+  "before:mr-[var(--sw-space-4)]",
   "before:text-right",
-  "before:text-muted-foreground/50",
-  "before:font-mono",
+  "before:text-[var(--sw-muted)]",
   "before:select-none",
 );
 
@@ -234,10 +253,19 @@ const CodeBlockBody = memo(
 
     return (
       <pre
-        className={cn("dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm", className)}
+        className={cn(
+          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
+          "m-0 p-[var(--sw-space-3)] text-[length:var(--sw-text-sm)] leading-[1.4]",
+          className,
+        )}
         style={preStyle}
       >
-        <code className={cn("font-mono text-sm", showLineNumbers && "[counter-increment:line_0] [counter-reset:line]")}>
+        <code
+          className={cn(
+            "text-[length:var(--sw-text-sm)]",
+            showLineNumbers && "[counter-increment:line_0] [counter-reset:line]",
+          )}
+        >
           {keyedLines.map((keyedLine) => (
             <LineSpan key={keyedLine.key} keyedLine={keyedLine} showLineNumbers={showLineNumbers} />
           ))}
@@ -260,7 +288,12 @@ export const CodeBlockContainer = ({
   ...props
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
-    className={cn("group relative w-full overflow-hidden rounded-md border bg-background text-foreground", className)}
+    className={cn(
+      "group relative w-full overflow-hidden",
+      "rounded-[var(--sw-radius-card)] border border-[var(--sw-border)]",
+      "bg-[var(--sw-surface)] text-[var(--sw-text)]",
+      className,
+    )}
     data-language={language}
     style={{
       containIntrinsicSize: "auto 200px",
@@ -274,7 +307,11 @@ export const CodeBlockContainer = ({
 export const CodeBlockHeader = ({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-center justify-between border-b bg-muted/80 px-3 py-2 text-muted-foreground text-xs",
+      "flex items-center justify-between",
+      // hairline-only separation; no `bg-muted` shade hierarchy
+      "border-b border-[var(--sw-border)]",
+      "px-[var(--sw-space-3)] py-[var(--sw-space-2)]",
+      "text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
       className,
     )}
     {...props}
@@ -284,19 +321,20 @@ export const CodeBlockHeader = ({ children, className, ...props }: HTMLAttribute
 );
 
 export const CodeBlockTitle = ({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex items-center gap-2", className)} {...props}>
+  <div className={cn("flex items-center gap-[var(--sw-space-2)]", className)} {...props}>
     {children}
   </div>
 );
 
 export const CodeBlockFilename = ({ children, className, ...props }: HTMLAttributes<HTMLSpanElement>) => (
-  <span className={cn("font-mono", className)} {...props}>
+  // monospace is the global voice; no need to re-declare `font-mono`
+  <span className={className} {...props}>
     {children}
   </span>
 );
 
 export const CodeBlockActions = ({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("-my-1 -mr-1 flex items-center gap-2", className)} {...props}>
+  <div className={cn("-my-1 -mr-1 flex items-center gap-[var(--sw-space-2)]", className)} {...props}>
     {children}
   </div>
 );
@@ -429,7 +467,11 @@ export type CodeBlockLanguageSelectorTriggerProps = ComponentProps<typeof Select
 
 export const CodeBlockLanguageSelectorTrigger = ({ className, ...props }: CodeBlockLanguageSelectorTriggerProps) => (
   <SelectTrigger
-    className={cn("h-7 border-none bg-transparent px-2 text-xs shadow-none", className)}
+    className={cn(
+      "h-7 border-none bg-transparent shadow-none",
+      "px-[var(--sw-space-2)] text-[length:var(--sw-text-xs)]",
+      className,
+    )}
     size="sm"
     {...props}
   />
