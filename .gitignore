@@ -1,11 +1,7 @@
-# Reference repos cloned for research — never committed
-/attractor/
-/Archon/
-/pi-mono/
-
 # Swarm runtime state (event logs, worktrees, checkpoints)
 /.swarm/runs/
 /.swarm/worktrees/
+/.swarm/daemon/
 
 # Node / Bun
 node_modules/
