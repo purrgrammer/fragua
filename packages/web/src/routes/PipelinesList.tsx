@@ -76,12 +76,22 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
       )}
       {state.kind === "ready" && state.rows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
-          <table className="w-full table-fixed text-sm border-collapse" data-testid="pipelines-table">
+          {/* Raw <table> (not the shadcn Table primitive) so <PipelineRow> keeps
+              control of row layout. Header classes mirror TableHead's design-skill
+              treatment (§Typography: UPPERCASE + 0.06em tracking + text-xs + muted)
+              so list headers feel consistent across the app. */}
+          <table className="w-full table-fixed border-collapse" data-testid="pipelines-table">
             <thead>
-              <tr className="text-left text-slate-600 border-b border-slate-200">
-                <th className="py-2 pr-4 font-medium">Title</th>
-                <th className="py-2 pr-4 font-medium w-40">Workflow</th>
-                <th className="py-2 pr-4 font-medium text-right w-28">Status</th>
+              <tr className="border-b">
+                <th className="px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                  Title
+                </th>
+                <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                  Workflow
+                </th>
+                <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                  Status
+                </th>
               </tr>
             </thead>
             <tbody>

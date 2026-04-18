@@ -31,6 +31,10 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
     pauseRun: async () => ({ id: "stub" }),
     resumeRun: async () => ({ id: "stub" }),
     cancelRun: async () => ({ id: "stub" }),
+    listJobs: async () => [],
+    getJob: async () => { throw new Error("getJob not stubbed"); },
+    cancelJob: async () => ({ status: "removed", jobId: "stub" }),
+    enqueueJob: async () => ({ jobId: "stub", runId: "stub" }),
     listSkills: async () => [],
     getSkill: async () => {
       throw new Error("getSkill not stubbed");

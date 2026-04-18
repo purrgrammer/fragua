@@ -272,6 +272,28 @@ export interface PipelineEventsPayload {
   lastSeq: number;
 }
 
+/**
+ * One row from `GET /jobs`. Mirrors `JobRowSchema` in @swarm/server.
+ * The wire exposes `input` (string) and omits the internal storage
+ * representation (`inputJson`).
+ */
+export type JobStatus = "queued" | "running" | "success" | "failed" | "canceled";
+
+export interface JobSummary {
+  id: string;
+  runId: string;
+  workflow: string;
+  input?: string;
+  model?: string;
+  status: JobStatus;
+  priority: number;
+  enqueuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  childPid?: number;
+  error?: string;
+}
+
 export interface ApiClient {
   /** Current baseUrl, exposed so URL helpers stay consistent with fetches. */
   readonly baseUrl: string;
@@ -308,6 +330,32 @@ export interface ApiClient {
   // watching without polling control.jsonl directly. Errors propagate
   // as `ApiError` with the server's status (404 for unknown runs,
   // 400 for invalid bodies, etc.).
+
+  // ── Jobs (daemon queue) ───────────────────────────────────────────
+  // Present on daemon-backed servers. When the server has no queue
+  // (plain `swarm serve`) these return 503 and throw `ApiError`.
+
+  /** List queued + running + recent terminal jobs. */
+  listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]>;
+  /** Fetch one job by id. */
+  getJob(id: string): Promise<JobSummary>;
+  /**
+   * Cancel a job. Queued rows are removed from the queue directly;
+   * running rows get a cancel request forwarded to the worker's
+   * control channel. Terminal rows reject with 409.
+   */
+  cancelJob(id: string): Promise<{ status: string; jobId: string }>;
+  /**
+   * Enqueue a new workflow run. Returns the assigned `jobId` and
+   * `runId`; use `runId` to deep-link into `/pipelines/:runId`. Phase
+   * 7 will make `swarm run` the canonical CLI client for this.
+   */
+  enqueueJob(input: {
+    workflow: string;
+    input?: string;
+    model?: string;
+    priority?: number;
+  }): Promise<{ jobId: string; runId: string }>;
 
   /** Inject a user message at the active agent's next turn boundary. */
   steerRun(id: string, message: string): Promise<{ id: string }>;
@@ -428,6 +476,55 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
       );
     },
 
+    async listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]> {
+      const qs = new URLSearchParams();
+      if (filter?.status) qs.set("status", filter.status);
+      if (filter?.limit !== undefined) qs.set("limit", String(filter.limit));
+      const q = qs.toString();
+      return getJson(`/jobs${q ? `?${q}` : ""}`, (v): v is JobSummary[] => Array.isArray(v) && v.every(isJobSummary));
+    },
+
+    async getJob(id: string): Promise<JobSummary> {
+      return getJson(`/jobs/${encodeURIComponent(id)}`, isJobSummary);
+    },
+
+    async cancelJob(id: string): Promise<{ status: string; jobId: string }> {
+      const u = url(`/jobs/${encodeURIComponent(id)}`);
+      const res = await fetchImpl(u, { method: "DELETE" });
+      if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+      const payload = (await res.json()) as unknown;
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        typeof (payload as { status?: unknown }).status !== "string" ||
+        typeof (payload as { jobId?: unknown }).jobId !== "string"
+      ) {
+        throw new Error(`DELETE ${u} → malformed response`);
+      }
+      return payload as { status: string; jobId: string };
+    },
+
+    async enqueueJob(input: { workflow: string; input?: string; model?: string; priority?: number }): Promise<{
+      jobId: string;
+      runId: string;
+    }> {
+      const body = {
+        workflow: input.workflow,
+        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      };
+      return postJson(
+        "/jobs",
+        body,
+        (v): v is { jobId: string; runId: string } =>
+          typeof v === "object" &&
+          v !== null &&
+          typeof (v as { jobId?: unknown }).jobId === "string" &&
+          typeof (v as { runId?: unknown }).runId === "string",
+      );
+    },
+
     async steerRun(id: string, message: string): Promise<{ id: string }> {
       return postJson(`/pipelines/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
     },
@@ -532,6 +629,30 @@ function isWorkflowSummary(v: unknown): v is WorkflowSummary {
     typeof o.path === "string" &&
     typeof o.sha === "string" &&
     (o.label === undefined || typeof o.label === "string")
+  );
+}
+
+function isJobStatus(v: unknown): v is JobStatus {
+  return v === "queued" || v === "running" || v === "success" || v === "failed" || v === "canceled";
+}
+
+function isJobSummary(v: unknown): v is JobSummary {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as {
+    id?: unknown;
+    runId?: unknown;
+    workflow?: unknown;
+    status?: unknown;
+    priority?: unknown;
+    enqueuedAt?: unknown;
+  };
+  return (
+    typeof o.id === "string" &&
+    typeof o.runId === "string" &&
+    typeof o.workflow === "string" &&
+    isJobStatus(o.status) &&
+    typeof o.priority === "number" &&
+    typeof o.enqueuedAt === "string"
   );
 }
 

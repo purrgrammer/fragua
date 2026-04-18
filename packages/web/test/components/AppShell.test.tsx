@@ -37,6 +37,10 @@ function makeClient(): ApiClient {
     pauseRun: async () => ({ id: "stub" }),
     resumeRun: async () => ({ id: "stub" }),
     cancelRun: async () => ({ id: "stub" }),
+    listJobs: async () => [],
+    getJob: async () => { throw new Error("getJob not stubbed"); },
+    cancelJob: async () => ({ status: "removed", jobId: "stub" }),
+    enqueueJob: async () => ({ jobId: "stub", runId: "stub" }),
     listSkills: async () => [],
     getSkill: async () => {
       throw new Error("getSkill not stubbed");
@@ -83,13 +87,15 @@ describe("AppShell + AppSidebar", () => {
   it("marks the link matching the current route with aria-current=page", () => {
     const { container } = mount("/workflows");
     const q = within(container);
-    // The active marker lives on the inner span (NavLink's children
-    // function), not the outer `<a>`. Assert by attribute to keep
-    // the test resilient against shadcn class churn.
+    // aria-current=page lives on the NavLink (`<a>`) itself — it's the
+    // semantically-correct element for the attribute, and it's what
+    // `SidebarMenuButton`'s `isActive` prop drives via `data-active`.
     const active = container.querySelector('[aria-current="page"]');
     expect(active).not.toBeNull();
     // It's the Workflows link that's active.
-    expect(q.getByTestId("nav-workflows").querySelector('[aria-current="page"]')).not.toBeNull();
+    expect(q.getByTestId("nav-workflows").getAttribute("aria-current")).toBe("page");
+    // Non-active entries don't carry the attribute.
+    expect(q.getByTestId("nav-home").getAttribute("aria-current")).toBeNull();
   });
 
   it("toggles the sidebar collapsed state on ⌘+B and persists via cookie", () => {

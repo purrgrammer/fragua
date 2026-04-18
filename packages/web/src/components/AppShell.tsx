@@ -32,7 +32,9 @@
 // route definitions free of breadcrumb-specific config.
 
 import { Outlet, useLocation, useParams } from "react-router-dom";
+import { useHealth } from "../types/health.ts";
 import { AppSidebar } from "./AppSidebar.tsx";
+import { DaemonBanner } from "./DaemonBanner.tsx";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -43,6 +45,19 @@ import {
 } from "./ui/breadcrumb.tsx";
 import { Separator } from "./ui/separator.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "./ui/sidebar.tsx";
+
+/**
+ * Renders the daemon banner above the outlet when the health probe
+ * reports no daemon. Skipped while the probe is still loading so the
+ * banner doesn't flash on page load. Kept as a component (not inline)
+ * so tests can assert on its presence/absence with a testid.
+ */
+function ShellDaemonBanner(): JSX.Element | null {
+  const { status, daemon } = useHealth();
+  if (status === "loading") return null;
+  if (daemon !== undefined) return null;
+  return <DaemonBanner />;
+}
 
 export function AppShell(): JSX.Element {
   return (
@@ -60,6 +75,7 @@ export function AppShell(): JSX.Element {
           </div>
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-4">
+          <ShellDaemonBanner />
           <Outlet />
         </main>
       </SidebarInset>

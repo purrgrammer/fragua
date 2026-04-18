@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { type ApiClient, createApiClient } from "./lib/api.ts";
 import { createRoutes } from "./lib/router.tsx";
-import { HealthContext, type HealthStatus } from "./types/health.ts";
+import { HealthContext, type HealthDaemonSnapshot, type HealthStatus } from "./types/health.ts";
 
 // Re-export for back-compat with existing callers (`HealthBadge`, the
 // App test) that import `HealthStatus` from this module.
@@ -31,6 +31,7 @@ export interface AppProps {
 export function App({ apiClient, router }: AppProps = {}): JSX.Element {
   const [status, setStatus] = useState<HealthStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [daemon, setDaemon] = useState<HealthDaemonSnapshot | undefined>(undefined);
 
   // Stable client reference — avoids re-running the health effect per
   // render and lets the router share the same client instance.
@@ -42,24 +43,35 @@ export function App({ apiClient, router }: AppProps = {}): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    client
-      .health()
-      .then((res) => {
-        if (cancelled) return;
-        setStatus(res.ok ? "connected" : "error");
-        if (!res.ok) setError("server reported ok: false");
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setStatus("error");
-        setError(err instanceof Error ? err.message : String(err));
-      });
+    const probe = () => {
+      client
+        .health()
+        .then((res) => {
+          if (cancelled) return;
+          setStatus(res.ok ? "connected" : "error");
+          if (!res.ok) setError("server reported ok: false");
+          else setError(null);
+          setDaemon(res.daemon);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setStatus("error");
+          setError(err instanceof Error ? err.message : String(err));
+          setDaemon(undefined);
+        });
+    };
+    probe();
+    // Re-probe every 5s so the daemon banner appears when the daemon is
+    // stopped mid-session, and disappears when it's restarted. Cheap —
+    // /health is indexed counts + no disk I/O on the hot path.
+    const t = setInterval(probe, 5_000);
     return () => {
       cancelled = true;
+      clearInterval(t);
     };
   }, [client]);
 
-  const value = useMemo(() => ({ status, error }), [status, error]);
+  const value = useMemo(() => ({ status, error, daemon }), [status, error, daemon]);
 
   return (
     <HealthContext.Provider value={value}>

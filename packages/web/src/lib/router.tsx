@@ -14,6 +14,7 @@
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
 import { AppShell } from "../components/AppShell.tsx";
 import { Home } from "../routes/Home.tsx";
+import { Jobs } from "../routes/Jobs.tsx";
 import { PipelineDetail } from "../routes/PipelineDetail.tsx";
 import { PipelinesList } from "../routes/PipelinesList.tsx";
 import { Settings } from "../routes/Settings.tsx";
@@ -35,6 +36,7 @@ export function createRoutes(opts: CreateRouterOptions): RouteObject[] {
       children: [
         { index: true, element: <Home api={opts.api} /> },
         { path: "workflows", element: <Workflows api={opts.api} /> },
+        { path: "jobs", element: <Jobs api={opts.api} /> },
         { path: "pipelines", element: <PipelinesList api={opts.api} /> },
         { path: "pipelines/:id", element: <PipelineDetail api={opts.api} /> },
         { path: "skills", element: <SkillsList api={opts.api} /> },

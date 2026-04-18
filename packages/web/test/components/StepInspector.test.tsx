@@ -37,6 +37,10 @@ function makeClient(steps: StepSnapshot[]): ApiClient {
     pauseRun: async () => ({ id: "stub" }),
     resumeRun: async () => ({ id: "stub" }),
     cancelRun: async () => ({ id: "stub" }),
+    listJobs: async () => [],
+    getJob: async () => { throw new Error("getJob not stubbed"); },
+    cancelJob: async () => ({ status: "removed", jobId: "stub" }),
+    enqueueJob: async () => ({ jobId: "stub", runId: "stub" }),
     pipelineEventsUrl: eventsUrl,
   };
 }

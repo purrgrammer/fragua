@@ -8,8 +8,8 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { BookOpen, Drone, Home, ListChecks, Settings, Workflow } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { BookOpen, Drone, Home, ListChecks, Settings, Workflow, Zap } from "lucide-react";
+import { NavLink, useMatch } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
 import {
@@ -29,10 +29,13 @@ import {
 const NAV = [
   { to: "/", label: "Home", icon: Home, end: true },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
+  { to: "/jobs", label: "Jobs", icon: Zap, end: false },
   { to: "/pipelines", label: "Pipelines", icon: ListChecks, end: false },
   { to: "/skills", label: "Skills", icon: BookOpen, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
+
+type NavEntry = (typeof NAV)[number];
 
 export function AppSidebar(): JSX.Element {
   return (
@@ -54,14 +57,8 @@ export function AppSidebar(): JSX.Element {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV.map(({ to, label, icon: Icon, end }) => (
-                <SidebarMenuItem key={to}>
-                  <SidebarMenuButton asChild tooltip={label}>
-                    <NavLink to={to} end={end} data-testid={`nav-${label.toLowerCase()}`}>
-                      {({ isActive }) => <NavInner Icon={Icon} label={label} isActive={isActive} />}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+              {NAV.map((entry) => (
+                <NavItem key={entry.to} entry={entry} />
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
@@ -75,27 +72,34 @@ export function AppSidebar(): JSX.Element {
   );
 }
 
-interface NavInnerProps {
-  Icon: typeof Home;
-  label: string;
-  isActive: boolean;
-}
-
 /**
- * `NavLink` children-as-function gets `isActive`; we forward it both as
- * a `data-active` attribute (so `SidebarMenuButton`'s `data-[active=...]`
- * styling lights up) and as `aria-current` for accessibility.
+ * One nav row. We compute `isActive` via `useMatch` rather than the
+ * `NavLink` render prop because `SidebarMenuButton`'s active-state
+ * styling keys off its own `isActive` *prop* (which forwards to a
+ * `data-active` attribute on the rendered element). Reading active
+ * from NavLink's render prop alone would only decorate a descendant
+ * span — the button chrome itself would never change.
  */
-function NavInner({ Icon, label, isActive }: NavInnerProps): JSX.Element {
+function NavItem({ entry }: { entry: NavEntry }): JSX.Element {
+  const { to, label, icon: Icon, end } = entry;
+  const match = useMatch({ path: to, end });
+  const isActive = match !== null;
   return (
-    <span
-      className="flex w-full min-w-0 items-center gap-2"
-      data-active={isActive ? "true" : undefined}
-      aria-current={isActive ? "page" : undefined}
-    >
-      <Icon className="size-4 shrink-0" />
-      <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">{label}</span>
-    </span>
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip={label} isActive={isActive}>
+        <NavLink
+          to={to}
+          end={end}
+          data-testid={`nav-${label.toLowerCase()}`}
+          aria-current={isActive ? "page" : undefined}
+        >
+          <span className="flex w-full min-w-0 items-center gap-2">
+            <Icon className="size-4 shrink-0" />
+            <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">{label}</span>
+          </span>
+        </NavLink>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
 

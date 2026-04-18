@@ -43,8 +43,13 @@ export function PipelineRow({ row, variant = "default" }: PipelineRowProps): JSX
  *  Title link · Workflow badge · Status pill (right-aligned). */
 function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
+  // Design skill: "Hover on hot rows — omit hover animation on list rows
+  // users traverse hundreds of times per session." The previous
+  // `hover:bg-slate-50` painted a light wash that collided with light
+  // text in dark mode (white-on-off-white). Dropped the row hover; the
+  // title link keeps its underline-on-hover for affordance.
   return (
-    <tr className="border-b border-slate-100 hover:bg-slate-50">
+    <tr className="border-b border-border/60">
       <td className="py-2 pr-4 max-w-0">
         <Link
           to={`/pipelines/${row.runId}`}

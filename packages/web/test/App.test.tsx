@@ -55,6 +55,10 @@ function stubClient(overrides: Overrides = {}): ApiClient {
     pauseRun: async () => ({ id: "stub" }),
     resumeRun: async () => ({ id: "stub" }),
     cancelRun: async () => ({ id: "stub" }),
+    listJobs: overrides.listJobs ?? (async () => []),
+    getJob: overrides.getJob ?? (async () => { throw new Error("getJob not stubbed"); }),
+    cancelJob: overrides.cancelJob ?? (async () => ({ status: "removed", jobId: "stub" })),
+    enqueueJob: overrides.enqueueJob ?? (async () => ({ jobId: "stub", runId: "stub" })),
     listSkills: overrides.listSkills ?? (async () => []),
     getSkill:
       overrides.getSkill ??

@@ -14,9 +14,26 @@ import { createContext, useContext } from "react";
 
 export type HealthStatus = "loading" | "connected" | "error";
 
+/** Snapshot of the daemon, when the connected server is one. `undefined`
+ * for plain `swarm serve` (no job queue → UI is read-only). */
+export interface HealthDaemonSnapshot {
+  pid: number;
+  port: number;
+  startedAt: string;
+  version: string;
+  concurrency: number;
+  inflight: number;
+  queued: number;
+}
+
 export interface HealthContextValue {
   status: HealthStatus;
   error: string | null;
+  /** `undefined` while loading or when the server is daemon-less. Set
+   * to a snapshot when the latest `/health` response carried a `daemon`
+   * key. Consumers use "daemon key absent" as the signal for the
+   * "daemon not running" banner. */
+  daemon?: HealthDaemonSnapshot;
 }
 
 const DEFAULT: HealthContextValue = { status: "connected", error: null };
