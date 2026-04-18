@@ -221,6 +221,37 @@ Retrofit titles onto pre-Wave-2b runs with
 idempotent (skips runs that already carry `pipeline.title_generated`)
 and append-only (never rewrites existing event lines).
 
+### Budgets (Wave 4)
+
+Cost + token ceilings are enforceable at node and run scope:
+
+```dot
+digraph build_feature {
+  graph [
+    budget_usd = 2.50         // hard run-level cap
+    budget_tokens = 500000    // optional token cap
+    budget_policy = "stop"    // default; "warn" keeps the run going
+  ]
+  plan [prompt="…", max_cost_usd = 0.25]
+  …
+}
+```
+
+The `BudgetLedger` in `@swarm/core/engine/budget.ts` is a pure reducer
+over `cost.recorded` events. When the cumulative crosses 80 % of any
+ceiling, `budget.warn` fires once; at 100 %, `budget.stop` fires once
+and — under `stop` policy — the next codergen call fails
+non-retryably (so goal-gate retries don't relaunch the breach). Both
+events ride under the synthetic `__budget` node so drilldown surfaces
+render them alongside summariser events.
+
+`llm.start.budget` carries the real cumulative snapshot
+(`cumulative_cost_usd`, `cumulative_tokens`, plus the ceilings) as
+soon as *any* budget knob is declared. Synthetic `__summary.*`
+summariser calls contribute to the run-level total but do NOT count
+against the caller node's `max_cost_usd` — a tight per-node cap can
+still trigger richer fidelity compressions.
+
 ### Web UI
 
 The React + Vite client lives in `packages/web/`. The app sits inside a

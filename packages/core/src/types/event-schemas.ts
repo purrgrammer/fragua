@@ -165,6 +165,21 @@ export const PipelineTitleGeneratedDataSchema = Type.Object(
   { additionalProperties: true },
 );
 
+export const BudgetBreachDataSchema = Type.Object(
+  {
+    scope: Type.Union([Type.Literal("node"), Type.Literal("run")]),
+    metric: Type.Union([Type.Literal("cost"), Type.Literal("tokens")]),
+    limit: Type.Number({ minimum: 0 }),
+    actual: Type.Number({ minimum: 0 }),
+    ratio: Type.Optional(Type.Number({ minimum: 0 })),
+    caller_node_id: Type.Optional(Type.String()),
+    run_max_cost_usd: Type.Optional(Type.Number({ minimum: 0 })),
+    run_max_tokens: Type.Optional(Type.Number({ minimum: 0 })),
+    reason: Type.String(),
+  },
+  { additionalProperties: true },
+);
+
 export const CostRecordedDataSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
@@ -189,4 +204,6 @@ export const PAYLOAD_SCHEMAS = {
   "summary.started": SummaryStartedDataSchema,
   "summary.completed": SummaryCompletedDataSchema,
   "pipeline.title_generated": PipelineTitleGeneratedDataSchema,
+  "budget.warn": BudgetBreachDataSchema,
+  "budget.stop": BudgetBreachDataSchema,
 } as const;

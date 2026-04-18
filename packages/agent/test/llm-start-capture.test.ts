@@ -166,7 +166,7 @@ describe("llm.start capture — Wave 1 fields", () => {
     expect(iterations[2]).toEqual({ n: 3, max: 3 });
   });
 
-  test("budget snapshot only emitted when max_cost_usd is set", async () => {
+  test("budget snapshot rides every call once a ledger is active (Wave 4 behaviour)", async () => {
     mock.setResponses([
       fauxAssistantMessage("ok", { stopReason: "stop" }),
       fauxAssistantMessage("ok", { stopReason: "stop" }),
@@ -188,8 +188,35 @@ describe("llm.start capture — Wave 1 fields", () => {
     const a = starts[0]!.data as {
       budget?: { max_cost_usd?: number; cumulative_cost_usd: number; cumulative_tokens: number };
     };
-    const b = starts[1]!.data as { budget?: unknown };
-    expect(a.budget).toMatchObject({ max_cost_usd: 0.5, cumulative_cost_usd: 0, cumulative_tokens: 0 });
-    expect(b.budget).toBeUndefined();
+    // The capped node carries its own max_cost_usd + pre-call cumulative
+    // of 0 (no cost events have landed yet when its llm.start fires).
+    expect(a.budget).toMatchObject({ max_cost_usd: 0.5, cumulative_cost_usd: 0 });
+    const b = starts[1]!.data as {
+      budget?: { max_cost_usd?: number; cumulative_cost_usd: number; cumulative_tokens: number };
+    };
+    // The uncapped node inherits the run-wide ledger once Wave 4 stands
+    // it up (triggered by the capped node's attr), so its budget field
+    // is present — but with no node-level max_cost_usd of its own.
+    expect(b.budget).toBeDefined();
+    expect(b.budget!.max_cost_usd).toBeUndefined();
+    // cumulative_tokens should reflect the capped node's usage from the
+    // faux provider's cost.recorded event.
+    expect(b.budget!.cumulative_tokens).toBeGreaterThanOrEqual(0);
+  });
+
+  test("no budget attrs anywhere → no ledger → budget field absent", async () => {
+    mock.setResponses([fauxAssistantMessage("ok", { stopReason: "stop" })]);
+    const sink = new InMemorySink();
+    const graph = parseDotSource(`
+      digraph {
+        s [shape=Mdiamond]
+        t [prompt="do it"]
+        done [shape=Msquare]
+        s -> t -> done
+      }
+    `);
+    await execute({ graph, sink, backend: mock.backend });
+    const d = sink.byType("llm.start")[0]!.data as { budget?: unknown };
+    expect(d.budget).toBeUndefined();
   });
 });

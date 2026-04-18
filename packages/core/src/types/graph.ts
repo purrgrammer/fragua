@@ -72,6 +72,14 @@ export interface NodeAttrs {
   /** Parallel-node config (component shape). */
   fan_in?: string;
   join_policy?: "wait_all" | "first_success";
+  /** Wave 4: per-node cost ceiling in USD. When the run's cumulative
+   * cost crosses this before the next call to this node's backend,
+   * `budget.stop` fires and the node's next attempt returns a
+   * non-retryable failure. Soft `budget.warn` at 80% of the ceiling. */
+  max_cost_usd?: number;
+  /** Wave 4: per-node total-token ceiling (input + output). Same
+   * enforcement shape as `max_cost_usd`. */
+  max_tokens?: number;
   [extra: string]: AttrScalar | undefined;
 }
 
@@ -100,6 +108,18 @@ export interface GraphAttrs {
   thread_id?: string;
   "tool_hooks.pre"?: string;
   "tool_hooks.post"?: string;
+  /** Wave 4: per-run cost ceiling in USD. Once the run's cumulative
+   * cost crosses this, `budget.stop` fires and every subsequent
+   * codergen call fails non-retryably. Enforced by the BudgetLedger
+   * in `engine/budget.ts`. */
+  budget_usd?: number;
+  /** Wave 4: per-run total-token ceiling. */
+  budget_tokens?: number;
+  /** Wave 4: what to do when a budget threshold is crossed. `"stop"`
+   * (default when any budget is set) hard-fails the run on first
+   * breach; `"warn"` keeps firing `budget.warn` events but never
+   * blocks. */
+  budget_policy?: "warn" | "stop";
   [extra: string]: AttrScalar | undefined;
 }
 

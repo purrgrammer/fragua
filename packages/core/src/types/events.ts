@@ -51,6 +51,13 @@ export type EventType =
   | "summary.started"
   | "summary.completed"
   | "pipeline.title_generated"
+  // Budget (Wave 4) — emitted by the BudgetLedger when a per-node or
+  // run-level ceiling is crossed. `budget.warn` is advisory (~80% of
+  // ceiling by default); `budget.stop` fires once the ceiling is
+  // breached and the executor turns subsequent codergen calls into
+  // non_retryable failures. Events ride under synthetic node `__budget`.
+  | "budget.warn"
+  | "budget.stop"
   // Cost
   | "cost.recorded";
 
@@ -266,6 +273,35 @@ export interface PipelineTitleGeneratedData {
   /** References the `summary.completed` event by its synthetic node id so
    * the UI can link "title" → "how was it generated + how much did it cost". */
   summary_node_id: string;
+}
+
+/** Payload for `budget.warn` / `budget.stop`. Both events share a shape;
+ * the `type` on the envelope distinguishes them. */
+export interface BudgetBreachData {
+  /** "node" when a specific node's ceiling tripped; "run" for the
+   * graph-level `budget_usd` / `budget_tokens`. */
+  scope: "node" | "run";
+  /** Which metric tripped. */
+  metric: "cost" | "tokens";
+  /** The ceiling that was configured. */
+  limit: number;
+  /** The cumulative value that breached (or first crossed the warn
+   * threshold). Post-delta, so always ≥ `limit` for `stop`. */
+  actual: number;
+  /** For warn events: fraction of the ceiling (e.g. 0.82 = 82 %). */
+  ratio?: number;
+  /** For stop events: which real node triggered the breach (the last
+   * cost-bearing call). Absent on run-level preflight-detected stops
+   * where the breach was from a prior call. */
+  caller_node_id?: string;
+  /** Run-level run_max_cost_usd / run_max_tokens mirrored for UIs
+   * that want to render "X of Y used" without cross-referencing the
+   * graph attrs. */
+  run_max_cost_usd?: number;
+  run_max_tokens?: number;
+  /** Human-readable summary — identical to the text that would appear
+   * on the caller's `outcome.failure_reason` when the stop fires. */
+  reason: string;
 }
 
 export interface EdgeSelectedData {

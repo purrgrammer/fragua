@@ -157,6 +157,22 @@ Non-`full` modes are fresh sessions, so they neither read nor write the store. T
 
 **Thread ID resolution:** edge → node → graph-level default → subgraph-derived class → previous node ID.
 
+### 3.3b Budgets (Wave 4)
+
+swarm enforces cost + token ceilings at two scopes:
+
+- **Per-node**: `node.attrs.max_cost_usd`, `node.attrs.max_tokens`.
+- **Per-run**: `graph.attrs.budget_usd`, `graph.attrs.budget_tokens`.
+
+`graph.attrs.budget_policy` is `"stop"` (default when any ceiling is set) or `"warn"`. Under `stop`, the first breach flips an internal flag and every subsequent codergen call returns a **non-retryable** failure — goal-gate retries are bypassed, the pipeline fails fast. Under `warn`, `budget.warn` + `budget.stop` events still fire, but the pipeline continues.
+
+The **`BudgetLedger`** (`packages/core/src/engine/budget.ts`) is a pure reducer over `cost.recorded` events. The executor wraps its event sink so every cost delta feeds the ledger; verdicts fire as their own events under the synthetic node `__budget`:
+
+- `budget.warn` — advisory (default 80 % of ceiling), one per (scope, metric) per ceiling.
+- `budget.stop` — hard breach, same payload shape as `budget.warn` + the `actual`/`limit` values.
+
+Each `llm.start` event carries the real cumulative snapshot on `data.budget`: `cumulative_cost_usd`, `cumulative_tokens`, and the configured ceilings (`max_cost_usd`, `run_max_cost_usd`). Summariser calls (synthetic `__summary.*` nodes) contribute to the **run-level** cumulative but do NOT count against the caller's per-node ceiling — so a node with `max_cost_usd=0.10` can still spawn a richer fidelity compression without spending its own budget.
+
 ### 3.4 Tools
 
 Agnostic execution primitives exposed to agents. Tools are registered in a **namespaced registry** to prevent collisions:

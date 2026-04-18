@@ -3,6 +3,7 @@
 //
 // See docs/SPEC.md §4.
 
+import { BudgetLedger, type BudgetLimits, type BudgetQuery, costDeltaFromEvent } from "../engine/budget.ts";
 import { type EdgeSelection, selectEdge } from "../engine/edge-selection.ts";
 import { resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
 import { applyStylesheet } from "../engine/stylesheet.ts";
@@ -46,6 +47,17 @@ export interface CodergenInput {
    * call is distinguishable in `events.jsonl` without reconstructing
    * sequence from `node.retrying` events. */
   iteration?: { n: number; max: number };
+  /** Wave 4 budget context: cumulative cost/tokens so far plus the
+   * per-node and per-run ceilings. Backends use this both to populate
+   * `llm.start.budget` with real values and to pre-flight-refuse a call
+   * that would breach a `stop` policy. `undefined` when no budget is
+   * configured anywhere. */
+  budget?: BudgetQuery;
+  /** Whether a breach has already triggered a stop. Backends must
+   * fail non-retryably on `true` even before inspecting `budget.*`
+   * (handles the case where the ledger crossed during a summariser
+   * call on the same node). */
+  budget_stopped?: boolean;
 }
 
 export interface HandlerContext {
@@ -63,6 +75,15 @@ export interface HandlerContext {
   node_outputs: Map<string, NodeOutput>;
   /** Positional args / built-in vars for prompt substitution ($ARGUMENTS, $1..$9). */
   args: SubstitutionArgs;
+  /** Wave 4 ledger. Shared across handlers in the run so per-node and
+   * per-run cumulatives stay in lockstep. `undefined` when no budget
+   * is configured anywhere (saves us the ledger's book-keeping cost
+   * on runs that don't need it). */
+  ledger?: BudgetLedger;
+  /** Wave 4: mutable flag the executor flips when the ledger emits
+   * budget.stop. Backends read this off `CodergenInput.budget_stopped`
+   * and refuse pre-flight when true. */
+  budgetStoppedRef?: { stopped: boolean };
 }
 
 export type Handler = (ctx: HandlerContext) => Promise<Outcome>;
@@ -217,6 +238,97 @@ async function maybeStartPipelineTitle(params: {
   }
 }
 
+/** Resolve the per-node budget limits for a single CodergenInput.
+ * Graph-level ceilings (`budget_usd`, `budget_tokens`) apply to every
+ * node; node attrs (`max_cost_usd`, `max_tokens`) stack on top. */
+function buildBudgetLimits(graph: Graph, node: Node): BudgetLimits {
+  const limits: BudgetLimits = {};
+  const nc = node.attrs.max_cost_usd;
+  const nt = node.attrs.max_tokens;
+  const rc = graph.attrs.budget_usd;
+  const rt = graph.attrs.budget_tokens;
+  if (typeof nc === "number") limits.node_max_cost_usd = nc;
+  if (typeof nt === "number") limits.node_max_tokens = nt;
+  if (typeof rc === "number") limits.run_max_cost_usd = rc;
+  if (typeof rt === "number") limits.run_max_tokens = rt;
+  return limits;
+}
+
+const BUDGET_SYNTHETIC_NODE_ID = "__budget";
+
+/** True when the graph or any node declares a budget ceiling. We only
+ * stand up the BudgetLedger + sink wrapper when there's work to do. */
+function hasAnyBudget(graph: Graph): boolean {
+  if (typeof graph.attrs.budget_usd === "number" || typeof graph.attrs.budget_tokens === "number") return true;
+  for (const node of Object.values(graph.nodes)) {
+    if (typeof node.attrs.max_cost_usd === "number" || typeof node.attrs.max_tokens === "number") return true;
+  }
+  return false;
+}
+
+/** Wrap an EventSink so every appended `cost.recorded` feeds the
+ * BudgetLedger, and any resulting warn/stop verdict is emitted as its
+ * own event under the synthetic `__budget` node. The original append
+ * still happens first so the cost event lands before any budget event
+ * that reacts to it — keeps the JSONL strictly causal for replay. */
+function wrapSinkWithLedger(params: {
+  inner: EventSink;
+  ledger: BudgetLedger;
+  graph: Graph;
+  run_id: string;
+  workflow_sha: string;
+  now: () => string;
+  policy: "warn" | "stop";
+  stoppedRef: { stopped: boolean };
+}): EventSink {
+  const { inner, ledger, graph, run_id, workflow_sha, now, policy, stoppedRef } = params;
+  return {
+    async append(ev: Event): Promise<void> {
+      await inner.append(ev);
+      if (ev.type !== "cost.recorded") return;
+      const delta = costDeltaFromEvent(ev);
+      if (!delta) return;
+      const node_id = delta.node_id;
+      // Synthetic (summariser) nodes don't have their own limits, so
+      // apply only the run-level ceilings for their cost.
+      const limits: BudgetLimits =
+        node_id && graph.nodes[node_id]
+          ? buildBudgetLimits(graph, graph.nodes[node_id]!)
+          : {
+              ...(typeof graph.attrs.budget_usd === "number" ? { run_max_cost_usd: graph.attrs.budget_usd } : {}),
+              ...(typeof graph.attrs.budget_tokens === "number" ? { run_max_tokens: graph.attrs.budget_tokens } : {}),
+            };
+      const verdict = ledger.record(delta, limits);
+      if (verdict.kind === "ok") return;
+      const baseData: Record<string, unknown> = {
+        scope: verdict.scope,
+        metric: verdict.metric,
+        reason: verdict.reason,
+        ...(typeof graph.attrs.budget_usd === "number" ? { run_max_cost_usd: graph.attrs.budget_usd } : {}),
+        ...(typeof graph.attrs.budget_tokens === "number" ? { run_max_tokens: graph.attrs.budget_tokens } : {}),
+        ...(node_id ? { caller_node_id: node_id } : {}),
+      };
+      const eventData: Record<string, unknown> = {
+        ...baseData,
+        limit: verdict.limit,
+        actual: verdict.actual,
+        ...(verdict.kind === "warn" ? { ratio: verdict.ratio } : {}),
+      };
+      await inner.append({
+        run_id,
+        node_id: BUDGET_SYNTHETIC_NODE_ID,
+        type: verdict.kind === "warn" ? "budget.warn" : "budget.stop",
+        timestamp: now(),
+        workflow_sha,
+        schema_version: EVENT_SCHEMA_VERSION,
+        data: eventData,
+      });
+      if (verdict.kind === "stop" && policy === "stop") stoppedRef.stopped = true;
+    },
+    close: inner.close ? () => inner.close!() : undefined,
+  } as EventSink;
+}
+
 /** Like `buildEmit` but lets the caller override `node_id` per event.
  * Used for synthetic nodes (Wave 2b summariser) whose cost + drilldown
  * should bucket separately from the real caller. */
@@ -250,6 +362,13 @@ const codergenHandler: Handler = async (ctx) => {
   const { signal, cancel } =
     timeoutMs !== undefined ? signalWithTimeout(ctx.signal, timeoutMs) : { signal: ctx.signal, cancel: () => {} };
 
+  // Wave 4: snapshot the ledger right before the backend call so the
+  // backend can populate `llm.start.budget` with real cumulative values
+  // and pre-flight-refuse when `stop` policy + prior breach.
+  const budgetLimits = ctx.ledger ? buildBudgetLimits(ctx.graph, ctx.node) : undefined;
+  const budgetSnapshot = ctx.ledger && budgetLimits ? ctx.ledger.query(ctx.node.id, budgetLimits) : undefined;
+  const budgetStopped = ctx.budgetStoppedRef?.stopped ?? false;
+
   try {
     const outcome = await ctx.backend.run({
       node: ctx.node,
@@ -262,6 +381,8 @@ const codergenHandler: Handler = async (ctx) => {
       workflow_sha: ctx.workflow_sha,
       emit: buildEmit(ctx),
       emitAt: buildEmitAt(ctx),
+      ...(budgetSnapshot !== undefined ? { budget: budgetSnapshot } : {}),
+      ...(budgetStopped ? { budget_stopped: true } : {}),
     });
     if (signal.aborted && !ctx.signal.aborted && timeoutMs !== undefined) {
       return fail(`node "${ctx.node.id}" timed out after ${timeoutMs}ms`, { notes: outcome.notes });
@@ -321,6 +442,9 @@ const loopHandler: Handler = async (ctx) => {
 
     let outcome: Outcome;
     try {
+      const budgetLimits = ctx.ledger ? buildBudgetLimits(ctx.graph, ctx.node) : undefined;
+      const budgetSnapshot = ctx.ledger && budgetLimits ? ctx.ledger.query(ctx.node.id, budgetLimits) : undefined;
+      const budgetStopped = ctx.budgetStoppedRef?.stopped ?? false;
       outcome = await ctx.backend.run({
         node: ctx.node,
         prompt: iterPrompt,
@@ -333,6 +457,8 @@ const loopHandler: Handler = async (ctx) => {
         emit,
         emitAt,
         iteration: { n: i, max: maxIter },
+        ...(budgetSnapshot !== undefined ? { budget: budgetSnapshot } : {}),
+        ...(budgetStopped ? { budget_stopped: true } : {}),
       });
     } catch (err) {
       return fail(`loop iteration ${i} crashed: ${err instanceof Error ? err.message : String(err)}`);
@@ -680,6 +806,8 @@ interface LoopArgs {
   node_outcomes: Record<string, Outcome>;
   retry_counts: Record<string, number>;
   args: SubstitutionArgs;
+  ledger?: BudgetLedger;
+  budgetStoppedRef?: { stopped: boolean };
 }
 
 type StopReason = "terminal" | "stop_at" | "no_edge" | "max_steps" | "aborted" | "error";
@@ -762,6 +890,11 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       node_outputs: args.node_outputs,
       retry_counts: args.retry_counts,
       args: args.args,
+      ...(args.ledger !== undefined ? { ledger: args.ledger } : {}),
+      ...(args.budgetStoppedRef !== undefined ? { budgetStoppedRef: args.budgetStoppedRef } : {}),
+      // ledger + budgetStoppedRef flow through HandlerContext since
+      // RetryInput extends it — spreads above just forward the pair
+      // into the retry wrapper's inherited slots.
     });
     lastOutcome = outcome;
 
@@ -895,7 +1028,7 @@ export interface ExecuteOptions {
 export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const graph = opts.graph;
   applyStylesheet(graph);
-  const sink: EventSink = opts.sink ?? new InMemorySink();
+  const rawSink: EventSink = opts.sink ?? new InMemorySink();
   const interviewer: Interviewer = opts.interviewer ?? new AutoApproveInterviewer();
   const backend: CodergenBackend = opts.backend ?? new MockCodergenBackend();
   const signal = opts.signal ?? new AbortController().signal;
@@ -911,6 +1044,28 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
     context[`graph.${k}`] = v as ContextValue;
   }
   context[ENGINE_CONTEXT_KEYS.run_id] = run_id;
+
+  // Wave 4: BudgetLedger + sink-wrapper that auto-records every
+  // cost.recorded event. Only stood up when at least one budget knob
+  // is configured — otherwise all runs would pay the book-keeping cost
+  // for nothing. Policy defaults to "stop" when any ceiling exists.
+  const budgetConfigured = hasAnyBudget(graph);
+  const ledger: BudgetLedger | undefined = budgetConfigured ? new BudgetLedger() : undefined;
+  const budgetStoppedRef: { stopped: boolean } | undefined = ledger ? { stopped: false } : undefined;
+  const policy: "warn" | "stop" =
+    (graph.attrs.budget_policy as "warn" | "stop" | undefined) ?? (budgetConfigured ? "stop" : "warn");
+  const sink: EventSink = ledger
+    ? wrapSinkWithLedger({
+        inner: rawSink,
+        ledger,
+        graph,
+        run_id,
+        workflow_sha,
+        now,
+        policy,
+        stoppedRef: budgetStoppedRef!,
+      })
+    : rawSink;
 
   const node_outputs = new Map<string, NodeOutput>();
   const completed_nodes: string[] = [];
@@ -998,6 +1153,8 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       node_outcomes,
       retry_counts,
       args: substitutionArgs,
+      ...(ledger !== undefined ? { ledger } : {}),
+      ...(budgetStoppedRef !== undefined ? { budgetStoppedRef } : {}),
     });
 
     // If we stopped at a terminal Msquare, check goal gates + maybe retry.
