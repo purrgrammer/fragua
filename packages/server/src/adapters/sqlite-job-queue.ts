@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at       TEXT,
   completed_at     TEXT,
   child_pid        INTEGER,
-  error            TEXT
+  error            TEXT,
+  worktree         INTEGER NOT NULL DEFAULT 1 CHECK (worktree IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status_priority
@@ -56,6 +57,7 @@ interface JobDbRow {
   completed_at: string | null;
   child_pid: number | null;
   error: string | null;
+  worktree: number;
 }
 
 function rowToJob(row: JobDbRow): JobRow {
@@ -66,6 +68,7 @@ function rowToJob(row: JobDbRow): JobRow {
     status: row.status,
     priority: row.priority,
     enqueuedAt: row.enqueued_at,
+    worktree: row.worktree !== 0,
   };
   if (row.input_json !== null) job.inputJson = row.input_json;
   if (row.model !== null) job.model = row.model;
@@ -109,10 +112,10 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
   const stmts = {
     insert: db.prepare<
       JobDbRow,
-      [string, string, string, string | null, string | null, number, string]
+      [string, string, string, string | null, string | null, number, string, number]
     >(
-      `INSERT INTO jobs (id, run_id, workflow, input_json, model, status, priority, enqueued_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+      `INSERT INTO jobs (id, run_id, workflow, input_json, model, status, priority, enqueued_at, worktree)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
        RETURNING *`,
     ),
     getById: db.prepare<JobDbRow, [string]>(`SELECT * FROM jobs WHERE id = ?`),
@@ -158,6 +161,7 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
       const runId = input.runId ?? generateRunId();
       const priority = input.priority ?? 0;
       const enqueuedAt = new Date().toISOString();
+      const worktree = input.worktree !== false ? 1 : 0;
       const row = stmts.insert.get(
         id,
         runId,
@@ -166,6 +170,7 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
         input.model ?? null,
         priority,
         enqueuedAt,
+        worktree,
       );
       if (!row) {
         // Unique constraint violation would throw above; reaching here means

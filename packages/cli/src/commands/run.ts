@@ -29,13 +29,12 @@ import {
   WorktreeEnvironment,
 } from "@swarm/workspace";
 import chalk from "chalk";
+import { ensureDaemonRunning } from "../lib/daemon-client.ts";
 import { loadConfig } from "../config.ts";
 
 export interface RunCommandOptions {
   workflow: string;
   input?: string;
-  /** Files whose contents are concatenated into the input with `===== <path> =====` headers. */
-  inputFiles?: string[];
   runsDir?: string;
   /** Use the faux provider (no API calls) — requires scripted responses, rarely useful from CLI. */
   mock?: boolean;
@@ -50,10 +49,8 @@ export interface RunCommandOptions {
   verbosity?: 0 | 1 | 2;
   /** Bypass the .env secret-scanning gate. */
   allowEnvKeys?: boolean;
-  /** Run in an isolated git worktree (branch swarm/<run-id>). */
+  /** Run in an isolated git worktree (branch swarm/<run-id>). Default true. */
   worktree?: boolean;
-  /** Don't delete the worktree after the run (for post-mortem). Implies --worktree. */
-  keepWorktree?: boolean;
   /** Which interviewer to use for wait.human nodes. Default: console if stdin is a TTY, else auto. */
   interviewer?: "auto" | "console";
   /** Disable async pipeline title generation. Default: on when a
@@ -75,9 +72,33 @@ export interface RunCommandOptions {
    * `--mock` so `--resume` on a later invocation has something to
    * load. */
   noCheckpoint?: boolean;
+  /** When set, `runCommand` refuses to auto-start the daemon and
+   * exits non-zero if one isn't already running. Useful for CI. */
+  noAutostart?: boolean;
 }
 
+/**
+ * Top-level dispatcher.
+ *
+ * - If `SWARM_WORKER_JOB_ID` is set in the env, the daemon's supervisor
+ *   spawned us — run the workflow in-process (original behaviour).
+ * - Otherwise this is a user-invoked `swarm run` → POST `/jobs` and
+ *   return. Fire-and-forget: no streaming, no waiting on exit.
+ */
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
+  if (process.env["SWARM_WORKER_JOB_ID"]) {
+    return runCommandInProcess(opts);
+  }
+  return runCommandViaDaemon(opts);
+}
+
+/**
+ * In-process execution. The daemon's `ProcessSupervisor` sets
+ * `SWARM_WORKER_JOB_ID` when it spawns us so we take this path instead
+ * of recursing through `POST /jobs`. Still exported for tests that
+ * want to drive the executor directly.
+ */
+export async function runCommandInProcess(opts: RunCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
   const config = await loadConfig(cwd);
 
@@ -87,10 +108,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const graph = parseDotSource(source);
   validateOrThrow(graph);
 
-  // Merge --input with --input-file contents. Raw --input goes first; each file
-  // follows as `===== <path> =====\n<content>` so the model can cite sources.
-  const mergedInput = await buildMergedInput(opts);
-  if (mergedInput === "error") return 1;
+  const mergedInput = opts.input;
 
   // Env-leak gate: scan ./.env in the target cwd before giving an agent keys.
   if (!opts.allowEnvKeys && !opts.mock) {
@@ -113,14 +131,17 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const eventsPath = resolve(cwd, runsDir, run_id, "events.jsonl");
   const controlPath = resolve(cwd, runsDir, run_id, "control.jsonl");
 
-  const useWorktree = opts.worktree === true || opts.keepWorktree === true;
+  // Worktree defaults to true for daemon-spawned workers; in-process
+  // direct calls (tests, debugging) can pass false to skip the git
+  // dance. The CLI layer already collapses `--no-worktree` to
+  // `opts.worktree === false` so we only disable on that exact value.
+  const useWorktree = opts.worktree !== false;
   let env: ExecutionEnvironment;
   let worktree: WorktreeEnvironment | undefined;
   if (useWorktree) {
     worktree = new WorktreeEnvironment({
       ...(opts.cwd !== undefined ? { repoRoot: opts.cwd } : {}),
       runId: run_id,
-      ...(opts.keepWorktree === true ? { keepAfterDispose: true } : {}),
     });
     await worktree.init();
     env = worktree;
@@ -416,28 +437,75 @@ async function writeRunSummary(args: SummaryArgs): Promise<void> {
   await writeFile(args.summaryPath, `${lines.join("\n")}\n`, "utf8");
 }
 
-/** Combine --input and --input-file(s). Files are prefixed with `===== <path> =====`
- * so the model can cite the source. Returns the merged string, `undefined` if both
- * were empty, or `"error"` if a file failed to load (caller should exit 1). */
-export async function buildMergedInput(opts: RunCommandOptions): Promise<string | undefined | "error"> {
-  const files = opts.inputFiles ?? [];
-  if (opts.input === undefined && files.length === 0) return undefined;
+// ---------------------------------------------------------------------------
+// Daemon-client path — user-invoked `swarm run`.
+//
+// Fire-and-forget: the daemon owns execution, writes events.jsonl, and
+// surfaces progress via the web UI. We just POST /jobs, print the
+// identifiers, and exit 0. Nothing to stream. Nothing to wait on.
+// ---------------------------------------------------------------------------
 
-  const parts: string[] = [];
-  if (opts.input !== undefined) parts.push(opts.input);
-
-  const cwd = opts.cwd ?? process.cwd();
-  for (const path of files) {
-    const abs = resolve(cwd, path);
-    try {
-      const body = await readFile(abs, "utf8");
-      parts.push(`===== ${path} =====\n${body}`);
-    } catch (err) {
-      console.error(
-        chalk.red(`--input-file: cannot read "${path}": ${err instanceof Error ? err.message : String(err)}`),
-      );
-      return "error";
-    }
-  }
-  return parts.join("\n\n");
+interface EnqueueBody {
+  workflow: string;
+  input?: string;
+  model?: string;
+  runId?: string;
+  worktree?: boolean;
 }
+
+export async function runCommandViaDaemon(opts: RunCommandOptions): Promise<number> {
+  const cwd = opts.cwd ?? process.cwd();
+
+  // Resolve workflow to an absolute path before POSTing so the daemon
+  // can find it regardless of its own cwd.
+  const absoluteWorkflow = resolve(cwd, opts.workflow);
+  try {
+    await stat(absoluteWorkflow);
+  } catch {
+    console.error(chalk.red(`run: workflow not found: ${opts.workflow}`));
+    return 1;
+  }
+
+  const daemon = await ensureDaemonRunning({
+    cwd,
+    autostart: opts.noAutostart !== true,
+  });
+  if (!daemon.ok) {
+    console.error(chalk.red(`run: ${daemon.message}`));
+    return 1;
+  }
+
+  const body: EnqueueBody = { workflow: absoluteWorkflow };
+  if (opts.input !== undefined) body.input = opts.input;
+  if (opts.model !== undefined) body.model = opts.model;
+  if (opts.runId !== undefined) body.runId = opts.runId;
+  // Forward the client's worktree preference. Omit when undefined to
+  // accept the server-side default (worktree=true).
+  if (opts.worktree === false) body.worktree = false;
+
+  let res: Response;
+  try {
+    res = await fetch(`${daemon.baseUrl}/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error(chalk.red(`run: POST /jobs failed — ${(err as Error).message}`));
+    return 1;
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error(chalk.red(`run: POST /jobs → ${res.status} ${res.statusText}`));
+    if (text) console.error(chalk.dim(`  ${text}`));
+    return 1;
+  }
+
+  const payload = (await res.json()) as { jobId: string; runId: string };
+  console.log(chalk.green(`queued: ${payload.jobId}`));
+  console.log(chalk.dim(`  run:  ${payload.runId}`));
+  console.log(chalk.dim(`  view: ${daemon.baseUrl}/pipelines/${payload.runId}`));
+  return 0;
+}
+

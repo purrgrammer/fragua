@@ -219,6 +219,10 @@ export const JobEnqueueBody = Type.Object({
   runId: Type.Optional(Type.String({ minLength: 1 })),
   /** Client-supplied job id (idempotency key). Default uuid. */
   id: Type.Optional(Type.String({ minLength: 1 })),
+  /** Run inside an isolated git worktree (branch `swarm/<runId>`)?
+   * Default true — concurrent daemon runs don't step on each other
+   * unless the client opts out with `--no-worktree`. */
+  worktree: Type.Optional(Type.Boolean()),
 });
 export type JobEnqueueBody = Static<typeof JobEnqueueBody>;
 
@@ -249,6 +253,7 @@ export const JobRowSchema = Type.Object({
   completedAt: Type.Optional(Type.String()),
   childPid: Type.Optional(Type.Integer()),
   error: Type.Optional(Type.String()),
+  worktree: Type.Boolean(),
 });
 export type JobRowSchema = Static<typeof JobRowSchema>;
 

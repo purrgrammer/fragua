@@ -201,6 +201,11 @@ export interface JobRow {
   completedAt?: string;
   childPid?: number;
   error?: string;
+  /** Run inside an isolated git worktree (branch `swarm/<runId>`)?
+   * Defaults to true for new rows — `swarm run` is worktree-by-default
+   * so concurrent runs don't step on each other. Clients pass `false`
+   * to opt out. */
+  worktree: boolean;
 }
 
 /** Fields a caller can pass to `enqueue`. The queue assigns id, run id,
@@ -219,6 +224,10 @@ export interface EnqueueInput {
   /** Priority tie-breaker. Higher runs first; ties break on enqueuedAt
    * ascending. Default 0. */
   priority?: number;
+  /** Run inside an isolated git worktree? Default true. Omit to accept
+   * the default; pass `false` only for explicit opt-out via
+   * `swarm run --no-worktree`. */
+  worktree?: boolean;
 }
 
 export interface JobListFilter {

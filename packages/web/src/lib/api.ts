@@ -292,6 +292,9 @@ export interface JobSummary {
   completedAt?: string;
   childPid?: number;
   error?: string;
+  /** True by default (daemon-spawned runs are isolated). `false` only
+   * when the client explicitly opted out via `--no-worktree`. */
+  worktree: boolean;
 }
 
 export interface ApiClient {

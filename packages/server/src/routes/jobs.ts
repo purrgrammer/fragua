@@ -46,6 +46,7 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(body.runId !== undefined ? { runId: body.runId } : {}),
         ...(body.id !== undefined ? { id: body.id } : {}),
+        ...(body.worktree !== undefined ? { worktree: body.worktree } : {}),
       });
       return c.json({ jobId: row.id, runId: row.runId }, 202);
     } catch (err) {
@@ -136,6 +137,7 @@ function toWire(row: JobRow): JobRowSchema {
     status: row.status,
     priority: row.priority,
     enqueuedAt: row.enqueuedAt,
+    worktree: row.worktree,
   };
   if (row.inputJson !== undefined) wire.input = row.inputJson;
   if (row.model !== undefined) wire.model = row.model;

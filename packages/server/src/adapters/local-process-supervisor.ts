@@ -57,6 +57,10 @@ export function createLocalProcessSupervisor(opts: LocalProcessSupervisorOptions
         "--interviewer",
         "auto",
       ];
+      // Thread the client's worktree preference through to the worker.
+      // Both branches are explicit so the worker doesn't silently pick
+      // up a different default later.
+      args.push(job.worktree ? "--worktree" : "--no-worktree");
       if (job.inputJson !== undefined) args.push("--input", job.inputJson);
       if (job.model !== undefined) args.push("--model", job.model);
 

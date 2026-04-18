@@ -23,16 +23,13 @@ import { validateCommand } from "../src/commands/validate.ts";
 const cli = cac("swarm");
 
 cli
-  .command("run <workflow>", "Execute a workflow end-to-end")
+  .command("run <workflow>", "Enqueue a workflow run via the daemon (fire-and-forget)")
   .option("--input <text>", "Prompt / argument passed to the pipeline")
-  .option(
-    "--input-file <path>",
-    "File whose contents become the input (repeatable; each file prefixed with `===== <path> =====`)",
-  )
   .option(
     "--model <id>",
     "Model id (e.g. `claude-opus-4-7` for anthropic, `anthropic/claude-opus-4.7` for openrouter). Defaults per provider; see `swarm providers`.",
   )
+  .option("--no-autostart", "Fail if the daemon isn't already running, instead of auto-starting it")
   .option(
     "--provider <name>",
     "Inference provider / API endpoint: anthropic | openai | openrouter | google | groq | cerebras | xai | mistral | vercel-ai-gateway | github-copilot | amazon-bedrock | google-vertex",
@@ -44,8 +41,7 @@ cli
   .option("-v, --verbose", "Stream tool calls + LLM events as they happen (level 2)")
   .option("-q, --quiet", "Suppress per-node progress output (level 0)")
   .option("--allow-env-keys", "Bypass the .env secret scanner (use with caution)")
-  .option("--worktree", "Run in an isolated git worktree (branch swarm/<run-id>)")
-  .option("--keep-worktree", "Keep the worktree after the run for post-mortem (implies --worktree)")
+  .option("--no-worktree", "Skip the isolated git worktree (default: run in one, branch swarm/<run-id>)")
   .option("--interviewer <mode>", "Human-in-the-loop interviewer: auto | console (default: console if TTY)")
   .option(
     "--no-auto-title",
@@ -69,18 +65,9 @@ cli
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    const pickArray = (key: string): string[] | undefined => {
-      const v = options[key];
-      if (typeof v === "string") return [v];
-      if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
-      return undefined;
-    };
-    // cac camelCases hyphenated flags: `--input-file` lands on `options.inputFile`.
-    // Reading `options["input-file"]` returns undefined and silently drops the flag.
     const code = await runCommand({
       workflow,
       ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
-      ...(pickArray("inputFile") !== undefined ? { inputFiles: pickArray("inputFile")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("runId") !== undefined ? { runId: pick("runId")! } : {}),
@@ -93,8 +80,8 @@ cli
           ? { verbosity: 0 as const }
           : {}),
       ...(options["allowEnvKeys"] === true ? { allowEnvKeys: true } : {}),
-      ...(options["worktree"] === true ? { worktree: true } : {}),
-      ...(options["keepWorktree"] === true ? { keepWorktree: true } : {}),
+      // --worktree is default ON; --no-worktree (options.worktree === false) opts out.
+      worktree: options["worktree"] !== false,
       ...(pick("interviewer") === "auto" || pick("interviewer") === "console"
         ? { interviewer: pick("interviewer") as "auto" | "console" }
         : {}),
@@ -105,6 +92,8 @@ cli
       ...(options["resume"] === true ? { resume: true } : {}),
       // cac renders `--no-checkpoint` as `options.checkpoint === false`.
       ...(options["checkpoint"] === false ? { noCheckpoint: true } : {}),
+      // cac renders `--no-autostart` as `options.autostart === false`.
+      ...(options["autostart"] === false ? { noAutostart: true } : {}),
     });
     process.exit(code);
   });

@@ -59,6 +59,7 @@ function job(overrides: Partial<JobSummary> = {}): JobSummary {
     status: overrides.status ?? "queued",
     priority: overrides.priority ?? 0,
     enqueuedAt: overrides.enqueuedAt ?? new Date().toISOString(),
+    worktree: overrides.worktree ?? true,
     ...(overrides.input !== undefined ? { input: overrides.input } : {}),
     ...(overrides.error !== undefined ? { error: overrides.error } : {}),
   };

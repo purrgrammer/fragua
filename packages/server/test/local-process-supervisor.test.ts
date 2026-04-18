@@ -20,6 +20,7 @@ function makeJob(overrides: Partial<JobRow> = {}): JobRow {
     status: overrides.status ?? "queued",
     priority: overrides.priority ?? 0,
     enqueuedAt: overrides.enqueuedAt ?? new Date().toISOString(),
+    worktree: overrides.worktree ?? true,
     ...(overrides.inputJson !== undefined ? { inputJson: overrides.inputJson } : {}),
     ...(overrides.model !== undefined ? { model: overrides.model } : {}),
   };
