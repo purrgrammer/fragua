@@ -1,25 +1,91 @@
-// shadcn/ui — Badge. Stateless pill with cva variants. Extended with two
-// swarm-specific tones (success / warning) that aren't in the stock
-// shadcn copy, because status pills are a recurring need in this app.
-
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/cn.ts";
 
+/*
+ * Badge — Swarm design language.
+ *
+ * Skill citations (.swarm/skills/design/SKILL.md):
+ *   § Color                — accents communicate state; no brand "primary";
+ *                            state variants resolve to --sw-accent-* tokens
+ *                            via color-mix tints (no hex, no Tailwind
+ *                            palette literals).
+ *   § Borders & elevation  — 1px hairline, 2px default radius. "Pills only
+ *                            where the pill *is* the status shape." Badges
+ *                            are labels, not status shapes → square corners.
+ *                            No box-shadow.
+ *   § Typography           — monospace, weight + case for hierarchy. Uses
+ *                            xs (11px) so badges sit quietly inline with
+ *                            12px body without becoming the loudest thing
+ *                            on the row.
+ *   § Spacing              — 4px scale only (--sw-space-*).
+ *   § Motion               — 120ms ease hover; instant 1px focus ring.
+ *
+ * Behavioural API (variants, BadgeProps) is preserved. The legacy `info`
+ * variant is removed because violet had no state mapping; callers can use
+ * `secondary` for neutral tags. `default` is no longer a brand-coloured
+ * solid — it is now an outlined neutral, since "default" is not a state.
+ */
+
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  [
+    // structure
+    "inline-flex items-center whitespace-nowrap select-none",
+    "border rounded-[var(--sw-radius-default)]",
+    "px-[var(--sw-space-2)] py-[var(--sw-space-05)]",
+
+    // typography: monospace voice, dense label size, UPPERCASE handled by
+    // callers when used as a status label (skill leaves casing to context).
+    "font-mono font-medium",
+    "text-[length:var(--sw-text-xs)] leading-none",
+
+    // motion: hover colour shift only; 120ms ease.
+    "transition-[background-color,border-color,color]",
+    "duration-[var(--sw-duration-hover)] ease-[ease]",
+
+    // focus: instant, 1px ring.
+    "outline-none focus-visible:ring-1 focus-visible:ring-ring",
+  ].join(" "),
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80",
-        secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive: "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
-        outline: "text-foreground",
-        // Status-family variants: deliberately match the health badge in
-        // App.tsx so list rows and the header feel like one system.
-        success: "border-emerald-300 bg-emerald-100 text-emerald-800",
-        warning: "border-amber-300 bg-amber-100 text-amber-800",
-        info: "border-violet-300 bg-violet-100 text-violet-800",
-        muted: "border-slate-300 bg-slate-100 text-slate-700",
+        // default — neutral outlined chip; not a brand colour.
+        default:
+          "border-[var(--sw-border)] bg-[var(--sw-surface)] text-[var(--sw-text)]",
+
+        // secondary — flatter, no border emphasis. Same visual weight as
+        // default, used when sitting next to one for grouping.
+        secondary:
+          "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+
+        // outline — chromeless until interaction; for inline tags in copy.
+        outline:
+          "border-[var(--sw-border)] bg-transparent text-[var(--sw-text)]",
+
+        // muted — quietest variant; metadata (paths, ids).
+        muted:
+          "border-transparent bg-[var(--sw-surface)] text-[var(--sw-muted)]",
+
+        // ── state variants (skill: "Accents communicate state.") ─────────
+        // Background is a low-chroma tint of the accent so the dot/label
+        // colour stays the carrier of meaning. color-mix keeps both themes
+        // in sync without auto-inversion.
+        success: [
+          "border-[color-mix(in_oklch,var(--sw-accent-success)_30%,transparent)]",
+          "bg-[color-mix(in_oklch,var(--sw-accent-success)_12%,transparent)]",
+          "text-[var(--sw-accent-success)]",
+        ].join(" "),
+
+        warning: [
+          "border-[color-mix(in_oklch,var(--sw-accent-warn)_30%,transparent)]",
+          "bg-[color-mix(in_oklch,var(--sw-accent-warn)_12%,transparent)]",
+          "text-[var(--sw-accent-warn)]",
+        ].join(" "),
+
+        destructive: [
+          "border-[color-mix(in_oklch,var(--sw-accent-error)_30%,transparent)]",
+          "bg-[color-mix(in_oklch,var(--sw-accent-error)_12%,transparent)]",
+          "text-[var(--sw-accent-error)]",
+        ].join(" "),
       },
     },
     defaultVariants: {
@@ -31,7 +97,7 @@ const badgeVariants = cva(
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, ...props }: BadgeProps): JSX.Element {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return <span data-slot="badge" data-variant={variant ?? "default"} className={cn(badgeVariants({ variant }), className)} {...props} />;
 }
 
 export { badgeVariants };
