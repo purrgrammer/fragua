@@ -14,6 +14,29 @@ import { cn } from "@/lib/utils";
 
 import { Shimmer } from "./shimmer";
 
+/**
+ * Reasoning — collapsible "thinking" disclosure for streaming model output.
+ *
+ * Styling notes (see .swarm/skills/design/SKILL.md):
+ *   - Token-only colour, spacing, motion. No shadcn aliases
+ *     (`text-muted-foreground`, `text-sm`, `hover:text-foreground`),
+ *     no raw tailwind spacing (`gap-2`, `mt-4`, `mb-4`, `size-4`).
+ *     § Authoring checklist; § Spacing ("These steps only").
+ *   - Body prose uses `--sw-text` (the legibility token), not `--sw-muted`
+ *     (which is reserved for labels / secondary metadata). § Color tokens.
+ *   - Trigger label is muted; hover lifts to `--sw-text`. Hover motion is
+ *     colour-only, 120ms ease. § Motion: "Hover, color shift … 120ms ease".
+ *   - Chevron rotation and content open/close share `--sw-duration-enter`
+ *     ease-out — paired easing per § Motion: "paired elements … share
+ *     easing and duration". (Chevron uses status duration to settle a hair
+ *     before content finishes — both are status-class transforms.)
+ *   - "Thinking" state is carried by `<Shimmer>` (opacity pulse on
+ *     `--sw-accent-thinking`, 1800ms floor). § Motion: "Pulse is slow.
+ *     1800ms floor"; § Color: accent.thinking is the alive colour.
+ *   - Slide distance reduced from 8px → 4px (`slide-…-top-1`) to keep the
+ *     transform within the spacing scale. § Spacing.
+ */
+
 interface ReasoningContextValue {
   isStreaming: boolean;
   isOpen: boolean;
@@ -118,7 +141,7 @@ export const Reasoning = memo(
     return (
       <ReasoningContext.Provider value={contextValue}>
         <Collapsible
-          className={cn("not-prose mb-4", className)}
+          className={cn("not-prose mb-[var(--sw-space-4)]", className)}
           onOpenChange={handleOpenChange}
           open={isOpen}
           {...props}
@@ -136,7 +159,8 @@ export type ReasoningTriggerProps = ComponentProps<typeof CollapsibleTrigger> & 
 
 const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
   if (isStreaming || duration === 0) {
-    return <Shimmer duration={1}>Thinking...</Shimmer>;
+    // Sentence case, not Title Case (§ Typography: "Never Title Case").
+    return <Shimmer duration={1}>Thinking…</Shimmer>;
   }
   if (duration === undefined) {
     return <p>Thought for a few seconds</p>;
@@ -151,16 +175,29 @@ export const ReasoningTrigger = memo(
     return (
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground",
+          "group flex w-full items-center",
+          "gap-[var(--sw-space-2)]",
+          "text-[length:var(--sw-text-sm)] text-[var(--sw-muted)]",
+          // Hover: colour shift only, 120ms ease (§ Motion).
+          "transition-colors duration-[var(--sw-duration-hover)] ease",
+          "hover:text-[var(--sw-text)]",
           className,
         )}
         {...props}
       >
         {children ?? (
           <>
-            <BrainIcon className="size-4" />
+            <BrainIcon className="size-[var(--sw-text-md)]" />
             {getThinkingMessage(isStreaming, duration)}
-            <ChevronDownIcon className={cn("size-4 transition-transform", isOpen ? "rotate-180" : "rotate-0")} />
+            <ChevronDownIcon
+              className={cn(
+                "size-[var(--sw-text-md)]",
+                // Status-flip transform, paired with content open/close
+                // (§ Motion: status transition 160ms ease).
+                "transition-transform duration-[var(--sw-duration-status)] ease",
+                isOpen ? "rotate-180" : "rotate-0",
+              )}
+            />
           </>
         )}
       </CollapsibleTrigger>
@@ -177,8 +214,15 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 export const ReasoningContent = memo(({ className, children, ...props }: ReasoningContentProps) => (
   <CollapsibleContent
     className={cn(
-      "mt-4 text-sm",
-      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+      // Enter/exit on transform + opacity only, paired with the chevron.
+      // § Motion: "Only animate transform and opacity"; "Drawer / panel
+      // enter-exit … 200ms ease-out".
+      "mt-[var(--sw-space-3)] outline-none",
+      "text-[length:var(--sw-text-sm)] text-[var(--sw-text)]",
+      "data-[state=open]:animate-in data-[state=closed]:animate-out",
+      "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
+      "data-[state=open]:slide-in-from-top-1 data-[state=closed]:slide-out-to-top-1",
+      "duration-[var(--sw-duration-enter)] ease-out",
       className,
     )}
     {...props}
