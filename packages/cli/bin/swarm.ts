@@ -5,6 +5,7 @@ import cac from "cac";
 import chalk from "chalk";
 import { cancelCommand } from "../src/commands/cancel.ts";
 import {
+  daemonLogsCommand,
   daemonRunCommand,
   daemonStartCommand,
   daemonStatusCommand,
@@ -225,10 +226,12 @@ cli
   });
 
 cli
-  .command("daemon <action>", "Manage the swarm daemon: start | stop | status")
+  .command("daemon <action>", "Manage the swarm daemon: start | stop | status | logs")
   .option("--port <n>", "TCP port to bind on 127.0.0.1 for `start` (default 3737; 0 for ephemeral)")
   .option("--foreground", "`start` only: run in-process instead of detaching (Ctrl-C to stop)")
   .option("--grace <ms>", "`stop` only: grace period before SIGKILL (default 10000)")
+  .option("-n, --lines <n>", "`logs` only: how many lines to show (default 50)")
+  .option("-f, --follow", "`logs` only: stream new log lines until Ctrl-C")
   .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
   .option("--cwd <path>", "Project root (default cwd)")
   .action(async (action: string, options: Record<string, unknown>) => {
@@ -266,9 +269,16 @@ cli
           ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
         });
         break;
+      case "logs":
+        code = await daemonLogsCommand({
+          ...(numOpt("lines") !== undefined ? { lines: numOpt("lines")! } : {}),
+          ...(options["follow"] === true ? { follow: true } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        });
+        break;
       default:
         console.error(chalk.red(`unknown daemon action: ${action}`));
-        console.error(chalk.dim("  valid actions: start | stop | status"));
+        console.error(chalk.dim("  valid actions: start | stop | status | logs"));
         code = 1;
     }
     process.exit(code);

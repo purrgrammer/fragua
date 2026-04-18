@@ -22,8 +22,8 @@
 //       --foreground` (same process). Binds the HTTP server, writes
 //       rendezvous, waits for SIGTERM/SIGINT, cleans up.
 
-import { openSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { createReadStream, openSync, watch } from "node:fs";
+import { mkdir, rename, stat } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve as resolvePath, join } from "node:path";
 import {
@@ -62,6 +62,15 @@ const DEFAULT_DAEMON_PORT = 3737;
 const START_HANDSHAKE_TIMEOUT_MS = 5_000;
 /** How long `stop` waits for SIGTERM to take effect before SIGKILL. */
 const DEFAULT_STOP_GRACE_MS = 10_000;
+/** Rotate `daemon.log` at start if it's bigger than this. A more
+ * elaborate runtime rotation would need to swap the child's stdout
+ * FD while it's running; start-time rotation covers the "daemon
+ * started → ran for a week → restarted" case, which is what most
+ * operators actually hit. */
+const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+/** How many lines `daemon logs` shows when neither --follow nor an
+ * explicit -n is passed. */
+const DEFAULT_LOG_TAIL_LINES = 50;
 
 export interface DaemonCommandBaseOptions {
   /** Project root — defaults to `process.cwd()`. */
@@ -85,6 +94,13 @@ export interface DaemonStopOptions extends DaemonCommandBaseOptions {
 export interface DaemonRunOptions extends DaemonCommandBaseOptions {
   port?: number;
   runsDir?: string;
+}
+
+export interface DaemonLogsOptions extends DaemonCommandBaseOptions {
+  /** Lines to print; default 50. Ignored when `follow` is true. */
+  lines?: number;
+  /** Tail the log (`-f`) — stream new appended content until Ctrl-C. */
+  follow?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +139,9 @@ export async function daemonStartCommand(opts: DaemonStartOptions = {}): Promise
   // and refuses to exit until it does.
   const daemonDir = getDaemonDir(cwd);
   await mkdir(daemonDir, { recursive: true });
-  const logFd = openSync(`${daemonDir}/daemon.log`, "a");
+  const logPath = `${daemonDir}/daemon.log`;
+  await rotateLogIfNeeded(logPath, LOG_ROTATE_MAX_BYTES);
+  const logFd = openSync(logPath, "a");
 
   const argv0 = process.argv[0];
   const script = process.argv[1];
@@ -455,4 +473,100 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
   });
 
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// swarm daemon logs
+// ---------------------------------------------------------------------------
+
+/**
+ * `swarm daemon logs [-n N] [--follow]` — read `.swarm/daemon/daemon.log`.
+ *
+ * Without `--follow`, prints the last N lines (default 50) and exits.
+ * With `--follow`, prints the last N lines, then watches the file
+ * for appended content until Ctrl-C. Uses `fs.watch` so we don't
+ * busy-poll.
+ */
+export async function daemonLogsCommand(opts: DaemonLogsOptions = {}): Promise<number> {
+  const cwd = opts.cwd ?? process.cwd();
+  const logPath = `${getDaemonDir(cwd)}/daemon.log`;
+
+  let size: number;
+  try {
+    size = (await stat(logPath)).size;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      console.error(chalk.dim(`no log yet at ${logPath}`));
+      return 1;
+    }
+    throw err;
+  }
+
+  const nLines = opts.lines ?? DEFAULT_LOG_TAIL_LINES;
+  // Read the whole file and tail in memory — cheap for a 10MB cap.
+  const raw = await Bun.file(logPath).text();
+  const lines = raw.split("\n");
+  const tail = lines.slice(-nLines - 1).join("\n");
+  if (tail.length > 0) process.stdout.write(tail.endsWith("\n") ? tail : `${tail}\n`);
+
+  if (!opts.follow) return 0;
+
+  // Follow mode: watch for appends, print delta. fs.watch fires on any
+  // change; we re-open with a byte offset so the process stays simple.
+  let offset = size;
+  return new Promise<number>((resolve) => {
+    const watcher = watch(logPath, { persistent: true });
+    watcher.on("change", () => {
+      stat(logPath)
+        .then((s) => {
+          if (s.size < offset) {
+            // File truncated or rotated; start from 0.
+            offset = 0;
+          }
+          if (s.size === offset) return;
+          const stream = createReadStream(logPath, { start: offset, end: s.size - 1 });
+          let chunks = "";
+          stream.on("data", (c) => {
+            chunks += c.toString();
+          });
+          stream.on("end", () => {
+            process.stdout.write(chunks);
+            offset = s.size;
+          });
+        })
+        .catch(() => {
+          // best-effort
+        });
+    });
+    const cleanup = () => {
+      watcher.close();
+      resolve(0);
+    };
+    process.once("SIGINT", cleanup);
+    process.once("SIGTERM", cleanup);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Log rotation (start-time)
+// ---------------------------------------------------------------------------
+
+/**
+ * If `daemon.log` exists and exceeds `maxBytes`, rename it to
+ * `daemon.log.1` (overwriting any previous .1). Called by
+ * `daemonStartCommand` before opening the new log FD so the fresh
+ * daemon writes into an empty file. Runtime rotation is out of
+ * scope — see the note at the top of this file.
+ */
+async function rotateLogIfNeeded(logPath: string, maxBytes: number): Promise<void> {
+  try {
+    const s = await stat(logPath);
+    if (s.size <= maxBytes) return;
+    await rename(logPath, `${logPath}.1`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    // Best-effort rotation. If it fails we just keep appending — the
+    // alternative is refusing to start, which is worse.
+    console.error(chalk.yellow(`daemon: log rotation skipped — ${(err as Error).message}`));
+  }
 }
