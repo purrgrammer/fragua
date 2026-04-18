@@ -4,11 +4,17 @@
 // only the content swaps.
 //
 // Layout invariants (load-bearing — change with care):
-//   - The shell fills the viewport: `SidebarProvider` is `min-h-svh
-//     w-full`, `SidebarInset` is `flex-1 min-w-0` (the `min-w-0` is
-//     the fix for flex children refusing to shrink below their
-//     intrinsic content width, which was letting wide tables push
-//     the sidebar off-screen).
+//   - The shell is pinned to the viewport height. `SidebarProvider`
+//     ships with `min-h-svh` by default, which lets it grow past the
+//     viewport when inner content overflows — combined with
+//     `body { overflow: hidden }` in globals.css, that clips the
+//     bottom of the page and makes it unreachable. We override to
+//     `h-svh` here so the wrapper is exactly viewport-tall, giving
+//     the `overflow-auto` main region a bounded parent to scroll
+//     inside of. `SidebarInset` gets `h-full` for the same reason.
+//   - `min-w-0` on `SidebarInset` is the fix for flex children
+//     refusing to shrink below their intrinsic content width, which
+//     was letting wide tables push the sidebar off-screen.
 //   - `<main>` is `flex-1 min-h-0 min-w-0 overflow-auto` so any
 //     oversized page content scrolls inside the main region instead
 //     of inflating the viewport. Pages that want to be full-bleed
@@ -40,9 +46,9 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "./ui/sidebar.tsx"
 
 export function AppShell(): JSX.Element {
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-svh">
       <AppSidebar />
-      <SidebarInset className="min-w-0">
+      <SidebarInset className="h-full min-w-0">
         <header
           data-testid="app-shell-header"
           className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3"

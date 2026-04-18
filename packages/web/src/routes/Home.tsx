@@ -224,7 +224,7 @@ interface StatTileProps {
 
 function StatTile({ label, value, icon, testId }: StatTileProps): JSX.Element {
   return (
-    <Card size="sm" data-testid={testId}>
+    <Card size="sm" data-testid={testId} className="ring-0">
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-xs font-medium text-muted-foreground">
           <span>{label}</span>

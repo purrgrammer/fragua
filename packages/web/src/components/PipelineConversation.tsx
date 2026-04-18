@@ -235,7 +235,7 @@ function InputMetaGrid({ section }: { section: NodeSection }): JSX.Element | nul
 function StatusChip({ status }: { status: NodeSectionStatus }): JSX.Element {
   const palette: Record<NodeSectionStatus, string> = {
     pending: "bg-muted text-muted-foreground",
-    running: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+    running: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-200",
     retrying: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
     completed: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
     failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",

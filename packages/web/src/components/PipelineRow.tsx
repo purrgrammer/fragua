@@ -49,7 +49,7 @@ function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
         <Link
           to={`/pipelines/${row.runId}`}
           title={displayTooltip(row)}
-          className="block truncate font-medium text-blue-700 hover:underline"
+          className="block truncate font-medium text-foreground hover:underline"
         >
           {displayTitle(row)}
         </Link>
@@ -135,7 +135,7 @@ export function StatusPill({ status }: { status: PipelineSummary["status"] }): J
       : status === "fail"
         ? "bg-rose-100 text-rose-800 border-rose-300"
         : status === "running"
-          ? "bg-blue-100 text-blue-800 border-blue-300"
+          ? "bg-violet-100 text-violet-800 border-violet-300"
           : "bg-slate-100 text-slate-700 border-slate-300";
   return (
     <span

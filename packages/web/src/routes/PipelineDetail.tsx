@@ -87,7 +87,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
         title="Missing pipeline id"
         description="The URL didn't include a run identifier."
         action={
-          <Link to="/" className="text-xs text-blue-700 hover:underline">
+          <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
             ← all pipelines
           </Link>
         }
@@ -107,7 +107,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <header className="flex min-w-0 items-baseline justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Link to="/" className="text-xs text-blue-700 hover:underline">
+          <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
             ← all pipelines
           </Link>
           <h2
@@ -131,7 +131,7 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
           title="Couldn't load this run"
           description="The server didn't return details for this run. It may have been deleted or the request failed — check the console for specifics."
           action={
-            <Link to="/" className="text-xs text-blue-700 hover:underline">
+            <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
               ← all pipelines
             </Link>
           }
