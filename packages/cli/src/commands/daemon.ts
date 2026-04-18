@@ -25,16 +25,18 @@
 import { openSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import { join } from "node:path";
+import { resolve as resolvePath, join } from "node:path";
 import {
+  createLocalProcessSupervisor,
   createSqliteJobQueue,
   getDaemonDir,
   isPidAlive,
   readRendezvous,
   removeRendezvous,
+  startScheduler,
   writeRendezvous,
 } from "@swarm/server";
-import type { HealthDaemonInfo, JobQueue } from "@swarm/server";
+import type { HealthDaemonInfo, JobQueue, ProcessSupervisor, SchedulerHandle } from "@swarm/server";
 import chalk from "chalk";
 import { startServer } from "./serve.ts";
 
@@ -324,6 +326,24 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
 
   const startedAt = new Date().toISOString();
   const concurrency = DEFAULT_CONCURRENCY;
+  const resolvedRunsDir = resolvePath(cwd, opts.runsDir ?? ".swarm/runs");
+
+  // ProcessSupervisor spawns `swarm run` children per job. It's pure
+  // shell-out plumbing; the scheduler owns the lifecycle logic.
+  const argv0 = process.argv[0];
+  const swarmScript = process.argv[1];
+  if (argv0 === undefined || swarmScript === undefined) {
+    console.error(chalk.red("swarm daemon: cannot determine interpreter path — refusing to start"));
+    await jobQueue.close().catch(() => {});
+    return 1;
+  }
+  const supervisor: ProcessSupervisor = createLocalProcessSupervisor({
+    argv0,
+    swarmScript,
+    cwd,
+    runsDir: resolvedRunsDir,
+  });
+
   // Captured in a closure so `/health` sees live counters. `handle.port`
   // is filled in after `startServer` returns; we reference it lazily.
   let boundPort = port;
@@ -366,9 +386,19 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
     version: DAEMON_VERSION,
   });
 
+  // Start the scheduler after the HTTP server so `/health` can report
+  // `inflight:0` from the first request.
+  const scheduler: SchedulerHandle = startScheduler({
+    queue: jobQueue,
+    supervisor,
+    concurrency,
+    runsDir: handle.runsDir,
+  });
+
   console.log(chalk.green(`swarm daemon listening on ${handle.url}`));
-  console.log(chalk.dim(`  pid:      ${process.pid}`));
-  console.log(chalk.dim(`  runs-dir: ${handle.runsDir}`));
+  console.log(chalk.dim(`  pid:         ${process.pid}`));
+  console.log(chalk.dim(`  runs-dir:    ${handle.runsDir}`));
+  console.log(chalk.dim(`  concurrency: ${concurrency}`));
 
   await new Promise<void>((resolveShutdown) => {
     let stopping = false;
@@ -376,18 +406,26 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
       if (stopping) return;
       stopping = true;
       console.log(chalk.dim(`\n${signal} received — shutting down daemon...`));
-      handle
-        .close()
-        .catch((err) => console.error(chalk.red(`daemon close failed — ${(err as Error).message}`)))
-        .finally(async () => {
-          await jobQueue
-            ?.close()
-            .catch((err) => console.error(chalk.red(`daemon queue close failed — ${(err as Error).message}`)));
-          await removeRendezvous(cwd).catch((err) =>
-            console.error(chalk.red(`daemon rendezvous cleanup failed — ${(err as Error).message}`)),
-          );
-          resolveShutdown();
-        });
+      (async () => {
+        // Order matters: stop accepting new work (scheduler) → stop
+        // accepting new HTTP requests (handle) → flush queue → drop
+        // rendezvous. In-flight worker children are detached and
+        // continue running — phase 6 orphan recovery adopts them on
+        // the next startup.
+        await scheduler
+          .stop()
+          .catch((err) => console.error(chalk.red(`daemon scheduler stop failed — ${(err as Error).message}`)));
+        await handle
+          .close()
+          .catch((err) => console.error(chalk.red(`daemon close failed — ${(err as Error).message}`)));
+        await jobQueue
+          ?.close()
+          .catch((err) => console.error(chalk.red(`daemon queue close failed — ${(err as Error).message}`)));
+        await removeRendezvous(cwd).catch((err) =>
+          console.error(chalk.red(`daemon rendezvous cleanup failed — ${(err as Error).message}`)),
+        );
+        resolveShutdown();
+      })();
     };
     process.once("SIGINT", () => stop("SIGINT"));
     process.once("SIGTERM", () => stop("SIGTERM"));

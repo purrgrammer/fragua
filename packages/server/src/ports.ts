@@ -229,6 +229,25 @@ export interface JobListFilter {
   cursor?: string;
 }
 
+/**
+ * Adapter over whatever primitive actually runs the workflow. The local
+ * default (`createLocalProcessSupervisor`) spawns `swarm run` as a
+ * child process; a future hosted adapter would talk to a container
+ * runtime or remote worker.
+ *
+ * `spawn` is given the whole job row — it has the workflow path, run
+ * id, input, and model. It returns the pid (cached by the scheduler
+ * so cancel has something to signal) and an `exited` promise that
+ * resolves with the child's exit code.
+ *
+ * `terminate` sends a signal to a pid previously returned by `spawn`.
+ * Returns false if the process is already gone.
+ */
+export interface ProcessSupervisor {
+  spawn(job: JobRow): Promise<{ pid: number; exited: Promise<number> }>;
+  terminate(pid: number, signal?: "SIGTERM" | "SIGKILL"): Promise<boolean>;
+}
+
 export interface JobQueue {
   enqueue(input: EnqueueInput): Promise<JobRow>;
   get(jobId: string): Promise<JobRow | undefined>;
@@ -261,6 +280,7 @@ export interface ServerPorts {
   controlGateway?: ControlGateway;
   skillReader?: SkillReader;
   jobQueue?: JobQueue;
+  processSupervisor?: ProcessSupervisor;
   /** Optional sink for interview.* events emitted on answer. */
   eventSink?: EventSink;
   /** Per-request provider for daemon metadata merged into `/health` under
