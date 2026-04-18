@@ -15,6 +15,7 @@
 import { resolve } from "node:path";
 import { createServer } from "@swarm/server";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
 
 export interface ServeCommandOptions {
   /** TCP port to bind. Default 3000. Pass 0 to get an ephemeral port. */
@@ -51,8 +52,18 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   if (typeof Bun?.serve !== "function") {
     throw new Error("swarm serve requires the Bun runtime (>=1.2). Run via `bun run` instead of `node`.");
   }
-  const runsDir = resolve(opts.cwd ?? process.cwd(), opts.runsDir ?? ".swarm/runs");
-  const app = createServer({ runsDir });
+  const cwd = opts.cwd ?? process.cwd();
+  const runsDir = resolve(cwd, opts.runsDir ?? ".swarm/runs");
+  // Load `.swarm/config.yaml` so the server's `SkillReader` honors
+  // `skills.paths` / `skills.disabled` / `skills.trust_project`. Without
+  // this, the server falls back to auto-discovery of every well-known
+  // path (~/.claude/skills etc.), which ignores the user's explicit pin.
+  const config = await loadConfig(cwd);
+  const app = createServer({
+    runsDir,
+    cwd,
+    ...(config.skills !== undefined ? { skillsConfig: config.skills } : {}),
+  });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
   // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire
   // regardless of which address family an existing listener is using, so the
