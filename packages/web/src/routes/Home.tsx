@@ -17,7 +17,7 @@ import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer } from "lucide-react
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
-import { PipelineRow, shortenRunId } from "../components/PipelineRow.tsx";
+import { displayTitle, displayTooltip, PipelineRow, shortenRunId } from "../components/PipelineRow.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
@@ -145,8 +145,8 @@ function RunningCard({ row, now }: { row: PipelineSummary; now: number }): JSX.E
       <Card size="sm" className="hover:bg-muted/40 transition-colors">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <span className="truncate" title={row.workflow ?? ""}>
-              {row.workflowName ?? row.workflow ?? "(unknown)"}
+            <span className="truncate" title={displayTooltip(row)}>
+              {displayTitle(row)}
             </span>
             <Shimmer className="ml-auto text-xs font-medium" as="span">
               running

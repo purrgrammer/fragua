@@ -64,14 +64,14 @@ describe("buildFidelitySeed", () => {
     priorMessages: [] as AgentMessage[],
   };
 
-  test("full mode produces no seed", () => {
-    const { seed, warnings } = buildFidelitySeed({ ...baseParams, fidelity: "full" });
+  test("full mode produces no seed", async () => {
+    const { seed, warnings } = await buildFidelitySeed({ ...baseParams, fidelity: "full" });
     expect(seed).toBe("");
     expect(warnings).toEqual([]);
   });
 
-  test("truncate seed carries goal + run_id only, no prior conversation", () => {
-    const { seed } = buildFidelitySeed({
+  test("truncate seed carries goal + run_id only, no prior conversation", async () => {
+    const { seed } = await buildFidelitySeed({
       ...baseParams,
       fidelity: "truncate",
       priorMessages: [userMsg("hi"), asstMsg("old reply")],
@@ -80,12 +80,11 @@ describe("buildFidelitySeed", () => {
     expect(seed).toContain("Goal: ship a feature");
     expect(seed).toContain("Run: run-123");
     expect(seed).toContain("No prior conversation");
-    // Truncate is intentionally amnesic; prior content must NOT leak.
     expect(seed).not.toContain("old reply");
   });
 
-  test("compact seed includes role census and latest assistant text", () => {
-    const { seed } = buildFidelitySeed({
+  test("compact seed includes role census and latest assistant text", async () => {
+    const { seed } = await buildFidelitySeed({
       ...baseParams,
       fidelity: "compact",
       priorMessages: [userMsg("q1"), asstMsg("a1"), userMsg("q2"), asstMsg("final answer")],
@@ -97,24 +96,82 @@ describe("buildFidelitySeed", () => {
     expect(seed).toContain("final answer");
   });
 
-  test("summary:low is deterministic (no LLM) and tags the mode", () => {
-    const a = buildFidelitySeed({ ...baseParams, fidelity: "summary:low", priorMessages: [asstMsg("x")] });
-    const b = buildFidelitySeed({ ...baseParams, fidelity: "summary:low", priorMessages: [asstMsg("x")] });
+  test("summary:low is deterministic (no LLM) and tags the mode", async () => {
+    const a = await buildFidelitySeed({ ...baseParams, fidelity: "summary:low", priorMessages: [asstMsg("x")] });
+    const b = await buildFidelitySeed({ ...baseParams, fidelity: "summary:low", priorMessages: [asstMsg("x")] });
     expect(a.seed).toBe(b.seed);
     expect(a.seed).toContain('fidelity="summary:low"');
     expect(a.warnings).toEqual([]);
   });
 
-  test("summary:medium/high warn and fall back to summary:low behaviour", () => {
-    const { seed: med, warnings: medWarn } = buildFidelitySeed({ ...baseParams, fidelity: "summary:medium" });
+  test("summary:medium/high without a summariser warn + fall back to summary:low", async () => {
+    const { seed: med, warnings: medWarn } = await buildFidelitySeed({ ...baseParams, fidelity: "summary:medium" });
     expect(med).toContain('fidelity="summary:medium"');
     expect(medWarn.join("\n")).toContain("no summariser backend is wired");
-    const { warnings: hiWarn } = buildFidelitySeed({ ...baseParams, fidelity: "summary:high" });
+    const { warnings: hiWarn } = await buildFidelitySeed({ ...baseParams, fidelity: "summary:high" });
     expect(hiWarn.length).toBe(1);
   });
 
-  test("missing graph goal renders gracefully", () => {
-    const { seed } = buildFidelitySeed({ ...baseParams, fidelity: "truncate", graphGoal: undefined });
+  test("summary:medium with a summariser embeds the narrative", async () => {
+    const summariser = {
+      async summarise(_i: unknown) {
+        return {
+          text: "compressed story of prior turns",
+          ok: true,
+          provider: "stub",
+          model: "stub-small",
+          input_tokens: 10,
+          output_tokens: 5,
+          cost_usd: 0.0001,
+          duration_ms: 3,
+        } as const;
+      },
+    };
+    const { seed, warnings } = await buildFidelitySeed({
+      ...baseParams,
+      fidelity: "summary:medium",
+      priorMessages: [userMsg("hi"), asstMsg("ok")],
+      // biome-ignore lint/suspicious/noExplicitAny: shaping a test double.
+      summariser: summariser as any,
+      callerNodeId: "plan",
+    });
+    expect(seed).toContain("<summariser-narrative>");
+    expect(seed).toContain("compressed story of prior turns");
+    expect(seed).toContain("stub/stub-small");
+    expect(warnings).toEqual([]);
+  });
+
+  test("summary:medium summariser failure falls back with a warning", async () => {
+    const summariser = {
+      async summarise(_i: unknown) {
+        return {
+          text: "",
+          ok: false,
+          error: "boom",
+          provider: "stub",
+          model: "stub-small",
+          input_tokens: 0,
+          output_tokens: 0,
+          cost_usd: 0,
+          duration_ms: 1,
+        } as const;
+      },
+    };
+    const { seed, warnings } = await buildFidelitySeed({
+      ...baseParams,
+      fidelity: "summary:medium",
+      priorMessages: [userMsg("hi"), asstMsg("ok")],
+      // biome-ignore lint/suspicious/noExplicitAny: shaping a test double.
+      summariser: summariser as any,
+      callerNodeId: "plan",
+    });
+    expect(seed).toContain('fidelity="summary:medium"');
+    expect(seed).not.toContain("<summariser-narrative>");
+    expect(warnings.join("\n")).toContain("summariser failed (boom)");
+  });
+
+  test("missing graph goal renders gracefully", async () => {
+    const { seed } = await buildFidelitySeed({ ...baseParams, fidelity: "truncate", graphGoal: undefined });
     expect(seed).toContain("Goal: (unspecified)");
   });
 });

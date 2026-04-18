@@ -53,6 +53,20 @@ export const PipelineSummary = Type.Object({
    * which advances as new events arrive.
    */
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  /**
+   * Auto-generated pipeline title (Wave 2b). Sourced from the first
+   * `pipeline.title_generated` event; `undefined` on runs that predate
+   * Wave 2b, were launched with `--no-auto-title`, or whose summariser
+   * call failed. UI layers should fall back to `input` (when captured
+   * on `pipeline.started.data.input`) or the workflow name.
+   */
+  title: Type.Optional(Type.String()),
+  /**
+   * Raw `$ARGUMENTS` captured on `pipeline.started.data.input`. Exposed
+   * so the UI has a sensible title fallback when `title` is absent, and
+   * so the title-backfill script has a deterministic source.
+   */
+  input: Type.Optional(Type.String()),
 });
 export type PipelineSummary = Static<typeof PipelineSummary>;
 
@@ -95,6 +109,10 @@ export const PipelineDetail = Type.Object({
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),
   outputTokens: Type.Integer({ minimum: 0, default: 0 }),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Auto-generated title — see PipelineSummary.title. */
+  title: Type.Optional(Type.String()),
+  /** Raw `$ARGUMENTS` — see PipelineSummary.input. */
+  input: Type.Optional(Type.String()),
 });
 export type PipelineDetail = Static<typeof PipelineDetail>;
 

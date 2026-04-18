@@ -24,6 +24,22 @@ defaults:
   # classifier + interactive.
   permissions: unsafe
 
+  # Weak-model summariser (Wave 2b). Powers:
+  #   - async pipeline-title generation from $ARGUMENTS (see `auto_title`)
+  #   - fidelity=summary:medium|high compression of prior node transcripts
+  # Always cheaper than the primary coding model. Leave unset to disable
+  # all summarisation — title generation silently skips; fidelity=summary:*
+  # falls back to the deterministic `summary:low` template with a warning.
+  summariser:
+    provider: openrouter
+    model: anthropic/claude-haiku-4.5
+
+# Auto-generated pipeline titles from $ARGUMENTS. "on" (default) kicks off a
+# fire-and-forget summariser call at pipeline start and emits
+# pipeline.title_generated when it resolves. "off" disables. CLI flag
+# --no-auto-title wins over this.
+auto_title: on
+
 # Command blocklist applied even in unsafe mode. Matched as literal substrings
 # against the shell command. Zero-cost safety floor.
 blocklist:

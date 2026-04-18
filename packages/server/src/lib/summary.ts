@@ -20,20 +20,24 @@ export function deriveSummary(runId: string, events: Event[]): PipelineSummary {
   const startedAt = first?.timestamp ?? new Date(0).toISOString();
   let workflow: string | undefined;
   let workflowName: string | undefined;
+  let input: string | undefined;
   if (first) {
     const data = first.data as {
       workflow?: string;
       workflow_label?: string;
       workflow_path?: string;
       graph_id?: string;
+      input?: string;
     };
     workflow = data.workflow ?? data.workflow_label ?? first.workflow_sha;
     workflowName = deriveWorkflowName(data, first.workflow_sha);
+    if (typeof data.input === "string" && data.input.length > 0) input = data.input;
   }
   // Cost/token aggregation uses the shared @swarm/events accumulator so
   // the CLI's ConsoleSink.totals and the REST summary stay in lockstep.
   const totals = aggregateCost(events);
   const durationMs = deriveDurationMs(events);
+  const title = deriveTitle(events);
 
   return {
     runId,
@@ -46,7 +50,21 @@ export function deriveSummary(runId: string, events: Event[]): PipelineSummary {
     inputTokens: totals.input_tokens,
     outputTokens: totals.output_tokens,
     ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(title !== undefined ? { title } : {}),
+    ...(input !== undefined ? { input } : {}),
   };
+}
+
+/** Latest-wins title pick — a retrofit script may append a second
+ * `pipeline.title_generated` and we want that to become authoritative. */
+export function deriveTitle(events: Event[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]?.type === "pipeline.title_generated") {
+      const t = (events[i]?.data as { title?: unknown }).title;
+      if (typeof t === "string" && t.length > 0) return t;
+    }
+  }
+  return undefined;
 }
 
 /**

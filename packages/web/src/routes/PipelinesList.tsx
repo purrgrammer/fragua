@@ -1,6 +1,9 @@
 // GET /pipelines → table of runs.
 //
 // Presentation notes:
+//   - The table is intentionally minimal: Title / Workflow / Status.
+//     Per-run detail (started-at, cost, tokens, events, duration) lives
+//     on the pipeline detail page, not here.
 //   - Row markup is shared with Home's "Recent runs" via
 //     `components/PipelineRow.tsx`. This file owns the table chrome
 //     (header, empty/loading states); the row-level styling lives there.
@@ -71,12 +74,9 @@ export function PipelinesList({ api }: PipelinesListProps): JSX.Element {
         <table className="w-full text-sm border-collapse" data-testid="pipelines-table">
           <thead>
             <tr className="text-left text-slate-600 border-b border-slate-200">
-              <th className="py-2 pr-4 font-medium">Run</th>
+              <th className="py-2 pr-4 font-medium">Title</th>
               <th className="py-2 pr-4 font-medium">Workflow</th>
-              <th className="py-2 pr-4 font-medium">Status</th>
-              <th className="py-2 pr-4 font-medium">Started</th>
-              <th className="py-2 pr-4 font-medium text-right">Cost</th>
-              <th className="py-2 pr-4 font-medium text-right">Tokens</th>
+              <th className="py-2 pr-4 font-medium text-right">Status</th>
             </tr>
           </thead>
           <tbody>

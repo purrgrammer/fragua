@@ -94,9 +94,17 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
           <Link to="/" className="text-xs text-blue-700 hover:underline">
             ← all pipelines
           </Link>
-          <h2 className="text-lg font-semibold mt-1" title={id}>
-            {shortenRunId(id)}
+          <h2
+            className="text-lg font-semibold mt-1"
+            title={detail && hasTitleOrInput(detail) ? headingTooltip(detail) : id}
+          >
+            {detail ? headingText(detail) : shortenRunId(id)}
           </h2>
+          {detail && (detail.title || detail.input) && (
+            <p className="text-xs text-slate-500 font-mono mt-0.5" title={id}>
+              {shortenRunId(id)}
+            </p>
+          )}
           {detail && <DetailMetaLine detail={detail} />}
         </div>
       </header>
@@ -195,4 +203,30 @@ const RUN_ID_SHORT_LEN = 8;
 /** Mirror of PipelinesList's shortener so both surfaces truncate identically. */
 function shortenRunId(runId: string): string {
   return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
+}
+
+/** Heading priority for Wave-2b runs: title → raw input (clamped).
+ * Legacy runs (no title, no input) fall through to the pre-Wave-2b
+ * behaviour of showing the shortened run id so existing expectations —
+ * and existing tests — don't shift. */
+function headingText(detail: PipelineDetailT): string {
+  if (detail.title && detail.title.length > 0) return detail.title;
+  if (detail.input && detail.input.length > 0) {
+    const single = detail.input.replace(/\s+/g, " ").trim();
+    return single.length > 80 ? `${single.slice(0, 79)}…` : single;
+  }
+  return shortenRunId(detail.runId);
+}
+
+function hasTitleOrInput(detail: PipelineDetailT): boolean {
+  return Boolean((detail.title && detail.title.length > 0) || (detail.input && detail.input.length > 0));
+}
+
+function headingTooltip(detail: PipelineDetailT): string {
+  const parts: string[] = [`run_id: ${detail.runId}`];
+  if (detail.title) parts.push(`title: ${detail.title}`);
+  if (detail.input) parts.push(`input: ${detail.input}`);
+  const wf = detail.workflowName ?? detail.workflow;
+  if (wf) parts.push(`workflow: ${wf}`);
+  return parts.join("\n");
 }

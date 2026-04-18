@@ -1,6 +1,10 @@
 // Route-level tests for PipelinesList. We mount the component inside a
 // `createMemoryRouter` so `<Link>` resolves, and stub the ApiClient rather
 // than `fetch` — keeps the test focused on presentation, not transport.
+//
+// The list is deliberately minimal: Title / Workflow / Status. Any
+// per-run detail (started-at, cost, tokens, events, duration) is viewed
+// on the pipeline detail page, not listed here.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, waitFor, within } from "@testing-library/react";
@@ -43,10 +47,45 @@ describe("PipelinesList", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("renders one row per pipeline with status and link", async () => {
+  it("renders a three-column header: Title / Workflow / Status (nothing else)", async () => {
+    const api = makeClient({
+      listPipelines: async () => [
+        {
+          runId: "r1",
+          workflow: "wf-A",
+          startedAt: "2024-01-01T00:00:00Z",
+          status: "success",
+          eventCount: 1,
+          costUsd: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      ],
+    });
+    const { container } = mount(api);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("pipelines-table")).toBeTruthy();
+    });
+
+    const headers = Array.from(q.getByTestId("pipelines-table").querySelectorAll("thead th")).map((th) =>
+      (th.textContent ?? "").trim(),
+    );
+
+    // Exactly the three columns we care about.
+    expect(headers).toEqual(["Title", "Workflow", "Status"]);
+
+    // Columns we deliberately dropped stay gone.
+    for (const dropped of ["Run", "Started", "Cost", "Tokens", "Events"]) {
+      expect(headers).not.toContain(dropped);
+    }
+  });
+
+  it("renders one row per pipeline with title link, workflow badge, and a status pill on the right", async () => {
     const rows: PipelineSummary[] = [
       {
         runId: "r1",
+        title: "Summarise the weekly digest",
         workflow: "wf-A",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
@@ -58,6 +97,7 @@ describe("PipelinesList", () => {
       },
       {
         runId: "r2",
+        title: "Draft release notes",
         workflow: "wf-B",
         startedAt: "2024-01-02T00:00:00Z",
         status: "running",
@@ -75,28 +115,38 @@ describe("PipelinesList", () => {
       expect(q.getByTestId("pipelines-table")).toBeTruthy();
     });
 
-    // Both rows present.
-    expect(q.getByText("r1")).toBeTruthy();
-    expect(q.getByText("r2")).toBeTruthy();
-    expect(q.getByText("wf-A")).toBeTruthy();
-    expect(q.getByText("wf-B")).toBeTruthy();
+    // Titles are rendered as the primary linked text.
+    expect(q.getByText("Summarise the weekly digest")).toBeTruthy();
+    expect(q.getByText("Draft release notes")).toBeTruthy();
 
-    // Status pills carry their status as a data-testid.
-    expect(q.getByTestId("status-success").textContent).toContain("success");
-    expect(q.getByTestId("status-running").textContent).toContain("running");
-
-    // Link targets — querySelector on the rendered anchors.
-    const links = container.querySelectorAll("a[href]");
-    const hrefs = Array.from(links).map((a) => a.getAttribute("href"));
+    // Link targets point at /pipelines/<runId>.
+    const links = Array.from(container.querySelectorAll("a[href]"));
+    const hrefs = links.map((a) => a.getAttribute("href"));
     expect(hrefs).toContain("/pipelines/r1");
     expect(hrefs).toContain("/pipelines/r2");
+
+    // Workflow is rendered inside a Badge (muted variant → slate classes).
+    const wfA = q.getByText("wf-A");
+    expect(wfA.className).toContain("bg-slate-100");
+    const wfB = q.getByText("wf-B");
+    expect(wfB.className).toContain("bg-slate-100");
+
+    // One StatusPill per row.
+    expect(q.getByTestId("status-success")).toBeTruthy();
+    expect(q.getByTestId("status-running")).toBeTruthy();
+
+    // Status lives in the right-most <td> of its row.
+    const successPillCell = (q.getByTestId("status-success").closest("td") as HTMLElement) ?? null;
+    expect(successPillCell).toBeTruthy();
+    const successRowCells = Array.from(successPillCell!.parentElement!.children);
+    expect(successRowCells.indexOf(successPillCell!)).toBe(successRowCells.length - 1);
   });
 
-  it("renders startedAt via the locale-aware helpers (no raw ISO leaks to users)", async () => {
+  it("omits the workflow badge when the row has no workflow", async () => {
     const rows: PipelineSummary[] = [
       {
-        runId: "r1",
-        workflow: "wf-A",
+        runId: "no-wf",
+        title: "Ad-hoc run",
         startedAt: "2024-01-01T00:00:00Z",
         status: "success",
         eventCount: 1,
@@ -108,104 +158,16 @@ describe("PipelinesList", () => {
     const api = makeClient({ listPipelines: async () => rows });
     const { container } = mount(api);
     const q = within(container);
-
     await waitFor(() => {
       expect(q.getByTestId("pipelines-table")).toBeTruthy();
     });
 
-    // The cell's visible text is NOT the raw ISO string.
-    const cell = q.getByTestId("started-r1");
-    expect(cell.textContent ?? "").not.toBe("2024-01-01T00:00:00Z");
-    expect(cell.textContent ?? "").not.toContain("T00:00");
-    // The precise ISO is reachable via the title attribute so operators
-    // can hover for precision (and copy/paste).
-    const cellEl = cell as HTMLElement;
-    const row = cellEl.closest("td") as HTMLElement;
-    expect(row.getAttribute("title")).toBe("2024-01-01T00:00:00.000Z");
-  });
-
-  it("renders cost and tokens in separate columns with long-form tooltips", async () => {
-    const rows: PipelineSummary[] = [
-      {
-        runId: "rUsage",
-        workflow: "wf",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "success",
-        eventCount: 5,
-        costUsd: 0.123,
-        inputTokens: 3500,
-        outputTokens: 700,
-      },
-    ];
-    const api = makeClient({ listPipelines: async () => rows });
-    const { container } = mount(api);
-    const q = within(container);
-    await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
-    });
-
-    // Cost column: USD formatted on its own, with a tooltip repeating it
-    // in long form for copy/paste.
-    const costCell = q.getByTestId("cost-rUsage");
-    expect((costCell.textContent ?? "").trim()).toBe("$0.123");
-    const costTitle = (costCell.closest("td") as HTMLElement).getAttribute("title") ?? "";
-    expect(costTitle).toContain("$0.123");
-
-    // Tokens column: compact total, tooltip holds the input/output split.
-    const tokensCell = q.getByTestId("tokens-rUsage");
-    expect(tokensCell.textContent ?? "").toMatch(/4(\.2)?K/); // 3500+700 = 4200
-    expect(tokensCell.textContent ?? "").not.toContain("tok"); // no unit in compact cell
-    const tokensTitle = (tokensCell.closest("td") as HTMLElement).getAttribute("title") ?? "";
-    expect(tokensTitle).toContain("input 3,500");
-    expect(tokensTitle).toContain("output 700");
-  });
-
-  it("renders '—' in both cost and tokens cells when no LLM usage is reported", async () => {
-    const rows: PipelineSummary[] = [
-      {
-        runId: "rEmpty",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "running",
-        eventCount: 2,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
-    ];
-    const api = makeClient({ listPipelines: async () => rows });
-    const { container } = mount(api);
-    const q = within(container);
-    await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
-    });
-    expect((q.getByTestId("cost-rEmpty").textContent ?? "").trim()).toBe("—");
-    expect((q.getByTestId("tokens-rEmpty").textContent ?? "").trim()).toBe("—");
-  });
-
-  it("does not render an Events column", async () => {
-    const rows: PipelineSummary[] = [
-      {
-        runId: "rNoEvents",
-        startedAt: "2024-01-01T00:00:00Z",
-        status: "success",
-        eventCount: 42,
-        costUsd: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      },
-    ];
-    const api = makeClient({ listPipelines: async () => rows });
-    const { container } = mount(api);
-    const q = within(container);
-    await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
-    });
-    const headers = Array.from(q.getByTestId("pipelines-table").querySelectorAll("thead th")).map((th) =>
-      (th.textContent ?? "").trim(),
-    );
-    expect(headers).not.toContain("Events");
-    expect(headers).toContain("Cost");
-    expect(headers).toContain("Tokens");
+    // The workflow cell exists (the <td> is always rendered for alignment)
+    // but it contains no muted-badge span.
+    const titleLink = q.getByText("Ad-hoc run").closest("a") as HTMLElement;
+    const tr = titleLink.closest("tr") as HTMLElement;
+    const badgesInRow = tr.querySelectorAll("span.bg-slate-100");
+    expect(badgesInRow.length).toBe(0);
   });
 
   it("shows a loading indicator while pending", async () => {

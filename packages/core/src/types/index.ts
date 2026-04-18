@@ -7,3 +7,4 @@ export * from "./fidelity.ts";
 export * from "./graph.ts";
 export * from "./interviewer.ts";
 export * from "./outcome.ts";
+export * from "./summariser.ts";

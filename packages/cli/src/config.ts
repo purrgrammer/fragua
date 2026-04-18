@@ -15,7 +15,19 @@ export interface SwarmConfig {
     provider?: string;
     model?: string;
     permissions?: string;
+    /** Small-model summariser config (Wave 2b). Powers auto-title +
+     * fidelity=summary:medium/high. Leave unset to disable summarisation
+     * (runs proceed, but summary:* fidelities fall back to the
+     * deterministic template). Per-provider defaults are used when
+     * `model` is unset — see `defaultSummariserModel` in @swarm/agent. */
+    summariser?: {
+      provider?: string;
+      model?: string;
+    };
   };
+  /** Policy for auto-generated pipeline titles. Omit or set `"on"` to
+   * enable (default); `"off"` disables regardless of CLI flag. */
+  auto_title?: "on" | "off";
   blocklist?: string[];
   workflows?: Record<string, string>;
 }

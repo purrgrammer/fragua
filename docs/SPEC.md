@@ -213,7 +213,8 @@ Immutable records of everything that happens. The event log is the system's back
 | LLM (bridged from pi) | `llm_start`, `text_delta`, `thinking_delta`, `toolcall_delta`, `llm_done`, `llm_error` |
 | Tool | `tool_execution_start`, `tool_execution_update`, `tool_execution_end` |
 | Steering | `steering_requested`, `steering_injected` |
-| Cost | `cost_recorded` (per turn, from pi's `usage.cost`) |
+| Summariser (Wave 2b) | `summary_started`, `summary_completed`, `pipeline_title_generated` — each rides a synthetic `node_id` (`__summary.title` for the async pipeline title; `__summary.<caller>` for fidelity=summary:medium\|high compressions) so cost + drilldown bucket separately from the calling node |
+| Cost | `cost_recorded` (per turn, from pi's `usage.cost`; summariser calls record under their synthetic `node_id`) |
 
 **Event schema** (stored as JSONL, one per line):
 ```

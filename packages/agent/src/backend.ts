@@ -4,7 +4,7 @@ import { open as openFile, stat as statFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
-import type { CodergenBackend, CodergenInput, Outcome } from "@swarm/core";
+import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -27,6 +27,10 @@ export interface PiCodergenBackendOptions {
   runsDir?: string;
   /** Steering poll interval in ms. Default 500. */
   steeringPollMs?: number;
+  /** Optional summariser used for `fidelity=summary:medium/high`. When
+   * omitted those modes fall back to the deterministic `summary:low`
+   * template with a soft warning — behaviour matches Wave 2. */
+  summariser?: SummariserBackend;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -42,6 +46,7 @@ export class PiCodergenBackend implements CodergenBackend {
    * store. The executor creates one backend per run today, which means
    * two concurrent runs already get isolated stores — no cross-run leak. */
   private readonly messageStore: MessageStore;
+  private readonly summariser: SummariserBackend | undefined;
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -53,6 +58,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.runsDir = opts.runsDir;
     this.steeringPollMs = opts.steeringPollMs ?? 500;
     this.messageStore = new MessageStore();
+    this.summariser = opts.summariser;
   }
 
   /** Direct access to the transcript store. Exposed for tests and, later,
@@ -114,11 +120,27 @@ export class PiCodergenBackend implements CodergenBackend {
     // the agent with goal + run + digest of priorMessages.
     const graphGoalRaw = input.context["graph.goal"];
     const graphGoal = typeof graphGoalRaw === "string" && graphGoalRaw.length > 0 ? graphGoalRaw : undefined;
-    const { seed, warnings: fidelityWarnings } = buildFidelitySeed({
+    // Summariser events land under synthetic node ids (see
+    // @swarm/core/types/summariser.ts). `buildFidelitySeed` wires the
+    // emit callback so `summary.started` / `summary.completed` /
+    // `cost.recorded` for a summary:medium/high call carry the right
+    // node_id on their envelope — not the caller's.
+    const syntheticEmit = input.emit
+      ? async (type: EventType, data: Record<string, unknown>, node_id: string) => {
+          await input.emitAt?.(type, data, node_id);
+        }
+      : undefined;
+    const { seed, warnings: fidelityWarnings } = await buildFidelitySeed({
       fidelity: input.fidelity,
       graphGoal,
       runId: input.run_id,
       priorMessages: storedForThread,
+      ...(this.summariser !== undefined ? { summariser: this.summariser } : {}),
+      callerNodeId: input.node.id,
+      ...(input.iteration !== undefined ? { iteration: input.iteration } : {}),
+      workflow_sha: input.workflow_sha,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(syntheticEmit !== undefined ? { emit: syntheticEmit } : {}),
     });
     if (input.emit) {
       for (const msg of fidelityWarnings) await input.emit("agent.warning", { message: msg });

@@ -56,6 +56,12 @@ export interface PipelineSummary {
   outputTokens: number;
   /** ms between first and last event; undefined if not computable. */
   durationMs?: number;
+  /** Auto-generated pipeline title (Wave 2b). Falls back to `input` then
+   * `workflowName` for display. */
+  title?: string;
+  /** Raw `$ARGUMENTS` captured on `pipeline.started.data.input`. Display
+   * fallback when `title` is absent; also handy for tooltips. */
+  input?: string;
 }
 
 /** Local mirror of the server's `NodeState`. */
@@ -92,6 +98,10 @@ export interface PipelineDetail {
   inputTokens: number;
   outputTokens: number;
   durationMs?: number;
+  /** Auto-generated pipeline title — see PipelineSummary.title. */
+  title?: string;
+  /** Raw `$ARGUMENTS` — see PipelineSummary.input. */
+  input?: string;
 }
 
 /**

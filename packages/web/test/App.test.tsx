@@ -126,6 +126,13 @@ describe("App", () => {
     await waitFor(() => {
       expect(within(container).getByTestId("pipelines-table")).toBeTruthy();
     });
-    expect(within(container).getByText("run-1")).toBeTruthy();
+    // The row links at /pipelines/<runId> and renders the workflow badge.
+    // (The list no longer shows the raw runId as cell text — see
+    // `PipelinesList.test.tsx` for the full row-shape contract.)
+    const link = container.querySelector('a[href="/pipelines/run-1"]');
+    expect(link).toBeTruthy();
+    // At least one row renders — any <tr> inside the table's <tbody>.
+    const tbodyRows = container.querySelectorAll("[data-testid='pipelines-table'] tbody tr");
+    expect(tbodyRows.length).toBe(1);
   });
 });

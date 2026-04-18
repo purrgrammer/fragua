@@ -2,6 +2,7 @@
 // tests to exercise the real Agent + tool path without real API calls.
 
 import { type FauxResponseStep, fauxAssistantMessage, registerFauxProvider } from "@mariozechner/pi-ai";
+import type { SummariserBackend } from "@swarm/core";
 import type { ExecutionEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiCodergenBackend } from "./backend.ts";
 
@@ -11,6 +12,9 @@ export interface PiMockBackendOptions {
   /** Pre-scripted assistant messages. Each element = one LLM call. */
   responses?: FauxResponseStep[];
   systemPrompt?: string;
+  /** Inject a summariser stub so Wave-2b integration tests can exercise
+   * the summary:medium/high path without live pi-ai calls. */
+  summariser?: SummariserBackend;
 }
 
 export interface PiMockBackendHandle {
@@ -36,6 +40,7 @@ export function createPiMockBackend(opts: PiMockBackendOptions): PiMockBackendHa
     resolveModel: () => model,
     defaultModel: { provider: model.provider, model: model.id },
     ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+    ...(opts.summariser !== undefined ? { summariser: opts.summariser } : {}),
   });
 
   return {

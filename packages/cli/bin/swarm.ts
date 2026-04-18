@@ -37,6 +37,18 @@ cli
   .option("--worktree", "Run in an isolated git worktree (branch swarm/<run-id>)")
   .option("--keep-worktree", "Keep the worktree after the run for post-mortem (implies --worktree)")
   .option("--interviewer <mode>", "Human-in-the-loop interviewer: auto | console (default: console if TTY)")
+  .option(
+    "--no-auto-title",
+    "Skip async pipeline-title generation from $ARGUMENTS (default on when a summariser is available)",
+  )
+  .option(
+    "--summariser-provider <name>",
+    "Provider for the weak-model summariser (defaults to .swarm/config.yaml defaults.summariser.provider, then the main provider)",
+  )
+  .option(
+    "--summariser-model <id>",
+    "Model for the summariser (defaults to .swarm/config.yaml defaults.summariser.model, then the provider's cheap-tier default)",
+  )
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -71,6 +83,10 @@ cli
       ...(pick("interviewer") === "auto" || pick("interviewer") === "console"
         ? { interviewer: pick("interviewer") as "auto" | "console" }
         : {}),
+      // cac renders `--no-auto-title` as `options.autoTitle === false`.
+      ...(options["autoTitle"] === false ? { noAutoTitle: true } : {}),
+      ...(pick("summariserProvider") !== undefined ? { summariserProvider: pick("summariserProvider")! } : {}),
+      ...(pick("summariserModel") !== undefined ? { summariserModel: pick("summariserModel")! } : {}),
     });
     process.exit(code);
   });

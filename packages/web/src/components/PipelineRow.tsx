@@ -1,25 +1,26 @@
-// Compact row component for pipeline summaries. Originally inlined in
-// `PipelinesList`; factored out here so Home's "Recent runs" section
-// can reuse the exact same row markup without forking the styling
-// (which would inevitably drift). The two callers differ only in
-// `variant`:
+// Compact row component for pipeline summaries. Two variants share the
+// same three-element shape: title (link), workflow (neutral badge), and
+// status (right-aligned pill). Any per-run detail — started-at, cost,
+// tokens, events, duration — lives on the pipeline detail page, not the
+// list row. This keeps the list easy to scan at a glance.
 //
+// Variants:
 //   - `"default"` — table-row layout used by `PipelinesList` inside a
 //     `<table>`. Renders a `<tr>` so the surrounding `<thead>` /
-//     `<tbody>` semantics survive.
+//     `<tbody>` semantics survive. Status lives in its own right-most
+//     `<td>`.
 //   - `"compact"` — single-line link card used in Home's recent-runs
-//     list. Renders an `<a>` so the whole row is one click target.
-//
-// Formatting discipline (timestamps via `lib/time.ts`, numbers via
-// `lib/format.ts`, full values reachable via `title`) carries over
-// verbatim from the original inline version.
+//     list. Renders an `<a>` so the whole row is one click target;
+//     status is pinned right via `ml-auto`.
 
 import { Link } from "react-router-dom";
 import type { PipelineSummary } from "../lib/api.ts";
-import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
-import { formatRelative, toIsoTitle } from "../lib/time.ts";
+import { statusLabel } from "../lib/format.ts";
+import { Badge } from "./ui/badge.tsx";
 
-/** Number of leading runId chars shown in the row. */
+/** Number of leading runId chars shown in hover tooltips or callers
+ *  that still want a short form. No longer used in-row, but kept as
+ *  an export because Home's `RunningCard` imports it. */
 const RUN_ID_SHORT_LEN = 8;
 
 export interface PipelineRowProps {
@@ -32,97 +33,83 @@ export function PipelineRow({ row, variant = "default" }: PipelineRowProps): JSX
   return <TableRow row={row} />;
 }
 
+/** Default variant — one `<tr>` with three `<td>`s:
+ *  Title link · Workflow badge · Status pill (right-aligned). */
 function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
+  const wf = row.workflowName ?? row.workflow;
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50">
-      <td className="py-2 pr-4 text-xs">
+      <td className="py-2 pr-4">
         <Link
           to={`/pipelines/${row.runId}`}
-          title={row.runId}
-          data-testid={`run-link-${row.runId}`}
-          className="text-blue-700 hover:underline"
+          title={displayTooltip(row)}
+          className="font-medium text-blue-700 hover:underline"
         >
-          {shortenRunId(row.runId)}
+          {displayTitle(row)}
         </Link>
       </td>
-      <td className="py-2 pr-4" title={row.workflow ?? ""}>
-        {row.workflowName ?? row.workflow ?? "(unknown)"}
-      </td>
-      <td className="py-2 pr-4">
+      <td className="py-2 pr-4">{wf ? <Badge variant="muted">{wf}</Badge> : null}</td>
+      <td className="py-2 pr-4 text-right">
         <StatusPill status={row.status} />
-      </td>
-      <td className="py-2 pr-4 text-slate-600" title={toIsoTitle(row.startedAt)} data-testid={`started-${row.runId}`}>
-        {formatRelative(row.startedAt)}
-      </td>
-      <td
-        className="py-2 pr-4 text-slate-600 tabular-nums text-right whitespace-nowrap"
-        title={costTooltip(row)}
-        data-testid={`cost-${row.runId}`}
-      >
-        {row.costUsd === 0 ? "—" : formatUsd(row.costUsd)}
-      </td>
-      <td
-        className="py-2 pr-4 text-slate-600 tabular-nums text-right whitespace-nowrap"
-        title={tokensTooltip(row)}
-        data-testid={`tokens-${row.runId}`}
-      >
-        {formatTokensCell(row)}
       </td>
     </tr>
   );
 }
 
+/** Compact variant — whole row is one `<a>`, so keyboards / screen
+ *  readers see exactly one focusable element per row. Status pinned
+ *  to the right with `ml-auto`. */
 function CompactRow({ row }: { row: PipelineSummary }): JSX.Element {
-  // Single-link layout. Everything in one `<a>` so keyboards / screen
-  // readers see exactly one focusable element per row.
+  const wf = row.workflowName ?? row.workflow;
   return (
     <Link
       to={`/pipelines/${row.runId}`}
-      title={row.runId}
+      title={displayTooltip(row)}
       data-testid={`recent-run-${row.runId}`}
       className="flex items-center gap-3 rounded-md border border-border/60 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
     >
-      <span className="font-mono text-xs text-muted-foreground shrink-0">{shortenRunId(row.runId)}</span>
-      <span className="flex-1 min-w-0 truncate" title={row.workflow ?? ""}>
-        {row.workflowName ?? row.workflow ?? "(unknown)"}
-      </span>
+      <span className="flex-1 min-w-0 truncate font-medium">{displayTitle(row)}</span>
+      {wf ? <Badge variant="muted">{wf}</Badge> : null}
       <StatusPill status={row.status} />
-      <span className="text-xs text-muted-foreground shrink-0" title={toIsoTitle(row.startedAt)}>
-        {formatRelative(row.startedAt)}
-      </span>
-      <span className="text-xs text-muted-foreground tabular-nums shrink-0 hidden sm:inline" title={costTooltip(row)}>
-        {row.costUsd === 0 ? "—" : formatUsd(row.costUsd)}
-      </span>
-      <span className="text-xs text-muted-foreground tabular-nums shrink-0 hidden sm:inline" title={tokensTooltip(row)}>
-        {formatTokensCell(row)}
-      </span>
     </Link>
   );
 }
 
-/** Truncate a runId to its leading `RUN_ID_SHORT_LEN` chars, no ellipsis. */
+/** Truncate a runId to its leading `RUN_ID_SHORT_LEN` chars, no ellipsis.
+ *  Re-exported for Home's `RunningCard`, which still shows a short runId
+ *  on its in-progress cards. */
 export function shortenRunId(runId: string): string {
   return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
 }
 
-/** Tokens cell — compact input + output total. "—" when no LLM calls yet. */
-function formatTokensCell(row: PipelineSummary): string {
-  const total = row.inputTokens + row.outputTokens;
-  if (total === 0) return "—";
-  return formatTokensCompact(total);
+/** Display priority for the row's primary label:
+ *   1. `title` — auto-generated summariser title (Wave 2b)
+ *   2. `input` — raw $ARGUMENTS, clamped (so pre-Wave-2b runs still read
+ *      as something useful once the backfill script fills titles)
+ *   3. `workflowName` / `workflow` — legacy pipelines list fallback
+ *   4. runId — last-resort so we never render an empty link */
+export function displayTitle(row: PipelineSummary): string {
+  if (row.title && row.title.length > 0) return row.title;
+  if (row.input && row.input.length > 0) return clampInline(row.input, 80);
+  return row.workflowName ?? row.workflow ?? row.runId;
 }
 
-/** Cost cell tooltip — precise USD, or a note when the run made no LLM calls. */
-function costTooltip(row: PipelineSummary): string {
-  if (row.costUsd === 0) return "no LLM usage reported";
-  return `cost ${formatUsd(row.costUsd)}`;
+/** Tooltip with the untruncated input + workflow + runId — so hovering
+ *  reveals everything the row hid (including the full runId, which is
+ *  no longer shown as a cell). */
+export function displayTooltip(row: PipelineSummary): string {
+  const parts: string[] = [];
+  if (row.title) parts.push(`title: ${row.title}`);
+  if (row.input) parts.push(`input: ${row.input}`);
+  const wf = row.workflowName ?? row.workflow;
+  if (wf) parts.push(`workflow: ${wf}`);
+  parts.push(`runId: ${row.runId}`);
+  return parts.join("\n");
 }
 
-/** Tokens cell tooltip — input / output split at long precision. */
-function tokensTooltip(row: PipelineSummary): string {
-  const total = row.inputTokens + row.outputTokens;
-  if (total === 0) return "no LLM usage reported";
-  return `input ${formatTokensLong(row.inputTokens)} · output ${formatTokensLong(row.outputTokens)} tokens`;
+function clampInline(s: string, cap: number): string {
+  const singleLine = s.replace(/\s+/g, " ").trim();
+  return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
 export function StatusPill({ status }: { status: PipelineSummary["status"] }): JSX.Element {

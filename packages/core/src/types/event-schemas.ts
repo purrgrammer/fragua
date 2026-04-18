@@ -120,6 +120,51 @@ export const NodeStartedDataSchema = Type.Object(
   { additionalProperties: true },
 );
 
+const SummaryPurposeSchema = Type.Union([Type.Literal("title"), Type.Literal("fidelity")]);
+
+const IterationSchema = Type.Object(
+  { n: Type.Number({ minimum: 1 }), max: Type.Number({ minimum: 1 }) },
+  { additionalProperties: true },
+);
+
+export const SummaryStartedDataSchema = Type.Object(
+  {
+    purpose: SummaryPurposeSchema,
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    caller_node_id: Type.Optional(Type.String()),
+    iteration: Type.Optional(IterationSchema),
+    fidelity: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const SummaryCompletedDataSchema = Type.Object(
+  {
+    purpose: SummaryPurposeSchema,
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    caller_node_id: Type.Optional(Type.String()),
+    iteration: Type.Optional(IterationSchema),
+    fidelity: Type.Optional(Type.String()),
+    input_tokens: Type.Number({ minimum: 0 }),
+    output_tokens: Type.Number({ minimum: 0 }),
+    cost_usd: Type.Number({ minimum: 0 }),
+    duration_ms: Type.Number({ minimum: 0 }),
+    output_text: Type.String(),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const PipelineTitleGeneratedDataSchema = Type.Object(
+  {
+    title: Type.String(),
+    summary_node_id: Type.String(),
+  },
+  { additionalProperties: true },
+);
+
 export const CostRecordedDataSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
@@ -141,4 +186,7 @@ export const PAYLOAD_SCHEMAS = {
   "llm.start": LlmStartDataSchema,
   "node.started": NodeStartedDataSchema,
   "cost.recorded": CostRecordedDataSchema,
+  "summary.started": SummaryStartedDataSchema,
+  "summary.completed": SummaryCompletedDataSchema,
+  "pipeline.title_generated": PipelineTitleGeneratedDataSchema,
 } as const;

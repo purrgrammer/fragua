@@ -181,6 +181,46 @@ is set — the budget resets and the fallback gets its own round. When
 `retry_target` is unset but `fallback_retry_target` is, it's used as
 the primary (single phase).
 
+### Summariser + auto-title (Wave 2b)
+
+A cheap-model summariser (separate from the coder model) powers two
+adjacent features:
+
+1. **Pipeline auto-title** — `execute()` fires a fire-and-forget
+   summariser call over `$ARGUMENTS` at pipeline start. When the call
+   returns, `pipeline.title_generated` is emitted (synthetic `node_id =
+   __summary.title`) and the title is mirrored into
+   `context["graph.title"]` so prompts can substitute it. UIs fall back
+   to `input` (raw `$ARGUMENTS`) then `workflowName`. Disable with
+   graph attr `auto_title = "off"` or CLI flag `--no-auto-title`.
+2. **Fidelity `summary:medium` / `summary:high`** — the same summariser
+   compresses prior transcript for these modes. Synthetic `node_id` is
+   `__summary.<caller>` (+ `#<iter>` in loops). On failure it falls
+   back to the deterministic `summary:low` template with a warning.
+
+Each summariser call emits `summary.started` + `summary.completed` +
+its own `cost.recorded` under the synthetic `node_id`, so cost totals
+are correct without any bespoke aggregation. Drilldown surfaces can
+render each synthetic node as a lightweight step in the timeline.
+
+Configure in `.swarm/config.yaml`:
+
+```yaml
+defaults:
+  summariser:
+    provider: openrouter
+    model: anthropic/claude-haiku-4.5
+auto_title: on
+```
+
+CLI flags: `--summariser-provider <name>`, `--summariser-model <id>`,
+`--no-auto-title`. Flags win over config.
+
+Retrofit titles onto pre-Wave-2b runs with
+`bun run scripts/backfill-titles.ts [--dry-run]`. The script is
+idempotent (skips runs that already carry `pipeline.title_generated`)
+and append-only (never rewrites existing event lines).
+
 ### Web UI
 
 The React + Vite client lives in `packages/web/`. The app sits inside a

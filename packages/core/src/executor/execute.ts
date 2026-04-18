@@ -15,6 +15,7 @@ import type { FidelityMode } from "../types/fidelity.ts";
 import { type Graph, handlerOf, isTerminal, type Node } from "../types/graph.ts";
 import type { Interviewer, Question } from "../types/interviewer.ts";
 import { type ContextValue, fail, type Outcome, ok } from "../types/outcome.ts";
+import { type SummariserBackend, titleSyntheticNodeId } from "../types/summariser.ts";
 
 // ---------------------------------------------------------------------------
 // Ports + types
@@ -36,6 +37,10 @@ export interface CodergenInput {
   /** Optional sink bridge — backends call this to emit sub-events
    * (agent.*, llm.*, tool.execution_*) during the node's execution. */
   emit?: (type: EventType, data: Record<string, unknown>) => Promise<void>;
+  /** Same as `emit` but with an explicit `node_id` override on the
+   * envelope — for synthetic-node events (Wave 2b summariser, future
+   * tool-hook events) that shouldn't be attributed to the caller. */
+  emitAt?: (type: EventType, data: Record<string, unknown>, node_id: string) => Promise<void>;
   /** Loop iteration metadata when invoked from a loop handler. The backend
    * forwards this verbatim onto `llm.start.iteration` so every per-iteration
    * call is distinguishable in `events.jsonl` without reconstructing
@@ -138,6 +143,100 @@ function buildEmit(ctx: HandlerContext): (type: EventType, data: Record<string, 
   };
 }
 
+/** Spawn an async pipeline-title summariser call. Returns a promise the
+ * executor awaits just before closing the run so the generated-title
+ * event lands before `pipeline.completed`. Never rejects — all failure
+ * modes are captured on `summary.completed.error` (emitted by the
+ * summariser itself) or silently dropped when no summariser is wired. */
+async function maybeStartPipelineTitle(params: {
+  summariser: SummariserBackend | undefined;
+  args: SubstitutionArgs;
+  graph: Graph;
+  run_id: string;
+  workflow_sha: string;
+  now: () => string;
+  sink: EventSink;
+  context: ContextMap;
+  auto_title: "on" | "off" | undefined;
+  signal: AbortSignal;
+}): Promise<void> {
+  const graphAutoTitleRaw = params.graph.attrs["auto_title"];
+  const graphAutoTitle =
+    typeof graphAutoTitleRaw === "string" ? (graphAutoTitleRaw === "off" ? "off" : "on") : undefined;
+  const effective = graphAutoTitle ?? params.auto_title ?? "on";
+  if (effective !== "on") return;
+  if (!params.summariser) return;
+
+  // $ARGUMENTS is the canonical "what did the user ask the pipeline to do"
+  // — that's what we want to title. Fall back to joining $1..$9 when the
+  // caller populated those but not $ARGUMENTS.
+  const args = params.args;
+  const sourceText = (
+    args.$ARGUMENTS ??
+    [args.$1, args.$2, args.$3, args.$4, args.$5, args.$6, args.$7, args.$8, args.$9].filter(Boolean).join(" ")
+  ).trim();
+  if (sourceText.length === 0) return;
+
+  const synthetic = titleSyntheticNodeId();
+  const summariser = params.summariser;
+  const goalRaw = params.graph.attrs["goal"];
+  const goal = typeof goalRaw === "string" && goalRaw.length > 0 ? goalRaw : undefined;
+  const emitAt = async (type: EventType, data: Record<string, unknown>, node_id: string): Promise<void> => {
+    const ev: Event = {
+      run_id: params.run_id,
+      node_id,
+      type,
+      timestamp: params.now(),
+      workflow_sha: params.workflow_sha,
+      schema_version: EVENT_SCHEMA_VERSION,
+      data,
+    };
+    await params.sink.append(ev);
+  };
+
+  try {
+    const result = await summariser.summarise({
+      purpose: "title",
+      input: sourceText,
+      ...(goal !== undefined ? { goal } : {}),
+      run_id: params.run_id,
+      workflow_sha: params.workflow_sha,
+      synthetic_node_id: synthetic,
+      max_output_tokens: 40,
+      emit: emitAt,
+      signal: params.signal,
+    });
+    if (result.ok && result.text.length > 0) {
+      const title = result.text.replace(/^["']|["']$/g, "").trim();
+      params.context["graph.title"] = title;
+      await emitAt("pipeline.title_generated", { title, summary_node_id: synthetic }, synthetic);
+    }
+  } catch {
+    // Title is a UX polish; never let it crash the run. `summary.completed`
+    // carries the failure reason if the summariser got far enough to emit.
+  }
+}
+
+/** Like `buildEmit` but lets the caller override `node_id` per event.
+ * Used for synthetic nodes (Wave 2b summariser) whose cost + drilldown
+ * should bucket separately from the real caller. */
+function buildEmitAt(
+  ctx: HandlerContext,
+): (type: EventType, data: Record<string, unknown>, node_id: string) => Promise<void> {
+  return async (type, data, node_id) => {
+    const ev: Event = {
+      run_id: ctx.run_id,
+      node_id,
+      type,
+      timestamp: ctx.now(),
+      workflow_sha: ctx.workflow_sha,
+      schema_version: EVENT_SCHEMA_VERSION,
+      data,
+    };
+    await ctx.sink.append(ev);
+  };
+}
+
 const codergenHandler: Handler = async (ctx) => {
   const prompt = substitute(ctx.node.attrs.prompt ?? "", {
     context: ctx.context,
@@ -162,6 +261,7 @@ const codergenHandler: Handler = async (ctx) => {
       run_id: ctx.run_id,
       workflow_sha: ctx.workflow_sha,
       emit: buildEmit(ctx),
+      emitAt: buildEmitAt(ctx),
     });
     if (signal.aborted && !ctx.signal.aborted && timeoutMs !== undefined) {
       return fail(`node "${ctx.node.id}" timed out after ${timeoutMs}ms`, { notes: outcome.notes });
@@ -191,6 +291,7 @@ const loopHandler: Handler = async (ctx) => {
   const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
   const threadBase = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
   const emit = buildEmit(ctx);
+  const emitAt = buildEmitAt(ctx);
 
   const basePrompt = substitute(ctx.node.attrs.prompt ?? "", {
     context: ctx.context,
@@ -230,6 +331,7 @@ const loopHandler: Handler = async (ctx) => {
         run_id: ctx.run_id,
         workflow_sha: ctx.workflow_sha,
         emit,
+        emitAt,
         iteration: { n: i, max: maxIter },
       });
     } catch (err) {
@@ -778,6 +880,16 @@ export interface ExecuteOptions {
   handlers?: Record<string, Handler>;
   /** Hard cap to prevent runaway loops. Default 500. */
   max_steps?: number;
+  /** Optional summariser — powers (a) the async pipeline-title generation
+   * and (b) `fidelity=summary:medium/high` inside backends that consult
+   * it. CLI wires a `PiSummariserBackend`; tests can pass a stub or
+   * omit it to keep runs pure. */
+  summariser?: SummariserBackend;
+  /** Auto-title policy. `"on"` (default) kicks off a background summariser
+   * call over `$ARGUMENTS` at pipeline start and emits
+   * `pipeline.title_generated` when it resolves. `"off"` skips the call
+   * entirely. Graph attr `auto_title` overrides this per-workflow. */
+  auto_title?: "on" | "off";
 }
 
 export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
@@ -822,7 +934,31 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const startedData: Record<string, unknown> = { graph_id: graph.id };
   if (opts.workflow_path) startedData["workflow_path"] = opts.workflow_path;
   if (opts.workflow_source) startedData["workflow_source"] = opts.workflow_source;
+  // Carry the user's $ARGUMENTS on pipeline.started so UI / backfill tooling
+  // can compute a title later without replaying the whole stream.
+  if (typeof substitutionArgs.$ARGUMENTS === "string" && substitutionArgs.$ARGUMENTS.length > 0) {
+    startedData["input"] = substitutionArgs.$ARGUMENTS;
+  }
   await emit("pipeline.started", undefined, startedData);
+
+  // Fire-and-forget pipeline title generation. `pipeline.started` has already
+  // gone out so the UI isn't blocked; when the summariser returns we emit
+  // `pipeline.title_generated` and mirror the title into `context["graph.title"]`
+  // so downstream nodes can substitute `${context.graph.title}` if they want.
+  // Failures are silent by design — a missing summariser or flaky key must
+  // not crash the pipeline; the run just goes untitled.
+  const titlePromise = maybeStartPipelineTitle({
+    summariser: opts.summariser,
+    args: substitutionArgs,
+    graph,
+    run_id,
+    workflow_sha,
+    now,
+    sink,
+    context,
+    auto_title: opts.auto_title,
+    signal,
+  });
 
   let current: Node = findStart(graph);
   let finalOutcome: Outcome = ok({ notes: "pipeline completed" });
@@ -930,6 +1066,12 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
     finalOutcome = result.finalOutcome;
     break;
   }
+
+  // Wait briefly for the title before closing the run, so the
+  // `pipeline.title_generated` event lands in `events.jsonl` before
+  // `pipeline.completed`. If the summariser is still outstanding (or it
+  // was never kicked off) this resolves immediately.
+  await titlePromise;
 
   const goal_gates_satisfied = unsatisfiedGoalGates(graph, node_outcomes).length === 0;
 

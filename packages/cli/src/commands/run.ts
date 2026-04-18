@@ -7,12 +7,14 @@ import {
   createPiMockBackend,
   createSubagentTool,
   defaultModelFor,
+  defaultSummariserModel,
   getProviderInfo,
   hasProviderCredentials,
   PiCodergenBackend,
+  PiSummariserBackend,
   resolveModelOrNull,
 } from "@swarm/agent";
-import type { CodergenBackend, Interviewer } from "@swarm/core";
+import type { CodergenBackend, Interviewer, SummariserBackend } from "@swarm/core";
 import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
 import { ConsoleSink, JsonlSink } from "@swarm/events";
 import type { ExecutionEnvironment } from "@swarm/workspace";
@@ -52,6 +54,15 @@ export interface RunCommandOptions {
   keepWorktree?: boolean;
   /** Which interviewer to use for wait.human nodes. Default: console if stdin is a TTY, else auto. */
   interviewer?: "auto" | "console";
+  /** Disable async pipeline title generation. Default: on when a
+   * summariser is configured. Maps to `--no-auto-title`. */
+  noAutoTitle?: boolean;
+  /** Override the summariser provider (Wave 2b). Defaults to
+   * `config.defaults.summariser.provider`. */
+  summariserProvider?: string;
+  /** Override the summariser model (Wave 2b). Defaults to
+   * `config.defaults.summariser.model` then per-provider cheap tier. */
+  summariserModel?: string;
 }
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
@@ -108,6 +119,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
   let backend: CodergenBackend;
   let mockHandle: { dispose: () => void } | undefined;
+  let summariser: SummariserBackend | undefined;
   if (opts.mock) {
     const h = createPiMockBackend({ registry, env });
     mockHandle = h;
@@ -139,11 +151,29 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       );
       return 2;
     }
+    // Summariser wiring: explicit flags win, then `.swarm/config.yaml`
+    // `defaults.summariser`, then the coder's provider with that
+    // provider's cheap-tier default model. When no credentials are
+    // available, `summariser` stays undefined — auto-title and
+    // summary:medium/high simply don't fire (fidelity=summary:* emits a
+    // soft agent.warning and falls back to summary:low's deterministic
+    // template, matching Wave 2).
+    const sumProvider = opts.summariserProvider ?? config.defaults?.summariser?.provider ?? provider;
+    const sumModel =
+      opts.summariserModel ??
+      config.defaults?.summariser?.model ??
+      defaultSummariserModel(sumProvider) ??
+      defaultModelFor(sumProvider);
+    if (sumModel && hasProviderCredentials(sumProvider) && resolveModelOrNull(sumProvider, sumModel) !== null) {
+      summariser = new PiSummariserBackend({ provider: sumProvider, model: sumModel });
+    }
+
     backend = new PiCodergenBackend({
       registry,
       env,
       defaultModel: { provider, model },
       runsDir: resolve(opts.cwd ?? process.cwd(), runsDir),
+      ...(summariser !== undefined ? { summariser } : {}),
     });
     registry.register(createSubagentTool({ registry, env, defaultModel: { provider, model } }));
   }
@@ -182,6 +212,10 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       // read `${context.input}` continue to work.
       ...(mergedInput !== undefined ? { args: { $ARGUMENTS: mergedInput } } : {}),
       initial_context: mergedInput !== undefined ? { input: mergedInput } : {},
+      ...(summariser !== undefined ? { summariser } : {}),
+      // --no-auto-title hard-disables, otherwise config/graph take over.
+      ...(opts.noAutoTitle === true ? { auto_title: "off" as const } : {}),
+      ...(opts.noAutoTitle !== true && config.auto_title === "off" ? { auto_title: "off" as const } : {}),
     });
     const durationMs = Date.now() - startedAt;
 

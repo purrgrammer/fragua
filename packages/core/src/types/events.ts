@@ -46,6 +46,11 @@ export type EventType =
   // Steering
   | "steering.requested"
   | "steering.injected"
+  // Summariser (Wave 2b) — each call rides as a synthetic node whose id is
+  // `__summary.<purpose-or-caller>` so cost + drilldown bucket naturally.
+  | "summary.started"
+  | "summary.completed"
+  | "pipeline.title_generated"
   // Cost
   | "cost.recorded";
 
@@ -196,6 +201,71 @@ export interface LlmStartData {
   context_files?: ContextFileCapture[];
   /** Read-only budget snapshot. See `BudgetSnapshot`. */
   budget?: BudgetSnapshot;
+}
+
+/** Why a summariser call was made. Added in Wave 2b.
+ *
+ * The concrete type lives in `./summariser.ts` (the port module); this
+ * file re-exports the type alias so the event payloads can reference it
+ * without pulling the port's functions into the event surface. See
+ * docs/SPEC.md §3.5 for where each value shows up on `events.jsonl`. */
+import type { SummaryPurpose } from "./summariser.ts";
+
+/** Fires when the summariser starts an LLM call. The synthetic node_id on
+ * the envelope (e.g. `__summary.title`, `__summary.plan`) lets the UI
+ * render it as a lightweight step without it participating in graph
+ * routing — `completed_nodes` / `node_outcomes` stay graph-only. */
+export interface SummaryStartedData {
+  purpose: SummaryPurpose;
+  provider?: string;
+  model?: string;
+  /** Real node id that triggered this compression, when purpose="fidelity". */
+  caller_node_id?: string;
+  /** Iteration metadata if the caller is a loop (copied from the caller's
+   * own `llm.start.iteration`). */
+  iteration?: { n: number; max: number };
+  /** The fidelity mode that caused the call (e.g. `summary:medium`). */
+  fidelity?: FidelityMode;
+}
+
+/** Fires when the summariser call finishes. Carries its own cost fields so
+ * a single summariser call corresponds to exactly one cost line — matching
+ * the "each summary gets its own cost" principle. The backend *also* emits
+ * a `cost.recorded` event under the same synthetic node_id so existing
+ * cost aggregators that only read `cost.recorded` keep working unchanged. */
+export interface SummaryCompletedData {
+  purpose: SummaryPurpose;
+  provider?: string;
+  model?: string;
+  caller_node_id?: string;
+  iteration?: { n: number; max: number };
+  fidelity?: FidelityMode;
+  /** Tokens in — prior messages + goal + any purpose-specific framing. */
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  duration_ms: number;
+  /** For `purpose="title"` this is the full title (≤80 chars by convention).
+   * For `purpose="fidelity"` this is the narrative tail embedded in the
+   * caller's fidelity seed. UIs may clamp. */
+  output_text: string;
+  /** Populated when the summariser refused / failed. Paired with
+   * `output_text === ""` so a replay consumer can tell "no summary" from
+   * "empty summary". */
+  error?: string;
+}
+
+/** Fires after the asynchronous pipeline-title summary completes. The
+ * pipeline.started event is deliberately *not* held on the title — it
+ * fires immediately with `$ARGUMENTS` as the placeholder title, and this
+ * event swaps in the generated title when it's ready. UI renders the
+ * before/after transparently. Emitted with `node_id = "__summary.title"`
+ * to stay co-located with its summariser events. */
+export interface PipelineTitleGeneratedData {
+  title: string;
+  /** References the `summary.completed` event by its synthetic node id so
+   * the UI can link "title" → "how was it generated + how much did it cost". */
+  summary_node_id: string;
 }
 
 export interface EdgeSelectedData {

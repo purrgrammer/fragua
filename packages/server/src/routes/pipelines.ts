@@ -140,6 +140,8 @@ export function deriveDetail(runId: string, events: Event[]): PipelineDetail {
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
     ...(summary.durationMs !== undefined ? { durationMs: summary.durationMs } : {}),
+    ...(summary.title !== undefined ? { title: summary.title } : {}),
+    ...(summary.input !== undefined ? { input: summary.input } : {}),
   };
 }
 
