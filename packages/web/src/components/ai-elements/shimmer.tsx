@@ -1,61 +1,57 @@
 "use client";
 
-import type { MotionProps } from "motion/react";
-import { motion } from "motion/react";
-import type { CSSProperties, ElementType, JSX } from "react";
-import { memo, useMemo } from "react";
+import type { CSSProperties, ElementType } from "react";
+import { createElement, memo } from "react";
 import { cn } from "@/lib/utils";
-
-type MotionHTMLProps = MotionProps & Record<string, unknown>;
-
-// Cache motion components at module level to avoid creating during render
-const motionComponentCache = new Map<keyof JSX.IntrinsicElements, React.ComponentType<MotionHTMLProps>>();
-
-const getMotionComponent = (element: keyof JSX.IntrinsicElements) => {
-  let component = motionComponentCache.get(element);
-  if (!component) {
-    component = motion.create(element);
-    motionComponentCache.set(element, component);
-  }
-  return component;
-};
 
 export interface TextShimmerProps {
   children: string;
   as?: ElementType;
   className?: string;
+  /**
+   * Pulse duration in seconds. Floored to the design system's pulse
+   * token (1.8s) — anything faster reads as error (SKILL.md § Motion:
+   * "Pulse is slow. 1800ms floor; a fast pulse reads as error").
+   */
   duration?: number;
+  /**
+   * Retained for API parity. The Swarm design language has no decorative
+   * shimmer band ("No gradients on surfaces"; "Data as decor"); the
+   * `.sw-pulse` opacity oscillation carries the "this is happening"
+   * signal instead.
+   */
   spread?: number;
 }
 
-const ShimmerComponent = ({ children, as: Component = "p", className, duration = 2, spread = 2 }: TextShimmerProps) => {
-  const MotionComponent = getMotionComponent(Component as keyof JSX.IntrinsicElements);
+// SKILL.md § Motion — "Pulse is slow. 1800ms floor."
+const MIN_PULSE_MS = 1800;
 
-  const dynamicSpread = useMemo(() => (children?.length ?? 0) * spread, [children, spread]);
+const ShimmerComponent = ({
+  children,
+  as: Component = "p" as ElementType,
+  className,
+  duration,
+  // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API parity
+  spread: _spread,
+}: TextShimmerProps) => {
+  const requested = duration ? duration * 1000 : MIN_PULSE_MS;
+  const pulseMs = Math.max(MIN_PULSE_MS, requested);
 
-  return (
-    <MotionComponent
-      animate={{ backgroundPosition: "0% center" }}
-      className={cn(
-        "relative inline-block bg-[length:250%_100%,auto] bg-clip-text text-transparent",
-        "[--bg:linear-gradient(90deg,#0000_calc(50%-var(--spread)),var(--color-background),#0000_calc(50%+var(--spread)))] [background-repeat:no-repeat,padding-box]",
-        className,
-      )}
-      initial={{ backgroundPosition: "100% center" }}
-      style={
-        {
-          "--spread": `${dynamicSpread}px`,
-          backgroundImage: "var(--bg), linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground))",
-        } as CSSProperties
-      }
-      transition={{
-        duration,
-        ease: "linear",
-        repeat: Number.POSITIVE_INFINITY,
-      }}
-    >
-      {children}
-    </MotionComponent>
+  // SKILL.md § Color — accent.thinking is the canonical "alive" colour
+  // for processing / awaiting / streaming. SKILL.md § Motion — the
+  // `.sw-pulse` class (opacity 1.0 → 0.55 → 1.0, ease-in-out, infinite)
+  // is the canonical processing motion and ships with a reduced-motion
+  // fallback in globals.css.
+  return createElement(
+    Component,
+    {
+      className: cn("sw-pulse inline-block", className),
+      style: {
+        color: "var(--sw-accent-thinking)",
+        animationDuration: `${pulseMs}ms`,
+      } as CSSProperties,
+    },
+    children,
   );
 };
 

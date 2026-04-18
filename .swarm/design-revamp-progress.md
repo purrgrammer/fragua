@@ -33,7 +33,7 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 - [x] packages/web/src/components/ui/empty-state.tsx
 
 ## AI Elements (shared visual language)
-- [ ] packages/web/src/components/ai-elements/shimmer.tsx
+- [x] packages/web/src/components/ai-elements/shimmer.tsx
 - [ ] packages/web/src/components/ai-elements/spinner.tsx
 - [ ] packages/web/src/components/ai-elements/task.tsx
 - [ ] packages/web/src/components/ai-elements/checkpoint.tsx
