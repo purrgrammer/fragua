@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 /*
  * Tooltip — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color               — only --sw-* tokens. Tooltip inverts surface/text
  *                           (sw-text bg, sw-bg fg) to read as a transient
  *                           overlay rather than a card; the hairline is

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /*
  * Dialog — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color               — only --sw-* tokens. Surface is --sw-surface
  *                           (one notch off bg, barely perceptible);
  *                           overlay scrim derives from --sw-text so

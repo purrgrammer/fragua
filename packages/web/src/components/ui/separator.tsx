@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /*
  * Separator — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only, `border` token. Tone shifts by
  *                           theme, width never." A separator is a
  *                           hairline by definition — width pinned at 1px

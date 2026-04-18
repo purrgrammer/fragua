@@ -3,7 +3,7 @@
 /*
  * Message — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Layout              — "sections separated by a hairline — never by a
  *                           different background shade". The user bubble
  *                           rides on `--sw-surface` + 1px `--sw-border`

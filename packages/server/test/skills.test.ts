@@ -160,7 +160,7 @@ describe("createDiscoverSkillReader", () => {
   });
 
   test("discovers skills from the cwd and strips frontmatter on read()", async () => {
-    const dir = join(tmp, ".swarm/skills/hello");
+    const dir = join(tmp, ".agents/skills/hello");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), "---\nname: hello\ndescription: Greeting\n---\n\n# Hello\n\nbody", "utf8");
     const reader = createDiscoverSkillReader({ cwd: tmp, homeDir: "" });
@@ -175,7 +175,7 @@ describe("createDiscoverSkillReader", () => {
     // First list is empty; after adding a skill, `refresh:true` picks it up.
     const reader = createDiscoverSkillReader({ cwd: tmp, homeDir: "", cacheTtlMs: 60_000 });
     expect(await reader.list()).toEqual([]);
-    const dir = join(tmp, ".swarm/skills/late");
+    const dir = join(tmp, ".agents/skills/late");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), "---\nname: late\ndescription: arrived later\n---\n\nbody", "utf8");
     expect(await reader.list()).toEqual([]); // still cached

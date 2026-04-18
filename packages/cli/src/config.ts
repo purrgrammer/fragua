@@ -31,7 +31,7 @@ export interface SwarmConfig {
   blocklist?: string[];
   workflows?: Record<string, string>;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the
-   * well-known paths (`.swarm/skills`, `.agents/skills`, `.claude/skills`
+   * well-known paths (`.agents/skills`, `.claude/skills`
    * under both project and user scopes). See `packages/workspace/src/skills`
    * and docs/skills.md. */
   skills?: {

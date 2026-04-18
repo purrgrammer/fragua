@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /*
  * Select — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color               — only --sw-* tokens. shadcn aliases
  *                           (bg-popover, bg-accent, border-input,
  *                           bg-input, border-destructive, ring-destructive,

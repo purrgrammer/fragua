@@ -59,7 +59,7 @@ export interface SkillsConfig {
 }
 
 export interface DiscoverOptions {
-  /** Working directory (project root). Used for `<cwd>/.swarm/skills/` etc. */
+  /** Working directory (project root). Used for `<cwd>/.agents/skills/` etc. */
   cwd: string;
   /** User home directory. Used for `~/.agents/skills/` etc. Pass empty
    * string to skip user-scope discovery. */

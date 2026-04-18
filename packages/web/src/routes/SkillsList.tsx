@@ -73,7 +73,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           description={
             <span>
               Drop a <code className="font-mono">SKILL.md</code> into{" "}
-              <code className="font-mono">.swarm/skills/&lt;name&gt;/</code> or{" "}
+              <code className="font-mono">.agents/skills/&lt;name&gt;/</code> or{" "}
               <code className="font-mono">~/.agents/skills/&lt;name&gt;/</code>.
             </span>
           }

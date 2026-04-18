@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /*
  * DropdownMenu — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color               — only --sw-* tokens. shadcn aliases
  *                           (bg-popover, text-popover-foreground,
  *                           bg-accent, text-accent-foreground,

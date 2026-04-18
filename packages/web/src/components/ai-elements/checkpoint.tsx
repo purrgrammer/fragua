@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 /**
  * Checkpoint — inline marker + optional action for a saved point in a run.
  *
- * Styling notes (see .swarm/skills/design/SKILL.md):
+ * Styling notes (see .agents/skills/design/SKILL.md):
  *   - Token-only colour and spacing, no shadcn aliases (`text-muted-foreground`
  *     → `text-[var(--sw-muted)]`). § Color: "Components reference theme tokens".
  *   - Gap snaps to the 4px scale via `--sw-space-05` (2px icon-to-label).

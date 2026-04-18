@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /*
  * Card — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only, `border` token", "Radius … 4px
  *                           cards/drawers", "Elevation: none". A ring is
  *                           an offset outline (shadow-flavoured); we use

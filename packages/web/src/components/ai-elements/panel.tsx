@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * sitting above the canvas surface — same hairline + radius rules as
  * Card; no shadow.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only, `border` token", "Radius … 4px
  *                           cards/drawers", "Elevation: none."
  *   § Spacing            — token scale only; `--sw-space-4` is the

@@ -73,7 +73,7 @@ describe("Skills routes", () => {
     it("renders one row per skill with name + description + scope + source", async () => {
       const rows: SkillSummary[] = [
         summary({ name: "pdf", description: "Extract PDFs", scope: "user" }),
-        summary({ name: "csv", description: "Parse CSVs", scope: "project", source_dir: "/repo/.swarm/skills" }),
+        summary({ name: "csv", description: "Parse CSVs", scope: "project", source_dir: "/repo/.agents/skills" }),
       ];
       const api = makeClient({ listSkills: async () => rows });
       const { container } = mount(api, "/skills");

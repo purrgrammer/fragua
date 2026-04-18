@@ -17,7 +17,7 @@ import { Shimmer } from "./shimmer";
 /**
  * Reasoning — collapsible "thinking" disclosure for streaming model output.
  *
- * Styling notes (see .swarm/skills/design/SKILL.md):
+ * Styling notes (see .agents/skills/design/SKILL.md):
  *   - Token-only colour, spacing, motion. No shadcn aliases
  *     (`text-muted-foreground`, `text-sm`, `hover:text-foreground`),
  *     no raw tailwind spacing (`gap-2`, `mt-4`, `mb-4`, `size-4`).

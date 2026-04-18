@@ -64,9 +64,9 @@ workflows:
 #
 # `paths` pins discovery to the listed directories and disables the
 # well-known auto-discovery paths (~/.agents/skills, ~/.claude/skills,
-# etc.) — so only this repo's .swarm/skills/ is scanned. Drop the
+# etc.) — so only this repo's .agents/skills/ is scanned. Drop the
 # `paths` block and the whole `skills:` section to turn auto-discovery
 # back on.
 skills:
   paths:
-    - .swarm/skills
+    - .agents/skills

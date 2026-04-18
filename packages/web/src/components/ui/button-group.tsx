@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /*
  * ButtonGroup — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "Radius: 2px default" — group corners snap
  *                           to --sw-radius-default to match Button, not
  *                           Tailwind's `rounded-lg` (8px).

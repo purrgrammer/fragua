@@ -187,7 +187,7 @@ than a dedicated tool namespace. A tier-1 catalog (`name` + `description`)
 is prepended to the agent's system prompt; a tier-2 `local:load_skill`
 tool returns the SKILL.md body on demand; tier-3 resources (scripts,
 references) are loaded via `local:read_file`. Auto-discovery scans
-`.swarm/skills`, `.agents/skills`, `.claude/skills` under both `<cwd>`
+`.agents/skills`, `.claude/skills` under both `<cwd>`
 and `$HOME`; `.swarm/config.yaml → skills.paths` pins an explicit list.
 Per-step skill catalog is durable on `llm.start.skills[]` (sha256 per
 SKILL.md) so replay can detect drift. Node-level `skills=…` /

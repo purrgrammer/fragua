@@ -1,7 +1,7 @@
 // shadcn/ui — Table primitives. Thin wrappers over semantic `<table>`
 // elements; responsive horizontal scroll is handled by the outer wrapper.
 //
-// Skill citations (.swarm/skills/design/SKILL.md):
+// Skill citations (.agents/skills/design/SKILL.md):
 //  - Typography §"sm 12 — Default body": dropped explicit `text-sm` so
 //    tables inherit the 12px global body size rather than Tailwind's 14px
 //    `sm`. Hierarchy comes from weight/case, not size jumps.

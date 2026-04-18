@@ -38,7 +38,7 @@ export interface ServerOptions {
    * working directory — matches the repo convention.
    */
   workflowsDir?: string;
-  /** Project root used for skill discovery (`.swarm/skills`, etc.).
+  /** Project root used for skill discovery (`.agents/skills`, etc.).
    * Defaults to `process.cwd()`. */
   cwd?: string;
   /** Merged `skills` block from `.swarm/config.yaml`. When omitted the

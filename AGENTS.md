@@ -505,8 +505,7 @@ Drop a directory with a `SKILL.md` into any of these well-known paths
 and it's auto-discovered:
 
 ```
-<cwd>/.swarm/skills/<name>/SKILL.md    <cwd>/.agents/skills/<name>/SKILL.md
-<cwd>/.claude/skills/<name>/SKILL.md   ~/.swarm/skills/<name>/SKILL.md
+<cwd>/.agents/skills/<name>/SKILL.md    <cwd>/.claude/skills/<name>/SKILL.md
 ~/.agents/skills/<name>/SKILL.md       ~/.claude/skills/<name>/SKILL.md
 ```
 
@@ -531,7 +530,7 @@ Config override in `.swarm/config.yaml` (see `docs/skills.md`):
 
 ```yaml
 skills:
-  paths: [.swarm/skills, vendor/agent-skills]   # disables auto-discovery
+  paths: [.agents/skills, vendor/agent-skills]   # disables auto-discovery
   disabled: [legacy-thing]                       # drop entirely from discovery
   trust_project: true                            # default
 ```

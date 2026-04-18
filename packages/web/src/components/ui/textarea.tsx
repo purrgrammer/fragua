@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /*
  * Textarea — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only", "Radius: 2px default"; no shadow;
  *                           focus ring is instant and 1px (matches Input).
  *   § Typography           — monospace voice (inherited), default body

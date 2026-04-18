@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /*
  * Button — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only", "Radius: 2px default"; no shadow.
  *   § Typography           — monospace voice, hierarchy via weight + case,
  *                            not size; size variants here only adjust the

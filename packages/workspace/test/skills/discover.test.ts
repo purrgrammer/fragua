@@ -29,10 +29,10 @@ body`;
 }
 
 describe("discoverSkills", () => {
-  test("discovers skills from .swarm/skills in project scope", async () => {
+  test("discovers skills from .agents/skills in project scope", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
-    await writeSkill(cwd, ".swarm/skills/hello", "hello", "Greet the user.");
+    await writeSkill(cwd, ".agents/skills/hello", "hello", "Greet the user.");
 
     const { skills } = await discoverSkills({ cwd, homeDir: home });
     expect(skills).toHaveLength(1);
@@ -57,7 +57,7 @@ describe("discoverSkills", () => {
     const cwd = join(tmp, "proj");
     const home = join(tmp, "home");
     await mkdir(cwd, { recursive: true });
-    await writeSkill(cwd, ".swarm/skills/dup", "dup", "project version");
+    await writeSkill(cwd, ".agents/skills/dup", "dup", "project version");
     await writeSkill(home, ".agents/skills/dup", "dup", "user version");
 
     const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
@@ -70,7 +70,7 @@ describe("discoverSkills", () => {
   test("skips skills without a description", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
-    const dir = join(cwd, ".swarm/skills/broken");
+    const dir = join(cwd, ".agents/skills/broken");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), `---\nname: broken\n---\n\nbody`, "utf8");
 
@@ -82,7 +82,7 @@ describe("discoverSkills", () => {
     const cwd = join(tmp, "proj");
     const home = join(tmp, "home");
     await mkdir(cwd, { recursive: true });
-    await writeSkill(cwd, ".swarm/skills/default", "default", "would auto-discover");
+    await writeSkill(cwd, ".agents/skills/default", "default", "would auto-discover");
     await writeSkill(cwd, "vendor/pack", "vendored", "only via explicit path");
 
     const { skills } = await discoverSkills({
@@ -97,7 +97,7 @@ describe("discoverSkills", () => {
   test("disabled config drops skills entirely from discovery", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
-    await writeSkill(cwd, ".swarm/skills/legacy", "legacy", "old skill");
+    await writeSkill(cwd, ".agents/skills/legacy", "legacy", "old skill");
 
     const { skills } = await discoverSkills({
       cwd,

@@ -10,7 +10,7 @@ import { discoverSkills, type Skill, type SkillsConfig, stripFrontmatter } from 
 import type { SkillDetail, SkillReader, SkillSummary } from "../ports.ts";
 
 export interface DiscoverSkillReaderOptions {
-  /** Project root scanned for `.swarm/skills/`, `.agents/skills/`, etc. */
+  /** Project root scanned for `.agents/skills/`, `.claude/skills/`, etc. */
   cwd: string;
   /** User home — set to "" to skip user-scope discovery (tests usually do this). */
   homeDir?: string;

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 /*
  * HoverCard — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color               — only --sw-* tokens. Unlike Tooltip (which
  *                           inverts to read as a transient label), the
  *                           hover-card is a richer disclosure surface,

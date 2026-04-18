@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function writeSkill(name: string, body = "body"): Promise<void> {
-  const dir = join(tmp, ".swarm/skills", name);
+  const dir = join(tmp, ".agents/skills", name);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} skill\n---\n\n${body}`, "utf8");
 }
@@ -28,7 +28,7 @@ describe("buildLoadSkillTool", () => {
 
   test("loads SKILL.md body and lists resources", async () => {
     await writeSkill("hello", "# Hello\n\nInstructions.");
-    const scriptDir = join(tmp, ".swarm/skills/hello/scripts");
+    const scriptDir = join(tmp, ".agents/skills/hello/scripts");
     await mkdir(scriptDir, { recursive: true });
     await writeFile(join(scriptDir, "run.py"), "print('ok')", "utf8");
 

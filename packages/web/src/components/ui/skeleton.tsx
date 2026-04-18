@@ -5,7 +5,7 @@
 // we're hand-crafting per-surface skeletons, which is a smell.
 // Callers size it via className (`h-8 w-24`, etc.).
 //
-// Skill: .swarm/skills/design/SKILL.md
+// Skill: .agents/skills/design/SKILL.md
 //   § Motion — "Processing / awaiting → Opacity pulse 1.0 → 0.55 → 1.0,
 //     1800ms infinite, ease-in-out". The canonical `.sw-pulse` keyframe
 //     defined in globals.css carries the cadence and the

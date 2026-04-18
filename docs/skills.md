@@ -48,8 +48,8 @@ By default, swarm auto-discovers skills from these well-known paths,
 project before user (project wins on name collisions):
 
 ```
-<cwd>/.swarm/skills/          <cwd>/.agents/skills/        <cwd>/.claude/skills/
-~/.swarm/skills/              ~/.agents/skills/            ~/.claude/skills/
+<cwd>/.agents/skills/        <cwd>/.claude/skills/
+~/.agents/skills/            ~/.claude/skills/
 ```
 
 Pin an explicit list in `.swarm/config.yaml` to disable auto-discovery:
@@ -57,7 +57,7 @@ Pin an explicit list in `.swarm/config.yaml` to disable auto-discovery:
 ```yaml
 skills:
   paths:
-    - .swarm/skills
+    - .agents/skills
     - vendor/agent-skills
   disabled:
     - legacy-thing        # dropped entirely — not discovered, not on /skills

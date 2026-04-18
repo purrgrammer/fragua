@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 /*
  * InputGroup — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only" / "Radius: 2px default";
  *                           focus ring is 1px and instant (matches Input).
  *                           No shadow, no ring-3.

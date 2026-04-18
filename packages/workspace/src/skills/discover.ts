@@ -13,8 +13,8 @@ import { parseSkillMd } from "./parse.ts";
 import type { DiscoverOptions, Skill, SkillScope, SkillsConfig } from "./types.ts";
 
 /** Well-known paths, project before user. See docs/skills.md. */
-const PROJECT_WELL_KNOWN = [".swarm/skills", ".agents/skills", ".claude/skills"] as const;
-const USER_WELL_KNOWN = [".swarm/skills", ".agents/skills", ".claude/skills"] as const;
+const PROJECT_WELL_KNOWN = [".agents/skills", ".claude/skills"] as const;
+const USER_WELL_KNOWN = [".agents/skills", ".claude/skills"] as const;
 
 export interface DiscoverResult {
   skills: Skill[];

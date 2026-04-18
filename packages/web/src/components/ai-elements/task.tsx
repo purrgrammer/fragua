@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 /**
  * Task — disclosure block for an in-flight or completed agent task.
  *
- * Styling notes (see .swarm/skills/design/SKILL.md):
+ * Styling notes (see .agents/skills/design/SKILL.md):
  *   - Token-only colour, spacing, radius (no shadcn aliases, no hex,
  *     no off-scale px). § Authoring checklist.
  *   - File chips render as quiet 2px-radius surface pills, hairline

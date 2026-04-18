@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 /*
  * Suggestion — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "Radius: 2px default, 4px cards/drawers...
  *                            Pills only where the pill *is* the status
  *                            shape." A suggestion is an action, not a

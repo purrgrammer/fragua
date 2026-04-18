@@ -4,7 +4,7 @@ import { cn } from "../../lib/cn.ts";
 /*
  * Badge — Swarm design language.
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Color                — accents communicate state; no brand "primary";
  *                            state variants resolve to --sw-accent-* tokens
  *                            via color-mix tints (no hex, no Tailwind

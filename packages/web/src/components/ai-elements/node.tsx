@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
  * flush header/footer layout (no inter-slot gap so the hairline carries
  * the separation).
  *
- * Skill citations (.swarm/skills/design/SKILL.md):
+ * Skill citations (.agents/skills/design/SKILL.md):
  *   § Borders & elevation — "1px only", "Radius … 4px cards/drawers",
  *                           "Elevation: none". Radius comes from Card's
  *                           --sw-radius-card; no local rounded-md.

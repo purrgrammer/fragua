@@ -2,7 +2,7 @@
 // nothing meaningful (404, 500, empty list) and we'd rather show a
 // purpose-built card than leak a stack trace to the user.
 //
-// Design (Swarm — .swarm/skills/design/SKILL.md):
+// Design (Swarm — .agents/skills/design/SKILL.md):
 //   § Borders & elevation — "1px only, `border` token", "Radius … 4px
 //                           cards/drawers". Solid hairline, no dashed
 //                           ornament; dashed read as a decorative cue
