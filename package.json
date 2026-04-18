@@ -14,7 +14,7 @@
     "test": "bun test ./packages",
     "ci": "bun run lint && bun run typecheck && bun test ./packages",
     "swarm": "bun run packages/cli/bin/swarm.ts",
-    "serve": "bun run packages/cli/bin/swarm.ts serve"
+    "serve": "bun --hot packages/cli/bin/swarm.ts serve"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
