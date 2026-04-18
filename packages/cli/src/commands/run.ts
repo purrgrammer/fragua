@@ -16,7 +16,7 @@ import {
 } from "@swarm/agent";
 import type { CheckpointStore, CodergenBackend, Interviewer, SummariserBackend } from "@swarm/core";
 import { AutoApproveInterviewer, ConsoleInterviewer, execute, parseDotSource, validateOrThrow } from "@swarm/core";
-import { ConsoleSink, JsonlCheckpointStore, JsonlSink } from "@swarm/events";
+import { ConsoleSink, JsonlCheckpointStore, JsonlSink, tailControlRequests } from "@swarm/events";
 import type { ExecutionEnvironment } from "@swarm/workspace";
 import {
   CORE_TOOLS,
@@ -109,6 +109,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const run_id = opts.runId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const runsDir = opts.runsDir ?? config.project?.runs_dir ?? ".swarm/runs";
   const eventsPath = resolve(cwd, runsDir, run_id, "events.jsonl");
+  const controlPath = resolve(cwd, runsDir, run_id, "control.jsonl");
 
   const useWorktree = opts.worktree === true || opts.keepWorktree === true;
   let env: ExecutionEnvironment;
@@ -182,7 +183,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       registry,
       env,
       defaultModel: { provider, model },
-      runsDir: resolve(opts.cwd ?? process.cwd(), runsDir),
       ...(summariser !== undefined ? { summariser } : {}),
     });
     registry.register(createSubagentTool({ registry, env, defaultModel: { provider, model } }));
@@ -242,6 +242,10 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       ...(opts.noAutoTitle !== true && config.auto_title === "off" ? { auto_title: "off" as const } : {}),
       ...(checkpointStore !== undefined ? { checkpointStore } : {}),
       ...(opts.resume === true ? { resume: true as const } : {}),
+      controlChannel: {
+        path: controlPath,
+        tail: tailControlRequests,
+      },
     });
     const durationMs = Date.now() - startedAt;
 
@@ -264,9 +268,13 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     console.log("");
     const t = console_sink.totals;
     if (t.calls > 0) {
+      const cacheSuffix =
+        t.cache_read_tokens > 0 || t.cache_write_tokens > 0
+          ? ` · cache ${t.cache_read_tokens}r / ${t.cache_write_tokens}w`
+          : "";
       console.log(
         chalk.dim(
-          `cost: $${t.cost_usd.toFixed(4)} · ${t.calls} LLM call${t.calls === 1 ? "" : "s"} · ${t.input_tokens}in / ${t.output_tokens}out tokens`,
+          `cost: $${t.cost_usd.toFixed(4)} · ${t.calls} LLM call${t.calls === 1 ? "" : "s"} · ${t.input_tokens}in / ${t.output_tokens}out tokens${cacheSuffix}`,
         ),
       );
     }
@@ -309,7 +317,14 @@ interface SummaryArgs {
   branch: string | undefined;
   result: Awaited<ReturnType<typeof execute>>;
   durationMs: number;
-  cost: { cost_usd: number; input_tokens: number; output_tokens: number; calls: number };
+  cost: {
+    cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    calls: number;
+  };
 }
 
 async function writeRunSummary(args: SummaryArgs): Promise<void> {
@@ -328,10 +343,14 @@ async function writeRunSummary(args: SummaryArgs): Promise<void> {
   lines.push(`- **nodes completed:** ${args.result.completed_nodes.length}`);
   lines.push(`- **goal gates satisfied:** ${args.result.goal_gates_satisfied}`);
   if (args.cost.calls > 0) {
+    const cacheSuffix =
+      args.cost.cache_read_tokens > 0 || args.cost.cache_write_tokens > 0
+        ? `, cache ${args.cost.cache_read_tokens} read / ${args.cost.cache_write_tokens} write`
+        : "";
     lines.push(
       `- **cost:** $${args.cost.cost_usd.toFixed(4)} across ${args.cost.calls} LLM call${
         args.cost.calls === 1 ? "" : "s"
-      } (${args.cost.input_tokens} in / ${args.cost.output_tokens} out tokens)`,
+      } (${args.cost.input_tokens} in / ${args.cost.output_tokens} out tokens${cacheSuffix})`,
     );
   }
   lines.push("");

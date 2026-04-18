@@ -2,9 +2,13 @@
 // swarm CLI entry — dispatches subcommands.
 
 import cac from "cac";
+import chalk from "chalk";
+import { cancelCommand } from "../src/commands/cancel.ts";
 import { listCommand } from "../src/commands/list.ts";
+import { pauseCommand } from "../src/commands/pause.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
+import { resumeCommand } from "../src/commands/resume.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { steerCommand } from "../src/commands/steer.ts";
@@ -134,6 +138,61 @@ cli
   });
 
 cli
+  .command("pause <run-id>", "Soft-pause a running pipeline at its next node boundary")
+  .option("--reason <text>", "Optional reason attached to the pause request (appears in events)")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--cwd <path>", "Base directory")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await pauseCommand({
+      runId,
+      ...(pick("reason") !== undefined ? { reason: pick("reason")! } : {}),
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("cancel <run-id>", "Request a graceful cancel of a running pipeline (emits pipeline.canceled)")
+  .option("--reason <text>", "Optional reason attached to the cancel request (appears in events)")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--cwd <path>", "Base directory")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await cancelCommand({
+      runId,
+      ...(pick("reason") !== undefined ? { reason: pick("reason")! } : {}),
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("resume <run-id>", "Resume a soft-paused pipeline")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--cwd <path>", "Base directory")
+  .action(async (runId: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await resumeCommand({
+      runId,
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
   .command("list", "List recent runs with outcome + failed nodes")
   .option("--limit <n>", "How many recent runs to show (default 20)")
   .option("--runs-dir <path>", "Directory to scan (default .swarm/runs)")
@@ -172,4 +231,29 @@ cli
 
 cli.help();
 cli.version("0.0.0");
-cli.parse();
+const parsed = cli.parse(process.argv, { run: false });
+
+// cac silently no-ops when invoked with no command. Print help instead so
+// `swarm` with no args discovers the command surface rather than looking
+// broken. `--help` / `--version` are already handled by cac itself before
+// we get here. `matchedCommand` lives on the cli instance (not the parse
+// result) — cac exposes it there after parse runs.
+if (!cli.matchedCommand && !parsed.options["help"] && !parsed.options["version"]) {
+  cli.outputHelp();
+  process.exit(0);
+}
+
+try {
+  await cli.runMatchedCommand();
+} catch (err) {
+  // cac throws CACError synchronously for missing required args. Render
+  // it as a one-line error + the matched command's usage, rather than
+  // a stack trace — the user didn't hit a bug, they mis-invoked.
+  const isCacError = err instanceof Error && err.constructor.name === "CACError";
+  if (isCacError) {
+    console.error(chalk.red(`error: ${(err as Error).message}`));
+    cli.outputHelp();
+    process.exit(1);
+  }
+  throw err;
+}

@@ -9,6 +9,7 @@ export type EventType =
   | "pipeline.started"
   | "pipeline.completed"
   | "pipeline.failed"
+  | "pipeline.canceled"
   // Node lifecycle
   | "node.started"
   | "node.completed"
@@ -43,9 +44,19 @@ export type EventType =
   | "tool.execution_start"
   | "tool.execution_update"
   | "tool.execution_end"
-  // Steering
+  // Steering (legacy — kept for replay of pre-control-channel runs only).
+  // New code uses the `control.*` family below.
   | "steering.requested"
   | "steering.injected"
+  // Control channel (steer / pause / resume / cancel). A single family
+  // discriminated by `data.command`; see ControlCommand below. Each
+  // request appears as exactly one `control.requested` event followed by
+  // exactly one `control.applied` *or* `control.rejected` — never both,
+  // never neither. `pipeline.canceled` is the terminal event that cancel
+  // produces as a side-effect of `control.applied`.
+  | "control.requested"
+  | "control.applied"
+  | "control.rejected"
   // Summariser (Wave 2b) — each call rides as a synthetic node whose id is
   // `__summary.<purpose-or-caller>` so cost + drilldown bucket naturally.
   // Wave 6 adds `summary.text_delta` for streaming mid-call so UIs can
@@ -327,4 +338,82 @@ export interface EdgeSelectedData {
   rule: "condition" | "preferred_label" | "suggested_next_ids" | "weight" | "lexical";
   matched_label?: string;
   matched_condition?: string;
+}
+
+// ───── Control channel ──────────────────────────────────────────────────
+// Control requests live in `.swarm/runs/<runId>/control.jsonl` (written by
+// the CLI/daemon) and are mirrored into `events.jsonl` by the runtime as
+// `control.requested` events. The request's `id` is a client-supplied
+// idempotency key (uuid) that survives restarts via the checkpoint's
+// `last_applied_control_id` — re-tailing a populated control file after
+// resume never double-applies.
+
+export type ControlCommand = "steer" | "pause" | "resume" | "cancel";
+
+/** Free-form payload per command. Fields are command-scoped; readers should
+ * switch on `command` before narrowing. Keeping a single interface with
+ * optional fields (rather than a discriminated union) lets the wire
+ * schema stay forward-compatible as new commands add new fields. */
+export interface ControlRequestPayload {
+  /** `steer`: the message to inject as a user turn. */
+  message?: string;
+  /** `pause` / `cancel`: optional free-form reason surfaced in UI + logs. */
+  reason?: string;
+}
+
+/** Line shape in `control.jsonl`. Not an Event envelope — the runtime
+ * promotes each line into a proper Event on read. */
+export interface ControlRequest {
+  /** Client-generated uuid. Idempotency key across restarts. */
+  id: string;
+  /** ISO-8601 wall-clock at request time. */
+  timestamp: string;
+  command: ControlCommand;
+  payload?: ControlRequestPayload;
+}
+
+/** `control.requested.data` — one-to-one mirror of the request line. */
+export interface ControlRequestedData {
+  id: string;
+  command: ControlCommand;
+  payload?: ControlRequestPayload;
+}
+
+/** `control.applied.data` — fired when the runtime actually acted on the
+ * request. For pause, this fires *after* the current node completes — the
+ * gap between `control.requested` and `control.applied` is the implicit
+ * "pending" state. */
+export interface ControlAppliedData {
+  id: string;
+  command: ControlCommand;
+  /** Node id at which the command took effect. Omitted when there is no
+   * relevant node (e.g. resume from a pause that started between nodes). */
+  applied_at_node?: string;
+  /** Free-form note for the UI — e.g. `"injected"` for a steer that was
+   * handed to the active backend. */
+  note?: string;
+}
+
+/** `control.rejected.data` — fired when the runtime refuses the request
+ * (e.g. resume while not paused, cancel after terminal). `reason` is a
+ * stable machine-readable code so the UI can branch without parsing
+ * human text. */
+export interface ControlRejectedData {
+  id: string;
+  command: ControlCommand;
+  reason: "not_paused" | "already_terminal" | "unknown_command" | string;
+}
+
+/** `pipeline.canceled.data` — terminal event emitted as a side-effect of
+ * a successful cancel, or by the runtime when an external abort signal
+ * (SIGTERM / AbortController) tripped before a control request landed. */
+export interface PipelineCanceledData {
+  /** What caused the cancel. `control.cancel` is the happy path; `signal`
+   * covers SIGTERM / parent-process death. */
+  cause: "control.cancel" | "signal";
+  /** Present when `cause === "control.cancel"` — correlates to the
+   * originating `control.requested.data.id`. */
+  request_id?: string;
+  /** Free-form reason from the requester (or the signal handler). */
+  reason?: string;
 }

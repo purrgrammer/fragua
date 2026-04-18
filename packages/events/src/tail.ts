@@ -1,7 +1,13 @@
-// Async iterator that yields parsed events from a JSONL file: first the
+// Async iterator that yields parsed JSONL records from a file: first the
 // existing content, then every new line appended after we opened it.
 //
-// Lives in @swarm/events (not @swarm/server) because JSONL parsing is this
+// The generic core — `tailJsonlLines<T>` — handles the file I/O, fs.watch
+// wake-ups, truncation detection, and partial-line buffering. Callers
+// supply a `parse` function that either returns `T` (kept) or `undefined`
+// (skip). `tailJsonl` is the Event-shaped wrapper kept for existing
+// consumers (server SSE tail, replay tests).
+//
+// Lives in @swarm/events (not @swarm/server) because JSONL tailing is this
 // package's job. The server consumes this as a pure producer; cancellation
 // is driven by an AbortSignal so the caller can unwind cleanly.
 //
@@ -30,13 +36,22 @@ export interface TailJsonlOptions {
   includeExisting?: boolean;
 }
 
+export interface TailJsonlLinesOptions<T> extends TailJsonlOptions {
+  /** Parse one JSONL line into a record of type T, or return `undefined`
+   * to skip (e.g. schema mismatch, transient partial flush). Thrown errors
+   * are also swallowed to keep the long-running stream alive. */
+  parse: (line: string) => T | undefined;
+}
+
 /**
- * Tail a JSONL event file. Yields one `Event` per line. Resolves when the
- * signal aborts. Non-JSON / blank lines are skipped silently (defensive:
- * a partially-flushed writer should never kill a long-running stream).
+ * Generic JSONL tail. Yields one `T` per line that `parse` accepts.
+ * Same file-watching and truncation semantics as `tailJsonl`.
  */
-export async function* tailJsonl(filePath: string, opts: TailJsonlOptions = {}): AsyncGenerator<Event, void, void> {
-  const { signal, includeExisting = true } = opts;
+export async function* tailJsonlLines<T>(
+  filePath: string,
+  opts: TailJsonlLinesOptions<T>,
+): AsyncGenerator<T, void, void> {
+  const { signal, includeExisting = true, parse } = opts;
   let offset = 0;
   let buffer = "";
 
@@ -70,8 +85,8 @@ export async function* tailJsonl(filePath: string, opts: TailJsonlOptions = {}):
       const existing = await readFrom(filePath, 0);
       offset = existing.offset;
       buffer += existing.chunk;
-      const drained = splitBuffer(buffer);
-      for (const ev of drained.events) yield ev;
+      const drained = splitBuffer(buffer, parse);
+      for (const rec of drained.records) yield rec;
       buffer = drained.remainder;
     } else {
       // Start at current EOF so we only see new appends.
@@ -100,13 +115,30 @@ export async function* tailJsonl(filePath: string, opts: TailJsonlOptions = {}):
       if (chunk.length === 0) continue;
       offset = next;
       buffer += chunk;
-      const drained = splitBuffer(buffer);
-      for (const ev of drained.events) yield ev;
+      const drained = splitBuffer(buffer, parse);
+      for (const rec of drained.records) yield rec;
       buffer = drained.remainder;
     }
   } finally {
     watcher?.close();
     if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * Tail a JSONL event file. Yields one `Event` per line. Resolves when the
+ * signal aborts. Non-JSON / blank lines are skipped silently (defensive:
+ * a partially-flushed writer should never kill a long-running stream).
+ */
+export function tailJsonl(filePath: string, opts: TailJsonlOptions = {}): AsyncGenerator<Event, void, void> {
+  return tailJsonlLines<Event>(filePath, { ...opts, parse: parseEventLine });
+}
+
+function parseEventLine(line: string): Event | undefined {
+  try {
+    return JSON.parse(line) as Event;
+  } catch {
+    return undefined;
   }
 }
 
@@ -141,20 +173,24 @@ async function readFrom(filePath: string, fromOffset: number): Promise<ReadResul
   }
 }
 
-/** Split `buffer` into parsed events (all complete `\n`-terminated lines) and
- * the remainder (text after the last newline). Malformed lines are skipped. */
-function splitBuffer(buffer: string): { events: Event[]; remainder: string } {
+/** Split `buffer` into parsed records (all complete `\n`-terminated lines,
+ * as filtered by `parse`) and the remainder (text after the last newline).
+ * Malformed / unparseable lines are skipped. */
+function splitBuffer<T>(buffer: string, parse: (line: string) => T | undefined): { records: T[]; remainder: string } {
   const lastNl = buffer.lastIndexOf("\n");
-  if (lastNl < 0) return { events: [], remainder: buffer };
-  const events: Event[] = [];
+  if (lastNl < 0) return { records: [], remainder: buffer };
+  const records: T[] = [];
   for (const raw of buffer.slice(0, lastNl).split("\n")) {
     const line = raw.trim();
     if (!line) continue;
+    let parsed: T | undefined;
     try {
-      events.push(JSON.parse(line) as Event);
+      parsed = parse(line);
     } catch {
-      // writer may be mid-flush; skip malformed line
+      // writer may be mid-flush, or line may not fit the schema; skip
+      continue;
     }
+    if (parsed !== undefined) records.push(parsed);
   }
-  return { events, remainder: buffer.slice(lastNl + 1) };
+  return { records, remainder: buffer.slice(lastNl + 1) };
 }

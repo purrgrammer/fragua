@@ -1,9 +1,12 @@
 // `swarm steer <run-id> "<message>"` — enqueue a steering message for a
-// currently-running swarm process. The running backend tails the file and
-// injects each new line into the active agent via agent.steer().
+// currently-running swarm process. Writes a `ControlRequest` line to
+// `<runsDir>/<run-id>/control.jsonl`; the running executor's control loop
+// tails the file, injects the message into the active agent, and emits
+// `control.requested` + `control.applied` events on the run's stream.
 
-import { appendFile, mkdir, stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
+import { submitControlRequest } from "@swarm/events";
 import chalk from "chalk";
 
 export interface SteerCommandOptions {
@@ -38,15 +41,12 @@ export async function steerCommand(opts: SteerCommandOptions): Promise<number> {
     return 1;
   }
 
-  const filePath = resolve(runDir, "steering.jsonl");
-  await mkdir(dirname(filePath), { recursive: true });
-
-  const entry = JSON.stringify({ timestamp: new Date().toISOString(), message: opts.message });
-  await appendFile(filePath, `${entry}\n`, "utf8");
+  const filePath = resolve(runDir, "control.jsonl");
+  const request = await submitControlRequest(filePath, "steer", { message: opts.message });
 
   console.log(chalk.green(`steer → ${opts.runId}`));
   console.log(chalk.dim(`  file: ${filePath}`));
+  console.log(chalk.dim(`  id:   ${request.id}`));
   console.log(chalk.dim(`  msg:  ${opts.message.slice(0, 120)}${opts.message.length > 120 ? "…" : ""}`));
-  console.log(chalk.dim("  note: the running swarm picks this up on its next poll (≤500ms by default)."));
   return 0;
 }

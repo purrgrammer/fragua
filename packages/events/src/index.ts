@@ -1,5 +1,6 @@
 export * from "./checkpoint.ts";
 export * from "./console.ts";
+export * from "./control.ts";
 export * from "./cost.ts";
 export * from "./jsonl.ts";
 export * from "./projection.ts";

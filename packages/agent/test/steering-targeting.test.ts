@@ -1,11 +1,12 @@
-// Wave 3 — steering targeting + robustness. Extends the existing
-// steer.test.ts with scenarios the pre-seeded fixture can't express:
+// Control-channel targeting + robustness. Extends the basic steer test
+// with scenarios that exercise error paths on the control.jsonl tail:
 //
-//   - Line appended MID-RUN is picked up by the poller before the
-//     active node finishes (not merely queued for after).
-//   - Malformed JSON lines are ignored rather than crashing the poller.
-//   - Lines missing a `message` field (or with non-string message) are
-//     skipped silently — they contribute no events.
+//   - Malformed JSON lines are ignored rather than crashing the loop.
+//   - Requests missing the required `message` payload for steer are
+//     skipped with a `control.rejected { reason: "missing_message" }`
+//     event rather than silently dropped.
+//   - Multiple pre-seeded requests each round-trip through
+//     `control.requested` / `control.applied`.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -13,10 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { execute, InMemorySink, parseDotSource } from "@swarm/core";
+import { tailControlRequests } from "@swarm/events";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiCodergenBackend } from "../src/backend.ts";
 
-describe("steering — targeting + robustness", () => {
+describe("control channel — targeting + robustness", () => {
   let scratch: string;
   let runsDir: string;
   let faux: ReturnType<typeof registerFauxProvider>;
@@ -39,23 +41,31 @@ describe("steering — targeting + robustness", () => {
       env: new LocalEnvironment({ cwd: scratch }),
       resolveModel: () => model,
       defaultModel: { provider: model.provider, model: model.id },
-      runsDir,
-      steeringPollMs: 25,
     });
   }
 
-  test("malformed and empty-message lines are ignored; only valid messages fire steering.injected", async () => {
+  test("malformed lines are ignored; missing-message requests are rejected; valid ones are applied", async () => {
     const run_id = "test-run-malformed";
     const runDir = join(runsDir, run_id);
     await mkdir(runDir, { recursive: true });
-    const file = join(runDir, "steering.jsonl");
-    // Pre-seed three lines: invalid JSON, missing message, valid. The
-    // poller must survive the first two and still process the third.
+    const file = join(runDir, "control.jsonl");
+    // Pre-seed: invalid JSON (skipped by parser), valid steer w/ empty
+    // message (rejected by loop), valid steer with real message (applied).
     await appendFile(
       file,
       "this is not JSON at all\n" +
-        `${JSON.stringify({ timestamp: new Date().toISOString() /* no message */ })}\n` +
-        `${JSON.stringify({ timestamp: new Date().toISOString(), message: "only real one" })}\n`,
+        `${JSON.stringify({
+          id: "ctl-empty",
+          timestamp: new Date().toISOString(),
+          command: "steer",
+          payload: {},
+        })}\n` +
+        `${JSON.stringify({
+          id: "ctl-real",
+          timestamp: new Date().toISOString(),
+          command: "steer",
+          payload: { message: "only real one" },
+        })}\n`,
       "utf8",
     );
 
@@ -68,26 +78,43 @@ describe("steering — targeting + robustness", () => {
       run_id,
       sink,
       backend: buildBackend(),
+      controlChannel: { path: file, tail: tailControlRequests },
     });
-    const steers = sink.byType("steering.injected");
-    expect(steers).toHaveLength(1);
-    expect(steers[0]!.data["message"]).toBe("only real one");
+    const requested = sink.byType("control.requested");
+    const applied = sink.byType("control.applied");
+    const rejected = sink.byType("control.rejected");
+    // Malformed line is skipped at parse time — no control.* event.
+    expect(requested.map((e) => e.data["id"])).toEqual(["ctl-empty", "ctl-real"]);
+    expect(applied.map((e) => e.data["id"])).toEqual(["ctl-real"]);
+    expect(rejected.map((e) => e.data["id"])).toEqual(["ctl-empty"]);
+    expect(rejected[0]!.data["reason"]).toBe("missing_message");
   });
 
-  test("multiple pre-seeded lines each fire their own steering.injected event", async () => {
+  test("multiple pre-seeded steer requests each round-trip through applied", async () => {
     const run_id = "test-run-multi";
     const runDir = join(runsDir, run_id);
     await mkdir(runDir, { recursive: true });
-    const file = join(runDir, "steering.jsonl");
-    // Three distinct nudges in order — the poller reads the whole file
-    // slice before the first agent turn, so all three must land. This is
-    // the "append-while-running" shape from the cheap side (no race with
-    // the faux provider's instant turn resolution).
+    const file = join(runDir, "control.jsonl");
     await appendFile(
       file,
-      `${JSON.stringify({ timestamp: new Date().toISOString(), message: "one" })}\n` +
-        `${JSON.stringify({ timestamp: new Date().toISOString(), message: "two" })}\n` +
-        `${JSON.stringify({ timestamp: new Date().toISOString(), message: "three" })}\n`,
+      `${JSON.stringify({
+        id: "m1",
+        timestamp: new Date().toISOString(),
+        command: "steer",
+        payload: { message: "one" },
+      })}\n` +
+        `${JSON.stringify({
+          id: "m2",
+          timestamp: new Date().toISOString(),
+          command: "steer",
+          payload: { message: "two" },
+        })}\n` +
+        `${JSON.stringify({
+          id: "m3",
+          timestamp: new Date().toISOString(),
+          command: "steer",
+          payload: { message: "three" },
+        })}\n`,
       "utf8",
     );
 
@@ -100,8 +127,9 @@ describe("steering — targeting + robustness", () => {
       run_id,
       sink,
       backend: buildBackend(),
+      controlChannel: { path: file, tail: tailControlRequests },
     });
-    const messages = sink.byType("steering.injected").map((e) => e.data["message"]);
-    expect(messages).toEqual(["one", "two", "three"]);
+    expect(sink.byType("control.requested").map((e) => e.data["id"])).toEqual(["m1", "m2", "m3"]);
+    expect(sink.byType("control.applied").map((e) => e.data["id"])).toEqual(["m1", "m2", "m3"]);
   });
 });

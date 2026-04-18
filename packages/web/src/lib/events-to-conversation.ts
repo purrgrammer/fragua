@@ -518,13 +518,11 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
       break;
     }
 
-    // ----- Steering -----
-    // `steering.injected` fires from the backend poller the moment a
-    // steering.jsonl line is read, *before* pi-agent-core drains the queue
-    // and emits its own `agent.message_start(role=user)`. Render it as a
-    // user message in the current section/turn so the steer is visible
-    // immediately; pi's later user-message_start still fires and remains a
-    // structural marker (filtered out at render time as an empty shell).
+    // ----- Steering (legacy) -----
+    // Pre-control-channel runs wrote `steering.injected` from a poller
+    // inside the backend. New runs use `control.requested(steer)` below,
+    // but we keep this branch so replays of older events.jsonl still
+    // render correctly.
     case "steering.injected": {
       if (!nodeId) break;
       const message = data["message"];
@@ -538,8 +536,37 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
         parts: [{ type: "text", text: message }],
       };
       state.activeTurn.messages.push(msg);
-      // Don't bind `activeMessage` — we don't want subsequent deltas to
-      // land here; this message is self-contained.
+      break;
+    }
+
+    // ----- Control channel -----
+    // `control.requested(steer)` is the moment a steer message lands on
+    // the run's control.jsonl; surface it as a user turn exactly like the
+    // legacy `steering.injected` so the UX is unchanged. pause / resume /
+    // cancel are pipeline-scoped (no node_id) and surface as lifecycle
+    // banners rather than chat bubbles — the conversation reducer skips
+    // them and the banner layer (future) reads them directly off the
+    // event stream.
+    case "control.requested": {
+      const command = data["command"];
+      if (command !== "steer") break; // pause/resume/cancel — banner layer handles these
+      const payload = data["payload"] as { message?: unknown } | undefined;
+      const message = payload?.message;
+      if (typeof message !== "string" || message.length === 0) break;
+      // Control events are run-scoped; attach to the currently-active
+      // node/turn so the steer appears inline with the agent's work, not
+      // as an orphaned top-level message.
+      const targetNodeId = nodeId ?? state.activeNodeId;
+      if (!targetNodeId) break;
+      state.activeNodeId = targetNodeId;
+      if (!state.activeTurn) state.activeTurn = openTurn(state, targetNodeId, ev.session_id ?? null);
+      state.messageCounter += 1;
+      const msg: Message = {
+        messageId: `${state.activeTurn.turnId}-m${state.messageCounter}`,
+        role: "user",
+        parts: [{ type: "text", text: message }],
+      };
+      state.activeTurn.messages.push(msg);
       break;
     }
 

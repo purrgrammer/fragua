@@ -19,6 +19,15 @@ export const CheckpointSchema = Type.Object(
     /** Serialized pi-mono session state keyed by thread_id. Opaque to @swarm/core. */
     pi_sessions: Type.Record(Type.String(), Type.Any()),
     saved_at: Type.String(),
+    /** Soft-pause flag set by `control.pause` and cleared by `control.resume`.
+     * When true, the executor finishes the current node then awaits resume
+     * before selecting the next edge. Absent on pre-control-channel runs —
+     * consumers treat `undefined` as `false`. */
+    paused: Type.Optional(Type.Boolean()),
+    /** Client-supplied id of the most recently applied (or rejected) control
+     * request. Used on resume to skip over requests already reflected in the
+     * event stream, so a re-tailed `control.jsonl` never double-applies. */
+    last_applied_control_id: Type.Optional(Type.String()),
   },
   { $id: "Checkpoint" },
 );

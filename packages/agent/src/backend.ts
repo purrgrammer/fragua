@@ -1,7 +1,5 @@
 // PiCodergenBackend — CodergenBackend backed by pi-agent-core + pi-ai.
 
-import { open as openFile, stat as statFile } from "node:fs/promises";
-import { join as joinPath } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
@@ -22,11 +20,6 @@ export interface PiCodergenBackendOptions {
   defaultModel?: { provider: string; model: string };
   /** Optional system prompt prepended to every run. Tests may omit this. */
   systemPrompt?: string;
-  /** Runs directory; if set, backend tails `<runsDir>/<run_id>/steering.jsonl`
-   * and injects any new lines into the running agent via agent.steer(). */
-  runsDir?: string;
-  /** Steering poll interval in ms. Default 500. */
-  steeringPollMs?: number;
   /** Optional summariser used for `fidelity=summary:medium/high`. When
    * omitted those modes fall back to the deterministic `summary:low`
    * template with a soft warning — behaviour matches Wave 2. */
@@ -39,8 +32,12 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
   private readonly defaultModel: { provider: string; model: string };
   private readonly systemPrompt: string;
-  private readonly runsDir: string | undefined;
-  private readonly steeringPollMs: number;
+  /** The agent currently running inside `run()`. When a steer request
+   * lands mid-node it's injected directly; if no agent is active the
+   * message is buffered on `pendingSteers` and drained into the next
+   * agent on its next turn. */
+  private activeAgent: Agent | undefined;
+  private pendingSteers: string[] = [];
   /** Per-backend transcript store keyed by `thread_id`. Scoped to the
    * backend instance so tests that spin up a fresh backend get a clean
    * store. The executor creates one backend per run today, which means
@@ -55,8 +52,6 @@ export class PiCodergenBackend implements CodergenBackend {
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
     this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-4-7" };
     this.systemPrompt = opts.systemPrompt ?? "";
-    this.runsDir = opts.runsDir;
-    this.steeringPollMs = opts.steeringPollMs ?? 500;
     this.messageStore = new MessageStore();
     this.summariser = opts.summariser;
   }
@@ -222,13 +217,17 @@ export class PiCodergenBackend implements CodergenBackend {
       }
     });
 
-    const steeringStop = this.runsDir ? await this.startSteeringPoller(agent, input.run_id, input.emit) : () => {};
+    // Register this agent as the current steer target and drain any messages
+    // that landed while no agent was active (e.g. a steer fired between nodes).
+    // `steer()` below calls agent.steer() directly when activeAgent is set.
+    this.activeAgent = agent;
+    for (const buffered of this.pendingSteers.splice(0)) this.injectSteer(agent, buffered);
 
     try {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
     } finally {
-      steeringStop();
+      this.activeAgent = undefined;
       unsubscribe();
     }
 
@@ -263,59 +262,28 @@ export class PiCodergenBackend implements CodergenBackend {
     return ok({ notes });
   }
 
-  /** Tail the steering file and inject new lines as user messages.
-   * Returns a stop function that cancels polling. */
-  private async startSteeringPoller(agent: Agent, run_id: string, emit: CodergenInput["emit"]): Promise<() => void> {
-    if (!this.runsDir) return () => {};
-    const filePath = joinPath(this.runsDir, run_id, "steering.jsonl");
-    let offset = 0;
-    let stopped = false;
+  /** CodergenBackend.steer — inject a user message into the currently
+   * active agent, or buffer it for the next agent when no node is running.
+   * Called by the executor's control loop when a `control.steer` request
+   * arrives. Fire-and-forget from the caller's point of view. */
+  steer(message: string): void {
+    if (!message) return;
+    const agent = this.activeAgent;
+    if (agent) {
+      this.injectSteer(agent, message);
+      return;
+    }
+    // No node is currently running; queue the message for the next
+    // agent so a steer fired between nodes isn't dropped.
+    this.pendingSteers.push(message);
+  }
 
-    const tick = async (): Promise<void> => {
-      if (stopped) return;
-      try {
-        const { size } = await statFile(filePath);
-        if (size > offset) {
-          const fh = await openFile(filePath, "r");
-          try {
-            const buf = Buffer.alloc(size - offset);
-            await fh.read(buf, 0, buf.length, offset);
-            offset = size;
-            for (const line of buf.toString("utf8").split("\n")) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              let parsed: { message?: unknown };
-              try {
-                parsed = JSON.parse(trimmed);
-              } catch {
-                continue;
-              }
-              const msg = typeof parsed.message === "string" ? parsed.message : undefined;
-              if (!msg) continue;
-              agent.steer({
-                role: "user",
-                content: [{ type: "text", text: msg }],
-                timestamp: Date.now(),
-              });
-              if (emit) await emit("steering.injected", { message: msg });
-            }
-          } finally {
-            await fh.close();
-          }
-        }
-      } catch {
-        // file may not exist yet — keep polling
-      }
-    };
-
-    // Fire one immediate tick so pre-existing messages are picked up before
-    // the first interval expires.
-    await tick();
-    const timer = setInterval(tick, this.steeringPollMs);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
+  private injectSteer(agent: Agent, message: string): void {
+    agent.steer({
+      role: "user",
+      content: [{ type: "text", text: message }],
+      timestamp: Date.now(),
+    });
   }
 }
 

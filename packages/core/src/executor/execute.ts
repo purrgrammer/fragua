@@ -12,7 +12,13 @@ import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
 import { CHECKPOINT_SCHEMA_VERSION, type Checkpoint, type CheckpointStore } from "../types/checkpoint.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";
-import { EVENT_SCHEMA_VERSION, type Event, type EventType, type NodeStartedData } from "../types/events.ts";
+import {
+  type ControlRequest,
+  EVENT_SCHEMA_VERSION,
+  type Event,
+  type EventType,
+  type NodeStartedData,
+} from "../types/events.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import { type Graph, handlerOf, isTerminal, type Node } from "../types/graph.ts";
 import type { Interviewer, Question } from "../types/interviewer.ts";
@@ -34,6 +40,12 @@ export interface CodergenBackend {
    * transcripts rejoin the MessageStore before the first resumed
    * backend.run(). */
   hydrateSessions?(sessions: Record<string, unknown>): void;
+  /** Control-channel hook: inject `message` as a user turn into the
+   * currently-running agent, or buffer it for the next `run()` call when
+   * no agent is active. Called by the executor's control loop when a
+   * `control.steer` request arrives. Optional — backends that don't
+   * support mid-run steering (e.g. the mock backend) can omit it. */
+  steer?(message: string): void;
 }
 
 export interface CodergenInput {
@@ -836,6 +848,13 @@ interface LoopArgs {
    * the executor can snapshot to a CheckpointStore without leaking
    * the store port into the loop core. */
   onNodeCompleted?: (node: Node) => Promise<void>;
+  /** Called after checkpoint save, before advancing to the next node.
+   * Returns a promise — the loop awaits it before stepping. Used to
+   * implement soft-pause: the executor's control loop sets
+   * `paused=true` on `control.pause` and the promise only resolves
+   * when a matching `control.resume` arrives. Safe terminal nodes
+   * return earlier so this never blocks at pipeline end. */
+  onBoundary?: (args: { completedNodeId: string; nextNodeId: string }) => Promise<void>;
 }
 
 type StopReason = "terminal" | "stop_at" | "no_edge" | "max_steps" | "aborted" | "error";
@@ -967,6 +986,7 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       // resume picks up at the node that hadn't started yet (not the
       // one that just completed, which would otherwise re-run).
       if (args.onNodeCompleted) await args.onNodeCompleted(next);
+      if (args.onBoundary) await args.onBoundary({ completedNodeId: node.id, nextNodeId: next.id });
       current = next;
       continue;
     }
@@ -1000,6 +1020,7 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
     // Wave 6 checkpoint hook fires here with the NEXT node so
     // resume starts at what hadn't begun yet.
     if (args.onNodeCompleted) await args.onNodeCompleted(next);
+    if (args.onBoundary) await args.onBoundary({ completedNodeId: node.id, nextNodeId: next.id });
     current = next;
   }
 
@@ -1073,6 +1094,24 @@ export interface ExecuteOptions {
    * when no checkpoint exists so the same CLI flag works for fresh
    * runs. */
   resume?: boolean;
+  /** Control channel hookup. When present, the executor tails the
+   * JSONL file at `path`, mirrors each request into the event stream
+   * as `control.requested`, dispatches it to the right boundary
+   * (steer → backend.steer; pause/resume/cancel later), and emits a
+   * paired `control.applied` or `control.rejected`. The `tail`
+   * function matches `@swarm/events`'s `tailControlRequests`
+   * signature — injected to keep @swarm/core free of filesystem
+   * I/O (SPEC §2). See docs/SPEC.md §3.7. */
+  controlChannel?: {
+    /** JSONL file path containing `ControlRequest` lines. */
+    path: string;
+    /** Injected tailer. Must yield one `ControlRequest` per valid line,
+     * first existing content then appends, until the signal aborts. */
+    tail: (
+      path: string,
+      opts: { signal: AbortSignal; includeExisting?: boolean },
+    ) => AsyncIterable<ControlRequest>;
+  };
 }
 
 export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
@@ -1081,7 +1120,15 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const rawSink: EventSink = opts.sink ?? new InMemorySink();
   const interviewer: Interviewer = opts.interviewer ?? new AutoApproveInterviewer();
   const backend: CodergenBackend = opts.backend ?? new MockCodergenBackend();
-  const signal = opts.signal ?? new AbortController().signal;
+  // `cancelController` backs `control.cancel`. The effective signal fires
+  // when either the caller's signal aborts OR a cancel request lands on
+  // the control channel, so every signal-aware downstream (runLoop,
+  // handlers, tool calls) trips without special casing.
+  const cancelController = new AbortController();
+  const signal =
+    opts.signal !== undefined
+      ? AbortSignal.any([opts.signal, cancelController.signal])
+      : cancelController.signal;
   const now = opts.now ?? (() => new Date().toISOString());
   const random = opts.random ?? Math.random;
   const handlers = opts.handlers ?? HANDLERS;
@@ -1131,6 +1178,12 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   // the resumed node (SPEC §3.6).
   const resumeDegradedNodes = new Set<string>();
   let resumeStartNodeId: string | undefined;
+  // Control-channel state. `lastAppliedControlId` survives restarts via
+  // the checkpoint so re-tailing a populated control.jsonl on resume
+  // doesn't re-apply already-handled requests. The `paused` flag is
+  // reserved for pause/resume support (P4).
+  let lastAppliedControlId: string | undefined;
+  let paused = false;
   if (opts.resume === true && opts.checkpointStore) {
     const loaded = await opts.checkpointStore.load(run_id);
     if (loaded) {
@@ -1141,6 +1194,8 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       if (backend.hydrateSessions) backend.hydrateSessions(loaded.pi_sessions);
       resumeDegradedNodes.add(loaded.current_node);
       resumeStartNodeId = loaded.current_node;
+      if (loaded.last_applied_control_id !== undefined) lastAppliedControlId = loaded.last_applied_control_id;
+      if (loaded.paused === true) paused = true;
     }
   }
 
@@ -1185,6 +1240,58 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
     auto_title: opts.auto_title,
     signal,
   });
+
+  // ── Control channel ────────────────────────────────────────────────
+  // Spin up a concurrent tail of control.jsonl. Each request mirrors into
+  // events.jsonl as `control.requested`, dispatches to the command-specific
+  // boundary, and acknowledges with `control.applied` or `control.rejected`.
+  // The checkpoint writer reads `lastAppliedControlId` so a restart skips
+  // requests already reflected in the event stream.
+  //
+  // Pause/resume are two-phase:
+  //   - On `control.pause.requested`, flip the `paused` flag and record the
+  //     pending request id. `control.applied` is emitted by runLoop's
+  //     `onBoundary` hook when the current node finishes — the gap between
+  //     requested and applied is the implicit "pending" state. Soft pause
+  //     only: a running node runs to completion.
+  //   - On `control.resume.requested`, clear the flag, wake the boundary
+  //     waiter, and emit `control.applied` for the resume request.
+  //
+  // Cancel lands in P5.
+  const controlAbort = new AbortController();
+  const pause = createPauseState();
+  /** Captured when `control.cancel` fires, so the pipeline-terminal step
+   * below emits `pipeline.canceled` (with the originating request id)
+   * instead of `pipeline.failed`. */
+  let cancelState: { id: string; reason?: string } | undefined;
+  const controlLoopDone: Promise<void> = opts.controlChannel
+    ? runControlLoop({
+        tailIter: opts.controlChannel.tail(opts.controlChannel.path, { signal: controlAbort.signal }),
+        skipUpToId: lastAppliedControlId,
+        onApplied: (id) => {
+          lastAppliedControlId = id;
+        },
+        backend,
+        emit,
+        pause,
+        getPaused: () => paused,
+        setPaused: (v) => {
+          paused = v;
+        },
+        isCancelled: () => cancelState !== undefined,
+        requestCancel: (id, reason) => {
+          cancelState = { id, ...(reason !== undefined ? { reason } : {}) };
+          // Trip the abort so any in-flight handler / tool call unwinds.
+          cancelController.abort();
+          // If the run is currently paused at a boundary, wake it so
+          // execute() can unwind and emit pipeline.canceled. The paused
+          // flag stays true on the outer var until exit so checkpoints
+          // reflect the final state if a save runs; the resume promise
+          // just needs to resolve.
+          pause.resolveResume();
+        },
+      })
+    : Promise.resolve();
 
   // On resume, jump straight to the checkpointed current_node when it
   // still exists in the workflow. If the workflow has changed and the
@@ -1248,11 +1355,30 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
                 retry_counts: { ...retry_counts },
                 pi_sessions: backend.serialiseSessions ? backend.serialiseSessions() : {},
                 saved_at: now(),
+                ...(lastAppliedControlId !== undefined ? { last_applied_control_id: lastAppliedControlId } : {}),
+                ...(paused ? { paused: true } : {}),
               };
               await opts.checkpointStore!.save(run_id, snapshot);
             },
           }
         : {}),
+      onBoundary: async ({ completedNodeId }) => {
+        // Pause gate: if a pause has landed, emit `control.applied` for
+        // it now (boundary reached) then block until `control.resume`
+        // wakes the promise. On a fresh (unpaused) run this is a no-op.
+        if (!paused) return;
+        const pendingId = pause.pendingPauseRequestId;
+        if (pendingId !== undefined) {
+          await emit("control.applied", undefined, {
+            id: pendingId,
+            command: "pause",
+            applied_at_node: completedNodeId,
+          });
+          lastAppliedControlId = pendingId;
+          pause.pendingPauseRequestId = undefined;
+        }
+        await pause.awaitResume();
+      },
     });
 
     // If we stopped at a terminal Msquare, check goal gates + maybe retry.
@@ -1328,9 +1454,32 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   // was never kicked off) this resolves immediately.
   await titlePromise;
 
+  // Tear down the control loop before emitting terminal events. The
+  // AbortController wakes the tailer; `controlLoopDone` resolves once
+  // its generator unwinds. Errors inside the loop are caught there and
+  // logged via the sink — nothing propagates here.
+  controlAbort.abort();
+  await controlLoopDone;
+
   const goal_gates_satisfied = unsatisfiedGoalGates(graph, node_outcomes).length === 0;
 
-  if (finalOutcome.status === "fail") {
+  if (cancelState !== undefined) {
+    // Cancel takes precedence: even if the run had already failed when
+    // the request landed, the *reason it stopped* is the cancel. The
+    // final outcome records the request id + reason so a consumer can
+    // distinguish canceled from spontaneous failure without replaying
+    // the full stream.
+    finalOutcome = {
+      ...finalOutcome,
+      status: "fail",
+      failure_reason: `canceled${cancelState.reason ? `: ${cancelState.reason}` : ""}`,
+    };
+    await emit("pipeline.canceled", undefined, {
+      cause: "control.cancel",
+      request_id: cancelState.id,
+      ...(cancelState.reason !== undefined ? { reason: cancelState.reason } : {}),
+    });
+  } else if (finalOutcome.status === "fail") {
     await emit("pipeline.failed", undefined, { reason: finalOutcome.failure_reason });
   } else {
     await emit("pipeline.completed", undefined, { outcome: finalOutcome });
@@ -1351,6 +1500,215 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
 
 // ---------------------------------------------------------------------------
 // Internals
+
+/**
+ * Pause coordinator shared between the control loop and runLoop's
+ * `onBoundary` hook. The control loop sets `pendingPauseRequestId`
+ * and creates a fresh resume promise on `control.pause`; runLoop
+ * awaits that promise at the next safe boundary. On `control.resume`
+ * the loop calls `resolveResume()` which unblocks the waiter.
+ */
+interface PauseState {
+  pendingPauseRequestId: string | undefined;
+  /** Returns a promise that resolves when resume is called. Idempotent:
+   * calling while already paused returns the same pending promise. */
+  awaitResume(): Promise<void>;
+  /** Begin a new pause cycle — creates a fresh unresolved promise. */
+  beginPause(requestId: string): void;
+  /** End the current pause cycle — resolves the outstanding promise.
+   * Returns true if a pause was actually in effect, false if not. */
+  resolveResume(): boolean;
+}
+
+function createPauseState(): PauseState {
+  let resumeResolver: (() => void) | undefined;
+  let resumePromise: Promise<void> | undefined;
+  const state: PauseState = {
+    pendingPauseRequestId: undefined,
+    awaitResume: () => resumePromise ?? Promise.resolve(),
+    beginPause(requestId: string) {
+      // Idempotent: a second pause while already paused just updates
+      // the pending request id (a rare race) and reuses the promise.
+      state.pendingPauseRequestId = requestId;
+      if (resumePromise) return;
+      resumePromise = new Promise<void>((resolve) => {
+        resumeResolver = resolve;
+      });
+    },
+    resolveResume() {
+      if (!resumePromise) return false;
+      const resolver = resumeResolver;
+      resumeResolver = undefined;
+      resumePromise = undefined;
+      resolver?.();
+      return true;
+    },
+  };
+  return state;
+}
+
+interface ControlLoopArgs {
+  tailIter: AsyncIterable<ControlRequest>;
+  /** Checkpoint-sourced id. Every request up to and including this id is
+   * skipped so a resume doesn't double-apply. `undefined` on fresh runs. */
+  skipUpToId: string | undefined;
+  onApplied: (id: string) => void;
+  backend: CodergenBackend;
+  /** Run-scoped emit (no node_id attached). */
+  emit: (type: EventType, node: Node | undefined, data: Record<string, unknown>) => Promise<void>;
+  pause: PauseState;
+  getPaused: () => boolean;
+  setPaused: (v: boolean) => void;
+  /** True once a cancel has been acknowledged — subsequent cancel
+   * requests are rejected with `already_terminal` instead of double-firing. */
+  isCancelled: () => boolean;
+  /** Side channel: trip the execute-scope AbortController and wake any
+   * paused boundary. Called once per accepted cancel request. */
+  requestCancel: (id: string, reason: string | undefined) => void;
+}
+
+/**
+ * Tail `control.jsonl` and dispatch each request. Emits `control.requested`
+ * for every accepted request, then `control.applied` or `control.rejected`
+ * as the per-command branch resolves.
+ *
+ * Pause is special-cased: this loop does NOT emit `control.applied(pause)`.
+ * Instead it sets `paused=true` + `pendingPauseRequestId`; runLoop's
+ * `onBoundary` hook emits `applied` when the current node finishes. The gap
+ * between requested and applied is the pending state.
+ *
+ * Cancel lands in P5 and currently rejects with `not_implemented`.
+ */
+async function runControlLoop(args: ControlLoopArgs): Promise<void> {
+  let resuming = args.skipUpToId !== undefined;
+  try {
+    for await (const request of args.tailIter) {
+      // Skip every request up to and including the last-applied id from
+      // the checkpoint. The file is strictly append-only so position-in-file
+      // is equivalent to position-in-sequence; once we see the marker id we
+      // apply everything that follows.
+      if (resuming) {
+        if (request.id === args.skipUpToId) resuming = false;
+        continue;
+      }
+
+      const requestedData: Record<string, unknown> = { id: request.id, command: request.command };
+      if (request.payload !== undefined) requestedData["payload"] = request.payload;
+      await args.emit("control.requested", undefined, requestedData);
+
+      switch (request.command) {
+        case "steer": {
+          const msg = request.payload?.message;
+          if (typeof msg !== "string" || msg.length === 0) {
+            await args.emit("control.rejected", undefined, {
+              id: request.id,
+              command: request.command,
+              reason: "missing_message",
+            });
+            break;
+          }
+          if (args.backend.steer) {
+            args.backend.steer(msg);
+            await args.emit("control.applied", undefined, {
+              id: request.id,
+              command: request.command,
+              note: "injected",
+            });
+            args.onApplied(request.id);
+          } else {
+            await args.emit("control.rejected", undefined, {
+              id: request.id,
+              command: request.command,
+              reason: "backend_unsupported",
+            });
+            args.onApplied(request.id);
+          }
+          break;
+        }
+        case "pause": {
+          if (args.getPaused()) {
+            // Idempotent: already paused. Ack right away so the UI knows
+            // the request landed, but don't gate twice at the next boundary.
+            await args.emit("control.applied", undefined, {
+              id: request.id,
+              command: request.command,
+              note: "already_paused",
+            });
+            args.onApplied(request.id);
+            break;
+          }
+          args.setPaused(true);
+          args.pause.beginPause(request.id);
+          // Do NOT emit control.applied here. runLoop's onBoundary will
+          // emit it when the current node completes; that's when pause
+          // has actually taken effect.
+          // Also do NOT call onApplied() yet — the checkpoint should see
+          // last_applied_control_id advance only once the pause has landed.
+          break;
+        }
+        case "resume": {
+          if (!args.getPaused()) {
+            await args.emit("control.rejected", undefined, {
+              id: request.id,
+              command: request.command,
+              reason: "not_paused",
+            });
+            args.onApplied(request.id);
+            break;
+          }
+          args.setPaused(false);
+          args.pause.resolveResume();
+          args.pause.pendingPauseRequestId = undefined;
+          await args.emit("control.applied", undefined, {
+            id: request.id,
+            command: request.command,
+          });
+          args.onApplied(request.id);
+          break;
+        }
+        case "cancel": {
+          if (args.isCancelled()) {
+            await args.emit("control.rejected", undefined, {
+              id: request.id,
+              command: request.command,
+              reason: "already_terminal",
+            });
+            args.onApplied(request.id);
+            break;
+          }
+          // Accept immediately. The side effect — tripping the run's
+          // AbortController — happens synchronously via requestCancel so
+          // downstream handlers / tool calls unwind on their next signal
+          // check. `pipeline.canceled` is emitted by the terminal step in
+          // execute() once runLoop returns (not here) so the cancel event
+          // lands in strict causal order with everything that was still
+          // in flight.
+          const reason = request.payload?.reason;
+          await args.emit("control.applied", undefined, {
+            id: request.id,
+            command: request.command,
+            ...(reason !== undefined ? { note: reason } : {}),
+          });
+          args.requestCancel(request.id, reason);
+          args.onApplied(request.id);
+          break;
+        }
+        default: {
+          await args.emit("control.rejected", undefined, {
+            id: request.id,
+            command: request.command,
+            reason: "unknown_command",
+          });
+          args.onApplied(request.id);
+        }
+      }
+    }
+  } catch {
+    // The tailer's own I/O errors are swallowed — a disappearing control
+    // file must never crash the run. The executor continues without
+    // control support for the remainder of this run.
+  }
+}
 
 interface RetryInput extends HandlerContext {
   handler: Handler;

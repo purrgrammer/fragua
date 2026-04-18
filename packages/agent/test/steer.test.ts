@@ -1,13 +1,20 @@
+// Steer via the control channel. The executor tails `control.jsonl`,
+// mirrors requests to `events.jsonl` as `control.requested`, forwards
+// `steer` commands to the backend's `steer()` hook, and emits
+// `control.applied` on success. This replaces the legacy
+// `steering.jsonl` poller that used to live inside the backend.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import { execute, InMemorySink, parseDotSource } from "@swarm/core";
+import { tailControlRequests } from "@swarm/events";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiCodergenBackend } from "../src/backend.ts";
 
-describe("PiCodergenBackend — steering file", () => {
+describe("PiCodergenBackend — control channel (steer)", () => {
   let scratch: string;
   let runsDir: string;
   let faux: ReturnType<typeof registerFauxProvider>;
@@ -23,17 +30,23 @@ describe("PiCodergenBackend — steering file", () => {
     await rm(scratch, { recursive: true, force: true });
   });
 
-  test("backend picks up new lines in steering.jsonl and calls agent.steer()", async () => {
+  test("pre-seeded steer request in control.jsonl is injected and emits paired control events", async () => {
     const run_id = "test-run-steer";
     const runDir = join(runsDir, run_id);
     await mkdir(runDir, { recursive: true });
-    const steeringFile = join(runDir, "steering.jsonl");
+    const controlFile = join(runDir, "control.jsonl");
 
-    // Pre-seed a steering message BEFORE the agent starts so the poller has
-    // something to find immediately. (This also dodges race conditions.)
+    // Pre-seed a steer request BEFORE the agent starts. The executor's
+    // control loop will read it synchronously on startup and forward to
+    // the backend's steer() hook.
     await appendFile(
-      steeringFile,
-      `${JSON.stringify({ timestamp: new Date().toISOString(), message: "stop and reply" })}\n`,
+      controlFile,
+      `${JSON.stringify({
+        id: "ctl-1",
+        timestamp: new Date().toISOString(),
+        command: "steer",
+        payload: { message: "stop and reply" },
+      })}\n`,
       "utf8",
     );
 
@@ -48,8 +61,6 @@ describe("PiCodergenBackend — steering file", () => {
       env,
       resolveModel: () => model,
       defaultModel: { provider: model.provider, model: model.id },
-      runsDir,
-      steeringPollMs: 50,
     });
 
     const sink = new InMemorySink();
@@ -62,15 +73,25 @@ describe("PiCodergenBackend — steering file", () => {
       }
     `);
 
-    await execute({ graph, run_id, sink, backend });
+    await execute({
+      graph,
+      run_id,
+      sink,
+      backend,
+      controlChannel: { path: controlFile, tail: tailControlRequests },
+    });
 
-    // The poller should have picked up the steering line and emitted an event
-    const steerEvents = sink.byType("steering.injected");
-    expect(steerEvents.length).toBeGreaterThanOrEqual(1);
-    expect(steerEvents[0]!.data["message"]).toBe("stop and reply");
+    const requested = sink.byType("control.requested");
+    const applied = sink.byType("control.applied");
+    expect(requested.length).toBeGreaterThanOrEqual(1);
+    expect(requested[0]!.data["id"]).toBe("ctl-1");
+    expect(requested[0]!.data["command"]).toBe("steer");
+    expect(applied.length).toBeGreaterThanOrEqual(1);
+    expect(applied[0]!.data["id"]).toBe("ctl-1");
+    expect(applied[0]!.data["note"]).toBe("injected");
   });
 
-  test("no runsDir configured → no poller, no events", async () => {
+  test("no controlChannel configured → no control events", async () => {
     const model = faux.getModel();
     faux.setResponses([fauxAssistantMessage([fauxText("no steering here")], { stopReason: "stop" })]);
 
@@ -82,7 +103,6 @@ describe("PiCodergenBackend — steering file", () => {
       env,
       resolveModel: () => model,
       defaultModel: { provider: model.provider, model: model.id },
-      // no runsDir
     });
 
     const sink = new InMemorySink();
@@ -95,6 +115,7 @@ describe("PiCodergenBackend — steering file", () => {
       }
     `);
     await execute({ graph, run_id: "no-steer", sink, backend });
-    expect(sink.byType("steering.injected").length).toBe(0);
+    expect(sink.byType("control.requested").length).toBe(0);
+    expect(sink.byType("control.applied").length).toBe(0);
   });
 });

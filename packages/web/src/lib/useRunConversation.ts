@@ -80,6 +80,7 @@ const KNOWN_EVENT_TYPES: readonly string[] = [
   "pipeline.started",
   "pipeline.completed",
   "pipeline.failed",
+  "pipeline.canceled",
   "node.started",
   "node.completed",
   "node.failed",
@@ -109,6 +110,9 @@ const KNOWN_EVENT_TYPES: readonly string[] = [
   "tool.execution_end",
   "steering.requested",
   "steering.injected",
+  "control.requested",
+  "control.applied",
+  "control.rejected",
   "cost.recorded",
 ];
 
