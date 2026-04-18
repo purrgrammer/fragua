@@ -178,11 +178,11 @@ describe("Home route", () => {
     // listPipelines never resolves → state stays "loading".
     const api = makeClient({ listPipelines: () => new Promise(() => {}) });
     const { container } = mount(api);
-    // Skeletons render with `animate-pulse`. We assert the running
-    // strip is in loading mode by querying for the test id and
-    // checking no real cards / empty state are rendered.
+    // Skeletons render with `.sw-pulse` (design-system pulse: 1800ms ease-in-out,
+    // `prefers-reduced-motion` aware). We assert the running strip is in loading
+    // mode by querying for the test id and checking no real cards are rendered.
     expect(within(container).getByTestId("running-strip")).toBeTruthy();
     expect(within(container).queryByTestId("running-empty")).toBeNull();
-    expect(container.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".sw-pulse").length).toBeGreaterThan(0);
   });
 });
