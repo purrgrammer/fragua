@@ -91,6 +91,16 @@ export { createEventInterviewGateway } from "./adapters/event-interview-gateway.
 export { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 export { createFsRunReader } from "./adapters/fs-run-reader.ts";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
+export {
+  DaemonRendezvous,
+  type DaemonRendezvousT,
+  getDaemonDir,
+  getRendezvousPath,
+  isPidAlive,
+  readRendezvous,
+  removeRendezvous,
+  writeRendezvous,
+} from "./rendezvous.ts";
 export type {
   ControlGateway,
   ControlSubmitResult,

@@ -24,6 +24,13 @@ export interface ServeCommandOptions {
   runsDir?: string;
   /** Working directory used to resolve `runsDir`. Default `process.cwd()`. */
   cwd?: string;
+  /**
+   * Hostname to bind. Default `"::"` (dual-stack, accepts v4 + v6 on
+   * all interfaces) matches the user-facing `swarm serve` semantics.
+   * The daemon passes `"127.0.0.1"` so its HTTP surface is not
+   * reachable off-box.
+   */
+  hostname?: string;
 }
 
 /**
@@ -68,7 +75,8 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire
   // regardless of which address family an existing listener is using, so the
   // printed `http://localhost:<port>` URL is actually the one we own.
-  const server = Bun.serve({ port: opts.port ?? 3000, hostname: "::", fetch: app.fetch });
+  const hostname = opts.hostname ?? "::";
+  const server = Bun.serve({ port: opts.port ?? 3000, hostname, fetch: app.fetch });
   const port = server.port ?? opts.port ?? 0;
   return {
     url: `http://localhost:${port}`,

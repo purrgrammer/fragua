@@ -4,6 +4,12 @@
 import cac from "cac";
 import chalk from "chalk";
 import { cancelCommand } from "../src/commands/cancel.ts";
+import {
+  daemonRunCommand,
+  daemonStartCommand,
+  daemonStatusCommand,
+  daemonStopCommand,
+} from "../src/commands/daemon.ts";
 import { listCommand } from "../src/commands/list.ts";
 import { pauseCommand } from "../src/commands/pause.ts";
 import { providersCommand } from "../src/commands/providers.ts";
@@ -225,6 +231,79 @@ cli
       ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
       ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("daemon <action>", "Manage the swarm daemon: start | stop | status")
+  .option("--port <n>", "TCP port to bind on 127.0.0.1 for `start` (default 3737; 0 for ephemeral)")
+  .option("--foreground", "`start` only: run in-process instead of detaching (Ctrl-C to stop)")
+  .option("--grace <ms>", "`stop` only: grace period before SIGKILL (default 10000)")
+  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
+  .option("--cwd <path>", "Project root (default cwd)")
+  .action(async (action: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const numOpt = (key: string): number | undefined => {
+      const v = options[key];
+      if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+      if (typeof v === "string") {
+        const n = Number.parseInt(v, 10);
+        return Number.isFinite(n) ? n : undefined;
+      }
+      return undefined;
+    };
+    let code: number;
+    switch (action) {
+      case "start":
+        code = await daemonStartCommand({
+          ...(numOpt("port") !== undefined ? { port: numOpt("port")! } : {}),
+          ...(options["foreground"] === true ? { foreground: true } : {}),
+          ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        });
+        break;
+      case "stop":
+        code = await daemonStopCommand({
+          ...(numOpt("grace") !== undefined ? { graceMs: numOpt("grace")! } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        });
+        break;
+      case "status":
+        code = await daemonStatusCommand({
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        });
+        break;
+      default:
+        console.error(chalk.red(`unknown daemon action: ${action}`));
+        console.error(chalk.dim("  valid actions: start | stop | status"));
+        code = 1;
+    }
+    process.exit(code);
+  });
+
+// Hidden: invoked by `daemon start` for the detached child. Single-word
+// command name so cac dispatches cleanly; not advertised in high-level help.
+cli
+  .command("__daemon-run", "(internal) Run the daemon body — invoked by `swarm daemon start`")
+  .option("--port <n>", "Port to bind")
+  .option("--cwd <path>", "Project root")
+  .option("--runs-dir <path>", "Runs directory")
+  .action(async (options: Record<string, unknown>) => {
+    const portRaw = options["port"];
+    const portNum =
+      typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await daemonRunCommand({
+      ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
     });
     process.exit(code);
   });
