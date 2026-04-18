@@ -476,7 +476,7 @@ Config override in `.swarm/config.yaml` (see `docs/skills.md`):
 ```yaml
 skills:
   paths: [.swarm/skills, vendor/agent-skills]   # disables auto-discovery
-  disabled: [legacy-thing]                       # hide names from catalog
+  disabled: [legacy-thing]                       # drop entirely from discovery
   trust_project: true                            # default
 ```
 

@@ -94,7 +94,7 @@ describe("discoverSkills", () => {
     expect(skills[0]!.name).toBe("vendored");
   });
 
-  test("disabled config hides from catalog but skill is still discovered", async () => {
+  test("disabled config drops skills entirely from discovery", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
     await writeSkill(cwd, ".swarm/skills/legacy", "legacy", "old skill");
@@ -104,8 +104,7 @@ describe("discoverSkills", () => {
       homeDir: home,
       config: { disabled: ["legacy"] },
     });
-    expect(skills).toHaveLength(1);
-    expect(skills[0]!.disabled_reason).toContain("skills.disabled");
+    expect(skills).toEqual([]);
   });
 
   test("trust_project=false hides project-scope skills but discovers them", async () => {

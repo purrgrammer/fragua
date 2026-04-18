@@ -33,9 +33,12 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverRes
   for (const root of roots) {
     const skillsFromRoot = await scanRoot(root.path, root.scope);
     for (const skill of skillsFromRoot) {
-      if (disabledSet.has(skill.name)) {
-        skill.disabled_reason = "disabled in .swarm/config.yaml (skills.disabled)";
-      } else if (skill.scope === "project" && !trustProject) {
+      // skills.disabled is an exclusion list: drop matching skills before
+      // the precedence merge so they're absent from the catalog, GET /skills,
+      // and the web UI — the user's intent is "pretend this isn't installed".
+      // For soft-hiding that still surfaces in /skills, see trust_project.
+      if (disabledSet.has(skill.name)) continue;
+      if (skill.scope === "project" && !trustProject) {
         skill.disabled_reason = "project scope hidden (skills.trust_project=false)";
       }
 

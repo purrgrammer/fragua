@@ -43,8 +43,12 @@ export interface SkillsConfig {
    * paths is disabled. Each entry is a directory containing
    * `<skill-name>/SKILL.md` subdirectories (NOT a glob of SKILL.md). */
   paths?: string[];
-  /** Names to hide from the catalog. Still discovered (so GET /skills
-   * can list them as disabled) but `disabled_reason="config"`. */
+  /** Names to exclude from discovery entirely. Skills listed here are
+   * dropped before the precedence merge — they do not appear in the
+   * agent catalog, on GET /skills, or in the web UI. Use this when you
+   * want to pretend a skill isn't installed. For temporary soft-hiding
+   * that keeps the skill visible in /skills, use `trust_project: false`
+   * on project-scope skills instead. */
   disabled?: string[];
   /** Trust gate for project-scope skills. Default true — swarm agents
    * already have full FS access on the same repo, so gating discovery

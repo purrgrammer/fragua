@@ -60,7 +60,7 @@ skills:
     - .swarm/skills
     - vendor/agent-skills
   disabled:
-    - legacy-thing        # still discovered, hidden from the catalog
+    - legacy-thing        # dropped entirely — not discovered, not on /skills
   trust_project: true     # default; false to hide project-scope skills
 ```
 
