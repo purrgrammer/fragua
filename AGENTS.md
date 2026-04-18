@@ -123,6 +123,31 @@ cost + tokens, avg duration), `GET /runs/:id/events` (SSE), plus the
 interview and workflows routes. Shapes live in
 `packages/server/src/schemas.ts`.
 
+### Per-step agent context (introspection)
+
+Every `llm.start` event on the SSE stream carries the full resolved
+context for one agent step so the UI / replay layer never has to
+reconstruct state out of band. Authoritative per-step fields (see
+`docs/SPEC.md §3.5`):
+
+- `prompt`, `system_prompt`, `provider`, `model`
+- `thread_id`, `allowed_tools`, `denied_tools`
+- `iteration: { n, max }` on every loop-originated call
+- `messages`: prior turns visible to the agent when a shared `thread_id`
+  restored a pi-agent-core session (omitted on fresh sessions)
+- `settings`: resolved generation knobs (`temperature`, `max_tokens`,
+  `top_p`, `reasoning_effort`, `stop`)
+- `context_files`: `[{ path, sha256, bytes, truncated, status }]` — use
+  the sha256 to detect drift between a run and a later replay
+- `budget`: read-only snapshot (`cumulative_cost_usd`,
+  `cumulative_tokens`, `max_cost_usd?`, `run_max_cost_usd?`); emitted
+  only when a ceiling is configured until Wave 4 wires real counters
+
+The envelope carries `schema_version` (current: `1`). Pre-versioned
+JSONL omits the field; validators must treat `undefined` as `1`. Use
+`validateEvent(raw, { checkPayload })` from `@swarm/events` to check
+event shapes at boundaries (replay harnesses, ingestion).
+
 ### Web UI
 
 The React + Vite client lives in `packages/web/`. The app sits inside a

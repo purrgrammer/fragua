@@ -62,6 +62,7 @@
       "name": "@swarm/events",
       "version": "0.0.0",
       "dependencies": {
+        "@sinclair/typebox": "0.34.41",
         "@swarm/core": "workspace:*",
         "pino": "9.5.0",
       },

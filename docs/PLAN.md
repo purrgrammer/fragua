@@ -169,10 +169,17 @@ Goal: the UI humans actually use.
 
 Independently valuable items, prioritized when needed:
 
+- **Context-management hardening (multi-wave).** Drive `docs/SPEC.md` §3.3 + §3.5 to actually-implemented status and close observed gaps. Tracked under `tasks/p6/NN-context-mgmt-waveN.md`.
+  - Wave 1 — Capture completeness. `events.jsonl` alone reconstructs what the agent saw at step N. Extend `llm.start` with message snapshot, generation settings, `context_files` sha256 records, `iteration`, and a read-only `budget` snapshot. Add `schema_version` to the envelope and a TypeBox-based `validateEvent` helper in `@swarm/events`. **Landed.**
+  - Wave 2 — Make declared knobs work. Implement fidelity transformations (`compact` / `truncate` / `summary:*`), node-level `context = "fresh"`, per-node `system_prompt` override, `fallback_retry_target`.
+  - Wave 3 — Close test-coverage gaps. Integration tests for thread_id session reuse, context_files end-to-end, retry context propagation, goal-gate × abort interaction, parallel-branch in-progress isolation, steering targeting, substitution fuzzing.
+  - Wave 4 — Budget scaffolding. Per-node / per-run ceilings, `BudgetLedger`, `budget.warn` / `budget.stop` events, pre-flight hard-stop in backend.
+  - Wave 5 — Server + UI introspection. `GET /pipelines/:id/steps/:idx` snapshot endpoint, expand P5.08 drilldown with prompt / system prompt / messages / tools / settings / context-files / budget sections.
+  - Deferred cross-cutting: secrets/PII redaction on captured prompts (decision taken to skip for now; revisit alongside Wave 4).
 - **MCP adapter:** load `mcp.json`, spawn MCP servers, expose tools as `mcp:*`
 - **Claude SKILL.md loader:** `load_playbook(name)` tool injects markdown body into the active turn
 - **PostgresEventSink:** Archon-style schema (sessions, isolation_environments, workflow_runs, workflow_events)
-- **Summarizer service:** configurable cheap model, implements `summary:low/medium/high`
+- **Summarizer service:** configurable cheap model, implements `summary:low/medium/high` (Wave 2 dependency)
 - **Classifier permission mode:** Sonnet / Haiku classifier evaluates tool calls, halts after 3 consecutive denials
 - **Auto-compaction:** 3-tier (placeholder replace → cache-aware tail trim → LLM summary) at 85 % context window
 - **`stack.manager_loop` supervisor handler:** parent oversees / steers a child pipeline

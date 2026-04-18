@@ -1,6 +1,7 @@
 export * from "./checkpoint.ts";
 export * from "./condition.ts";
 export * from "./context.ts";
+export * from "./event-schemas.ts";
 export * from "./events.ts";
 export * from "./fidelity.ts";
 export * from "./graph.ts";

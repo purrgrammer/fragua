@@ -10,7 +10,7 @@ import { type NodeOutput, type SubstitutionArgs, substitute } from "../engine/su
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";
-import type { Event, EventType, NodeStartedData } from "../types/events.ts";
+import { EVENT_SCHEMA_VERSION, type Event, type EventType, type NodeStartedData } from "../types/events.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import { type Graph, handlerOf, isTerminal, type Node } from "../types/graph.ts";
 import type { Interviewer, Question } from "../types/interviewer.ts";
@@ -36,6 +36,11 @@ export interface CodergenInput {
   /** Optional sink bridge — backends call this to emit sub-events
    * (agent.*, llm.*, tool.execution_*) during the node's execution. */
   emit?: (type: EventType, data: Record<string, unknown>) => Promise<void>;
+  /** Loop iteration metadata when invoked from a loop handler. The backend
+   * forwards this verbatim onto `llm.start.iteration` so every per-iteration
+   * call is distinguishable in `events.jsonl` without reconstructing
+   * sequence from `node.retrying` events. */
+  iteration?: { n: number; max: number };
 }
 
 export interface HandlerContext {
@@ -126,6 +131,7 @@ function buildEmit(ctx: HandlerContext): (type: EventType, data: Record<string, 
       type,
       timestamp: ctx.now(),
       workflow_sha: ctx.workflow_sha,
+      schema_version: EVENT_SCHEMA_VERSION,
       data,
     };
     await ctx.sink.append(ev);
@@ -224,6 +230,7 @@ const loopHandler: Handler = async (ctx) => {
         run_id: ctx.run_id,
         workflow_sha: ctx.workflow_sha,
         emit,
+        iteration: { n: i, max: maxIter },
       });
     } catch (err) {
       return fail(`loop iteration ${i} crashed: ${err instanceof Error ? err.message : String(err)}`);
@@ -593,6 +600,7 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       type,
       timestamp: now(),
       workflow_sha,
+      schema_version: EVENT_SCHEMA_VERSION,
       data,
       ...(node ? { node_id: node.id } : {}),
     };
@@ -804,6 +812,7 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       type,
       timestamp: now(),
       workflow_sha,
+      schema_version: EVENT_SCHEMA_VERSION,
       data,
       ...(node ? { node_id: node.id } : {}),
     };
@@ -948,6 +957,7 @@ async function runWithRetry(input: RetryInput): Promise<Outcome> {
         type: "node.retrying",
         timestamp: now(),
         workflow_sha,
+        schema_version: EVENT_SCHEMA_VERSION,
         node_id: node.id,
         data: {
           attempt,

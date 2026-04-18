@@ -205,17 +205,27 @@ Immutable records of everything that happens. The event log is the system's back
   "node_id": string | null,
   "type": string,
   "timestamp": ISO8601,
-  "workflow_sha": string,   // for post-hoc reproducibility
+  "workflow_sha": string,    // for post-hoc reproducibility
+  "schema_version": number,  // envelope version (current: 1)
   "data": { ... type-specific }
 }
 ```
 
+`schema_version` is optional on read. Pre-versioned JSONL (runs from before P6/Wave-1) omits the field; consumers treat `undefined` as `1` for back-compat. Additive field changes to `data` do **not** bump the envelope version — only incompatible renames/removals on the envelope itself do. Runtime validation is available via `@swarm/events` → `validateEvent(raw, { checkPayload })`; the envelope check is always strict, the per-`type` payload check is opt-in so a single payload rename doesn't break replay of older fixtures.
+
 **Observability invariant:** the event log is the single source of truth. Everything a debugger or replayer needs must be on an event — no out-of-band state. Two payloads carry the LLM-call inputs so nothing is "in memory only":
 
 - `node.started.data` — static, pre-substitution inputs (`node_type`, `prompt_template`, `context_keys`, `node_outputs_in_scope`, `model`, `provider`, `thread_id`, `fidelity`, `allowed_tools`, `denied_tools`, `context_files`). One per node execution.
-- `llm.start.data` — the resolved call snapshot emitted by the backend before `agent.prompt()`: `{ provider, model, prompt, system_prompt, thread_id, allowed_tools, denied_tools, iteration? }`. Fires once per `backend.run()` — that means once per codergen node and N times for a loop node with N iterations.
+- `llm.start.data` — the resolved call snapshot emitted by the backend before `agent.prompt()`. Fires once per `backend.run()` (once per codergen node, N times for a loop node with N iterations). Post-Wave-1 shape:
+  - Always: `provider`, `model`, `prompt`, `system_prompt`
+  - When present: `thread_id`, `allowed_tools`, `denied_tools`
+  - `iteration: { n, max }` on every loop-originated call
+  - `messages: MessageSnapshot[]` — prior turns visible to the agent when `thread_id` restored an existing pi-agent-core session (omitted on fresh sessions)
+  - `settings: { temperature?, max_tokens?, top_p?, reasoning_effort?, stop? }` — any generation knob set on the node
+  - `context_files: { path, sha256, bytes, truncated, status }[]` — per-file records for every entry in `node.attrs.context_files` (drift-detectable on replay via sha256)
+  - `budget: { cumulative_cost_usd, cumulative_tokens, max_cost_usd?, run_max_cost_usd? }` — read-only snapshot; only emitted when a ceiling is configured (Wave 4 will start emitting unconditionally with real cumulative counters)
 
-`node.started` deliberately does NOT carry the resolved prompt, because loop handlers resolve a different prompt per iteration; the resolved text belongs on `llm.start`. `context_keys` lists scope keys without values to keep payloads bounded and avoid accidental secret leaks — debug modes can opt into value capture.
+`node.started` deliberately does NOT carry the resolved prompt, because loop handlers resolve a different prompt per iteration; the resolved text belongs on `llm.start`. `context_keys` lists scope keys without values to keep payloads bounded and avoid accidental secret leaks — debug modes can opt into value capture. The `context_files` array on `node.started` carries raw paths only (workflow-author intent); the resolved records with hashes live on `llm.start.context_files`.
 
 **Duplication policy:** events are optimised for stateless replay, so some redundancy is tolerated — `duration_ms` on `node.completed` is derivable from timestamps, `retry_count` from counting prior `node.retrying` events, both kept for reader ergonomics. `outcome.notes` duplicates the agent's final assistant text that also streams through `llm.text_delta` / `agent.message_*`; the duplication is load-bearing because `$nodeId.output` substitution and `<promise>` / `<abort>` markers run against `notes`. UIs that render a conversation should read from the message stream, not from `notes`.
 

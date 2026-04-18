@@ -75,7 +75,7 @@ export class PiCodergenBackend implements CodergenBackend {
     const tools = this.registry.select(selectOpts).map((t) => toAgentTool(t, this.env));
 
     const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
-    const { text: contextBlock, warnings } = await loadContextFiles(this.env, contextFiles);
+    const { text: contextBlock, warnings, files: contextFileRecords } = await loadContextFiles(this.env, contextFiles);
     if (input.emit) {
       for (const msg of warnings) await input.emit("agent.warning", { message: msg });
     }
@@ -88,10 +88,12 @@ export class PiCodergenBackend implements CodergenBackend {
 
     // Emit the resolved LLM-call snapshot. This is the one durable record of
     // what the agent was actually asked — resolved user prompt + assembled
-    // system prompt + model binding. Fires once per backend.run(), which
-    // means once for a codergen node and N times for a loop node with N
-    // iterations. Downstream observability (UI, JSONL debugging) depends
-    // on this payload; keep it compact but authoritative.
+    // system prompt + model binding + prior messages + settings + context
+    // file hashes. Fires once per backend.run() (once for a codergen node,
+    // N times for a loop node with N iterations). Everything a UI / replay
+    // consumer needs to reconstruct "what the agent saw at step N" lives
+    // here. Adding fields is additive — schema_version on the envelope
+    // only bumps on incompatible renames/removals.
     if (input.emit) {
       const llmStart: Record<string, unknown> = {
         provider,
@@ -102,6 +104,24 @@ export class PiCodergenBackend implements CodergenBackend {
       if (input.thread_id) llmStart["thread_id"] = input.thread_id;
       if (allow) llmStart["allowed_tools"] = allow;
       if (deny) llmStart["denied_tools"] = deny;
+      if (input.iteration) llmStart["iteration"] = input.iteration;
+      // Snapshot the transcript the agent is starting with. For a fresh
+      // session this is []; for a thread_id that restored a prior
+      // pi-agent-core session, this holds the prior turns the agent will
+      // see alongside the new user prompt. JSON round-trip both detaches
+      // from the live state and forces JSON-safety (images/tool-results
+      // pass through as whatever shape they already serialise to).
+      const priorMessages = agent.state.messages.map((m) => jsonSafe(m));
+      if (priorMessages.length > 0) llmStart["messages"] = priorMessages;
+      const settings = captureSettings(input.node.attrs);
+      if (settings) llmStart["settings"] = settings;
+      if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
+      // Wave 1 placeholder: the ledger that populates real cumulative
+      // values lands in Wave 4. Today we surface only the per-node /
+      // per-run ceilings when a workflow author sets them, so UIs can
+      // start rendering the "budget used / budget cap" strip.
+      const budget = captureBudget(input.node.attrs);
+      if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
     }
 
@@ -230,4 +250,65 @@ export function parseAbortMarker(text: string): { reason: string } | null {
   // Collapse any internal newlines; cap length.
   const oneLine = raw.replace(/\s+/g, " ").slice(0, 400);
   return { reason: oneLine.length > 0 ? oneLine : "agent aborted without a reason" };
+}
+
+/** JSON round-trip a value so the captured copy is detached from live
+ * agent state and guaranteed JSON-safe. Functions / symbols / undefineds
+ * inside content blocks get stripped by JSON.stringify; anything that
+ * throws falls back to a minimal record so a single unserialisable
+ * message doesn't take down the whole snapshot. */
+function jsonSafe(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    // Typical cause: a Symbol or BigInt lurking in content. The role is
+    // still worth preserving.
+    const role = (value as { role?: unknown } | null)?.role;
+    return { role: typeof role === "string" ? role : "unknown", unserialisable: true };
+  }
+}
+
+/** Read generation settings from node attrs, returning `undefined` when
+ * nothing is set so `llm.start.settings` stays omitted rather than empty.
+ * `reasoning_effort` is explicitly typed on `NodeAttrs`; the others live
+ * in the `[extra: string]` bag and are picked up when present. */
+function captureSettings(attrs: Record<string, unknown>):
+  | {
+      temperature?: number;
+      max_tokens?: number;
+      top_p?: number;
+      reasoning_effort?: "low" | "medium" | "high";
+      stop?: string[];
+    }
+  | undefined {
+  const settings: {
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+    reasoning_effort?: "low" | "medium" | "high";
+    stop?: string[];
+  } = {};
+  if (typeof attrs["temperature"] === "number") settings.temperature = attrs["temperature"];
+  if (typeof attrs["max_tokens"] === "number") settings.max_tokens = attrs["max_tokens"];
+  if (typeof attrs["top_p"] === "number") settings.top_p = attrs["top_p"];
+  const effort = attrs["reasoning_effort"];
+  if (effort === "low" || effort === "medium" || effort === "high") settings.reasoning_effort = effort;
+  const stop = attrs["stop"];
+  if (Array.isArray(stop) && stop.every((s): s is string => typeof s === "string")) settings.stop = stop;
+  return Object.keys(settings).length > 0 ? settings : undefined;
+}
+
+/** Wave 1 budget snapshot: cumulative counters are placeholders (0) until
+ * Wave 4 wires a BudgetLedger; the ceilings are populated opportunistically
+ * when a workflow author sets them on the node. Returns `undefined` if
+ * there is nothing useful to surface. */
+function captureBudget(
+  attrs: Record<string, unknown>,
+): { cumulative_cost_usd: number; cumulative_tokens: number; max_cost_usd?: number } | undefined {
+  const maxCost = typeof attrs["max_cost_usd"] === "number" ? attrs["max_cost_usd"] : undefined;
+  // Wave 1 emits budget only when the author has actually set a ceiling,
+  // otherwise the field is noise. Wave 4 will start emitting unconditionally
+  // because the cumulative counters will then be meaningful.
+  if (maxCost === undefined) return undefined;
+  return { cumulative_cost_usd: 0, cumulative_tokens: 0, max_cost_usd: maxCost };
 }
