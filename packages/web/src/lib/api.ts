@@ -118,6 +118,59 @@ export interface WorkflowSummary {
 }
 
 /**
+ * Wave 5: local mirror of the server's `StepSnapshot`. One element per
+ * `llm.start` event in a run, carrying the fully-assembled context the
+ * agent saw for that call. Kept narrow (no method helpers, no deep
+ * content typing) — the UI just displays these fields.
+ */
+export interface StepSnapshot {
+  stepIdx: number;
+  nodeId: string;
+  iteration?: { n: number; max: number };
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  provider?: string;
+  model?: string;
+  threadId?: string;
+  fidelity?: string;
+  prompt: string;
+  systemPrompt: string;
+  allowedTools: string[];
+  deniedTools: string[];
+  settings?: {
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+    reasoning_effort?: string;
+    stop?: string[];
+  };
+  messages: Array<{ role: string; content?: unknown; timestamp?: number }>;
+  contextFiles: Array<{
+    path: string;
+    sha256: string;
+    bytes: number;
+    truncated: boolean;
+    status: string;
+    error?: string;
+  }>;
+  budget?: {
+    cumulative_cost_usd: number;
+    cumulative_tokens: number;
+    max_cost_usd?: number;
+    run_max_cost_usd?: number;
+  };
+  cost?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens?: number;
+    cost_usd: number;
+  };
+  finalText: string;
+  stopReason?: string;
+}
+
+/**
  * Thrown for any non-2xx HTTP response from the API. Callers can branch on
  * `.status` to render status-specific fallbacks (e.g. 404 → empty state).
  */
@@ -173,6 +226,14 @@ export interface ApiClient {
    * UI never keeps a raw-event buffer in memory past the fold.
    */
   getPipelineEvents(id: string): Promise<PipelineEventsPayload>;
+  /**
+   * Wave 5: per-step snapshots. Each element is the fully-assembled
+   * context for one `backend.run()` call (prompt, system prompt,
+   * messages, tools, settings, context files, budget, cost). The
+   * server computes this from the raw event stream; the UI just
+   * renders.
+   */
+  getPipelineSteps(id: string): Promise<StepSnapshot[]>;
 
   // URL helpers — always return relative strings starting with the client's
   // `baseUrl` (default "/api"). Callers use these anywhere a URL is needed
@@ -238,6 +299,13 @@ export function createApiClient(opts: ApiClientOptions = {}): ApiClient {
           v !== null &&
           Array.isArray((v as { events?: unknown }).events) &&
           typeof (v as { lastSeq?: unknown }).lastSeq === "number",
+      );
+    },
+
+    async getPipelineSteps(id: string): Promise<StepSnapshot[]> {
+      return getJson(
+        `/pipelines/${encodeURIComponent(id)}/steps`,
+        (v): v is StepSnapshot[] => Array.isArray(v) && v.every(isStepSnapshot),
       );
     },
 
@@ -319,5 +387,30 @@ function isWorkflowSummary(v: unknown): v is WorkflowSummary {
     typeof o.path === "string" &&
     typeof o.sha === "string" &&
     (o.label === undefined || typeof o.label === "string")
+  );
+}
+
+/**
+ * Soft validator for `StepSnapshot`. Required fields: the identity
+ * triple (`stepIdx`, `nodeId`, `startedAt`) and the two strings the UI
+ * would otherwise crash on (`prompt`, `systemPrompt`). Everything else
+ * is optional / tolerated — a malformed nested field shouldn't bounce
+ * the whole inspector.
+ */
+function isStepSnapshot(v: unknown): v is StepSnapshot {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as {
+    stepIdx?: unknown;
+    nodeId?: unknown;
+    startedAt?: unknown;
+    prompt?: unknown;
+    systemPrompt?: unknown;
+  };
+  return (
+    typeof o.stepIdx === "number" &&
+    typeof o.nodeId === "string" &&
+    typeof o.startedAt === "string" &&
+    typeof o.prompt === "string" &&
+    typeof o.systemPrompt === "string"
   );
 }

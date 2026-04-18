@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { PipelineConversation } from "../components/PipelineConversation.tsx";
+import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { ApiClient, PipelineDetail as PipelineDetailT } from "../lib/api.ts";
 import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
@@ -37,6 +38,10 @@ type DetailState = { kind: "loading" } | { kind: "ready"; detail: PipelineDetail
 export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
   const { id = "" } = useParams();
   const [state, setState] = useState<DetailState>({ kind: "loading" });
+  // Declared at the top — Rules of Hooks demands we not skip past any
+  // hook on an early return (the `if (!id) return <EmptyState/>` below
+  // would do exactly that if this sat after it).
+  const [view, setView] = useState<"conversation" | "steps">("conversation");
 
   // Bootstrap + live stream, folded into a conversation tree. No raw
   // event buffer on the client — the reducer is the only state we keep.
@@ -123,17 +128,45 @@ export function PipelineDetail({ api }: PipelineDetailProps): JSX.Element {
       )}
 
       {state.kind !== "error" && (
-        <div
-          data-testid="conversation-region"
-          className="flex-1 min-h-0 border rounded-md overflow-hidden bg-background"
-        >
-          <PipelineConversation
-            conversation={conversation}
-            nodeStates={detail?.nodes}
-            isLive={isLive}
-            isLoading={isLoading}
-          />
-        </div>
+        <>
+          <div role="tablist" aria-label="Detail view" className="flex gap-2 text-xs">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "conversation"}
+              data-testid="view-tab-conversation"
+              onClick={() => setView("conversation")}
+              className={`px-3 py-1 rounded-md border ${view === "conversation" ? "bg-muted" : "bg-transparent"}`}
+            >
+              Conversation
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "steps"}
+              data-testid="view-tab-steps"
+              onClick={() => setView("steps")}
+              className={`px-3 py-1 rounded-md border ${view === "steps" ? "bg-muted" : "bg-transparent"}`}
+            >
+              Steps
+            </button>
+          </div>
+          <div
+            data-testid={view === "conversation" ? "conversation-region" : "steps-region"}
+            className="flex-1 min-h-0 border rounded-md overflow-y-auto bg-background"
+          >
+            {view === "conversation" ? (
+              <PipelineConversation
+                conversation={conversation}
+                nodeStates={detail?.nodes}
+                isLive={isLive}
+                isLoading={isLoading}
+              />
+            ) : (
+              <StepInspector api={api} runId={id} totalEvents={totalEvents} />
+            )}
+          </div>
+        </>
       )}
     </section>
   );

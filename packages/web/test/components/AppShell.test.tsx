@@ -32,6 +32,7 @@ function makeClient(): ApiClient {
     }),
     getPipelineEvents: async () => ({ events: [], lastSeq: 0 }),
     getPipelineEventsUrl: eventsUrl,
+    getPipelineSteps: async () => [],
     pipelineEventsUrl: eventsUrl,
   };
 }

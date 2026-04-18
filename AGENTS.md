@@ -117,11 +117,34 @@ triggers a graceful shutdown. No auth / HTTPS — put a reverse proxy in
 front if exposing beyond localhost.
 
 REST surface at time of writing: `GET /health`, `GET /pipelines`,
-`GET /pipelines/:id`, `GET /stats` (aggregate tiles for the Home
-dashboard — total / running / succeeded / failed, success rate, total
-cost + tokens, avg duration), `GET /runs/:id/events` (SSE), plus the
-interview and workflows routes. Shapes live in
-`packages/server/src/schemas.ts`.
+`GET /pipelines/:id`, `GET /pipelines/:id/steps` (Wave 5 —
+`StepSnapshot[]` reconstructed from `llm.start` + companion events),
+`GET /stats` (aggregate tiles for the Home dashboard — total /
+running / succeeded / failed, success rate, total cost + tokens, avg
+duration), `GET /runs/:id/events` (SSE), plus the interview and
+workflows routes. Shapes live in `packages/server/src/schemas.ts`.
+
+**Read-side abstractions (Wave 5).** `@swarm/events` exposes the
+inverse of `EventSink`:
+
+- `EventSource` — `listRuns() + readRun(runId)`; the port that
+  JSONL / Postgres / OTel adapters implement.
+- `Projection<T>` — pure reducer `Event[] → T`. `stepsProjection` and
+  `summaryProjection` are the first consumers.
+- `projectRun(source, runId, projection)` — sugar for "load run →
+  handle 404 → project". `foldAll(source, projection, folder, init)`
+  is the aggregate path (e.g. `/stats`).
+- `MaterializedProjectionStore<T>` — optional interface a DB adapter
+  implements when it wants to precompute + cache projections.
+- `migrateAllRuns(source, sink)` — supported path for moving an
+  archive between backing stores (JSONL → Postgres, etc.). Idempotency
+  is the sink's job.
+
+The web `<StepInspector>` component fetches `StepSnapshot[]` and
+renders collapsible sections per step (prompt · system prompt ·
+messages · tools · context files · settings · budget · cost · final
+text). Toggle between `Conversation` and `Steps` tabs on
+`/pipelines/:id`.
 
 ### Per-step agent context (introspection)
 

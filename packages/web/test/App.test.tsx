@@ -50,6 +50,7 @@ function stubClient(overrides: Overrides = {}): ApiClient {
         outputTokens: 0,
       })),
     getPipelineEventsUrl: eventsUrl,
+    getPipelineSteps: async () => [],
     pipelineEventsUrl: overrides.pipelineEventsUrl ?? eventsUrl,
   };
 }

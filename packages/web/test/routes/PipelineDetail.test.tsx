@@ -36,6 +36,7 @@ function makeClient(overrides: Partial<ApiClient> = {}): ApiClient {
       outputTokens: 0,
     }),
     getPipelineEventsUrl: eventsUrl,
+    getPipelineSteps: async () => [],
     pipelineEventsUrl: eventsUrl,
     getPipelineEvents: overrides.getPipelineEvents ?? (async () => ({ events: [], lastSeq: 0 })),
     ...overrides,

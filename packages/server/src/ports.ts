@@ -4,10 +4,19 @@
 // I/O. This mirrors the pattern used by @swarm/core.
 
 import type { Event, EventSink } from "@swarm/core";
+import type { EventSource } from "@swarm/events";
 
 /**
  * Reader for the run archive. The server never touches `node:fs` directly —
  * all on-disk shape concerns live in the adapter.
+ *
+ * NOTE: this is interface-equivalent to `EventSource` in `@swarm/events`
+ * (listRuns + readRun/readEvents) — they exist side-by-side because the
+ * server defined `RunReader` before the read-side port was hoisted into
+ * @swarm/events. New code should prefer `EventSource`; `RunReader` lives
+ * on to keep existing adapters compiling. A thin `runReaderFromSource`
+ * adapter below bridges between the two method names until the next
+ * refactor pass unifies them.
  */
 export interface RunReader {
   /** Enumerate all run ids (usually directory names under `.swarm/runs/`). */
@@ -18,6 +27,17 @@ export interface RunReader {
    * rather than distinguishing "missing" from "empty".
    */
   readEvents(runId: string): Promise<Event[] | undefined>;
+}
+
+/** Bridge: wrap an `EventSource` as a `RunReader`. Route handlers keep
+ * the `RunReader` type; new sinks/adapters can be written against the
+ * canonical `EventSource` port in @swarm/events and plugged in via
+ * this adapter. */
+export function runReaderFromSource(source: EventSource): RunReader {
+  return {
+    listRuns: () => source.listRuns(),
+    readEvents: (runId) => source.readRun(runId),
+  };
 }
 
 /** A pending question tagged with its originating run for routing. */

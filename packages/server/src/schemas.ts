@@ -160,6 +160,93 @@ export const ErrorBody = Type.Object({
 export type ErrorBody = Static<typeof ErrorBody>;
 
 /**
+ * One agent step — the fully-assembled context for a single
+ * `backend.run()` / `llm.start` call. Wave 5 endpoint
+ * `GET /pipelines/:runId/steps` returns `StepSnapshot[]`, ordered by
+ * timestamp. The shape mirrors `packages/server/src/lib/steps.ts`
+ * `StepSnapshot` exactly — keep them in lockstep. All optional fields
+ * absent when not captured on older runs.
+ */
+export const StepSnapshotContextFile = Type.Object(
+  {
+    path: Type.String(),
+    sha256: Type.String(),
+    bytes: Type.Integer({ minimum: 0 }),
+    truncated: Type.Boolean(),
+    status: Type.String(),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const StepSnapshotMessage = Type.Object(
+  {
+    role: Type.String(),
+    content: Type.Optional(Type.Unknown()),
+    timestamp: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: true },
+);
+
+export const StepSnapshotSettings = Type.Object(
+  {
+    temperature: Type.Optional(Type.Number()),
+    max_tokens: Type.Optional(Type.Number()),
+    top_p: Type.Optional(Type.Number()),
+    reasoning_effort: Type.Optional(Type.String()),
+    stop: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: true },
+);
+
+export const StepSnapshotBudget = Type.Object(
+  {
+    cumulative_cost_usd: Type.Number({ minimum: 0 }),
+    cumulative_tokens: Type.Number({ minimum: 0 }),
+    max_cost_usd: Type.Optional(Type.Number({ minimum: 0 })),
+    run_max_cost_usd: Type.Optional(Type.Number({ minimum: 0 })),
+  },
+  { additionalProperties: true },
+);
+
+export const StepSnapshotCost = Type.Object(
+  {
+    input_tokens: Type.Number({ minimum: 0 }),
+    output_tokens: Type.Number({ minimum: 0 }),
+    total_tokens: Type.Optional(Type.Number({ minimum: 0 })),
+    cost_usd: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: true },
+);
+
+export const StepSnapshot = Type.Object({
+  stepIdx: Type.Integer({ minimum: 0 }),
+  nodeId: Type.String(),
+  iteration: Type.Optional(
+    Type.Object({ n: Type.Integer({ minimum: 1 }), max: Type.Integer({ minimum: 1 }) }, { additionalProperties: true }),
+  ),
+  startedAt: Type.String(),
+  endedAt: Type.Optional(Type.String()),
+  durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  provider: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
+  threadId: Type.Optional(Type.String()),
+  fidelity: Type.Optional(Type.String()),
+  prompt: Type.String(),
+  systemPrompt: Type.String(),
+  allowedTools: Type.Array(Type.String()),
+  deniedTools: Type.Array(Type.String()),
+  settings: Type.Optional(StepSnapshotSettings),
+  messages: Type.Array(StepSnapshotMessage),
+  contextFiles: Type.Array(StepSnapshotContextFile),
+  budget: Type.Optional(StepSnapshotBudget),
+  cost: Type.Optional(StepSnapshotCost),
+  finalText: Type.String(),
+  stopReason: Type.Optional(Type.String()),
+});
+export type StepSnapshot = Static<typeof StepSnapshot>;
+
+/**
  * Aggregate returned by `GET /stats`. One number per tile on the Home
  * dashboard — derived server-side over every run under `runsDir` so the
  * tiles stay accurate even after we add pagination to `GET /pipelines`.

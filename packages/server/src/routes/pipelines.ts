@@ -22,6 +22,7 @@
 
 import type { Event } from "@swarm/core";
 import { Hono } from "hono";
+import { stepsProjection } from "../lib/steps.ts";
 import { deriveSummary } from "../lib/summary.ts";
 import type { RunReader } from "../ports.ts";
 import type { NodeState, PipelineDetail } from "../schemas.ts";
@@ -79,6 +80,20 @@ export function pipelinesRoutes(opts: PipelinesRouteOptions): Hono {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
     return c.json({ events, lastSeq: events.length });
+  });
+
+  // Wave 5 — per-step introspection. One StepSnapshot per llm.start,
+  // reconstructed server-side so clients never have to replay the
+  // raw stream to inspect "what did the agent see at step N". The
+  // reducer is exposed as a Projection so a future DB-backed
+  // MaterializedProjectionStore can cache it under STEPS_PROJECTION_KEY.
+  app.get("/pipelines/:runId/steps", async (c) => {
+    const runId = c.req.param("runId");
+    const events = await opts.runReader.readEvents(runId);
+    if (!events) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    return c.json(await stepsProjection(events));
   });
 
   return app;
