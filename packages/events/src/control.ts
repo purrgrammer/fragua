@@ -33,10 +33,7 @@ import { type TailJsonlOptions, tailJsonlLines } from "./tail.ts";
  * cannot interleave a single record; the tail reader's line-boundary
  * splitting then guarantees we never yield a torn request.
  */
-export async function writeControlRequest(
-  filePath: string,
-  request: ControlRequest,
-): Promise<void> {
+export async function writeControlRequest(filePath: string, request: ControlRequest): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   await appendFile(filePath, `${JSON.stringify(request)}\n`, "utf8");
 }

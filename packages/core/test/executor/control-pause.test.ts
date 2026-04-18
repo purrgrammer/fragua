@@ -11,10 +11,10 @@
 // dance without sleeping.
 
 import { describe, expect, test } from "bun:test";
-import type { ControlRequest } from "../../src/types/events.ts";
 import { InMemorySink } from "../../src/events/sink.ts";
 import { execute, MockCodergenBackend } from "../../src/executor/execute.ts";
 import { parseDotSource } from "../../src/parser/parser.ts";
+import type { ControlRequest } from "../../src/types/events.ts";
 import { ok } from "../../src/types/outcome.ts";
 
 /** Build a controllable async iterator of ControlRequests that can be

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { LocalEnvironment } from "../src/local-env.ts";
 import { isPrivateAddress } from "../src/ssrf-guard.ts";
 import { createWebFetchTool } from "../src/tools.ts";
-import { LocalEnvironment } from "../src/local-env.ts";
 
 type FetchFn = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 

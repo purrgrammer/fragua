@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ApplyPatchError, applyPatch, parsePatch } from "../src/apply-patch.ts";
+import { type ApplyPatchError, applyPatch, parsePatch } from "../src/apply-patch.ts";
 import { LocalEnvironment } from "../src/local-env.ts";
 import { applyPatchTool } from "../src/tools.ts";
 
@@ -38,14 +38,9 @@ describe("parsePatch", () => {
 
   test("parses Add File and Delete File", () => {
     const ops = parsePatch(
-      [
-        "*** Begin Patch",
-        "*** Add File: new.ts",
-        "+line1",
-        "+line2",
-        "*** Delete File: gone.ts",
-        "*** End Patch",
-      ].join("\n"),
+      ["*** Begin Patch", "*** Add File: new.ts", "+line1", "+line2", "*** Delete File: gone.ts", "*** End Patch"].join(
+        "\n",
+      ),
     );
     expect(ops).toHaveLength(2);
     expect(ops[0]).toEqual({ op: "add", path: "new.ts", content: "line1\nline2\n" });
@@ -53,9 +48,9 @@ describe("parsePatch", () => {
   });
 
   test("rejects Move File directive", () => {
-    expect(() =>
-      parsePatch(["*** Begin Patch", "*** Move File: a.ts -> b.ts", "*** End Patch"].join("\n")),
-    ).toThrow(/Move File/);
+    expect(() => parsePatch(["*** Begin Patch", "*** Move File: a.ts -> b.ts", "*** End Patch"].join("\n"))).toThrow(
+      /Move File/,
+    );
   });
 
   test("parses multiple hunks separated by @@ with anchor", () => {
@@ -98,9 +93,15 @@ describe("applyPatch (applier)", () => {
 
   test("single-hunk update rewrites the file", async () => {
     await writeFile(join(scratch, "a.ts"), "line1\nOLD\nline3\n");
-    const patch = ["*** Begin Patch", "*** Update File: a.ts", " line1", "-OLD", "+NEW", " line3", "*** End Patch"].join(
-      "\n",
-    );
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: a.ts",
+      " line1",
+      "-OLD",
+      "+NEW",
+      " line3",
+      "*** End Patch",
+    ].join("\n");
     const r = await applyPatch(patch, env);
     expect(r.files_changed).toHaveLength(1);
     expect(await readFile(join(scratch, "a.ts"), "utf-8")).toBe("line1\nNEW\nline3\n");
@@ -181,10 +182,7 @@ describe("applyPatch (applier)", () => {
   });
 
   test("anchor narrows search to disambiguate identical blocks", async () => {
-    await writeFile(
-      join(scratch, "a.ts"),
-      "region-A\nVALUE\nend-A\nregion-B\nVALUE\nend-B\n",
-    );
+    await writeFile(join(scratch, "a.ts"), "region-A\nVALUE\nend-A\nregion-B\nVALUE\nend-B\n");
     const patch = [
       "*** Begin Patch",
       "*** Update File: a.ts",
@@ -194,9 +192,7 @@ describe("applyPatch (applier)", () => {
       "*** End Patch",
     ].join("\n");
     await applyPatch(patch, env);
-    expect(await readFile(join(scratch, "a.ts"), "utf-8")).toBe(
-      "region-A\nVALUE\nend-A\nregion-B\nCHANGED\nend-B\n",
-    );
+    expect(await readFile(join(scratch, "a.ts"), "utf-8")).toBe("region-A\nVALUE\nend-A\nregion-B\nCHANGED\nend-B\n");
   });
 
   test("hunk with no context but unique removed line succeeds", async () => {

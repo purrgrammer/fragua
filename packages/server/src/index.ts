@@ -15,14 +15,7 @@ import { createEventInterviewGateway } from "./adapters/event-interview-gateway.
 import { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 import { createFsRunReader } from "./adapters/fs-run-reader.ts";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
-import type {
-  ControlGateway,
-  InterviewGateway,
-  RunReader,
-  ServerPorts,
-  SkillReader,
-  WorkflowReader,
-} from "./ports.ts";
+import type { ControlGateway, InterviewGateway, RunReader, ServerPorts, SkillReader, WorkflowReader } from "./ports.ts";
 import { controlRoutes } from "./routes/control.ts";
 import { eventsRoutes } from "./routes/events.ts";
 import { healthRoutes } from "./routes/health.ts";

@@ -1107,10 +1107,7 @@ export interface ExecuteOptions {
     path: string;
     /** Injected tailer. Must yield one `ControlRequest` per valid line,
      * first existing content then appends, until the signal aborts. */
-    tail: (
-      path: string,
-      opts: { signal: AbortSignal; includeExisting?: boolean },
-    ) => AsyncIterable<ControlRequest>;
+    tail: (path: string, opts: { signal: AbortSignal; includeExisting?: boolean }) => AsyncIterable<ControlRequest>;
   };
 }
 
@@ -1126,9 +1123,7 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   // handlers, tool calls) trips without special casing.
   const cancelController = new AbortController();
   const signal =
-    opts.signal !== undefined
-      ? AbortSignal.any([opts.signal, cancelController.signal])
-      : cancelController.signal;
+    opts.signal !== undefined ? AbortSignal.any([opts.signal, cancelController.signal]) : cancelController.signal;
   const now = opts.now ?? (() => new Date().toISOString());
   const random = opts.random ?? Math.random;
   const handlers = opts.handlers ?? HANDLERS;

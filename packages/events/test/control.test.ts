@@ -3,11 +3,7 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ControlRequest } from "@swarm/core";
-import {
-  submitControlRequest,
-  tailControlRequests,
-  writeControlRequest,
-} from "../src/control.ts";
+import { submitControlRequest, tailControlRequests, writeControlRequest } from "../src/control.ts";
 
 function req(id: string, command: ControlRequest["command"] = "steer"): ControlRequest {
   return {
@@ -60,7 +56,7 @@ describe("tailControlRequests", () => {
   test("skips malformed lines and records with unknown commands", async () => {
     const bogus = '{"id":"x","timestamp":"t","command":"launch_nukes"}\n';
     const missingId = '{"timestamp":"t","command":"steer"}\n';
-    await writeFile(file, toLine(req("a")) + bogus + missingId + "not-json\n" + toLine(req("b")));
+    await writeFile(file, `${toLine(req("a")) + bogus + missingId}not-json\n${toLine(req("b"))}`);
     const ac = new AbortController();
     const out: ControlRequest[] = [];
 

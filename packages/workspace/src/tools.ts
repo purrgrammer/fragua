@@ -1,10 +1,10 @@
 // Built-in tools exposed to LLM agents.
 // Per-tool truncation defaults per Attractor Coding Agent Loop spec.
 
-import TurndownService from "turndown";
 import { Type } from "@sinclair/typebox";
+import TurndownService from "turndown";
 import { ApplyPatchError, applyPatch } from "./apply-patch.ts";
-import { SsrfError, assertSafeUrl } from "./ssrf-guard.ts";
+import { assertSafeUrl, SsrfError } from "./ssrf-guard.ts";
 import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool<{ path: string }, { path: string; size: number }> = {
@@ -237,7 +237,14 @@ export const editFileTool: Tool<
 
 export const applyPatchTool: Tool<
   { patch: string },
-  { files_changed: Array<{ path: string; op: "update" | "add" | "delete"; bytes_before?: number; bytes_after?: number }> }
+  {
+    files_changed: Array<{
+      path: string;
+      op: "update" | "add" | "delete";
+      bytes_before?: number;
+      bytes_after?: number;
+    }>;
+  }
 > = {
   name: "local:apply_patch",
   description: [
@@ -259,7 +266,9 @@ export const applyPatchTool: Tool<
     "Rules: (1) every hunk's (context + removed) block must match exactly once in the target file — include surrounding context until unique, or add an @@ anchor. (2) the patch is pre-validated; if any hunk fails to match, no files are written. (3) Add File fails if the path already exists; Delete File fails if it does not. Move File is not yet supported.",
   ].join("\n"),
   parameters: Type.Object({
-    patch: Type.String({ description: "The full patch text, beginning with `*** Begin Patch` and ending with `*** End Patch`" }),
+    patch: Type.String({
+      description: "The full patch text, beginning with `*** Begin Patch` and ending with `*** End Patch`",
+    }),
   }),
   idempotent: false,
   truncation: { max_chars: 10_000, mode: "tail" },
@@ -304,7 +313,9 @@ export interface WebFetchDeps {
   lookup?: (host: string) => Promise<Array<{ address: string }>>;
 }
 
-export function createWebFetchTool(deps: WebFetchDeps = {}): Tool<
+export function createWebFetchTool(
+  deps: WebFetchDeps = {},
+): Tool<
   { url: string; format?: "auto" | "raw"; max_bytes?: number },
   { status: number; content_type: string; bytes: number; final_url: string; converted: boolean; truncated: boolean }
 > {
