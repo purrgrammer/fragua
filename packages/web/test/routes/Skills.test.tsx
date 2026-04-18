@@ -85,15 +85,33 @@ describe("Skills routes", () => {
       await waitFor(() => expect(within(container).getByTestId("skills-empty")).toBeTruthy());
     });
 
-    it("greys out disabled skills and surfaces disabled_reason", async () => {
-      const rows: SkillSummary[] = [summary({ name: "hidden", disabled_reason: "skills.trust_project=false" })];
+    it("hides disabled skills by default but exposes a toggle", async () => {
+      const rows: SkillSummary[] = [
+        summary({ name: "active" }),
+        summary({ name: "hidden", disabled_reason: "skills.trust_project=false" }),
+      ];
       const api = makeClient({ listSkills: async () => rows });
       const { container } = mount(api, "/skills");
+      const q = within(container);
+      // Active row renders; disabled row is absent until the toggle is clicked.
+      await waitFor(() => expect(q.getByTestId("skill-row-active")).toBeTruthy());
+      expect(q.queryByTestId("skill-row-hidden")).toBeNull();
+      // Toggle reveals the disabled row; data-disabled + title come through.
+      const toggle = q.getByTestId("skills-toggle-disabled");
+      expect(toggle.textContent).toContain("Show 1 disabled");
+      toggle.click();
       await waitFor(() => {
-        const row = within(container).getByTestId("skill-row-hidden");
+        const row = q.getByTestId("skill-row-hidden");
         expect(row.getAttribute("data-disabled")).toBe("true");
         expect(row.getAttribute("title")).toContain("trust_project");
       });
+    });
+
+    it("renders 'all disabled' empty state when every skill is hidden", async () => {
+      const rows: SkillSummary[] = [summary({ name: "only-one", disabled_reason: "config" })];
+      const api = makeClient({ listSkills: async () => rows });
+      const { container } = mount(api, "/skills");
+      await waitFor(() => expect(within(container).getByTestId("skills-all-disabled")).toBeTruthy());
     });
   });
 

@@ -1,11 +1,13 @@
 // /skills — catalog of installed skills from `GET /skills`.
 //
-// Columns: Name / Description / Scope / Source. Disabled rows (skills
-// discovered but hidden from the agent's tier-1 catalog by config) are
-// greyed out with the `disabled_reason` surfaced as a tooltip.
+// Columns: Name / Description / Scope / Source. Skills disabled via
+// `skills.disabled` / `trust_project: false` in `.swarm/config.yaml` are
+// hidden by default (if you turned them off in config, you asked to not
+// see them). A "N hidden by config" footer + toggle reveals them — the
+// detail page stays reachable via its direct URL either way.
 
 import { BookOpen } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/badge.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -22,6 +24,14 @@ type LoadState = { kind: "loading" } | { kind: "ready"; rows: SkillSummary[] } |
 
 export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [showDisabled, setShowDisabled] = useState(false);
+
+  const { visibleRows, hiddenCount } = useMemo(() => {
+    if (state.kind !== "ready") return { visibleRows: [] as SkillSummary[], hiddenCount: 0 };
+    const hidden = state.rows.filter((r) => r.disabled_reason !== undefined);
+    const visible = showDisabled ? state.rows : state.rows.filter((r) => r.disabled_reason === undefined);
+    return { visibleRows: visible, hiddenCount: hidden.length };
+  }, [state, showDisabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +65,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {state.kind === "ready" && state.rows.length === 0 && (
+      {state.kind === "ready" && visibleRows.length === 0 && hiddenCount === 0 && (
         <EmptyState
           data-testid="skills-empty"
           icon={<BookOpen className="size-6" />}
@@ -69,7 +79,15 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
           }
         />
       )}
-      {state.kind === "ready" && state.rows.length > 0 && (
+      {state.kind === "ready" && visibleRows.length === 0 && hiddenCount > 0 && (
+        <EmptyState
+          data-testid="skills-all-disabled"
+          icon={<BookOpen className="size-6" />}
+          title="All skills disabled"
+          description={`${hiddenCount} skill${hiddenCount === 1 ? "" : "s"} hidden by .swarm/config.yaml.`}
+        />
+      )}
+      {state.kind === "ready" && visibleRows.length > 0 && (
         <div className="w-full min-w-0 overflow-x-auto">
           <Table data-testid="skills-table" className="table-fixed">
             <TableHeader>
@@ -81,7 +99,7 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {state.rows.map((row) => {
+              {visibleRows.map((row) => {
                 const dim = row.disabled_reason !== undefined;
                 return (
                   <TableRow
@@ -118,6 +136,18 @@ export function SkillsList({ api, fetcher }: SkillsListProps): JSX.Element {
             </TableBody>
           </Table>
         </div>
+      )}
+      {state.kind === "ready" && hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowDisabled((v) => !v)}
+          data-testid="skills-toggle-disabled"
+          className="self-start text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+        >
+          {showDisabled
+            ? `Hide ${hiddenCount} disabled`
+            : `Show ${hiddenCount} disabled skill${hiddenCount === 1 ? "" : "s"}`}
+        </button>
       )}
     </section>
   );
