@@ -5,11 +5,12 @@
 
 import { BudgetLedger, type BudgetLimits, type BudgetQuery, costDeltaFromEvent } from "../engine/budget.ts";
 import { type EdgeSelection, selectEdge } from "../engine/edge-selection.ts";
-import { resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
+import { degradeOnResume, resolveFidelity, resolveThreadId } from "../engine/fidelity.ts";
 import { applyStylesheet } from "../engine/stylesheet.ts";
 import { type NodeOutput, type SubstitutionArgs, substitute } from "../engine/substitution.ts";
 import { type EventSink, InMemorySink } from "../events/sink.ts";
 import { AutoApproveInterviewer } from "../interviewer/index.ts";
+import { CHECKPOINT_SCHEMA_VERSION, type Checkpoint, type CheckpointStore } from "../types/checkpoint.ts";
 import { type ContextMap, ENGINE_CONTEXT_KEYS, retryCountKey } from "../types/context.ts";
 import { EVENT_SCHEMA_VERSION, type Event, type EventType, type NodeStartedData } from "../types/events.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
@@ -23,6 +24,16 @@ import { type SummariserBackend, titleSyntheticNodeId } from "../types/summarise
 
 export interface CodergenBackend {
   run(input: CodergenInput): Promise<Outcome>;
+  /** Wave 6 checkpoint bridge: serialise any in-memory per-thread
+   * transcript state so the executor can stamp it onto
+   * `checkpoint.pi_sessions`. Optional — backends without a session
+   * store just omit this and the field stays empty. */
+  serialiseSessions?(): Record<string, unknown>;
+  /** Inverse of `serialiseSessions`. Called on resume with the
+   * `pi_sessions` field from the loaded checkpoint so prior
+   * transcripts rejoin the MessageStore before the first resumed
+   * backend.run(). */
+  hydrateSessions?(sessions: Record<string, unknown>): void;
 }
 
 export interface CodergenInput {
@@ -84,6 +95,11 @@ export interface HandlerContext {
    * budget.stop. Backends read this off `CodergenInput.budget_stopped`
    * and refuse pre-flight when true. */
   budgetStoppedRef?: { stopped: boolean };
+  /** Wave 6 resume degradation: node ids whose next codergen call
+   * should have its resolved fidelity run through `degradeOnResume`
+   * (SPEC §3.6). Populated on resume with the checkpoint's
+   * `current_node`; the codergen handler clears the entry after use. */
+  resumeDegradedNodes?: Set<string>;
 }
 
 export type Handler = (ctx: HandlerContext) => Promise<Outcome>;
@@ -355,7 +371,14 @@ const codergenHandler: Handler = async (ctx) => {
     nodeOutputs: ctx.node_outputs,
     args: ctx.args,
   });
-  const fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
+  let fidelity = resolveFidelity({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
+  // Wave 6 — SPEC §3.6: the first codergen call for the resumed node
+  // degrades its fidelity. Clearing the entry after use means later
+  // nodes in the same run run at their declared fidelity.
+  if (ctx.resumeDegradedNodes?.has(ctx.node.id)) {
+    fidelity = degradeOnResume(fidelity);
+    ctx.resumeDegradedNodes.delete(ctx.node.id);
+  }
   const thread_id = resolveThreadId({ graph: ctx.graph, edge: undefined, targetNode: ctx.node });
 
   const timeoutMs = parseTimeoutMs(ctx.node.attrs.timeout);
@@ -808,6 +831,11 @@ interface LoopArgs {
   args: SubstitutionArgs;
   ledger?: BudgetLedger;
   budgetStoppedRef?: { stopped: boolean };
+  resumeDegradedNodes?: Set<string>;
+  /** Wave 6: called after each node's outcome is folded into state so
+   * the executor can snapshot to a CheckpointStore without leaking
+   * the store port into the loop core. */
+  onNodeCompleted?: (node: Node) => Promise<void>;
 }
 
 type StopReason = "terminal" | "stop_at" | "no_edge" | "max_steps" | "aborted" | "error";
@@ -892,9 +920,10 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
       args: args.args,
       ...(args.ledger !== undefined ? { ledger: args.ledger } : {}),
       ...(args.budgetStoppedRef !== undefined ? { budgetStoppedRef: args.budgetStoppedRef } : {}),
-      // ledger + budgetStoppedRef flow through HandlerContext since
-      // RetryInput extends it — spreads above just forward the pair
-      // into the retry wrapper's inherited slots.
+      ...(args.resumeDegradedNodes !== undefined ? { resumeDegradedNodes: args.resumeDegradedNodes } : {}),
+      // ledger + budgetStoppedRef + resumeDegradedNodes flow through
+      // HandlerContext since RetryInput extends it — spreads above
+      // forward the trio into the retry wrapper's inherited slots.
     });
     lastOutcome = outcome;
 
@@ -934,6 +963,10 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
           lastNode: node,
         };
       }
+      // Wave 6: persist the snapshot with `current_node = <next>` so a
+      // resume picks up at the node that hadn't started yet (not the
+      // one that just completed, which would otherwise re-run).
+      if (args.onNodeCompleted) await args.onNodeCompleted(next);
       current = next;
       continue;
     }
@@ -964,6 +997,9 @@ async function runLoop(args: LoopArgs): Promise<LoopResult> {
         lastNode: node,
       };
     }
+    // Wave 6 checkpoint hook fires here with the NEXT node so
+    // resume starts at what hadn't begun yet.
+    if (args.onNodeCompleted) await args.onNodeCompleted(next);
     current = next;
   }
 
@@ -1023,6 +1059,20 @@ export interface ExecuteOptions {
    * `pipeline.title_generated` when it resolves. `"off"` skips the call
    * entirely. Graph attr `auto_title` overrides this per-workflow. */
   auto_title?: "on" | "off";
+  /** Wave 6: checkpoint persistence. When set, the executor calls
+   * `save()` after every node's retry/loop cycle so a crash can be
+   * recovered by running with `resume: true`. Each saved checkpoint
+   * supersedes the prior one — the file is a snapshot, not a log. */
+  checkpointStore?: CheckpointStore;
+  /** Wave 6: resume from the most recent checkpoint for `run_id`.
+   * When `true` and the store has one, the executor hydrates
+   * `context` / `completed_nodes` / `node_outcomes` / `retry_counts`,
+   * restores `pi_sessions` into the backend's transcript store via
+   * `hydrateSessions()`, and applies `degradeOnResume` to the first
+   * codergen call on `current_node` (SPEC §3.6). Silently no-ops
+   * when no checkpoint exists so the same CLI flag works for fresh
+   * runs. */
+  resume?: boolean;
 }
 
 export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
@@ -1073,6 +1123,27 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   const retry_counts: Record<string, number> = {};
   const substitutionArgs: SubstitutionArgs = opts.args ?? {};
 
+  // Wave 6: optional resume path. Load the most recent checkpoint for
+  // this run_id and hydrate executor state before the first node runs.
+  // Silently no-ops when no checkpoint exists so the same CLI flag is
+  // safe on fresh runs. The `resumeDegradedNodes` set tells the
+  // codergen handler to apply `degradeOnResume` to the first call on
+  // the resumed node (SPEC §3.6).
+  const resumeDegradedNodes = new Set<string>();
+  let resumeStartNodeId: string | undefined;
+  if (opts.resume === true && opts.checkpointStore) {
+    const loaded = await opts.checkpointStore.load(run_id);
+    if (loaded) {
+      Object.assign(context, loaded.context);
+      for (const id of loaded.completed_nodes) completed_nodes.push(id);
+      Object.assign(node_outcomes, loaded.node_outcomes);
+      Object.assign(retry_counts, loaded.retry_counts);
+      if (backend.hydrateSessions) backend.hydrateSessions(loaded.pi_sessions);
+      resumeDegradedNodes.add(loaded.current_node);
+      resumeStartNodeId = loaded.current_node;
+    }
+  }
+
   const emit = async (type: EventType, node: Node | undefined, data: Record<string, unknown>): Promise<void> => {
     const ev: Event = {
       run_id,
@@ -1115,7 +1186,14 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
     signal,
   });
 
-  let current: Node = findStart(graph);
+  // On resume, jump straight to the checkpointed current_node when it
+  // still exists in the workflow. If the workflow has changed and the
+  // id is stale, fall through to `findStart` — that's safer than
+  // aborting the resume outright.
+  let current: Node =
+    resumeStartNodeId !== undefined && graph.nodes[resumeStartNodeId]
+      ? graph.nodes[resumeStartNodeId]!
+      : findStart(graph);
   let finalOutcome: Outcome = ok({ notes: "pipeline completed" });
   let goalGateRetries = 0;
   const maxGoalGateRetries =
@@ -1155,6 +1233,26 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
       args: substitutionArgs,
       ...(ledger !== undefined ? { ledger } : {}),
       ...(budgetStoppedRef !== undefined ? { budgetStoppedRef } : {}),
+      ...(resumeDegradedNodes.size > 0 || opts.checkpointStore ? { resumeDegradedNodes } : {}),
+      ...(opts.checkpointStore
+        ? {
+            onNodeCompleted: async (node: Node) => {
+              const snapshot: Checkpoint = {
+                version: CHECKPOINT_SCHEMA_VERSION,
+                run_id,
+                workflow_sha,
+                current_node: node.id,
+                completed_nodes: [...completed_nodes],
+                node_outcomes: { ...node_outcomes },
+                context: { ...context },
+                retry_counts: { ...retry_counts },
+                pi_sessions: backend.serialiseSessions ? backend.serialiseSessions() : {},
+                saved_at: now(),
+              };
+              await opts.checkpointStore!.save(run_id, snapshot);
+            },
+          }
+        : {}),
     });
 
     // If we stopped at a terminal Msquare, check goal gates + maybe retry.

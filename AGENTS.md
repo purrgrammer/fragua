@@ -140,6 +140,10 @@ inverse of `EventSink`:
 - `migrateAllRuns(source, sink)` — supported path for moving an
   archive between backing stores (JSONL → Postgres, etc.). Idempotency
   is the sink's job.
+- `CheckpointStore` port (`@swarm/core`) + `JsonlCheckpointStore`
+  adapter — `save(runId, checkpoint)` / `load(runId)`. Enables resume
+  via `execute({ checkpointStore, resume: true })`. See
+  `docs/SPEC.md §3.6` for the resume-degradation rule.
 
 The web `<StepInspector>` component fetches `StepSnapshot[]` and
 renders collapsible sections per step (prompt · system prompt ·

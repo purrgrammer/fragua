@@ -51,4 +51,25 @@ export class MessageStore {
   threadIds(): string[] {
     return [...this.map.keys()];
   }
+
+  /** Wave 6: serialise into a JSON-safe plain object for
+   * `checkpoint.pi_sessions`. Each entry is the per-thread transcript
+   * at checkpoint time — opaque to @swarm/core but round-trippable by
+   * `hydrate()` below. */
+  serialise(): Record<string, AgentMessage[]> {
+    const out: Record<string, AgentMessage[]> = {};
+    for (const [k, v] of this.map.entries()) out[k] = v.slice();
+    return out;
+  }
+
+  /** Wave 6: inverse of `serialise`. Replaces the current store
+   * contents with the snapshot — used by the executor on resume so
+   * prior transcripts rejoin the store before the first post-resume
+   * backend.run(). */
+  hydrate(snapshot: Record<string, unknown>): void {
+    this.map.clear();
+    for (const [k, v] of Object.entries(snapshot)) {
+      if (Array.isArray(v)) this.map.set(k, v.slice() as AgentMessage[]);
+    }
+  }
 }

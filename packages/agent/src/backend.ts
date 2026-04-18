@@ -67,6 +67,21 @@ export class PiCodergenBackend implements CodergenBackend {
     return this.messageStore;
   }
 
+  /** Wave 6 checkpoint bridge. The executor calls this after each
+   * node transition so the saved snapshot's `pi_sessions` field has
+   * the full per-thread transcript. */
+  serialiseSessions(): Record<string, unknown> {
+    return this.messageStore.serialise();
+  }
+
+  /** Wave 6 resume bridge. On `execute({ resume: true })` the loaded
+   * checkpoint's `pi_sessions` replaces the backend's MessageStore so
+   * the first post-resume backend.run() sees the correct prior
+   * transcript under any shared thread_id. */
+  hydrateSessions(sessions: Record<string, unknown>): void {
+    this.messageStore.hydrate(sessions);
+  }
+
   async run(input: CodergenInput): Promise<Outcome> {
     const provider = input.node.attrs.provider ?? this.defaultModel.provider;
     const modelId = input.node.attrs.model ?? this.defaultModel.model;

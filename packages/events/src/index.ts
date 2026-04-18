@@ -1,3 +1,4 @@
+export * from "./checkpoint.ts";
 export * from "./console.ts";
 export * from "./cost.ts";
 export * from "./jsonl.ts";

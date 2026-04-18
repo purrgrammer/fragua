@@ -285,7 +285,9 @@ Written atomically after every node transition to `.swarm/runs/<run-id>/checkpoi
 }
 ```
 
-**Resume degradation rule** (per Attractor spec): if a node used `fidelity=full` and we're resuming after a crash, the first resumed node degrades to `summary:high` (in-memory LLM sessions can't always be serialized perfectly).
+**Resume degradation rule** (per Attractor spec): if a node used `fidelity=full` and we're resuming after a crash, the first resumed node degrades to `summary:high` (in-memory LLM sessions can't always be serialized perfectly). Wave 6 wires this end-to-end: `execute({ checkpointStore, resume: true })` loads the most recent checkpoint, hydrates `context` / `completed_nodes` / `node_outcomes` / `retry_counts` / `pi_sessions` into the backend's `MessageStore` via `hydrateSessions()`, and applies `degradeOnResume` once on the first codergen call to `current_node`. Subsequent nodes run at their declared fidelity unchanged.
+
+**CheckpointStore port** (`@swarm/core`): `save(runId, checkpoint)` + `load(runId)`. Filesystem adapter `JsonlCheckpointStore` in `@swarm/events` writes `<runsDir>/<runId>/checkpoint.json` atomically (rename-over-.tmp). A future Postgres adapter implements the same two methods. The executor fires `onNodeCompleted(nextNode)` after edge selection — `current_node` on the saved snapshot is the node that would run next, so resume picks up exactly where the crash interrupted rather than re-running the completed tail.
 
 **Non-idempotent tools on resume:** if the last event is `tool_execution_start` without matching `tool_execution_end` for a tool declared `idempotent: false`, engine raises `ResumeRequiresApproval` and routes to `Interviewer`.
 

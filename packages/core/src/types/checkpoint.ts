@@ -24,3 +24,19 @@ export const CheckpointSchema = Type.Object(
 );
 
 export type Checkpoint = Static<typeof CheckpointSchema>;
+
+/**
+ * Port for checkpoint persistence. Wave 6 wires the JSONL adapter in
+ * `@swarm/events` (`JsonlCheckpointStore`); a future Postgres sink will
+ * implement the same two methods so resume works identically across
+ * backing stores.
+ */
+export interface CheckpointStore {
+  /** Write (or overwrite) the checkpoint for a run. Must be atomic
+   * enough that a mid-write crash leaves either the previous
+   * checkpoint or the new one — never a torn JSON file. */
+  save(runId: string, checkpoint: Checkpoint): Promise<void>;
+  /** Read the latest checkpoint for a run. Returns `undefined` when
+   * the run has never been checkpointed. */
+  load(runId: string): Promise<Checkpoint | undefined>;
+}
