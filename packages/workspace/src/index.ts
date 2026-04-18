@@ -1,3 +1,4 @@
+export * from "./apply-patch.ts";
 export * from "./blocklist.ts";
 export * from "./env-leak.ts";
 export * from "./local-env.ts";

@@ -3,6 +3,7 @@
 
 import TurndownService from "turndown";
 import { Type } from "@sinclair/typebox";
+import { ApplyPatchError, applyPatch } from "./apply-patch.ts";
 import { SsrfError, assertSafeUrl } from "./ssrf-guard.ts";
 import type { Tool } from "./types.ts";
 
@@ -234,6 +235,55 @@ export const editFileTool: Tool<
   },
 };
 
+export const applyPatchTool: Tool<
+  { patch: string },
+  { files_changed: Array<{ path: string; op: "update" | "add" | "delete"; bytes_before?: number; bytes_after?: number }> }
+> = {
+  name: "local:apply_patch",
+  description: [
+    "Apply a multi-file, multi-hunk patch in OpenAI v4a format. Use this instead of local:edit_file when a change spans more than a couple of locations or files — one call replaces a sequence of read_file / write_file / edit_file roundtrips.",
+    "",
+    "Envelope:",
+    "  *** Begin Patch",
+    "  *** Update File: <path>",
+    "  @@ [optional anchor line — narrows the hunk search when context alone is ambiguous]",
+    "   unchanged context line (single space prefix)",
+    "  -line to remove",
+    "  +line to add",
+    "  *** Add File: <path>",
+    "  +first line of new file",
+    "  +second line",
+    "  *** Delete File: <path>",
+    "  *** End Patch",
+    "",
+    "Rules: (1) every hunk's (context + removed) block must match exactly once in the target file — include surrounding context until unique, or add an @@ anchor. (2) the patch is pre-validated; if any hunk fails to match, no files are written. (3) Add File fails if the path already exists; Delete File fails if it does not. Move File is not yet supported.",
+  ].join("\n"),
+  parameters: Type.Object({
+    patch: Type.String({ description: "The full patch text, beginning with `*** Begin Patch` and ending with `*** End Patch`" }),
+  }),
+  idempotent: false,
+  truncation: { max_chars: 10_000, mode: "tail" },
+  async execute(args, env) {
+    try {
+      const result = await applyPatch(args.patch, env);
+      const summary = result.files_changed
+        .map((f) => {
+          if (f.op === "add") return `+ ${f.path} (${f.bytes_after} bytes)`;
+          if (f.op === "delete") return `- ${f.path} (was ${f.bytes_before} bytes)`;
+          return `~ ${f.path} (${f.bytes_before} → ${f.bytes_after} bytes)`;
+        })
+        .join("\n");
+      return {
+        text: summary || "[no files changed]",
+        data: { files_changed: result.files_changed },
+      };
+    } catch (err) {
+      const msg = err instanceof ApplyPatchError ? err.message : err instanceof Error ? err.message : String(err);
+      return { text: msg, is_error: true };
+    }
+  },
+};
+
 const WEB_FETCH_DEFAULT_MAX_BYTES = 1_000_000;
 const WEB_FETCH_TIMEOUT_MS = 30_000;
 const WEB_FETCH_ACCEPT = "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.5";
@@ -382,5 +432,6 @@ export const CORE_TOOLS: Tool[] = [
   globTool,
   grepTool,
   editFileTool,
+  applyPatchTool,
   webFetchTool,
 ];
