@@ -228,6 +228,17 @@ export interface FactAppendResult {
   seqs: number[];
 }
 
+export interface AppendFactOpts {
+  /** Merge into run_state.routing inside the same transaction. */
+  routingPatch?: Record<string, unknown>;
+  /**
+   * Advance `last_applied_seq` to this value. If omitted, last_applied_seq
+   * is left untouched so intents written since the last fold remain
+   * unapplied and visible to getUnappliedIntents.
+   */
+  advanceAppliedTo?: number;
+}
+
 export interface IntentAppendResult {
   seq: number;
   ts: number;
@@ -322,6 +333,7 @@ export interface IEventStore {
     runId: string,
     events: FactEvent[],
     expectedVersion: number,
+    opts?: AppendFactOpts,
   ): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
 

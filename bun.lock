@@ -64,6 +64,18 @@
         "typescript": "5.7.3",
       },
     },
+    "packages/daemon": {
+      "name": "@swarm/daemon",
+      "version": "0.0.0",
+      "dependencies": {
+        "@swarm/core": "workspace:*",
+        "@swarm/store": "workspace:*",
+      },
+      "devDependencies": {
+        "fast-check": "3.23.1",
+        "typescript": "5.7.3",
+      },
+    },
     "packages/events": {
       "name": "@swarm/events",
       "version": "0.0.0",
@@ -774,6 +786,8 @@
     "@swarm/cli": ["@swarm/cli@workspace:packages/cli"],
 
     "@swarm/core": ["@swarm/core@workspace:packages/core"],
+
+    "@swarm/daemon": ["@swarm/daemon@workspace:packages/daemon"],
 
     "@swarm/events": ["@swarm/events@workspace:packages/events"],
 

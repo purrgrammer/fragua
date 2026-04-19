@@ -12,6 +12,7 @@ import {
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   PayloadTooLargeError,
+  type AppendFactOpts,
   type ArtifactRef,
   type ArtifactScope,
   type DaemonLockResult,
@@ -81,6 +82,7 @@ export class SqliteStore implements IEventStore {
     runId: string,
     events: FactEvent[],
     expectedVersion: number,
+    opts: AppendFactOpts = {},
   ): FactAppendResult {
     if (events.length === 0) {
       throw new Error("appendFact requires at least one event");
@@ -110,10 +112,20 @@ export class SqliteStore implements IEventStore {
         state = applyFact(state, event, ts);
       }
 
+      if (opts.routingPatch != null) {
+        state = {
+          ...state,
+          routing: { ...state.routing, ...opts.routingPatch },
+        };
+      }
+
       state = {
         ...state,
         version: state.version + 1,
-        lastAppliedSeq: seqs[seqs.length - 1]!,
+        lastAppliedSeq:
+          opts.advanceAppliedTo != null
+            ? opts.advanceAppliedTo
+            : state.lastAppliedSeq,
       };
 
       this.writeProjection(state);

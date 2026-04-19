@@ -77,8 +77,12 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_resumed": {
-      next.status = "running";
-      next.nodeStartedAt = now;
+      // Resumed from paused_hitl (or quarantined). Go back to queued so the
+      // executor's claim loop picks the run up and re-dispatches the same
+      // node, this time with the newly-arrived intent folded into context.
+      next.status = "queued";
+      next.nodeStartedAt = null;
+      next.readyAt = now;
       return next;
     }
     case "fact.run_completed": {
