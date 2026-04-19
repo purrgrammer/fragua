@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@sinclair/typebox": "0.34.41"
+    "@sinclair/typebox": "0.34.41",
+    "@swarm/store": "workspace:*"
   },
   "devDependencies": {
     "fast-check": "3.23.1",
