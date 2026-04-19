@@ -12,7 +12,8 @@
 // We use `Bun.serve` directly (Bun ≥ 1.2 is the primary runtime per AGENTS.md),
 // which avoids adding `@hono/node-server` as a dependency.
 
-import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import { createServer, type ServerPorts } from "@swarm/server";
 import chalk from "chalk";
@@ -20,38 +21,19 @@ import chalk from "chalk";
 export interface ServeCommandOptions {
   /** TCP port to bind. Default 3000. Pass 0 to get an ephemeral port. */
   port?: number;
-  /** Runs directory (default `.swarm/runs` under cwd). */
-  runsDir?: string;
-  /** Working directory used to resolve `runsDir`. Default `process.cwd()`. */
+  /** Working directory. Default `process.cwd()`. */
   cwd?: string;
-  /**
-   * Hostname to bind. Default `"::"` (dual-stack, accepts v4 + v6 on
-   * all interfaces) matches the user-facing `swarm serve` semantics.
-   * The daemon passes `"127.0.0.1"` so its HTTP surface is not
-   * reachable off-box.
-   */
+  /** Hostname to bind. Default `"::"` (dual-stack IPv4+IPv6). */
   hostname?: string;
-  /**
-   * Optional port overrides forwarded to `createServer`. The daemon
-   * uses this to inject its SQLite `JobQueue`; the default `swarm
-   * serve` invocation leaves it empty and the server returns 503 on
-   * `/jobs` requests.
-   */
+  /** Optional port overrides forwarded to `createServer`. */
   ports?: ServerPorts;
 }
 
-/**
- * Handle returned by `startServer`. Tests use `close()` for teardown; CLI code
- * uses `url` for the "listening on …" banner.
- */
 export interface ServerHandle {
-  /** Bound URL, e.g. `http://localhost:54321`. */
   url: string;
-  /** Bound port (resolved even when caller passed 0). */
   port: number;
-  /** Absolute path of the runs directory the server is exposing. */
-  runsDir: string;
-  /** Stop accepting new connections and release the port. */
+  /** Absolute path of the SQLite store this server is reading from. */
+  storePath: string;
   close(): Promise<void>;
 }
 
@@ -67,11 +49,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     throw new Error("swarm serve requires the Bun runtime (>=1.2). Run via `bun run` instead of `node`.");
   }
   const cwd = opts.cwd ?? process.cwd();
-  const runsDir = resolve(cwd, opts.runsDir ?? ".swarm/runs");
   const storePath = resolve(cwd, ".swarm/swarm.db");
+  mkdirSync(dirname(storePath), { recursive: true });
   const store = new SqliteStore({ path: storePath });
   const app = createServer({
-    runsDir,
     cwd,
     store,
     ...(opts.ports !== undefined ? { ports: opts.ports } : {}),
@@ -86,7 +67,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   return {
     url: `http://localhost:${port}`,
     port,
-    runsDir,
+    storePath,
     async close() {
       await server.stop(true);
       store.close();
@@ -115,7 +96,7 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   }
 
   console.log(chalk.green(`swarm serve listening on ${handle.url}`));
-  console.log(chalk.dim(`  runs-dir: ${handle.runsDir}`));
+  console.log(chalk.dim(`  store: ${handle.storePath}`));
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
   await new Promise<void>((resolveShutdown) => {

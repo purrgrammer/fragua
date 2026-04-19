@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFsWorkflowReader, createServer } from "../src/index.ts";
 import type { WorkflowReader, WorkflowSummary } from "../src/ports.ts";
+import { freshStore } from "./helpers.ts";
 
 function memoryWorkflowReader(items: WorkflowSummary[]): WorkflowReader {
   return {
@@ -24,7 +25,7 @@ function memoryWorkflowReader(items: WorkflowSummary[]): WorkflowReader {
 describe("GET /workflows", () => {
   test("returns 200 and [] when no workflows exist", async () => {
     const app = createServer({
-      runsDir: "/unused",
+      store: freshStore(),
       ports: { workflowReader: memoryWorkflowReader([]) },
     });
     const res = await app.request("/workflows");
@@ -40,7 +41,7 @@ describe("GET /workflows", () => {
       { name: "b", path: "workflows/b.dot", sha: "def5678" },
     ];
     const app = createServer({
-      runsDir: "/unused",
+      store: freshStore(),
       ports: { workflowReader: memoryWorkflowReader(items) },
     });
     const res = await app.request("/workflows");
@@ -102,7 +103,7 @@ describe("GET /workflows/:name", () => {
       source: "digraph alpha {\n  start [shape=Mdiamond]\n}\n",
     };
     const app = createServer({
-      runsDir: "/unused",
+      store: freshStore(),
       ports: {
         workflowReader: {
           async list() {
@@ -122,7 +123,7 @@ describe("GET /workflows/:name", () => {
 
   test("returns 404 when the workflow is unknown", async () => {
     const app = createServer({
-      runsDir: "/unused",
+      store: freshStore(),
       ports: {
         workflowReader: {
           async list() {

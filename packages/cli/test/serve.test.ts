@@ -28,7 +28,7 @@ describe("startServer", () => {
 
   test("binds an ephemeral port and returns a handle", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    handle = await startServer({ port: 0, runsDir: scratch });
+    handle = await startServer({ port: 0, cwd: scratch });
     expect(handle.port).toBeGreaterThan(0);
     expect(handle.url).toBe(`http://localhost:${handle.port}`);
     expect(typeof handle.close).toBe("function");
@@ -36,7 +36,7 @@ describe("startServer", () => {
 
   test("GET /health returns 200 {ok:true}", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    handle = await startServer({ port: 0, runsDir: scratch });
+    handle = await startServer({ port: 0, cwd: scratch });
     const res = await fetch(`${handle.url}/health`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean };
@@ -45,12 +45,12 @@ describe("startServer", () => {
 
   test("close() releases the port (subsequent bind to same port succeeds)", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    const first = await startServer({ port: 0, runsDir: scratch });
+    const first = await startServer({ port: 0, cwd: scratch });
     const port = first.port;
     await first.close();
     // Rebind to the exact port that was just freed. If `close()` left a
     // dangling listener this throws EADDRINUSE.
-    handle = await startServer({ port, runsDir: scratch });
+    handle = await startServer({ port, cwd: scratch });
     expect(handle.port).toBe(port);
   });
 });
@@ -68,7 +68,7 @@ describe("serveCommand", () => {
   test("SIGINT triggers clean shutdown and returns exit code 0", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
     // Run in the background; serveCommand blocks until SIGINT/SIGTERM.
-    const done = serveCommand({ port: 0, runsDir: scratch });
+    const done = serveCommand({ port: 0, cwd: scratch });
     // Give the bind a moment to complete before we send the signal.
     await new Promise((r) => setTimeout(r, 50));
     process.emit("SIGINT");
@@ -78,9 +78,9 @@ describe("serveCommand", () => {
 
   test("conflicting port → exit code 1", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    const occupied = await startServer({ port: 0, runsDir: scratch });
+    const occupied = await startServer({ port: 0, cwd: scratch });
     try {
-      const code = await serveCommand({ port: occupied.port, runsDir: scratch });
+      const code = await serveCommand({ port: occupied.port, cwd: scratch });
       expect(code).toBe(1);
     } finally {
       await occupied.close();

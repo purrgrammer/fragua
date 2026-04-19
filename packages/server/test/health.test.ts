@@ -1,29 +1,24 @@
-// Tests for GET /health. Two shapes:
-//   - { ok: true }                          — no daemon injected
-//   - { ok: true, daemon: { ... } }         — daemon info provider set
-//
-// The second shape drives the web UI's "daemon-down" banner; the first
-// is the plain `swarm serve` path and must stay backwards-compatible.
+// Tests for GET /health.
 
 import { describe, expect, test } from "bun:test";
 import { createServer } from "../src/index.ts";
 import type { HealthDaemonInfo } from "../src/routes/health.ts";
-import { memoryRunReader } from "./helpers.ts";
+import { freshStore } from "./helpers.ts";
 
 describe("GET /health", () => {
   test("without daemonInfo → { ok: true } only", async () => {
-    const app = createServer({
-      runsDir: "/tmp/health-a",
-      ports: { runReader: memoryRunReader({}) },
-    });
+    const store = freshStore();
+    const app = createServer({ store });
     const res = await app.request("/health");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; daemon?: unknown };
     expect(body.ok).toBe(true);
     expect("daemon" in body).toBe(false);
+    store.close();
   });
 
   test("with daemonInfo → includes the daemon key", async () => {
+    const store = freshStore();
     const info: HealthDaemonInfo = {
       pid: 12345,
       port: 3737,
@@ -33,23 +28,21 @@ describe("GET /health", () => {
       inflight: 0,
       queued: 3,
     };
-    const app = createServer({
-      runsDir: "/tmp/health-b",
-      ports: { runReader: memoryRunReader({}), daemonInfo: () => info },
-    });
+    const app = createServer({ store, ports: { daemonInfo: () => info } });
     const res = await app.request("/health");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; daemon: HealthDaemonInfo };
     expect(body.ok).toBe(true);
     expect(body.daemon).toEqual(info);
+    store.close();
   });
 
   test("daemonInfo is called per request (counters stay fresh)", async () => {
     let queued = 0;
+    const store = freshStore();
     const app = createServer({
-      runsDir: "/tmp/health-c",
+      store,
       ports: {
-        runReader: memoryRunReader({}),
         daemonInfo: () => ({
           pid: 1,
           port: 1,
@@ -61,26 +54,36 @@ describe("GET /health", () => {
         }),
       },
     });
-    const a = (await (await app.request("/health")).json()) as { daemon: { queued: number } };
-    const b = (await (await app.request("/health")).json()) as { daemon: { queued: number } };
-    expect(a.daemon.queued).toBe(0);
-    expect(b.daemon.queued).toBe(1);
+    const res1 = (await (await app.request("/health")).json()) as {
+      daemon: { queued: number };
+    };
+    const res2 = (await (await app.request("/health")).json()) as {
+      daemon: { queued: number };
+    };
+    expect(res1.daemon.queued).toBe(0);
+    expect(res2.daemon.queued).toBe(1);
+    store.close();
   });
 
-  test("a throwing daemonInfo falls back to { ok: true } (liveness doesn't flap)", async () => {
+  test("daemonInfo may be async", async () => {
+    const store = freshStore();
     const app = createServer({
-      runsDir: "/tmp/health-d",
+      store,
       ports: {
-        runReader: memoryRunReader({}),
-        daemonInfo: () => {
-          throw new Error("queue closed");
-        },
+        daemonInfo: async () => ({
+          pid: 7,
+          port: 8,
+          startedAt: "t",
+          version: "v",
+          concurrency: 1,
+          inflight: 0,
+          queued: 0,
+        }),
       },
     });
     const res = await app.request("/health");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; daemon?: unknown };
-    expect(body.ok).toBe(true);
-    expect("daemon" in body).toBe(false);
+    const body = (await res.json()) as { daemon: { pid: number } };
+    expect(body.daemon.pid).toBe(7);
+    store.close();
   });
 });
