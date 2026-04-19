@@ -57,6 +57,8 @@ cli
   .command("daemon", "Run the store-backed execution daemon in the foreground")
   .option("--concurrency <n>", "Max concurrent runs (default 4)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
+  .option("--provider <name>", "LLM provider (e.g. anthropic)")
+  .option("--model <id>", "Model id (e.g. claude-opus-4-7)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -74,6 +76,8 @@ cli
       ...(concurrency !== undefined && Number.isFinite(concurrency)
         ? { concurrency }
         : {}),
+      ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
+      ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
     });
     process.exit(code);
   });

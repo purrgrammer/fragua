@@ -9,6 +9,7 @@
 // plugs a richer dispatcher built from packages/agent's backends.
 
 import { handler, parseDotSource } from "@swarm/core";
+import type { Node } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 
@@ -16,6 +17,13 @@ type HandlerSpec = handler.HandlerSpec;
 
 export interface AutoDispatcherOpts {
   store: IEventStore;
+  /**
+   * Optional factory that builds a real codergen handler for `box`-shape
+   * nodes. When provided, the auto-dispatcher uses it instead of the
+   * trivial noop transition so any box node that reaches the daemon is
+   * executed via a real LLM backend.
+   */
+  codergenFactory?: (node: Node, nextNode: string) => HandlerSpec;
 }
 
 /**
@@ -30,14 +38,17 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
   };
 }
 
-function specsForGraph(dotSource: string): Map<string, HandlerSpec> {
+function specsForGraph(
+  dotSource: string,
+  codergenFactory?: (node: Node, nextNode: string) => HandlerSpec,
+): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   const outgoing = new Map<string, string[]>();
   for (const edge of graph.edges) {
@@ -47,9 +58,14 @@ function specsForGraph(dotSource: string): Map<string, HandlerSpec> {
   }
   const specs = new Map<string, HandlerSpec>();
   for (const node of Object.values(graph.nodes)) {
+    const first = outgoing.get(node.id)?.[0] ?? "__end__";
+    const kind = handlerKindOf(node.attrs);
+    const useFactory = kind === "codergen" && codergenFactory != null;
     specs.set(
       node.id,
-      specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
+      useFactory
+        ? codergenFactory(node, first)
+        : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
     );
   }
   return specs;
