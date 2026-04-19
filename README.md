@@ -6,18 +6,21 @@ A universal AI agent orchestrator. Declarative DOT workflows drive multi-provide
 
 ## Documentation
 
-- **[SPEC.md](docs/SPEC.md)** — what swarm is
-- **[PLAN.md](docs/PLAN.md)** — the phased build plan
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — design decisions and rationale
+- **[REARCHITECTURE.md](docs/REARCHITECTURE.md)** — **authoritative** design (DB-backed, event-sourced, OCC)
+- **[SPEC.md](docs/SPEC.md)** — what swarm is (conceptual)
 - **[AGENTS.md](AGENTS.md)** — conventions for AI agents working on this repo
 
-## Quick tour (once Phase 2 ships)
+Older docs under `docs/` (ARCHITECTURE, daemon, events, run-control, web-ui, PLAN) describe the file-based coordination surfaces that the rearchitecture replaced. They remain as historical context; trust REARCHITECTURE.md when they disagree.
+
+## Quick tour
 
 ```sh
 bun install
-bun run swarm run examples/hello.dot
-bun run swarm replay .swarm/runs/<id>/events.jsonl
+bun run swarm serve           # starts HTTP + SSE server on :3000
+bun run swarm validate <file> # parse + lint a .dot workflow
 ```
+
+The store lives at `.swarm/swarm.db`. The daemon (future `bun run swarm daemon`) executes runs by claiming queued rows; the web UI reads the projection directly via Hono routes.
 
 ## Stack
 

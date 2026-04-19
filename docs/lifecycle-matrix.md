@@ -1,5 +1,8 @@
 # Lifecycle × interrupt matrix
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 Coverage of pipeline/job lifecycle states crossed with interrupts. Each cell
 links to the test that pins down the expected terminal state.
 

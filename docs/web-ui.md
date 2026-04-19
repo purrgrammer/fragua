@@ -1,5 +1,8 @@
 # Web UI
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 The React + Vite client lives in `packages/web/`. The app sits inside a persistent `AppShell` (sidebar + breadcrumb header + connection badge) and routes to:
 
 - `/` — Home dashboard (stats tiles from `GET /stats` + recent runs)

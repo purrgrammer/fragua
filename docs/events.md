@@ -1,5 +1,8 @@
 # Events, fidelity, summariser, budgets
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 ## Per-step agent context (introspection)
 
 Every `llm.start` event on the SSE stream carries the full resolved context for one agent step so the UI / replay layer never has to reconstruct state out of band. Authoritative per-step fields (see `docs/SPEC.md §3.5`):

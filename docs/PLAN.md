@@ -1,5 +1,8 @@
 # swarm — Incremental Build Plan
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 > Companion to `SPEC.md`. Each phase has a hard verification bar. A phase is not done until all tests pass **and** the end-to-end demo runs cleanly three times on a fresh clone.
 
 ---

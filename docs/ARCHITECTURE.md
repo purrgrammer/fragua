@@ -1,5 +1,8 @@
 # swarm — Architecture Notes
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 Companion to `SPEC.md`. Deeper dives, diagrams, and design decisions that don't fit in the spec.
 
 ## Reference implementations studied

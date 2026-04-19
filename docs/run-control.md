@@ -1,5 +1,8 @@
 # Run control: steer, pause, resume, cancel
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 Every running pipeline exposes a sibling control file at `.swarm/runs/<run-id>/control.jsonl`. CLI commands write `ControlRequest` lines there; the executor's control loop tails the file (via `fs.watch`, no polling), mirrors each request into `events.jsonl` as `control.requested`, and dispatches to the right safe boundary before emitting the paired `control.applied` or `control.rejected`. All four commands share this one channel — nothing special-cases by command at the transport layer.
 
 ```sh

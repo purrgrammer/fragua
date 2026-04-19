@@ -73,6 +73,7 @@
         "@swarm/store": "workspace:*",
       },
       "devDependencies": {
+        "@swarm/server": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },

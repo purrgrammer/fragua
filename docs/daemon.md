@@ -1,5 +1,8 @@
 # Daemon and dev server
 
+> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+
+
 `swarm run` is a fire-and-forget client: it POSTs to the daemon's `/jobs` endpoint and exits. The daemon owns workflow execution, writes `events.jsonl`, exposes HTTP + SSE, and supervises concurrent runs. One daemon per repo.
 
 ```sh
