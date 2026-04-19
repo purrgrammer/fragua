@@ -1,11 +1,10 @@
 // build-feature.dot — swarm builds a feature on its own codebase.
 //
-// This is the critical self-hosting workflow. All nodes use the CLI's default
-// model so the same file works across providers. Override per-run:
+// Self-hosting workflow. Nodes may set their own `model`; the rest inherit
+// the CLI's default model.
 //
 //   # Anthropic direct (default if ANTHROPIC_API_KEY is set)
 //   bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
-//     --provider anthropic --model claude-opus-4-7 \
 //     --input="add local:list_dir tool that lists files in a directory"
 //
 //   # OpenRouter (300+ models through one key)
@@ -14,38 +13,40 @@
 //     --input="..."
 //
 // Stages:
-//   1. explore             — read the repo, identify target package + tests
-//   2. plan                — produce a concrete change list + test plan
-//   3. implement_and_review — trapezium loop: edit files, spawn a subagent
+//   1. plan                 — single read-only discovery + planning pass.
+//                             No bash, no writes, no subagent. Agent reads
+//                             the repo with glob/grep/read_file/git_read
+//                             and emits a concrete plan.
+//   2. implement_and_review — trapezium loop: edit files, spawn a subagent
 //                             as read-only reviewer, iterate until the
 //                             reviewer emits <promise>APPROVED</promise>
-//                             or max_iterations=3 is hit
-//   4. verify              — run `bun run ci` and iterate on failures
-//   5. update_docs         — sync docs/SPEC.md, docs/PLAN.md, AGENTS.md if
-//                             user-visible behavior / conventions shifted
-//   6. commit              — stage touched files and commit per AGENTS.md
-//                             §Commit conventions (imperative, [P<n>] tag,
-//                             no --no-verify). The commit body IS the run
-//                             summary — there is no separate summarize step.
-//   7. merge               — only runs when invoked via `--worktree`. Rebases
-//                             the worktree branch onto the current tip of
-//                             main, resolves any conflicts (keeping changes
-//                             from BOTH sides semantically), and fast-
-//                             forwards main to the new tip using a
-//                             compare-and-swap so concurrent parallel runs
-//                             serialize safely. Skips cleanly when run from
-//                             the main checkout (not a worktree) or when
-//                             there are no commits ahead of main.
+//                             or max_iterations=3 is hit.
+//   3. verify               — run `bun run ci` and iterate on failures.
+//   4. update_docs          — sync docs/SPEC.md, docs/PLAN.md, AGENTS.md if
+//                             user-visible behavior / conventions shifted.
+//   5. commit               — stage touched files and commit per AGENTS.md
+//                             §Commit conventions. The commit body IS the
+//                             run summary — there is no separate summary.
+//   6. merge                — rebase the worktree branch onto main and
+//                             fast-forward. Skips cleanly on the main
+//                             checkout or when ahead-count is zero.
+//
+// Scope-safety: `plan` has no write tools and no local:bash, so the agent
+// literally cannot implement the feature prematurely. That was a real
+// failure mode in the old explore+plan split — an agent used shell
+// redirection to write files during "explore" and skipped planning.
 //
 // Context-management notes:
-//   - thread_id="dev" is shared only between implement_and_review and verify
-//     so the verifier can recall the edits it just made. update_docs and
-//     commit run on fresh threads and read state via `git diff` / `git status`,
-//     which keeps the implement-loop conversation from bleeding into unrelated
-//     nodes.
-//   - AGENTS.md is attached as context_files only on `explore`. Downstream
-//     nodes that need a convention cite the relevant rule inline instead of
-//     re-shipping the whole file.
+//   - thread_id="dev" is shared only between implement_and_review and
+//     verify so the verifier can recall the edits it just made.
+//     update_docs, commit, and merge run on fresh threads and read state
+//     via git, which keeps the implement-loop conversation from bleeding
+//     into unrelated nodes.
+//   - AGENTS.md is attached as context_files only on `plan`. Downstream
+//     nodes that need a convention cite the rule inline.
+//   - Every node's system prompt starts with a <run-environment> block
+//     injected by the CLI (worktree path, run id, log dir, bootstrap
+//     status). Agents don't need to introspect their cwd.
 
 digraph build_feature {
   graph [
@@ -58,14 +59,10 @@ digraph build_feature {
 
   start [shape=Mdiamond]
 
-  explore [
-    prompt = "You are a senior engineer working on swarm (a universal AI agent orchestrator).\n\nTask from user (authoritative — do NOT substitute): $ARGUMENTS\n\nIf $ARGUMENTS is empty, names nothing specific, or the target is blocked/ill-specified, STOP immediately. Emit a human-readable line `EXPLORE_BLOCKED: <one-line reason>` AND a final line `<abort>missing or blocked target: short reason</abort>` so the executor terminates the run. Do NOT pick a different task on the grounds that it is smaller, more unblocking, a prerequisite, or a better fit — silent retargeting is a bug, not an optimisation.\n\nOtherwise, if $ARGUMENTS names a specific task spec (e.g. a `tasks/<phase>/NN-*.md` file) or a specific feature, that IS the target for this run.\n\nStep 1 — Explore:\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - The repo conventions from AGENTS.md have been prepended as <project-conventions> above — follow them.\n  - If $ARGUMENTS references a file path, read that file first and let its scope constrain the rest of this step.\n  - Use local:list_dir or local:glob to understand layout; local:grep to find where a symbol/string already lives before assuming it doesn't. Fall back to local:bash for git-aware queries (e.g. `git log -- <path>`).\n  - Identify which package(s) the task targets and which tests already cover similar ground.\n  - Output a short summary under 600 words describing what you found. Begin the summary with a one-line `Target:` field quoting the specific task, file, or feature named by $ARGUMENTS."
-    allowed_tools = "local:read_file, local:list_dir, local:glob, local:grep, local:bash, local:load_skill"
-    context_files = "AGENTS.md"
-  ]
-
   plan [
-    prompt = "Original task from user (authoritative — do NOT substitute): $ARGUMENTS\n\nIf you cannot produce a concrete plan for this task (target is under-specified, internally contradictory, or out of reach within this run), emit `PLAN_BLOCKED: <one-line reason>` and a final line `<abort>cannot plan: short reason</abort>`. Do NOT produce a no-op plan that forwards to implement_and_review — that burns tokens on downstream nodes that can't act.\n\nYour plan must target exactly the task, file(s), or feature named above. Do not retarget even if exploration surfaced a smaller/easier/more-unblocking alternative — silent retargeting is a bug. If $ARGUMENTS references a `tasks/<phase>/NN-*.md` file, every `Files to create or modify` entry must be consistent with that spec's Scope section (you may add supporting files, but you may not drop in-scope files or add files that belong to a different task).\n\nBased on your exploration ($explore.output) and the task above, produce a concrete plan as a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Any constraints you want to flag before implementation.\n\nHonour repo conventions summarised in $explore.output — especially `pure core`, `spec-first`, and `no silent deps`.\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`. Do not call any tools in this node."
+    prompt = "You are a senior engineer on swarm (a universal AI agent orchestrator).\n\nTask from user (authoritative — do NOT substitute): $ARGUMENTS\n\nIf $ARGUMENTS is empty, names nothing specific, or the target is blocked/ill-specified, STOP immediately. Emit `PLAN_BLOCKED: <one-line reason>` and a final line `<abort>missing or blocked target: short reason</abort>`. Do NOT retarget silently — picking a different task because it is smaller, a prerequisite, or more unblocking is a bug, not an optimisation. If $ARGUMENTS references a `tasks/<phase>/NN-*.md` file, every `Files to create or modify` entry must be consistent with that spec's Scope section.\n\nYou work inside the worktree at $WORKTREE_PATH. Dependencies are already installed (see the <run-environment> block). You have NO write tools and NO shell — do not attempt to implement the feature. Your output is a plan that a downstream node will execute.\n\nStep 1 — explore (read-only):\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - The repo conventions from AGENTS.md have been prepended as <project-conventions> above — follow them.\n  - If $ARGUMENTS references a file path, read that file first and let its scope constrain the rest of this step.\n  - Use local:list_dir / local:glob to understand layout; local:grep to find where a symbol/string already lives before assuming it doesn't.\n  - Use local:git_read for git-aware queries (e.g. subcommand=\"log\", args=[\"--oneline\", \"-20\", \"--\", \"<path>\"]). This replaces any prior use of local:bash in planning.\n  - local:load_skill for any specialty area the task hints at (UI design, animations, etc.).\n  - Identify which package(s) the task targets and which tests already cover similar ground.\n\nStep 2 — plan: produce a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add / change.\n  4. Concrete implementation notes per file — enough detail that a cheaper model can execute each step without additional repository discovery. Quote relevant existing symbols, cite line numbers, and surface any non-obvious constraints.\n  5. Constraints or conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`."
+    allowed_tools = "local:read_file, local:list_dir, local:glob, local:grep, local:git_read, local:load_skill"
+    context_files = "AGENTS.md"
     fidelity = "compact"
   ]
 
@@ -73,9 +70,10 @@ digraph build_feature {
     shape = trapezium
     until = "APPROVED"
     max_iterations = 3
-    prompt = "You are implementing the plan ($plan.output).\n\nEach iteration, do all three steps in order:\n  (1) IMPLEMENT — apply any remaining plan items. Prefer local:apply_patch for multi-file or multi-hunk changes, local:edit_file for a single surgical replacement, and local:write_file only for new files or whole-file rewrites. Use local:glob/local:grep to locate call sites before editing. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package (via local:bash) and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n  (2) REVIEW — call local:subagent with: prompt = the full plan + a diff of what you changed (from `git diff`) + this instruction: \"You are a senior reviewer. Read the listed files and judge whether the implementation matches the plan, tests cover the new behavior, and there are no obvious bugs or scope creep. Respond with either \\\"APPROVE: <one-line reason>\\\" or \\\"REJECT: <numbered list of concrete fixes>\\\".\" Set allowed_tools to [\"local:read_file\",\"local:glob\",\"local:grep\",\"local:bash\"] (read-only reviewer).\n  (3) DECIDE — if the reviewer's verdict starts with APPROVE, emit exactly <promise>APPROVED</promise> as your final message (nothing else). If it starts with REJECT, acknowledge the fixes you will make next iteration and STOP (the loop will re-invoke you)."
+    prompt = "You are implementing the plan ($plan.output).\n\nEach iteration, do all three steps in order:\n  (1) IMPLEMENT — apply any remaining plan items. Prefer local:apply_patch for multi-file or multi-hunk changes, local:edit_file for a single surgical replacement, and local:write_file only for new files or whole-file rewrites. Use local:glob/local:grep to locate call sites before editing. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package (via local:bash) and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n  (2) REVIEW — call local:subagent with: prompt = the full plan + a diff of what you changed (from `git diff`) + this instruction: \"You are a senior reviewer. Read the listed files and judge whether the implementation matches the plan, tests cover the new behavior, and there are no obvious bugs or scope creep. Respond with either \\\"APPROVE: <one-line reason>\\\" or \\\"REJECT: <numbered list of concrete fixes>\\\".\" Set allowed_tools to [\"local:read_file\",\"local:glob\",\"local:grep\",\"local:git_read\"] (read-only reviewer — no bash).\n  (3) DECIDE — if the reviewer's verdict starts with APPROVE, emit exactly <promise>APPROVED</promise> as your final message (nothing else). If it starts with REJECT, acknowledge the fixes you will make next iteration and STOP (the loop will re-invoke you)."
     allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:glob, local:grep, local:bash, local:subagent, local:load_skill"
     thread_id = "dev"
+    model = "claude-sonnet-4-6"
   ]
 
   verify [
@@ -84,37 +82,38 @@ digraph build_feature {
     max_retries = 2
     goal_gate = true
     thread_id = "dev"
+    model = "claude-sonnet-4-6"
   ]
 
   update_docs [
-    prompt = "Decide whether this run's changes need to be reflected in the repo's docs. You are on a fresh thread — read state via git, not from prior-node conversation.\n\nSteps:\n  1. Run `git diff --stat HEAD` via local:bash. If it is empty, emit `DOCS_READY: no changes` and stop.\n  2. Scan the stat. If only internal package source/tests changed (nothing a reader of docs/SPEC.md, docs/PLAN.md, or AGENTS.md would notice — e.g. refactors, new tests, private helpers), emit `DOCS_READY: no changes` and stop. Do NOT fetch the full diff in that case.\n  3. Only if user-visible surface may have shifted (public APIs, CLI flags/commands, workflow contracts, repo layout, stack/tooling changes), run `git diff HEAD -- <path>` for just the specific files whose names hint at user-visible impact.\n  4. For each of the following, decide if an update is warranted:\n       - docs/SPEC.md   — user-visible behavior, invariants, or public contracts changed\n       - docs/PLAN.md   — phase scope or a phase's verification bar shifted\n       - AGENTS.md      — conventions, commands, repo layout, or stack changed\n     Cosmetic/internal refactors that a reader of the docs would not notice do NOT need doc updates.\n  5. If none apply, emit exactly `DOCS_READY: no changes` and stop.\n  6. Otherwise, edit the affected docs. Prefer local:edit_file for small targeted changes and local:apply_patch when a single update spans multiple sections/files; reserve local:write_file for whole-file rewrites. Keep edits minimal and on-topic — do not rewrite sections that weren't affected. Do not touch any files outside docs/*.md and AGENTS.md.\n  7. Emit `DOCS_READY: updated <comma-separated file list>` as your final line."
-    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:bash, local:load_skill"
+    prompt = "Decide whether this run's changes need to be reflected in the repo's docs. You are on a fresh thread — read state via git, not from prior-node conversation.\n\nSteps:\n  1. Run local:git_read subcommand=\"diff\" args=[\"--stat\", \"HEAD\"]. If empty, emit `DOCS_READY: no changes` and stop.\n  2. Scan the stat. If only internal package source/tests changed (nothing a reader of docs/SPEC.md, docs/PLAN.md, or AGENTS.md would notice — e.g. refactors, new tests, private helpers), emit `DOCS_READY: no changes` and stop. Do NOT fetch the full diff in that case.\n  3. Only if user-visible surface may have shifted (public APIs, CLI flags/commands, workflow contracts, repo layout, stack/tooling changes), run local:git_read subcommand=\"diff\" args=[\"HEAD\", \"--\", \"<path>\"] for just the specific files whose names hint at user-visible impact.\n  4. For each of the following, decide if an update is warranted:\n       - docs/SPEC.md   — user-visible behavior, invariants, or public contracts changed\n       - docs/PLAN.md   — phase scope or a phase's verification bar shifted\n       - AGENTS.md      — conventions, commands, repo layout, or stack changed\n     Cosmetic/internal refactors that a reader of the docs would not notice do NOT need doc updates.\n  5. If none apply, emit exactly `DOCS_READY: no changes` and stop.\n  6. Otherwise, edit the affected docs. Prefer local:edit_file for small targeted changes and local:apply_patch when a single update spans multiple sections/files; reserve local:write_file for whole-file rewrites. Keep edits minimal and on-topic — do not rewrite sections that weren't affected. Do not touch any files outside docs/*.md and AGENTS.md.\n  7. Emit `DOCS_READY: updated <comma-separated file list>` as your final line."
+    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:git_read, local:load_skill"
     fidelity = "compact"
+    model = "claude-sonnet-4-6"
   ]
 
   commit [
-    prompt = "Commit this run's work following AGENTS.md §Commit conventions. You are on a fresh thread — read state via git, not from prior-node conversation. Use local:bash for every git call.\n\nSteps:\n  1. `git status --short` — if there are no changes, emit `COMMITTED: no changes` and stop.\n  2. `git diff --stat` — enumerate the files you will stage.\n  3. Pick the phase tag: `grep -n '^## Phase' docs/PLAN.md`, read the surrounding text, and choose `[P<n>]` for the lowest-numbered phase whose verification bar this change advances. When uncertain, prefer the current in-progress phase over speculating about later ones.\n  4. Stage explicitly: `git add <path1> <path2> ...`. Never `git add .` or `git add -A`.\n  5. Commit with a HEREDOC so quoting survives:\n       git commit -m \"$(cat <<'EOF'\n       [P<n>] <imperative one-line subject, <=72 chars>\n\n       <optional body explaining why, wrapped at 72 cols. The body should stand on its own as the run summary — a future reader of `git log` should understand what changed and why without consulting events.jsonl.>\n       EOF\n       )\"\n     Rules: imperative mood (\"add X\", not \"added X\"); no `--no-verify`; no `Co-Authored-By` line; no marketing language.\n  6. If the pre-commit hook fails, fix the root cause (typecheck/lint/test error) — local:edit_file for a one-spot fix, local:apply_patch for multi-file, local:write_file for whole-file rewrites — re-stage the fix, and create a NEW commit — never `git commit --amend`. One retry only; if it still fails, emit `COMMIT_FAILED: <short reason>` and stop.\n  7. `git status` must be clean. Emit `COMMITTED: <short sha from git rev-parse --short HEAD>` as the final line.\n\nDo not run `git push`."
-    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:bash, local:load_skill"
+    prompt = "Commit this run's work following AGENTS.md §Commit conventions. You are on a fresh thread — read state via git, not from prior-node conversation. Use local:bash for the git commit call (HEREDOC makes quoting survive); use local:git_read for everything else.\n\nSteps:\n  1. local:git_read subcommand=\"status\" args=[\"--short\"] — if empty, emit `COMMITTED: no changes` and stop.\n  2. local:git_read subcommand=\"diff\" args=[\"--stat\"] — enumerate the files you will stage.\n  3. Pick the phase tag: local:grep `^## Phase` against docs/PLAN.md, read the surrounding text, choose `[P<n>]` for the lowest-numbered phase whose verification bar this change advances. When uncertain, prefer the current in-progress phase.\n  4. Stage explicitly via local:bash: `git add <path1> <path2> ...`. Never `git add .` or `git add -A`.\n  5. Commit with a HEREDOC so quoting survives:\n       git commit -m \"$(cat <<'EOF'\n       [P<n>] <imperative one-line subject, <=72 chars>\n\n       <optional body explaining why, wrapped at 72 cols. The body should stand on its own as the run summary — a future reader of `git log` should understand what changed and why without consulting events.jsonl.>\n       EOF\n       )\"\n     Rules: imperative mood (\"add X\", not \"added X\"); no `--no-verify`; no `Co-Authored-By` line; no marketing language.\n  6. If the pre-commit hook fails, fix the root cause (typecheck/lint/test error) — local:edit_file for a one-spot fix, local:apply_patch for multi-file, local:write_file for whole-file rewrites — re-stage the fix, and create a NEW commit — never `git commit --amend`. One retry only; if it still fails, emit `COMMIT_FAILED: <short reason>` and stop.\n  7. local:git_read subcommand=\"status\" must be clean. Emit `COMMITTED: <short sha from git rev-parse --short HEAD>` as the final line.\n\nDo not run `git push`."
+    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:bash, local:git_read, local:load_skill"
     max_retries = 1
+    model = "claude-sonnet-4-6"
   ]
 
   merge [
-    prompt = "Rebase this worktree's branch onto main and fast-forward main to the new tip. You are on a fresh thread — read state via git. Use local:bash for every git call.\n\nPreconditions — emit a SKIP reason and stop if any fails:\n  1. `git rev-parse --is-inside-work-tree` prints `true` (otherwise `MERGE_SKIPPED: not a git work tree`).\n  2. `git rev-parse --git-common-dir` vs `git rev-parse --git-dir`: if they match, this is the MAIN checkout, not a linked worktree. Emit `MERGE_SKIPPED: not a linked worktree, human merges main manually` and stop.\n  3. `current=$(git branch --show-current)`; if empty or equal to `main`, emit `MERGE_SKIPPED: on $current` and stop.\n  4. `git log main..HEAD --oneline` — if empty, emit `MERGE_SKIPPED: no commits ahead of main` and stop.\n\nRebase + conflict resolution loop (max 3 outer attempts for CAS retry, max 5 inner rounds for conflict resolution):\n  5. `old_main=$(git rev-parse main)` — capture current main tip for the compare-and-swap.\n  6. `git rebase \"$old_main\"`. If it stops on conflicts:\n       a. `git status --short` — identify UU/AA/DD paths.\n       b. For each conflicted file: `local:read_file`, locate the `<<<<<<<` / `=======` / `>>>>>>>` markers (local:grep `'^<<<<<<<'` can find them fast across many files), resolve by KEEPING CHANGES FROM BOTH SIDES whenever semantically possible — concatenate list entries, union import statements, merge type members, keep both imports if both are used. Only drop one side's content when the two literally contradict (e.g. the same variable assigned two different values) and the correct choice is obvious from context; otherwise err toward keeping both and fixing forward. Use local:edit_file to strip individual conflict hunks, or local:write_file when rewriting the whole file is simpler.\n       c. After editing, `git add <files>` then `git rebase --continue`.\n       d. If a round leaves conflicts unresolved, repeat (max 5 rounds). On exhaustion: `git rebase --abort` → emit `MERGE_BLOCKED: unresolvable conflicts in <files>` and a final line `<abort>merge conflicts unresolved</abort>`.\n  7. Once rebase is clean, atomically fast-forward main: `new_sha=$(git rev-parse HEAD)` then `git update-ref refs/heads/main \"$new_sha\" \"$old_main\"`. The trailing `$old_main` is the compare argument — update-ref only succeeds if main is still at $old_main, so a concurrent parallel run that already advanced main will make this fail. That is expected.\n  8. On update-ref failure (another worker won the race): the rebase we just did was on stale main. Loop back to step 5 and re-rebase on the new main tip. Max 3 outer attempts. If still failing: emit `MERGE_BLOCKED: lost CAS race 3 times, retry manually` and `<abort>merge race</abort>`.\n  9. Success: emit `MERGED: main -> $(git rev-parse --short HEAD) (was ${old_main:0:7})` as the final line.\n\nDo not run `git push`. Do not touch the reflog. Do not rewrite commits already on main."
-    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:grep, local:bash, local:load_skill"
+    prompt = "Rebase this worktree's branch onto main and fast-forward main to the new tip. You are on a fresh thread — read state via git. Use local:bash for mutating git calls (rebase, update-ref) and local:git_read for the read-only ones.\n\nPreconditions — emit a SKIP reason and stop if any fails:\n  1. local:git_read subcommand=\"rev-parse\" args=[\"--is-inside-work-tree\"] must print `true` (otherwise `MERGE_SKIPPED: not a git work tree`).\n  2. local:git_read subcommand=\"rev-parse\" args=[\"--git-common-dir\"] vs args=[\"--git-dir\"]: if they match, this is the MAIN checkout, not a linked worktree. Emit `MERGE_SKIPPED: not a linked worktree, human merges main manually` and stop.\n  3. `current=$(git branch --show-current)` (local:bash); if empty or equal to `main`, emit `MERGE_SKIPPED: on $current` and stop.\n  4. local:git_read subcommand=\"log\" args=[\"main..HEAD\", \"--oneline\"] — if empty, emit `MERGE_SKIPPED: no commits ahead of main` and stop.\n\nRebase + conflict resolution loop (max 3 outer attempts for CAS retry, max 5 inner rounds for conflict resolution):\n  5. `old_main=$(git rev-parse main)` (local:bash) — capture current main tip for the compare-and-swap.\n  6. `git rebase \"$old_main\"` (local:bash). If it stops on conflicts:\n       a. local:git_read subcommand=\"status\" args=[\"--short\"] — identify UU/AA/DD paths.\n       b. For each conflicted file: local:read_file, locate the `<<<<<<<` / `=======` / `>>>>>>>` markers (local:grep `'^<<<<<<<'` can find them fast across many files), resolve by KEEPING CHANGES FROM BOTH SIDES whenever semantically possible — concatenate list entries, union import statements, merge type members. Only drop one side when the two literally contradict. Use local:edit_file to strip individual hunks, or local:write_file when rewriting the whole file is simpler.\n       c. After editing, `git add <files>` then `git rebase --continue` (local:bash).\n       d. If a round leaves conflicts unresolved, repeat (max 5 rounds). On exhaustion: `git rebase --abort` → emit `MERGE_BLOCKED: unresolvable conflicts in <files>` and a final line `<abort>merge conflicts unresolved</abort>`.\n  7. Once rebase is clean, atomically fast-forward main: `new_sha=$(git rev-parse HEAD)` then `git update-ref refs/heads/main \"$new_sha\" \"$old_main\"`. The trailing `$old_main` is the compare argument — update-ref only succeeds if main is still at $old_main, so a concurrent parallel run that already advanced main will make this fail. That is expected.\n  8. On update-ref failure (another worker won the race): the rebase we just did was on stale main. Loop back to step 5 and re-rebase on the new main tip. Max 3 outer attempts. If still failing: emit `MERGE_BLOCKED: lost CAS race 3 times, retry manually` and `<abort>merge race</abort>`.\n  9. Success: emit `MERGED: main -> $(git rev-parse --short HEAD) (was ${old_main:0:7})` as the final line.\n\nDo not run `git push`. Do not touch the reflog. Do not rewrite commits already on main."
+    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:grep, local:bash, local:git_read, local:load_skill"
     max_retries = 1
+    model = "claude-sonnet-4-6"
   ]
 
   done [shape=Msquare]
 
-  start -> explore
+  start -> plan
 
-  // Early exits: when explore or plan emit `<abort>…</abort>`, the backend
-  // turns that into a `fail` outcome and we route straight to `done`. The
-  // unconditional edges below only fire on `outcome=success` because the
-  // condition-matched edges are evaluated first (see docs/SPEC.md §3.8).
-  explore -> done [condition="outcome=fail"]
-  explore -> plan
-
+  // Early exits: when plan emits `<abort>…</abort>`, the backend turns that
+  // into a `fail` outcome and we route straight to `done`. The unconditional
+  // edges below only fire on `outcome=success` because the condition-matched
+  // edges are evaluated first (see docs/SPEC.md §3.8).
   plan -> done [condition="outcome=fail"]
   plan -> implement_and_review
 

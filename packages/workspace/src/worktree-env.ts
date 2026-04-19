@@ -1,26 +1,28 @@
 // WorktreeEnvironment — ExecutionEnvironment backed by a short-lived
 // `git worktree`. Each session gets its own branch so agents don't mutate
-// the user's working copy.
+// the user's working copy and concurrent runs don't step on each other.
 //
 // Layout:
 //   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree
 //   branch: swarm/<run-id>                    ← tracking branch
 //
-// Untracked/ignored paths (node_modules, .env, etc.) are NOT copied into a
-// fresh worktree. For transparent tooling (bun install, bun test), we
-// symlink a configurable list of ignored paths from the main repo into the
-// worktree. Default list is `["node_modules"]`. Users can extend via opts.
-//
-// WARNING: symlinked node_modules means `bun install` inside the worktree
-// mutates the shared cache. For Phase 3 MVP this is the right trade-off
-// (correctness + speed > isolation for deps). Proper CoW arrives later.
+// Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
+// shared with the main repo. If the project needs dependencies installed,
+// set `.swarm/config.yaml` project.bootstrap to the appropriate command
+// (e.g. `bun install --frozen-lockfile`, `pnpm install`, `pip install -r
+// requirements.txt`). The command runs inside the fresh worktree before the
+// first node executes; a non-zero exit fails the run.
 
 import { spawn } from "node:child_process";
-import { existsSync, symlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
+
+/** A shell command string, or a callback given the partially-initialized
+ * environment to run whatever bootstrap logic the host needs. Either form
+ * runs inside the worktree as its cwd. */
+export type BootstrapSpec = string | ((env: ExecutionEnvironment) => Promise<void>);
 
 export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions, "cwd"> {
   /** The repo that owns the worktree. Defaults to process.cwd(). */
@@ -29,12 +31,20 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   runId: string;
   /** Directory under repoRoot where worktrees live. Default `.swarm/worktrees`. */
   worktreesDir?: string;
-  /** Ignored paths to symlink from repoRoot into the worktree. Default `["node_modules"]`. */
-  shareIgnored?: string[];
   /** Starting branch/commit for the worktree. Default current HEAD. */
   baseRef?: string;
   /** Keep the worktree + branch after dispose() (for post-mortem). Default false. */
   keepAfterDispose?: boolean;
+  /** Per-worktree dependency install. Stack-agnostic — pass whatever the
+   * project needs (`bun install --frozen-lockfile`, `pnpm install`, a
+   * custom script, or a callback). Missing = no-op. */
+  bootstrap?: BootstrapSpec;
+  /** Per-run directory for service logs, port files, and other run-local
+   * sidecar state. Created in init(). Default undefined = no log dir is
+   * prepared (callers that don't need it can skip). */
+  logDir?: string;
+  /** Timeout for the bootstrap command. Default 10 minutes. */
+  bootstrapTimeoutMs?: number;
 }
 
 export class WorktreeEnvironment implements ExecutionEnvironment {
@@ -42,9 +52,13 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   readonly runId: string;
   readonly branch: string;
   readonly worktreePath: string;
-  private readonly shareIgnored: string[];
+  readonly logDir: string | undefined;
+  readonly bootstrapRan: boolean = false;
+  readonly bootstrapCommand: string | undefined;
   private readonly baseRef: string | undefined;
   private readonly keepAfterDispose: boolean;
+  private readonly bootstrap: BootstrapSpec | undefined;
+  private readonly bootstrapTimeoutMs: number;
   private readonly local: LocalEnvironment;
   private initialized = false;
   private disposed = false;
@@ -55,9 +69,12 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     this.branch = `swarm/${opts.runId}`;
     const dir = opts.worktreesDir ?? ".swarm/worktrees";
     this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
-    this.shareIgnored = opts.shareIgnored ?? ["node_modules"];
     if (opts.baseRef !== undefined) this.baseRef = opts.baseRef;
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
+    if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
+    this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
+    if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
+    if (opts.logDir !== undefined) this.logDir = resolve(opts.logDir);
     this.local = new LocalEnvironment({
       cwd: this.worktreePath,
       ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
@@ -65,7 +82,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     });
   }
 
-  /** Create the worktree + branch and set up symlinks. Idempotent. */
+  /** Create the worktree + branch, prepare the log dir, and run the
+   * project's bootstrap command if configured. Idempotent. */
   async init(): Promise<void> {
     if (this.initialized) return;
     await mkdir(join(this.repoRoot, ".swarm", "worktrees"), { recursive: true });
@@ -76,16 +94,21 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       args.push("-b", this.branch, this.worktreePath);
     }
     await runGit(this.repoRoot, args);
-    for (const name of this.shareIgnored) {
-      const src = join(this.repoRoot, name);
-      const dst = join(this.worktreePath, name);
-      if (existsSync(src) && !existsSync(dst)) {
-        try {
-          symlinkSync(src, dst, "dir");
-        } catch {
-          // ignore — symlinking is best-effort, some tools work without it
+    if (this.logDir !== undefined) {
+      await mkdir(this.logDir, { recursive: true });
+    }
+    if (this.bootstrap !== undefined) {
+      if (typeof this.bootstrap === "string") {
+        const result = await this.local.exec(this.bootstrap, { timeoutMs: this.bootstrapTimeoutMs });
+        if (result.exitCode !== 0) {
+          throw new Error(
+            `bootstrap command failed (exit ${result.exitCode}): ${this.bootstrap}\n${result.stderr.trim()}`,
+          );
         }
+      } else {
+        await this.bootstrap(this.local);
       }
+      (this as { bootstrapRan: boolean }).bootstrapRan = true;
     }
     this.initialized = true;
   }

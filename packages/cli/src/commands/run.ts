@@ -145,16 +145,23 @@ export async function runCommandInProcess(opts: RunCommandOptions): Promise<numb
   // dance. The CLI layer already collapses `--no-worktree` to
   // `opts.worktree === false` so we only disable on that exact value.
   const useWorktree = opts.worktree !== false;
+  const logDir = resolve(cwd, runsDir, run_id, "logs");
   let env: ExecutionEnvironment;
   let worktree: WorktreeEnvironment | undefined;
   if (useWorktree) {
     worktree = new WorktreeEnvironment({
       ...(opts.cwd !== undefined ? { repoRoot: opts.cwd } : {}),
       runId: run_id,
+      ...(config.project?.bootstrap !== undefined ? { bootstrap: config.project.bootstrap } : {}),
+      logDir,
     });
     await worktree.init();
     env = worktree;
   } else {
+    // WorktreeEnvironment.init() normally creates logDir; replicate for the
+    // direct-LocalEnvironment path so `$LOG_DIR` always points at an
+    // existing dir.
+    await mkdir(logDir, { recursive: true });
     env = new LocalEnvironment(opts.cwd !== undefined ? { cwd: opts.cwd } : {});
   }
   const registry = new ToolRegistry();
@@ -223,10 +230,17 @@ export async function runCommandInProcess(opts: RunCommandOptions): Promise<numb
       summariser = new PiSummariserBackend({ provider: sumProvider, model: sumModel });
     }
 
+    const runEnv = {
+      worktreePath: env.cwd(),
+      runId: run_id,
+      logDir,
+      ...(worktree?.bootstrapCommand !== undefined ? { bootstrapCommand: worktree.bootstrapCommand } : {}),
+    };
     backend = new PiCodergenBackend({
       registry,
       env,
       defaultModel: { provider, model },
+      runEnv,
       ...(summariser !== undefined ? { summariser } : {}),
       ...(discoveredSkills.length > 0 ? { skills: discoveredSkills } : {}),
     });
@@ -283,10 +297,16 @@ export async function runCommandInProcess(opts: RunCommandOptions): Promise<numb
       sink,
       backend,
       interviewer,
-      // `$ARGUMENTS` is read via prompt substitution's `args` channel, not
-      // the context map. We also mirror into context.input so prompts that
-      // read `${context.input}` continue to work.
-      ...(mergedInput !== undefined ? { args: { $ARGUMENTS: mergedInput } } : {}),
+      // `$ARGUMENTS`, `$WORKTREE_PATH`, `$RUN_ID`, `$LOG_DIR` are read via
+      // prompt substitution's `args` channel, not the context map. We also
+      // mirror `$ARGUMENTS` into context.input so prompts that read
+      // `${context.input}` continue to work.
+      args: {
+        ...(mergedInput !== undefined ? { $ARGUMENTS: mergedInput } : {}),
+        $WORKTREE_PATH: env.cwd(),
+        $RUN_ID: run_id,
+        $LOG_DIR: logDir,
+      },
       initial_context: mergedInput !== undefined ? { input: mergedInput } : {},
       ...(summariser !== undefined ? { summariser } : {}),
       // --no-auto-title hard-disables, otherwise config/graph take over.

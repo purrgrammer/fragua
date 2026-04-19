@@ -1,6 +1,7 @@
 // Built-in tools exposed to LLM agents.
 // Per-tool truncation defaults per Attractor Coding Agent Loop spec.
 
+import { spawn } from "node:child_process";
 import { Type } from "@sinclair/typebox";
 import TurndownService from "turndown";
 import { ApplyPatchError, applyPatch } from "./apply-patch.ts";
@@ -68,6 +69,95 @@ export const bashTool: Tool<{ command: string; timeout_ms?: number }, { exit_cod
     return {
       text: combined,
       data: { exit_code: result.exitCode, duration_ms: result.durationMs },
+      is_error: result.exitCode !== 0,
+    };
+  },
+};
+
+// Read-only git subcommands. Spawned via `git` directly (no shell), so the
+// `args` array is always passed verbatim as argv — shell metachars are inert.
+// We still deny a short list of git flags that rebind git's execution context
+// (`-c`, `-C`, `--exec-path`, `--upload-pack`, …), which are the only RCE
+// vectors local git has.
+const GIT_READ_SUBCOMMANDS = ["log", "diff", "show", "status", "rev-parse", "blame", "ls-files"] as const;
+type GitReadSubcommand = (typeof GIT_READ_SUBCOMMANDS)[number];
+
+const DENIED_GIT_FLAGS: RegExp[] = [
+  /^-c(=|$)/,
+  /^-C(=|$)/,
+  /^--config-env(=|$)/,
+  /^--exec-path(=|$)/,
+  /^--upload-pack(=|$)/,
+  /^--receive-pack(=|$)/,
+  /^--work-tree(=|$)/,
+  /^--git-dir(=|$)/,
+  /^--super-prefix(=|$)/,
+];
+
+export const gitReadTool: Tool<
+  { subcommand: GitReadSubcommand; args?: string[] },
+  { exit_code: number; duration_ms: number }
+> = {
+  name: "local:git_read",
+  description:
+    "Run a read-only git subcommand (log, diff, show, status, rev-parse, blame, ls-files) with optional args. No shell, no redirection, no writes. Use this instead of local:bash when you only need git information.",
+  parameters: Type.Object({
+    subcommand: Type.Union(
+      GIT_READ_SUBCOMMANDS.map((s) => Type.Literal(s)),
+      { description: "Read-only git subcommand" },
+    ),
+    args: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Extra args passed verbatim as argv (no shell interpretation). Rejects flags that rebind git's execution context.",
+      }),
+    ),
+  }),
+  idempotent: true,
+  truncation: { max_chars: 30_000, mode: "head_tail", max_lines: 500 },
+  async execute(args, env) {
+    const extra = args.args ?? [];
+    for (const a of extra) {
+      if (DENIED_GIT_FLAGS.some((re) => re.test(a))) {
+        return {
+          text: `git_read: denied flag "${a}" (rebinds git execution context)`,
+          is_error: true,
+        };
+      }
+    }
+    const start = Date.now();
+    const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolvePromise) => {
+      const child = spawn("git", [args.subcommand, ...extra], {
+        cwd: env.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+        env: process.env,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("close", (code) => {
+        resolvePromise({ stdout, stderr, exitCode: code ?? 0 });
+      });
+      child.on("error", (err) => {
+        resolvePromise({ stdout, stderr: err.message, exitCode: 127 });
+      });
+    });
+    const durationMs = Date.now() - start;
+    const combined = [
+      result.stdout && `--- stdout ---\n${result.stdout}`,
+      result.stderr && `--- stderr ---\n${result.stderr}`,
+      `--- exit: ${result.exitCode} (${durationMs}ms) ---`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return {
+      text: combined,
+      data: { exit_code: result.exitCode, duration_ms: durationMs },
       is_error: result.exitCode !== 0,
     };
   },
@@ -439,6 +529,7 @@ export const CORE_TOOLS: Tool[] = [
   readFileTool,
   writeFileTool,
   bashTool,
+  gitReadTool,
   listDirTool,
   globTool,
   grepTool,

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CONTEXT_FILES_MAX_BYTES, loadContextFiles, mergeSystemPrompt } from "../src/system-prompt.ts";
+import {
+  buildSystemPrompt,
+  CONTEXT_FILES_MAX_BYTES,
+  loadContextFiles,
+  mergeSystemPrompt,
+  renderRunEnvironment,
+} from "../src/system-prompt.ts";
 
 function stubEnv(files: Record<string, string>): { readFile(path: string): Promise<string> } {
   return {
@@ -97,5 +103,60 @@ describe("mergeSystemPrompt", () => {
 
   test("extension goes first, separated by blank line", () => {
     expect(mergeSystemPrompt("base", "ext")).toBe("ext\n\nbase");
+  });
+});
+
+describe("renderRunEnvironment", () => {
+  test("with bootstrap command", () => {
+    const block = renderRunEnvironment({
+      worktreePath: "/wt/abc",
+      runId: "abc",
+      logDir: "/wt/abc/logs",
+      bootstrapCommand: "bun install --frozen-lockfile",
+    });
+    expect(block).toContain("<run-environment>");
+    expect(block).toContain("worktree: /wt/abc");
+    expect(block).toContain("run_id: abc");
+    expect(block).toContain("log_dir: /wt/abc/logs");
+    expect(block).toContain("ran `bun install --frozen-lockfile`");
+    expect(block).toContain("re-run the project's bootstrap command");
+    expect(block).toContain("</run-environment>");
+  });
+
+  test("without bootstrap, states plain checkout", () => {
+    const block = renderRunEnvironment({
+      worktreePath: "/wt/x",
+      runId: "x",
+    });
+    expect(block).toContain("bootstrap: none configured");
+    expect(block).not.toContain("re-run the project's bootstrap command");
+    expect(block).not.toContain("log_dir:");
+  });
+});
+
+describe("buildSystemPrompt with runEnv", () => {
+  test("prepends <run-environment> before every other block", () => {
+    const out = buildSystemPrompt({
+      global: "you are the agent",
+      perNode: undefined,
+      contextBlock: "<project-conventions>rules</project-conventions>",
+      runEnv: { worktreePath: "/wt/abc", runId: "abc" },
+    });
+    const runEnvIdx = out.indexOf("<run-environment>");
+    const conventionsIdx = out.indexOf("<project-conventions>");
+    const baseIdx = out.indexOf("you are the agent");
+    expect(runEnvIdx).toBeGreaterThanOrEqual(0);
+    expect(runEnvIdx).toBeLessThan(conventionsIdx);
+    expect(conventionsIdx).toBeLessThan(baseIdx);
+  });
+
+  test("omits <run-environment> entirely when runEnv is undefined", () => {
+    const out = buildSystemPrompt({
+      global: "base",
+      perNode: undefined,
+      contextBlock: "",
+    });
+    expect(out).not.toContain("<run-environment>");
+    expect(out).toBe("base");
   });
 });

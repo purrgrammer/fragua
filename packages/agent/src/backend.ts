@@ -9,7 +9,7 @@ import { buildLoadSkillTool, filterSkillsForNode, renderSkillsCatalog, toCatalog
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
-import { buildSystemPrompt, loadContextFiles } from "./system-prompt.ts";
+import { buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
@@ -31,6 +31,12 @@ export interface PiCodergenBackendOptions {
    * the backend renders a tier-1 catalog into the system prompt and
    * adds a scoped `local:load_skill` tool to the run. */
   skills?: Skill[];
+  /** Per-run isolation facts — worktree path, run id, log dir, bootstrap
+   * command. When provided, the backend prepends a `<run-environment>`
+   * block to every node's system prompt so agents know where they are
+   * and which dependencies are installed. Omit for bare LocalEnvironment
+   * runs that don't need the preamble. */
+  runEnv?: RunEnvironment;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -52,6 +58,7 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly messageStore: MessageStore;
   private readonly summariser: SummariserBackend | undefined;
   private readonly skills: readonly Skill[];
+  private readonly runEnv: RunEnvironment | undefined;
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -63,6 +70,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.messageStore = new MessageStore();
     this.summariser = opts.summariser;
     this.skills = opts.skills ?? [];
+    this.runEnv = opts.runEnv;
   }
 
   /** Direct access to the transcript store. Exposed for tests and, later,
@@ -156,6 +164,7 @@ export class PiCodergenBackend implements CodergenBackend {
       perNode: perNodeSystemPrompt,
       contextBlock,
       skillsCatalog,
+      ...(this.runEnv !== undefined ? { runEnv: this.runEnv } : {}),
     });
 
     // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out

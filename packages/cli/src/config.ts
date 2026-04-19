@@ -10,6 +10,12 @@ export interface SwarmConfig {
   project?: {
     name?: string;
     runs_dir?: string;
+    /** Shell command run inside each fresh worktree before the first node
+     * fires. Use whatever the project's stack needs — `bun install
+     * --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
+     * `./scripts/bootstrap.sh`, etc. Omit for source-only projects that
+     * don't need a per-worktree install. Non-zero exit fails the run. */
+    bootstrap?: string;
   };
   defaults?: {
     provider?: string;
@@ -30,6 +36,9 @@ export interface SwarmConfig {
   auto_title?: "on" | "off";
   blocklist?: string[];
   workflows?: Record<string, string>;
+  /** Max concurrent pipeline runs the daemon will claim from its queue.
+   * CLI `--concurrency` overrides this. Default 8 when unset. */
+  concurrency?: number;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the
    * well-known paths (`.agents/skills`, `.claude/skills`
    * under both project and user scopes). See `packages/workspace/src/skills`

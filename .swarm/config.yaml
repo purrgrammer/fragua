@@ -8,6 +8,10 @@
 project:
   name: swarm
   runs_dir: .swarm/runs
+  # Stack-agnostic bootstrap. Runs inside each fresh worktree before the
+  # first node fires, after `git worktree add`. Non-zero exit fails the
+  # run. Leave unset for projects that don't need per-worktree install.
+  bootstrap: "bun install --frozen-lockfile"
 
 defaults:
   # Multi-provider: swap to any provider pi-ai supports — see `swarm providers`.

@@ -8,6 +8,9 @@
 //   $LOOP_USER_INPUT          — latest user input in a loop iteration
 //   $REJECTION_REASON         — reason for the most recent rejection
 //   $ARGUMENTS                — all positional args joined with space
+//   $WORKTREE_PATH            — absolute path to this run's worktree
+//   $RUN_ID                   — the run id (stable across the whole pipeline)
+//   $LOG_DIR                  — per-run dir for service logs / sidecars
 //   $1 … $9                   — individual positional args
 //
 // Shell-safe mode wraps every substituted value in single quotes, escaping
@@ -37,6 +40,9 @@ export interface SubstitutionArgs {
   $ARTIFACTS_DIR?: string;
   $LOOP_USER_INPUT?: string;
   $REJECTION_REASON?: string;
+  $WORKTREE_PATH?: string;
+  $RUN_ID?: string;
+  $LOG_DIR?: string;
 }
 
 export interface SubstitutionOptions {
@@ -50,7 +56,15 @@ export interface SubstitutionOptions {
 const CONTEXT_RE = /\$\{context\.([^}]+)\}/g;
 const NODE_OUTPUT_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.([A-Za-z0-9_.[\]-]+))?/g;
 // POSITIONAL_VARS handled explicitly to avoid greedy conflicts.
-const BUILTIN_VARS = ["$ARTIFACTS_DIR", "$LOOP_USER_INPUT", "$REJECTION_REASON", "$ARGUMENTS"];
+const BUILTIN_VARS = [
+  "$ARTIFACTS_DIR",
+  "$LOOP_USER_INPUT",
+  "$REJECTION_REASON",
+  "$ARGUMENTS",
+  "$WORKTREE_PATH",
+  "$RUN_ID",
+  "$LOG_DIR",
+];
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { context = {}, nodeOutputs, args = {}, escapeForShell = false } = opts;

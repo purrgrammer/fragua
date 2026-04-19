@@ -35,7 +35,22 @@ bun run packages/cli/bin/swarm.ts run workflows/add-tool.dot \
   --worktree
 ```
 
-`node_modules` is symlinked from the main repo into the worktree so `bun test` / `bun run ci` work without a reinstall. Caveat: `bun install` inside the worktree mutates the shared cache — swarm will still run, but you may see `bun.lock` changes bleed back to the main repo.
+Each worktree is a clean checkout: no symlinks, no shared `node_modules`. To prepare dependencies the project declares a bootstrap command in `.swarm/config.yaml`:
+
+```yaml
+project:
+  bootstrap: "bun install --frozen-lockfile"   # swarm itself
+  # or: bootstrap: "pnpm install"
+  # or: bootstrap: "pip install -r requirements.txt"
+  # or: bootstrap: "./scripts/bootstrap.sh"
+  # or: (omitted — source-only projects skip the install step)
+```
+
+The command runs inside the fresh worktree after `git worktree add` and before the first node fires. Non-zero exit fails the run. This is stack-agnostic by design — swarm makes no assumptions about bun, npm, or any package manager.
+
+Concurrent runs are fully isolated: each gets its own `node_modules` (or equivalent), so `bun install` / `pnpm install` in one worktree can't mutate another's state.
+
+The agent's system prompt always starts with a `<run-environment>` block listing the worktree path, run id, log dir, and whether the bootstrap command ran — so agents don't need to introspect their cwd.
 
 ## Flagship workflow
 

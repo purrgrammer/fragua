@@ -97,6 +97,23 @@ export function mergeSystemPrompt(base: string, extension: string): string {
   return `${extension}\n\n${base}`;
 }
 
+/** Per-run environment facts surfaced to every node's system prompt so
+ * agents know their isolation context — worktree path, run id, log dir,
+ * and whether the project's bootstrap command ran. `undefined` omits the
+ * block entirely (e.g. single-process runs that don't use a worktree). */
+export interface RunEnvironment {
+  /** Absolute path the agent is working inside. */
+  worktreePath: string;
+  /** Opaque session id, stable across the whole pipeline. */
+  runId: string;
+  /** Per-run dir for service logs / port files / sidecar state. */
+  logDir?: string | undefined;
+  /** The bootstrap command that ran (string form only). Omitted when the
+   * project didn't configure one. Presence of this field signals "deps
+   * are installed". */
+  bootstrapCommand?: string | undefined;
+}
+
 export interface BuildSystemPromptInput {
   /** Global system prompt configured on the backend (e.g. a project-wide
    * "you are the coding agent" preamble). Becomes the fallback when no
@@ -113,22 +130,59 @@ export interface BuildSystemPromptInput {
    * before `contextBlock` so skill advertisements frame the whole call —
    * order: skills → project-conventions → base. */
   skillsCatalog?: string;
+  /** Per-run isolation facts (worktree path, run id, log dir, bootstrap
+   * status). Rendered as a `<run-environment>` block at the very top so
+   * agents know where they are before reading anything else. */
+  runEnv?: RunEnvironment | undefined;
 }
 
 /** Assemble the final system prompt for a single agent call. Isolated from
  * the backend so tests can round-trip the combinator without standing up
  * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
  * compose it without duplicating the merge rules. */
-export function buildSystemPrompt({ global, perNode, contextBlock, skillsCatalog }: BuildSystemPromptInput): string {
+export function buildSystemPrompt({
+  global,
+  perNode,
+  contextBlock,
+  skillsCatalog,
+  runEnv,
+}: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
   const catalog = skillsCatalog ?? "";
-  // Prepend order: skills (first, so the model sees capabilities up-front),
-  // then context-files, then the base persona prompt. Each non-empty block
-  // is joined with a blank line.
+  // Prepend order: run-env (first, so the model knows WHERE it is),
+  // then skills (what tools are available), then project-conventions
+  // (repo rules), then the base persona prompt. Each non-empty block is
+  // joined with a blank line.
   let out = base;
   out = mergeSystemPrompt(out, contextBlock);
   out = mergeSystemPrompt(out, catalog);
+  if (runEnv !== undefined) {
+    out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
+  }
   return out;
+}
+
+/** Render the `<run-environment>` block. Kept pure + tiny so it can be
+ * unit-tested independently. */
+export function renderRunEnvironment(env: RunEnvironment): string {
+  const lines: string[] = ["<run-environment>", `worktree: ${env.worktreePath}`, `run_id: ${env.runId}`];
+  if (env.logDir) lines.push(`log_dir: ${env.logDir}`);
+  if (env.bootstrapCommand) {
+    lines.push(`bootstrap: ran \`${env.bootstrapCommand}\` successfully in this worktree`);
+  } else {
+    lines.push("bootstrap: none configured (worktree is a plain checkout)");
+  }
+  lines.push("conventions:");
+  lines.push(" - Do all work inside the worktree at the path above; never `cd` out.");
+  if (env.bootstrapCommand) {
+    lines.push(" - If you change dependency manifests (package.json, requirements.txt, etc.),");
+    lines.push("   re-run the project's bootstrap command before running CI/tests.");
+  }
+  if (env.logDir) {
+    lines.push(" - Write any service logs under $LOG_DIR.");
+  }
+  lines.push("</run-environment>");
+  return lines.join("\n");
 }
 
 function escapeAttr(value: string): string {

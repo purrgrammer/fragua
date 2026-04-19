@@ -71,6 +71,13 @@ describe("substitute", () => {
     expect(out).toBe("art=/tmp/r in=again why=fuzzy");
   });
 
+  test("$WORKTREE_PATH, $RUN_ID, $LOG_DIR substituted", () => {
+    const out = substitute("cd $WORKTREE_PATH; run=$RUN_ID logs=$LOG_DIR", {
+      args: { $WORKTREE_PATH: "/wt/abc", $RUN_ID: "abc", $LOG_DIR: "/wt/abc/logs" },
+    });
+    expect(out).toBe("cd /wt/abc; run=abc logs=/wt/abc/logs");
+  });
+
   test("builtin tokens default to empty when arg missing", () => {
     expect(substitute("[$ARTIFACTS_DIR]")).toBe("[]");
   });

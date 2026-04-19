@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeEnvironment } from "../src/worktree-env.ts";
@@ -33,10 +33,9 @@ describe("WorktreeEnvironment", () => {
   });
 
   test("init creates worktree + branch, dispose removes both", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "abc", shareIgnored: [] });
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "abc" });
     await env.init();
     expect(existsSync(env.worktreePath)).toBe(true);
-    // Branch exists
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
     expect(branches.stdout).toContain("swarm/abc");
 
@@ -47,7 +46,7 @@ describe("WorktreeEnvironment", () => {
   });
 
   test("writeFile in worktree does not touch repoRoot files", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "xyz", shareIgnored: [] });
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "xyz" });
     await env.init();
     try {
       await env.writeFile("hello.txt", "only in worktree");
@@ -58,21 +57,89 @@ describe("WorktreeEnvironment", () => {
     }
   });
 
-  test("shareIgnored symlinks ignored directories into the worktree", async () => {
-    await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
-    await writeFile(join(repo, "node_modules", "pkg", "index.js"), "console.log(1)");
-
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "syml", shareIgnored: ["node_modules"] });
+  test("no symlinks by default — worktree is a clean checkout", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "clean" });
     await env.init();
     try {
-      expect(existsSync(join(env.worktreePath, "node_modules", "pkg", "index.js"))).toBe(true);
+      // node_modules must NOT exist after init (no bootstrap was set)
+      expect(existsSync(join(env.worktreePath, "node_modules"))).toBe(false);
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  test("bootstrap string runs in worktree, marks bootstrapRan", async () => {
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-ok",
+      bootstrap: "echo ran > bootstrap.log",
+    });
+    await env.init();
+    try {
+      expect(env.bootstrapRan).toBe(true);
+      expect(env.bootstrapCommand).toBe("echo ran > bootstrap.log");
+      expect(existsSync(join(env.worktreePath, "bootstrap.log"))).toBe(true);
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  test("bootstrap callback receives the env and can write files", async () => {
+    let receivedCwd = "";
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-cb",
+      bootstrap: async (e) => {
+        receivedCwd = e.cwd();
+        await e.writeFile("from-callback.txt", "hi");
+      },
+    });
+    await env.init();
+    try {
+      expect(env.bootstrapRan).toBe(true);
+      expect(receivedCwd).toBe(env.worktreePath);
+      expect(existsSync(join(env.worktreePath, "from-callback.txt"))).toBe(true);
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  test("bootstrap non-zero exit fails init()", async () => {
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "boot-fail",
+      bootstrap: "exit 7",
+    });
+    let error: Error | undefined;
+    try {
+      await env.init();
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error?.message).toContain("bootstrap command failed");
+    expect(error?.message).toContain("exit 7");
+    await env.dispose();
+  });
+
+  test("logDir is created under init()", async () => {
+    const logDir = join(repo, "custom-logs", "run-1");
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "logs", logDir });
+    await env.init();
+    try {
+      expect(existsSync(logDir)).toBe(true);
+      expect(env.logDir).toBe(logDir);
     } finally {
       await env.dispose();
     }
   });
 
   test("keepAfterDispose preserves the worktree for inspection", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "keep", shareIgnored: [], keepAfterDispose: true });
+    const env = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "keep",
+      keepAfterDispose: true,
+    });
     await env.init();
     const path = env.worktreePath;
     try {
@@ -80,18 +147,16 @@ describe("WorktreeEnvironment", () => {
       await env.dispose();
       expect(existsSync(path)).toBe(true);
     } finally {
-      // manual cleanup for the test
       spawnSync("git", ["-C", repo, "worktree", "remove", "--force", path], { stdio: "ignore" });
       spawnSync("git", ["-C", repo, "branch", "-D", "swarm/keep"], { stdio: "ignore" });
     }
   });
 
   test("exec runs in the worktree cwd", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "exec", shareIgnored: [] });
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "exec" });
     await env.init();
     try {
       const r = await env.exec("pwd");
-      // macOS tmpdirs resolve to /private/var/... via symlink; compare suffix
       expect(r.stdout.trim().endsWith(env.worktreePath)).toBe(true);
     } finally {
       await env.dispose();
@@ -99,7 +164,7 @@ describe("WorktreeEnvironment", () => {
   });
 
   test("blocklist passes through from LocalEnvironment", async () => {
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "block", shareIgnored: [] });
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "block" });
     await env.init();
     try {
       const r = await env.exec("sudo echo hi");

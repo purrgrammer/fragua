@@ -486,7 +486,8 @@ Every `AssistantMessage` from pi-ai carries `usage.cost` (input / output / cache
 - **Event log replay:** any run's JSONL replayed produces the same final state
 - **Checkpoint round-trip:** stop at any node, serialize, load into fresh engine, resume → identical end-state
 - **Provider equivalence:** the same workflow running on Claude / GPT-5 / Gemini produces the same structural event log (types and order; content differs)
-- **Worktree isolation:** three concurrent runs on the same repo don't corrupt each other
+- **Worktree isolation:** each run runs in its own `git worktree add` checkout. No files are symlinked from the main repo — dependencies are installed per-worktree via the project-declared `bootstrap` command in `.swarm/config.yaml` (`bun install`, `pip install`, custom script, or unset). Three concurrent runs on the same repo don't corrupt each other's `node_modules` or state
+- **Run-environment preamble:** every agent's system prompt begins with a `<run-environment>` block stating `worktree`, `run_id`, `log_dir`, and `bootstrap` status. The prompt template language also exposes `$WORKTREE_PATH`, `$RUN_ID`, `$LOG_DIR`
 
 ### 6.3 Performance budget
 

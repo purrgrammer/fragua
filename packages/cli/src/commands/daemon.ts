@@ -45,11 +45,13 @@ import {
   writeRendezvous,
 } from "@swarm/server";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
 import { startServer } from "./serve.ts";
 
-/** Global concurrency cap. Phase 4 will source this from
- * `.swarm/config.yaml`; for now a sensible default. */
-const DEFAULT_CONCURRENCY = 2;
+/** Global concurrency cap. `.swarm/config.yaml`'s `concurrency` key
+ * overrides this; the default stays high enough to exercise the
+ * scheduler without overwhelming a laptop. */
+const DEFAULT_CONCURRENCY = 8;
 
 /** Bumped manually when the rendezvous shape or daemon protocol changes. */
 const DAEMON_VERSION = "0.0.0";
@@ -350,7 +352,12 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
   }
 
   const startedAt = new Date().toISOString();
-  const concurrency = DEFAULT_CONCURRENCY;
+  const config = await loadConfig(cwd);
+  const configuredConcurrency = config.concurrency;
+  const concurrency =
+    typeof configuredConcurrency === "number" && Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
+      ? Math.floor(configuredConcurrency)
+      : DEFAULT_CONCURRENCY;
   const resolvedRunsDir = resolvePath(cwd, opts.runsDir ?? ".swarm/runs");
 
   // ProcessSupervisor spawns `swarm run` children per job. It's pure

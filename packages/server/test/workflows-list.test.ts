@@ -92,7 +92,6 @@ describe("createFsWorkflowReader", () => {
   });
 });
 
-
 describe("GET /workflows/:name", () => {
   test("returns 200 + full detail (summary + source) when the workflow exists", async () => {
     const detail = {

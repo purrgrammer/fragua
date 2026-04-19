@@ -42,7 +42,7 @@ Gemini proposed full event sourcing with materialized views. Attractor proposes 
 
 Gemini proposed OverlayFS / APFS native cloning. Industry converged on `git worktree` through 2025-2026 (Claude Code v2.1.50 ships `--worktree`, Archon uses worktree-per-workflow). Portable, proven, cheap.
 
-For parallel runs that touch `node_modules`, symlink or rsync-clone ignored paths; avoid the race-condition rabbit hole.
+For parallel runs, each worktree gets its own dependency install via the project-declared `bootstrap` command in `.swarm/config.yaml` (e.g. `bun install --frozen-lockfile`, `pip install …`, custom script). No symlinks, no shared caches — full isolation at the cost of one install per run.
 
 Default permission mode is `unsafe` (yolo), but the command blocklist refuses the worst commands (`rm -rf /`, `sudo *`, `curl | sh`, writes outside worktree). Zero-cost safety floor; upgrade to classifier / interactive mode in Phase 6.
 
