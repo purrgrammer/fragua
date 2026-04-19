@@ -1,26 +1,17 @@
-// GET /pipelines/:id → detail page.
+// GET /pipelines/:id → run detail page.
 //
-// Post-P5.08 layout is minimal by design: a header with run identity +
-// metrics, and a single primary surface — `<PipelineConversation />` —
-// that streams the run as an AI-Elements-based conversation. The graph
-// "map" panel and the timeline placeholder have been removed; the
-// conversation is the main view, period.
-//
-// Data flow:
-//   - `useRunConversation(id)` owns the event pipeline end-to-end: a
-//     REST bootstrap fetches the full history, then SSE delivers new
-//     events. Events are folded into the conversation tree via
-//     `applyEvent` on arrival; the client never keeps a raw-event
-//     buffer, so memory scales with conversation content (KB) rather
-//     than event count (MB on a 23K-event run).
-//   - `queries.pipelines.detail(id)` drives the header metrics. We
-//     invalidate on `totalEvents` changes so cost / tokens / duration
-//     stay live.
+// Tabs:
+//   Events       — raw store event log (new fact.* / intent.* shapes)
+//   Conversation — AI-Elements conversation view, populated by agent.*
+//                  events when handlers use packages/agent LLM backends
+//   Graph        — live DAG with node inspector
+//   Steps        — per-step LLM context dump (agent-runtime only)
 
 import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { PipelineConversation } from "../components/PipelineConversation.tsx";
@@ -33,20 +24,22 @@ import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { useRunConversation } from "../lib/useRunConversation.ts";
 
+type TabId = "events" | "conversation" | "graph" | "steps";
+
 export function PipelineDetail(): JSX.Element {
   const { id = "" } = useParams();
-  const [view, setView] = useState<"conversation" | "steps" | "graph">("conversation");
+  const [view, setView] = useState<TabId>("conversation");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const { conversation, status: convStatus, totalEvents, controlEvents } = useRunConversation(id || null);
   const isLoading = convStatus === "loading";
+  const isLive = convStatus === "live" || convStatus === "loading";
 
   const qc = useQueryClient();
   const { data: detail, isError } = useQuery({ ...queries.pipelines.detail(id), enabled: !!id });
 
-  // Invalidate detail on totalEvents transitions so header metrics stay
-  // live with the conversation stream. Cheap — server replays from disk.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and id are stable.
+  // Keep header metrics live with the event stream.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
   useEffect(() => {
     if (id) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(id).queryKey });
   }, [totalEvents]);
@@ -55,37 +48,30 @@ export function PipelineDetail(): JSX.Element {
     return (
       <EmptyState
         data-testid="detail-missing-id"
-        title="Missing pipeline id"
+        title="Missing run id"
         description="The URL didn't include a run identifier."
         action={
-          <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-            ← all pipelines
+          <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            ← all runs
           </Link>
         }
       />
     );
   }
 
-  const isLive = convStatus === "live" || convStatus === "loading";
-
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <header className="flex min-w-0 items-baseline justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-            ← all pipelines
+          <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            ← all runs
           </Link>
-          <h2
-            className="mt-1 truncate text-lg font-semibold"
-            title={detail && hasTitleOrInput(detail) ? headingTooltip(detail) : id}
-          >
+          <h2 className="mt-1 truncate text-lg font-semibold" title={id}>
             {detail ? headingText(detail) : shortenRunId(id)}
           </h2>
-          {detail && (detail.title || detail.input) && (
-            <p className="mt-0.5 truncate font-mono text-xs text-slate-500" title={id}>
-              {shortenRunId(id)}
-            </p>
-          )}
+          <p className="mt-0.5 truncate font-mono text-xs text-slate-500" title={id}>
+            {shortenRunId(id)}
+          </p>
           {detail && <DetailMetaLine detail={detail} />}
         </div>
       </header>
@@ -94,10 +80,10 @@ export function PipelineDetail(): JSX.Element {
         <EmptyState
           data-testid="detail-error"
           title="Couldn't load this run"
-          description="The server didn't return details for this run. It may have been deleted or the request failed — check the console for specifics."
+          description="The server didn't return details for this run."
           action={
-            <Link to="/" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-              ← all pipelines
+            <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+              ← all runs
             </Link>
           }
         />
@@ -106,44 +92,17 @@ export function PipelineDetail(): JSX.Element {
       {!(isError && !detail) && (
         <>
           <div role="tablist" aria-label="Detail view" className="flex gap-2 text-xs">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === "conversation"}
-              data-testid="view-tab-conversation"
-              onClick={() => setView("conversation")}
-              className={`px-3 py-1 rounded-md border ${view === "conversation" ? "bg-muted" : "bg-transparent"}`}
-            >
-              Conversation
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === "graph"}
-              data-testid="view-tab-graph"
-              onClick={() => setView("graph")}
-              className={`px-3 py-1 rounded-md border ${view === "graph" ? "bg-muted" : "bg-transparent"}`}
-            >
-              Graph
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === "steps"}
-              data-testid="view-tab-steps"
-              onClick={() => setView("steps")}
-              className={`px-3 py-1 rounded-md border ${view === "steps" ? "bg-muted" : "bg-transparent"}`}
-            >
-              Steps
-            </button>
+            <TabButton current={view} id="conversation" onSelect={setView}>Conversation</TabButton>
+            <TabButton current={view} id="events" onSelect={setView}>Events</TabButton>
+            <TabButton current={view} id="graph" onSelect={setView}>Graph</TabButton>
+            <TabButton current={view} id="steps" onSelect={setView}>Steps</TabButton>
           </div>
           <div
-            data-testid={
-              view === "conversation" ? "conversation-region" : view === "graph" ? "graph-region" : "steps-region"
-            }
+            data-testid={`${view}-region`}
             className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-background"
           >
-            {view === "conversation" ? (
+            {view === "events" && <EventLog runId={id} refetchKey={totalEvents} />}
+            {view === "conversation" && (
               <PipelineConversation
                 conversation={conversation}
                 nodeStates={detail?.nodes}
@@ -151,35 +110,54 @@ export function PipelineDetail(): JSX.Element {
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
               />
-            ) : view === "graph" ? (
+            )}
+            {view === "graph" && (
               <PipelineGraphTab
                 detail={detail ?? null}
                 refetchKey={totalEvents}
                 selectedNodeId={selectedNodeId}
                 onSelect={setSelectedNodeId}
               />
-            ) : (
-              <StepInspector runId={id} totalEvents={totalEvents} />
             )}
+            {view === "steps" && <StepInspector runId={id} totalEvents={totalEvents} />}
           </div>
-          {view === "conversation" && detail?.status === "running" && <SteerInput runId={id} events={controlEvents} />}
+          {view === "conversation" && detail?.status === "running" && (
+            <SteerInput runId={id} events={controlEvents} />
+          )}
         </>
       )}
     </section>
   );
 }
 
+function TabButton({
+  current,
+  id,
+  onSelect,
+  children,
+}: {
+  current: TabId;
+  id: TabId;
+  onSelect: (t: TabId) => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={current === id}
+      data-testid={`view-tab-${id}`}
+      onClick={() => onSelect(id)}
+      className={`px-3 py-1 rounded-md border ${current === id ? "bg-muted" : "bg-transparent"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
   const totalTokens = detail.inputTokens + detail.outputTokens;
   const hasUsage = detail.costUsd > 0 || totalTokens > 0;
-  const cacheRead = detail.cacheReadTokens ?? 0;
-  const cacheWrite = detail.cacheWriteTokens ?? 0;
-  const hasCache = cacheRead > 0 || cacheWrite > 0;
-  // Cache hit rate approximation: providers that report cached tokens
-  // exclude them from input_tokens, so summing the two reconstructs the
-  // total prompt the model saw.
-  const cacheDenom = detail.inputTokens + cacheRead;
-  const cacheHitRate = cacheDenom > 0 ? cacheRead / cacheDenom : undefined;
   const workflowLabel = detail.workflowName ?? detail.workflow;
 
   return (
@@ -222,23 +200,6 @@ function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
           "cost: — · tokens: —"
         )}
       </span>
-      {hasCache && (
-        <>
-          <span>·</span>
-          <span
-            data-testid="detail-cache"
-            title={`cache ${formatTokensLong(cacheRead)} read · ${formatTokensLong(cacheWrite)} written${
-              cacheHitRate !== undefined ? ` · hit rate ${(cacheHitRate * 100).toFixed(0)}%` : ""
-            }`}
-          >
-            cache:{" "}
-            <span data-testid="detail-cache-read">
-              {formatTokensCompact(cacheRead)}
-              {cacheHitRate !== undefined ? ` (${(cacheHitRate * 100).toFixed(0)}%)` : ""}
-            </span>
-          </span>
-        </>
-      )}
       {workflowLabel && (
         <>
           <span>·</span>
@@ -266,25 +227,6 @@ function headingText(detail: PipelineDetailT): string {
   return shortenRunId(detail.runId);
 }
 
-function hasTitleOrInput(detail: PipelineDetailT): boolean {
-  return Boolean((detail.title && detail.title.length > 0) || (detail.input && detail.input.length > 0));
-}
-
-function headingTooltip(detail: PipelineDetailT): string {
-  const parts: string[] = [`run_id: ${detail.runId}`];
-  if (detail.title) parts.push(`title: ${detail.title}`);
-  if (detail.input) parts.push(`input: ${detail.input}`);
-  const wf = detail.workflowName ?? detail.workflow;
-  if (wf) parts.push(`workflow: ${wf}`);
-  return parts.join("\n");
-}
-
-// "Graph" tab — small leaf that pairs the live GraphView with the
-// NodeInspector so a user can click through nodes while the run streams.
-// The running node (if any) is whichever lifecycle state entry reports
-// `state === "running"`; we surface that as the GraphView's
-// `activeNodeId` so it gets the "thinking" ring even before a user
-// clicks anything.
 function PipelineGraphTab({
   detail,
   refetchKey,

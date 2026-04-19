@@ -25,7 +25,7 @@ function prepare(id: string, detail: PipelineDetailT) {
   client.setQueryData(queries.pipelines.detail(id).queryKey, detail);
   const mock = installFetchMock(
     {
-      [`/api/pipelines/${encodeURIComponent(id)}/events.json`]: () => json({ events: [], lastSeq: 0 }),
+      [`/api/pipelines/${encodeURIComponent(id)}/events.json`]: () => json([]),
       [`/api/pipelines/${encodeURIComponent(id)}/steps`]: () => json([]),
       [`/api/pipelines/${encodeURIComponent(id)}`]: () => json(detail),
     },
@@ -161,7 +161,7 @@ describe("PipelineDetail", () => {
       {
         "/api/pipelines/run-999": () =>
           new Response("secret-detail-error", { status: 500, statusText: "Internal Server Error" }),
-        "/api/pipelines/run-999/events.json": () => json({ events: [], lastSeq: 0 }),
+        "/api/pipelines/run-999/events.json": () => json([]),
       },
       () => json([]),
     );
