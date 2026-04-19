@@ -31,7 +31,6 @@ const ShimmerComponent = ({
   as: Component = "p" as ElementType,
   className,
   duration,
-  // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API parity
   spread: _spread,
 }: TextShimmerProps) => {
   const requested = duration ? duration * 1000 : MIN_PULSE_MS;

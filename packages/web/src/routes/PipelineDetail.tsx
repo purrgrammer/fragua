@@ -21,6 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { PipelineConversation } from "../components/PipelineConversation.tsx";
+import SteerInput from "../components/SteerInput.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { PipelineDetail as PipelineDetailT } from "../lib/api.ts";
@@ -33,7 +34,7 @@ export function PipelineDetail(): JSX.Element {
   const { id = "" } = useParams();
   const [view, setView] = useState<"conversation" | "steps">("conversation");
 
-  const { conversation, status: convStatus, totalEvents } = useRunConversation(id || null);
+  const { conversation, status: convStatus, totalEvents, controlEvents } = useRunConversation(id || null);
   const isLoading = convStatus === "loading";
 
   const qc = useQueryClient();
@@ -41,9 +42,9 @@ export function PipelineDetail(): JSX.Element {
 
   // Invalidate detail on totalEvents transitions so header metrics stay
   // live with the conversation stream. Cheap — server replays from disk.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and id are stable.
   useEffect(() => {
     if (id) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(id).queryKey });
-    // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and id are stable.
   }, [totalEvents]);
 
   if (!id) {
@@ -138,6 +139,7 @@ export function PipelineDetail(): JSX.Element {
               <StepInspector runId={id} totalEvents={totalEvents} />
             )}
           </div>
+          {view === "conversation" && detail?.status === "running" && <SteerInput runId={id} events={controlEvents} />}
         </>
       )}
     </section>

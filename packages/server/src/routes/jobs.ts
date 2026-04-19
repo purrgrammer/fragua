@@ -129,10 +129,7 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
     }
     if (row.status === "running") {
       if (!opts.controlGateway) {
-        return c.json(
-          { error: "cancel of running jobs requires a control gateway", code: "not_implemented" },
-          501,
-        );
+        return c.json({ error: "cancel of running jobs requires a control gateway", code: "not_implemented" }, 501);
       }
       const reason = c.req.query("reason");
       const result = await opts.controlGateway.cancel(row.runId, reason);
@@ -149,10 +146,7 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
       }
       return c.json({ status: "canceling", jobId: row.id, requestId: result.id }, 202);
     }
-    return c.json(
-      { error: `cannot delete job in terminal state '${row.status}'`, code: "conflict" },
-      409,
-    );
+    return c.json({ error: `cannot delete job in terminal state '${row.status}'`, code: "conflict" }, 409);
   });
 
   return app;

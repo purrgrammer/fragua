@@ -63,6 +63,12 @@ export interface UseRunConversationResult {
   revision: number;
   /** Total raw events seen (historical + streamed). Diagnostic only. */
   totalEvents: number;
+  /** Narrow slice of the raw event stream surfaced for reconciliation
+   * by optimistic local queues (e.g. pending steers). Filtered to
+   * control-channel + legacy-steering events so this doesn't reintroduce
+   * the raw-buffer scaling problem: long runs accumulate at most tens
+   * of these events, not tens of thousands. */
+  controlEvents: ReadonlyArray<{ type: string; data?: Record<string, unknown> | null }>;
 }
 
 export interface UseRunConversationOptions {
@@ -161,6 +167,9 @@ export function useRunConversation(
   const [lastSeq, setLastSeq] = useState(0);
   const [revision, setRevision] = useState(0);
   const [totalEvents, setTotalEvents] = useState(0);
+  const [controlEvents, setControlEvents] = useState<
+    ReadonlyArray<{ type: string; data?: Record<string, unknown> | null }>
+  >([]);
 
   // Hold the reducer state across renders without triggering React updates
   // on every mutation. We publish via setConversation() at controlled points.
@@ -176,6 +185,7 @@ export function useRunConversation(
     setLastSeq(0);
     setRevision(0);
     setTotalEvents(0);
+    setControlEvents([]);
 
     if (!runId) {
       setStatus("idle");
@@ -197,6 +207,10 @@ export function useRunConversation(
         setLastSeq(payload.lastSeq);
         setRevision((r) => r + 1);
         setTotalEvents(historical.length);
+        const historicalControl = historical
+          .filter(isControlReconcileEvent)
+          .map((ev) => ({ type: ev.type, data: ev.data ?? null }));
+        if (historicalControl.length > 0) setControlEvents(historicalControl);
         startStream();
       })
       .catch((err: unknown) => {
@@ -226,6 +240,9 @@ export function useRunConversation(
       setTotalEvents((n) => n + 1);
       setConversation(toConversation(stateRef.current));
       setRevision((r) => r + 1);
+      if (isControlReconcileEvent(raw)) {
+        setControlEvents((prev) => [...prev, { type: raw.type, data: raw.data ?? null }]);
+      }
     };
 
     function startStream(): void {
@@ -267,5 +284,18 @@ export function useRunConversation(
     };
   }, [runId]);
 
-  return { conversation, status, lastSeq, revision, totalEvents };
+  return { conversation, status, lastSeq, revision, totalEvents, controlEvents };
+}
+
+/** Tight predicate: only events that `usePendingSteers` reconciles on.
+ * Keeping the list tiny bounds the controlEvents array at 2× the
+ * number of steer round-trips in a run — vs the full event stream,
+ * which hits 20K+ on long runs. */
+function isControlReconcileEvent(ev: RawEvent): boolean {
+  if (ev.type === "steering.injected") return true;
+  if (ev.type === "control.requested") {
+    const command = ev.data?.["command"];
+    return command === "steer";
+  }
+  return false;
 }

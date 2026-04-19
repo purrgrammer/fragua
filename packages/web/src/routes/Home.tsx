@@ -159,11 +159,7 @@ function Overview(): JSX.Element {
               </PromptInputSelectTrigger>
               <PromptInputSelectContent>
                 {workflows.map((w) => (
-                  <PromptInputSelectItem
-                    key={w.name}
-                    value={w.name}
-                    data-testid={`overview-workflow-item-${w.name}`}
-                  >
+                  <PromptInputSelectItem key={w.name} value={w.name} data-testid={`overview-workflow-item-${w.name}`}>
                     {w.label ?? w.name}
                   </PromptInputSelectItem>
                 ))}
@@ -182,11 +178,7 @@ function Overview(): JSX.Element {
 
         <PromptInputFooter>
           <PromptInputTools />
-          <PromptInputSubmit
-            disabled={!canSubmit}
-            data-testid="overview-submit"
-            status={submitStatus}
-          />
+          <PromptInputSubmit disabled={!canSubmit} data-testid="overview-submit" status={submitStatus} />
         </PromptInputFooter>
       </PromptInput>
 

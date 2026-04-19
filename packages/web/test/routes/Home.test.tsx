@@ -8,9 +8,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-// biome-ignore lint/nursery/noRestrictedImports: react-dom/test-utils Simulate is
-// the only way to dispatch an event happy-dom + React 18 will route to a React
-// synthetic onChange handler on controlled inputs.
+// react-dom/test-utils Simulate is the only way to dispatch an event that
+// happy-dom + React 18 will route to a React synthetic onChange handler on
+// controlled inputs.
 import { Simulate } from "react-dom/test-utils";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { PipelineSummary, WorkflowSummary } from "../../src/lib/api.ts";
@@ -100,6 +100,7 @@ function withRows(rows: PipelineSummary[]) {
 // Single top-level DOM registration shared across every describe in
 // this file. Registering in each nested block would race the previous
 // block's async afterAll teardown.
+// biome-ignore lint/correctness/useHookAtTopLevel: useDom is a test-harness helper, not a React hook — it just wraps beforeAll/afterAll.
 useDom();
 
 describe("Home route", () => {
@@ -208,7 +209,12 @@ describe("Home / Overview launcher", () => {
 
   const workflows: WorkflowSummary[] = [workflow("build-feature", "Build feature"), workflow("fix-bug")];
 
-  function installLauncherFetch(extra: Record<string, (req: { url: string; method: string; init?: RequestInit }) => Response | Promise<Response>> = {}) {
+  function installLauncherFetch(
+    extra: Record<
+      string,
+      (req: { url: string; method: string; init?: RequestInit }) => Response | Promise<Response>
+    > = {},
+  ) {
     return installFetchMock({
       "/api/pipelines": () => json([]),
       "/api/workflows": () => json(workflows),

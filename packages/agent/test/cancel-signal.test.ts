@@ -23,10 +23,7 @@ describe("PiCodergenBackend — cancel signal", () => {
         // Factory that blocks forever unless the stream signal aborts.
         // The fix wires input.signal → agent.abort(), which the Agent
         // forwards to the stream's AbortController.
-        const hangThenAbort = (
-          _ctx: unknown,
-          options: StreamOptions | undefined,
-        ): Promise<AssistantMessage> =>
+        const hangThenAbort = (_ctx: unknown, options: StreamOptions | undefined): Promise<AssistantMessage> =>
           new Promise((resolve, reject) => {
             const sig = options?.signal;
             if (!sig) {
@@ -56,7 +53,7 @@ describe("PiCodergenBackend — cancel signal", () => {
 
         const started = Date.now();
         const outcome = await backend.run({
-          node: { id: "n", shape: "box", attrs: {}, edges: [] },
+          node: { id: "n", shape: "box", attrs: {}, classes: [] },
           prompt: "do work",
           context: {},
           thread_id: undefined,

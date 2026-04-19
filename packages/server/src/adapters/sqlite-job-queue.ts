@@ -110,18 +110,13 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
   // query plans so this is pure ergonomics, but it's also the idiomatic
   // pattern and keeps the hot-path readable.
   const stmts = {
-    insert: db.prepare<
-      JobDbRow,
-      [string, string, string, string | null, string | null, number, string, number]
-    >(
+    insert: db.prepare<JobDbRow, [string, string, string, string | null, string | null, number, string, number]>(
       `INSERT INTO jobs (id, run_id, workflow, input_json, model, status, priority, enqueued_at, worktree)
        VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
        RETURNING *`,
     ),
     getById: db.prepare<JobDbRow, [string]>(`SELECT * FROM jobs WHERE id = ?`),
-    listAll: db.prepare<JobDbRow, [number]>(
-      `SELECT * FROM jobs ORDER BY enqueued_at DESC LIMIT ?`,
-    ),
+    listAll: db.prepare<JobDbRow, [number]>(`SELECT * FROM jobs ORDER BY enqueued_at DESC LIMIT ?`),
     listByStatus: db.prepare<JobDbRow, [string, number]>(
       `SELECT * FROM jobs WHERE status = ? ORDER BY priority DESC, enqueued_at ASC LIMIT ?`,
     ),
@@ -144,15 +139,9 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
          SET status = ?, completed_at = ?, error = ?, child_pid = NULL
        WHERE id = ? AND status = 'running'`,
     ),
-    deleteQueued: db.prepare<undefined, [string]>(
-      `DELETE FROM jobs WHERE id = ? AND status = 'queued'`,
-    ),
-    runningJobs: db.prepare<JobDbRow, []>(
-      `SELECT * FROM jobs WHERE status = 'running' ORDER BY enqueued_at ASC`,
-    ),
-    count: db.prepare<{ n: number }, [string]>(
-      `SELECT COUNT(*) AS n FROM jobs WHERE status = ?`,
-    ),
+    deleteQueued: db.prepare<undefined, [string]>(`DELETE FROM jobs WHERE id = ? AND status = 'queued'`),
+    runningJobs: db.prepare<JobDbRow, []>(`SELECT * FROM jobs WHERE status = 'running' ORDER BY enqueued_at ASC`),
+    count: db.prepare<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM jobs WHERE status = ?`),
   };
 
   return {
@@ -187,7 +176,8 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
 
     async list(filter: JobListFilter = {}): Promise<JobRow[]> {
       const limit = filter.limit ?? 50;
-      const rows = filter.status !== undefined ? stmts.listByStatus.all(filter.status, limit) : stmts.listAll.all(limit);
+      const rows =
+        filter.status !== undefined ? stmts.listByStatus.all(filter.status, limit) : stmts.listAll.all(limit);
       return rows.map(rowToJob);
     },
 
@@ -201,11 +191,7 @@ export function createSqliteJobQueue(opts: SqliteJobQueueOptions): JobQueue {
       stmts.markRunning.run(childPid, jobId);
     },
 
-    async markTerminal(
-      jobId: string,
-      status: "success" | "failed" | "canceled",
-      error?: string,
-    ): Promise<void> {
+    async markTerminal(jobId: string, status: "success" | "failed" | "canceled", error?: string): Promise<void> {
       const now = new Date().toISOString();
       stmts.markTerminal.run(status, now, error ?? null, jobId);
     },

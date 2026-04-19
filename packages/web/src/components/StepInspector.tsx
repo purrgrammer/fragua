@@ -41,9 +41,9 @@ export function StepInspector({ runId, totalEvents }: StepInspectorProps): JSX.E
     queryFn: () => getPipelineSteps(runId),
   });
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and queryKey are stable.
   useEffect(() => {
     if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey });
-    // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
   }, [totalEvents]);
 
   if (isPending) {

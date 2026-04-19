@@ -29,8 +29,8 @@ import {
   WorktreeEnvironment,
 } from "@swarm/workspace";
 import chalk from "chalk";
-import { ensureDaemonRunning } from "../lib/daemon-client.ts";
 import { loadConfig } from "../config.ts";
+import { ensureDaemonRunning } from "../lib/daemon-client.ts";
 
 export interface RunCommandOptions {
   workflow: string;
@@ -541,4 +541,3 @@ export async function runCommandViaDaemon(opts: RunCommandOptions): Promise<numb
   console.log(chalk.dim(`  view: ${daemon.baseUrl}/pipelines/${payload.runId}`));
   return 0;
 }
-

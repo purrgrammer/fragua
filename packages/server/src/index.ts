@@ -100,27 +100,8 @@ export { createEventInterviewGateway } from "./adapters/event-interview-gateway.
 export { createFsControlGateway } from "./adapters/fs-control-gateway.ts";
 export { createFsRunReader } from "./adapters/fs-run-reader.ts";
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
-export { createSqliteJobQueue } from "./adapters/sqlite-job-queue.ts";
 export { createLocalProcessSupervisor } from "./adapters/local-process-supervisor.ts";
-export {
-  recoverOrphans,
-  startScheduler,
-  type OrphanRecoveryOptions,
-  type OrphanRecoveryResult,
-  type SchedulerHandle,
-  type SchedulerOptions,
-} from "./scheduler.ts";
-export {
-  DaemonRendezvous,
-  type DaemonRendezvousT,
-  getDaemonDir,
-  getRendezvousPath,
-  isPidAlive,
-  readRendezvous,
-  removeRendezvous,
-  writeRendezvous,
-} from "./rendezvous.ts";
-export type { HealthDaemonInfo } from "./routes/health.ts";
+export { createSqliteJobQueue } from "./adapters/sqlite-job-queue.ts";
 export type {
   ControlGateway,
   ControlSubmitResult,
@@ -141,8 +122,27 @@ export type {
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";
+export {
+  DaemonRendezvous,
+  type DaemonRendezvousT,
+  getDaemonDir,
+  getRendezvousPath,
+  isPidAlive,
+  readRendezvous,
+  removeRendezvous,
+  writeRendezvous,
+} from "./rendezvous.ts";
 export type { EventsRouteOptions } from "./routes/events.ts";
+export type { HealthDaemonInfo } from "./routes/health.ts";
 export { deriveDetail, deriveSummary } from "./routes/pipelines.ts";
+export {
+  type OrphanRecoveryOptions,
+  type OrphanRecoveryResult,
+  recoverOrphans,
+  type SchedulerHandle,
+  type SchedulerOptions,
+  startScheduler,
+} from "./scheduler.ts";
 export {
   ControlAccepted,
   ControlCancelBody,

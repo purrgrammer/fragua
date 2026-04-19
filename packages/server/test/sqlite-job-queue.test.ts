@@ -124,9 +124,7 @@ describe("createSqliteJobQueue — :memory:", () => {
     for (let i = 0; i < 5; i++) {
       await queue.enqueue({ id: `j${i}`, runId: `r${i}`, workflow: "w.dot" });
     }
-    const claims = await Promise.all(
-      Array.from({ length: 5 }, () => queue.claimNext()),
-    );
+    const claims = await Promise.all(Array.from({ length: 5 }, () => queue.claimNext()));
     const claimedIds = claims.filter((c) => c !== undefined).map((c) => c!.id);
     // Each row can only be claimed once — no duplicates.
     expect(new Set(claimedIds).size).toBe(claimedIds.length);

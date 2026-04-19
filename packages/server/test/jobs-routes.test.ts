@@ -12,8 +12,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Event } from "@swarm/core";
-import { createServer } from "../src/index.ts";
 import { createSqliteJobQueue } from "../src/adapters/sqlite-job-queue.ts";
+import { createServer } from "../src/index.ts";
 import type { JobQueue } from "../src/ports.ts";
 import { ev, memoryRunReader } from "./helpers.ts";
 
@@ -141,7 +141,11 @@ describe("POST /jobs", () => {
       ports: {
         jobQueue: queue,
         runReader: memoryRunReader({}),
-        workflowReader: { async list() { return []; } },
+        workflowReader: {
+          async list() {
+            return [];
+          },
+        },
       },
     });
     const res = await app.request("/jobs", {

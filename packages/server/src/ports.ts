@@ -265,11 +265,7 @@ export interface JobQueue {
    * Returns `undefined` when the queue is empty. */
   claimNext(): Promise<JobRow | undefined>;
   markRunning(jobId: string, childPid: number): Promise<void>;
-  markTerminal(
-    jobId: string,
-    status: "success" | "failed" | "canceled",
-    error?: string,
-  ): Promise<void>;
+  markTerminal(jobId: string, status: "success" | "failed" | "canceled", error?: string): Promise<void>;
   /** Remove a queued row. Throws if the row is in any other status. */
   delete(jobId: string): Promise<void>;
   /** All rows currently in `running` — used for orphan recovery on daemon startup. */
@@ -295,5 +291,7 @@ export interface ServerPorts {
   /** Per-request provider for daemon metadata merged into `/health` under
    * the `daemon` key. Present only when the server runs inside the
    * swarm daemon; absent for plain `swarm serve`. */
-  daemonInfo?: () => import("./routes/health.ts").HealthDaemonInfo | Promise<import("./routes/health.ts").HealthDaemonInfo>;
+  daemonInfo?: () =>
+    | import("./routes/health.ts").HealthDaemonInfo
+    | Promise<import("./routes/health.ts").HealthDaemonInfo>;
 }

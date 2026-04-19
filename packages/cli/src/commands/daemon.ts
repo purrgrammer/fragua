@@ -24,8 +24,15 @@
 
 import { createReadStream, openSync, watch } from "node:fs";
 import { mkdir, rename, stat } from "node:fs/promises";
+import { join, resolve as resolvePath } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolve as resolvePath, join } from "node:path";
+import type {
+  HealthDaemonInfo,
+  JobQueue,
+  OrphanRecoveryResult,
+  ProcessSupervisor,
+  SchedulerHandle,
+} from "@swarm/server";
 import {
   createLocalProcessSupervisor,
   createSqliteJobQueue,
@@ -36,13 +43,6 @@ import {
   removeRendezvous,
   startScheduler,
   writeRendezvous,
-} from "@swarm/server";
-import type {
-  HealthDaemonInfo,
-  JobQueue,
-  OrphanRecoveryResult,
-  ProcessSupervisor,
-  SchedulerHandle,
 } from "@swarm/server";
 import chalk from "chalk";
 import { startServer } from "./serve.ts";
@@ -419,11 +419,7 @@ export async function daemonRunCommand(opts: DaemonRunOptions = {}): Promise<num
     runsDir: handle.runsDir,
   });
   if (orphans.adopted > 0 || orphans.reconciled > 0) {
-    console.log(
-      chalk.dim(
-        `  orphans:     ${orphans.adopted} adopted · ${orphans.reconciled} reconciled`,
-      ),
-    );
+    console.log(chalk.dim(`  orphans:     ${orphans.adopted} adopted · ${orphans.reconciled} reconciled`));
   }
 
   // Start the scheduler after the HTTP server so `/health` can report

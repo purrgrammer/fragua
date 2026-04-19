@@ -6,11 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  daemonLogsCommand,
-  daemonRunCommand,
-  daemonStopCommand,
-} from "../src/commands/daemon.ts";
+import { daemonLogsCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 
 describe("daemonLogsCommand", () => {
   let cwd: string;

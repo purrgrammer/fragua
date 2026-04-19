@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSqliteJobQueue } from "../src/adapters/sqlite-job-queue.ts";
 import type { JobQueue, JobRow, ProcessSupervisor } from "../src/ports.ts";
 import { startScheduler } from "../src/scheduler.ts";
-import { createSqliteJobQueue } from "../src/adapters/sqlite-job-queue.ts";
 
 /**
  * Fake supervisor. Each call to `spawn` hands back a controlled
@@ -117,10 +117,7 @@ describe("startScheduler", () => {
     // Plant a canceled terminal event BEFORE the exit fires.
     const runDir = join(runsDir, "cancel-run");
     await mkdir(runDir, { recursive: true });
-    await writeFile(
-      join(runDir, "events.jsonl"),
-      `${JSON.stringify({ type: "pipeline.canceled", seq: 1 })}\n`,
-    );
+    await writeFile(join(runDir, "events.jsonl"), `${JSON.stringify({ type: "pipeline.canceled", seq: 1 })}\n`);
 
     const handle = startScheduler({ queue, supervisor: sup.supervisor, concurrency: 1, runsDir });
     await waitFor(() => sup.activeJobIds().length === 1);
@@ -139,10 +136,7 @@ describe("startScheduler", () => {
     await queue.enqueue({ id: "j1", runId: "ok-run", workflow: "w.dot" });
     const runDir = join(runsDir, "ok-run");
     await mkdir(runDir, { recursive: true });
-    await writeFile(
-      join(runDir, "events.jsonl"),
-      `${JSON.stringify({ type: "pipeline.completed", seq: 1 })}\n`,
-    );
+    await writeFile(join(runDir, "events.jsonl"), `${JSON.stringify({ type: "pipeline.completed", seq: 1 })}\n`);
     const handle = startScheduler({ queue, supervisor: sup.supervisor, concurrency: 1, runsDir });
     await waitFor(() => sup.activeJobIds().length === 1);
     sup.finish("j1", 1);

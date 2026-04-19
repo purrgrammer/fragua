@@ -21,9 +21,8 @@
 // Reads job status via the daemon's HTTP API (default http://localhost:3737)
 // so we don't have to open the sqlite queue while the daemon holds its lock.
 
-import { readFile, stat } from "node:fs/promises";
+import { appendFile, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { appendFile } from "node:fs/promises";
 
 interface JobRow {
   runId: string;
@@ -145,11 +144,7 @@ async function backfillOne(runId: string, jobs: Map<string, JobRow>, args: Args)
     // torn mid-line.
     const raw = await readFile(eventsPath, "utf8");
     const needsLeadingNewline = raw.length > 0 && !raw.endsWith("\n");
-    await appendFile(
-      eventsPath,
-      `${needsLeadingNewline ? "\n" : ""}${JSON.stringify(synthetic)}\n`,
-      "utf8",
-    );
+    await appendFile(eventsPath, `${needsLeadingNewline ? "\n" : ""}${JSON.stringify(synthetic)}\n`, "utf8");
   }
   return { runId, action: "appended", eventType };
 }

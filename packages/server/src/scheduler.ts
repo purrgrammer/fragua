@@ -52,10 +52,12 @@ export interface SchedulerHandle {
 export function startScheduler(opts: SchedulerOptions): SchedulerHandle {
   const { queue, supervisor, concurrency, runsDir } = opts;
   const pollMs = opts.pollIntervalMs ?? 500;
-  const onError = opts.onError ?? ((err, ctx) => {
-    const tag = ctx.jobId ? `[${ctx.jobId}]` : "";
-    console.error(`scheduler ${tag}: ${err.message}`);
-  });
+  const onError =
+    opts.onError ??
+    ((err, ctx) => {
+      const tag = ctx.jobId ? `[${ctx.jobId}]` : "";
+      console.error(`scheduler ${tag}: ${err.message}`);
+    });
 
   const inflight = new Set<string>();
   let stopping = false;

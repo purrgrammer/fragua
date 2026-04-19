@@ -9,8 +9,7 @@ import { Zap } from "lucide-react";
 
 export function DaemonBanner(): JSX.Element {
   return (
-    <div
-      role="status"
+    <output
       data-testid="daemon-banner"
       className="mb-3 flex items-start gap-2 rounded-sm border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
     >
@@ -21,6 +20,6 @@ export function DaemonBanner(): JSX.Element {
           Jobs + queue are disabled. Start it with <code className="font-mono">swarm daemon start</code>.
         </span>
       </div>
-    </div>
+    </output>
   );
 }

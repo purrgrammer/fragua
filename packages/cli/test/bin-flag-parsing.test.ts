@@ -43,15 +43,7 @@ describe("swarm run — CLI argv → options mapping (cac camelCase contract)", 
   });
 
   test("every kebab-case flag camelCases consistently", () => {
-    const opts = parseRun([
-      "run",
-      "w.dot",
-      "--run-id",
-      "r1",
-      "--runs-dir",
-      ".runs",
-      "--allow-env-keys",
-    ]);
+    const opts = parseRun(["run", "w.dot", "--run-id", "r1", "--runs-dir", ".runs", "--allow-env-keys"]);
     expect(opts["runId"]).toBe("r1");
     expect(opts["runsDir"]).toBe(".runs");
     expect(opts["allowEnvKeys"]).toBe(true);
