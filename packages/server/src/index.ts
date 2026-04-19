@@ -119,6 +119,7 @@ export type {
   SkillDetail,
   SkillReader,
   SkillSummary,
+  WorkflowDetail,
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";

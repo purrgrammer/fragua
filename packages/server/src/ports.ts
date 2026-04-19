@@ -104,9 +104,22 @@ export interface WorkflowSummary {
   label?: string;
 }
 
-/** Enumerate workflow definitions available on disk for `GET /workflows`. */
+/** Full workflow detail for `GET /workflows/:name` — summary plus the raw
+ *  DOT source the runtime will parse. Splitting this from the list view
+ *  keeps `GET /workflows` cheap (metadata only) and defers the file read
+ *  until an operator actually opens a workflow. */
+export interface WorkflowDetail extends WorkflowSummary {
+  /** Full DOT text as written on disk. Parsed client-side by
+   *  `@swarm/core`'s `parseDotSource` — the server does not validate
+   *  DOT, it only surfaces the bytes. */
+  source: string;
+}
+
+/** Enumerate + read workflow definitions for `GET /workflows[/:name]`. */
 export interface WorkflowReader {
   list(): Promise<WorkflowSummary[]>;
+  /** Returns `undefined` when the workflow is not found so the route can 404. */
+  read(name: string): Promise<WorkflowDetail | undefined>;
 }
 
 /** Result of submitting a control request. The id is the uuid the gateway
