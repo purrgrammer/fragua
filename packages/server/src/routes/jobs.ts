@@ -14,7 +14,7 @@
 
 import { Value } from "@sinclair/typebox/value";
 import { Hono } from "hono";
-import type { ControlGateway, JobQueue, JobRow, JobStatus } from "../ports.ts";
+import type { ControlGateway, JobQueue, JobRow, JobStatus, WorkflowReader } from "../ports.ts";
 import { JobEnqueueBody, type JobRowSchema } from "../schemas.ts";
 
 export interface JobsRouteOptions {
@@ -25,6 +25,10 @@ export interface JobsRouteOptions {
    * Same instance the `/pipelines/:id/cancel` route uses. When unset,
    * cancel of running jobs returns 501. */
   controlGateway?: ControlGateway;
+  /** Used by POST /jobs to resolve bare workflow names (e.g. "build-feature")
+   * to the filesystem path the worker expects. Clients that already send a
+   * path (the CLI) bypass the lookup. */
+  workflowReader?: WorkflowReader;
 }
 
 export function jobsRoutes(opts: JobsRouteOptions): Hono {
@@ -38,9 +42,29 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
     if (!Value.Check(JobEnqueueBody, body)) {
       return c.json(schemaError(JobEnqueueBody, body), 400);
     }
+    // Accept either a path (e.g. "workflows/build.dot", "/abs/foo.dot")
+    // or a bare name ("build-feature") for the `workflow` field. Bare
+    // names go through the WorkflowReader so the daemon's cwd doesn't
+    // have to match the client's — the CLI already resolves to an
+    // absolute path and skips this branch.
+    let workflow = body.workflow;
+    if (isBareWorkflowName(workflow)) {
+      if (!opts.workflowReader) {
+        return c.json(
+          { error: `workflow '${workflow}' requires a path; server has no workflow reader`, code: "bad_request" },
+          400,
+        );
+      }
+      const list = await opts.workflowReader.list();
+      const match = list.find((w) => w.name === workflow);
+      if (!match) {
+        return c.json({ error: `workflow not found: ${workflow}`, code: "not_found" }, 404);
+      }
+      workflow = match.path;
+    }
     try {
       const row = await queue.enqueue({
-        workflow: body.workflow,
+        workflow,
         ...(body.input !== undefined ? { inputJson: body.input } : {}),
         ...(body.model !== undefined ? { model: body.model } : {}),
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
@@ -58,6 +82,12 @@ export function jobsRoutes(opts: JobsRouteOptions): Hono {
       return c.json({ error: msg, code: "internal" }, 500);
     }
   });
+
+  /** A bare name has no path separators and no `.dot` extension. Both are
+   * the signals the CLI uses today to distinguish paths from names. */
+  function isBareWorkflowName(value: string): boolean {
+    return !value.includes("/") && !value.includes("\\") && !value.endsWith(".dot");
+  }
 
   app.get("/jobs", async (c) => {
     if (!queue) return noQueue(c);

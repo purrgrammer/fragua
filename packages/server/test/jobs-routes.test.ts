@@ -106,6 +106,53 @@ describe("POST /jobs", () => {
     expect(row?.priority).toBe(7);
     expect(row?.runId).toBe("custom-run");
   });
+
+  test("resolves bare workflow names via the WorkflowReader", async () => {
+    const app = createServer({
+      runsDir: "/tmp/does-not-matter",
+      ports: {
+        jobQueue: queue,
+        runReader: memoryRunReader({}),
+        workflowReader: {
+          async list() {
+            return [
+              { name: "build-feature", path: "/repo/workflows/build-feature.dot", sha: "abc1234" },
+              { name: "fix-bug", path: "/repo/workflows/fix-bug.dot", sha: "def5678" },
+            ];
+          },
+        },
+      },
+    });
+    const res = await app.request("/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workflow: "build-feature", input: "ship it" }),
+    });
+    expect(res.status).toBe(202);
+    const { jobId } = (await res.json()) as { jobId: string };
+    const row = await queue.get(jobId);
+    // Persisted workflow is the resolved absolute path, not the bare name.
+    expect(row?.workflow).toBe("/repo/workflows/build-feature.dot");
+  });
+
+  test("bare name that doesn't match any workflow → 404", async () => {
+    const app = createServer({
+      runsDir: "/tmp/does-not-matter",
+      ports: {
+        jobQueue: queue,
+        runReader: memoryRunReader({}),
+        workflowReader: { async list() { return []; } },
+      },
+    });
+    const res = await app.request("/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workflow: "missing" }),
+    });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("not_found");
+  });
 });
 
 describe("GET /jobs", () => {

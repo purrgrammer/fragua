@@ -1,27 +1,45 @@
-// Home dashboard — three projections of the same `GET /pipelines`
-// payload (running strip, stats tiles, recent runs). A single query
-// feeds all three sections: every piece is a derived view, so any
-// drift between sections would mean the projections themselves
-// disagree — which is the kind of bug operators won't catch but will
-// frustrate them.
+// Home dashboard — four sections. Overview is a workflow launcher
+// that drives `POST /jobs` through the same query cache the rest of
+// the page reads, so a successful submit triggers an invalidate →
+// refetch and the new run surfaces in the Running strip without a
+// reload. Running + Stats + Recent are three projections of
+// `GET /pipelines`.
 //
-// Cadence: the 5s poll lives on the query factory (`queries.pipelines.list`'s
-// `refetchInterval`). No local timer needed.
+// Layout (top → bottom): Overview, Running, Stats, Recent.
+//
+// Cadence: the 5s poll lives on the query factory
+// (`queries.pipelines.list`'s `refetchInterval`). No local timer needed.
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { Message, MessageContent } from "../components/ai-elements/message.tsx";
+import {
+  PromptInput,
+  PromptInputFooter,
+  PromptInputHeader,
+  type PromptInputMessage,
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "../components/ai-elements/prompt-input.tsx";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
 import { displayTitle, displayTooltip, PipelineRow, shortenRunId } from "../components/PipelineRow.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
-import type { PipelineSummary } from "../lib/api.ts";
+import { enqueueJob, type PipelineSummary } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
+import { useHealth } from "../types/health.ts";
 
 const RECENT_LIMIT = 10;
 
@@ -43,10 +61,152 @@ export function Home(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-8">
+      <Overview />
       <RunningStrip running={running} now={now} loading={isPending} />
       <StatsTiles stats={stats} loading={isPending} />
       <RecentRuns rows={rows.slice(0, RECENT_LIMIT)} loading={isPending} />
     </div>
+  );
+}
+
+// ── Overview launcher ────────────────────────────────────────────────
+//
+// `daemon === undefined` is the authoritative signal for "read-only
+// archive" (plain `swarm serve`), matching the sidebar footer badge.
+// We deliberately don't double-probe /jobs — the health response is
+// the single source of truth.
+
+function Overview(): JSX.Element {
+  const health = useHealth();
+  const daemonOff = health.status === "error" || health.daemon === undefined;
+
+  const qc = useQueryClient();
+  const workflowsQuery = useQuery({
+    ...queries.workflows.list(),
+    enabled: !daemonOff,
+  });
+  const workflows = workflowsQuery.data ?? [];
+
+  const [workflow, setWorkflow] = useState<string>("");
+  const [input, setInput] = useState<string>("");
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+
+  // Default-select the first workflow once the list arrives. Seeded
+  // only on the transition from "no selection" → "have one"; never
+  // overwritten by refetches.
+  useEffect(() => {
+    if (!workflow && workflows.length > 0) {
+      const first = workflows[0];
+      if (first) setWorkflow(first.name);
+    }
+  }, [workflow, workflows]);
+
+  const mutation = useMutation({
+    mutationFn: (vars: { workflow: string; input: string }) =>
+      enqueueJob({ workflow: vars.workflow, input: vars.input }),
+    onSuccess: (_data, vars) => {
+      setLastPrompt(vars.input);
+      setInput("");
+      void qc.invalidateQueries({ queryKey: queries.pipelines.all() });
+      void qc.invalidateQueries({ queryKey: queries.jobs.all() });
+    },
+  });
+
+  const trimmed = input.trim();
+  const canSubmit = !daemonOff && !!workflow && trimmed !== "" && !mutation.isPending;
+
+  const handleSubmit = (message: PromptInputMessage) => {
+    const text = message.text.trim();
+    if (!workflow || text === "") return;
+    mutation.mutate({ workflow, input: text });
+  };
+
+  const submitStatus: "submitted" | "error" | undefined = mutation.isPending
+    ? "submitted"
+    : mutation.isError
+      ? "error"
+      : undefined;
+
+  const errorMessage =
+    mutation.error instanceof Error ? mutation.error.message : mutation.error ? String(mutation.error) : null;
+
+  return (
+    <section data-testid="overview" className="flex flex-col gap-[var(--sw-space-3)]">
+      <h2 className="font-heading text-base font-semibold">Overview</h2>
+
+      {lastPrompt !== null && (
+        <Message from="user" data-testid="overview-last-prompt">
+          <MessageContent>
+            <p className="whitespace-pre-wrap">{lastPrompt}</p>
+          </MessageContent>
+        </Message>
+      )}
+
+      <PromptInput onSubmit={handleSubmit} data-testid="overview-form">
+        <PromptInputHeader>
+          <PromptInputTools>
+            <PromptInputSelect
+              value={workflow}
+              // Radix Select's items live inside a portal that only
+              // mounts while the menu is open. On mount, with a seeded
+              // `value`, Radix can't find a matching item yet and fires
+              // `onValueChange("")` to "clear" — which used to race our
+              // seeding effect into an infinite loop. Dropping the empty
+              // callback lets the seeded value stick until the user
+              // actually picks something.
+              onValueChange={(v) => {
+                if (v) setWorkflow(v);
+              }}
+              disabled={daemonOff}
+            >
+              <PromptInputSelectTrigger data-testid="overview-workflow-trigger" aria-label="Workflow">
+                <PromptInputSelectValue placeholder="Select workflow…" />
+              </PromptInputSelectTrigger>
+              <PromptInputSelectContent>
+                {workflows.map((w) => (
+                  <PromptInputSelectItem
+                    key={w.name}
+                    value={w.name}
+                    data-testid={`overview-workflow-item-${w.name}`}
+                  >
+                    {w.label ?? w.name}
+                  </PromptInputSelectItem>
+                ))}
+              </PromptInputSelectContent>
+            </PromptInputSelect>
+          </PromptInputTools>
+        </PromptInputHeader>
+
+        <PromptInputTextarea
+          placeholder={daemonOff ? "Daemon not running" : "Describe what the workflow should do…"}
+          disabled={daemonOff}
+          value={input}
+          onChange={(e) => setInput(e.currentTarget.value)}
+          data-testid="overview-input"
+        />
+
+        <PromptInputFooter>
+          <PromptInputTools />
+          <PromptInputSubmit
+            disabled={!canSubmit}
+            data-testid="overview-submit"
+            status={submitStatus}
+          />
+        </PromptInputFooter>
+      </PromptInput>
+
+      {daemonOff && (
+        <p className="text-xs text-[var(--sw-muted)]" data-testid="overview-daemon-off">
+          Daemon not running — start <code className="font-mono">swarm daemon</code> to launch workflows from here.
+        </p>
+      )}
+
+      {errorMessage && !daemonOff && (
+        <p className="text-xs text-[var(--sw-accent-error)]" role="alert" data-testid="overview-error">
+          {errorMessage}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -131,7 +291,7 @@ interface StatsTilesProps {
 function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
   return (
     <section data-testid="stats-tiles" className="flex flex-col gap-3">
-      <h2 className="font-heading text-base font-semibold">Overview</h2>
+      <h2 className="font-heading text-base font-semibold">Stats</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
         <StatTile
           label="Total runs"
