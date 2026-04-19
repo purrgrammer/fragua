@@ -7,7 +7,7 @@
 import type { Database } from "bun:sqlite";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { IEventStore, StoredEvent } from "@swarm/store";
+import { sha256Hex, type IEventStore, type StoredEvent } from "@swarm/store";
 import { newRunId } from "./run-id.ts";
 
 export interface ServerDeps {
@@ -23,6 +23,24 @@ const DEFAULT_SSE_POLL_MS = 100;
 export function createRoutes(deps: ServerDeps): Hono {
   const app = new Hono();
   const pollMs = deps.ssePollMs ?? DEFAULT_SSE_POLL_MS;
+
+  // ─── Workflow upload ────────────────────────────────────────
+
+  app.post("/workflows", async (c) => {
+    const body = await readJson<{ name?: string; dotSource?: string }>(c);
+    if (
+      !body ||
+      typeof body.name !== "string" ||
+      body.name.length === 0 ||
+      typeof body.dotSource !== "string" ||
+      body.dotSource.length === 0
+    ) {
+      return c.json({ error: "name and dotSource required" }, 400);
+    }
+    const sha = sha256Hex(body.dotSource);
+    deps.store.saveWorkflow(sha, body.name, body.dotSource);
+    return c.json({ sha, name: body.name });
+  });
 
   // ─── Writes (intents) ───────────────────────────────────────
 

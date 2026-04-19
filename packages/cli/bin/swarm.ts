@@ -12,6 +12,7 @@ import { daemonCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
+import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
@@ -107,6 +108,38 @@ cli
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command(
+    "run <workflow>",
+    "Upload a DOT workflow, enqueue a run, stream events to stdout",
+  )
+  .option("--url <url>", "Server URL (default http://localhost:3000)")
+  .option("--priority <n>", "Priority tie-breaker (default 0)")
+  .option("--no-follow", "Print the run id and exit without streaming")
+  .option("--cwd <path>", "Base directory for relative workflow paths")
+  .action(async (workflow: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const priorityRaw = options["priority"];
+    const priority =
+      typeof priorityRaw === "number"
+        ? priorityRaw
+        : typeof priorityRaw === "string"
+          ? Number.parseInt(priorityRaw, 10)
+          : undefined;
+    const code = await runCommand({
+      workflow,
+      ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
+      ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      // cac renders `--no-follow` as `options.follow === false`.
+      ...(options["follow"] === false ? { follow: false } : {}),
     });
     process.exit(code);
   });

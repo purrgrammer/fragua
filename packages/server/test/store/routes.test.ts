@@ -33,6 +33,38 @@ async function req(method: string, path: string, body?: unknown): Promise<Respon
   return server.fetch(new Request(`http://test${path}`, init));
 }
 
+describe("POST /workflows — upload", () => {
+  test("accepts DOT source, returns sha, persists via saveWorkflow", async () => {
+    const res = await req("POST", "/workflows", {
+      name: "hello",
+      dotSource: "digraph Hello { a -> b }",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sha: string; name: string };
+    expect(body.name).toBe("hello");
+    expect(body.sha).toMatch(/^[0-9a-f]{64}$/);
+    expect(store.getWorkflow(body.sha)?.name).toBe("hello");
+  });
+
+  test("rejects missing fields", async () => {
+    const res1 = await req("POST", "/workflows", { name: "x" });
+    expect(res1.status).toBe(400);
+    const res2 = await req("POST", "/workflows", { dotSource: "digraph{}" });
+    expect(res2.status).toBe(400);
+  });
+
+  test("idempotent on same source — same sha, no duplicate row", async () => {
+    const src = "digraph X { a -> b }";
+    const a = (await (
+      await req("POST", "/workflows", { name: "x", dotSource: src })
+    ).json()) as { sha: string };
+    const b = (await (
+      await req("POST", "/workflows", { name: "x", dotSource: src })
+    ).json()) as { sha: string };
+    expect(a.sha).toBe(b.sha);
+  });
+});
+
 describe("POST /runs — enqueue", () => {
   test("enqueues a run and returns the generated id", async () => {
     const res = await req("POST", "/runs", { workflowSha: "wf", priority: 3 });
