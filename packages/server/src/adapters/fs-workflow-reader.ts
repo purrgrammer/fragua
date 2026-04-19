@@ -1,6 +1,8 @@
 // Filesystem WorkflowReader: scans `<workflowsDir>` for `*.dot` files and
 // reports their name, relative path, a short content sha, and any
-// `label="..."` attribute extracted from the DOT source.
+// `label="..."` attribute extracted from the DOT source. For
+// `GET /workflows/:name` the `read` method returns the same metadata
+// plus the raw DOT source on demand.
 //
 // This adapter is the only place in @swarm/server that reads workflow
 // sources from disk. Handlers stay pure so tests can inject an in-memory
@@ -9,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { WorkflowReader, WorkflowSummary } from "../ports.ts";
+import type { WorkflowDetail, WorkflowReader, WorkflowSummary } from "../ports.ts";
 
 export interface FsWorkflowReaderOptions {
   /** Directory containing `*.dot` workflow sources. */
@@ -53,7 +55,36 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
       out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       return out;
     },
+
+    async read(name: string): Promise<WorkflowDetail | undefined> {
+      // Defence-in-depth: the route pattern already constrains `:name`,
+      // but rejecting path separators + traversal here keeps this
+      // adapter safe in isolation (unit tests call `read` directly).
+      if (!isSafeName(name)) return undefined;
+      const path = join(workflowsDir, `${name}.dot`);
+      let source: string;
+      try {
+        source = await readFile(path, "utf8");
+      } catch {
+        return undefined;
+      }
+      const sha = shortSha(source);
+      const label = extractLabel(source);
+      const detail: WorkflowDetail = { name, path, sha, source };
+      if (label !== undefined) detail.label = label;
+      return detail;
+    },
   };
+}
+
+/** Reject anything that could escape `workflowsDir` or address a file
+ *  other than `<name>.dot`. The filename grammar the list endpoint
+ *  already enforces is "basename of a *.dot file" — we mirror that. */
+function isSafeName(name: string): boolean {
+  if (name.length === 0 || name.length > 128) return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) return false;
+  if (name === "." || name === ".." || name.startsWith(".")) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
 }
 
 /** First 7 hex chars of sha256 — enough for visual "same?" comparison. */

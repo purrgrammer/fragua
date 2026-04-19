@@ -11,6 +11,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
 import { useEffect } from "react";
+import { Link } from "react-router-dom";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import { queries } from "../lib/queries.ts";
@@ -64,7 +65,13 @@ export function Workflows(): JSX.Element {
               {rows.map((row) => (
                 <TableRow key={row.path} data-testid={`workflow-row-${row.name}`}>
                   <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
-                    {row.label ?? row.name}
+                    <Link
+                      to={`/workflows/${encodeURIComponent(row.name)}`}
+                      className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
+                      data-testid={`workflow-link-${row.name}`}
+                    >
+                      {row.label ?? row.name}
+                    </Link>
                   </TableCell>
                   <TableCell className="max-w-0">
                     <code className="block truncate font-mono text-xs text-muted-foreground" title={row.path}>

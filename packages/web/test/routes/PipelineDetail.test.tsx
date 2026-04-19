@@ -176,4 +176,47 @@ describe("PipelineDetail", () => {
       console.warn = origWarn;
     }
   });
+  it("exposes a Graph tab that renders the live graph + inspector when the tab is active", async () => {
+    const detail: PipelineDetailT = {
+      runId: "run-graph",
+      workflowName: "demo",
+      startedAt: "2024-01-01T00:00:00Z",
+      status: "running",
+      lastEventSeq: 1,
+      nodes: [{ nodeId: "implement", state: "running", lastEventSeq: 1 }],
+      workflowSource: `digraph demo {
+        start [shape=Mdiamond]
+        implement [shape=box, label="Implement", model="claude-sonnet-4-5"]
+        done [shape=Msquare]
+        start -> implement -> done
+      }`,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    const { client, mock } = prepare("run-graph", detail);
+    try {
+      const { container } = mount(client, "/pipelines/run-graph");
+      const q = within(container);
+      // Tab button present + starts on conversation.
+      await waitFor(() => {
+        expect(q.getByTestId("view-tab-graph")).toBeTruthy();
+      });
+      expect(q.queryByTestId("graph-region")).toBeNull();
+
+      // Switch to the graph tab.
+      const tab = q.getByTestId("view-tab-graph") as HTMLButtonElement;
+      tab.click();
+      await waitFor(() => {
+        expect(q.getByTestId("graph-region")).toBeTruthy();
+      });
+      // Orientation is top-to-bottom for the pipeline graph tab.
+      const canvas = q.getByTestId("graphview");
+      expect(canvas.getAttribute("data-orientation")).toBe("TB");
+      // Inspector empty until a node is clicked.
+      expect(q.getByTestId("node-inspector-empty")).toBeTruthy();
+    } finally {
+      mock.restore();
+    }
+  });
 });

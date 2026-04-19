@@ -20,6 +20,7 @@ import { PipelinesList } from "../routes/PipelinesList.tsx";
 import { Settings } from "../routes/Settings.tsx";
 import { SkillDetail } from "../routes/SkillDetail.tsx";
 import { SkillsList } from "../routes/SkillsList.tsx";
+import { WorkflowDetail } from "../routes/WorkflowDetail.tsx";
 import { Workflows } from "../routes/Workflows.tsx";
 
 export function createRoutes(): RouteObject[] {
@@ -30,6 +31,7 @@ export function createRoutes(): RouteObject[] {
       children: [
         { index: true, element: <Home /> },
         { path: "workflows", element: <Workflows /> },
+        { path: "workflows/:name", element: <WorkflowDetail /> },
         { path: "jobs", element: <Jobs /> },
         { path: "pipelines", element: <PipelinesList /> },
         { path: "pipelines/:id", element: <PipelineDetail /> },

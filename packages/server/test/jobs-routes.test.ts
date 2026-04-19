@@ -120,6 +120,9 @@ describe("POST /jobs", () => {
               { name: "fix-bug", path: "/repo/workflows/fix-bug.dot", sha: "def5678" },
             ];
           },
+          async read() {
+            return undefined;
+          },
         },
       },
     });
@@ -144,6 +147,9 @@ describe("POST /jobs", () => {
         workflowReader: {
           async list() {
             return [];
+          },
+          async read() {
+            return undefined;
           },
         },
       },

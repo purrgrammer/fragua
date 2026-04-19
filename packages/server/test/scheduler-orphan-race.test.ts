@@ -145,10 +145,7 @@ describe("scheduler — orphan recovery races", () => {
     // parse errors per-line and ultimately return undefined, producing
     // the "daemon restart" failure path.
     await mkdir(join(runsDir, "r-g"), { recursive: true });
-    await writeFile(
-      join(runsDir, "r-g", "events.jsonl"),
-      "not-json\n{\"truncated\n{incomplete \n",
-    );
+    await writeFile(join(runsDir, "r-g", "events.jsonl"), 'not-json\n{"truncated\n{incomplete \n');
 
     const recovery = await recoverOrphans({ queue, runsDir });
     recovery.stop();

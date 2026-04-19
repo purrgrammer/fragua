@@ -13,16 +13,23 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import fc from "fast-check";
 import type { Checkpoint } from "@swarm/core";
+import fc from "fast-check";
 import { JsonlCheckpointStore } from "../src/checkpoint.ts";
 
-const outcomeArb: fc.Arbitrary<Checkpoint["node_outcomes"][string]> = fc.oneof(
-  fc.record({
-    status: fc.constantFrom("success" as const, "fail" as const, "partial_success" as const),
-    notes: fc.option(fc.string({ maxLength: 50 }), { nil: undefined }),
-  }),
-);
+const outcomeArb: fc.Arbitrary<Checkpoint["node_outcomes"][string]> = fc.record({
+  status: fc.constantFrom(
+    "success" as const,
+    "fail" as const,
+    "partial_success" as const,
+    "retry" as const,
+    "skipped" as const,
+  ),
+  context_updates: fc.constant({} as Record<string, never>),
+  preferred_label: fc.string({ maxLength: 20 }),
+  suggested_next_ids: fc.array(fc.stringMatching(/^[a-z][a-z0-9_]{0,10}$/), { maxLength: 3 }),
+  notes: fc.string({ maxLength: 50 }),
+});
 
 const checkpointArb: fc.Arbitrary<Checkpoint> = fc
   .record({

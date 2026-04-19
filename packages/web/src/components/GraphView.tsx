@@ -1,38 +1,37 @@
-// GraphView — renders a pipeline run's workflow graph using Vercel AI
-// Elements (`Canvas`, `Node`, `Edge`, `Controls`) which wrap `@xyflow/react`.
+// GraphView — renders a swarm workflow graph using Vercel AI Elements
+// (`Canvas`, `Node`, `Edge`, `Controls`) on top of `@xyflow/react`.
 //
-// Data path:
-//   - Topology comes from the DOT source recorded on `pipeline.started`
-//     and parsed in-browser via `@swarm/core`'s `parseDotSource`. This is
-//     the SAME parser the runtime uses — one source of truth, zero risk
-//     of drift.
-//   - Lifecycle state (pending / running / completed / failed / skipped /
-//     retrying) comes from `PipelineDetail.nodes[]` keyed by nodeId. Nodes
-//     that only appear in the DOT topology (not yet in node events) render
-//     as "pending".
-//   - There is NO `detail.edges` field — the server does not parse DOT.
-//     If you see a PR trying to add one, reject it.
+// Two call shapes:
 //
-// Public prop contract (stable; Playwright + unit tests depend on it):
-//   - `runId`        — id passed to `api.getPipeline(id)`.
-//   - `api`          — ApiClient used to fetch detail. Required when
-//                      `runId` is set and `detail` is not supplied.
-//   - `detail`       — pre-fetched `PipelineDetail`. Optional shortcut
-//                      for parents that already have the data.
-//   - `onNodeClick`  — invoked with `nodeId` on click.
-//   - `activeNodeId` — highlight target.
-//   - `refetchKey`   — value change → re-fetch detail (SSE-driven).
+//   1. Pipeline-live:  <GraphView runId=… />           (or detail=…)
+//      Topology from `PipelineDetail.workflowSource`, lifecycle state
+//      from `detail.nodes[]`. Edges animate while the run is running.
+//
+//   2. Workflow-detail:  <GraphView graph=… source=… />
+//      Topology from an already-parsed `Graph`. No lifecycle state:
+//      every node renders neutral. The workflow detail route uses this
+//      to inspect a `.dot` file without needing a run.
+//
+// Data path notes:
+//   - Topology is ALWAYS parsed from DOT via `@swarm/core`'s
+//     `parseDotSource` — the same parser the runtime uses. One source
+//     of truth, zero risk of drift.
+//   - There is NO `detail.edges` field on the server — topology lives
+//     in the DOT source and is parsed client-side. Reject any PR that
+//     tries to add one.
+//   - Flow is top-to-bottom by default (`orientation="TB"`). Callers
+//     can ask for `"LR"` when they need the horizontal strip.
 //
 // Node DOM contract: each rendered node carries `data-node-id="<id>"`
 // so existing tests (and any future Playwright) can target them.
 
-import { type Graph, parseDotSource } from "@swarm/core";
+import { type Graph, type Node as GraphNode, handlerOf, parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { useCallback, useEffect, useMemo } from "react";
 import type { NodeState, PipelineDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { layoutDag } from "../lib/graph-layout.ts";
+import { type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
@@ -41,21 +40,35 @@ import { Node as AiNode, NodeContent, NodeDescription, NodeHeader, NodeTitle } f
 import { EmptyState } from "./ui/empty-state.tsx";
 
 export interface GraphViewProps {
-  /** When provided, we fetch `/pipelines/:runId` via react-query. */
+  /** When provided (and no `detail`/`graph`), we fetch `/pipelines/:runId`. */
   runId?: string;
   /**
-   * Pre-fetched detail. Takes precedence over `runId` — use this when
-   * the parent is already loading the detail (e.g. PipelineDetail page).
+   * Pre-fetched pipeline detail. Takes precedence over `runId` — used
+   * when the parent is already loading the detail (e.g. PipelineDetail
+   * page). Supplies workflow source AND live lifecycle state.
    */
   detail?: PipelineDetail;
-  /** Click → fires with the `data-node-id`. */
+  /**
+   * Pre-parsed topology for the static workflow-detail view. When this
+   * is set `detail`/`runId` are ignored and every node renders neutral.
+   */
+  graph?: Graph;
+  /** Click → fires with the `data-node-id` of the clicked node. */
   onNodeClick?: (nodeId: string) => void;
-  /** Highlight target. */
+  /**
+   * Runtime-active node (the one currently executing). Distinct from
+   * `selectedNodeId`: "active" is the workflow's current pointer,
+   * "selected" is what the user clicked to inspect.
+   */
   activeNodeId?: string | null;
+  /** User-selected node — renders a distinct ring so the two signals don't collide. */
+  selectedNodeId?: string | null;
+  /** Flow direction. Default `"TB"`. */
+  orientation?: LayoutOrientation;
   /**
    * When this value changes, invalidate the detail query so the graph
-   * refetches. Consumers pass e.g. `events.length` from SSE so the
-   * graph stays in sync with live updates.
+   * refetches. Parents pass e.g. `events.length` from SSE so the graph
+   * stays in sync with live updates. Unused in workflow-detail mode.
    */
   refetchKey?: number | string;
 }
@@ -64,25 +77,37 @@ const NODE_TYPE = "swarmNode";
 const EDGE_TYPE = "swarmEdge";
 
 export function GraphView(props: GraphViewProps): JSX.Element {
-  const { runId, detail: detailProp, onNodeClick, activeNodeId, refetchKey } = props;
+  const {
+    runId,
+    detail: detailProp,
+    graph: graphProp,
+    onNodeClick,
+    activeNodeId,
+    selectedNodeId,
+    orientation = "TB",
+    refetchKey,
+  } = props;
 
   const qc = useQueryClient();
   const query = useQuery({
     ...queries.pipelines.detail(runId ?? ""),
-    enabled: !!runId && !detailProp,
+    enabled: !!runId && !detailProp && !graphProp,
   });
 
-  // `refetchKey` is a deliberate invalidation trigger. Single-line
-  // directive is load-bearing for biome.
+  // `refetchKey` is a deliberate invalidation trigger for the live view.
   // biome-ignore lint/correctness/useExhaustiveDependencies: refetchKey is the trigger.
   useEffect(() => {
-    if (runId && !detailProp) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(runId).queryKey });
+    if (runId && !detailProp && !graphProp) {
+      void qc.invalidateQueries({ queryKey: queries.pipelines.detail(runId).queryKey });
+    }
   }, [refetchKey]);
 
   const readyDetail = detailProp ?? query.data ?? null;
-  const isLoading = !detailProp && !!runId && query.isPending;
-  const fetchError = !detailProp && !!runId && query.error;
+  const isLoading = !detailProp && !graphProp && !!runId && query.isPending;
+  const fetchError = !detailProp && !graphProp && !!runId && query.error;
+
   const graph: Graph | null = useMemo(() => {
+    if (graphProp) return graphProp;
     if (!readyDetail?.workflowSource) return null;
     try {
       return parseDotSource(readyDetail.workflowSource);
@@ -95,12 +120,16 @@ export function GraphView(props: GraphViewProps): JSX.Element {
       );
       return null;
     }
-  }, [readyDetail?.workflowSource, readyDetail?.runId]);
+  }, [graphProp, readyDetail?.workflowSource, readyDetail?.runId]);
 
   const { flowNodes, flowEdges } = useMemo(() => {
-    if (!readyDetail || !graph) return { flowNodes: [], flowEdges: [] };
-    return toFlowGraph(readyDetail, graph, activeNodeId ?? null);
-  }, [readyDetail, graph, activeNodeId]);
+    if (!graph) return { flowNodes: [], flowEdges: [] };
+    return toFlowGraph(readyDetail, graph, {
+      activeNodeId: activeNodeId ?? null,
+      selectedNodeId: selectedNodeId ?? null,
+      orientation,
+    });
+  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation]);
 
   const handleNodeClick = useCallback(
     (_e: unknown, node: FlowNode) => {
@@ -112,17 +141,17 @@ export function GraphView(props: GraphViewProps): JSX.Element {
   if (isLoading) {
     return (
       <div data-testid="graphview-loading" className="flex min-h-[320px] items-center justify-center">
-        <p className="text-sm text-muted-foreground">Loading graph…</p>
+        <p className="text-sw-sm text-sw-muted">Loading graph…</p>
       </div>
     );
   }
 
-  if (!readyDetail && !runId) {
+  if (!readyDetail && !runId && !graphProp) {
     return (
       <EmptyState
         data-testid="graphview-empty"
         title="No graph to display"
-        description="Pass a runId or a detail prop to render."
+        description="Pass a runId, a detail, or a graph prop to render."
       />
     );
   }
@@ -151,8 +180,9 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     <div
       data-testid="graphview"
       data-node-count={flowNodes.length}
+      data-orientation={orientation}
       // React Flow needs an explicit height — the canvas fills its parent.
-      className="h-[480px] w-full rounded-md border bg-sidebar"
+      className="h-full min-h-[480px] w-full rounded-sw-card border border-sw-border bg-sw-surface"
     >
       <Canvas
         nodes={flowNodes}
@@ -171,51 +201,83 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 
 function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   const d = data as SwarmNodeData;
+  const handlerLabel = d.handler;
   return (
     <AiNode
-      handles={{ target: d.hasIncoming, source: d.hasOutgoing }}
+      handles={{ target: d.hasIncoming, source: d.hasOutgoing, orientation: d.orientation }}
       data-node-id={d.nodeId}
       data-state={d.state}
-      className={cn("w-56", d.active && "ring-2 ring-primary")}
+      data-handler={handlerLabel}
+      className={cn(
+        "w-60 transition-colors duration-[var(--sw-duration-status)]",
+        d.active && "ring-2 ring-sw-accent-thinking",
+        d.selected && !d.active && "ring-2 ring-sw-accent-idle",
+      )}
     >
-      <NodeHeader className="gap-1 p-2!">
-        <NodeTitle className="text-xs font-medium" title={d.label ?? d.nodeId}>
-          {d.label ?? d.nodeId}
+      <NodeHeader className="gap-0.5 p-2!">
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-sw-xs uppercase tracking-[0.06em] text-sw-muted" title={handlerLabel}>
+            {handlerLabel}
+          </span>
+          {d.state && <StateDot state={d.state} />}
+        </div>
+        <NodeTitle className="truncate text-sw-sm font-medium text-sw-text" title={d.label}>
+          {d.label}
         </NodeTitle>
-        <NodeDescription className="text-[10px]">
-          <StateBadge state={d.state} />
-        </NodeDescription>
+        {d.iterationLabel && <NodeDescription className="text-sw-xs text-sw-muted">{d.iterationLabel}</NodeDescription>}
       </NodeHeader>
-      <NodeContent className="p-2 text-[10px] text-muted-foreground">
-        <span className="font-mono">{d.nodeId}</span>
-        {d.lastEventSeq > 0 ? <span className="ml-2">· seq {d.lastEventSeq}</span> : null}
+      <NodeContent className="flex flex-col gap-0.5 p-2 text-sw-xs text-sw-muted">
+        {d.model ? (
+          <span className="truncate" title={d.model}>
+            <span className="uppercase tracking-[0.06em]">model</span> <code className="text-sw-text">{d.model}</code>
+          </span>
+        ) : (
+          <span className="truncate">
+            <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
+          </span>
+        )}
+        {d.lastEventSeq > 0 ? <span>seq {d.lastEventSeq}</span> : null}
       </NodeContent>
     </AiNode>
   );
 }
 
-function StateBadge({ state }: { state: NodeState["state"] }): JSX.Element {
-  const tone =
-    state === "running"
-      ? "bg-violet-100 text-violet-800 border-violet-300"
-      : state === "completed"
-        ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-        : state === "failed"
-          ? "bg-rose-100 text-rose-800 border-rose-300"
-          : state === "retrying"
-            ? "bg-amber-100 text-amber-800 border-amber-300"
-            : state === "skipped"
-              ? "bg-slate-200 text-slate-700 border-slate-300"
-              : "bg-slate-100 text-slate-700 border-slate-300";
+function StateDot({ state }: { state: NodeState["state"] }): JSX.Element {
+  const { tone, pulse } = stateStyle(state);
   return (
-    <span className={cn("inline-block rounded-full border px-1.5 py-0 text-[10px] font-medium", tone)}>{state}</span>
+    <span
+      aria-hidden
+      title={state}
+      className={cn(
+        "size-2 shrink-0 rounded-full transition-colors duration-[var(--sw-duration-status)]",
+        tone,
+        pulse && "sw-pulse",
+      )}
+    />
   );
+}
+
+function stateStyle(state: NodeState["state"]): { tone: string; pulse: boolean } {
+  switch (state) {
+    case "running":
+      return { tone: "bg-sw-accent-thinking", pulse: true };
+    case "retrying":
+      return { tone: "bg-sw-accent-warn", pulse: true };
+    case "completed":
+      return { tone: "bg-sw-accent-success", pulse: false };
+    case "failed":
+      return { tone: "bg-sw-accent-error", pulse: false };
+    case "skipped":
+    case "pending":
+      return { tone: "bg-sw-accent-idle", pulse: false };
+    default:
+      return { tone: "bg-sw-accent-idle", pulse: false };
+  }
 }
 
 /**
  * Edge renderer: animated bezier for live/running runs, static dashed
- * "temporary" for completed/failed terminal runs. Both are AI Elements
- * primitives from `./ai-elements/edge.tsx`.
+ * "temporary" for completed/failed terminal runs and static views.
  */
 function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
   return props.data?.animated ? <AiEdge.Animated {...props} /> : <AiEdge.Temporary {...props} />;
@@ -232,39 +294,50 @@ const edgeTypes = { [EDGE_TYPE]: SwarmEdge };
 
 interface SwarmNodeData extends Record<string, unknown> {
   nodeId: string;
-  label: string | undefined;
-  state: NodeState["state"];
+  label: string;
+  /** Semantic handler type (`codergen`, `loop`, `conditional`, …). */
+  handler: string;
+  /** DOT model attribute, when set. */
+  model: string | undefined;
+  /** Pre-rendered iteration badge text ("×3 iterations") for loop nodes. */
+  iterationLabel: string | undefined;
+  state: NodeState["state"] | null;
   lastEventSeq: number;
   hasIncoming: boolean;
   hasOutgoing: boolean;
   active: boolean;
+  selected: boolean;
+  orientation: LayoutOrientation;
+}
+
+export interface ToFlowGraphOptions {
+  activeNodeId?: string | null;
+  selectedNodeId?: string | null;
+  orientation?: LayoutOrientation;
 }
 
 /**
- * Build `FlowNode[]` + `FlowEdge[]` from a `PipelineDetail` (lifecycle
- * state) and a parsed `Graph` (topology). Exported as a pure function so
- * tests can exercise the transform without mounting React.
+ * Build `FlowNode[]` + `FlowEdge[]` from a parsed `Graph` and (optionally)
+ * a `PipelineDetail`. Exported as a pure function so tests can exercise
+ * the transform without mounting React.
  *
- * `detail.nodes` and `graph.nodes` are unioned by nodeId:
- *   - topology nodes (in `graph.nodes`) contribute label + handles,
- *   - lifecycle nodes (in `detail.nodes`) contribute state + seq,
- *   - nodes present only in `graph.nodes` get state="pending".
- *   - nodes present only in `detail.nodes` (rare: DOT and events out of
- *     sync) still render, just without an incoming/outgoing handle.
+ * When `detail` is null the transform runs in workflow-detail mode:
+ * every node renders with `state = null` and edges are non-animated.
  */
 export function toFlowGraph(
-  detail: PipelineDetail,
+  detail: PipelineDetail | null,
   graph: Graph,
-  activeNodeId: string | null,
+  opts: ToFlowGraphOptions = {},
 ): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
-  const stateById = new Map(detail.nodes.map((n) => [n.nodeId, n]));
+  const { activeNodeId = null, selectedNodeId = null, orientation = "TB" } = opts;
+  const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
   const incoming = new Set(graph.edges.map((e) => e.to));
   const outgoing = new Set(graph.edges.map((e) => e.from));
-  const isRunning = detail.status === "running";
+  const isRunning = detail?.status === "running";
 
   const ids = new Set<string>();
   for (const id of Object.keys(graph.nodes)) ids.add(id);
-  for (const n of detail.nodes) ids.add(n.nodeId);
+  for (const n of detail?.nodes ?? []) ids.add(n.nodeId);
 
   const positions = new Map(
     layoutDag(
@@ -272,21 +345,26 @@ export function toFlowGraph(
         nodes: [...ids].map((id) => ({ id })),
         edges: graph.edges.map((e) => ({ from: e.from, to: e.to })),
       },
-      { colWidth: 240, rowHeight: 110 },
+      { orientation },
     ).map((p) => [p.id, p.position]),
   );
 
   const flowNodes: FlowNode[] = [...ids].map((id) => {
-    const state = stateById.get(id);
-    const topo = graph.nodes[id];
+    const stateEntry = stateById.get(id);
+    const topo: GraphNode | undefined = graph.nodes[id];
     const data: SwarmNodeData = {
       nodeId: id,
-      label: topo?.attrs?.label,
-      state: state?.state ?? "pending",
-      lastEventSeq: state?.lastEventSeq ?? 0,
+      label: topo?.attrs.label ?? id,
+      handler: topo ? handlerOf(topo) : "unknown",
+      model: topo?.attrs.model,
+      iterationLabel: iterationLabelFor(topo),
+      state: stateEntry ? stateEntry.state : detail ? "pending" : null,
+      lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
       active: activeNodeId === id,
+      selected: selectedNodeId === id,
+      orientation,
     };
     return {
       id,
@@ -301,8 +379,18 @@ export function toFlowGraph(
     source: e.from,
     target: e.to,
     type: EDGE_TYPE,
-    data: { animated: isRunning },
+    data: { animated: Boolean(isRunning) },
   }));
 
   return { flowNodes, flowEdges };
+}
+
+/** Loop nodes (trapezium) surface their iteration cap in the card so
+ *  operators don't need to open the inspector to see "how many rounds
+ *  can this run?". Returns `undefined` for non-loop nodes. */
+function iterationLabelFor(topo: GraphNode | undefined): string | undefined {
+  if (!topo || topo.shape !== "trapezium") return undefined;
+  const max = topo.attrs.max_iterations;
+  if (typeof max === "number" && max > 0) return `×${max} iterations`;
+  return "loop";
 }

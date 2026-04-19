@@ -96,6 +96,14 @@ export interface WorkflowSummary {
   label?: string;
 }
 
+/** Full workflow, including the raw DOT source. Fetched on demand by
+ *  the workflow detail page — the list endpoint stays cheap. The DOT is
+ *  parsed client-side by `@swarm/core`'s `parseDotSource`; the server
+ *  never parses DOT itself. */
+export interface WorkflowDetail extends WorkflowSummary {
+  source: string;
+}
+
 export interface SkillSummary {
   name: string;
   description: string;
@@ -279,6 +287,10 @@ export async function listWorkflows(): Promise<WorkflowSummary[]> {
   return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
 }
 
+export async function getWorkflow(name: string): Promise<WorkflowDetail> {
+  return getJson(`/workflows/${encodeURIComponent(name)}`, isWorkflowDetail);
+}
+
 export async function listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]> {
   const qs = opts?.refresh ? "?refresh=1" : "";
   return getJson(`/skills${qs}`, (v): v is SkillSummary[] => Array.isArray(v) && v.every(isSkillSummary));
@@ -449,6 +461,11 @@ function isWorkflowSummary(v: unknown): v is WorkflowSummary {
     typeof o.sha === "string" &&
     (o.label === undefined || typeof o.label === "string")
   );
+}
+
+function isWorkflowDetail(v: unknown): v is WorkflowDetail {
+  if (!isWorkflowSummary(v)) return false;
+  return typeof (v as { source?: unknown }).source === "string";
 }
 
 function isJobStatus(v: unknown): v is JobStatus {

@@ -10,7 +10,7 @@ import { InMemorySink } from "../../src/events/sink.ts";
 import { type CodergenBackend, type CodergenInput, execute } from "../../src/executor/execute.ts";
 import { parseDotSource } from "../../src/parser/parser.ts";
 import type { ControlRequest } from "../../src/types/events.ts";
-import { ok, type Outcome } from "../../src/types/outcome.ts";
+import { type Outcome, ok } from "../../src/types/outcome.ts";
 
 function makeControlChannel(): {
   push: (r: ControlRequest) => void;

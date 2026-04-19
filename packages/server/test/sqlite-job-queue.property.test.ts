@@ -150,7 +150,8 @@ describe("sqlite job queue — property: state invariants", () => {
           const claims = await Promise.all(Array.from({ length: n * 2 }, () => queue.claimNext()));
           const claimed = claims.filter((c) => c !== undefined);
           const ids = new Set(claimed.map((c) => c!.id));
-          if (ids.size !== claimed.length) throw new Error(`duplicate claim: ${claimed.length} claims but ${ids.size} unique ids`);
+          if (ids.size !== claimed.length)
+            throw new Error(`duplicate claim: ${claimed.length} claims but ${ids.size} unique ids`);
           if (claimed.length !== n) throw new Error(`expected ${n} claims, got ${claimed.length}`);
           const remaining = await queue.list({ status: "queued", limit: 9999 });
           if (remaining.length !== 0) throw new Error(`${remaining.length} rows remain queued after ${n} claims`);

@@ -588,11 +588,7 @@ const waitHumanHandler: Handler = async (ctx) => {
         reject(new Error("aborted"));
         return;
       }
-      ctx.signal.addEventListener(
-        "abort",
-        () => reject(new Error("aborted")),
-        { once: true },
-      );
+      ctx.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     });
     const answer = await Promise.race([askPromise, abortPromise]);
     await emit("interview.completed", { value: String(answer.value) });

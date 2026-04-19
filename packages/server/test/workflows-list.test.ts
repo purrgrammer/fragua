@@ -15,6 +15,9 @@ function memoryWorkflowReader(items: WorkflowSummary[]): WorkflowReader {
     async list(): Promise<WorkflowSummary[]> {
       return [...items];
     },
+    async read(): Promise<undefined> {
+      return undefined;
+    },
   };
 }
 

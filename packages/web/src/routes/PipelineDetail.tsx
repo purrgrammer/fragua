@@ -17,9 +17,12 @@
 //     invalidate on `totalEvents` changes so cost / tokens / duration
 //     stay live.
 
+import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { GraphView } from "../components/GraphView.tsx";
+import { NodeInspector } from "../components/NodeInspector.tsx";
 import { PipelineConversation } from "../components/PipelineConversation.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
@@ -32,7 +35,8 @@ import { useRunConversation } from "../lib/useRunConversation.ts";
 
 export function PipelineDetail(): JSX.Element {
   const { id = "" } = useParams();
-  const [view, setView] = useState<"conversation" | "steps">("conversation");
+  const [view, setView] = useState<"conversation" | "steps" | "graph">("conversation");
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const { conversation, status: convStatus, totalEvents, controlEvents } = useRunConversation(id || null);
   const isLoading = convStatus === "loading";
@@ -115,6 +119,16 @@ export function PipelineDetail(): JSX.Element {
             <button
               type="button"
               role="tab"
+              aria-selected={view === "graph"}
+              data-testid="view-tab-graph"
+              onClick={() => setView("graph")}
+              className={`px-3 py-1 rounded-md border ${view === "graph" ? "bg-muted" : "bg-transparent"}`}
+            >
+              Graph
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={view === "steps"}
               data-testid="view-tab-steps"
               onClick={() => setView("steps")}
@@ -124,7 +138,9 @@ export function PipelineDetail(): JSX.Element {
             </button>
           </div>
           <div
-            data-testid={view === "conversation" ? "conversation-region" : "steps-region"}
+            data-testid={
+              view === "conversation" ? "conversation-region" : view === "graph" ? "graph-region" : "steps-region"
+            }
             className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-background"
           >
             {view === "conversation" ? (
@@ -134,6 +150,13 @@ export function PipelineDetail(): JSX.Element {
                 isLive={isLive}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
+              />
+            ) : view === "graph" ? (
+              <PipelineGraphTab
+                detail={detail ?? null}
+                refetchKey={totalEvents}
+                selectedNodeId={selectedNodeId}
+                onSelect={setSelectedNodeId}
               />
             ) : (
               <StepInspector runId={id} totalEvents={totalEvents} />
@@ -254,4 +277,53 @@ function headingTooltip(detail: PipelineDetailT): string {
   const wf = detail.workflowName ?? detail.workflow;
   if (wf) parts.push(`workflow: ${wf}`);
   return parts.join("\n");
+}
+
+// "Graph" tab — small leaf that pairs the live GraphView with the
+// NodeInspector so a user can click through nodes while the run streams.
+// The running node (if any) is whichever lifecycle state entry reports
+// `state === "running"`; we surface that as the GraphView's
+// `activeNodeId` so it gets the "thinking" ring even before a user
+// clicks anything.
+function PipelineGraphTab({
+  detail,
+  refetchKey,
+  selectedNodeId,
+  onSelect,
+}: {
+  detail: PipelineDetailT | null;
+  refetchKey: number;
+  selectedNodeId: string | null;
+  onSelect: (id: string) => void;
+}): JSX.Element {
+  const graph = useMemo(() => {
+    if (!detail?.workflowSource) return null;
+    try {
+      return parseDotSource(detail.workflowSource);
+    } catch {
+      return null;
+    }
+  }, [detail?.workflowSource]);
+
+  const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
+  const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
+  const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;
+
+  return (
+    <div className="grid h-full min-h-[480px] grid-cols-1 gap-4 p-2 md:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-h-[480px] min-w-0">
+        {detail ? (
+          <GraphView
+            detail={detail}
+            orientation="TB"
+            refetchKey={refetchKey}
+            activeNodeId={activeNodeId}
+            selectedNodeId={selectedNodeId}
+            onNodeClick={onSelect}
+          />
+        ) : null}
+      </div>
+      <NodeInspector node={selected} state={selectedState} />
+    </div>
+  );
 }

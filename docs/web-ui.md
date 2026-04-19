@@ -4,8 +4,9 @@ The React + Vite client lives in `packages/web/`. The app sits inside a persiste
 
 - `/` — Home dashboard (stats tiles from `GET /stats` + recent runs)
 - `/pipelines` — full pipelines list (the table-shaped view)
-- `/pipelines/:id` — per-run detail with graph + active-node highlight
-- `/workflows` — workflow catalog
+- `/pipelines/:id` — per-run detail. Three tabs: **Conversation** (AI-Elements drilldown of the streamed messages), **Graph** (live workflow DAG with the running node pulsing + a read-only NodeInspector side panel), and **Steps** (`<StepInspector>` snapshots).
+- `/workflows` — workflow catalog (rows link into the detail page)
+- `/workflows/:name` — read-only workflow inspector. Top-to-bottom graph on the left, NodeInspector side panel on the right. Click a node to surface its attrs (handler, model, fidelity, tools, skills, loop iterations, etc.). Strictly read-only for now; running a workflow from here lands in a later phase.
 - `/settings` — client settings
 
 Metrics (cost, input/output tokens, duration) are derived server-side from `cost.recorded` events and rendered in both the list and the detail header. The sidebar reads connection status from `HealthContext`, so the route tree stays stable across health-status flips (tests rely on this).

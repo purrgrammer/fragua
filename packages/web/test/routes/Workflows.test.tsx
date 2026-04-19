@@ -70,4 +70,20 @@ describe("Workflows route", () => {
       console.warn = origWarn;
     }
   });
+  it("links each row's name to /workflows/:name", async () => {
+    const rows: WorkflowSummary[] = [
+      { name: "alpha", path: "workflows/alpha.dot", sha: "abcdef1234567890", label: "Alpha" },
+    ];
+    const client = createTestQueryClient();
+    client.setQueryData(queries.workflows.list().queryKey, rows);
+
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("workflow-link-alpha")).toBeTruthy();
+    });
+    const link = q.getByTestId("workflow-link-alpha") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/workflows/alpha");
+    expect(link.textContent).toBe("Alpha");
+  });
 });

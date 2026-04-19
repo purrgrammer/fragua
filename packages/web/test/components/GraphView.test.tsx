@@ -61,7 +61,7 @@ function makeDetail(overrides: Partial<PipelineDetail> = {}): PipelineDetail {
 describe("toFlowGraph — pure transform", () => {
   it("emits one FlowEdge per DOT edge, anchored to correct source/target", () => {
     const graph = parseDotSource(WORKFLOW_SOURCE);
-    const { flowEdges, flowNodes } = toFlowGraph(makeDetail(), graph, null);
+    const { flowEdges, flowNodes } = toFlowGraph(makeDetail(), graph);
 
     // Both edges present, in source order.
     expect(flowEdges.length).toBe(2);
@@ -78,7 +78,7 @@ describe("toFlowGraph — pure transform", () => {
 
   it("unions graph.nodes with detail.nodes so DOT-only nodes still render as pending", () => {
     const graph = parseDotSource(WORKFLOW_SOURCE);
-    const { flowNodes } = toFlowGraph(makeDetail(), graph, null);
+    const { flowNodes } = toFlowGraph(makeDetail(), graph);
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { state: string; label?: string }]));
     // `done` is only in topology (no lifecycle event yet).
     expect(byId.get("done")?.state).toBe("pending");
@@ -90,7 +90,7 @@ describe("toFlowGraph — pure transform", () => {
 
   it("marks the activeNodeId entry as active", () => {
     const graph = parseDotSource(WORKFLOW_SOURCE);
-    const { flowNodes } = toFlowGraph(makeDetail(), graph, "middle");
+    const { flowNodes } = toFlowGraph(makeDetail(), graph, { activeNodeId: "middle" });
     const active = flowNodes.find((n) => n.id === "middle")?.data as { active: boolean };
     expect(active.active).toBe(true);
     const other = flowNodes.find((n) => n.id === "start")?.data as { active: boolean };
@@ -143,5 +143,107 @@ describe("GraphView — rendering", () => {
     expect(startNode).toBeTruthy();
     fireEvent.click(startNode as Element);
     expect(clicks).toEqual(["start"]);
+  });
+});
+
+describe("toFlowGraph — layout + metadata", () => {
+  it("default orientation is top-to-bottom (depth drives y, siblings spread on x)", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      done [shape=Msquare]
+      start -> a -> done
+      start -> b -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph);
+    const byId = new Map(flowNodes.map((n) => [n.id, n.position]));
+    const start = byId.get("start");
+    const done = byId.get("done");
+    expect(start).toBeDefined();
+    expect(done).toBeDefined();
+    // Top-to-bottom: `done` sits BELOW `start` (greater y), same x axis range.
+    expect((done?.y ?? 0) > (start?.y ?? 0)).toBe(true);
+  });
+
+  it("LR orientation swaps axes (depth drives x)", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      done [shape=Msquare]
+      start -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(makeDetail({ workflowSource: src, nodes: [] }), graph, { orientation: "LR" });
+    const byId = new Map(flowNodes.map((n) => [n.id, n.position]));
+    const start = byId.get("start");
+    const done = byId.get("done");
+    expect((done?.x ?? 0) > (start?.x ?? 0)).toBe(true);
+  });
+
+  it("loop (trapezium) nodes carry an iteration label", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      loop [shape=trapezium, max_iterations=3, until="APPROVED", label="implement and review"]
+      done [shape=Msquare]
+      start -> loop -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const loopData = flowNodes.find((n) => n.id === "loop")?.data as {
+      iterationLabel?: string;
+      handler: string;
+    };
+    expect(loopData.handler).toBe("loop");
+    expect(loopData.iterationLabel).toBe("×3 iterations");
+  });
+
+  it("non-loop nodes have no iteration label", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      start -> a
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const aData = flowNodes.find((n) => n.id === "a")?.data as { iterationLabel?: string };
+    expect(aData.iterationLabel).toBeUndefined();
+  });
+
+  it("surfaces the model attribute in the node data", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box, model="claude-sonnet-4-5"]
+      start -> a
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const aData = flowNodes.find((n) => n.id === "a")?.data as { model?: string };
+    expect(aData.model).toBe("claude-sonnet-4-5");
+  });
+
+  it("static mode (null detail) emits nodes with state=null and non-animated edges", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      done [shape=Msquare]
+      start -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes, flowEdges } = toFlowGraph(null, graph);
+    expect(flowNodes.every((n) => (n.data as { state: unknown }).state === null)).toBe(true);
+    expect(flowEdges.every((e) => (e.data as { animated: boolean }).animated === false)).toBe(true);
+  });
+
+  it("selectedNodeId flag flows to the selected node", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      done [shape=Msquare]
+      start -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph, { selectedNodeId: "done" });
+    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { selected: boolean }]));
+    expect(byId.get("done")?.selected).toBe(true);
+    expect(byId.get("start")?.selected).toBe(false);
   });
 });

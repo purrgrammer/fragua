@@ -47,6 +47,11 @@ export const queries = {
         queryKey: [...queries.workflows.all(), "list"] as const,
         queryFn: api.listWorkflows,
       }),
+    detail: (name: string) =>
+      queryOptions({
+        queryKey: [...queries.workflows.all(), "detail", name] as const,
+        queryFn: () => api.getWorkflow(name),
+      }),
   },
 
   jobs: {

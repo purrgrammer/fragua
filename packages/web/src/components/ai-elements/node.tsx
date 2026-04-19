@@ -26,22 +26,35 @@ export type NodeProps = ComponentProps<typeof Card> & {
   handles: {
     target: boolean;
     source: boolean;
+    /**
+     * Flow direction this node sits in. `"TB"` routes handles through
+     * Top/Bottom (workflow reads top-to-bottom), `"LR"` through
+     * Left/Right. Defaults to `"TB"` — the canonical orientation for
+     * swarm workflows. xyflow needs this to know which edge port each
+     * Handle binds to.
+     */
+    orientation?: "TB" | "LR";
   };
 };
 
-export const Node = ({ handles, className, ...props }: NodeProps) => (
-  <Card
-    // gap-0: header/content/footer are flush; hairline is the separation.
-    // h-auto + relative: required for xyflow handle anchoring.
-    // No local radius — Card owns --sw-radius-card.
-    className={cn("relative h-auto w-sm gap-0 p-0", className)}
-    {...props}
-  >
-    {handles.target && <Handle position={Position.Left} type="target" />}
-    {handles.source && <Handle position={Position.Right} type="source" />}
-    {props.children}
-  </Card>
-);
+export const Node = ({ handles, className, ...props }: NodeProps) => {
+  const orientation = handles.orientation ?? "TB";
+  const targetPos = orientation === "TB" ? Position.Top : Position.Left;
+  const sourcePos = orientation === "TB" ? Position.Bottom : Position.Right;
+  return (
+    <Card
+      // gap-0: header/content/footer are flush; hairline is the separation.
+      // h-auto + relative: required for xyflow handle anchoring.
+      // No local radius — Card owns --sw-radius-card.
+      className={cn("relative h-auto w-sm gap-0 p-0", className)}
+      {...props}
+    >
+      {handles.target && <Handle position={targetPos} type="target" />}
+      {handles.source && <Handle position={sourcePos} type="source" />}
+      {props.children}
+    </Card>
+  );
+};
 
 export type NodeHeaderProps = ComponentProps<typeof CardHeader>;
 

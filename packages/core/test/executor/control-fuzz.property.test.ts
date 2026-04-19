@@ -22,7 +22,7 @@ import { InMemorySink } from "../../src/events/sink.ts";
 import { type CodergenBackend, type CodergenInput, execute } from "../../src/executor/execute.ts";
 import { parseDotSource } from "../../src/parser/parser.ts";
 import type { ControlRequest } from "../../src/types/events.ts";
-import { ok, type Outcome } from "../../src/types/outcome.ts";
+import { type Outcome, ok } from "../../src/types/outcome.ts";
 
 /** Seedable PRNG so fast-check shrinking is deterministic. */
 function mulberry32(seed: number): () => number {
@@ -41,10 +41,7 @@ type Cmd = "pause" | "resume" | "cancel" | "steer";
 /** Arbitrary for a schedule: a list of (command, delayMs) pairs.
  * Small delays so the whole property test finishes quickly. */
 const scheduleArb = fc.array(
-  fc.tuple(
-    fc.constantFrom<Cmd>("pause", "resume", "cancel", "steer"),
-    fc.integer({ min: 0, max: 30 }),
-  ),
+  fc.tuple(fc.constantFrom<Cmd>("pause", "resume", "cancel", "steer"), fc.integer({ min: 0, max: 30 })),
   { minLength: 0, maxLength: 6 },
 );
 
