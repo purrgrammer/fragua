@@ -256,18 +256,20 @@ describe("Home / Overview launcher", () => {
     }
   });
 
-  it("on submit: POSTs /jobs, clears input, invalidates queries, renders user bubble", async () => {
+  it("on submit: POSTs /jobs with workflow path, invalidates queries, navigates to the pipeline", async () => {
     let jobsPosts = 0;
     let pipelinesReloads = 0;
+    let lastBody: unknown;
     const mock = installFetchMock({
       "/api/pipelines": () => {
         pipelinesReloads += 1;
         return json([]);
       },
       "/api/workflows": () => json(workflows),
-      "/api/jobs": ({ method }) => {
+      "/api/jobs": async ({ method, init }) => {
         if (method !== "POST") return new Response("method not allowed", { status: 405 });
         jobsPosts += 1;
+        if (typeof init?.body === "string") lastBody = JSON.parse(init.body);
         return json({ jobId: "j-1", runId: "r-1" });
       },
     });
@@ -276,8 +278,6 @@ describe("Home / Overview launcher", () => {
       const q = within(container);
       const textarea = (await waitFor(() => q.getByTestId("overview-input"))) as HTMLTextAreaElement;
       typeInto(textarea, "draft the release notes");
-      // Workflow seeds async from /api/workflows — wait for submit to
-      // become enabled before firing it.
       await waitFor(() => {
         expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(false);
       });
@@ -291,28 +291,19 @@ describe("Home / Overview launcher", () => {
         expect(jobsPosts).toBe(1);
       });
 
-      // POST body assertion: last /api/jobs POST carried the right shape.
-      const postCall = mock.calls.find((c) => c.url === "/api/jobs" && c.method === "POST");
-      expect(postCall).toBeTruthy();
-      // The posted body is read off the mock's stored init; we recomputed
-      // it by capturing in the handler above.
-      //
-      // Textarea cleared:
-      await waitFor(() => {
-        expect((q.getByTestId("overview-input") as HTMLTextAreaElement).value).toBe("");
-      });
+      // Body carries the workflow PATH (so old daemons work too) + input.
+      expect(lastBody).toEqual({ workflow: "workflows/build-feature.dot", input: "draft the release notes" });
 
-      // Last-prompt bubble visible:
-      await waitFor(() => {
-        expect(q.getByTestId("overview-last-prompt")).toBeTruthy();
-      });
-      expect(q.getByTestId("overview-last-prompt").textContent).toContain("draft the release notes");
-
-      // Pipelines query was invalidated → at least one re-fetch. Initial
-      // mount is skipped because the cache is seeded via `withRows([])`;
-      // polling may tick later but we can't rely on that window here.
+      // Pipelines query was invalidated → at least one re-fetch.
       await waitFor(() => {
         expect(pipelinesReloads).toBeGreaterThanOrEqual(1);
+      });
+
+      // Navigated away from Home — the overview section is no longer in
+      // the tree. (Asserting on the PipelineDetail page's contents would
+      // require mocking the pipeline-detail + events endpoints too.)
+      await waitFor(() => {
+        expect(within(container).queryByTestId("overview")).toBeNull();
       });
     } finally {
       mock.restore();

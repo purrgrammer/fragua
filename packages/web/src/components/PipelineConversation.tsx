@@ -51,6 +51,12 @@ export interface PipelineConversationProps {
    * state during the REST-fetch phase so the user doesn't briefly see
    * "No conversation yet" before the events arrive. */
   isLoading?: boolean;
+  /** The free-form text the run was launched with. Rendered as the first
+   * user message at the top of the thread. The agent's event stream
+   * doesn't carry this prompt today — it only emits empty structural
+   * `role=user` shells for tool-result round-trips — so the header is
+   * the only place we have it. */
+  userInput?: string | null;
   className?: string;
 }
 
@@ -59,6 +65,7 @@ export function PipelineConversation({
   nodeStates,
   isLive = false,
   isLoading = false,
+  userInput,
   className,
 }: PipelineConversationProps): JSX.Element {
   // Merge: server state wins when present (handles replay / reconnect
@@ -72,6 +79,8 @@ export function PipelineConversation({
     });
   }, [conversation, nodeStates]);
 
+  const userPrompt = userInput?.trim() ? userInput : null;
+
   if (sections.length === 0) {
     // Suppress the empty state while events are still being fetched —
     // an empty surface is better than "No conversation yet" flashing
@@ -79,13 +88,14 @@ export function PipelineConversation({
     if (isLoading) {
       return (
         <Conversation className={cn("h-full", className)}>
-          <ConversationContent>{null}</ConversationContent>
+          <ConversationContent>{userPrompt && <UserPromptMessage text={userPrompt} />}</ConversationContent>
         </Conversation>
       );
     }
     return (
       <Conversation className={cn("h-full", className)}>
         <ConversationContent>
+          {userPrompt && <UserPromptMessage text={userPrompt} />}
           <ConversationEmptyState
             data-testid="conversation-empty"
             title="No conversation yet"
@@ -99,12 +109,23 @@ export function PipelineConversation({
   return (
     <Conversation className={cn("h-full", className)}>
       <ConversationContent>
+        {userPrompt && <UserPromptMessage text={userPrompt} />}
         {sections.map((section, idx) => (
           <SectionBlock key={section.nodeId} section={section} isLive={isLive} isFirst={idx === 0} />
         ))}
       </ConversationContent>
       <ConversationScrollButton />
     </Conversation>
+  );
+}
+
+function UserPromptMessage({ text }: { text: string }): JSX.Element {
+  return (
+    <AIMessage from="user" data-testid="conversation-user-prompt">
+      <MessageContent>
+        <p className="whitespace-pre-wrap">{text}</p>
+      </MessageContent>
+    </AIMessage>
   );
 }
 

@@ -132,6 +132,7 @@ export function PipelineDetail(): JSX.Element {
                 nodeStates={detail?.nodes}
                 isLive={isLive}
                 isLoading={isLoading}
+                userInput={detail?.input ?? null}
               />
             ) : (
               <StepInspector runId={id} totalEvents={totalEvents} />

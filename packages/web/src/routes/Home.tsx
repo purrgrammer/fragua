@@ -13,8 +13,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Message, MessageContent } from "../components/ai-elements/message.tsx";
+import { Link, useNavigate } from "react-router-dom";
 import {
   PromptInput,
   PromptInputFooter,
@@ -81,6 +80,7 @@ function Overview(): JSX.Element {
   const daemonOff = health.status === "error" || health.daemon === undefined;
 
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const workflowsQuery = useQuery({
     ...queries.workflows.list(),
     enabled: !daemonOff,
@@ -89,7 +89,6 @@ function Overview(): JSX.Element {
 
   const [workflow, setWorkflow] = useState<string>("");
   const [input, setInput] = useState<string>("");
-  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
 
   // Default-select the first workflow once the list arrives. Seeded
   // only on the transition from "no selection" → "have one"; never
@@ -102,13 +101,13 @@ function Overview(): JSX.Element {
   }, [workflow, workflows]);
 
   const mutation = useMutation({
-    mutationFn: (vars: { workflow: string; input: string }) =>
-      enqueueJob({ workflow: vars.workflow, input: vars.input }),
-    onSuccess: (_data, vars) => {
-      setLastPrompt(vars.input);
+    mutationFn: (vars: { workflowPath: string; input: string }) =>
+      enqueueJob({ workflow: vars.workflowPath, input: vars.input }),
+    onSuccess: (data) => {
       setInput("");
       void qc.invalidateQueries({ queryKey: queries.pipelines.all() });
       void qc.invalidateQueries({ queryKey: queries.jobs.all() });
+      navigate(`/pipelines/${data.runId}`);
     },
   });
 
@@ -117,8 +116,12 @@ function Overview(): JSX.Element {
 
   const handleSubmit = (message: PromptInputMessage) => {
     const text = message.text.trim();
-    if (!workflow || text === "") return;
-    mutation.mutate({ workflow, input: text });
+    const selected = workflows.find((w) => w.name === workflow);
+    if (!selected || text === "") return;
+    // Send the filesystem path the worker expects. Newer daemons also
+    // accept the bare name, but sending the path works against any
+    // running daemon version.
+    mutation.mutate({ workflowPath: selected.path, input: text });
   };
 
   const submitStatus: "submitted" | "error" | undefined = mutation.isPending
@@ -133,14 +136,6 @@ function Overview(): JSX.Element {
   return (
     <section data-testid="overview" className="flex flex-col gap-[var(--sw-space-3)]">
       <h2 className="font-heading text-base font-semibold">Overview</h2>
-
-      {lastPrompt !== null && (
-        <Message from="user" data-testid="overview-last-prompt">
-          <MessageContent>
-            <p className="whitespace-pre-wrap">{lastPrompt}</p>
-          </MessageContent>
-        </Message>
-      )}
 
       <PromptInput onSubmit={handleSubmit} data-testid="overview-form">
         <PromptInputHeader>
