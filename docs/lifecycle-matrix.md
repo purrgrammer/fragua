@@ -35,6 +35,10 @@ links to the test that pins down the expected terminal state.
 - **Control idempotency across restarts** — `last_applied_control_id` in the checkpoint is advanced on every apply and a final checkpoint is persisted after control-loop teardown so fast-completing runs don't lose the marker. Tested across two restarts in `control-idempotency.test.ts` ("dedup marker survives two restarts").
 - **Torn writes to `control.jsonl`** — the tail reader buffers partial lines until a newline arrives and silently drops any JSON line that fails parse or lacks required fields (`parseControlLine`). Tested in `packages/events/test/control.test.ts`.
 - **Cancel beats timeout** — `waitHumanHandler` races the interviewer promise against `ctx.signal`. A cancel arriving during the timeout window produces `pipeline.canceled`, not a spurious `pipeline.failed`-via-timeout.
+- **Every `control.requested` has a matching `control.applied` or `control.rejected`** — including the tricky case where resume/cancel arrives before a pending pause has had a chance to land at a node boundary (emitted with `note: "superseded_by_resume"` / `"superseded_by_cancel"`). Fuzzed in `control-fuzz.property.test.ts`.
+- **Job queue state machine** — claimed rows are never re-claimed, terminal status is one-shot, `count(status)` always equals `list({status}).length`. Fuzzed in `sqlite-job-queue.property.test.ts` across 80 random op sequences.
+- **Checkpoint concurrent save safety** — parallel `save()` calls land exactly one valid checkpoint; no torn file and no ENOENT on rename (unique per-write tmp suffix). Fuzzed in `checkpoint.property.test.ts`.
+- **Orphan recovery never touches queued rows** — recovery running concurrently with enqueue/claim only reconciles `running` rows. Tested in `scheduler-orphan-race.test.ts`.
 
 ## Known gaps
 

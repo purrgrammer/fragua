@@ -1697,6 +1697,20 @@ async function runControlLoop(args: ControlLoopArgs): Promise<void> {
             args.onApplied(request.id);
             break;
           }
+          // If resume arrived before the pause boundary landed, the
+          // pause request is still "pending" and would never get an ack
+          // (runLoop's onBoundary won't fire once we clear paused).
+          // Emit a superseded ack for the pause so every requested has
+          // a matching applied/rejected.
+          const pendingPauseId = args.pause.pendingPauseRequestId;
+          if (pendingPauseId !== undefined) {
+            await args.emit("control.applied", undefined, {
+              id: pendingPauseId,
+              command: "pause",
+              note: "superseded_by_resume",
+            });
+            args.onApplied(pendingPauseId);
+          }
           args.setPaused(false);
           args.pause.resolveResume();
           args.pause.pendingPauseRequestId = undefined;
@@ -1725,6 +1739,19 @@ async function runControlLoop(args: ControlLoopArgs): Promise<void> {
           // lands in strict causal order with everything that was still
           // in flight.
           const reason = request.payload?.reason;
+          // Same pending-pause invariant as resume: if cancel lands
+          // before the pause boundary did, ack the pause as superseded
+          // so every requested has a matching applied/rejected.
+          const pendingPauseId = args.pause.pendingPauseRequestId;
+          if (pendingPauseId !== undefined) {
+            await args.emit("control.applied", undefined, {
+              id: pendingPauseId,
+              command: "pause",
+              note: "superseded_by_cancel",
+            });
+            args.onApplied(pendingPauseId);
+            args.pause.pendingPauseRequestId = undefined;
+          }
           await args.emit("control.applied", undefined, {
             id: request.id,
             command: request.command,

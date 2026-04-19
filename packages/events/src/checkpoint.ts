@@ -3,7 +3,8 @@
 // leaves either the previous checkpoint or the new one — never a torn
 // file. Default runs directory mirrors the JSONL sink's convention.
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Checkpoint, CheckpointStore } from "@swarm/core";
 
@@ -24,13 +25,19 @@ export class JsonlCheckpointStore implements CheckpointStore {
   async save(runId: string, checkpoint: Checkpoint): Promise<void> {
     const dir = join(this.runsDir, runId);
     const finalPath = join(dir, "checkpoint.json");
-    const tmpPath = `${finalPath}.tmp`;
+    // Unique tmp suffix so concurrent saves don't race on the same .tmp
+    // path. Each writer gets its own file, then `rename` last-write-wins
+    // atomically (rename is atomic on POSIX within one filesystem).
+    const tmpPath = `${finalPath}.${randomBytes(6).toString("hex")}.tmp`;
     await mkdir(dirname(finalPath), { recursive: true });
-    // Write to .tmp first then rename — `fs.rename` is atomic on the
-    // same filesystem, so a crash mid-write never exposes a partially
-    // serialised JSON blob.
     await writeFile(tmpPath, `${JSON.stringify(checkpoint)}\n`, "utf8");
-    await rename(tmpPath, finalPath);
+    try {
+      await rename(tmpPath, finalPath);
+    } catch (err) {
+      // Best-effort cleanup if the rename failed for any reason.
+      await unlink(tmpPath).catch(() => {});
+      throw err;
+    }
   }
 
   async load(runId: string): Promise<Checkpoint | undefined> {
