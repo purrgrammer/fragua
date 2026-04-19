@@ -5,6 +5,7 @@
 // executor loop. On SIGTERM/SIGINT: trip shutdownSignal; executor finishes
 // its current turn; supervisor exits; release lock.
 
+import { hostname as osHostname } from "node:os";
 import type { handler as coreHandler } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
@@ -111,9 +112,7 @@ export class DaemonAlreadyRunningError extends Error {
 
 function hostnameSafe(): string {
   try {
-    // Avoid importing node:os at the top so tests can run in any env.
-    // @ts-ignore - dynamic require ok in bun runtime
-    return require("node:os").hostname() as string;
+    return osHostname();
   } catch {
     return "unknown-host";
   }

@@ -28,19 +28,17 @@ describe("AppShell + AppSidebar", () => {
     }
   });
 
-  it("renders the five nav entries", () => {
+  it("renders the three nav entries", () => {
     const { container } = mount("/");
     const q = within(container);
     expect(q.getByTestId("nav-home")).toBeTruthy();
     expect(q.getByTestId("nav-workflows")).toBeTruthy();
-    expect(q.getByTestId("nav-pipelines")).toBeTruthy();
-    expect(q.getByTestId("nav-skills")).toBeTruthy();
-    expect(q.getByTestId("nav-settings")).toBeTruthy();
+    expect(q.getByTestId("nav-runs")).toBeTruthy();
   });
 
   it("renders a lucide icon next to each nav label", () => {
     const { container } = mount("/");
-    for (const id of ["nav-home", "nav-workflows", "nav-pipelines", "nav-skills", "nav-settings"]) {
+    for (const id of ["nav-home", "nav-workflows", "nav-runs"]) {
       const link = within(container).getByTestId(id);
       expect(link.querySelector("svg")).not.toBeNull();
     }
@@ -91,19 +89,15 @@ describe("crumbsFor (route → breadcrumb derivation)", () => {
     expect(crumbsFor("/workflows", {})).toEqual([{ label: "Home", href: "/" }, { label: "Workflows" }]);
   });
 
-  it("pipelines list", () => {
-    expect(crumbsFor("/pipelines", {})).toEqual([{ label: "Home", href: "/" }, { label: "Pipelines" }]);
+  it("runs list", () => {
+    expect(crumbsFor("/runs", {})).toEqual([{ label: "Home", href: "/" }, { label: "Runs" }]);
   });
 
-  it("pipeline detail truncates the id to 8 chars", () => {
-    expect(crumbsFor("/pipelines/abcdef1234567890", { id: "abcdef1234567890" })).toEqual([
+  it("run detail truncates the id to 8 chars", () => {
+    expect(crumbsFor("/runs/abcdef1234567890", { id: "abcdef1234567890" })).toEqual([
       { label: "Home", href: "/" },
-      { label: "Pipelines", href: "/pipelines" },
+      { label: "Runs", href: "/runs" },
       { label: "abcdef12" },
     ]);
-  });
-
-  it("settings", () => {
-    expect(crumbsFor("/settings", {})).toEqual([{ label: "Home", href: "/" }, { label: "Settings" }]);
   });
 });

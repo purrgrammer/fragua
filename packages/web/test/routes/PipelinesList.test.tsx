@@ -12,7 +12,7 @@ import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-function mount(client = createTestQueryClient(), path = "/pipelines") {
+function mount(client = createTestQueryClient(), path = "/runs") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
   return renderWithClient(<RouterProvider router={router} />, { client });
 }
@@ -94,8 +94,8 @@ describe("PipelinesList", () => {
 
     const links = Array.from(container.querySelectorAll("a[href]"));
     const hrefs = links.map((a) => a.getAttribute("href"));
-    expect(hrefs).toContain("/pipelines/r1");
-    expect(hrefs).toContain("/pipelines/r2");
+    expect(hrefs).toContain("/runs/r1");
+    expect(hrefs).toContain("/runs/r2");
 
     // Workflow cell uses the muted Badge variant. Asserting on
     // `data-variant` keeps the test resilient to theme-token changes.

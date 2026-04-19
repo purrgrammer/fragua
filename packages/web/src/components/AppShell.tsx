@@ -129,16 +129,12 @@ export function crumbsFor(pathname: string, params: Record<string, string | unde
     crumbs.push({ label: "Workflows" });
     return crumbs;
   }
-  if (segments[0] === "settings") {
-    crumbs.push({ label: "Settings" });
-    return crumbs;
-  }
-  if (segments[0] === "pipelines") {
+  if (segments[0] === "runs") {
     if (segments.length === 1) {
-      crumbs.push({ label: "Pipelines" });
+      crumbs.push({ label: "Runs" });
       return crumbs;
     }
-    crumbs.push({ label: "Pipelines", href: "/pipelines" });
+    crumbs.push({ label: "Runs", href: "/runs" });
     const id = params["id"] ?? segments[1] ?? "";
     crumbs.push({ label: id.length > 8 ? id.slice(0, 8) : id });
     return crumbs;

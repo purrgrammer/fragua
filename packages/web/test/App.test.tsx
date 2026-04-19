@@ -105,13 +105,13 @@ describe("App", () => {
             },
           ]),
       },
-      "/pipelines",
+      "/runs",
     );
     try {
       await waitFor(() => {
         expect(within(container).getByTestId("pipelines-table")).toBeTruthy();
       });
-      const link = container.querySelector('a[href="/pipelines/run-1"]');
+      const link = container.querySelector('a[href="/runs/run-1"]');
       expect(link).toBeTruthy();
       const tbodyRows = container.querySelectorAll("[data-testid='pipelines-table'] tbody tr");
       expect(tbodyRows.length).toBe(1);

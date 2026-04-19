@@ -14,7 +14,6 @@ import {
   ConcurrencyError,
   type FactEvent,
   type IEventStore,
-  type RunState,
 } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -411,5 +410,3 @@ function lastHitlSeq(
   return 0;
 }
 
-// Remove unused param warning when _state accesses removed helpers.
-export type _InternalRunState = RunState;

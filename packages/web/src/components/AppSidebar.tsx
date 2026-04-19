@@ -1,6 +1,6 @@
 // Persistent left-rail navigation. Hosts the "swarm" wordmark in the
-// header, the Home / Workflows / Pipelines / Settings entries in the
-// content slot, and the connection-status badge in the footer.
+// header, the Home / Workflows / Runs entries in the content slot, and
+// the connection-status badge in the footer.
 //
 // The badge moved out of the old `App.tsx` header into the sidebar
 // footer so the topbar can be a clean breadcrumb-only surface; the
@@ -8,7 +8,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { BookOpen, Drone, Home, ListChecks, Settings, Workflow, Zap } from "lucide-react";
+import { Drone, Home, ListChecks, Workflow } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
@@ -29,10 +29,7 @@ import {
 const NAV = [
   { to: "/", label: "Home", icon: Home, end: true },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
-  { to: "/jobs", label: "Jobs", icon: Zap, end: false },
-  { to: "/pipelines", label: "Pipelines", icon: ListChecks, end: false },
-  { to: "/skills", label: "Skills", icon: BookOpen, end: false },
-  { to: "/settings", label: "Settings", icon: Settings, end: false },
+  { to: "/runs", label: "Runs", icon: ListChecks, end: false },
 ] as const;
 
 type NavEntry = (typeof NAV)[number];

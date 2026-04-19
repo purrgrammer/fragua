@@ -1,104 +1,19 @@
 #!/usr/bin/env bun
 // swarm CLI entry — dispatches subcommands.
+//
+// Commands that depended on the legacy fs-based control plane (run, daemon,
+// pause, cancel, steer, resume, list, dashboard) were removed in the
+// rearchitecture. They will be reintroduced in M5 as thin shells over the
+// HTTP intent routes once the store-backed runtime is the default.
 
 import cac from "cac";
 import chalk from "chalk";
-import { cancelCommand } from "../src/commands/cancel.ts";
-import {
-  daemonLogsCommand,
-  daemonRunCommand,
-  daemonStartCommand,
-  daemonStatusCommand,
-  daemonStopCommand,
-} from "../src/commands/daemon.ts";
-import { dashboardCommand } from "../src/commands/dashboard.tsx";
-import { listCommand } from "../src/commands/list.ts";
-import { pauseCommand } from "../src/commands/pause.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
-import { resumeCommand } from "../src/commands/resume.ts";
-import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
-import { steerCommand } from "../src/commands/steer.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
 const cli = cac("swarm");
-
-cli
-  .command("run <workflow>", "Enqueue a workflow run via the daemon (fire-and-forget)")
-  .option("--input <text>", "Prompt / argument passed to the pipeline")
-  .option(
-    "--model <id>",
-    "Model id (e.g. `claude-opus-4-7` for anthropic, `anthropic/claude-opus-4.7` for openrouter). Defaults per provider; see `swarm providers`.",
-  )
-  .option("--no-autostart", "Fail if the daemon isn't already running, instead of auto-starting it")
-  .option(
-    "--provider <name>",
-    "Inference provider / API endpoint: anthropic | openai | openrouter | google | groq | cerebras | xai | mistral | vercel-ai-gateway | github-copilot | amazon-bedrock | google-vertex",
-  )
-  .option("--run-id <id>", "Use a specific run id (default auto-generated)")
-  .option("--runs-dir <path>", "Directory for event logs (default .swarm/runs)")
-  .option("--cwd <path>", "Working directory for tools")
-  .option("--mock", "Use the faux LLM provider (no scripted responses → most runs will fail)")
-  .option("-v, --verbose", "Stream tool calls + LLM events as they happen (level 2)")
-  .option("-q, --quiet", "Suppress per-node progress output (level 0)")
-  .option("--allow-env-keys", "Bypass the .env secret scanner (use with caution)")
-  .option("--no-worktree", "Skip the isolated git worktree (default: run in one, branch swarm/<run-id>)")
-  .option("--interviewer <mode>", "Human-in-the-loop interviewer: auto | console (default: console if TTY)")
-  .option(
-    "--no-auto-title",
-    "Skip async pipeline-title generation from $ARGUMENTS (default on when a summariser is available)",
-  )
-  .option(
-    "--summariser-provider <name>",
-    "Provider for the weak-model summariser (defaults to .swarm/config.yaml defaults.summariser.provider, then the main provider)",
-  )
-  .option(
-    "--summariser-model <id>",
-    "Model for the summariser (defaults to .swarm/config.yaml defaults.summariser.model, then the provider's cheap-tier default)",
-  )
-  .option(
-    "--resume",
-    "Resume from the latest checkpoint for the given --run-id. Silently no-ops on fresh runs where no checkpoint exists.",
-  )
-  .option("--no-checkpoint", "Disable checkpoint writes for this run (no resume possible later). Default: on.")
-  .action(async (workflow: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await runCommand({
-      workflow,
-      ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
-      ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
-      ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
-      ...(pick("runId") !== undefined ? { runId: pick("runId")! } : {}),
-      ...(pick("runsDir") !== undefined ? { runsDir: pick("runsDir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-      ...(options["mock"] === true ? { mock: true } : {}),
-      ...(options["verbose"] === true
-        ? { verbosity: 2 as const }
-        : options["quiet"] === true
-          ? { verbosity: 0 as const }
-          : {}),
-      ...(options["allowEnvKeys"] === true ? { allowEnvKeys: true } : {}),
-      // --worktree is default ON; --no-worktree (options.worktree === false) opts out.
-      worktree: options["worktree"] !== false,
-      ...(pick("interviewer") === "auto" || pick("interviewer") === "console"
-        ? { interviewer: pick("interviewer") as "auto" | "console" }
-        : {}),
-      // cac renders `--no-auto-title` as `options.autoTitle === false`.
-      ...(options["autoTitle"] === false ? { noAutoTitle: true } : {}),
-      ...(pick("summariserProvider") !== undefined ? { summariserProvider: pick("summariserProvider")! } : {}),
-      ...(pick("summariserModel") !== undefined ? { summariserModel: pick("summariserModel")! } : {}),
-      ...(options["resume"] === true ? { resume: true } : {}),
-      // cac renders `--no-checkpoint` as `options.checkpoint === false`.
-      ...(options["checkpoint"] === false ? { noCheckpoint: true } : {}),
-      // cac renders `--no-autostart` as `options.autostart === false`.
-      ...(options["autostart"] === false ? { noAutostart: true } : {}),
-    });
-    process.exit(code);
-  });
 
 cli.command("validate <workflow>", "Parse + lint a workflow without executing").action(async (workflow: string) => {
   const code = await validateCommand(workflow);
@@ -117,120 +32,9 @@ cli.command("providers", "List supported LLM providers and which ones have crede
 });
 
 cli
-  .command("steer <run-id> <message>", "Inject a steering message into a running swarm process")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--cwd <path>", "Base directory")
-  .action(async (runId: string, message: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await steerCommand({
-      runId,
-      message,
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("pause <run-id>", "Soft-pause a running pipeline at its next node boundary")
-  .option("--reason <text>", "Optional reason attached to the pause request (appears in events)")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--cwd <path>", "Base directory")
-  .action(async (runId: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await pauseCommand({
-      runId,
-      ...(pick("reason") !== undefined ? { reason: pick("reason")! } : {}),
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("cancel <run-id>", "Request a graceful cancel of a running pipeline (emits pipeline.canceled)")
-  .option("--reason <text>", "Optional reason attached to the cancel request (appears in events)")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--cwd <path>", "Base directory")
-  .action(async (runId: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await cancelCommand({
-      runId,
-      ...(pick("reason") !== undefined ? { reason: pick("reason")! } : {}),
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("resume <run-id>", "Resume a soft-paused pipeline")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--cwd <path>", "Base directory")
-  .action(async (runId: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await resumeCommand({
-      runId,
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("dashboard", "Launch the Ink TUI for a running (or recent) pipeline")
-  .option("--run-id <id>", "Target run id (default: newest directory under runs-dir)")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--no-follow", "Print a one-shot snapshot instead of the live Ink TUI")
-  .option("--cwd <path>", "Base directory for resolving --runs-dir")
-  .action(async (options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await dashboardCommand({
-      ...(pick("runId") !== undefined ? { runId: pick("runId")! } : {}),
-      ...(pick("runsDir") !== undefined ? { runsDir: pick("runsDir")! } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-      // cac renders `--no-follow` as `options.follow === false`.
-      ...(options["follow"] === false ? { follow: false } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("list", "List recent runs with outcome + failed nodes")
-  .option("--limit <n>", "How many recent runs to show (default 20)")
-  .option("--runs-dir <path>", "Directory to scan (default .swarm/runs)")
-  .action(async (options: Record<string, unknown>) => {
-    const limitRaw = options["limit"];
-    const runsDirRaw = options["runs-dir"];
-    const code = await listCommand({
-      ...(typeof limitRaw === "string" || typeof limitRaw === "number"
-        ? { limit: Number.parseInt(String(limitRaw), 10) }
-        : {}),
-      ...(typeof runsDirRaw === "string" ? { runsDir: runsDirRaw } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
   .option("--port <n>", "TCP port to bind (default 3000; pass 0 for ephemeral)")
-  .option("--runs-dir <path>", "Runs directory to expose (default .swarm/runs)")
-  .option("--cwd <path>", "Base directory for resolving --runs-dir")
+  .option("--cwd <path>", "Base directory (default process.cwd)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -241,90 +45,7 @@ cli
       typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
     const code = await serveCommand({
       ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("daemon <action>", "Manage the swarm daemon: start | stop | status | logs")
-  .option("--port <n>", "TCP port to bind on 127.0.0.1 for `start` (default 3737; 0 for ephemeral)")
-  .option("--foreground", "`start` only: run in-process instead of detaching (Ctrl-C to stop)")
-  .option("--grace <ms>", "`stop` only: grace period before SIGKILL (default 10000)")
-  .option("-n, --lines <n>", "`logs` only: how many lines to show (default 50)")
-  .option("-f, --follow", "`logs` only: stream new log lines until Ctrl-C")
-  .option("--runs-dir <path>", "Runs directory (default .swarm/runs)")
-  .option("--cwd <path>", "Project root (default cwd)")
-  .action(async (action: string, options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const numOpt = (key: string): number | undefined => {
-      const v = options[key];
-      if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
-      if (typeof v === "string") {
-        const n = Number.parseInt(v, 10);
-        return Number.isFinite(n) ? n : undefined;
-      }
-      return undefined;
-    };
-    let code: number;
-    switch (action) {
-      case "start":
-        code = await daemonStartCommand({
-          ...(numOpt("port") !== undefined ? { port: numOpt("port")! } : {}),
-          ...(options["foreground"] === true ? { foreground: true } : {}),
-          ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
-          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-        });
-        break;
-      case "stop":
-        code = await daemonStopCommand({
-          ...(numOpt("grace") !== undefined ? { graceMs: numOpt("grace")! } : {}),
-          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-        });
-        break;
-      case "status":
-        code = await daemonStatusCommand({
-          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-        });
-        break;
-      case "logs":
-        code = await daemonLogsCommand({
-          ...(numOpt("lines") !== undefined ? { lines: numOpt("lines")! } : {}),
-          ...(options["follow"] === true ? { follow: true } : {}),
-          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-        });
-        break;
-      default:
-        console.error(chalk.red(`unknown daemon action: ${action}`));
-        console.error(chalk.dim("  valid actions: start | stop | status | logs"));
-        code = 1;
-    }
-    process.exit(code);
-  });
-
-// Hidden: invoked by `daemon start` for the detached child. Single-word
-// command name so cac dispatches cleanly; not advertised in high-level help.
-cli
-  .command("__daemon-run", "(internal) Run the daemon body — invoked by `swarm daemon start`")
-  .option("--port <n>", "Port to bind")
-  .option("--cwd <path>", "Project root")
-  .option("--runs-dir <path>", "Runs directory")
-  .action(async (options: Record<string, unknown>) => {
-    const portRaw = options["port"];
-    const portNum =
-      typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const code = await daemonRunCommand({
-      ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-      ...(pick("runs-dir") !== undefined ? { runsDir: pick("runs-dir")! } : {}),
     });
     process.exit(code);
   });
@@ -333,11 +54,6 @@ cli.help();
 cli.version("0.0.0");
 const parsed = cli.parse(process.argv, { run: false });
 
-// cac silently no-ops when invoked with no command. Print help instead so
-// `swarm` with no args discovers the command surface rather than looking
-// broken. `--help` / `--version` are already handled by cac itself before
-// we get here. `matchedCommand` lives on the cli instance (not the parse
-// result) — cac exposes it there after parse runs.
 if (!cli.matchedCommand && !parsed.options["help"] && !parsed.options["version"]) {
   cli.outputHelp();
   process.exit(0);
@@ -346,9 +62,6 @@ if (!cli.matchedCommand && !parsed.options["help"] && !parsed.options["version"]
 try {
   await cli.runMatchedCommand();
 } catch (err) {
-  // cac throws CACError synchronously for missing required args. Render
-  // it as a one-line error + the matched command's usage, rather than
-  // a stack trace — the user didn't hit a bug, they mis-invoked.
   const isCacError = err instanceof Error && err.constructor.name === "CACError";
   if (isCacError) {
     console.error(chalk.red(`error: ${(err as Error).message}`));

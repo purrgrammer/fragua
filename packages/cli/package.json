@@ -20,6 +20,7 @@
     "@swarm/core": "workspace:*",
     "@swarm/events": "workspace:*",
     "@swarm/server": "workspace:*",
+    "@swarm/store": "workspace:*",
     "@swarm/workspace": "workspace:*",
     "cac": "6.7.14",
     "chalk": "5.6.2",

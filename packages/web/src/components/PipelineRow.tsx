@@ -52,7 +52,7 @@ function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
     <tr className="border-b border-border/60">
       <td className="py-2 pr-4 max-w-0">
         <Link
-          to={`/pipelines/${row.runId}`}
+          to={`/runs/${row.runId}`}
           title={displayTooltip(row)}
           className="block truncate font-medium text-foreground hover:underline"
         >
@@ -80,7 +80,7 @@ function CompactRow({ row }: { row: PipelineSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
   return (
     <Link
-      to={`/pipelines/${row.runId}`}
+      to={`/runs/${row.runId}`}
       title={displayTooltip(row)}
       data-testid={`recent-run-${row.runId}`}
       className="flex w-full min-w-0 items-center gap-3 rounded-md border border-border/60 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"

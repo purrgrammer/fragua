@@ -52,7 +52,7 @@ describe("PipelineDetail", () => {
     };
     const { client, mock } = prepare("abc12345xyz", detail);
     try {
-      const { container } = mount(client, "/pipelines/abc12345xyz");
+      const { container } = mount(client, "/runs/abc12345xyz");
       await waitFor(() => {
         expect(within(container).getByTestId("detail-status").textContent).toBe("running");
       });
@@ -83,7 +83,7 @@ describe("PipelineDetail", () => {
     };
     const { client, mock } = prepare("run-metrics", detail);
     try {
-      const { container } = mount(client, "/pipelines/run-metrics");
+      const { container } = mount(client, "/runs/run-metrics");
       const q = within(container);
 
       await waitFor(() => {
@@ -115,7 +115,7 @@ describe("PipelineDetail", () => {
     };
     const { client, mock } = prepare("run-empty", detail);
     try {
-      const { container } = mount(client, "/pipelines/run-empty");
+      const { container } = mount(client, "/runs/run-empty");
       const q = within(container);
       await waitFor(() => {
         expect(q.getByTestId("detail-duration")).toBeTruthy();
@@ -141,7 +141,7 @@ describe("PipelineDetail", () => {
     };
     const { client, mock } = prepare("run-dates", detail);
     try {
-      const { container } = mount(client, "/pipelines/run-dates");
+      const { container } = mount(client, "/runs/run-dates");
       const q = within(container);
       await waitFor(() => {
         expect(q.getByTestId("detail-started")).toBeTruthy();
@@ -166,7 +166,7 @@ describe("PipelineDetail", () => {
       () => json([]),
     );
     try {
-      const { container } = mount(createTestQueryClient(), "/pipelines/run-999");
+      const { container } = mount(createTestQueryClient(), "/runs/run-999");
       await waitFor(() => {
         expect(within(container).getByTestId("detail-error")).toBeTruthy();
       });
@@ -196,7 +196,7 @@ describe("PipelineDetail", () => {
     };
     const { client, mock } = prepare("run-graph", detail);
     try {
-      const { container } = mount(client, "/pipelines/run-graph");
+      const { container } = mount(client, "/runs/run-graph");
       const q = within(container);
       // Tab button present + starts on conversation.
       await waitFor(() => {

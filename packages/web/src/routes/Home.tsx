@@ -107,7 +107,7 @@ function Overview(): JSX.Element {
       setInput("");
       void qc.invalidateQueries({ queryKey: queries.pipelines.all() });
       void qc.invalidateQueries({ queryKey: queries.jobs.all() });
-      navigate(`/pipelines/${data.runId}`);
+      navigate(`/runs/${data.runId}`);
     },
   });
 
@@ -239,7 +239,7 @@ function RunningCard({ row, now }: { row: PipelineSummary; now: number }): JSX.E
   const elapsed = Number.isFinite(startedMs) ? Math.max(0, now - startedMs) : undefined;
   return (
     <Link
-      to={`/pipelines/${row.runId}`}
+      to={`/runs/${row.runId}`}
       data-testid={`running-card-${row.runId}`}
       className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
     >
@@ -375,7 +375,7 @@ function RecentRuns({ rows, loading }: RecentRunsProps): JSX.Element {
     <section data-testid="recent-runs" className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between">
         <h2 className="font-heading text-base font-semibold">Recent runs</h2>
-        <Link to="/pipelines" className="text-xs text-muted-foreground hover:text-foreground">
+        <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground">
           View all →
         </Link>
       </div>

@@ -13,9 +13,9 @@
 // which avoids adding `@hono/node-server` as a dependency.
 
 import { resolve } from "node:path";
+import { SqliteStore } from "@swarm/store";
 import { createServer, type ServerPorts } from "@swarm/server";
 import chalk from "chalk";
-import { loadConfig } from "../config.ts";
 
 export interface ServeCommandOptions {
   /** TCP port to bind. Default 3000. Pass 0 to get an ephemeral port. */
@@ -68,15 +68,12 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   }
   const cwd = opts.cwd ?? process.cwd();
   const runsDir = resolve(cwd, opts.runsDir ?? ".swarm/runs");
-  // Load `.swarm/config.yaml` so the server's `SkillReader` honors
-  // `skills.paths` / `skills.disabled` / `skills.trust_project`. Without
-  // this, the server falls back to auto-discovery of every well-known
-  // path (~/.claude/skills etc.), which ignores the user's explicit pin.
-  const config = await loadConfig(cwd);
+  const storePath = resolve(cwd, ".swarm/swarm.db");
+  const store = new SqliteStore({ path: storePath });
   const app = createServer({
     runsDir,
     cwd,
-    ...(config.skills !== undefined ? { skillsConfig: config.skills } : {}),
+    store,
     ...(opts.ports !== undefined ? { ports: opts.ports } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
@@ -92,6 +89,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     runsDir,
     async close() {
       await server.stop(true);
+      store.close();
     },
   };
 }
