@@ -1,0 +1,375 @@
+import { describe, expect, test } from "bun:test";
+import {
+  ConcurrencyError,
+  MAX_BLOB_BYTES,
+  MAX_EVENT_PAYLOAD_BYTES,
+  MAX_ROUTING_BYTES,
+  PayloadTooLargeError,
+  type FactEvent,
+  type IntentEvent,
+  ArtifactTooLargeError,
+} from "../src/index.ts";
+import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
+
+describe("SqliteStore — lifecycle", () => {
+  test("enqueueRun seeds a queued projection and an intent event", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const runId = nextId();
+    store.enqueueRun({ runId, workflowSha: sha, priority: 3 });
+
+    const state = store.getState(runId);
+    expect(state).not.toBeNull();
+    expect(state!.status).toBe("queued");
+    expect(state!.priority).toBe(3);
+    expect(state!.version).toBe(1);
+    expect(state!.nextSeq).toBe(2);
+
+    const events = store.getEvents(runId);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe("intent.run_enqueued");
+    expect(events[0]!.writer).toBe("web");
+
+    store.close();
+  });
+
+  test("unknown workflow rejects enqueue", async () => {
+    const store = freshStore();
+    expect(() =>
+      store.enqueueRun({ runId: "r1", workflowSha: "missing" }),
+    ).toThrow(/unknown workflow/);
+    store.close();
+  });
+
+  test("claimNextRun moves queued → running atomically and respects concurrency cap", async () => {
+    const store = freshStore();
+    const r1 = await seedRun(store);
+    const r2 = await seedRun(store);
+    const r3 = await seedRun(store);
+
+    const first = store.claimNextRun(2);
+    const second = store.claimNextRun(2);
+    const third = store.claimNextRun(2);
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(third).toBeNull();
+    expect(new Set([first!.runId, second!.runId])).toEqual(new Set([r1, r2]));
+    expect(store.getState(r3)!.status).toBe("queued");
+    store.close();
+  });
+
+  test("claim order respects priority DESC then ready_at ASC", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "low", workflowSha: sha, priority: 1 });
+    store.enqueueRun({ runId: "high1", workflowSha: sha, priority: 10 });
+    store.enqueueRun({ runId: "high2", workflowSha: sha, priority: 10 });
+    expect(store.claimNextRun(10)!.runId).toBe("high1");
+    expect(store.claimNextRun(10)!.runId).toBe("high2");
+    expect(store.claimNextRun(10)!.runId).toBe("low");
+    store.close();
+  });
+});
+
+describe("SqliteStore — appendFact", () => {
+  test("writes events and bumps version; OCC blocks stale writers", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const state = store.getState(runId)!;
+
+    const fact: FactEvent = {
+      type: "fact.run_started",
+      payload: {
+        workflowSha: state.workflowSha,
+        schemaVersion: state.schemaVersion,
+        startNode: "a",
+      },
+    };
+    const result = store.appendFact(runId, [fact], state.version);
+    expect(result.committed).toBe(true);
+    expect(result.newVersion).toBe(state.version + 1);
+
+    expect(() => store.appendFact(runId, [fact], state.version)).toThrow(
+      ConcurrencyError,
+    );
+    store.close();
+  });
+
+  test("fact.node_completed updates totals and per-model breakdown", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: s0.workflowSha,
+            schemaVersion: s0.schemaVersion,
+            startNode: "a",
+          },
+        },
+      ],
+      s0.version,
+    );
+
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "a",
+            iteration: 0,
+            tokens: 100,
+            costUsd: 0.02,
+            modelName: "gemini-1.5-pro",
+            nextNode: "b",
+          },
+        },
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "b",
+            iteration: 0,
+            tokens: 50,
+            costUsd: 0.005,
+            modelName: "gemini-1.5-flash",
+            nextNode: "c",
+          },
+        },
+      ],
+      s1.version,
+    );
+
+    const s2 = store.getState(runId)!;
+    expect(s2.metrics.totalTokens).toBe(150);
+    expect(s2.metrics.totalCostUsd).toBeCloseTo(0.025, 6);
+    expect(s2.metrics.models["gemini-1.5-pro"]).toEqual({
+      tokens: 100,
+      costUsd: 0.02,
+    });
+    expect(s2.metrics.models["gemini-1.5-flash"]).toEqual({
+      tokens: 50,
+      costUsd: 0.005,
+    });
+
+    // generated columns reflect the metrics JSON
+    const row = (store as unknown as { db: import("bun:sqlite").Database }).db
+      .query<{ total_cost_usd: number; total_tokens: number }, [string]>(
+        "SELECT total_cost_usd, total_tokens FROM run_state WHERE run_id = ?",
+      )
+      .get(runId)!;
+    expect(row.total_tokens).toBe(150);
+    expect(row.total_cost_usd).toBeCloseTo(0.025, 6);
+
+    store.close();
+  });
+
+  test("appendFact rejects oversized payloads", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s = store.getState(runId)!;
+    const big = "x".repeat(MAX_EVENT_PAYLOAD_BYTES);
+    expect(() =>
+      store.appendFact(
+        runId,
+        [
+          {
+            type: "fact.run_halted",
+            payload: { reason: "error", detail: big },
+          },
+        ],
+        s.version,
+      ),
+    ).toThrow(PayloadTooLargeError);
+    store.close();
+  });
+});
+
+describe("SqliteStore — intents", () => {
+  test("appendIntent lands in the event log, does not change version", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s = store.getState(runId)!;
+    const intent: IntentEvent = {
+      type: "intent.pause_requested",
+      payload: {},
+    };
+    const { seq } = store.appendIntent(runId, intent);
+    expect(seq).toBeGreaterThan(0);
+    expect(store.getState(runId)!.version).toBe(s.version);
+    const unapplied = store.getUnappliedIntents(runId);
+    expect(unapplied.some((e) => e.type === "intent.pause_requested")).toBe(true);
+    store.close();
+  });
+});
+
+describe("SqliteStore — artifacts & blobs", () => {
+  test("putArtifact dedups identical content into one blob", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const content = new TextEncoder().encode("hello");
+
+    const a = store.putArtifact(
+      { runId, nodeId: "n1", iteration: 0, key: "k" },
+      content,
+      "text/plain",
+    );
+    const b = store.putArtifact(
+      { runId, nodeId: "n1", iteration: 1, key: "k" },
+      content,
+      "text/plain",
+    );
+    expect(a.sha256).toBe(b.sha256);
+
+    const blobCount = (
+      store as unknown as { db: import("bun:sqlite").Database }
+    ).db
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM blobs")
+      .get();
+    expect(blobCount!.n).toBe(1);
+
+    expect(new TextDecoder().decode(store.getArtifact(a))).toBe("hello");
+    store.close();
+  });
+
+  test("loop iterations produce distinct artifact rows for same key", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    for (let i = 0; i < 3; i++) {
+      store.putArtifact(
+        { runId, nodeId: "loop", iteration: i, key: "out" },
+        new TextEncoder().encode(`iter-${i}`),
+      );
+    }
+    const rows = (
+      store as unknown as { db: import("bun:sqlite").Database }
+    ).db
+      .query<{ n: number }, [string]>(
+        "SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?",
+      )
+      .get(runId)!;
+    expect(rows.n).toBe(3);
+    store.close();
+  });
+
+  test("oversize blob is rejected", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const big = new Uint8Array(MAX_BLOB_BYTES + 1);
+    expect(() =>
+      store.putArtifact(
+        { runId, nodeId: "n", iteration: 0, key: "k" },
+        big,
+      ),
+    ).toThrow(ArtifactTooLargeError);
+    store.close();
+  });
+});
+
+describe("SqliteStore — routing bound", () => {
+  test("enqueue with oversize initial routing throws", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const huge: Record<string, string> = {
+      bloat: "x".repeat(MAX_ROUTING_BYTES),
+    };
+    expect(() =>
+      store.enqueueRun({
+        runId: "r_bloat",
+        workflowSha: sha,
+        initialRouting: huge,
+      }),
+    ).toThrow(PayloadTooLargeError);
+    store.close();
+  });
+});
+
+describe("SqliteStore — daemon lock", () => {
+  test("acquire is exclusive; force overrides", () => {
+    const store = freshStore();
+    const first = store.acquireDaemonLock(101, "host-a");
+    expect(first.acquired).toBe(true);
+
+    const second = store.acquireDaemonLock(202, "host-b");
+    expect(second.acquired).toBe(false);
+    expect(second.current.pid).toBe(101);
+
+    store.forceAcquireDaemonLock(202, "host-b");
+    expect(store.currentDaemonLock()!.pid).toBe(202);
+
+    store.releaseDaemonLock(202);
+    expect(store.currentDaemonLock()).toBeNull();
+    store.close();
+  });
+
+  test("heartbeat advances heartbeat_at only for the current owner", () => {
+    const store = freshStore();
+    store.acquireDaemonLock(1, "h");
+    const before = store.currentDaemonLock()!.heartbeatAt;
+    store.heartbeatDaemonLock(1);
+    const after = store.currentDaemonLock()!.heartbeatAt;
+    expect(after).toBeGreaterThan(before);
+
+    // Non-owner heartbeat is a no-op.
+    store.heartbeatDaemonLock(9999);
+    const unchanged = store.currentDaemonLock()!.heartbeatAt;
+    expect(unchanged).toBe(after);
+    store.close();
+  });
+});
+
+describe("SqliteStore — messages", () => {
+  test("append and read back in ordinal order", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendMessage(runId, {
+      role: "user",
+      content: "hi",
+      nodeId: null,
+      iteration: 0,
+    });
+    store.appendMessage(runId, {
+      role: "assistant",
+      content: "hello",
+      nodeId: "a",
+      iteration: 0,
+    });
+    const rows = store.getMessages(runId);
+    expect(rows.map((r) => r.content)).toEqual(["hi", "hello"]);
+    store.close();
+  });
+});
+
+describe("SqliteStore — gcBlobs", () => {
+  test("deletes orphan blobs, preserves referenced ones", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const ref = store.putArtifact(
+      { runId, nodeId: "n", iteration: 0, key: "k" },
+      new TextEncoder().encode("keep"),
+    );
+    // Inject an orphan blob directly.
+    const db = (
+      store as unknown as { db: import("bun:sqlite").Database }
+    ).db;
+    db.query(
+      "INSERT INTO blobs (sha256, content, size_bytes, created_at) VALUES (?, ?, ?, ?)",
+    ).run("orphan-sha", new Uint8Array([1, 2, 3]), 3, 1);
+
+    const { deleted } = store.gcBlobs();
+    expect(deleted).toBeGreaterThanOrEqual(1);
+
+    const remain = db
+      .query<{ sha256: string }, []>("SELECT sha256 FROM blobs")
+      .all()
+      .map((r) => r.sha256);
+    expect(remain).toContain(ref.sha256);
+    expect(remain).not.toContain("orphan-sha");
+    store.close();
+  });
+});
