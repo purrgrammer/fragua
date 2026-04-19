@@ -198,6 +198,18 @@ export function createRoutes(deps: ServerDeps): Hono {
     }),
   );
 
+  // ─── Store-level metrics (performance) ──────────────────────
+
+  app.get("/metrics/store", (c) => {
+    const store = deps.store as unknown as {
+      metricsSnapshot?: () => unknown;
+    };
+    if (typeof store.metricsSnapshot !== "function") {
+      return c.json({ error: "metrics unavailable" }, 503);
+    }
+    return c.json(store.metricsSnapshot());
+  });
+
   // ─── Aggregate metrics (dashboard) ──────────────────────────
 
   app.get("/metrics/global", (c) => {

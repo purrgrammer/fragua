@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import { migrate } from "./migrations.ts";
+import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
@@ -65,6 +66,11 @@ export class SqliteStore implements IEventStore {
   private readonly db: Database;
   private readonly now: () => number;
   private readonly listeners = new Set<CommitListener>();
+  private readonly metrics = new Metrics();
+
+  metricsSnapshot(): MetricsSnapshot {
+    return this.metrics.snapshot();
+  }
 
   constructor(opts: SqliteStoreOpts = {}) {
     const path = opts.path ?? ":memory:";
@@ -90,8 +96,10 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const seqs: number[] = [];
     let newVersion = 0;
+    const startAt = performance.now();
 
-    this.writeTxn(() => {
+    try {
+      this.writeTxn(() => {
       const row = this.selectRunRow(runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
       if (row.version !== expectedVersion) {
@@ -130,7 +138,12 @@ export class SqliteStore implements IEventStore {
 
       this.writeProjection(state);
       newVersion = state.version;
-    });
+      });
+      this.metrics.recordWrite(performance.now() - startAt, "fact");
+    } catch (err) {
+      if (err instanceof ConcurrencyError) this.metrics.recordOccConflict();
+      throw err;
+    }
 
     const lastSeq = seqs[seqs.length - 1]!;
     this.emitCommit(runId, lastSeq);
@@ -141,6 +154,7 @@ export class SqliteStore implements IEventStore {
     const payload = this.validatePayload(event.payload);
     const ts = this.now();
     let seq = 0;
+    const startAt = performance.now();
 
     this.writeTxn(() => {
       const row = this.selectRunRow(runId);
@@ -152,6 +166,7 @@ export class SqliteStore implements IEventStore {
         )
         .run(runId, seq, event.type, payload, ts);
     });
+    this.metrics.recordWrite(performance.now() - startAt, "intent");
 
     this.emitCommit(runId, seq);
     return { seq, ts };

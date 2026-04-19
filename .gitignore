@@ -1,7 +1,10 @@
-# Swarm runtime state (event logs, worktrees, checkpoints)
+# Swarm runtime state (event logs, worktrees, checkpoints, DB)
 /.swarm/runs/
 /.swarm/worktrees/
 /.swarm/daemon/
+/.swarm/swarm.db
+/.swarm/swarm.db-shm
+/.swarm/swarm.db-wal
 
 # Node / Bun
 node_modules/

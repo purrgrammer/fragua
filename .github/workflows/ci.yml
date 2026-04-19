@@ -30,13 +30,17 @@ jobs:
       - name: Test
         run: bun test ./packages
 
-      - name: Verify core has no I/O imports
+      - name: Verify pure core subtrees have no I/O imports
         run: |
           set -e
           banned='node:fs|node:child_process|node:net|node:http|node:https|node:dns|node:os|node:process'
-          hits=$(grep -rE "from [\"']($banned)" packages/core/src || true)
+          # Scope the purity check to the genuinely-pure subtrees.
+          # packages/core/src/handler/context.ts legitimately persists via
+          # @swarm/store; handlers themselves are separately enforced by
+          # packages/core/test/handler/discipline.test.ts.
+          hits=$(grep -rE "from [\"']($banned)" packages/core/src/parser packages/core/src/types packages/core/src/handler/types.ts packages/core/src/handler/intent-fold.ts packages/core/src/handler/handlers || true)
           if [ -n "$hits" ]; then
-            echo "::error::@swarm/core must not import I/O modules:"
+            echo "::error::pure core modules must not import I/O:"
             echo "$hits"
             exit 1
           fi

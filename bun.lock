@@ -20,6 +20,7 @@
         "@swarm/workspace": "workspace:*",
       },
       "devDependencies": {
+        "@swarm/store": "workspace:*",
         "typescript": "5.7.3",
       },
     },
@@ -32,6 +33,7 @@
       "dependencies": {
         "@swarm/agent": "workspace:*",
         "@swarm/core": "workspace:*",
+        "@swarm/daemon": "workspace:*",
         "@swarm/events": "workspace:*",
         "@swarm/server": "workspace:*",
         "@swarm/store": "workspace:*",
@@ -45,6 +47,7 @@
         "yaml": "2.7.0",
       },
       "devDependencies": {
+        "@swarm/daemon": "workspace:*",
         "@types/react": "18.3.12",
         "typescript": "5.7.3",
       },
