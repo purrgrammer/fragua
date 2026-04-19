@@ -17,3 +17,6 @@ export {
 export type { SupervisorOpts } from "./supervisor.ts";
 export { startDaemon, DaemonAlreadyRunningError } from "./entrypoint.ts";
 export type { DaemonMainOpts, DaemonHandle } from "./entrypoint.ts";
+export { autoDispatcherResolver } from "./auto-dispatcher.ts";
+export type { AutoDispatcherOpts } from "./auto-dispatcher.ts";
+export type { DispatcherResolver } from "./dispatch.ts";

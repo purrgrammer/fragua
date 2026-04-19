@@ -8,6 +8,8 @@
 
 import cac from "cac";
 import chalk from "chalk";
+import { daemonCommand } from "../src/commands/daemon.ts";
+import { dbCommand } from "../src/commands/db.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { replayCommand } from "../src/commands/replay.ts";
 import { serveCommand } from "../src/commands/serve.ts";
@@ -46,6 +48,65 @@ cli
     const code = await serveCommand({
       ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("daemon", "Run the store-backed execution daemon in the foreground")
+  .option("--concurrency <n>", "Max concurrent runs (default 4)")
+  .option("--cwd <path>", "Base directory (default process.cwd)")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const concurrencyRaw = options["concurrency"];
+    const concurrency =
+      typeof concurrencyRaw === "number"
+        ? concurrencyRaw
+        : typeof concurrencyRaw === "string"
+          ? Number.parseInt(concurrencyRaw, 10)
+          : undefined;
+    const code = await daemonCommand({
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(concurrency !== undefined && Number.isFinite(concurrency)
+        ? { concurrency }
+        : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command(
+    "db <action>",
+    "DB maintenance: vacuum | gc-blobs | backup",
+  )
+  .option("--to <path>", "`backup` only: destination path")
+  .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
+  .option("--cwd <path>", "Base directory (default process.cwd)")
+  .action(async (action: string, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    if (action !== "vacuum" && action !== "gc-blobs" && action !== "backup") {
+      console.error(chalk.red(`unknown db action: ${action}`));
+      console.error(chalk.dim("  valid actions: vacuum | gc-blobs | backup"));
+      process.exit(1);
+    }
+    const limitRaw = options["limit"];
+    const limit =
+      typeof limitRaw === "number"
+        ? limitRaw
+        : typeof limitRaw === "string"
+          ? Number.parseInt(limitRaw, 10)
+          : undefined;
+    const code = await dbCommand({
+      action,
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
+      ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
     });
     process.exit(code);
   });

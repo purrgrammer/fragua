@@ -30,33 +30,56 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
   const requeued: string[] = [];
   const quarantined = new Map<string, number[]>();
 
+  // Read-only scans first — outside the write txn — to gather work + pre-serialize payloads.
+  const orphans = db
+    .query<OrphanRow, []>(
+      `SELECT i.run_id,
+              i.seq,
+              json_extract(i.payload, '$.idempotencyKey') AS idempotency_key
+         FROM events i
+         LEFT JOIN events d
+                ON d.run_id = i.run_id
+               AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
+               AND json_extract(d.payload, '$.idempotencyKey') =
+                   json_extract(i.payload, '$.idempotencyKey')
+        WHERE i.type = 'fact.side_effect_intent'
+          AND d.seq IS NULL`,
+    )
+    .all();
+  for (const row of orphans) {
+    const list = quarantined.get(row.run_id) ?? [];
+    list.push(row.seq);
+    quarantined.set(row.run_id, list);
+  }
+
+  // Pre-serialize quarantine payloads so the write txn is pure DB work.
+  const quarantinePayloads = new Map<string, string>();
+  for (const [runId, seqs] of quarantined) {
+    quarantinePayloads.set(
+      runId,
+      JSON.stringify({ reason: "orphan_side_effect", orphanedIntents: seqs }),
+    );
+  }
+
+  const running = db
+    .query<RunningRow, []>(
+      `SELECT run_id, version, current_node
+         FROM run_state
+        WHERE status = 'running'`,
+    )
+    .all();
+  const requeuePayloads = new Map<string, string>();
+  for (const row of running) {
+    requeuePayloads.set(
+      row.run_id,
+      JSON.stringify(row.current_node != null ? { prevNode: row.current_node } : {}),
+    );
+  }
+
   db.exec("BEGIN IMMEDIATE");
   try {
-    // (b) find orphans first so we can quarantine them instead of requeueing.
-    const orphans = db
-      .query<OrphanRow, []>(
-        `SELECT i.run_id,
-                i.seq,
-                json_extract(i.payload, '$.idempotencyKey') AS idempotency_key
-           FROM events i
-           LEFT JOIN events d
-                  ON d.run_id = i.run_id
-                 AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
-                 AND json_extract(d.payload, '$.idempotencyKey') =
-                     json_extract(i.payload, '$.idempotencyKey')
-          WHERE i.type = 'fact.side_effect_intent'
-            AND d.seq IS NULL`,
-      )
-      .all();
-
-    for (const row of orphans) {
-      const list = quarantined.get(row.run_id) ?? [];
-      list.push(row.seq);
-      quarantined.set(row.run_id, list);
-    }
-
     // Quarantine orphan runs (only those currently in a non-terminal, non-quarantined state).
-    for (const [runId, seqs] of quarantined) {
+    for (const [runId, _seqs] of quarantined) {
       const ts = now();
       const stateRow = db
         .query<
@@ -82,15 +105,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
           `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`,
         )
-        .run(
-          runId,
-          seq,
-          JSON.stringify({
-            reason: "orphan_side_effect",
-            orphanedIntents: seqs,
-          }),
-          ts,
-        );
+        .run(runId, seq, quarantinePayloads.get(runId)!, ts);
       db
         .query(
           `UPDATE run_state SET
@@ -105,16 +120,15 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
         .run(seq, ts, runId);
     }
 
-    // (a) Requeue runs still in 'running' that weren't quarantined above.
-    const running = db
-      .query<RunningRow, []>(
-        `SELECT run_id, version, current_node
-           FROM run_state
-          WHERE status = 'running'`,
-      )
-      .all();
-
+    // Requeue runs still in 'running'. Re-read status here (inside the txn)
+    // because the quarantine loop above may have moved some of them.
     for (const row of running) {
+      const current = db
+        .query<{ status: string }, [string]>(
+          "SELECT status FROM run_state WHERE run_id = ?",
+        )
+        .get(row.run_id);
+      if (current == null || current.status !== "running") continue;
       const ts = now();
       const seq = bumpSeq(db, row.run_id);
       db
@@ -125,9 +139,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
         .run(
           row.run_id,
           seq,
-          JSON.stringify(
-            row.current_node != null ? { prevNode: row.current_node } : {},
-          ),
+          requeuePayloads.get(row.run_id) ?? "{}",
           ts,
         );
       db
