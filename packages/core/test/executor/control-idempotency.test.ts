@@ -179,4 +179,66 @@ describe("control channel — restart-safety + idempotency", () => {
     expect(applied.length).toBe(1);
     expect((applied[0]!.data["payload"] as { message: string } | undefined)?.message).toBeUndefined();
   });
+
+  test("dedup marker survives two restarts (resume → crash → resume again)", async () => {
+    // Adversarial: the executor may resume, advance the marker, then
+    // crash before finishing. On the second resume the control tail
+    // yields the full file again — both already-applied ids must be
+    // skipped, and only the tail-most request should land.
+    const store = memoryCheckpointStore();
+    const runId = "run-double-restart";
+
+    // Run 1: apply ctl-1. Checkpoint marker advances to ctl-1.
+    const s1 = new InMemorySink();
+    const c1 = makeControlChannel([req("ctl-1", "steer", { message: "one" })]);
+    await execute({
+      graph: parseDotSource(GRAPH),
+      run_id: runId,
+      sink: s1,
+      backend: steerableMockBackend(),
+      checkpointStore: store,
+      controlChannel: { path: "/dev/null", tail: c1.tail },
+    });
+    expect(store.snapshots.get(runId)?.last_applied_control_id).toBe("ctl-1");
+
+    // Run 2 (resume): replay yields ctl-1 again, plus new ctl-2. Only
+    // ctl-2 lands. Marker advances to ctl-2.
+    const s2 = new InMemorySink();
+    const c2 = makeControlChannel([
+      req("ctl-1", "steer", { message: "one" }),
+      req("ctl-2", "steer", { message: "two" }),
+    ]);
+    await execute({
+      graph: parseDotSource(GRAPH),
+      run_id: runId,
+      sink: s2,
+      backend: steerableMockBackend(),
+      checkpointStore: store,
+      resume: true,
+      controlChannel: { path: "/dev/null", tail: c2.tail },
+    });
+    expect(s2.byType("control.applied").map((e) => e.data["id"])).toEqual(["ctl-2"]);
+    expect(store.snapshots.get(runId)?.last_applied_control_id).toBe("ctl-2");
+
+    // Run 3 (second resume after simulated crash): replay yields
+    // ctl-1, ctl-2, ctl-3. Marker (now ctl-2) must skip the first
+    // two; only ctl-3 lands.
+    const s3 = new InMemorySink();
+    const c3 = makeControlChannel([
+      req("ctl-1", "steer", { message: "one" }),
+      req("ctl-2", "steer", { message: "two" }),
+      req("ctl-3", "steer", { message: "three" }),
+    ]);
+    await execute({
+      graph: parseDotSource(GRAPH),
+      run_id: runId,
+      sink: s3,
+      backend: steerableMockBackend(),
+      checkpointStore: store,
+      resume: true,
+      controlChannel: { path: "/dev/null", tail: c3.tail },
+    });
+    expect(s3.byType("control.applied").map((e) => e.data["id"])).toEqual(["ctl-3"]);
+    expect(s3.byType("control.requested").map((e) => e.data["id"])).toEqual(["ctl-3"]);
+  });
 });

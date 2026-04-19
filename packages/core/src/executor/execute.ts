@@ -576,7 +576,25 @@ const waitHumanHandler: Handler = async (ctx) => {
   });
 
   try {
-    const answer = await ctx.interviewer.ask(question);
+    // Interviewer.ask is not signal-aware in the current interface, so we
+    // race it against ctx.signal. If cancel fires while a human is idling
+    // on the prompt, the pipeline unwinds instead of hanging forever.
+    // The ask continues in the background; the throw below propagates to
+    // the outer catch which maps to a fail outcome, and the pipeline
+    // terminal event becomes `pipeline.canceled` via the cancelState path.
+    const askPromise = ctx.interviewer.ask(question);
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (ctx.signal.aborted) {
+        reject(new Error("aborted"));
+        return;
+      }
+      ctx.signal.addEventListener(
+        "abort",
+        () => reject(new Error("aborted")),
+        { once: true },
+      );
+    });
+    const answer = await Promise.race([askPromise, abortPromise]);
     await emit("interview.completed", { value: String(answer.value) });
 
     const v = String(answer.value).toUpperCase();
@@ -1455,6 +1473,34 @@ export async function execute(opts: ExecuteOptions): Promise<ExecutionResult> {
   // logged via the sink — nothing propagates here.
   controlAbort.abort();
   await controlLoopDone;
+
+  // Persist a final checkpoint so `last_applied_control_id` captures any
+  // request the control loop applied AFTER the final `onNodeCompleted`
+  // save. Without this, a fast-completing run can leave the marker
+  // stranded on a prior request, causing duplicate application on
+  // resume. Skipped when no checkpoint store is configured.
+  if (opts.checkpointStore && lastAppliedControlId !== undefined) {
+    const prior = await opts.checkpointStore.load(run_id);
+    if (prior?.last_applied_control_id !== lastAppliedControlId) {
+      const base: Checkpoint = prior ?? {
+        version: CHECKPOINT_SCHEMA_VERSION,
+        run_id,
+        workflow_sha,
+        current_node: "",
+        completed_nodes: [...completed_nodes],
+        node_outcomes: { ...node_outcomes },
+        context: { ...context },
+        retry_counts: { ...retry_counts },
+        pi_sessions: backend.serialiseSessions ? backend.serialiseSessions() : {},
+        saved_at: now(),
+      };
+      await opts.checkpointStore.save(run_id, {
+        ...base,
+        last_applied_control_id: lastAppliedControlId,
+        saved_at: now(),
+      });
+    }
+  }
 
   const goal_gates_satisfied = unsatisfiedGoalGates(graph, node_outcomes).length === 0;
 

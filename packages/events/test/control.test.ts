@@ -71,6 +71,34 @@ describe("tailControlRequests", () => {
     expect(out.map((r) => r.id)).toEqual(["a", "b"]);
   });
 
+  test("a torn partial line is held in the buffer until the next append completes it", async () => {
+    // Simulate a writer that flushes a record in two pieces (the first
+    // without a trailing newline). The tail must NOT yield the partial
+    // fragment on its own; it should wait for the second flush and then
+    // yield the full request.
+    const full = toLine(req("torn"));
+    const cut = Math.floor(full.length / 2);
+    const part1 = full.slice(0, cut);
+    const part2 = full.slice(cut);
+
+    await writeFile(file, part1); // intentionally no newline
+    const ac = new AbortController();
+    const out: ControlRequest[] = [];
+
+    const pump = (async () => {
+      for await (const r of tailControlRequests(file, { signal: ac.signal })) {
+        out.push(r);
+        if (out.length === 1) ac.abort();
+      }
+    })();
+
+    await Bun.sleep(30);
+    expect(out).toEqual([]); // partial line must not be emitted
+    await appendFile(file, part2);
+    await pump;
+    expect(out.map((r) => r.id)).toEqual(["torn"]);
+  });
+
   test("handles a missing initial file and picks up appends once created", async () => {
     // No file created yet; control loop may start before first CLI write.
     const ac = new AbortController();
