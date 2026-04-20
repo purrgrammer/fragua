@@ -22,7 +22,7 @@ defaults:
   #   provider: google          | GEMINI_API_KEY
   #   provider: groq            | GROQ_API_KEY
   provider: openrouter
-  model: anthropic/claude-haiku-4.7
+  model: anthropic/claude-sonnet-4.6
 
   # Tool permission mode. Phase 2 supports unsafe only. Phase 6 will add
   # classifier + interactive.
@@ -36,7 +36,7 @@ defaults:
   # falls back to the deterministic `summary:low` template with a warning.
   summariser:
     provider: openrouter
-    model: anthropic/claude-haiku-4.6
+    model: anthropic/claude-haiku-4.5
 
 # Auto-generated run titles from $ARGUMENTS. "on" (default) kicks off a
 # fire-and-forget summariser call at run start and emits

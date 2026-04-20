@@ -391,8 +391,14 @@ export class PiCodergenBackend implements CodergenBackend {
     // through a no-op plan → implement → verify chain. We also flag it
     // `non_retryable` so the goal-gate retry machinery doesn't relaunch the
     // run after an explicit stop.
-    const notes = summarizeMessage(last);
-    const aborted = parseAbortMarker(notes);
+    //
+    // Parse the FULL assistant text, not the 4KB-clipped `notes`. Long agent
+    // replies (many tool calls, lots of reasoning) push the trailing
+    // `<abort>` marker off the end of the clipped window, which would mask
+    // the abort and mis-report the node as outcome=success.
+    const fullText = fullAssistantText(last);
+    const notes = fullText.slice(0, 4_000);
+    const aborted = parseAbortMarker(fullText);
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
     return ok({ notes });
@@ -530,13 +536,19 @@ function extractMessageText(message: { role: string; content?: unknown }): strin
 }
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {
+  return fullAssistantText(message).slice(0, 4_000);
+}
+
+/** Concatenate every text block in an assistant message. Caller clips for
+ *  storage; callers that scan for markers (`<abort>…</abort>`) must NOT
+ *  clip first — a trailing marker in a long reply would be lost. */
+function fullAssistantText(message: { role: string; content?: unknown }): string {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
   const parts = message.content as Array<{ type: string; text?: string }>;
   return parts
     .filter((p) => p.type === "text" && typeof p.text === "string")
     .map((p) => p.text)
-    .join("\n")
-    .slice(0, 4_000);
+    .join("\n");
 }
 
 /**

@@ -47,4 +47,16 @@ describe("parseAbortMarker", () => {
     const r = parseAbortMarker("<abort>first</abort> and <abort>second</abort>");
     expect(r?.reason).toBe("first");
   });
+
+  test("detects a marker past the 4KB storage-clip window", () => {
+    // Regression: the backend used to feed `parseAbortMarker` the
+    // 4KB-clipped `notes` string, which masked `<abort>` tags emitted at
+    // the end of long assistant turns (hundreds of tool-call-like text
+    // blocks before the agent gave up). The function itself has no
+    // clipping, so this passes in pure form — but it documents the
+    // invariant the caller MUST honour: pass the full assistant text.
+    const padding = "x".repeat(8000);
+    const r = parseAbortMarker(`${padding}\n<abort>out-of-window reason</abort>`);
+    expect(r?.reason).toBe("out-of-window reason");
+  });
 });
