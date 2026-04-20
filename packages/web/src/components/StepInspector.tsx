@@ -15,10 +15,11 @@
 //   - Pure display; no mutation, no state beyond the fetch.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 import { getRunSteps, type StepSnapshot } from "../lib/api.ts";
-import { formatTokensCompact, formatUsd } from "../lib/format.ts";
+import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
+import { AnimatedNumber } from "./ui/animated-number.tsx";
 
 export interface StepInspectorProps {
   runId: string;
@@ -88,19 +89,50 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
     .join(" · ");
   const cacheRead = step.cost?.cache_read_tokens ?? 0;
   const cacheWrite = step.cost?.cache_write_tokens ?? 0;
-  const metrics = [
-    step.durationMs !== undefined ? `⏱ ${formatDuration(step.durationMs)}` : undefined,
-    step.cost !== undefined ? `💲 ${formatUsd(step.cost.cost_usd)}` : undefined,
-    step.cost !== undefined
-      ? `◎ ${formatTokensCompact(step.cost.total_tokens ?? step.cost.input_tokens + step.cost.output_tokens)}`
-      : undefined,
-    // Show cache stats only when the step actually reported any. Tooltip
-    // via the title attr on the containing span would be noise here —
-    // operators filter steps by eye, so short labels win.
-    cacheRead > 0 || cacheWrite > 0
-      ? `⚡ ${formatTokensCompact(cacheRead)}${cacheWrite > 0 ? `/+${formatTokensCompact(cacheWrite)}` : ""}`
-      : undefined,
-  ].filter(Boolean);
+  const totalCostTokens =
+    step.cost !== undefined ? (step.cost.total_tokens ?? step.cost.input_tokens + step.cost.output_tokens) : undefined;
+  // Show cache stats only when the step actually reported any. Tooltip via
+  // the title attr on the containing span would be noise here — operators
+  // filter steps by eye, so short labels win.
+  const metrics: { key: string; node: ReactNode }[] = [];
+  if (step.durationMs !== undefined) {
+    metrics.push({ key: "duration", node: <>⏱ {formatDuration(step.durationMs)}</> });
+  }
+  if (step.cost !== undefined) {
+    metrics.push({
+      key: "cost",
+      node: (
+        <>
+          💲 <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
+        </>
+      ),
+    });
+  }
+  if (totalCostTokens !== undefined) {
+    metrics.push({
+      key: "tokens",
+      node: (
+        <>
+          ◎ <AnimatedNumber value={totalCostTokens} format={tokensCompactFormatOptions(totalCostTokens)} />
+        </>
+      ),
+    });
+  }
+  if (cacheRead > 0 || cacheWrite > 0) {
+    metrics.push({
+      key: "cache",
+      node: (
+        <>
+          ⚡ <AnimatedNumber value={cacheRead} format={tokensCompactFormatOptions(cacheRead)} />
+          {cacheWrite > 0 ? (
+            <>
+              /+<AnimatedNumber value={cacheWrite} format={tokensCompactFormatOptions(cacheWrite)} />
+            </>
+          ) : null}
+        </>
+      ),
+    });
+  }
 
   return (
     <details data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card">
@@ -108,7 +140,7 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
         <span className="font-mono text-xs text-muted-foreground flex-shrink-0">{headLabel}</span>
         <span className="ml-auto flex gap-3 text-xs text-muted-foreground tabular-nums">
           {metrics.map((m) => (
-            <span key={m}>{m}</span>
+            <span key={m.key}>{m.node}</span>
           ))}
         </span>
       </summary>
@@ -188,14 +220,37 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
           <Section title="Budget">
             <div className="flex flex-col gap-0.5 font-mono text-xs">
               <div>
-                spent: {formatUsd(step.budget.cumulative_cost_usd)} /{" "}
-                {step.budget.max_cost_usd !== undefined ? formatUsd(step.budget.max_cost_usd) : "—"} (node)
+                spent:{" "}
+                <AnimatedNumber
+                  value={step.budget.cumulative_cost_usd}
+                  format={usdFormatOptions(step.budget.cumulative_cost_usd)}
+                />{" "}
+                /{" "}
+                {step.budget.max_cost_usd !== undefined ? (
+                  <AnimatedNumber
+                    value={step.budget.max_cost_usd}
+                    format={usdFormatOptions(step.budget.max_cost_usd)}
+                  />
+                ) : (
+                  "—"
+                )}{" "}
+                (node)
               </div>
               <div>
-                tokens: {step.budget.cumulative_tokens}
-                {step.budget.run_max_cost_usd !== undefined
-                  ? ` · run cap ${formatUsd(step.budget.run_max_cost_usd)}`
-                  : ""}
+                tokens:{" "}
+                <AnimatedNumber
+                  value={step.budget.cumulative_tokens}
+                  format={tokensCompactFormatOptions(step.budget.cumulative_tokens)}
+                />
+                {step.budget.run_max_cost_usd !== undefined ? (
+                  <>
+                    {" · run cap "}
+                    <AnimatedNumber
+                      value={step.budget.run_max_cost_usd}
+                      format={usdFormatOptions(step.budget.run_max_cost_usd)}
+                    />
+                  </>
+                ) : null}
               </div>
             </div>
           </Section>

@@ -18,9 +18,10 @@ import { RunConversation } from "../components/RunConversation.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
+import { AnimatedNumber } from "../components/ui/animated-number.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
-import { formatTokensCompact, formatTokensLong, formatUsd } from "../lib/format.ts";
+import { formatTokensLong, formatUsd, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { useRunConversation } from "../lib/useRunConversation.ts";
@@ -204,8 +205,14 @@ function DetailMetaLine({ detail }: { detail: RunDetailT }): JSX.Element {
       >
         {hasUsage ? (
           <>
-            cost: <span data-testid="detail-cost">{formatUsd(detail.costUsd)}</span> · tokens:{" "}
-            <span data-testid="detail-tokens">{formatTokensCompact(totalTokens)}</span>
+            cost:{" "}
+            <span data-testid="detail-cost">
+              <AnimatedNumber value={detail.costUsd} format={usdFormatOptions(detail.costUsd)} />
+            </span>{" "}
+            · tokens:{" "}
+            <span data-testid="detail-tokens">
+              <AnimatedNumber value={totalTokens} format={tokensCompactFormatOptions(totalTokens)} />
+            </span>
           </>
         ) : (
           "cost: — · tokens: —"

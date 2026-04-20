@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.2.8",
+    "@number-flow/react": "0.6.0",
     "@radix-ui/react-separator": "1.1.1",
     "@radix-ui/react-slot": "1.1.1",
     "@radix-ui/react-tooltip": "1.1.4",

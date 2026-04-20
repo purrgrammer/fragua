@@ -270,6 +270,26 @@ describe("Home route", () => {
       mock.restore();
     }
   });
+
+  // StatTile contract: `loading=false` + absent-value MUST render "—", never
+  // a Skeleton. Skeleton is reserved for the loading branch. `cacheHitRate`
+  // and `avgDurationMs` are the two optional stats fields — an empty run
+  // list yields both as `undefined` via `computeStats`.
+  it("renders '—' (not Skeleton) for absent cacheHitRate + avgDurationMs once loaded", async () => {
+    const client = withRows([]);
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("tile-cache")).toBeTruthy();
+    });
+    const cache = q.getByTestId("tile-cache");
+    expect(cache.textContent).toContain("—");
+    expect(cache.querySelector(".sw-pulse")).toBeNull();
+
+    const duration = q.getByTestId("tile-duration");
+    expect(duration.textContent).toContain("—");
+    expect(duration.querySelector(".sw-pulse")).toBeNull();
+  });
 });
 
 // Overview launcher is temporarily commented out on Home until POST /jobs

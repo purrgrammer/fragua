@@ -37,11 +37,12 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
 import { RunRow } from "../components/RunRow.tsx";
+import { AnimatedNumber } from "../components/ui/animated-number.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
-import { formatTokensCompact, formatUsd } from "../lib/format.ts";
+import { formatTokensCompact, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { formatDuration } from "../lib/time.ts";
@@ -269,25 +270,29 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
       <StatsGroup label="Queue" testId="stats-queue">
         <StatTile
           label="Running"
-          value={loading ? null : String(stats.running)}
+          loading={loading}
+          numericValue={stats.running}
           icon={<Play className="size-4" />}
           testId="tile-running"
         />
         <StatTile
           label="Queued"
-          value={loading ? null : String(stats.queued)}
+          loading={loading}
+          numericValue={stats.queued}
           icon={<Hourglass className="size-4" />}
           testId="tile-queued"
         />
         <StatTile
           label="Paused"
-          value={loading ? null : String(stats.paused)}
+          loading={loading}
+          numericValue={stats.paused}
           icon={<Pause className="size-4" />}
           testId="tile-paused"
         />
         <StatTile
           label="Total runs"
-          value={loading ? null : String(stats.totalRuns)}
+          loading={loading}
+          numericValue={stats.totalRuns}
           icon={<Hash className="size-4" />}
           testId="tile-total"
         />
@@ -296,25 +301,29 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
       <StatsGroup label="Outcomes" testId="stats-outcomes">
         <StatTile
           label="Succeeded"
-          value={loading ? null : String(stats.succeeded)}
+          loading={loading}
+          numericValue={stats.succeeded}
           icon={<CheckCircle2 className="size-4" />}
           testId="tile-succeeded"
         />
         <StatTile
           label="Failed"
-          value={loading ? null : String(stats.failed)}
+          loading={loading}
+          numericValue={stats.failed}
           icon={<XCircle className="size-4" />}
           testId="tile-failed"
         />
         <StatTile
           label="Canceled"
-          value={loading ? null : String(stats.canceled)}
+          loading={loading}
+          numericValue={stats.canceled}
           icon={<Ban className="size-4" />}
           testId="tile-canceled"
         />
         <StatTile
           label="Success rate"
-          value={loading ? null : formatPercent(stats.successRate)}
+          loading={loading}
+          value={formatPercent(stats.successRate)}
           icon={<Target className="size-4" />}
           testId="tile-success"
         />
@@ -323,25 +332,31 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
       <StatsGroup label="Resources" testId="stats-resources">
         <StatTile
           label="Avg duration"
-          value={loading ? null : stats.avgDurationMs === undefined ? "—" : formatDuration(stats.avgDurationMs)}
+          loading={loading}
+          value={stats.avgDurationMs === undefined ? undefined : formatDuration(stats.avgDurationMs)}
           icon={<Timer className="size-4" />}
           testId="tile-duration"
         />
         <StatTile
           label="Total spend"
-          value={loading ? null : formatUsd(stats.totalCostUsd)}
+          loading={loading}
+          numericValue={stats.totalCostUsd}
+          format={usdFormatOptions(stats.totalCostUsd ?? 0)}
           icon={<DollarSign className="size-4" />}
           testId="tile-spend"
         />
         <StatTile
           label="Total tokens"
-          value={loading ? null : formatTokensCompact(stats.totalTokens)}
+          loading={loading}
+          numericValue={stats.totalTokens}
+          format={tokensCompactFormatOptions(stats.totalTokens ?? 0)}
           icon={<Coins className="size-4" />}
           testId="tile-tokens"
         />
         <StatTile
           label="Cache hit rate"
-          value={loading ? null : stats.cacheHitRate === undefined ? "—" : formatPercent(stats.cacheHitRate)}
+          loading={loading}
+          value={stats.cacheHitRate === undefined ? undefined : formatPercent(stats.cacheHitRate)}
           hint={
             loading
               ? undefined
@@ -374,15 +389,30 @@ function StatsGroup({ label, testId, children }: StatsGroupProps): JSX.Element {
 
 interface StatTileProps {
   label: string;
-  /** `null` = loading; renders a skeleton in place of the number. */
-  value: string | null;
+  /**
+   * `true` = render a loading skeleton (the ONLY trigger — the Skeleton
+   * branch must never stand in for "no data").
+   */
+  loading: boolean;
+  /**
+   * Animated numeric path. `undefined` (with `loading=false`) renders
+   * "—", never a skeleton. `AnimatedNumber` itself owns the fallback.
+   */
+  numericValue?: number;
+  format?: Intl.NumberFormatOptions;
+  /**
+   * Pre-formatted static text (percent, duration, etc.). Mutually
+   * exclusive with `numericValue`. `undefined` with `loading=false`
+   * renders "—".
+   */
+  value?: string;
   /** Optional secondary line, rendered under the main value in muted text. */
   hint?: string;
   icon: JSX.Element;
   testId: string;
 }
 
-function StatTile({ label, value, hint, icon, testId }: StatTileProps): JSX.Element {
+function StatTile({ label, loading, numericValue, format, value, hint, icon, testId }: StatTileProps): JSX.Element {
   return (
     <Card size="sm" data-testid={testId} className="ring-0" title={hint}>
       <CardHeader>
@@ -392,10 +422,16 @@ function StatTile({ label, value, hint, icon, testId }: StatTileProps): JSX.Elem
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {value === null ? (
+        {loading ? (
           <Skeleton className="h-7 w-20" />
+        ) : numericValue !== undefined || format !== undefined ? (
+          <AnimatedNumber
+            value={numericValue}
+            format={format}
+            className="font-heading text-2xl tabular-nums"
+          />
         ) : (
-          <p className="font-heading text-2xl tabular-nums">{value}</p>
+          <p className="font-heading text-2xl tabular-nums">{value ?? "—"}</p>
         )}
       </CardContent>
     </Card>

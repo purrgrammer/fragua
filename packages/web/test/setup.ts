@@ -23,6 +23,25 @@ export function useDom(): void {
       g.__swarmWebDomInstalled = true;
       installed = true;
     }
+    // Override `matchMedia` to force `(prefers-reduced-motion: reduce)` in
+    // tests. happy-dom provides a stub that returns `matches: false`, which
+    // pushes `AnimatedNumber` down the NumberFlow custom-element path —
+    // NumberFlow then injects a `<style>` tag whose content shows up in
+    // `textContent` assertions, breaking exact-match tests. Forcing
+    // reduced-motion here also neutralises the spin animation's timers.
+    if (typeof window !== "undefined") {
+      window.matchMedia = (query: string) =>
+        ({
+          matches: query === "(prefers-reduced-motion: reduce)",
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }) as MediaQueryList;
+    }
   });
   afterAll(async () => {
     const g = globalThis as unknown as { __swarmWebDomInstalled?: boolean };

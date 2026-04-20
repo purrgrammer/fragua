@@ -6,6 +6,7 @@
 // in the list + detail header. We keep the API tiny and add helpers as
 // new call sites appear rather than pre-building a library.
 
+import { defaultLocale } from "./locale.ts";
 import { type TimeInput, toDate } from "./time.ts";
 
 export interface NumberFormatOptions {
@@ -14,15 +15,35 @@ export interface NumberFormatOptions {
   fallback?: string;
 }
 
-function defaultLocale(): string {
-  if (typeof navigator !== "undefined" && typeof navigator.language === "string") {
-    return navigator.language;
-  }
-  return "en-US";
-}
-
 function isFiniteNumber(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n);
+}
+
+/**
+ * `Intl.NumberFormatOptions` for USD cost at the given magnitude. Extracted
+ * so animated counters (`AnimatedNumber`) can feed the same option set into
+ * `NumberFlow` without double-formatting. See `formatUsd` for the rationale
+ * behind the fraction-digit ladder.
+ */
+export function usdFormatOptions(value: number): Intl.NumberFormatOptions {
+  const fractionDigits = value === 0 ? 2 : value < 0.01 ? 4 : value < 1 ? 3 : 2;
+  return {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  };
+}
+
+/** `Intl.NumberFormatOptions` mirroring `formatTokensCompact` for the given magnitude. */
+export function tokensCompactFormatOptions(value: number): Intl.NumberFormatOptions {
+  if (value < 1000) return { maximumFractionDigits: 0 };
+  return { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 };
+}
+
+/** `Intl.NumberFormatOptions` mirroring `formatTokensLong`. */
+export function tokensLongFormatOptions(): Intl.NumberFormatOptions {
+  return { maximumFractionDigits: 0 };
 }
 
 /**
@@ -37,13 +58,7 @@ function isFiniteNumber(n: unknown): n is number {
 export function formatUsd(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";
   const locale = opts.locale ?? defaultLocale();
-  const fractionDigits = value === 0 ? 2 : value < 0.01 ? 4 : value < 1 ? 3 : 2;
-  return new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  }).format(value);
+  return new Intl.NumberFormat(locale, usdFormatOptions(value)).format(value);
 }
 
 /**
@@ -54,22 +69,14 @@ export function formatUsd(value: number | null | undefined, opts: NumberFormatOp
 export function formatTokensCompact(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";
   const locale = opts.locale ?? defaultLocale();
-  if (value < 1000) {
-    // Under 1k → plain integer; avoids "999" suddenly becoming "1K".
-    return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
-  }
-  return new Intl.NumberFormat(locale, {
-    notation: "compact",
-    compactDisplay: "short",
-    maximumFractionDigits: 1,
-  }).format(value);
+  return new Intl.NumberFormat(locale, tokensCompactFormatOptions(value)).format(value);
 }
 
 /** Long form token count, for tooltips where precision matters. */
 export function formatTokensLong(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";
   const locale = opts.locale ?? defaultLocale();
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat(locale, tokensLongFormatOptions()).format(value);
 }
 
 /**
