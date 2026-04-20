@@ -46,14 +46,32 @@ export interface ExecutorOpts {
    * status. When unset, handlers fall back to their construction-time
    * env (tests, bare-bones daemons). */
   provisioner?: Provisioner;
+  /** Max time to wait for in-flight runs to drain on shutdown. Past
+   * this, the executor returns anyway — the shutdown signal has
+   * already tripped handler aborts. Defaults to 30s. */
+  shutdownDrainMs?: number;
 }
 
 const DEFAULT_POLL_MS = 50;
 const DEFAULT_LEAK_GRACE_MS = 5_000;
+const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const ABORT_LOOP_CEILING = 5;
 
+/**
+ * Executor loop. Claims queued runs and dispatches each on its own
+ * async fiber (fire-and-forget) so many runs can progress concurrently —
+ * `store.claimNextRun(maxConcurrentRuns)` is the authoritative capacity
+ * gate. Its atomic `COUNT(*) WHERE status='running' < maxInFlight`
+ * check (inside a write transaction) ensures we never exceed the cap,
+ * even across restarts. An in-process Set would duplicate that truth
+ * and desync on restart, so we don't keep one for capacity — only for
+ * tracking shutdown drain.
+ */
 export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   const pollMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
+  const drainMs = opts.shutdownDrainMs ?? DEFAULT_SHUTDOWN_DRAIN_MS;
+  const inflight = new Set<Promise<void>>();
+
   while (!opts.shutdownSignal.aborted) {
     wakePendingHitl(opts.store);
     const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns);
@@ -61,11 +79,64 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
       await sleep(pollMs, opts.shutdownSignal);
       continue;
     }
-    await runOne(claimed.runId, opts);
+    const p = runOneSafe(claimed.runId, opts);
+    inflight.add(p);
+    p.finally(() => inflight.delete(p));
+  }
+
+  // Shutdown drain: stop accepting new claims (loop exited), then wait
+  // for in-flight runs to reach terminal within `drainMs`. The shutdown
+  // signal has already been observed by handlers via their AbortSignal,
+  // so they should wrap up quickly. On timeout we return anyway —
+  // leaked handlers will land `fact.run_halted` via their own catch
+  // blocks, or the next startup sweep will requeue stuck runs.
+  if (inflight.size > 0) {
+    await Promise.race([
+      Promise.allSettled([...inflight]),
+      new Promise<void>((resolve) => setTimeout(resolve, drainMs)),
+    ]);
+  }
+}
+
+/** runOne that never rejects — logs unhandled errors and ensures a
+ * terminal fact was already appended by runOne's own crash path. */
+async function runOneSafe(runId: string, opts: ExecutorOpts): Promise<void> {
+  try {
+    await runOne(runId, opts);
+  } catch (err) {
+    // runOne appends `fact.run_halted` before rethrowing on crash; this
+    // catch just prevents an unhandled promise rejection from crashing
+    // the daemon.
+    // eslint-disable-next-line no-console
+    console.error(`[executor] run ${runId} crashed:`, err);
   }
 }
 
 export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
+  try {
+    await runOneInner(runId, opts);
+  } catch (err) {
+    // Outer safety net: if the main body escaped without terminalising
+    // the run, append `fact.run_halted` so the `running` capacity slot
+    // doesn't leak. Covers throws outside the existing inner try/catch
+    // that wraps only `spec.handler(ctx)` — e.g. foldIntents / graphFor
+    // / selectEdge / tryAppendFact failures. Belt-and-suspenders: the
+    // store's startupSweep also requeues stuck `running` rows on
+    // daemon restart.
+    const state = opts.store.getState(runId);
+    if (state != null && state.status === "running") {
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.run_halted",
+          payload: { reason: "error", detail: `executor crashed: ${errorMessage(err)}` },
+        },
+      ]);
+    }
+    throw err;
+  }
+}
+
+async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
   const leakGrace = opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   let consecutiveAborts = 0;

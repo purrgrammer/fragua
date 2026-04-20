@@ -10,6 +10,7 @@ import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swar
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
+import { SteeringRegistry } from "./steering-registry.ts";
 import { buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
@@ -50,16 +51,18 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
   private readonly defaultModel: { provider: string; model: string };
   private readonly systemPrompt: string;
-  /** The agent currently running inside `run()`. When a steer request
-   * lands mid-node it's injected directly; if no agent is active the
-   * message is buffered on `pendingSteers` and drained into the next
-   * agent on its next turn. */
-  private activeAgent: Agent | undefined;
-  private pendingSteers: string[] = [];
-  /** Per-backend transcript store keyed by `thread_id`. Scoped to the
-   * backend instance so tests that spin up a fresh backend get a clean
-   * store. The executor creates one backend per run today, which means
-   * two concurrent runs already get isolated stores — no cross-run leak. */
+  /** Per-run live-agent + pending-steer registry. Scoped by runId so two
+   * concurrent runs on this shared backend can each have their own live
+   * agent without clobbering each other's slot, and so a steer buffered
+   * between one run's nodes never leaks into another run's agent. */
+  private readonly steering = new SteeringRegistry();
+  /** Per-backend transcript store keyed by `(run_id, thread_id)`. Scoped
+   * to the backend instance so tests that spin up a fresh backend get a
+   * clean store. Backends are shared across runs — one per `(workflow,
+   * node)` per `packages/cli/src/commands/daemon.ts` — so the `run_id`
+   * component is what isolates concurrent runs; without it two runs
+   * sharing a `thread_id` (e.g. `thread_id="dev"`) would clobber each
+   * other's transcripts. */
   private readonly messageStore: MessageStore;
   private readonly summariser: SummariserBackend | undefined;
   private readonly skills: readonly Skill[];
@@ -219,11 +222,11 @@ export class PiCodergenBackend implements CodergenBackend {
     // process.
     const externalPrior = Array.isArray(input.priorMessages) ? (input.priorMessages as AgentMessage[]) : undefined;
     const storedForThread: AgentMessage[] =
-      !isFresh && threadId ? (externalPrior ?? this.messageStore.get(threadId)) : [];
+      !isFresh && threadId ? (externalPrior ?? this.messageStore.get(input.run_id, threadId)) : [];
     if (externalPrior !== undefined && threadId) {
       // Keep the in-memory cache in sync so a subsequent same-process
       // call that omits priorMessages still sees the right history.
-      this.messageStore.set(threadId, storedForThread);
+      this.messageStore.set(input.run_id, threadId, storedForThread);
     }
 
     // Resume detection. When the executor hands us a non-empty
@@ -366,11 +369,12 @@ export class PiCodergenBackend implements CodergenBackend {
       }
     });
 
-    // Register this agent as the current steer target and drain any messages
-    // that landed while no agent was active (e.g. a steer fired between nodes).
-    // `steer()` below calls agent.steer() directly when activeAgent is set.
-    this.activeAgent = agent;
-    for (const buffered of this.pendingSteers.splice(0)) this.injectSteer(agent, buffered);
+    // Register this agent as this run's steer target and drain any messages
+    // that landed while no agent was active for this run (e.g. a steer fired
+    // between nodes). `steer()` below calls agent.steer() directly when the
+    // run's agent is set.
+    const runId = input.run_id;
+    this.steering.beginRun(runId, agent);
 
     // Wire the executor's abort signal to agent.abort() so control.cancel
     // actually stops the in-flight LLM stream / tool loop. Without this the
@@ -386,7 +390,7 @@ export class PiCodergenBackend implements CodergenBackend {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
     } finally {
-      this.activeAgent = undefined;
+      this.steering.endRun(runId, agent);
       unsubscribe();
       if (input.signal) input.signal.removeEventListener("abort", abortListener);
     }
@@ -396,7 +400,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // other mode is explicitly fresh (SPEC §3.3) and must not contaminate
     // the full-mode cache under the same thread.
     if (persist && threadId) {
-      this.messageStore.set(threadId, agent.state.messages);
+      this.messageStore.set(input.run_id, threadId, agent.state.messages);
     }
     // Stamp `inProcessWrites` whenever a threaded node runs so the next
     // call in this process isn't misread as a resume. This has to fire
@@ -435,28 +439,32 @@ export class PiCodergenBackend implements CodergenBackend {
     return ok({ notes });
   }
 
-  /** CodergenBackend.steer — inject a user message into the currently
-   * active agent, or buffer it for the next agent when no node is running.
+  /** Inject a user message into the currently active agent for `runId`,
+   * or buffer it for that run's next agent when nothing is running.
    * Called by the executor's control loop when a `control.steer` request
-   * arrives. Fire-and-forget from the caller's point of view. */
-  steer(message: string): void {
-    if (!message) return;
-    const agent = this.activeAgent;
-    if (agent) {
-      this.injectSteer(agent, message);
-      return;
-    }
-    // No node is currently running; queue the message for the next
-    // agent so a steer fired between nodes isn't dropped.
-    this.pendingSteers.push(message);
+   * arrives. Fire-and-forget from the caller's point of view.
+   *
+   * `runId` is required so a steer can never leak across concurrent runs
+   * on this shared backend — a caller that doesn't know the target runId
+   * shouldn't be calling steer at all. */
+  steer(runId: string, message: string): void {
+    this.steering.steer(runId, message);
   }
 
-  private injectSteer(agent: Agent, message: string): void {
-    agent.steer({
-      role: "user",
-      content: [{ type: "text", text: message }],
-      timestamp: Date.now(),
-    });
+  /** Release every per-run resource this backend holds for `runId`.
+   * Called by the executor after a run reaches a terminal status. Without
+   * this, a run that buffered a steer but never started another codergen
+   * node would leak its `pendingSteers` entry until daemon restart —
+   * bounded but pointless. Also wipes the `MessageStore` slot and any
+   * `inProcessWrites` entries for the run so checkpoint bookkeeping
+   * stays tight. Safe to call for a runId with no state. */
+  forgetRun(runId: string): void {
+    this.steering.forgetRun(runId);
+    this.messageStore.clearRun(runId);
+    const prefix = `${runId}::`;
+    for (const key of this.inProcessWrites) {
+      if (key.startsWith(prefix)) this.inProcessWrites.delete(key);
+    }
   }
 }
 
