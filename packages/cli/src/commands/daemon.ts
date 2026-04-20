@@ -170,12 +170,15 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       registry: new ToolRegistry(),
       defaultModel: { provider: provider!, model: model! },
     };
-    codergenFactory = (node, nextNode) =>
-      makeCodergenHandler({
-        node,
-        nextNode,
-        backendOpts,
-      });
+    // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
+    // The factory receives the first outgoing edge as a legacy-compat
+    // hint for tool/transition nodes, but for codergen that would force
+    // every call to route to whichever edge happens to appear first in
+    // the DOT — bypassing the edge selector. Real codergen nodes need
+    // the selector to pick based on outcome status + condition matching
+    // (e.g. `implement -> done [condition="outcome=fail"]` vs the
+    // unconditional `implement -> verify`).
+    codergenFactory = (node, _nextNode) => makeCodergenHandler({ node, backendOpts });
   }
   void PiCodergenBackend;
   dispatcher.setResolver(

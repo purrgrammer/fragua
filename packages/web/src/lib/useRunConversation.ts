@@ -120,17 +120,23 @@ const KNOWN_EVENT_TYPES: readonly string[] = [
   "cost.recorded",
 ];
 
-/** Parse one SSE frame into the reducer's input shape. Opaque on failure. */
+/** Parse one SSE frame into the reducer's input shape. Opaque on failure.
+ *  Server frames mirror the REST shape: `{ runId, seq, type, writer,
+ *  payload, ts }` with domain fields nested under `payload`. */
 function toRawEvent(type: string, data: string): RawEvent | null {
   try {
     const parsed = JSON.parse(data) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object") return null;
+    const payload = (parsed["payload"] ?? null) as Record<string, unknown> | null;
+    const nodeId = payload && typeof payload["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
+    const sessionId =
+      payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
     return {
       type: String(parsed["type"] ?? type),
-      node_id: (parsed["node_id"] ?? null) as string | null,
-      session_id: (parsed["session_id"] ?? null) as string | null,
-      data: (parsed["data"] ?? null) as Record<string, unknown> | null,
-      timestamp: parsed["timestamp"] as string | undefined,
+      node_id: nodeId,
+      session_id: sessionId,
+      data: payload,
+      timestamp: typeof parsed["ts"] === "number" ? new Date(parsed["ts"] as number).toISOString() : undefined,
     };
   } catch {
     return null;
@@ -140,19 +146,29 @@ function toRawEvent(type: string, data: string): RawEvent | null {
 /** Coerce arbitrary unknown[] from the REST payload into RawEvents. Drops
  * entries that don't look like events rather than throwing; the wire
  * format should always be valid but we never crash the UI over a
- * malformed frame. */
+ * malformed frame.
+ *
+ * REST events arrive as `{ runId, seq, type, writer, payload, ts }` — the
+ * domain fields the reducer cares about (`nodeId`, `session_id`) live
+ * INSIDE `payload`, not at the top level. Earlier versions read `node_id`
+ * / `data` off the top level and silently dropped every agent/llm event
+ * because nodeId came back as null, which killed the conversation view. */
 function coerceRawEvents(items: readonly unknown[]): RawEvent[] {
   const out: RawEvent[] = [];
   for (const raw of items) {
     if (!raw || typeof raw !== "object") continue;
     const o = raw as Record<string, unknown>;
     if (typeof o["type"] !== "string") continue;
+    const payload = (o["payload"] ?? null) as Record<string, unknown> | null;
+    const nodeId = payload && typeof payload["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
+    const sessionId =
+      payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
     out.push({
       type: o["type"],
-      node_id: (o["node_id"] ?? null) as string | null,
-      session_id: (o["session_id"] ?? null) as string | null,
-      data: (o["data"] ?? null) as Record<string, unknown> | null,
-      timestamp: o["timestamp"] as string | undefined,
+      node_id: nodeId,
+      session_id: sessionId,
+      data: payload,
+      timestamp: typeof o["ts"] === "number" ? new Date(o["ts"] as number).toISOString() : undefined,
     });
   }
   return out;
