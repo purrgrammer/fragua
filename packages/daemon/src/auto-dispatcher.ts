@@ -4,9 +4,10 @@
 // after daemon start get their nodes registered on first dispatch. Each
 // node's spec is derived from its shape / `type` attribute.
 //
-// This is the "any valid DOT runs" demo fallback. Handlers just transition
-// forward so the executor can move the state machine. Real runtime usage
-// plugs a richer dispatcher built from packages/agent's backends.
+// Two-pass build: first pass creates specs for leaf kinds (codergen,
+// tool, wait.human, etc.); second pass creates `parallel` specs whose
+// `resolveChild` closures read from the specs map, and `fan_in` specs
+// that point at their paired parallel node.
 
 import type { Node } from "@swarm/core";
 import { parseDotSource } from "@swarm/core";
@@ -14,6 +15,7 @@ import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 
+type HandlerContext = handler.HandlerContext;
 type HandlerSpec = handler.HandlerSpec;
 
 export interface AutoDispatcherOpts {
@@ -60,16 +62,109 @@ function specsForGraph(
     outgoing.set(edge.from, list);
   }
   const specs = new Map<string, HandlerSpec>();
+
+  // Pass 1: leaf handler kinds.
   for (const node of Object.values(graph.nodes)) {
-    const first = outgoing.get(node.id)?.[0] ?? "__end__";
     const kind = handlerKindOf(node.attrs);
+    if (kind === "parallel" || kind === "parallel.fan_in") continue;
+    const first = outgoing.get(node.id)?.[0] ?? "__end__";
     const useFactory = kind === "codergen" && codergenFactory != null;
     specs.set(
       node.id,
       useFactory ? codergenFactory(node, first) : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
     );
   }
+
+  // Pass 2: parallel + fan_in, which need cross-node references.
+  for (const node of Object.values(graph.nodes)) {
+    const kind = handlerKindOf(node.attrs);
+    if (kind === "parallel") {
+      const children = outgoing.get(node.id) ?? [];
+      const fanInId = typeof node.attrs.fan_in === "string" ? node.attrs.fan_in : "";
+      if (fanInId.length === 0 || children.length === 0) {
+        // Validator flags these at authoring; at runtime we halt with a
+        // clear message rather than silently no-op into a bad state.
+        specs.set(node.id, malformedParallelSpec(node.id));
+        continue;
+      }
+      const joinPolicy = node.attrs.join_policy === "first_success" ? "first_success" : "wait_all";
+      specs.set(
+        node.id,
+        handler.makeParallelHandler({
+          children,
+          fanInNode: fanInId,
+          joinPolicy,
+          resolveChild: (childId) => specs.get(childId) ?? null,
+          buildChildContext: (childId, parentCtx) => buildBranchContext(childId, parentCtx),
+        }),
+      );
+    } else if (kind === "parallel.fan_in") {
+      // Find the parallel node whose fan_in attr points here.
+      const parallelNodeId = findParallelParent(graph.nodes, node.id);
+      if (parallelNodeId == null) {
+        specs.set(node.id, malformedFanInSpec(node.id));
+        continue;
+      }
+      specs.set(node.id, handler.makeFanInHandler({ parallelNodeId }));
+    }
+  }
+
   return specs;
+}
+
+/**
+ * Child HandlerContext used when a parallel branch is dispatched. The
+ * child sees the parent's shared resources (store-backed artifacts /
+ * messages / tools / llm / externalCall) but with its own nodeId, a
+ * deep-cloned routing snapshot, and iteration reset to 0.
+ *
+ * The parent's AbortSignal is reused so steers / shutdown propagate.
+ * Branch-level events still emit through the parent's `emit`; the
+ * executor stamps `nodeId` from the parent ctx, so branch-scoped
+ * observability events carry the branch id via the handler writing
+ * it into the payload.
+ */
+function buildBranchContext(childId: string, parent: HandlerContext): HandlerContext {
+  return {
+    ...parent,
+    nodeId: childId,
+    iteration: 0,
+    routing: structuredClone(parent.routing as Record<string, unknown>),
+  };
+}
+
+function findParallelParent(nodes: Record<string, Node>, fanInNodeId: string): string | null {
+  for (const node of Object.values(nodes)) {
+    if (node.attrs.shape !== "component") continue;
+    if (node.attrs.fan_in === fanInNodeId) return node.id;
+  }
+  return null;
+}
+
+function malformedParallelSpec(nodeId: string): HandlerSpec {
+  return {
+    kind: "parallel",
+    sideEffect: "none",
+    maxMs: 50,
+    handler: async () => ({
+      kind: "halt",
+      reason: "error",
+      detail: `parallel node "${nodeId}" missing fan_in attr or has no branches`,
+    }),
+  };
+}
+
+function malformedFanInSpec(nodeId: string): HandlerSpec {
+  return {
+    kind: "parallel.fan_in",
+    sideEffect: "none",
+    maxMs: 50,
+    handler: async () => ({
+      kind: "halt",
+      reason: "error",
+      detail: `fan_in node "${nodeId}" is not referenced by any component (parallel) node`,
+    }),
+  };
 }
 
 function specForNode(
@@ -128,14 +223,6 @@ function specForNode(
         maxMs: 50,
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
-    // `parallel` and `parallel.fan_in` still fall through to a noop
-    // transition — their executor wiring is the next milestone. A
-    // workflow that ships with these shapes runs but the branches are
-    // not actually forked; fan_in sees an empty results list. A real
-    // parallel workflow must register dispatcher specs manually until
-    // those handlers land.
-    case "parallel":
-    case "parallel.fan_in":
     default:
       return transitionSpec(kind, first);
   }

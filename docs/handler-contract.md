@@ -127,6 +127,45 @@ Declare your handler's risk level on the spec:
 
 ---
 
+## Parallel fan-out / fan-in
+
+Use `component` (parallel) + `tripleoctagon` (parallel.fan_in) to fork
+a run into N branches that explore alternatives in parallel, rank the
+outcomes, and continue down a single path (attractor §4.8 / §4.9).
+
+Swarm's parallel is **deliberation-only** (regime C): each branch gets
+an in-memory deep-cloned routing snapshot and shares the parent run's
+single worktree. Branches must NOT mutate the filesystem; restrict
+their `allowed_tools` to read-only sets and have the follow-up node
+(after fan_in) perform any actual writes.
+
+```dot
+  explore [
+    shape    = component
+    fan_in   = pick_best     // required — points at the fan_in node
+    join_policy = "wait_all" // or "first_success"
+  ]
+  approach_a [ prompt = "..." allowed_tools = "local:read_file, local:grep" ]
+  approach_b [ prompt = "..." allowed_tools = "local:read_file, local:grep" ]
+  pick_best [ shape = tripleoctagon ]   // heuristic ranking by (status, -score, id)
+
+  explore -> approach_a
+  explore -> approach_b
+  approach_a -> pick_best
+  approach_b -> pick_best
+  pick_best -> next_step
+```
+
+Branch outcomes land in routing under
+`parallel.<parallelNodeId>.results = [{branchId, status, score?}, …]`,
+and the fan_in winner lands under `fan_in.<nodeId>.winner`. Downstream
+nodes read these through normal `${context.*}` substitution.
+
+Limits (v1): a branch that returns `yield_hitl` is coerced to `fail`
+with a documented reason; nested HITL in a parallel fan-out is not
+supported. A branch's `externalCall` intent/done facts attribute to
+the parent parallel node's id for idempotency purposes.
+
 ## Tool nodes (graph-level shell)
 
 A `parallelogram`-shape node runs `node.attrs.tool_command` as a single
