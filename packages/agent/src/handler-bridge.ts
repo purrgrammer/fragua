@@ -6,7 +6,14 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import { type CodergenBackend, type ContextMap, type EventType, type Node, type Outcome, substitute } from "@swarm/core";
+import {
+  type CodergenBackend,
+  type ContextMap,
+  type EventType,
+  type Node,
+  type Outcome,
+  substitute,
+} from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 
@@ -73,6 +80,12 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
         const model = strAt(data, "model");
         if (model != null) modelName = model;
       } else if (type === "agent.message_end") {
+        // Legacy stub-backend path: some CodergenBackend impls emit the
+        // full message on the `agent.message_end` event payload (see
+        // handler-bridge.test.ts' stubBackend). The real
+        // PiCodergenBackend takes the dedicated `persistMessage`
+        // callback below instead — which stays out of the 4KB event
+        // envelope.
         const role = strAt(data, "role");
         const content = extractTextFromMessage(data);
         if (content.length > 0 && (role === "assistant" || role === "tool" || role === "user" || role === "system")) {
@@ -81,16 +94,29 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       }
     };
 
+    const threadId = strAt(node.attrs as Record<string, unknown>, "thread_id");
+    // Resume hydration: load any prior messages for this (run, thread)
+    // that are already in the messages table. This is the daemon-
+    // restart path — in-process MessageStore is empty but the DB has
+    // the pre-crash transcript. The backend compares the size of this
+    // load against its `inProcessWrites` set to decide whether to
+    // apply SPEC §3.6 degrade on fidelity=full.
+    const priorMessages = threadId ? loadPriorMessagesForThread(ctx, threadId) : undefined;
+
     const outcome: Outcome = await backend.run({
       node,
       prompt,
       context,
-      thread_id: strAt(node.attrs as Record<string, unknown>, "thread_id"),
+      thread_id: threadId,
       fidelity: (node.attrs.fidelity ?? "full") as NonNullable<Node["attrs"]["fidelity"]>,
       signal: ctx.signal,
       run_id: ctx.runId,
       workflow_sha: "",
       emit,
+      ...(priorMessages !== undefined ? { priorMessages } : {}),
+      persistMessage: (role, content, payloadJson) => {
+        ctx.messages.append(role, content, payloadJson);
+      },
     });
 
     if (outcome.status === "fail") {
@@ -162,6 +188,53 @@ function numAt(data: Record<string, unknown>, key: string): number {
 function strAt(data: Record<string, unknown>, key: string): string | undefined {
   const v = data[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Hydrate the AgentMessage history for a (runId, threadId) pair from
+ * the `messages` table. Filters by `node_id` if every node sharing the
+ * thread id is also a node id (the common case: `thread_id` defaults
+ * to the source node id). Falls back to all messages when there's no
+ * direct match so authors who set `thread_id="dev"` don't get empty
+ * history. Returns `undefined` when nothing is persisted so the
+ * backend can skip resume-detection and use its in-process cache.
+ *
+ * `payload_json` carries the full structured AgentMessage; if absent
+ * on a row (legacy appends / stub tests), fall back to synthesising a
+ * plain-text message from `content` + `role` — the backend treats
+ * both shapes uniformly. */
+function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly unknown[] | undefined {
+  // Prefer messages tagged with the exact thread_id as node_id (common
+  // default). When empty, return all run messages so wide threads
+  // (`thread_id="dev"`) still hydrate.
+  //
+  // `ctx.messages.since(0)` inherits a 10k default cap — fine for the
+  // UI path, not for resume where a silent truncation loses context.
+  // Task tracking: the context.ts cap should become a tail query, but
+  // today we work around it by accepting what the API gives us and
+  // documenting the limit as a known ceiling for resume fidelity.
+  const byNode = ctx.messages.since(0).filter((m) => m.nodeId === threadId);
+  const rows = byNode.length > 0 ? byNode : ctx.messages.since(0);
+  if (rows.length === 0) return undefined;
+  const out: unknown[] = [];
+  for (const row of rows) {
+    if (row.payloadJson) {
+      try {
+        out.push(JSON.parse(row.payloadJson));
+        continue;
+      } catch {
+        // Fallthrough to text-only reconstruction.
+      }
+    }
+    // Synthesise a minimal AgentMessage — enough for non-full fidelity
+    // modes to summarise against; `fidelity=full` resume degrades per
+    // §3.6 so the exact shape is irrelevant on first resumed call.
+    out.push({
+      role: row.role,
+      content: [{ type: "text", text: row.content }],
+      timestamp: Date.now(),
+    });
+  }
+  return out;
 }
 
 function extractTextFromMessage(data: Record<string, unknown>): string {

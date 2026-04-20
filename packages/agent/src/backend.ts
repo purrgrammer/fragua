@@ -2,8 +2,8 @@
 
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
-import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
-import { fail, ok } from "@swarm/core";
+import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
+import { degradeOnResume, fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
 import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -59,6 +59,13 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly summariser: SummariserBackend | undefined;
   private readonly skills: readonly Skill[];
   private readonly runEnv: RunEnvironment | undefined;
+  /** Per-(runId, threadId) flags marking threads we've *written* to in
+   * THIS process. A load of a non-empty transcript for a (run, thread)
+   * whose key is missing here is the resume signal: the transcript is
+   * from a prior process, so the pi-ai sessionId is stale and
+   * fidelity=full must degrade to summary:high (SPEC §3.6). Purely
+   * in-memory — never persisted. */
+  private readonly inProcessWrites = new Set<string>();
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -71,6 +78,13 @@ export class PiCodergenBackend implements CodergenBackend {
     this.summariser = opts.summariser;
     this.skills = opts.skills ?? [];
     this.runEnv = opts.runEnv;
+  }
+
+  /** True when we've already persisted `threadId` for `runId` during
+   * *this* backend instance's lifetime. Exposed for tests; production
+   * callers should not need this. */
+  hasInProcessWrite(runId: string, threadId: string): boolean {
+    return this.inProcessWrites.has(sessionKey(runId, threadId));
   }
 
   /** Direct access to the transcript store. Exposed for tests and, later,
@@ -158,8 +172,46 @@ export class PiCodergenBackend implements CodergenBackend {
     const threadId = input.thread_id;
     const hydrate = shouldHydrateFromStore(input.fidelity, isFresh);
     const persist = shouldPersistToStore(input.fidelity, isFresh);
-    const storedForThread: AgentMessage[] = !isFresh && threadId ? this.messageStore.get(threadId) : [];
-    const hydrateMessages: AgentMessage[] = hydrate && threadId ? storedForThread : [];
+
+    // Pull the prior transcript. `input.priorMessages` is populated by
+    // the executor from the messages table when a prior transcript
+    // exists for (runId, threadId); it's the single source of truth
+    // across daemon restarts. The backend's in-process MessageStore is
+    // a write-through cache populated from this input so tests that
+    // skip priorMessages still see consistent behaviour inside one
+    // process.
+    const externalPrior = Array.isArray(input.priorMessages) ? (input.priorMessages as AgentMessage[]) : undefined;
+    const storedForThread: AgentMessage[] =
+      !isFresh && threadId ? (externalPrior ?? this.messageStore.get(threadId)) : [];
+    if (externalPrior !== undefined && threadId) {
+      // Keep the in-memory cache in sync so a subsequent same-process
+      // call that omits priorMessages still sees the right history.
+      this.messageStore.set(threadId, storedForThread);
+    }
+
+    // Resume detection. When the executor hands us a non-empty
+    // transcript for a (runId, threadId) we haven't written to in
+    // *this* process, the pi-ai sessionId is from a prior daemon life
+    // and the provider's KV cache is gone. SPEC §3.6 says degrade
+    // fidelity=full to summary:high; other modes already build a seed
+    // from priorMessages so they're unaffected.
+    const decision = computeResumeDecision({
+      fidelity: input.fidelity,
+      isFresh,
+      threadId,
+      externalPriorLen: externalPrior !== undefined ? storedForThread.length : -1,
+      hasInProcessWrite: threadId != null && this.inProcessWrites.has(sessionKey(input.run_id, threadId)),
+    });
+    const resumed = decision.resumed;
+    const effectiveFidelity = decision.effectiveFidelity;
+    const effectiveHydrate = resumed ? shouldHydrateFromStore(effectiveFidelity, isFresh) : hydrate;
+    if (resumed && input.emit) {
+      await input.emit("agent.warning", {
+        message: `resuming thread "${threadId}" after daemon restart — fidelity=${input.fidelity} degraded to ${effectiveFidelity}`,
+      });
+    }
+
+    const hydrateMessages: AgentMessage[] = effectiveHydrate && threadId ? storedForThread : [];
 
     // Build the fidelity seed prepended to the user prompt for non-full
     // modes. `full` returns "" and the user prompt is unchanged. `truncate`
@@ -178,7 +230,7 @@ export class PiCodergenBackend implements CodergenBackend {
         }
       : undefined;
     const { seed, warnings: fidelityWarnings } = await buildFidelitySeed({
-      fidelity: input.fidelity,
+      fidelity: effectiveFidelity,
       graphGoal,
       runId: input.run_id,
       priorMessages: storedForThread,
@@ -197,7 +249,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // sessionId is a provider-cache hint (not a message restore). Pick
     // the right bucket so cache hits work and different fidelities don't
     // clobber each other's cache under the same thread.
-    const sessionId = resolveSessionId({ fidelity: input.fidelity, threadId, isFresh });
+    const sessionId = resolveSessionId({ fidelity: effectiveFidelity, threadId, isFresh });
 
     const agent = new Agent({
       initialState: {
@@ -237,8 +289,33 @@ export class PiCodergenBackend implements CodergenBackend {
     const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
       const bridged = bridgeAgentEvent(event);
       if (bridged && input.emit) await input.emit(bridged.type, bridged.data);
-      if (event.type === "message_end" && event.message.role === "assistant" && input.emit) {
-        await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
+      if (event.type === "message_end") {
+        if (event.message.role === "assistant" && input.emit) {
+          await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
+        }
+        // Persist the fully-assembled message to the messages table.
+        // Payload content is unbounded — if we shoved it onto the
+        // event envelope we'd bust the 4KB I7 cap on the first sizable
+        // assistant turn. Messages table's `content` is TEXT with no
+        // such limit, matching §I9's "LLM-visible preview" split.
+        //
+        // We pass BOTH the flattened `content` (for UI rendering) and
+        // the full AgentMessage JSON (for resume-path rehydration —
+        // the flattened text is lossy for tool_use blocks, images,
+        // and structured tool_result payloads). pi-agent-core's
+        // `toolResult` role maps onto swarm's `"tool"` MessageRole;
+        // anything else unexpected is skipped (custom UI-only messages
+        // that don't round-trip through pi-ai).
+        if (input.persistMessage) {
+          const mappedRole = mapAgentRoleToMessageRole(event.message.role);
+          if (mappedRole !== undefined) {
+            const content = extractMessageText(event.message);
+            const payload = safeStringify(event.message);
+            if (content.length > 0 || payload !== undefined) {
+              input.persistMessage(mappedRole, content, payload);
+            }
+          }
+        }
       }
     });
 
@@ -273,6 +350,13 @@ export class PiCodergenBackend implements CodergenBackend {
     // the full-mode cache under the same thread.
     if (persist && threadId) {
       this.messageStore.set(threadId, agent.state.messages);
+    }
+    // Stamp `inProcessWrites` whenever a threaded node runs so the next
+    // call in this process isn't misread as a resume. This has to fire
+    // regardless of `persist` — e.g. a compact-mode node on the same
+    // thread still proves "we're alive and past any pre-crash state".
+    if (threadId) {
+      this.inProcessWrites.add(sessionKey(input.run_id, threadId));
     }
 
     const last = agent.state.messages[agent.state.messages.length - 1];
@@ -321,6 +405,98 @@ export class PiCodergenBackend implements CodergenBackend {
       timestamp: Date.now(),
     });
   }
+}
+
+function sessionKey(runId: string, threadId: string): string {
+  return `${runId}::${threadId}`;
+}
+
+/** Pure resume-decision helper, extracted for unit testability.
+ *
+ * Inputs:
+ *   - `fidelity`: the mode declared on the node.
+ *   - `isFresh`: `context="fresh"` was set; no cross-node sharing.
+ *   - `threadId`: resolved thread id, or `undefined` if the node has
+ *     none (no thread = no possible resume).
+ *   - `externalPriorLen`: number of messages supplied via
+ *     `CodergenInput.priorMessages`. Use `-1` to signal "caller did
+ *     not supply priorMessages at all" (legacy / test paths) — those
+ *     never count as resume.
+ *   - `hasInProcessWrite`: `inProcessWrites` already has this
+ *     `(runId, threadId)` — means we wrote it earlier in THIS process,
+ *     so any transcript is ours and the provider cache is live.
+ *
+ * Returns `{ resumed, effectiveFidelity }` where `effectiveFidelity`
+ * is the fidelity to actually use for the seed + session resolution.
+ * `resumed=true` implies `fidelity=full` was degraded per §3.6.
+ */
+export function computeResumeDecision(args: {
+  fidelity: FidelityMode;
+  isFresh: boolean;
+  threadId: string | undefined;
+  externalPriorLen: number;
+  hasInProcessWrite: boolean;
+}): { resumed: boolean; effectiveFidelity: FidelityMode } {
+  const resumed = !args.isFresh && args.threadId != null && args.externalPriorLen > 0 && !args.hasInProcessWrite;
+  const effectiveFidelity: FidelityMode = resumed ? degradeOnResume(args.fidelity) : args.fidelity;
+  return { resumed, effectiveFidelity };
+}
+
+function safeStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** pi-agent-core's AgentMessage role space (`user`, `assistant`,
+ * `toolResult`, plus arbitrary custom strings) → swarm's narrower
+ * MessageRole union (`system | user | assistant | tool`). Returns
+ * undefined for custom / UI-only roles that have no swarm equivalent. */
+function mapAgentRoleToMessageRole(role: string): "assistant" | "tool" | "user" | "system" | undefined {
+  switch (role) {
+    case "assistant":
+      return "assistant";
+    case "user":
+      return "user";
+    case "system":
+      return "system";
+    case "toolResult":
+    case "tool":
+      return "tool";
+    default:
+      return undefined;
+  }
+}
+
+/** Flatten pi-agent-core `AgentMessage.content` (string | ContentBlock[])
+ * into a plain string suitable for the messages table. Mirrors
+ * `summarizeMessage` but without the 4KB cap — the messages table has
+ * no size limit. Tool result blocks are stringified best-effort. */
+function extractMessageText(message: { role: string; content?: unknown }): string {
+  const c = message.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  const parts: string[] = [];
+  for (const block of c) {
+    if (block == null || typeof block !== "object") continue;
+    const b = block as { type?: string; text?: unknown; content?: unknown };
+    if (b.type === "text" && typeof b.text === "string") {
+      parts.push(b.text);
+    } else if (b.type === "tool_result") {
+      if (typeof b.content === "string") parts.push(b.content);
+      else if (Array.isArray(b.content)) {
+        for (const inner of b.content) {
+          if (inner && typeof inner === "object") {
+            const t = (inner as { text?: unknown }).text;
+            if (typeof t === "string") parts.push(t);
+          }
+        }
+      }
+    }
+  }
+  return parts.join("\n").trim();
 }
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {

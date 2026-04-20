@@ -46,20 +46,28 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const { runId, nodeId, iteration, store } = opts;
 
   const messages: MessagesApi = {
-    append(role: MessageRole, content: string) {
+    append(role: MessageRole, content: string, payloadJson?: string) {
       return store.appendMessage(runId, {
         role,
         content,
         nodeId,
         iteration,
+        payloadJson: payloadJson ?? null,
       });
     },
     recent(n) {
-      const all = store.getMessages(runId, { limit: 10_000 });
+      // TODO(perf): replace with a tail query (`ORDER BY ordinal DESC
+      // LIMIT n`) instead of pulling everything and slicing. For now
+      // the call site is bounded by run lifetime — an n=10 recent call
+      // on a 100k-message run reads the whole table.
+      const all = store.getMessages(runId, { limit: Number.MAX_SAFE_INTEGER });
       return all.slice(-n);
     },
     since(ordinal) {
-      return store.getMessages(runId, { sinceOrdinal: ordinal, limit: 10_000 });
+      // Unbounded: resume hydration relies on `since(0)` returning
+      // every prior message. A silent cap would lose transcript
+      // context on a daemon restart (§3.6).
+      return store.getMessages(runId, { sinceOrdinal: ordinal, limit: Number.MAX_SAFE_INTEGER });
     },
   };
 

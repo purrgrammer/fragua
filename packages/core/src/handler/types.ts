@@ -56,7 +56,11 @@ export interface ToolRegistry {
 }
 
 export interface MessagesApi {
-  append(role: MessageRole, content: string): { ordinal: number };
+  /** Append an LLM-visible message row. `payloadJson` carries the full
+   * structured `AgentMessage` JSON (tool_use blocks, images, etc.) so
+   * resume can rehydrate without lossy text-flattening. Optional — the
+   * plain `content` is sufficient for UI rendering. */
+  append(role: MessageRole, content: string, payloadJson?: string): { ordinal: number };
   recent(n: number): Message[];
   since(ordinal: number): Message[];
 }
