@@ -80,11 +80,12 @@ export interface NodeAttrs {
    * shape as `max_cost_usd`. Enforcement not yet wired. */
   max_tokens?: number;
   /** Scope the skills catalog visible to this node. Unset = all discovered
-   * skills. Set = only these names appear in `<available_skills>` and as
-   * valid `local:load_skill` args. Comma-separated in DOT. */
+   * skills. Set = only these names appear in the `<available_skills>`
+   * block of the system prompt. Comma-separated in DOT. Agents read
+   * SKILL.md bodies directly via the `read` tool; there is no dedicated
+   * load-skill tool under the trimmed agent surface. */
   skills?: string[];
-  /** Hard opt-out — no skills catalog in the system prompt and no
-   * `local:load_skill` tool for this node. */
+  /** Hard opt-out — no skills catalog in the system prompt for this node. */
   skills_disabled?: boolean;
   [extra: string]: AttrScalar | undefined;
 }

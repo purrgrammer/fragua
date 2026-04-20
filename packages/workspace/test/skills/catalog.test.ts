@@ -27,7 +27,10 @@ describe("renderSkillsCatalog", () => {
     expect(out).toContain("<available_skills>");
     expect(out).toContain("<name>pdf</name>");
     expect(out).toContain("<name>csv</name>");
-    expect(out).toContain("local:load_skill");
+    // Instructions direct the agent to read the SKILL.md with the `read`
+    // tool — no dedicated load_skill tool under the trimmed surface.
+    expect(out).toContain("`read`");
+    expect(out).toContain("SKILL.md");
   });
 
   test("escapes XML special characters in name/description", () => {

@@ -1,15 +1,16 @@
 // Render the tier-1 catalog block prepended to the agent's system prompt.
 // One XML block per call — the agent sees this at session start, decides
-// whether a skill applies, and calls `local:load_skill` to pull the body.
+// whether a skill applies, and reads the SKILL.md at `<location>` using
+// the `read` tool. No dedicated load-skill tool — "less is more".
 
 import type { Skill, SkillCatalogRecord } from "./types.ts";
 
 const BEHAVIORAL_INSTRUCTIONS = [
   "The following skills provide specialized instructions for specific tasks.",
-  "When a task matches a skill's description, call the local:load_skill tool",
-  "with the skill's name to load its full instructions before proceeding.",
-  "Relative paths inside a skill are resolved against the skill directory",
-  "returned in the load_skill result — use absolute paths when calling tools.",
+  "When a task matches a skill's description, read the SKILL.md at the",
+  "<location> path below using the `read` tool; the body contains the",
+  "detailed workflow. Resources referenced inside a skill live in the",
+  "same directory as its SKILL.md — resolve relative paths there.",
 ].join(" ");
 
 export function renderSkillsCatalog(skills: readonly Skill[]): string {

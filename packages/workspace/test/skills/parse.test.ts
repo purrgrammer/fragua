@@ -46,13 +46,13 @@ body`;
 name: ex
 description: test
 allowed_tools:
-  - local:read_file
-  - local:bash
+  - read
+  - bash
 ---
 
 body`;
     const { frontmatter } = parseSkillMd(src);
-    expect(frontmatter["allowed_tools"]).toEqual(["local:read_file", "local:bash"]);
+    expect(frontmatter["allowed_tools"]).toEqual(["read", "bash"]);
   });
 });
 

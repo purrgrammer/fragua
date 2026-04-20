@@ -225,8 +225,9 @@ export interface LlmStartData {
   budget?: BudgetSnapshot;
   /** Tier-1 skill catalog shown to the model for this step. Parallel to
    * `context_files`: a per-SKILL.md sha256 + bytes record lets replay
-   * detect drift. This is what was *advertised* — which skills the model
-   * actually loaded lives in the `tool.call` events for `local:load_skill`. */
+   * detect drift. This is what was *advertised* — which skills the
+   * model actually read is inferred from `tool.execution_*` events
+   * targeting the catalog's `location` paths via the `read` tool. */
   skills?: SkillCatalogCapture[];
 }
 

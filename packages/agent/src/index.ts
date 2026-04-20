@@ -5,7 +5,6 @@ export * from "./handler-bridge.ts";
 export * from "./message-store.ts";
 export * from "./mock.ts";
 export * from "./providers.ts";
-export * from "./subagent.ts";
 export * from "./summariser.ts";
 export * from "./system-prompt.ts";
 export * from "./tool-adapter.ts";

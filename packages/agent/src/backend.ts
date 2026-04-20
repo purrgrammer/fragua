@@ -5,7 +5,7 @@ import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai
 import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
-import { buildLoadSkillTool, filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
+import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
@@ -122,8 +122,10 @@ export class PiCodergenBackend implements CodergenBackend {
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt, and mint a scoped
     // `local:load_skill` tool whose `name` enum matches the filtered set.
-    // The tool is appended to the per-call tools list (not the registry) so
-    // concurrent runs with different node-level scopes don't fight over it.
+    // Skills are injected into the system prompt as a catalog listing;
+    // agents read the SKILL.md at `<location>` directly via the `read`
+    // tool. No dedicated load-skill tool exists under the trimmed
+    // four-tool surface (read / write / edit / bash).
     const nodeSkills = input.node.attrs.skills as string[] | undefined;
     const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {
       skills_disabled: input.node.attrs.skills_disabled === true,
@@ -131,14 +133,7 @@ export class PiCodergenBackend implements CodergenBackend {
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
     const effectiveSkills = filterSkillsForNode(this.skills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
-    const toolsIncludingSkill =
-      effectiveSkills.length > 0 &&
-      // Respect an explicit deny or a narrowing allow that omits load_skill.
-      !(deny?.includes("local:load_skill") === true) &&
-      !(allow && !allow.includes("local:load_skill"))
-        ? [...selectedTools, buildLoadSkillTool(effectiveSkills)]
-        : selectedTools;
-    const tools = toolsIncludingSkill.map((t) => toAgentTool(t, this.env));
+    const tools = selectedTools.map((t) => toAgentTool(t, this.env));
 
     const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
     const { text: contextBlock, warnings, files: contextFileRecords } = await loadContextFiles(this.env, contextFiles);

@@ -700,10 +700,11 @@ function stringifyToolError(result: unknown, err: unknown): string {
 }
 
 /**
- * Convenience: the swarm tool-name convention is `domain:tool` (e.g.
- * `local:bash`). AI Elements' `ToolHeader` expects `type="tool-<name>"`
- * and its derivation splits on `-`, so `:` must be rewritten. Used by
- * `RunConversation` but exported for tests.
+ * AI Elements' `ToolHeader` expects `type="tool-<name>"`. Tool names are
+ * bare identifiers post-trim (`read`, `write`, `edit`, `bash`) so the
+ * mapping is straightforward, but we still scrub any non-alphanumeric
+ * characters as a defence for legacy event payloads that might still
+ * carry a namespaced name.
  */
 export function toolTypeFromName(toolName: string): `tool-${string}` {
   const safe = toolName.replace(/[^a-zA-Z0-9_]/g, "_");

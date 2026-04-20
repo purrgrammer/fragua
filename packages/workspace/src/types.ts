@@ -71,13 +71,19 @@ export interface ToolOutput<TResult = ContextValue> {
   is_error?: boolean;
 }
 
-/** Tool registry with namespace enforcement. */
+/** Tool registry. Tool names are bare identifiers (no namespace prefix)
+ * under the trimmed four-tool surface — the graph-level `tool` node is
+ * a separate primitive, so the namespace distinction is structural and
+ * no longer carried in the tool name. Custom tools loaded from
+ * `.swarm/tools/*.ts` land here via `register()` alongside the core four. */
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
 
   register(tool: Tool): void {
-    if (!tool.name.includes(":")) {
-      throw new Error(`tool "${tool.name}" must use a namespace prefix (e.g. "local:${tool.name}")`);
+    if (!/^[a-z][a-z0-9_]*$/.test(tool.name)) {
+      throw new Error(
+        `tool "${tool.name}" must be a bare identifier (lowercase, alphanumeric + underscore, starting with a letter)`,
+      );
     }
     if (this.tools.has(tool.name)) {
       throw new Error(`tool "${tool.name}" is already registered`);

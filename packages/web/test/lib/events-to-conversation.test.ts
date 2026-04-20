@@ -119,14 +119,14 @@ describe("eventsToConversation — synthetic sequences", () => {
       ev("tool.execution_start", {
         data: {
           tool_call_id: "call_1",
-          tool_name: "local:read_file",
+          tool_name: "read",
           args: { path: "/tmp" },
         },
       }),
       ev("tool.execution_end", {
         data: {
           tool_call_id: "call_1",
-          tool_name: "local:read_file",
+          tool_name: "read",
           is_error: false,
           result: { content: [{ type: "text", text: "hello" }] },
         },
@@ -137,7 +137,7 @@ describe("eventsToConversation — synthetic sequences", () => {
     const tool = parts.find((p) => p.type === "tool_call");
     if (tool?.type !== "tool_call") throw new Error("no tool_call");
     expect(tool.toolCallId).toBe("call_1");
-    expect(tool.toolName).toBe("local:read_file");
+    expect(tool.toolName).toBe("read");
     expect(tool.input).toEqual({ path: "/tmp" });
     expect(tool.state).toBe("output-available");
     expect(tool.output).toEqual({ content: [{ type: "text", text: "hello" }] });
@@ -151,12 +151,12 @@ describe("eventsToConversation — synthetic sequences", () => {
       ev("llm.toolcall_delta", { data: { delta: "{}", content_index: 1 } }),
       ev("agent.message_end"),
       ev("tool.execution_start", {
-        data: { tool_call_id: "call_err", tool_name: "local:bash", args: { cmd: "fail" } },
+        data: { tool_call_id: "call_err", tool_name: "bash", args: { cmd: "fail" } },
       }),
       ev("tool.execution_end", {
         data: {
           tool_call_id: "call_err",
-          tool_name: "local:bash",
+          tool_name: "bash",
           is_error: true,
           result: "permission denied",
         },
@@ -257,10 +257,10 @@ describe("eventsToConversation — synthetic sequences", () => {
       ev("llm.done"),
       ev("agent.message_end"),
       ev("tool.execution_start", {
-        data: { tool_call_id: "t1", tool_name: "local:bash", args: { cmd: "x" } },
+        data: { tool_call_id: "t1", tool_name: "bash", args: { cmd: "x" } },
       }),
       ev("tool.execution_end", {
-        data: { tool_call_id: "t1", tool_name: "local:bash", is_error: false, result: "ok" },
+        data: { tool_call_id: "t1", tool_name: "bash", is_error: false, result: "ok" },
       }),
     ];
     const a = eventsToConversation(stream);
@@ -278,7 +278,7 @@ describe("eventsToConversation — synthetic sequences", () => {
           model: "claude-opus-4-7",
           provider: "anthropic",
           context_keys: ["greeting"],
-          allowed_tools: ["local:bash"],
+          allowed_tools: ["bash"],
         },
       }),
     ]);
@@ -288,7 +288,7 @@ describe("eventsToConversation — synthetic sequences", () => {
     expect(s?.model).toBe("claude-opus-4-7");
     expect(s?.provider).toBe("anthropic");
     expect(s?.contextKeys).toEqual(["greeting"]);
-    expect(s?.allowedTools).toEqual(["local:bash"]);
+    expect(s?.allowedTools).toEqual(["bash"]);
   });
 
   it("captures llm.start resolved prompt + system prompt on the section", () => {
@@ -356,9 +356,11 @@ describe("eventsToConversation — synthetic sequences", () => {
 });
 
 describe("toolTypeFromName", () => {
-  it("swaps non-identifier chars so AI Elements' ToolHeader label renders", () => {
-    expect(toolTypeFromName("local:bash")).toBe("tool-local_bash");
-    expect(toolTypeFromName("local:subagent")).toBe("tool-local_subagent");
+  it("passes bare identifiers through and scrubs legacy namespaced names", () => {
+    expect(toolTypeFromName("bash")).toBe("tool-bash");
+    expect(toolTypeFromName("read")).toBe("tool-read");
+    // Legacy payloads may still carry a prefix — make sure they still
+    // render rather than crashing the UI.
     expect(toolTypeFromName("mcp:github.list_issues")).toBe("tool-mcp_github_list_issues");
   });
 });
