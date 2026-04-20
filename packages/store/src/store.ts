@@ -377,10 +377,10 @@ export class SqliteStore implements IEventStore {
       ordinal = (max?.m ?? 0) + 1;
       this.db
         .query(
-          `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration, payload_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0);
+        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0, row.payloadJson ?? null);
     });
     return { ordinal };
   }
@@ -388,20 +388,19 @@ export class SqliteStore implements IEventStore {
   getMessages(runId: string, opts: GetMessagesOpts = {}): Message[] {
     const since = opts.sinceOrdinal ?? 0;
     const limit = opts.limit ?? 1000;
+    type Row = {
+      run_id: string;
+      ordinal: number;
+      role: MessageRole;
+      content: string;
+      node_id: string | null;
+      iteration: number;
+      payload_json: string | null;
+    };
     if (opts.nodeId != null) {
       return this.db
-        .query<
-          {
-            run_id: string;
-            ordinal: number;
-            role: MessageRole;
-            content: string;
-            node_id: string | null;
-            iteration: number;
-          },
-          [string, number, string, number]
-        >(
-          `SELECT run_id, ordinal, role, content, node_id, iteration
+        .query<Row, [string, number, string, number]>(
+          `SELECT run_id, ordinal, role, content, node_id, iteration, payload_json
              FROM messages
             WHERE run_id = ? AND ordinal > ? AND node_id = ?
             ORDER BY ordinal ASC
@@ -411,18 +410,8 @@ export class SqliteStore implements IEventStore {
         .map(this.rowToMessage);
     }
     return this.db
-      .query<
-        {
-          run_id: string;
-          ordinal: number;
-          role: MessageRole;
-          content: string;
-          node_id: string | null;
-          iteration: number;
-        },
-        [string, number, number]
-      >(
-        `SELECT run_id, ordinal, role, content, node_id, iteration
+      .query<Row, [string, number, number]>(
+        `SELECT run_id, ordinal, role, content, node_id, iteration, payload_json
            FROM messages
           WHERE run_id = ? AND ordinal > ?
           ORDER BY ordinal ASC
@@ -769,6 +758,7 @@ export class SqliteStore implements IEventStore {
     content: string;
     node_id: string | null;
     iteration: number;
+    payload_json?: string | null;
   }): Message => ({
     runId: r.run_id,
     ordinal: r.ordinal,
@@ -776,6 +766,7 @@ export class SqliteStore implements IEventStore {
     content: r.content,
     nodeId: r.node_id,
     iteration: r.iteration,
+    payloadJson: r.payload_json ?? null,
   });
 
   private bumpSeq(runId: string): number {

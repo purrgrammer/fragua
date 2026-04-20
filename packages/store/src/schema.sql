@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
+  -- Full structured message payload (pi-agent-core AgentMessage JSON).
+  -- Nullable so legacy rows + synthetic callers that only care about
+  -- the plaintext preview stay valid. Populated by PiCodergenBackend
+  -- so a resume after daemon restart can rehydrate fidelity=full
+  -- threads with the exact prior AgentMessage shape (tool_use blocks,
+  -- images, etc.) — per §3.6 / §I9. Size: unlimited (TEXT); this is
+  -- the SPEC's escape valve from the 4KB events cap.
+  payload_json TEXT,
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 

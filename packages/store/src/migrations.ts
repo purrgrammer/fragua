@@ -39,6 +39,13 @@ function stepMigration(db: Database, from: number): number {
       }
       return 2;
     }
+    case 2: {
+      const cols = db.query<{ name: string }, []>("PRAGMA table_info(messages)").all();
+      if (!cols.some((c) => c.name === "payload_json")) {
+        db.exec("ALTER TABLE messages ADD COLUMN payload_json TEXT");
+      }
+      return 3;
+    }
     default:
       throw new Error(`no migration registered from schema version ${from}`);
   }
