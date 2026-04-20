@@ -1,46 +1,35 @@
-// add-tool.dot — drop in a new @swarm/workspace tool end-to-end.
+// add-tool.dot — add a new @swarm/workspace tool end-to-end.
 //
-// Narrower than build-feature.dot: fixed to editing packages/workspace.
-// Run:
 //   bun run packages/cli/bin/swarm.ts run workflows/add-tool.dot \
 //     --input="add a `touch` tool that creates an empty file"
-//
-// Tool surface (agent-callable): read / write / edit / bash. Search and
-// directory-listing go through bash.
 
 digraph add_tool {
   graph [
-    goal        = "Add a new tool to @swarm/workspace with tests, passing CI."
-    label       = "add-tool"
-    default_fidelity = "compact"
-    default_max_retries = 1
-    retry_target = "implement"
+    goal  = "Add a new tool to @swarm/workspace with tests, passing CI."
+    label = "add-tool"
   ]
 
   start [shape=Mdiamond]
 
   inspect [
-    prompt = "We're adding a new tool to @swarm/workspace.\n\nUser request: $ARGUMENTS\n\nRead these files with the `read` tool:\n  - packages/workspace/src/tools.ts (the existing four core tools + CORE_TOOLS export)\n  - packages/workspace/src/types.ts (Tool interface + ExecutionEnvironment + ToolRegistry)\n  - packages/workspace/src/index.ts\n\nUse `bash` for search (`rg`, `grep -rn`, `ls`, `find`) to confirm target spots.\n\nOutput under 400 words describing: (1) the exact file+location to add the tool (note: tool `name` is a bare identifier — `^[a-z][a-z0-9_]*$` — no `local:` prefix), (2) what ExecutionEnvironment methods it needs (add if missing — note it in your plan), (3) the Attractor-style truncation policy you'll use, and (4) test cases you will add."
+    prompt = "Plan a new tool for @swarm/workspace. User request: $ARGUMENTS. Read packages/workspace/src/{tools.ts,types.ts,index.ts}. Output (<400 words): target file+location, ExecutionEnvironment methods needed (flag if new), truncation policy, test cases. Tool `name` is `^[a-z][a-z0-9_]*$`."
     allowed_tools = "read, bash"
   ]
 
   implement [
-    prompt = "Implement the plan from $inspect.output.\n\nRules:\n  - Edit packages/workspace/src/tools.ts with `edit` for single-location changes, `write` for whole-file rewrites. Include enough surrounding context that `old_string` is unique.\n  - Add the tool to the `CORE_TOOLS` array at the bottom of that file.\n  - Add tests in a new file under packages/workspace/test/ (e.g. `touch.test.ts`). The suite deliberately does not keep a catch-all `new-tools.test.ts` — each new tool gets its own focused test file.\n  - Run `bun run --filter='@swarm/workspace' typecheck` after every batch of edits via `bash`, and fix any errors before continuing.\n  - If the ExecutionEnvironment interface needs a new method, add it in types.ts AND implement it in local-env.ts AND cover it in existing env tests.\n\nDo not edit any file outside packages/workspace.\n\nWhen finished, output a summary of what you changed."
+    prompt = "Implement $inspect.output. Edit packages/workspace only. Add the tool to CORE_TOOLS. Add tests in a new file under packages/workspace/test/. Run `bun run --filter='@swarm/workspace' typecheck` after edits. If ExecutionEnvironment gains a method, implement it in local-env.ts too."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 2
     thread_id = "dev"
   ]
 
   verify [
-    prompt = "Run `bun test ./packages/workspace` via `bash`. Report results. If anything fails, `read` the error, fix with `edit`, and re-run. When every test passes, emit the literal string `WORKSPACE_GREEN` in your final reply."
+    prompt = "Run `bun test ./packages/workspace`. Fix failures. Emit `WORKSPACE_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 2
-    goal_gate = true
     thread_id = "dev"
   ]
 
   summarize [
-    prompt = "Write a PR-style summary to .swarm/runs/${context.graph.run_id}/summary.md:\n  - Tool added: name + description\n  - Files changed (bullet list)\n  - Why ($ARGUMENTS)\n  - Tests added\n\nUse `write`. Under 300 words."
+    prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: tool added, files changed, why ($ARGUMENTS), tests. Under 300 words."
     allowed_tools = "write"
     fidelity = "truncate"
   ]
@@ -49,6 +38,6 @@ digraph add_tool {
 
   start -> inspect -> implement -> verify
   verify -> summarize [condition="outcome=success"]
-  verify -> done [condition="outcome=fail"]
+  verify -> done      [condition="outcome=fail"]
   summarize -> done
 }

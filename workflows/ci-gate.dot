@@ -1,57 +1,21 @@
-// ci-gate.dot — deterministic CI gate using tool nodes.
+// ci-gate.dot — lint → typecheck → test, halt on first failure.
 //
-// Every node is a graph-level shell step (parallelogram / `tool` kind) —
-// no LLM in the loop. The workflow runs lint, then typecheck, then
-// tests, halting on the first non-zero exit. Use it for pre-merge
-// verification, pre-commit hooks, or as a downstream step fired by
-// another workflow.
+// All tool nodes (parallelogram), no LLM. `tool_command` substitutes
+// $ARGUMENTS / ${context.*}; exit 0 → success, non-zero → fail.
 //
 //   bun run packages/cli/bin/swarm.ts run workflows/ci-gate.dot
-//
-// Notes on the tool primitive:
-//
-//   - `tool_command` is substituted at dispatch through the same
-//     machinery as codergen prompts ($ARGUMENTS, ${context.*}).
-//     Example: the `test` node runs `bun test $ARGUMENTS` so the
-//     caller can scope the suite.
-//   - Exit 0 → outcome=success; non-zero → outcome=fail. There is no
-//     retry signal from shell — a workflow that wants retry-on-flake
-//     sets max_retries on the tool node, which makes the executor
-//     re-enter it up to the ceiling when the downstream edge condition
-//     catches `outcome=fail` (here we halt instead — CI should be red
-//     when CI is red).
-//   - Stdout and stderr are written as artifacts keyed by
-//     `${nodeId}:stdout` / `${nodeId}:stderr`, so downstream codergen
-//     nodes can inspect them via `$nodeId.output`.
 
 digraph ci_gate {
   graph [
-    goal        = "Run lint, typecheck, and tests in sequence. Halt on first failure."
-    label       = "ci-gate"
-    default_fidelity = "compact"
+    goal  = "Run lint, typecheck, and tests in sequence. Halt on first failure."
+    label = "ci-gate"
   ]
 
   start [shape=Mdiamond]
 
-  lint [
-    shape        = parallelogram
-    tool_command = "bun run lint"
-    // biome check on the whole repo. Fast enough to run first so authors
-    // see formatter / obvious issues before the heavier steps.
-  ]
-
-  typecheck [
-    shape        = parallelogram
-    tool_command = "bun run --filter='*' typecheck"
-  ]
-
-  test [
-    shape        = parallelogram
-    tool_command = "bun test $ARGUMENTS"
-    // `$ARGUMENTS` lets a caller scope the suite (e.g. "./packages/core").
-    // When unset the substitution yields "bun test " which runs everything.
-    goal_gate    = true
-  ]
+  lint      [shape=parallelogram, tool_command="bun run lint"]
+  typecheck [shape=parallelogram, tool_command="bun run --filter='*' typecheck"]
+  test      [shape=parallelogram, tool_command="bun test $ARGUMENTS"]
 
   done [shape=Msquare]
 

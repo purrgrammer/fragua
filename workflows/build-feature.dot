@@ -1,124 +1,63 @@
 // build-feature.dot — swarm builds a feature on its own codebase.
 //
-// Self-hosting workflow. Nodes may set their own `model`; the rest inherit
-// the CLI's default model.
-//
-//   # Anthropic direct (default if ANTHROPIC_API_KEY is set)
 //   bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
 //     --input="add a new tool named `touch` to @swarm/workspace"
 //
-//   # OpenRouter (300+ models through one key)
-//   bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
-//     --provider openrouter --model "anthropic/claude-opus-4.7" \
-//     --input="..."
-//
-// Stages:
-//   1. plan        — read-only discovery + planning pass. Agent reads
-//                    the repo with `read` + `bash` (for grep/find/git)
-//                    and emits a concrete plan.
-//   2. implement   — edit files, run typecheck, stop when the plan is
-//                    landed. `thread_id="dev"` keeps context between
-//                    implement + verify so the verifier can recall edits.
-//   3. review      — FRESH thread, read-only, sees the plan + `git diff
-//                    HEAD` but never the implementer's conversation.
-//                    Emits APPROVE or `<abort>reviewer rejected: …</abort>`.
-//   4. verify      — run `bun run ci` and iterate on failures.
-//   5. update_docs — sync docs/SPEC.md, docs/PLAN.md, AGENTS.md if
-//                    user-visible behavior / conventions shifted.
-//   6. commit      — stage touched files and commit per AGENTS.md
-//                    §Commit conventions. Commit body IS the run summary.
-//   7. merge       — rebase the worktree branch onto main and fast-forward.
-//                    Skips cleanly on the main checkout or when ahead-count
-//                    is zero.
-//
-// Tool surface (agent-callable): read / write / edit / bash. No other
-// named tools exist under the trimmed agent API — grep / ls / find /
-// git / curl all go through `bash`. Review independence is structural
-// (separate graph node on a fresh thread), not via a subagent tool.
-//
-// Scope-safety: `plan` has no write tools and no `bash`, so the agent
-// literally cannot implement the feature prematurely.
-//
-// Review independence: `review` is a separate graph node on a fresh
-// thread with read-only tools. REJECT → outcome=fail → run halts for
-// a human to intervene. A rejected review means the plan itself was
-// wrong or the implementation drifted; silently looping back rarely
-// helps and burns tokens.
-//
-// Context-management notes:
-//   - thread_id="dev" is shared between implement and verify so verify
-//     remembers the edits. review / update_docs / commit / merge each run
-//     on fresh threads and read state via git.
-//   - AGENTS.md is attached as context_files only on `plan`. Downstream
-//     nodes cite any needed rule inline.
-//   - Every node's system prompt starts with a <run-environment> block
-//     injected by the CLI (worktree path, run id, log dir, bootstrap
-//     status). Agents don't need to introspect their cwd.
+// Stages: plan (read-only) → implement → review (fresh thread) → verify →
+// update_docs → commit → merge. `thread_id="dev"` shares context between
+// implement and verify so the verifier remembers edits; every other stage
+// runs on a fresh thread and reads state via git. AGENTS.md is attached to
+// plan via context_files; downstream nodes cite any rule inline.
 
 digraph build_feature {
   graph [
-    goal        = "Land a reviewable feature change on swarm. Human merges the diff."
-    label       = "build-feature"
-    default_fidelity = "compact"
-    default_max_retries = 1
-    retry_target = "implement"
+    goal  = "Land a reviewable feature change on swarm. Human merges the diff."
+    label = "build-feature"
   ]
 
   start [shape=Mdiamond]
 
   plan [
-    prompt = "You are a senior engineer on swarm (a universal AI agent orchestrator).\n\nTask from user (authoritative — do NOT substitute): $ARGUMENTS\n\nIf $ARGUMENTS is empty, names nothing specific, or the target is blocked/ill-specified, STOP immediately. Emit `PLAN_BLOCKED: <one-line reason>` and a final line `<abort>missing or blocked target: short reason</abort>`. Do NOT retarget silently — picking a different task because it is smaller, a prerequisite, or more unblocking is a bug, not an optimisation. If $ARGUMENTS references a `tasks/<phase>/NN-*.md` file, every `Files to create or modify` entry must be consistent with that spec's Scope section.\n\nYou work inside the worktree at $WORKTREE_PATH. Dependencies are already installed (see the <run-environment> block). You have NO write tools and NO shell — do not attempt to implement the feature. Your output is a plan that a downstream node will execute.\n\nStep 1 — explore (read-only):\n  - Read docs/SPEC.md and docs/PLAN.md for the project vision and current phase.\n  - Repo conventions from AGENTS.md are prepended as <project-conventions> above — follow them.\n  - If $ARGUMENTS references a file path, `read` that file first and let its scope constrain the rest of this step.\n  - You do NOT have `bash` for this step. Use `read` to inspect specific files. If a skill listed in <available_skills> matches the task, `read` its SKILL.md at the `<location>` shown there.\n  - Identify which package(s) the task targets and which tests already cover similar ground.\n\nStep 2 — plan: produce a numbered list:\n  1. Files to create or modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add / change.\n  4. Concrete implementation notes per file — enough detail that a cheaper model can execute each step without additional repository discovery. Quote relevant existing symbols, cite line numbers, and surface any non-obvious constraints.\n  5. Constraints or conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd the plan with a single line: `<promise>PLAN_READY</promise>`."
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nIf $ARGUMENTS is empty, names nothing specific, or the target is blocked, emit `<abort>missing or blocked target: <reason></abort>`. Do NOT retarget silently. If $ARGUMENTS references `tasks/<phase>/NN-*.md`, its Scope section is authoritative.\n\nYou have read-only tools. Read docs/SPEC.md, docs/PLAN.md, any file named in $ARGUMENTS, and (if relevant) a skill's SKILL.md.\n\nProduce a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add (full paths + what they verify).\n  3. Public exports to add/change.\n  4. Implementation notes per file — specific enough that a cheaper model can execute without further discovery. Cite existing symbols + line numbers.\n  5. Conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd with `<promise>PLAN_READY</promise>`."
     allowed_tools = "read"
     context_files = "AGENTS.md"
-    fidelity = "compact"
   ]
 
   implement [
-    prompt = "You are implementing the plan ($plan.output).\n\nApply every plan item. Prefer `edit` for a single surgical replacement and `write` for new files or whole-file rewrites. Use `bash` (`rg`, `grep -rn`, `git ls-files`) to locate call sites before editing. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package via `bash` and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n\nWhen finished, emit a concise summary of the landed work: (1) files touched, (2) public surface added/changed, (3) tests added, (4) any plan items you skipped and why. Stop — a separate review node will judge your work."
+    prompt = "Implement $plan.output. Stay inside the package(s) the plan names. After edits, `bun run --filter='@swarm/<pkg>' typecheck` on every modified package; fix errors. Do NOT modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md unless the plan says so. Summarise: files touched, public surface, tests, any skipped plan items + why."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    max_retries = 2
     model = "claude-sonnet-4-6"
   ]
 
   review [
-    prompt = "You are a senior code reviewer on a FRESH thread with no memory of how the changes were produced. You judge the artifact (the diff), not the process.\n\nInputs you have:\n  - The plan that was committed to: $plan.output\n  - The implementation summary: $implement.output\n  - The actual diff — get it via `bash`: `git diff HEAD`.\n\nSteps:\n  1. Run `git diff HEAD` via `bash`.\n  2. For each changed file, `read` the current state and confirm the edits match the plan.\n  3. Judge four things independently:\n       (a) Does the diff implement the plan's stated scope? No more, no less.\n       (b) Are new behaviors covered by tests? Read the test files and verify they assert what the plan said they should.\n       (c) Any obvious bugs, type errors the compiler would miss, or security issues?\n       (d) Any scope creep — edits to files the plan didn't name?\n  4. Respond with EXACTLY ONE of:\n       APPROVE: <one-line reason the diff is shippable>\n       <abort>REJECT: <one-line summary>. fixes: <numbered list, 1-4 items></abort>\n     APPROVE ⇒ outcome=success; the run proceeds to verify. REJECT ⇒ outcome=fail; the run halts for a human to triage. Do NOT hedge; do NOT loop; if you're unsure, REJECT with a concrete concern.\n\nYou have read-only tools: `read` and `bash`. You cannot `edit` or `write`."
+    prompt = "Fresh thread. Judge the diff, not the process. Inputs: $plan.output, $implement.output, and `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) New behavior is covered by tests that assert what the plan said.\n  (c) Obvious bugs, type errors the compiler missed, security issues.\n  (d) Scope creep — edits outside the plan's named files.\n\nReply EXACTLY one of:\n  APPROVE: <one line>\n  <abort>REJECT: <one line>. fixes: <numbered list, 1-4 items></abort>\n\nDon't hedge. If unsure, REJECT with a concrete concern. Read-only tools."
     allowed_tools = "read, bash"
-    fidelity = "compact"
     model = "claude-sonnet-4-6"
   ]
 
   verify [
-    prompt = "Run `bun run ci` via `bash` and report the result. If anything fails, `read` the error (use `bash`'s `grep` / `rg` to pinpoint the call site if the message names a symbol), fix the code with `edit` for small targeted changes or `write` for whole-file rewrites, and run again. Max 3 iterations. When green, emit the literal string `CI_GREEN` in your final reply."
+    prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 2
-    goal_gate = true
     thread_id = "dev"
     model = "claude-sonnet-4-6"
   ]
 
   update_docs [
-    prompt = "Decide whether this run's changes need to be reflected in the repo's docs. You are on a fresh thread — read state via git, not from prior-node conversation.\n\nSteps:\n  1. Run `git diff --stat HEAD` via `bash`. If empty, emit `DOCS_READY: no changes` and stop.\n  2. Scan the stat. If only internal package source/tests changed (nothing a reader of docs/SPEC.md, docs/PLAN.md, or AGENTS.md would notice — e.g. refactors, new tests, private helpers), emit `DOCS_READY: no changes` and stop. Do NOT fetch the full diff in that case.\n  3. Only if user-visible surface may have shifted (public APIs, CLI flags/commands, workflow contracts, repo layout, stack/tooling changes), run `git diff HEAD -- <path>` for just the specific files whose names hint at user-visible impact.\n  4. For each of the following, decide if an update is warranted:\n       - docs/SPEC.md   — user-visible behavior, invariants, or public contracts changed\n       - docs/PLAN.md   — phase scope or a phase's verification bar shifted\n       - AGENTS.md      — conventions, commands, repo layout, or stack changed\n     Cosmetic/internal refactors that a reader of the docs would not notice do NOT need doc updates.\n  5. If none apply, emit exactly `DOCS_READY: no changes` and stop.\n  6. Otherwise, edit the affected docs. Prefer `edit` for small targeted changes; reserve `write` for whole-file rewrites. Keep edits minimal and on-topic — do not rewrite sections that weren't affected. Do not touch any files outside docs/*.md and AGENTS.md.\n  7. Emit `DOCS_READY: updated <comma-separated file list>` as your final line."
+    prompt = "Fresh thread — read state via git. `git diff --stat HEAD`. If empty, emit `DOCS_READY: no changes`. If only internal source/tests changed (nothing a docs reader would notice), emit `DOCS_READY: no changes`. Only user-visible shifts (public APIs, CLI flags, workflow contracts, repo layout, stack) warrant updates. Edit docs/SPEC.md / docs/PLAN.md / AGENTS.md as needed — minimal, on-topic, nothing outside those files. Emit `DOCS_READY: updated <files>` or `DOCS_READY: no changes`."
     allowed_tools = "read, write, edit, bash"
-    fidelity = "compact"
     model = "claude-sonnet-4-6"
   ]
 
   commit [
-    prompt = "Commit this run's work following AGENTS.md §Commit conventions. You are on a fresh thread — read state via git, not from prior-node conversation. Use `bash` for every git call (HEREDOC makes quoting survive).\n\nSteps:\n  1. `git status --short` — if empty, emit `COMMITTED: no changes` and stop.\n  2. `git diff --stat` — enumerate the files you will stage.\n  3. Pick the phase tag: `grep -n '^## Phase' docs/PLAN.md`, read the surrounding text, choose `[P<n>]` for the lowest-numbered phase whose verification bar this change advances. When uncertain, prefer the current in-progress phase.\n  4. Stage explicitly: `git add <path1> <path2> ...`. Never `git add .` or `git add -A`.\n  5. Commit with a HEREDOC so quoting survives:\n       git commit -m \"$(cat <<'EOF'\n       [P<n>] <imperative one-line subject, <=72 chars>\n\n       <optional body explaining why, wrapped at 72 cols. The body should stand on its own as the run summary — a future reader of `git log` should understand what changed and why without consulting events.jsonl.>\n       EOF\n       )\"\n     Rules: imperative mood (\"add X\", not \"added X\"); no `--no-verify`; no `Co-Authored-By` line; no marketing language.\n  6. If the pre-commit hook fails, fix the root cause (typecheck/lint/test error) — `edit` for a one-spot fix, `write` for whole-file rewrites — re-stage the fix, and create a NEW commit — never `git commit --amend`. Keep iterating on hook failures until the commit lands.\n  7. `git status` must be clean. Emit `COMMITTED: <short sha from git rev-parse --short HEAD>` as the final line.\n\nDo not run `git push`."
+    prompt = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: pick `[P<n>]` phase tag from docs/PLAN.md (prefer current in-progress phase on doubt), `git add` explicit paths, commit with a HEREDOC message (imperative subject ≤72 chars; body stands alone as run summary). No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Keep iterating until it lands. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    // commit has no outcome=fail exit — the only escape is success. Try
-    // hard (3 retries) so transient hook flakes don't abort the run.
-    max_retries = 3
     model = "claude-sonnet-4-6"
   ]
 
   merge [
-    prompt = "Rebase this worktree's branch onto main and fast-forward main to the new tip. You are on a fresh thread — read state via git. Use `bash` for every git call.\n\nPreconditions — emit a SKIP reason and stop if any fails:\n  1. `git rev-parse --is-inside-work-tree` must print `true` (otherwise `MERGE_SKIPPED: not a git work tree`).\n  2. Compare `git rev-parse --git-common-dir` vs `git rev-parse --git-dir`: if they match, this is the MAIN checkout, not a linked worktree. Emit `MERGE_SKIPPED: not a linked worktree, human merges main manually` and stop.\n  3. `current=$(git branch --show-current)`; if empty or equal to `main`, emit `MERGE_SKIPPED: on $current` and stop.\n  4. `git log main..HEAD --oneline` — if empty, emit `MERGE_SKIPPED: no commits ahead of main` and stop.\n\nRebase + conflict resolution loop (max 3 outer attempts for CAS retry, max 5 inner rounds for conflict resolution):\n  5. `old_main=$(git rev-parse main)` — capture current main tip for the compare-and-swap.\n  6. `git rebase \"$old_main\"`. If it stops on conflicts:\n       a. `git status --short` — identify UU/AA/DD paths.\n       b. For each conflicted file: `read` it, locate the `<<<<<<<` / `=======` / `>>>>>>>` markers (via `bash`: `grep -n '^<<<<<<<' <file>`), resolve by KEEPING CHANGES FROM BOTH SIDES whenever semantically possible — concatenate list entries, union import statements, merge type members. Only drop one side when the two literally contradict. Use `edit` to strip individual hunks or `write` to rewrite the whole file.\n       c. After editing, `git add <files>` then `git rebase --continue`.\n       d. If a round leaves conflicts unresolved, repeat (max 5 rounds). On exhaustion: `git rebase --abort` → emit `MERGE_BLOCKED: unresolvable conflicts in <files>` and a final line `<abort>merge conflicts unresolved</abort>`.\n  7. Once rebase is clean, atomically fast-forward main: `new_sha=$(git rev-parse HEAD)` then `git update-ref refs/heads/main \"$new_sha\" \"$old_main\"`. The trailing `$old_main` is the compare argument — update-ref only succeeds if main is still at $old_main, so a concurrent parallel run that already advanced main will make this fail. That is expected.\n  8. On update-ref failure (another worker won the race): the rebase we just did was on stale main. Loop back to step 5 and re-rebase on the new main tip. Max 3 outer attempts. If still failing: emit `MERGE_BLOCKED: lost CAS race 3 times, retry manually` and `<abort>merge race</abort>`.\n  9. Success: emit `MERGED: main -> $(git rev-parse --short HEAD) (was ${old_main:0:7})` as the final line.\n\nDo not run `git push`. Do not touch the reflog. Do not rewrite commits already on main."
+    prompt = "Rebase this worktree's branch onto main and fast-forward main. Fresh thread — read state via git.\n\nSkip (emit `MERGE_SKIPPED: <reason>` and stop) if:\n  - not inside a work tree\n  - `git-common-dir` == `git-dir` (main checkout, not a linked worktree)\n  - on `main` or detached\n  - no commits ahead of main\n\nOtherwise:\n  1. `old_main=$(git rev-parse main)`\n  2. `git rebase \"$old_main\"`. On conflicts, resolve by keeping both sides when semantically possible (concatenate lists, union imports, merge type members); only drop one side on literal contradiction. Max 5 conflict rounds. On exhaustion: `git rebase --abort` and emit `<abort>merge conflicts unresolved</abort>`.\n  3. `git update-ref refs/heads/main \"$(git rev-parse HEAD)\" \"$old_main\"` (CAS — fails if main advanced). On CAS failure, loop back to step 1. Max 3 outer attempts; on exhaustion emit `<abort>merge race</abort>`.\n  4. Emit `MERGED: <short-sha> (was ${old_main:0:7})`.\n\nDon't push."
     allowed_tools = "read, write, edit, bash"
-    // Try hard on transient CAS races / conflict re-rebases before falling
-    // through to `done` unconditionally.
-    max_retries = 3
     model = "claude-sonnet-4-6"
   ]
 
@@ -126,10 +65,8 @@ digraph build_feature {
 
   start -> plan
 
-  // Early exits: when plan / review emit `<abort>…</abort>`, the backend
-  // turns that into a `fail` outcome and we route straight to `done`. The
-  // unconditional edges below only fire on `outcome=success` because the
-  // condition-matched edges are evaluated first (see docs/SPEC.md §3.8).
+  // <abort> → outcome=fail → route straight to done. Condition edges are
+  // evaluated before unconditional ones (see docs/SPEC.md §3.8).
   plan -> done [condition="outcome=fail"]
   plan -> implement
 
@@ -141,9 +78,5 @@ digraph build_feature {
   verify -> done        [condition="outcome=fail"]
   update_docs -> commit
   commit -> merge
-  // commit + merge have no outcome=fail escapes — they retry hard and
-  // the unconditional `merge -> done` catches both success and terminal
-  // failure. If they truly can't land after `max_retries`, the run
-  // aborts rather than routing through a fail branch.
   merge -> done
 }

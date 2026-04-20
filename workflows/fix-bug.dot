@@ -1,46 +1,36 @@
 // fix-bug.dot — reproduce, fix, regression-test.
 //
-// Run:
 //   bun run packages/cli/bin/swarm.ts run workflows/fix-bug.dot \
 //     --input="bash tool hangs when command writes to stdin"
-//
-// Tool surface (agent-callable): read / write / edit / bash.
 
 digraph fix_bug {
   graph [
-    goal        = "Turn a bug report into a minimal regression test + fix that leaves CI green."
-    label       = "fix-bug"
-    default_fidelity = "compact"
-    default_max_retries = 1
-    retry_target = "fix"
+    goal  = "Turn a bug report into a minimal regression test + fix that leaves CI green."
+    label = "fix-bug"
   ]
 
   start [shape=Mdiamond]
 
   reproduce [
-    prompt = "Bug report: $ARGUMENTS\n\nStep 1 — Reproduce.\n  - Use `bash` (`rg`, `grep -rn`, `ls`, `find`) to find the code paths that match the bug description, and `read` to inspect them.\n  - If a reproducer already exists (a failing test), describe where.\n  - Otherwise, write a new failing test (prefer test/ next to the affected source) with `write`. Run `bun test ./packages/<pkg>` via `bash` and confirm it fails.\n  - Output: (1) the affected package + file, (2) the reproducer test path, (3) the failing assertion text."
+    prompt = "Bug: $ARGUMENTS. Locate the affected package, write a failing test next to the source (or find an existing one), confirm it fails. Output: (1) package+file, (2) test path, (3) failing assertion."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 1
     thread_id = "dev"
   ]
 
   fix [
-    prompt = "Fix plan: $reproduce.output.\n\nRules:\n  - Use `edit` for surgical changes (include enough surrounding context that `old_string` is unique) and `write` only for whole-file rewrites.\n  - Do not modify the reproducer test unless it was itself wrong.\n  - After each edit, run the reproducer test via `bash`. When it passes, run the full package suite.\n  - Do not touch packages outside the one where the bug lives.\n\nOutput a concise description of the fix."
+    prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer, then the full package suite. Stay in the bug's package."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 2
     thread_id = "dev"
   ]
 
   verify [
-    prompt = "Run `bun run ci` via `bash`. If green, emit `CI_GREEN`. If not, diagnose (`read` the failure, `edit` the code) and re-run until it passes. Max 3 iterations here."
+    prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
-    max_retries = 2
-    goal_gate = true
     thread_id = "dev"
   ]
 
   summarize [
-    prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md with:\n  - Bug: $ARGUMENTS\n  - Root cause\n  - Fix (which file(s) / line(s))\n  - Regression test added\n\nUse `write`."
+    prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: bug, root cause, fix (file:line), regression test."
     allowed_tools = "write"
     fidelity = "truncate"
   ]
@@ -49,6 +39,6 @@ digraph fix_bug {
 
   start -> reproduce -> fix -> verify
   verify -> summarize [condition="outcome=success"]
-  verify -> done [condition="outcome=fail"]
+  verify -> done      [condition="outcome=fail"]
   summarize -> done
 }
