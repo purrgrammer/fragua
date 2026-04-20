@@ -88,6 +88,7 @@ export function SidebarProvider({
       if (onOpenChange) onOpenChange(next);
       else setInternalOpen(next);
       if (typeof document !== "undefined") {
+        // biome-ignore lint/suspicious/noDocumentCookie: shadcn sidebar persists open state via cookie
         document.cookie = `${SIDEBAR_COOKIE_NAME}=${next}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
       }
     },

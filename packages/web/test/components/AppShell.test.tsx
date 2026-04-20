@@ -24,6 +24,7 @@ describe("AppShell + AppSidebar", () => {
     // Reset the persisted sidebar state so each test starts from
     // `defaultOpen=true` (cookie reads happen on first render).
     if (typeof document !== "undefined") {
+      // biome-ignore lint/suspicious/noDocumentCookie: test resets sidebar persistence cookie
       document.cookie = "sidebar:state=; max-age=0; path=/";
     }
   });
