@@ -278,6 +278,28 @@ describe("SqliteStore — appendObservabilityEvents", () => {
     expect(() => store.appendObservabilityEvents("no-such-run", [{ type: "llm.text_delta", payload: {} }])).toThrow();
     store.close();
   });
+
+  test("oversized payload is truncated, not rejected — keeps batch flowing", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const huge = "x".repeat(8000);
+    const res = store.appendObservabilityEvents(runId, [
+      { type: "agent.turn_start", payload: { nodeId: "n1", iteration: 0 } },
+      { type: "llm.start", payload: { nodeId: "n1", iteration: 0, system_prompt: huge } },
+      { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "ok" } },
+    ]);
+    expect(res.seqs).toHaveLength(3);
+    const events = store.getEvents(runId);
+    const llmStart = events.find((e) => e.type === "llm.start");
+    expect(llmStart).toBeDefined();
+    const payload = llmStart!.payload as Record<string, unknown>;
+    expect(payload["_truncated"]).toBe(true);
+    expect(payload["_original_bytes"]).toBeGreaterThan(4096);
+    expect(payload["nodeId"]).toBe("n1");
+    expect(payload["iteration"]).toBe(0);
+    expect(payload["system_prompt"]).toBeUndefined();
+    store.close();
+  });
 });
 
 describe("SqliteStore — artifacts & blobs", () => {

@@ -1,5 +1,6 @@
 // PiCodergenBackend — CodergenBackend backed by pi-agent-core + pi-ai.
 
+import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
@@ -297,22 +298,39 @@ export class PiCodergenBackend implements CodergenBackend {
       ...(sessionId !== undefined ? { sessionId } : {}),
     });
 
+    // Persist the system prompt as a role='system' message so the full
+    // text is recoverable from the messages table. Keeps `llm.start`
+    // under the 4KB event cap (§I7) — prior turns + a sizable
+    // system_prompt easily blow past it. The messages table is
+    // unbounded (§I9), so full content lives there.
+    if (input.persistMessage && systemPrompt.length > 0) {
+      input.persistMessage("system", systemPrompt);
+    }
+
     // Emit the resolved LLM-call snapshot. See docs/SPEC.md §3.5 for the
     // contract. Adding fields is additive — schema_version on the
     // envelope only bumps on incompatible renames/removals.
+    //
+    // Large fields are NOT inlined:
+    //   - `system_prompt` → persisted as a role='system' message; the
+    //     envelope carries sha256 + byte length for verification.
+    //   - prior transcript snapshot → fully duplicated in the messages
+    //     table; dropping it avoids O(N²) blow-up on threaded nodes.
     if (input.emit) {
+      const systemPromptBytes = Buffer.byteLength(systemPrompt, "utf8");
       const llmStart: Record<string, unknown> = {
         provider,
         model: modelId,
         prompt: effectivePrompt,
-        system_prompt: systemPrompt,
+        system_prompt_sha256: sha256Hex(systemPrompt),
+        system_prompt_bytes: systemPromptBytes,
       };
       if (threadId) llmStart["thread_id"] = threadId;
       if (allow) llmStart["allowed_tools"] = allow;
       if (deny) llmStart["denied_tools"] = deny;
       if (input.iteration) llmStart["iteration"] = input.iteration;
-      const priorSnapshot = agent.state.messages.map((m) => jsonSafe(m));
-      if (priorSnapshot.length > 0) llmStart["messages"] = priorSnapshot;
+      const priorMessageCount = agent.state.messages.length;
+      if (priorMessageCount > 0) llmStart["prior_message_count"] = priorMessageCount;
       const settings = captureSettings(input.node.attrs);
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
@@ -584,20 +602,8 @@ export function parseAbortMarker(text: string): { reason: string } | null {
   return { reason: oneLine.length > 0 ? oneLine : "agent aborted without a reason" };
 }
 
-/** JSON round-trip a value so the captured copy is detached from live
- * agent state and guaranteed JSON-safe. Functions / symbols / undefineds
- * inside content blocks get stripped by JSON.stringify; anything that
- * throws falls back to a minimal record so a single unserialisable
- * message doesn't take down the whole snapshot. */
-function jsonSafe(value: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    // Typical cause: a Symbol or BigInt lurking in content. The role is
-    // still worth preserving.
-    const role = (value as { role?: unknown } | null)?.role;
-    return { role: typeof role === "string" ? role : "unknown", unserialisable: true };
-  }
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** Read generation settings from node attrs, returning `undefined` when

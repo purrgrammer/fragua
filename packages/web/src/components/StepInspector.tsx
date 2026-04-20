@@ -116,11 +116,13 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
         <Section title="Prompt">
           <pre className="whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded text-xs">{step.prompt}</pre>
         </Section>
-        <Section title="System prompt">
-          <pre className="whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded text-xs">
-            {step.systemPrompt}
-          </pre>
-        </Section>
+        {step.systemPrompt && (
+          <Section title="System prompt">
+            <pre className="whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded text-xs">
+              {step.systemPrompt}
+            </pre>
+          </Section>
+        )}
         {step.messages.length > 0 && (
           <Section title={`Prior messages (${step.messages.length})`}>
             <ul className="flex flex-col gap-1">

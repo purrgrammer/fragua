@@ -168,6 +168,7 @@ export class SqliteStore implements IEventStore {
     const seqs: number[] = [];
     const startAt = performance.now();
 
+    const truncated: { type: string; bytes: number }[] = [];
     this.writeTxn(() => {
       const row = this.selectRunRow(runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
@@ -175,7 +176,18 @@ export class SqliteStore implements IEventStore {
         if (typeof event.type !== "string" || event.type.length === 0) {
           throw new Error("observability event.type must be a non-empty string");
         }
-        const payload = this.validatePayload(event.payload);
+        // One oversized event must not tank the rest of the batch. Swap
+        // the payload for a truncation marker that keeps routing info
+        // (nodeId, iteration) so UI step-grouping still works. Full
+        // content for llm turns is already in the `messages` table.
+        let payload: string;
+        try {
+          payload = this.validatePayload(event.payload);
+        } catch (err) {
+          if (!(err instanceof PayloadTooLargeError)) throw err;
+          truncated.push({ type: event.type, bytes: err.sizeBytes });
+          payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
+        }
         const seq = this.bumpSeq(runId);
         seqs.push(seq);
         this.db
@@ -183,6 +195,14 @@ export class SqliteStore implements IEventStore {
           .run(runId, seq, event.type, payload, ts);
       }
     });
+    if (truncated.length > 0) {
+      for (const t of truncated) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[store] truncated oversized observability event for run ${runId}: type=${t.type} bytes=${t.bytes} cap=${MAX_EVENT_PAYLOAD_BYTES}`,
+        );
+      }
+    }
     this.metrics.recordWrite(performance.now() - startAt, "fact");
 
     if (seqs.length > 0) this.emitCommit(runId, seqs[seqs.length - 1]!);
@@ -835,4 +855,20 @@ export class SqliteStore implements IEventStore {
       }
     });
   }
+}
+
+/** Replacement payload for an oversized observability event. Preserves
+ * the routing fields UIs need to group steps (nodeId, iteration) and
+ * stamps an explicit truncation marker so consumers don't silently read
+ * fabricated data. Full LLM content is reconstructable from the
+ * `messages` table, which is uncapped. */
+function truncationMarker(original: unknown, originalBytes: number): Record<string, unknown> {
+  const out: Record<string, unknown> = { _truncated: true, _original_bytes: originalBytes };
+  if (original != null && typeof original === "object") {
+    const src = original as Record<string, unknown>;
+    if (typeof src["nodeId"] === "string") out["nodeId"] = src["nodeId"];
+    if (typeof src["iteration"] === "number") out["iteration"] = src["iteration"];
+    if (typeof src["content_index"] === "number") out["content_index"] = src["content_index"];
+  }
+  return out;
 }
