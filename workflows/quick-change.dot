@@ -23,7 +23,7 @@ digraph quick_change {
     prompt = "Task from user (authoritative — do NOT substitute): $ARGUMENTS\n\nIf $ARGUMENTS is empty or the target is ill-specified, STOP immediately. Emit `IMPLEMENT_BLOCKED: <one-line reason>` AND a final line `<abort>missing or blocked target: short reason</abort>` so the executor terminates the run. Do NOT pick a different task — silent retargeting is a bug.\n\nThis workflow is for SMALL, self-contained changes. If the task actually needs exploration, a plan, or a reviewer loop, STOP and emit `<abort>task too large for quick-change: use build-feature instead</abort>`.\n\nRepo conventions from AGENTS.md are prepended as <project-conventions> above — follow them.\n\nSteps:\n  1. Read only the files you need to touch (use local:read_file; local:bash for `git ls-files` / `grep` if you need to locate them).\n  2. Make the change with local:write_file. Stay inside the smallest set of packages that the task requires.\n  3. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package and fix any errors.\n  4. Do NOT modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md — if the change needs doc updates, it's too large for this workflow.\n\nEmit a one-line `IMPLEMENTED: <short description>` when done."
     allowed_tools = "local:read_file, local:write_file, local:bash"
     thread_id = "dev"
-    model = "anthropic/claude-haiku-4.5"
+    model = "anthropic/claude-sonnet-4.6"
   ]
 
   verify [
@@ -32,14 +32,14 @@ digraph quick_change {
     max_retries = 2
     goal_gate = true
     thread_id = "dev"
-    model = "anthropic/claude-haiku-4.5"
+    model = "anthropic/claude-sonnet-4.6"
   ]
 
   commit [
     prompt = "Commit this run's work following AGENTS.md §Commit conventions. You are on a fresh thread — read state via git, not from prior-node conversation. Use local:bash for every git call.\n\nSteps:\n  1. `git status --short` — if there are no changes, emit `COMMITTED: no changes` and stop.\n  2. `git diff --stat` — enumerate the files you will stage.\n  3. Pick the phase tag: `grep -n '^## Phase' docs/PLAN.md`, read the surrounding text, and choose `[P<n>]` for the lowest-numbered phase whose verification bar this change advances. When uncertain, prefer the current in-progress phase over speculating about later ones.\n  4. Stage explicitly: `git add <path1> <path2> ...`. Never `git add .` or `git add -A`.\n  5. Commit with a HEREDOC so quoting survives:\n       git commit -m \"$(cat <<'EOF'\n       [P<n>] <imperative one-line subject, <=72 chars>\n\n       <optional body explaining why, wrapped at 72 cols. Keep it short — this is a small change.>\n       EOF\n       )\"\n     Rules: imperative mood (\"add X\", not \"added X\"); no `--no-verify`; no `Co-Authored-By` line; no marketing language.\n  6. If the pre-commit hook fails, fix the root cause (typecheck/lint/test error) with local:write_file, re-stage the fix, and create a NEW commit — never `git commit --amend`. One retry only; if it still fails, emit `COMMIT_FAILED: <short reason>` and stop.\n  7. `git status` must be clean. Emit `COMMITTED: <short sha from git rev-parse --short HEAD>` as the final line.\n\nDo not run `git push`."
     allowed_tools = "local:read_file, local:write_file, local:bash"
     max_retries = 1
-    model = "anthropic/claude-haiku-4.5"
+    model = "anthropic/claude-sonnet-4.6"
   ]
 
   merge [
@@ -48,7 +48,7 @@ digraph quick_change {
     // 1 initial + 2 retries = 3 attempts against CAS races / conflict
     // re-rebases before falling through to `done`.
     max_retries = 3
-    model = "anthropic/claude-haiku-4.5"
+    model = "anthropic/claude-sonnet-4.6"
   ]
 
   done [shape=Msquare]
