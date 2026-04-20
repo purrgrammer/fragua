@@ -8,3 +8,4 @@ export * from "./providers.ts";
 export * from "./summariser.ts";
 export * from "./system-prompt.ts";
 export * from "./tool-adapter.ts";
+export * from "./workflow-model-validator.ts";

@@ -58,6 +58,64 @@ describe("POST /workflows — upload", () => {
     const b = (await (await req("POST", "/workflows", { name: "x", dotSource: src })).json()) as { sha: string };
     expect(a.sha).toBe(b.sha);
   });
+
+  test("validator rejects a workflow with unresolved model IDs", async () => {
+    // Inject a stub validator — mirrors the daemon wiring. Production
+    // uses @swarm/agent's validateWorkflowModels, but @swarm/server
+    // stays pi-ai-free.
+    const localStore = new SqliteStore({ path: ":memory:" });
+    const local = createRoutes({
+      store: localStore,
+      validateWorkflowModels: (dotSource) => {
+        if (dotSource.includes("claude-sonnet-4-6")) {
+          return {
+            ok: false as const,
+            offenders: [
+              {
+                nodeId: "impl",
+                provider: "openrouter",
+                model: "claude-sonnet-4-6",
+                reason: "unknown model",
+              },
+            ],
+          };
+        }
+        return { ok: true as const };
+      },
+    });
+
+    const badRes = await local.fetch(
+      new Request("http://test/workflows", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "bad",
+          dotSource: `digraph { impl [shape=box, model="claude-sonnet-4-6", provider="openrouter"]; }`,
+        }),
+      }),
+    );
+    expect(badRes.status).toBe(400);
+    const badBody = (await badRes.json()) as {
+      code: string;
+      offenders: Array<{ nodeId: string; model: string }>;
+    };
+    expect(badBody.code).toBe("model_unresolved");
+    expect(badBody.offenders).toHaveLength(1);
+    expect(badBody.offenders[0]?.nodeId).toBe("impl");
+    expect(badBody.offenders[0]?.model).toBe("claude-sonnet-4-6");
+
+    // The good path still accepts.
+    const goodRes = await local.fetch(
+      new Request("http://test/workflows", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "good", dotSource: "digraph { a -> b }" }),
+      }),
+    );
+    expect(goodRes.status).toBe(200);
+
+    localStore.close();
+  });
 });
 
 describe("POST /runs — enqueue", () => {

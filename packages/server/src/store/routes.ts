@@ -10,6 +10,13 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
 
+/** Per-node model-resolution check injected by the daemon. Returns a
+ * non-empty array of node-level offenders when one or more declared
+ * `(provider, model)` pairs don't resolve in the provider registry. */
+export type WorkflowModelValidator = (dotSource: string) =>
+  | { ok: true }
+  | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
+
 export interface ServerDeps {
   store: IEventStore;
   /** Poll interval for SSE streams in ms. */
@@ -25,6 +32,15 @@ export interface ServerDeps {
    * can check per-workflow provider overrides.
    */
   preflightProviders?: () => { ok: true } | { ok: false; detail: string };
+  /**
+   * Validate every codergen node's `(provider, model)` declaration at
+   * workflow registration. Rejects typos that would otherwise only
+   * surface mid-run (after an expensive `plan` phase already spent
+   * tokens). Injected rather than imported so @swarm/server stays
+   * free of the pi-ai dependency; the daemon wires in the real
+   * resolver on startup.
+   */
+  validateWorkflowModels?: WorkflowModelValidator;
 }
 
 const DEFAULT_SSE_POLL_MS = 100;
@@ -72,6 +88,19 @@ export function createRoutes(deps: ServerDeps): Hono {
       body.dotSource.length === 0
     ) {
       return c.json({ error: "name and dotSource required" }, 400);
+    }
+    if (deps.validateWorkflowModels != null) {
+      const check = deps.validateWorkflowModels(body.dotSource);
+      if (!check.ok) {
+        return c.json(
+          {
+            error: "workflow has unresolved model declarations",
+            code: "model_unresolved",
+            offenders: check.offenders,
+          },
+          400,
+        );
+      }
     }
     const sha = sha256Hex(body.dotSource);
     deps.store.saveWorkflow(sha, body.name, body.dotSource);

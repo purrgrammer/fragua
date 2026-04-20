@@ -34,6 +34,12 @@ export interface ServerOptions {
    * resolver returns `ok: false`. The CLI's `serve` / `daemon` commands
    * wire `envProviderPreflight` by default; leave unset in tests. */
   preflightProviders?: () => { ok: true } | { ok: false; detail: string };
+  /** Optional workflow-registration validator. When set, POST /workflows
+   * rejects with code="model_unresolved" if any codergen node declares a
+   * `(provider, model)` pair the provider registry doesn't recognise.
+   * The CLI's `daemon` command wires in the real pi-ai-backed resolver;
+   * tests can omit it or inject a stub. */
+  validateWorkflowModels?: import("./store/routes.ts").WorkflowModelValidator;
 }
 
 function buildApiApp(opts: ServerOptions): Hono {
@@ -50,6 +56,7 @@ function buildApiApp(opts: ServerOptions): Hono {
     createStoreRoutes({
       store: opts.store,
       ...(opts.preflightProviders !== undefined ? { preflightProviders: opts.preflightProviders } : {}),
+      ...(opts.validateWorkflowModels !== undefined ? { validateWorkflowModels: opts.validateWorkflowModels } : {}),
     }),
   );
   return api;
@@ -163,6 +170,7 @@ export {
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export { envProviderPreflight } from "./store/routes.ts";
+export type { WorkflowModelValidator } from "./store/routes.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,
