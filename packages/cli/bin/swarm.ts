@@ -115,13 +115,19 @@ cli
   });
 
 cli
-  .command("run <workflow>", "Upload a DOT workflow, enqueue a run, stream events to stdout")
+  .command(
+    "run <workflow> [...input]",
+    "Upload a DOT workflow, enqueue a run, stream events to stdout. " +
+      "Trailing positional args are joined with ' ' and piped into the workflow's " +
+      "\\$ARGUMENTS token (overridden by --input when both are given)",
+  )
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
+  .option("--input <text>", "Explicit \\$ARGUMENTS value — wins over trailing positional args")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
   .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
-  .action(async (workflow: string, options: Record<string, unknown>) => {
+  .action(async (workflow: string, positional: string[], options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
@@ -133,12 +139,16 @@ cli
         : typeof priorityRaw === "string"
           ? Number.parseInt(priorityRaw, 10)
           : undefined;
+    const explicit = pick("input");
+    const joined = Array.isArray(positional) && positional.length > 0 ? positional.join(" ") : undefined;
+    const input = explicit ?? joined;
     const code = await runCommand({
       workflow,
       ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
       ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(input !== undefined ? { input } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),
     });

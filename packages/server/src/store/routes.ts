@@ -50,17 +50,24 @@ export function createRoutes(deps: ServerDeps): Hono {
       priority?: number;
       runId?: string;
       routing?: Record<string, unknown>;
+      /** Positional input — lands in `routing.input`, where the
+       * executor's buildSubstitutionArgs() picks it up as $ARGUMENTS. */
+      input?: string;
     }>(c);
     if (!body || typeof body.workflowSha !== "string") {
       return c.json({ error: "workflowSha required" }, 400);
     }
     const runId = body.runId ?? newRunId();
+    const initialRouting: Record<string, unknown> = { ...(body.routing ?? {}) };
+    if (typeof body.input === "string" && initialRouting["input"] === undefined) {
+      initialRouting["input"] = body.input;
+    }
     try {
       deps.store.enqueueRun({
         runId,
         workflowSha: body.workflowSha,
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
-        ...(body.routing !== undefined ? { initialRouting: body.routing } : {}),
+        ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
       });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

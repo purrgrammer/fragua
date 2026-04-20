@@ -129,4 +129,33 @@ describe("swarm run", () => {
       await r.close();
     }
   });
+
+  test("opts.input is carried into routing.input on the enqueued run", async () => {
+    const r = await rig();
+    try {
+      const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
+      tmps.push(workflowDir);
+      const dotPath = join(workflowDir, "echo.dot");
+      writeFileSync(dotPath, `digraph { start [shape=Mdiamond]; end [shape=Msquare]; start -> end; }`);
+
+      const code = await runCommand({
+        workflow: dotPath,
+        url: r.url,
+        follow: false,
+        input: "rename foo to bar",
+      });
+      expect(code).toBe(0);
+      // Peek at the most-recently-enqueued run. The round-trip test above
+      // also enqueues one; isolate by checking the max-seq intent payload.
+      const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
+      const row = db
+        .query<{ run_id: string }, []>(`SELECT run_id FROM run_state ORDER BY enqueued_at DESC LIMIT 1`)
+        .get();
+      expect(row).not.toBeNull();
+      const state = r.store.getState(row!.run_id);
+      expect(state!.routing["input"]).toBe("rename foo to bar");
+    } finally {
+      await r.close();
+    }
+  });
 });

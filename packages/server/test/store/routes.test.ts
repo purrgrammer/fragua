@@ -82,6 +82,34 @@ describe("POST /runs — enqueue", () => {
     const res = await req("POST", "/runs", { workflowSha: "nonexistent" });
     expect(res.status).toBe(400);
   });
+
+  test("body.input lands on routing.input — the $ARGUMENTS bridge", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf", input: "rename foo to bar" });
+    expect(res.status).toBe(200);
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect(state).not.toBeNull();
+    expect(state!.routing["input"]).toBe("rename foo to bar");
+  });
+
+  test("explicit routing.input wins over body.input", async () => {
+    const res = await req("POST", "/runs", {
+      workflowSha: "wf",
+      input: "ignored",
+      routing: { input: "explicit", start_node: "s" },
+    });
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect(state!.routing["input"]).toBe("explicit");
+    expect(state!.routing["start_node"]).toBe("s");
+  });
+
+  test("no input → no routing.input key", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf" });
+    const { runId } = (await res.json()) as { runId: string };
+    const state = store.getState(runId);
+    expect("input" in state!.routing).toBe(false);
+  });
 });
 
 describe("intent-write routes", () => {
