@@ -161,6 +161,8 @@ export {
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export { envProviderPreflight } from "./store/routes.ts";
+export { DEFAULT_REAP_TTL_MS, reapStaleDaemon } from "./reaper.ts";
+export type { ReapOptions, ReapResult } from "./reaper.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,

@@ -25,6 +25,7 @@
 
 import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
+import { reapStaleDaemon } from "../reaper.ts";
 
 /** Daemons heartbeat at ~10s; treat 30s without one as dead. Matches
  * `DEFAULT_LOCK_TTL_MS` in `@swarm/daemon`. */
@@ -63,6 +64,11 @@ export function daemonInfoFromStore(opts: DaemonInfoFromStoreOptions): () => Hea
     const lock = opts.store.currentDaemonLock();
     if (lock == null) throw new Error("daemon not running");
     if (now() - lock.heartbeatAt > ttl) {
+      // Stale heartbeat: the daemon died without releasing. Sweep any
+      // runs it had in flight and clear the lock row so the next
+      // `swarm daemon` doesn't have to wait out the TTL. Idempotent —
+      // safe to fire on every /health request when the lock is stale.
+      reapStaleDaemon({ store: opts.store, ttlMs: ttl, now });
       throw new Error("daemon heartbeat stale");
     }
     const counts = opts.store.runStateCounts();
