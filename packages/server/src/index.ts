@@ -12,7 +12,7 @@ import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
-import { envProviderPreflight, createRoutes as createStoreRoutes } from "./store/routes.ts";
+import { createRoutes as createStoreRoutes } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
 
 export interface ServerOptions {
@@ -144,6 +144,8 @@ export type {
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";
+export type { ReapOptions, ReapResult } from "./reaper.ts";
+export { DEFAULT_REAP_TTL_MS, reapStaleDaemon } from "./reaper.ts";
 export type {
   DaemonInfoFromStoreOptions,
   HealthDaemonInfo,
@@ -161,8 +163,6 @@ export {
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export { envProviderPreflight } from "./store/routes.ts";
-export { DEFAULT_REAP_TTL_MS, reapStaleDaemon } from "./reaper.ts";
-export type { ReapOptions, ReapResult } from "./reaper.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,

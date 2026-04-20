@@ -251,7 +251,11 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
   test("(I1) no nextNode option + no override → result.nextNode undefined", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inv-1", store, "n1");
-    const backend: CodergenBackend = { async run() { return ok({}); } };
+    const backend: CodergenBackend = {
+      async run() {
+        return ok({});
+      },
+    };
     const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("transition");
@@ -262,7 +266,11 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
   test("(I2) nextNode option alone propagates when no override is set", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inv-2", store, "n1");
-    const backend: CodergenBackend = { async run() { return ok({}); } };
+    const backend: CodergenBackend = {
+      async run() {
+        return ok({});
+      },
+    };
     const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "legacy-target", backend });
     const result = await spec.handler(ctx);
     if (result.kind === "transition") expect(result.nextNode).toBe("legacy-target");
@@ -273,7 +281,9 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-inv-3", store, "n1");
     const backend: CodergenBackend = {
-      async run() { return ok({ next_node_override: "override-target" }); },
+      async run() {
+        return ok({ next_node_override: "override-target" });
+      },
     };
     const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "legacy-target", backend });
     const result = await spec.handler(ctx);

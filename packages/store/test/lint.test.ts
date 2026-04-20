@@ -44,20 +44,19 @@ function collectSources(root: string): string[] {
 function* txnBodies(source: string): IterableIterator<string> {
   // Shape A: .transaction(() => { ... })()
   const TXN_RE = /\.transaction\s*\(\s*\(\s*\)\s*=>\s*\{/g;
-  let match: RegExpExecArray | null;
-  while ((match = TXN_RE.exec(source)) != null) {
+  for (const match of source.matchAll(TXN_RE)) {
     const start = match.index + match[0].length;
     const end = matchBrace(source, start - 1);
     if (end > start) yield source.slice(start, end);
   }
   // Shape B: BEGIN IMMEDIATE ... COMMIT wrapped in a try block
-  const BEGIN = /this\.db\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[^]*?this\.db\.exec\(\s*["']COMMIT["']\s*\)/g;
-  while ((match = BEGIN.exec(source)) != null) {
+  const BEGIN = /this\.db\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[\s\S]*?this\.db\.exec\(\s*["']COMMIT["']\s*\)/g;
+  for (const match of source.matchAll(BEGIN)) {
     yield match[0];
   }
   // Shape C: db.exec("BEGIN IMMEDIATE") ... db.exec("COMMIT") via free db var
-  const BEGIN2 = /\bdb\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[^]*?\bdb\.exec\(\s*["']COMMIT["']\s*\)/g;
-  while ((match = BEGIN2.exec(source)) != null) {
+  const BEGIN2 = /\bdb\.exec\(\s*["']BEGIN IMMEDIATE["']\s*\)[\s\S]*?\bdb\.exec\(\s*["']COMMIT["']\s*\)/g;
+  for (const match of source.matchAll(BEGIN2)) {
     yield match[0];
   }
 }

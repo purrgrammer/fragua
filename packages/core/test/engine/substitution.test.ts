@@ -141,7 +141,10 @@ describe("collectReferences", () => {
 // accidentally form a token boundary that would block substitution. The
 // token regex guards with `(?![A-Za-z0-9_])`, so "foo$ARGUMENTSbar" doesn't
 // substitute — filler must not be a word character to keep properties sound.
-const plainText = fc.string({ unit: fc.constantFrom(" ", "-", ":", "=", "\n", "/", "?", "!", "(", ")"), maxLength: 20 });
+const plainText = fc.string({
+  unit: fc.constantFrom(" ", "-", ":", "=", "\n", "/", "?", "!", "(", ")"),
+  maxLength: 20,
+});
 
 describe("substitute — properties", () => {
   test("idempotent on tokenless templates", () => {

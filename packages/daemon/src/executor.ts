@@ -396,11 +396,18 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       if (!ok) continue; // OCC retry — rebuild from fresh state
     }
   } finally {
-    // Worktree dispose disabled: a hallucinated run that emits a
-    // well-formed terminator is currently indistinguishable from a real
-    // one, and auto-dispose erases the forensics needed to tell them
-    // apart. Keep the worktree + branch around until the executor can
-    // verify terminal outcomes against real git state.
+    // Dispose the worktree env when the run reaches a hard-terminal
+    // status. We intentionally skip dispose on paused_hitl so the env
+    // survives across HITL pauses and the same worktree can be reused
+    // on resume. completed / cancelled / halted / quarantined are all
+    // truly terminal — the run will never execute another node.
+    if (opts.provisioner) {
+      const finalState = opts.store.getState(runId);
+      const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
+      if (finalState != null && terminalStatuses.has(finalState.status)) {
+        await opts.provisioner.dispose(runId);
+      }
+    }
   }
 }
 

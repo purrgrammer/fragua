@@ -163,8 +163,22 @@ describe("eventsToSteps", () => {
         nodeId: "n1",
         prompt: "q",
         skills: [
-          { name: "design", location: "~/.agents/skills/design", sha256: "abc", bytes: 10, scope: "user", source_dir: "~/.agents" },
-          { name: "frontend", location: "./.agents/skills/frontend", sha256: "def", bytes: 20, scope: "bogus", source_dir: "." },
+          {
+            name: "design",
+            location: "~/.agents/skills/design",
+            sha256: "abc",
+            bytes: 10,
+            scope: "user",
+            source_dir: "~/.agents",
+          },
+          {
+            name: "frontend",
+            location: "./.agents/skills/frontend",
+            sha256: "def",
+            bytes: 20,
+            scope: "bogus",
+            source_dir: ".",
+          },
         ],
       }),
     ];

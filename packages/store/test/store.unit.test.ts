@@ -248,7 +248,12 @@ describe("SqliteStore — appendObservabilityEvents", () => {
     const s = store.getState(runId)!;
     store.appendFact(
       runId,
-      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: CURRENT_SCHEMA_VERSION, startNode: "n1" } }],
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", schemaVersion: CURRENT_SCHEMA_VERSION, startNode: "n1" },
+        },
+      ],
       s.version,
     );
     const obs1 = store.appendObservabilityEvents(runId, [
@@ -264,17 +269,13 @@ describe("SqliteStore — appendObservabilityEvents", () => {
   test("rejects an event with an empty type string", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
-    expect(() =>
-      store.appendObservabilityEvents(runId, [{ type: "", payload: {} }]),
-    ).toThrow();
+    expect(() => store.appendObservabilityEvents(runId, [{ type: "", payload: {} }])).toThrow();
     store.close();
   });
 
   test("rejects writes to unknown runId", async () => {
     const store = freshStore();
-    expect(() =>
-      store.appendObservabilityEvents("no-such-run", [{ type: "llm.text_delta", payload: {} }]),
-    ).toThrow();
+    expect(() => store.appendObservabilityEvents("no-such-run", [{ type: "llm.text_delta", payload: {} }])).toThrow();
     store.close();
   });
 });

@@ -163,7 +163,9 @@ async function raceForFirstSuccess(
   abort: AbortController,
 ): Promise<ParallelBranchResult[]> {
   const pending = new Map<Promise<ParallelBranchResult>, number>();
-  branches.forEach((p, i) => pending.set(p, i));
+  branches.forEach((p, i) => {
+    pending.set(p, i);
+  });
   const results: ParallelBranchResult[] = new Array(branches.length);
 
   while (pending.size > 0) {

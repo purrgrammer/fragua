@@ -259,7 +259,6 @@ function handlerKindOf(attrs: { shape?: string; type?: string }): string {
       return "parallel";
     case "tripleoctagon":
       return "parallel.fan_in";
-    case "box":
     default:
       return "codergen";
   }

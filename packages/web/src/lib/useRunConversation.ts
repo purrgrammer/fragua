@@ -129,8 +129,7 @@ function toRawEvent(type: string, data: string): RawEvent | null {
     if (!parsed || typeof parsed !== "object") return null;
     const payload = (parsed["payload"] ?? null) as Record<string, unknown> | null;
     const nodeId = payload && typeof payload["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
-    const sessionId =
-      payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
+    const sessionId = payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
     return {
       type: String(parsed["type"] ?? type),
       node_id: nodeId,
@@ -161,8 +160,7 @@ function coerceRawEvents(items: readonly unknown[]): RawEvent[] {
     if (typeof o["type"] !== "string") continue;
     const payload = (o["payload"] ?? null) as Record<string, unknown> | null;
     const nodeId = payload && typeof payload["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
-    const sessionId =
-      payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
+    const sessionId = payload && typeof payload["session_id"] === "string" ? (payload["session_id"] as string) : null;
     out.push({
       type: o["type"],
       node_id: nodeId,

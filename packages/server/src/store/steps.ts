@@ -153,7 +153,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     if (ev.type === "cost.recorded") {
       const cost = costField(data);
       if (cost) step.cost = cost;
-      continue;
     }
   }
 

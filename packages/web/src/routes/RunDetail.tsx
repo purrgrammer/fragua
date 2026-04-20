@@ -9,7 +9,7 @@
 
 import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -30,6 +30,7 @@ export function RunDetail(): JSX.Element {
   const { id = "" } = useParams();
   const [view, setView] = useState<TabId>("conversation");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const tabPrefix = useId();
 
   const { conversation, status: convStatus, totalEvents, controlEvents } = useRunConversation(id || null);
   const isLoading = convStatus === "loading";
@@ -92,16 +93,16 @@ export function RunDetail(): JSX.Element {
       {!(isError && !detail) && (
         <>
           <div role="tablist" aria-label="Detail view" className="flex gap-2 text-xs">
-            <TabButton current={view} id="conversation" onSelect={setView}>
+            <TabButton current={view} tabId="conversation" domId={`${tabPrefix}-conversation`} onSelect={setView}>
               Conversation
             </TabButton>
-            <TabButton current={view} id="events" onSelect={setView}>
+            <TabButton current={view} tabId="events" domId={`${tabPrefix}-events`} onSelect={setView}>
               Events
             </TabButton>
-            <TabButton current={view} id="graph" onSelect={setView}>
+            <TabButton current={view} tabId="graph" domId={`${tabPrefix}-graph`} onSelect={setView}>
               Graph
             </TabButton>
-            <TabButton current={view} id="steps" onSelect={setView}>
+            <TabButton current={view} tabId="steps" domId={`${tabPrefix}-steps`} onSelect={setView}>
               Steps
             </TabButton>
           </div>
@@ -138,12 +139,14 @@ export function RunDetail(): JSX.Element {
 
 function TabButton({
   current,
-  id,
+  tabId,
+  domId,
   onSelect,
   children,
 }: {
   current: TabId;
-  id: TabId;
+  tabId: TabId;
+  domId: string;
   onSelect: (t: TabId) => void;
   children: React.ReactNode;
 }): JSX.Element {
@@ -151,10 +154,11 @@ function TabButton({
     <button
       type="button"
       role="tab"
-      aria-selected={current === id}
-      data-testid={`view-tab-${id}`}
-      onClick={() => onSelect(id)}
-      className={`px-3 py-1 rounded-md border ${current === id ? "bg-muted" : "bg-transparent"}`}
+      id={domId}
+      aria-selected={current === tabId}
+      data-testid={`view-tab-${tabId}`}
+      onClick={() => onSelect(tabId)}
+      className={`px-3 py-1 rounded-md border ${current === tabId ? "bg-muted" : "bg-transparent"}`}
     >
       {children}
     </button>
