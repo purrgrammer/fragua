@@ -1,158 +1,792 @@
-# swarm — Architecture Notes
+# swarm — Architecture
+
+> **Authoritative.** The design the codebase implements. Companion to [`SPEC.md`](./SPEC.md) (goals) and [`handler-contract.md`](./handler-contract.md) (writing handlers).
+>
+> SQLite-backed event store with projection-in-transaction, intent/fact split, hard-abort semantics, content-addressed blob storage. No filesystem coordination surface.
+
+---
+
+## 0. Context and decisions
+
+### What the old architecture got wrong
+Three independent coordination surfaces (`events.jsonl`, `checkpoint.json`, `control.jsonl`) each with its own race semantics, tied together by `fs.watch`, with a separate SQLite job queue bolted on. Writes across files could not be atomic. Steering was limited to between-node boundaries. Handlers blocked inside the executor (e.g. `Interviewer.ask()`), so "paused" runs could not survive daemon restart. Property testing was possible per component but not across the coordination seam.
+
+### What we're committing to
+- **Single coordination surface: one SQLite database.** All state, events, queue, locks, artifacts. Two processes (daemon, web server) both read and write. WAL mode handles multi-process access.
+- **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
+- **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
+- **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `NODE_ABORTED` with partial metrics, executor re-enters (or halts) based on new state.
+- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `YIELD_HITL`, the executor emits `RUN_PAUSED_HITL`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
+- **Graph-level loops.** Cycles are first-class graph edges with a `loop_counter` field in projection; each iteration is a node transition = a steer point.
+- **Content-addressed blobs with sha256.** Tool outputs never inline in event payloads. Handlers write raw content to content-addressed `blobs`; events carry a ref + bounded preview.
+- **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
+- **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
+- **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs.
+- **Web UI works daemon-down.** Reads hit SQLite directly; intents queue; SSE continues polling. No daemon required for observability or control-plane writes.
+- **Greenfield.** Delete JSONL sinks, file checkpoints, control tailing, interviewer module, rendezvous file, in-handler loops, job queue adapter. No migration from existing runs — dev-only data.
+
+### Invariants (the contract)
 
-> **Superseded by `REARCHITECTURE.md`.** This document describes the pre-Revision-2 file-based coordination surface (events.jsonl + checkpoint.json + control.jsonl + fs.watch + in-daemon JobQueue). It is kept for historical context only. Trust [REARCHITECTURE.md](./REARCHITECTURE.md) when the two disagree.
+| # | Invariant | Enforced by |
+|---|---|---|
+| **I1** | Every write is one SQLite transaction; events + projection updated together | Store module API; lint rule: no `await`/`fetch`/`JSON.stringify` inside `db.transaction()` bodies |
+| **I2** | No handler state outside the projection | HandlerContext API; pure-function handler signature |
+| **I3** | Intents always-appendable; facts OCC-checked | Two distinct store methods (`appendIntent`, `appendFact`) |
+| **I4** | Handlers receive `AbortSignal`; respecting it is contract | HandlerContext carries signal; pre-wired LLM/HTTP clients auto-propagate |
+| **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay | `SideEffectEnvelope.idempotencyKey`; startup sweep emits `fact.run_quarantined` |
+| **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
+| **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
+| **I8** | Raw tool output addressed by sha256 in `blobs`; artifacts are named refs scoped by `(run, node, iteration, key)` | Store API; handlers cannot emit raw content as fact payload |
+| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`) | Handler API exposes `messages.append()` and `artifacts.put()` separately |
+| **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
+
+---
 
-
-Companion to `SPEC.md`. Deeper dives, diagrams, and design decisions that don't fit in the spec.
-
-## Reference implementations studied
-
-The following repos are cloned under the swarm root for research and are **not committed** (see `.gitignore`):
-
-- `attractor/` — the three NLSpecs that define the orchestrator, agent loop, and LLM client protocols we implement
-- `Archon/` — a production YAML-based harness; source of several stolen ideas (`$nodeId.output`, loop node, env-leak gate, Hono + SSE stack, immutable sessions with parent chain)
-- `pi-mono/` — the agent + LLM runtime we adopt (`@mariozechner/pi-agent-core` and `@mariozechner/pi-ai`)
-
-## Key design decisions and rationale
-
-### Why DOT instead of YAML
-
-Archon chose YAML; swarm chose DOT. Trade-off:
-- DOT wins on free visualization (Graphviz → SVG)
-- DOT matches Attractor spec exactly
-- YAML wins on ergonomics (inline prompts, richer attribute types)
-- We mitigate DOT's ergonomics loss by allowing prompts to be external `.md` files referenced by path
-
-### Why pi-mono instead of building our own LLM / agent layer
-
-pi-mono is essentially Attractor's Unified LLM + most of Coding Agent Loop, already implemented to production quality, with:
-- 15+ providers under one interface (including cross-provider handoff — thinking blocks converted, tool-call IDs normalized)
-- Mid-session model / provider swap via simple property assignment
-- Deterministic faux provider for tests
-- Per-session prompt-cache alignment
-- Strict TypeScript + TypeBox schemas
-
-Writing our own would cost 3-4 months and be strictly worse. Our `@swarm/agent` wrapper adds what pi-mono is missing: loop detection, subagents, per-tool truncation rules, checkpoint granularity, permission modes, event sink bridge.
-
-### Why event-log-as-source-of-truth + checkpoint snapshot
-
-Gemini proposed full event sourcing with materialized views. Attractor proposes `events + checkpoint.json after each node`. We chose Attractor's model:
-- Operationally simpler (no projection rebuilds, no snapshot coordination)
-- Sufficient for our replay / resume needs
-- The checkpoint IS the "current-state projection" — no separate view store
-
-### Why git worktrees + command blocklist (not CoW / Docker)
-
-Gemini proposed OverlayFS / APFS native cloning. Industry converged on `git worktree` through 2025-2026 (Claude Code v2.1.50 ships `--worktree`, Archon uses worktree-per-workflow). Portable, proven, cheap.
-
-For parallel runs, each worktree gets its own dependency install via the project-declared `bootstrap` command in `.swarm/config.yaml` (e.g. `bun install --frozen-lockfile`, `pip install …`, custom script). No symlinks, no shared caches — full isolation at the cost of one install per run.
-
-Default permission mode is `unsafe` (yolo), but the command blocklist refuses the worst commands (`rm -rf /`, `sudo *`, `curl | sh`, writes outside worktree). Zero-cost safety floor; upgrade to classifier / interactive mode in Phase 6.
-
-### Why Vercel AI Elements for the web UI
-
-AI Elements ships production-grade React components for rendering multi-turn conversations with thinking blocks, tool calls, streaming deltas. Using them means:
-- Better component quality than we'd build ourselves
-- Community-maintained accessibility and UX polish
-- Matches the Attractor spec's step-drilldown requirement out of the box
-
-### Why the 5-port hexagonal split
-
-5 ports = 5 axes of variation we want to swap independently:
-- `CodergenBackend` — different agent runtimes (pi, Claude CLI, Codex CLI)
-- `ExecutionEnvironment` — where tools run (local, worktree, Docker, remote)
-- `EventSink` — where events persist (JSONL, Postgres, OTel, SSE)
-- `Interviewer` — who answers human questions (auto, console, web, queue, recording wrapper)
-- `WorkspaceProvider` — where configs come from (FS, git repo, DB)
-
-Any more ports adds ceremony. Any fewer collapses concerns that legitimately vary.
-
-### Why a swarm-owned MessageStore
-
-pi-agent-core's `sessionId` is a provider-cache hint; it does not restore conversation history. If we relied on it, `fidelity=full` would silently behave like `truncate` — the provider would get cache hits but the agent would see no prior turns. So `@swarm/agent` owns a keyed-by-`thread_id` `MessageStore` that performs actual transcript hydration, and `sessionId` is bucketed per fidelity (`thread_id`, `thread_id:truncate`, `thread_id:compact`, …) to keep caches from cross-contaminating between modes.
-
-The split matters because the two concerns travel on different timescales: cache bucketing is per-call, transcript restoration is per-thread-id across nodes. Collapsing them would break one or the other.
-
-→ see AGENTS.md §"Fidelity modes (what each one actually does)".
-
-### Why fidelity is declarative, not runtime-inferred
-
-The resolution chain (edge attr → target node attr → graph default → hard default `compact`) lets a workflow author reason statically about what an agent will see at each node. A runtime heuristic would be cheaper to implement but would make replay non-deterministic and debugging much harder — the same graph could produce different prompts depending on state the author can't see.
-
-`context = "fresh"` is the escape hatch when an author needs a node to stand entirely alone, regardless of `thread_id` or fidelity.
-
-→ see SPEC.md §3.3 and AGENTS.md §"Fidelity modes".
-
-### Why the summariser is a separate port with its own model
-
-Using the coder model (Opus / GPT-5) to summarise its own prior transcript is ~10× more expensive than using a cheap model (Haiku / mini) for the same job, and the quality difference doesn't matter for compression. A separate `SummariserBackend` port keeps the coder model choice orthogonal to the compression choice, and lets the default be a cheap model without imposing that on teams that want a single-model setup.
-
-Summariser calls ride on synthetic node IDs (`__summary.title`, `__summary.<caller>`) so cost accounting and drilldown bucket cleanly — a node's per-node budget is never charged for compression it didn't ask for. Streaming is via `summary.text_delta` for the same reason the rest of the system streams: the UI shouldn't block waiting for a full summary.
-
-→ see SPEC.md §3.3 (summariser config) and AGENTS.md §"Summariser + auto-title".
-
-### Why budgets are a pure reducer over `cost.recorded`
-
-Everything else in swarm is reconstructable from the event log; budgets should be too. `BudgetLedger` is a pure function from `cost.recorded` events to verdicts — no hidden state, no race conditions on the hot path, trivially replayable. The executor wraps its event sink so every cost delta feeds the ledger automatically; handlers don't need to know budgets exist.
-
-Verdicts are themselves events (`budget.warn`, `budget.stop` under synthetic node `__budget`) so UIs and cost reports render them first-class without bespoke aggregation. Pre-flight budget checks run at `backend.run()` boundaries so a breach fails fast and non-retryably — bypassing goal-gate retry, which would otherwise relaunch the breach.
-
-→ see SPEC.md §3.3b and AGENTS.md §"Budgets (Wave 4)".
-
-### Why the control channel is a file, not an IPC socket
-
-The same reasons checkpoints are files: restart-safety and zero-dependency debuggability. A running `swarm run` can be steered, paused, resumed, or canceled by any other process that can write a line to `.swarm/runs/<run-id>/control.jsonl` — including a human with `echo` and a text editor. No daemon, no port, no auth. The executor tails via `fs.watch`, mirrors each request into `events.jsonl` as `control.requested`, and dispatches at safe boundaries.
-
-A uuid on every request plus `last_applied_control_id` on the checkpoint guarantees no double-application across `--resume`. All four verbs share one channel so transport logic doesn't special-case by command — the differences live in the dispatch step, not the pipe.
-
-→ see AGENTS.md §"Run control (steer / pause / resume / cancel)".
-
-### Why skills use three-tier progressive disclosure
-
-The agentskills.io tier model (catalog in system prompt → body via `load_skill` tool → resources via `read_file`) lets a project carry dozens of skills without paying their full token cost on every call. Tier 1 is ~100 tokens per skill regardless of body size; the agent only pays for the ones it actually invokes.
-
-sha256 on every SKILL.md captured into `llm.start.skills[]` gives replay drift detection for free: if a skill's body changed between the run and a later replay, the hashes differ and the replay harness knows to flag it. We didn't design this — agentskills.io did — we just make sure the per-step durability is there.
-
-→ see AGENTS.md §"Skills (agentskills.io)" and `docs/skills.md`.
-
-### Why `local:subagent` is a tool, not a handler
-
-Subagents exist for focused triage — "find which files import `FooBar`" shouldn't pollute the main agent's context with its own scratchwork. The fresh-context invariant (child can't see parent turns) is easier to enforce at the tool boundary than the handler boundary: the child gets its own pi-agent-core session with no shared `thread_id`, and the parent workflow stays a linear readable graph instead of fanning out per invocation.
-
-Skill-body propagation is gated on explicit `preload_skills` for the same reason — the child re-runs discovery so its tier-1 catalog matches the parent's, but activated SKILL.md bodies don't leak unless the caller asks for them.
-
-→ see AGENTS.md §"Subagent tool".
-
-### Why the model stylesheet is CSS-like
-
-Most workflows express intent as "every box node uses Haiku; the `.heavy` class uses Opus with high reasoning; the `#explore` node uses Sonnet." Repeating `[model=…, provider=…, reasoning_effort=…]` on every node is noise and drifts between nodes that were meant to match.
-
-A single `model_stylesheet` string with `#id`, `.class`, `[shape=X]`, and `[attr=value]` selectors expresses the intent once. Node-level attrs still win over the stylesheet, so the escape hatch is obvious. CSS was the closest match to the selector vocabulary we wanted; we took the syntax and left the cascade rules out.
-
-→ see AGENTS.md §"Model stylesheet".
-
-### Why the condition language is intentionally minimal
-
-`=`, `!=`, `&&` and nothing else. DSL creep is the enemy: once the condition language gets operators like `contains`, `matches`, or numeric comparisons, workflow authors start writing logic inside edge labels instead of in handlers where it's testable and debuggable. Keeping conditions boolean-equals means complex decisions push up to a `diamond` / `conditional` node that runs a real handler with access to the full context and outcome.
-
-This is a deliberate inconvenience — it channels complexity into places that are easier to reason about.
-
-→ see SPEC.md §3.8.
-
-### Trust-boundary posture
-
-swarm is a **high-trust harness**. The default permission mode is `unsafe`; the command blocklist refuses the worst patterns (`rm -rf /`, `sudo *`, `curl | sh`, writes outside worktree) and the env-leak gate blocks `.env` files with obvious key patterns. Together these are a *safety floor* — they stop common mistakes — but they are emphatically not a sandbox. A determined agent running under `unsafe` can still do damage inside its worktree.
-
-For production use on untrusted input (tracker-driven workflows, repos you don't own, user-supplied prompts), pair swarm with an isolation layer outside the harness: a dedicated OS user, a container, a VM, or a remote worker. The `ExecutionEnvironment` port already lists `DockerEnvironment` and `RemoteEnvironment` as planned adapters (SPEC.md §2.2); they are the intended path for stricter postures without retrofitting swarm itself into a sandbox it wasn't designed to be.
-
-### Influences
-
-- **Attractor** (`attractor/`) — the three NLSpecs that define orchestrator, coding-agent-loop, and unified-LLM contracts. swarm implements the orchestrator spec; `@swarm/agent` shadows the coding-agent-loop on top of pi-mono.
-- **Archon** (`Archon/`) — production YAML-based harness. Source of `$nodeId.output` substitution, loop nodes, env-leak gate, Hono+SSE surface, immutable sessions with parent chain.
-- **pi-mono** (`pi-mono/`) — the agent + LLM runtime we adopted rather than rebuilt (`@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`). See §"Why pi-mono instead of building our own LLM / agent layer".
-- **Symphony** — Codex-flavored daemon orchestrator with Linear-tracker polling, per-issue workspaces, and SSH-worker appendix. Not implemented in swarm, but useful as a design contrast when thinking about long-running service mode. swarm's own daemon plan lives in `~/.claude/plans/daemon.md`; the trust-boundary framing above was sharpened by Symphony §15.
-
-## Open questions tracked for later
-
-- **Pipeline composition** — If cross-workflow state-passing becomes necessary, adopt LangGraph's Command-style pattern (explicit inputs / outputs) rather than Temporal's signal-only model. Defer until needed.
-- **Auto-compaction threshold** — Claude Code uses `window - 13K tokens`; we likely follow but treat as a config knob.
+## 1. Adversarial review — findings and resolutions
+
+### 1.1 Orphan `SIDE_EFFECT_INTENT` after crash
+**Attack.** Daemon crashes after `fact.side_effect_intent` is committed but before `fact.side_effect_done`. The external API call actually happened (credit charged, PR merged). On replay, absence of `DONE` is not proof of non-execution — blindly re-running doubles the effect.
+
+**Resolution.**
+1. **Provider-level idempotency keys.** External tool envelope carries `idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)`. Handler passes this as `Idempotency-Key` header (or provider-equivalent). Provider dedupes server-side; jointly we achieve at-most-once.
+2. **Startup quarantine.** On daemon start, scan for `fact.side_effect_intent` events without a matching `fact.side_effect_done`/`fact.side_effect_failed` (joined by `idempotencyKey`). Any run with such an orphan enters `quarantined` status. Run does not resume until a human writes `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel", note }`.
+3. **Retry uses the same key.** If operator chooses `retry`, the handler re-executes with the same `idempotencyKey`. If the provider already processed the prior attempt, it returns the cached response. Safe under operator error.
+4. **Tools without provider dedup** get a warning label at registration; operator is the only safety net. Documented as handler-author responsibility.
+
+### 1.2 Artifact key collision under loops
+**Attack.** Node `A` runs in iteration 1 of a graph cycle, calls `artifacts.put("result", ...)`. On iteration 2, same node, same user key → `UNIQUE` constraint violation.
+
+**Resolution.** `artifacts` PK becomes `(run_id, node_id, iteration, key)` explicitly — no string encoding. Handler API auto-scopes:
+
+```typescript
+ctx.artifacts.put(key, content, mime?)                          // implicit (nodeId, iteration)
+ctx.artifacts.get(key)                                          // implicit current scope
+ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cross-scope
+```
+
+`iteration` comes from `ctx.routing.loop_counter`, maintained by the graph-cycle handler (0 outside loops). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
+
+### 1.3 Unix socket IPC is net-negative
+**Attack.** `.sock` cleanup, `EADDRINUSE`, permission errors, reconnect bookkeeping — hundreds of lines for something SQLite already does in <0.1ms per query.
+
+**Resolution.** `packages/ipc` is deleted from the plan.
+- **Daemon supervisor fiber** ticks every 50ms, inside one short transaction:
+  - `heartbeat()` — UPDATE `daemon_lock.heartbeat_at`
+  - `detectNewIntents()` — for every registered abort controller, check if there are unapplied intents; trip abort if yes
+  - `detectStuckNodes()` — watchdog for handlers that exceeded `maxMs + LEAK_GRACE_MS`
+- **Web SSE streams** poll `events WHERE seq > ?` every 100ms per subscribed run. At 10 concurrent subscribers, ≈100 qps of indexed reads; <1ms each.
+- **No `.sock` file.** Nothing to clean up on crash. Nothing to reconcile on restart.
+
+### 1.4 Crash-recovery limbo
+**Attack.** Daemon hard-crashes while runs were `running`. On restart, those rows still say `running`; the executor only claims `queued`; runs sit dead until watchdog fires a minute later.
+
+**Resolution.** **Startup sweep** runs before the executor loop, in a single transaction:
+
+```sql
+-- (a) Requeue crash-interrupted runs
+UPDATE run_state
+   SET status = 'queued',
+       current_node = NULL,
+       node_started_at = NULL,
+       ready_at = :now,
+       version = version + 1,
+       updated_at = :now
+ WHERE status = 'running'
+ RETURNING run_id, version;
+
+-- For each returned run_id, append fact.run_requeued_after_crash
+
+-- (b) Quarantine orphans (see 1.1)
+-- (c) paused_hitl and quarantined runs are NOT touched
+```
+
+Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
+
+### 1.5 `MAX(seq)` write-path contention
+**Attack.** `INSERT ... SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE run_id=?` adds a B-tree seek inside every write txn. Under load, the extra latency amplifies `SQLITE_BUSY` across both processes.
+
+**Resolution.** Per-run counter on `run_state`. Every append bumps it atomically:
+
+```sql
+UPDATE run_state SET next_seq = next_seq + 1 WHERE run_id = ?1 RETURNING next_seq - 1 AS seq;
+INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?1, ?seq, ?, ?, ?, ?);
+```
+
+No scan. Combined with `BEGIN IMMEDIATE`, concurrent appends serialize cleanly without index pressure. I10 captures this.
+
+### 1.6 Zombie daemon after lock reclaim
+Unchanged from Revision 1. Daemon lock has TTL; stalled process fails OCC on every commit; loop-internal re-check of `daemon_lock` forces it to exit on takeover.
+
+### 1.7 Heartbeat outlives stuck executor
+Consolidated into the supervisor fiber (1.3). Heartbeat, intent detection, and stuck-node detection share one 50ms tick. If the executor fiber wedges in a tight sync loop, the event loop is blocked — supervisor also stops, lock stales, another daemon reclaims. Belt and suspenders via handler-level `AbortSignal.timeout()` (§5).
+
+### 1.8 LLM provider ignores `AbortSignal`
+Unchanged. `Promise.race` with hard timeout bounds damage; leaked handlers emit `fact.handler_timeout_leaked` for accounting honesty.
+
+### 1.9 Mid-flight abort replay
+Covered by provider idempotency keys (1.1) and graph-cycle loop_counter (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
+
+### 1.10 Remaining concerns
+- **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
+- **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
+- **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
+- **Large BLOB page-split cascade** — `blobs` is **rowid** table; overflow pages handle big values efficiently. See §2.
+- **Schema drift across long pauses** — `schema_version` pinned per run; daemon refuses to resume mismatches, emits `fact.run_halted { reason: "schema_drift" }`.
+- **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
+
+---
+
+## 2. Schema
+
+All tables `STRICT`. All per-run tables cascade on run deletion. `WITHOUT ROWID` only on narrow rows; **`blobs` is a rowid table** to benefit from overflow pages for large BLOBs.
+
+```sql
+-- Pragmas applied on every connection open
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA foreign_keys = ON;
+PRAGMA temp_store = MEMORY;
+PRAGMA cache_size = -65536;           -- 64MB per connection
+PRAGMA mmap_size = 268435456;         -- 256MB mmap
+PRAGMA wal_autocheckpoint = 1000;
+
+-- Set at DB creation only:
+-- PRAGMA page_size = 8192;
+
+-- Every write transaction opens as BEGIN IMMEDIATE (grabs write lock up front)
+
+CREATE TABLE schema_version (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE workflows (
+  sha TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  dot_source TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE run_state (                          -- projection + queue + seq counter
+  run_id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,                       -- OCC token
+  status TEXT NOT NULL CHECK (status IN (
+    'queued','running','paused_hitl','completed','cancelled','halted','quarantined'
+  )),
+  current_node TEXT,
+  workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+  schema_version INTEGER NOT NULL,
+  routing TEXT NOT NULL CHECK (length(routing) < 8192),
+  metrics TEXT NOT NULL,
+  next_seq INTEGER NOT NULL DEFAULT 1,            -- per-run counter; I10
+  last_applied_seq INTEGER NOT NULL DEFAULT 0,
+  priority INTEGER NOT NULL DEFAULT 0,
+  enqueued_at INTEGER NOT NULL,                   -- original enqueue, immutable
+  ready_at INTEGER NOT NULL,                      -- set on every transition INTO 'queued'
+  node_started_at INTEGER,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- Partial index = queue in disguise; O(log N) claim
+CREATE INDEX idx_run_state_queue
+  ON run_state(priority DESC, ready_at ASC)
+  WHERE status = 'queued';
+
+CREATE INDEX idx_run_state_status ON run_state(status);
+
+CREATE TABLE events (
+  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  type TEXT NOT NULL,                             -- 'intent.*' | 'fact.*'
+  writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+  payload TEXT NOT NULL CHECK (length(payload) < 4096),
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (run_id, seq)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX idx_events_type ON events(type, run_id, seq);
+
+CREATE TABLE messages (                           -- append-mostly; never rewritten
+  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('system','user','assistant','tool')),
+  content TEXT NOT NULL,
+  node_id TEXT,
+  iteration INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (run_id, ordinal)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE blobs (                              -- content-addressed; ROWID table for BLOB overflow
+  sha256 TEXT NOT NULL UNIQUE,
+  content BLOB NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX idx_blobs_sha ON blobs(sha256);
+
+CREATE TABLE artifacts (                          -- per-(run,node,iteration) named refs
+  run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL,
+  iteration INTEGER NOT NULL DEFAULT 0,
+  key TEXT NOT NULL,
+  blob_sha TEXT NOT NULL REFERENCES blobs(sha256),
+  mime TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, node_id, iteration, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX idx_artifacts_blob ON artifacts(blob_sha);
+
+CREATE TABLE daemon_lock (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  pid INTEGER NOT NULL,
+  hostname TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  heartbeat_at INTEGER NOT NULL
+) STRICT;
+```
+
+**Size targets:**
+- `run_state` row: ~500 bytes; thousands of rows negligible.
+- `events` row: ~300 bytes; partial indexes small.
+- `messages` rows: variable, bounded by LLM message size.
+- `blobs`: up to 16MB per row; overflow pages handle efficiently on rowid table.
+
+---
+
+## 3. Event taxonomy
+
+### Intent events (writer: `web`, no OCC)
+| Type | Payload fields | Semantics |
+|---|---|---|
+| `intent.run_enqueued` | `workflowSha`, `priority?` | Queue a new run |
+| `intent.steering_requested` | `payload: string` | Abort current node; inject steering before re-entry |
+| `intent.pause_requested` | — | Abort current node; transition to `paused` |
+| `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
+| `intent.hitl_input` | `payload: unknown` | Wake a `paused_hitl` run |
+| `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note: string` | Operator acknowledgement for a quarantined run |
+| `intent.priority_adjusted` | `newPriority: number`, `note: string` | Operator bump |
+
+### Fact events (writer: `daemon`, OCC-checked)
+| Type | Payload fields | Semantics |
+|---|---|---|
+| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode` | Run enters `running` |
+| `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
+| `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `nextNode` | Node succeeded |
+| `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd` | Mid-flight abort |
+| `fact.steering_applied` | `intentSeq`, `folded` | Steer merged into routing/messages |
+| `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
+| `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed |
+| `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
+| `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
+| `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
+| `fact.run_paused_hitl` | `nodeId`, `prompt` | Yielded for human input |
+| `fact.run_resumed` | `fromStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
+| `fact.run_completed` | `finalNode` | Terminal success |
+| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'`, `detail?` | Terminal failure |
+| `fact.run_cancelled` | `intentSeq` | Terminal cancel |
+| `fact.run_quarantined` | `reason: 'orphan_side_effect'\|...`, `orphanedIntents?: seq[]` | Awaiting operator |
+| `fact.run_requeued_after_crash` | `prevNode?` | Startup sweep requeued |
+| `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
+| `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
+
+All payloads ≤ 4KB. Content references are `artifactKey`.
+
+---
+
+## 4. IEventStore interface
+
+```typescript
+// packages/store/src/types.ts
+
+export interface IEventStore {
+  // Writes
+  appendFact(runId: string, events: FactEvent[], expectedVersion: number): FactAppendResult;
+  appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
+
+  // Run lifecycle
+  enqueueRun(params: { runId: string; workflowSha: string; priority?: number }): void;
+  claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; respects concurrency
+  startupSweep(): { requeued: string[]; quarantined: string[] };
+
+  // State reads
+  getState(runId: string): RunState | null;
+  getEvents(runId: string, sinceSeq?: number, limit?: number): StoredEvent[];
+  getUnappliedIntents(runId: string): StoredEvent[];
+
+  // Messages
+  appendMessage(runId: string, row: Omit<Message,'ordinal'>): { ordinal: number };
+  getMessages(runId: string, opts?: { sinceOrdinal?: number; limit?: number; nodeId?: string }): Message[];
+
+  // Artifacts
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef;
+  getArtifact(scope: ArtifactScope): Uint8Array;
+  getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
+  findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;   // replay short-circuit
+
+  // Daemon lock
+  acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
+  heartbeatDaemonLock(pid: number): void;
+  releaseDaemonLock(pid: number): void;
+  currentDaemonLock(): DaemonLockRow | null;
+
+  // Workflows
+  saveWorkflow(sha: string, name: string, dotSource: string): void;
+  getWorkflow(sha: string): WorkflowRow | null;
+
+  // Subscriptions (in-process post-commit callback; no IPC)
+  onCommit(listener: (runId: string, seq: number) => void): () => void;
+
+  // Maintenance
+  vacuum(): void;
+  gcBlobs(maxRows?: number): { deleted: number };
+  close(): void;
+}
+
+export type ArtifactScope = { runId: string; nodeId: string; iteration: number; key: string };
+export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string };
+
+export class ConcurrencyError extends Error {}
+export class ArtifactTooLargeError extends Error {}
+export class SchemaDriftError extends Error {}
+export class QuarantineError extends Error {}
+```
+
+**Implementation notes:**
+- All methods synchronous; `bun:sqlite` is sync.
+- Every write wraps in `WriteQueue.enqueue(() => db.transaction(() => ...)())`. `BEGIN IMMEDIATE` for all txns.
+- `onCommit` listeners fire after commit, inside `queueMicrotask`. Used by daemon supervisor for optional early-wake (belt-and-suspenders alongside 50ms polling).
+
+---
+
+## 5. Handler contract
+
+Unchanged in substance from Revision 1; now with `iteration` visible and side-effect envelope carrying `idempotencyKey`.
+
+```typescript
+export type SideEffect = "none" | "idempotent" | "external";
+
+export type HandlerSpec = {
+  kind: string;
+  sideEffect: SideEffect;
+  maxMs: number;
+  handler: Handler;
+};
+
+export type HandlerContext = Readonly<{
+  runId: string;
+  nodeId: string;
+  iteration: number;                     // 0 outside loops; from routing.loop_counter
+  signal: AbortSignal;                   // AbortSignal.any([steer, timeout, shutdown])
+  routing: Readonly<Record<string, unknown>>;
+  llm: LlmClient;                        // pre-wired with signal, accounting
+  http: HttpClient;                      // pre-wired with signal, timeout
+  tools: ToolRegistry;                   // side_effect tagged; external tools auto-envelope
+  messages: {
+    append(role: MessageRole, content: string): { ordinal: number };
+    recent(n: number): Message[];
+    since(ordinal: number): Message[];
+  };
+  artifacts: {
+    put(key: string, content: string | Uint8Array, mime?: string): ArtifactRef;
+    get(key: string): Uint8Array;
+    ref(key: string): ArtifactRef | null;
+    getFrom(scope: ArtifactScope): Uint8Array;
+  };
+  externalCall: <T>(fn: (key: string) => Promise<T>, argsHash: string, attempt?: number) => Promise<T>;
+  // No direct fetch, filesystem, DB, or process access.
+}>;
+
+export type HandlerResult =
+  | { kind: "transition"; nextNode: string; outputRef?: ArtifactRef; routingDelta?: Record<string, unknown>; tokens: number; costUsd: number }
+  | { kind: "yield_hitl"; prompt: string; routingDelta?: Record<string, unknown> }
+  | { kind: "halt"; reason: "budget" | "max_loops" | "error"; detail?: string };
+```
+
+`externalCall` is the canonical helper for `side_effect: "external"` tools. It:
+1. Computes `idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)`.
+2. Emits `fact.side_effect_intent` via the executor (not the handler directly).
+3. Invokes `fn(idempotencyKey)`; `fn` passes the key to the provider as an idempotency header.
+4. On success: emits `fact.side_effect_done`, returns result.
+5. On `AbortError`: does NOT emit `done`; executor will see orphan on replay if we crashed here.
+6. On clean failure: emits `fact.side_effect_failed`.
+
+### Enforced at review
+- `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.
+- AST rule: no `await`/`JSON.stringify` inside `.transaction(() => ...)` bodies.
+- Handler PRs must: declare `sideEffect`, set `maxMs`, include replay property test for external tools.
+
+---
+
+## 6. Daemon loop (pseudocode)
+
+```typescript
+async function daemonMain() {
+  const pid = process.pid;
+  const lock = store.acquireDaemonLock(pid, os.hostname());
+  if (!lock.acquired) {
+    const current = store.currentDaemonLock()!;
+    if (Date.now() - current.heartbeat_at > LOCK_TTL_MS) {
+      store.forceAcquireDaemonLock(pid, os.hostname());
+    } else {
+      console.error(`Daemon already running: pid=${current.pid}`);
+      process.exit(1);
+    }
+  }
+
+  // CRITICAL: before anything else, heal any crash damage
+  const sweep = store.startupSweep();
+  log.info(`startup: requeued=${sweep.requeued.length} quarantined=${sweep.quarantined.length}`);
+
+  const shutdown = new AbortController();
+  process.on("SIGTERM", () => shutdown.abort());
+  process.on("SIGINT", () => shutdown.abort());
+
+  startSupervisor(shutdown.signal);      // 50ms tick: heartbeat + intents + watchdog
+  await runExecutor(shutdown.signal);
+
+  store.releaseDaemonLock(pid);
+  store.close();
+}
+
+async function runExecutor(shutdownSignal: AbortSignal) {
+  while (!shutdownSignal.aborted) {
+    const job = store.claimNextRun(MAX_CONCURRENT_RUNS);
+    if (!job) { await sleep(50); continue; }
+    runOne(job.runId, shutdownSignal).catch(logAndQuarantine);
+  }
+}
+
+async function runOne(runId: string, shutdownSignal: AbortSignal) {
+  // Zombie detection
+  const lock = store.currentDaemonLock();
+  if (!lock || lock.pid !== process.pid) return;
+
+  while (!shutdownSignal.aborted) {
+    const state = store.getState(runId);
+    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "quarantined") return;
+
+    if (state.schema_version !== CURRENT_SCHEMA_VERSION) {
+      store.appendFact(runId, [haltFact("schema_drift")], state.version);
+      return;
+    }
+
+    const unapplied = store.getUnappliedIntents(runId);
+    const decision = foldIntents(unapplied, state);
+
+    if (decision.kind === "cancel") {
+      store.appendFact(runId, [cancelFact(unapplied)], state.version);
+      return;
+    }
+
+    const steerAbort = new AbortController();
+    const nodeSignal = AbortSignal.any([
+      steerAbort.signal,
+      AbortSignal.timeout(handlerSpec(state.current_node).maxMs),
+      shutdownSignal,
+    ]);
+    registerAbort(runId, steerAbort);
+
+    const ctx = buildHandlerContext(runId, state, nodeSignal, decision.routingDelta, decision.steering, decision.hitlInput);
+
+    let result: HandlerResult;
+    try {
+      result = await Promise.race([
+        dispatch(state.current_node, ctx),
+        timeoutRejects(handlerSpec(state.current_node).maxMs + LEAK_GRACE_MS),
+      ]);
+    } catch (err) {
+      result = mapErrorToResult(err, nodeSignal);
+    } finally {
+      unregisterAbort(runId);
+    }
+
+    const factEvents = mapResultToFacts(runId, state, result, unapplied);
+    try {
+      store.appendFact(runId, factEvents, state.version);
+    } catch (err) {
+      if (err instanceof ConcurrencyError) continue;
+      throw err;
+    }
+  }
+}
+```
+
+---
+
+## 7. Web server
+
+```typescript
+app.post("/runs", async (c) => {
+  const { workflowSha, priority } = await c.req.json();
+  const runId = newRunId();
+  store.enqueueRun({ runId, workflowSha, priority });
+  return c.json({ runId });
+});
+
+app.post("/runs/:id/steer",    async (c) => writeIntent(c, "intent.steering_requested"));
+app.post("/runs/:id/pause",    async (c) => writeIntent(c, "intent.pause_requested"));
+app.post("/runs/:id/cancel",   async (c) => writeIntent(c, "intent.cancel_requested"));
+app.post("/runs/:id/hitl",     async (c) => writeIntent(c, "intent.hitl_input"));
+app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
+
+app.get("/runs/:id/events", (c) => streamSSE(c, async (stream) => {
+  const runId = c.req.param("id");
+  let lastSeq = Number(c.req.header("Last-Event-ID") ?? 0);
+  while (!stream.aborted) {
+    const events = store.getEvents(runId, lastSeq, 500);
+    for (const e of events) {
+      await stream.writeSSE({ id: String(e.seq), event: e.type, data: JSON.stringify(e) });
+      lastSeq = e.seq;
+    }
+    if (events.length === 0) await sleep(100);
+  }
+}));
+```
+
+No IPC. No daemon dependency for reads or intent writes. Polling is the whole story.
+
+---
+
+## 8. Queue fairness
+
+**Rule.** Within a priority tier, FIFO on `ready_at`. `ready_at` is reset to `now()` on every transition INTO `queued` (initial enqueue, HITL wake, crash requeue, unquarantine-retry). Ties break by `run_id` (deterministic, seeded by ULID-like ordering).
+
+```sql
+ORDER BY priority DESC, ready_at ASC, run_id ASC
+```
+
+**Why this over alternatives:**
+
+| Strategy | Behavior | Why rejected |
+|---|---|---|
+| Preserve original `enqueued_at` on resume | Long-paused runs jump to front on wake | Starves new submissions |
+| Priority boost on HITL wake | Interactive runs preempt batch | Priority inversion; hogging |
+| Round-robin per workflow | Fair across workflows | Complex; unclear within-workflow |
+| **FIFO on `ready_at`** | Everyone queues fresh on transition | Simple; predictable; no starvation at single-machine scale |
+
+**Scenario — N priority-10 runs wake from HITL simultaneously:**
+SQLite serializes the N `intent.hitl_input` commits; each HITL-resume transaction sets `ready_at = now()` inside the same txn. Even at ms-level clustering, SQL commit order gives each a distinct `ready_at`; ties break by `run_id`. The claim index (`priority DESC, ready_at ASC, run_id ASC`) pops them deterministically in commit order. No thundering herd.
+
+**Not starvation-free in theory:** a relentless priority-11 stream starves priority-10. That's priority's point. If workflow-level fairness becomes a need, add `workflow_max_concurrent` per workflow (cheap partial-index count). Not needed day 1.
+
+**Observability:**
+- Derive `wait_time_ms = now() - ready_at` at read time; expose in UI.
+- `intent.priority_adjusted` is the operator escape hatch if something starves.
+
+**Edge — operator cancel mid-resume:**
+HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in either order. Both are intents, both non-OCC, both processed by the daemon supervisor's fold. The fold prioritizes `cancel` deterministically: if both present, run becomes `cancelled` regardless of order. Documented in fold semantics.
+
+---
+
+## 9. Size bounds
+
+| Name | Value | Enforced by |
+|---|---|---|
+| `MAX_EVENT_PAYLOAD_BYTES` | 4096 | `events.payload CHECK` |
+| `MAX_ROUTING_BYTES` | 8192 | `run_state.routing CHECK` |
+| `MAX_BLOB_BYTES` | 16 * 1024 * 1024 | Store module; throws `ArtifactTooLargeError` |
+| `MAX_PREVIEW_CHARS` | 512 | Handler convention |
+| `MAX_CONCURRENT_RUNS` | 8 (configurable) | `claimNextRun` |
+| `LOCK_TTL_MS` | 30000 | Daemon lock reclaim |
+| `HEARTBEAT_INTERVAL_MS` | 5000 | Supervisor fiber |
+| `SUPERVISOR_TICK_MS` | 50 | Supervisor fiber |
+| `SSE_POLL_MS` | 100 | Web SSE handler |
+| `LEAK_GRACE_MS` | 5000 | Hard timeout grace |
+| `ABORT_LOOP_CEILING` | 5 | Reducer → `RUN_HALTED` |
+
+---
+
+## 10. Property-test matrix
+
+Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-memory or tmp-file.
+
+| # | Invariant | Generator | Assertion |
+|---|---|---|---|
+| P1 | Seq monotonic & contiguous per run | N fibers × K writes | `events.seq = 1..NK` contiguous; `run_state.next_seq` matches |
+| P2 | OCC correctness | K fibers racing `appendFact(v=N)` | Exactly one succeeds; K-1 `ConcurrencyError` |
+| P3 | Intent never lost | Intents interleaved with aborts | All submitted intents in `getEvents` |
+| P4 | Projection = fold | Random event sequences | `getState` ≡ `events.reduce(reducer)` |
+| P5 | Crash recovery requeue | Kill at random SQL boundary | Startup sweep requeues all `running`; no half-applied txn |
+| P6 | Orphan quarantine | Kill between `intent` and `done` | Startup → run `quarantined`; no re-run |
+| P7 | Unquarantine retry | `intent.unquarantine:retry` | Run resumes; tool re-executes with same `idempotencyKey` |
+| P8 | Mid-flight abort → replay | Abort at random await points | `NODE_ABORTED` present; next turn converges; external tool count ≤ 1 per `idempotencyKey` |
+| P9 | Daemon singleton | Start two daemons | Second exits non-zero; lock unchanged |
+| P10 | Concurrency bound | Enqueue 100 runs, `MAX=4` | `COUNT(status='running') ≤ 4` at every snapshot |
+| P11 | HITL durability | Pause → kill → restart → input | Progresses from exact stop point |
+| P12 | Event payload bound | 5KB payload attempt | Throws; no insert |
+| P13 | Routing bound | 10KB routing attempt | Throws; projection unchanged |
+| P14 | Blob dedup | Identical content twice | Single `blobs` row; two `artifacts` |
+| P15 | Artifact loop scoping | Same node, 3 iterations, same key | 3 distinct `artifacts` rows; no PK violation |
+| P16 | Blob GC | Delete run; sweep | Orphan blobs removed; shared blobs retained |
+| P17 | Schema drift refusal | Resume with mismatched version | `RUN_HALTED { reason: "schema_drift" }` |
+| P18 | Zombie daemon commit | Force-acquire; original commits | Commit fails (OCC or lock check); original exits |
+| P19 | SSE replay | Reconnect with `Last-Event-ID=N` | Receives `seq > N` in order |
+| P20 | Abort loop ceiling | K>5 consecutive aborts, no progress | `RUN_HALTED { reason: "abort_loop" }` |
+| P21 | Queue fairness | N priority-10 HITL wakes | Claim order = commit order of `intent.hitl_input` |
+| P22 | Cascade delete | Delete run_state row | events/messages/artifacts for that run all gone; blobs unchanged |
+| P23 | STRICT enforcement | Insert string into integer column | Throws; no row inserted |
+| P24 | Claim atomicity | K fibers racing `claimNextRun` | Each popped run claimed by exactly one fiber |
+
+---
+
+## 11. Module layout
+
+```
+packages/
+  store/                              ← NEW
+    src/
+      schema.sql
+      pragmas.ts
+      migrations.ts
+      write-queue.ts
+      store.ts                         ← IEventStore impl
+      reducers.ts                      ← intent fold, fact-from-result
+      sweep.ts                         ← startup sweep (requeue + quarantine)
+      types.ts
+    tests/
+      property/                        ← P1..P24
+      unit/
+  core/                                ← TRIMMED
+    src/
+      parser/                          ← kept (DOT)
+      handler.ts                       ← HandlerContext, HandlerSpec, Handler types
+      handlers/
+        codegen.ts
+        tool.ts
+        conditional.ts
+        wait-human.ts                  ← NEW semantic: yields, no blocking
+        loop.ts                        ← graph-level cycle with loop_counter
+        parallel.ts
+      llm-client.ts                    ← pre-wired abort + idempotency
+      http-client.ts                   ← pre-wired abort
+      tool-registry.ts                 ← side-effect tagging
+      external-call.ts                 ← idempotency key + intent/done envelope
+  daemon/                              ← REWRITTEN
+    src/
+      loop.ts                          ← executor fiber
+      supervisor.ts                    ← 50ms tick: heartbeat + intents + watchdog
+      abort-registry.ts                ← runId → AbortController map
+      dispatch.ts                      ← node-kind → handler
+      entrypoint.ts                    ← CLI binary
+  server/                              ← TRIMMED
+    src/
+      routes.ts                        ← Hono routes
+      sse.ts                           ← polling SSE streams
+      entrypoint.ts
+  web/                                 ← kept; hooks updated for new event shapes
+  cli/                                 ← kept; commands map to intent writes
+  workspace/                           ← kept
+```
+
+**DELETED packages/modules** (full list):
+
+| Path | Reason |
+|---|---|
+| `packages/events/` entire package | JSONL sinks/sources replaced by `packages/store` |
+| `packages/ipc/` | Never created; DB polling is the coordination path |
+| `packages/core/src/engine/checkpoint.ts` | File checkpoint replaced by projection |
+| `packages/core/src/interviewer/` | Replaced by `wait.human` handler yielding `YIELD_HITL` |
+| `fs.watch` on `control.jsonl` | DB polling |
+| `.swarm/runs/<id>/events.jsonl` | `events` table |
+| `.swarm/runs/<id>/checkpoint.json` | `run_state` |
+| `.swarm/runs/<id>/control.jsonl` | Intent events |
+| `.swarm/daemon/daemon.json` | `daemon_lock` row |
+| `packages/server/src/adapters/sqlite-job-queue.ts` | Folded into `run_state` |
+| In-handler for-loops (trapezium) | Graph cycles + `loop_counter` |
+| `last_applied_control_id` tracking | `last_applied_seq` in projection |
+| Sink/source abstractions | Single `IEventStore` |
+| Filesystem-locking helpers | WAL + `BEGIN IMMEDIATE` |
+| `jobs` table | Folded into `run_state` |
+
+---
+
+## 12. Build order (milestones)
+
+**M1 — Store foundation (~1 week)**
+- `packages/store`: schema, pragmas, migrations, `WriteQueue`, prepared-statement cache
+- `IEventStore` full implementation
+- `startupSweep()` implementation
+- Unit tests for every method
+- Property tests P1, P2, P4, P12, P13, P14, P22, P23, P24
+- **Bar:** store module drop-in usable; no other changes
+
+**M2 — Core refactor (~1 week)**
+- `packages/core/handler.ts`: types and context builder
+- `LlmClient`, `HttpClient`, `ToolRegistry` with signal pre-wiring
+- `external-call.ts`: idempotency envelope
+- Reducer (fact/intent fold)
+- Graph-level loop handler
+- `wait.human` handler returns `YIELD_HITL`
+- Delete `interviewer/`, in-handler for-loops
+- Handler-level tests
+- **Bar:** all handler tests pass in isolation
+
+**M3 — Daemon rewrite (~1 week)**
+- `packages/daemon`: executor + supervisor + abort registry + lock
+- Singleton enforcement; zombie detection; startup sweep wiring
+- End-to-end toy-DAG run
+- Property tests P3, P5, P6, P7, P8, P9, P10, P11, P15, P17, P18, P20, P21
+- **Bar:** daemon can run, pause, resume, abort, quarantine, unquarantine, replay
+
+**M4 — Server wiring (~3 days)**
+- Hono routes: intent writes
+- SSE via polling with `Last-Event-ID` replay
+- Property test P19
+- **Bar:** web UI shows live updates; works with daemon stopped
+
+**M5 — Cutover (~2 days)**
+- Delete everything on §11 kill list
+- Update `SPEC.md`, `ARCHITECTURE.md`, `daemon.md`, `events.md`, `run-control.md`
+- End-to-end: fresh clone → start daemon + server → LLM workflow → pause → kill daemon → restart → resume → complete
+- **Bar:** fresh-clone demo runs cleanly three times
+
+**M6 — Hardening (~1 week ongoing)**
+- CI nightly long-seed property runs
+- Structural lint rules: no raw `fetch`, no `await`/`JSON.stringify` in `.transaction()` bodies
+- Metrics: `store.write_duration_ms`, `daemon.turn_duration_ms`, `run.abort_rate`, `run.wait_time_ms`
+- `swarm backup` (SQLite online backup API)
+- `swarm vacuum`, `swarm gc-blobs`
+- Handler-author contract doc
+
+---
+
+## 13. Deferred decisions
+
+- **Blob encryption** for secret-bearing outputs — single-user local; deferred.
+- **Cross-machine deployment** — single-machine by design; swap SQLite → Postgres behind `IEventStore` if ever needed.
+- **Retention policies** per workflow — manual `swarm prune` until demand.
+- **Blob streaming** for >16MB — handler must chunk; revisit on real use case.
+- **Auto-migration of schema drift** — refuse + manual for v1.
+- **Workflow hot-reload for in-flight runs** — not planned; `workflow_sha` pinned.
+- **Per-workflow concurrency caps** — add when needed; easy via partial-index counts.
+
+---
+
+## 14. Risks ranked
+
+1. **Handler discipline drift** — #1 long-term risk. Structural lint + review gate mandatory. A single handler ignoring `AbortSignal` breaks invariants.
+2. **Provider without idempotency support** — any external tool that can't accept a dedup key cannot be made safe; operator review is the only line of defense. Tag loudly.
+3. **SQLite write throughput ceiling** — unknown until measured. Counter-based seq (1.5) + BEGIN IMMEDIATE + STRICT + partial indexes should be comfortable below 1000 writes/sec. Measure in M6.
+4. **LLM provider abort leakage** — real and uncontrollable; `Promise.race` bounds; `handler_timeout_leaked` records truth.
+5. **Mid-flight external tool double-execution** — provider idempotency keys + quarantine close the window; relies on (2).
+6. **Schema drift for long-paused runs** — refusing to resume is safe but operationally annoying; acceptable v1.
+
+---
+
+## 15. What this architecture buys
+
+- **One coordination surface.** All races resolve in SQLite; nothing in the filesystem; no unix sockets.
+- **Zero-cost pause snapshots.** Projection always current; pausing = emitting an event.
+- **Deterministic property tests.** Seed-reproducible across the full coordination seam.
+- **Web works daemon-down.** Reads + intent writes never block on daemon availability.
+- **Content-addressed blobs.** Deduplication, loop-safe replay, clean GC.
+- **Orphan side effects are caught, not masked.** Quarantine + idempotency keys = at-most-once jointly with provider.
+- **Fair, predictable queueing.** `ready_at` FIFO; no hidden scheduler rules.
+- **Small delete-heavy diff.** More lines removed than added.
+- **Auditable.** Every state transition is a durable event; `events` table is system memory.
+
+---
+
+*Ready to begin M1.*
