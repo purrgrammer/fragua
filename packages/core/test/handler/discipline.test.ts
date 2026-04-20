@@ -1,4 +1,4 @@
-// Handler discipline — REARCHITECTURE.md §5.
+// Handler discipline — ARCHITECTURE.md §5.
 //
 // Handlers receive their I/O through HandlerContext (ctx.llm, ctx.http,
 // ctx.tools, ctx.messages, ctx.artifacts, ctx.externalCall). Any handler

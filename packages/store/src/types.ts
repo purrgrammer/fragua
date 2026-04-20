@@ -1,4 +1,4 @@
-// swarm store — public types. Mirrors §4 of docs/REARCHITECTURE.md.
+// swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
 
 export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
 

@@ -1,4 +1,4 @@
-// Daemon orchestration — REARCHITECTURE.md §6.
+// Daemon orchestration — ARCHITECTURE.md §6.
 //
 // Top-level: acquire the daemon lock (with TTL-based reclaim of stale
 // holders), run the startup sweep, start the supervisor fiber, then the

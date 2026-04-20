@@ -1,22 +1,20 @@
-// Wave 3 — fidelity-resume degradation rule. `degradeOnResume` is
-// already unit-tested in fidelity.test.ts for `full → summary:high`,
-// but the SPEC §3.6 rule is stronger:
+// Fidelity-resume degradation rule. `degradeOnResume` is already unit-
+// tested in fidelity.test.ts for `full → summary:high`, but SPEC §3.6 is
+// stronger:
 //
 //   > if a node used `fidelity=full` and we're resuming after a crash,
 //   > the first resumed node degrades to `summary:high` (in-memory LLM
 //   > sessions can't always be serialized perfectly).
 //
-// Two things to nail down in Wave 3:
-//   1. *Every* non-full mode stays unchanged (no accidental surprise
-//      when a future patch adds a new mode).
-//   2. The function is exported from the package root so a future
-//      resume implementation (and external callers) can reach it
-//      without digging into `engine/fidelity.ts`.
+// Two invariants:
+//   1. Every non-full mode stays unchanged (no surprise when a new mode
+//      is added).
+//   2. The function is exported from the package root so a resume
+//      implementation can reach it without digging into engine internals.
 //
-// The integration "resume a real run" test is intentionally out of
-// scope — resume is not yet wired end-to-end (no checkpoint loader).
-// That lands with Wave 4+. This suite guards the building block so the
-// integration, when it arrives, doesn't silently regress.
+// End-to-end "resume a real run" is out of scope — the checkpoint
+// loader isn't wired. This suite guards the pure-function building
+// block so the integration, when it arrives, can't silently regress.
 
 import { describe, expect, test } from "bun:test";
 import { degradeOnResume, type FidelityMode } from "../../src/index.ts";

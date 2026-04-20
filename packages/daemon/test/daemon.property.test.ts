@@ -1,4 +1,4 @@
-// Daemon-level property tests — REARCHITECTURE.md §10.
+// Daemon-level property tests — ARCHITECTURE.md §10.
 //
 //  P3  intents never lost
 //  P5  startup sweep requeues running runs

@@ -1,4 +1,4 @@
-// Property tests — REARCHITECTURE.md §10.
+// Property tests — ARCHITECTURE.md §10.
 //
 // P1  seq monotonic & contiguous per run, matches next_seq
 // P2  OCC correctness under racing appendFact

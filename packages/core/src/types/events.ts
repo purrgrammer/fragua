@@ -57,19 +57,20 @@ export type EventType =
   | "control.requested"
   | "control.applied"
   | "control.rejected"
-  // Summariser (Wave 2b) — each call rides as a synthetic node whose id is
+  // Summariser — each call rides as a synthetic node whose id is
   // `__summary.<purpose-or-caller>` so cost + drilldown bucket naturally.
-  // Wave 6 adds `summary.text_delta` for streaming mid-call so UIs can
-  // render the title / narrative as it arrives.
+  // `summary.text_delta` streams mid-call so UIs can render the title /
+  // narrative as it arrives rather than waiting for the full completion.
   | "summary.started"
   | "summary.text_delta"
   | "summary.completed"
   | "run.title_generated"
-  // Budget (Wave 4) — emitted by the BudgetLedger when a per-node or
-  // run-level ceiling is crossed. `budget.warn` is advisory (~80% of
-  // ceiling by default); `budget.stop` fires once the ceiling is
-  // breached and the executor turns subsequent codergen calls into
-  // non_retryable failures. Events ride under synthetic node `__budget`.
+  // Budget — emitted when a per-node or run-level ceiling is crossed.
+  // `budget.warn` is advisory (~80% of ceiling by default); `budget.stop`
+  // fires once the ceiling is breached and the executor turns subsequent
+  // codergen calls into non-retryable failures. Events ride under the
+  // synthetic node `__budget`. Enforcement not yet wired — the ceiling
+  // attrs on node/graph (`max_cost_usd`, `budget_usd`) are declarative.
   | "budget.warn"
   | "budget.stop"
   // Cost
@@ -154,8 +155,8 @@ export interface ContextFileCapture {
 
 /** Generation settings captured per LLM call. All fields optional because not
  * every provider honours every knob, and some settings (top_p, stop) are
- * left at provider defaults today. When Wave 2 wires `reasoning_effort`
- * node attrs through to pi-ai, this is where the resolved value lands. */
+ * left at provider defaults today. When node attrs like `reasoning_effort`
+ * are resolved for a specific call, this is where they land. */
 export interface LlmSettings {
   temperature?: number;
   max_tokens?: number;
@@ -176,17 +177,17 @@ export interface MessageSnapshot {
 }
 
 /** Read-only cumulative cost + token counters at the moment the LLM call is
- * issued. Wave 1 emits this as a placeholder ({0, 0}); Wave 4 wires it to a
- * real BudgetLedger so downstream nodes can enforce per-node / per-run
- * ceilings. Once populated, this is the single source of truth for "how
- * much has the run spent by step N" that UIs can render without summing
- * every `cost.recorded` themselves. */
+ * issued. Currently emitted as a placeholder ({0, 0}) — a real BudgetLedger
+ * that tracks spend and enforces per-node / per-run ceilings is not yet
+ * wired. When populated, this is the single source of truth for "how much
+ * has the run spent by step N" that UIs can render without summing every
+ * `cost.recorded` themselves. */
 export interface BudgetSnapshot {
   cumulative_cost_usd: number;
   cumulative_tokens: number;
-  /** Node-level ceiling if `node.attrs.max_cost_usd` is set (Wave 4). */
+  /** Node-level ceiling if `node.attrs.max_cost_usd` is set. */
   max_cost_usd?: number;
-  /** Run-level ceiling if `graph.attrs.budget_usd` is set (Wave 4). */
+  /** Run-level ceiling if `graph.attrs.budget_usd` is set. */
   run_max_cost_usd?: number;
 }
 
@@ -241,7 +242,7 @@ export interface SkillCatalogCapture {
   source_dir: string;
 }
 
-/** Why a summariser call was made. Added in Wave 2b.
+/** Why a summariser call was made.
  *
  * The concrete type lives in `./summariser.ts` (the port module); this
  * file re-exports the type alias so the event payloads can reference it

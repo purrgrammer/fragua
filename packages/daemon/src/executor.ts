@@ -1,4 +1,4 @@
-// Executor fiber — REARCHITECTURE.md §6.
+// Executor fiber — ARCHITECTURE.md §6.
 //
 // One executor loop per daemon. It repeatedly:
 //   1. Polls for the next claimable run (concurrency-capped).

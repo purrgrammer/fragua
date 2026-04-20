@@ -1,4 +1,4 @@
-// startupSweep — REARCHITECTURE.md §1.4 and §1.1.
+// startupSweep — ARCHITECTURE.md §1.4 and §1.1.
 
 import { describe, expect, test } from "bun:test";
 import type { FactEvent } from "../src/index.ts";

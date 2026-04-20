@@ -1,4 +1,4 @@
-// Supervisor fiber — REARCHITECTURE.md §1.3 / §6.
+// Supervisor fiber — ARCHITECTURE.md §1.3 / §6.
 //
 // One 50ms tick that consolidates:
 //   (a) heartbeat — keeps daemon_lock alive

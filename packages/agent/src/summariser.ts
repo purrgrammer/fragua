@@ -1,7 +1,6 @@
 // Default SummariserBackend — wraps pi-ai's `streamSimple` for a
-// one-shot, no-tools compression call. Wave 6 upgraded from
-// `completeSimple` to streaming so UIs can render titles / narratives
-// as they arrive. Used by:
+// one-shot, no-tools compression call. Streaming so UIs can render
+// titles / narratives as they arrive. Used by:
 //
 //   - execute() to generate the async run title from $ARGUMENTS
 //   - PiCodergenBackend to produce the tail for fidelity=summary:medium/high

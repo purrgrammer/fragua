@@ -1,4 +1,4 @@
-// wait.human handler — REARCHITECTURE.md §0.
+// wait.human handler — ARCHITECTURE.md §0.
 //
 // First call: returns yield_hitl. The executor emits fact.run_paused_hitl
 // and releases the fiber. Process is free to die or do other work.

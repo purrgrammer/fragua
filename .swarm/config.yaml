@@ -28,7 +28,7 @@ defaults:
   # classifier + interactive.
   permissions: unsafe
 
-  # Weak-model summariser (Wave 2b). Powers:
+  # Weak-model summariser. Powers:
   #   - async run-title generation from $ARGUMENTS (see `auto_title`)
   #   - fidelity=summary:medium|high compression of prior node transcripts
   # Always cheaper than the primary coding model. Leave unset to disable

@@ -12,8 +12,8 @@ export interface PiMockBackendOptions {
   /** Pre-scripted assistant messages. Each element = one LLM call. */
   responses?: FauxResponseStep[];
   systemPrompt?: string;
-  /** Inject a summariser stub so Wave-2b integration tests can exercise
-   * the summary:medium/high path without live pi-ai calls. */
+  /** Inject a summariser stub so integration tests can exercise the
+   * summary:medium/high path without live pi-ai calls. */
   summariser?: SummariserBackend;
 }
 

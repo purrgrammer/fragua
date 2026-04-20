@@ -390,9 +390,9 @@ const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "default_max_retri
 
 const NUMBER_KEYS: ReadonlySet<string> = new Set([
   "weight",
-  // Wave 4 budget knobs (graph + node). Declared as numbers so DOT
-  // authors can write `budget_usd = 0.75` without quoting and the
-  // runtime gets a real number, not "0.75".
+  // Budget knobs (graph + node). Declared as numbers so DOT authors can
+  // write `budget_usd = 0.75` without quoting and the runtime gets a real
+  // number, not "0.75".
   "max_cost_usd",
   "max_tokens",
   "budget_usd",

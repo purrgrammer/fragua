@@ -1,4 +1,4 @@
-// Handler contract — REARCHITECTURE.md §5.
+// Handler contract — ARCHITECTURE.md §5.
 //
 // A Handler is a pure async function: given an immutable context, produce a
 // HandlerResult. Handlers never touch the filesystem, spawn processes, or

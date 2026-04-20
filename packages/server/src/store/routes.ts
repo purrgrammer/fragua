@@ -1,4 +1,4 @@
-// DB-backed HTTP routes — REARCHITECTURE.md §7.
+// DB-backed HTTP routes — ARCHITECTURE.md §7.
 //
 // All writes are intents (writer: "web"). Daemon-facing facts are never
 // written here. Reads hit the store projection directly and work even when

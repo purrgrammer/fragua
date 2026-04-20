@@ -72,13 +72,13 @@ export interface NodeAttrs {
   /** Parallel-node config (component shape). */
   fan_in?: string;
   join_policy?: "wait_all" | "first_success";
-  /** Wave 4: per-node cost ceiling in USD. When the run's cumulative
-   * cost crosses this before the next call to this node's backend,
-   * `budget.stop` fires and the node's next attempt returns a
-   * non-retryable failure. Soft `budget.warn` at 80% of the ceiling. */
+  /** Per-node cost ceiling in USD. When the run's cumulative cost crosses
+   * this before the next call to this node's backend, `budget.stop` fires
+   * and the node's next attempt returns a non-retryable failure. Soft
+   * `budget.warn` at 80% of the ceiling. Enforcement not yet wired. */
   max_cost_usd?: number;
-  /** Wave 4: per-node total-token ceiling (input + output). Same
-   * enforcement shape as `max_cost_usd`. */
+  /** Per-node total-token ceiling (input + output). Same enforcement
+   * shape as `max_cost_usd`. Enforcement not yet wired. */
   max_tokens?: number;
   /** Scope the skills catalog visible to this node. Unset = all discovered
    * skills. Set = only these names appear in `<available_skills>` and as
@@ -115,17 +115,16 @@ export interface GraphAttrs {
   thread_id?: string;
   "tool_hooks.pre"?: string;
   "tool_hooks.post"?: string;
-  /** Wave 4: per-run cost ceiling in USD. Once the run's cumulative
-   * cost crosses this, `budget.stop` fires and every subsequent
-   * codergen call fails non-retryably. Enforced by the BudgetLedger
-   * in `engine/budget.ts`. */
+  /** Per-run cost ceiling in USD. Once the run's cumulative cost crosses
+   * this, `budget.stop` fires and every subsequent codergen call fails
+   * non-retryably. Enforcement not yet wired. */
   budget_usd?: number;
-  /** Wave 4: per-run total-token ceiling. */
+  /** Per-run total-token ceiling. Enforcement not yet wired. */
   budget_tokens?: number;
-  /** Wave 4: what to do when a budget threshold is crossed. `"stop"`
-   * (default when any budget is set) hard-fails the run on first
-   * breach; `"warn"` keeps firing `budget.warn` events but never
-   * blocks. */
+  /** Policy when a budget threshold is crossed. `"stop"` (default when
+   * any budget is set) hard-fails the run on first breach; `"warn"`
+   * keeps firing `budget.warn` events but never blocks. Enforcement not
+   * yet wired. */
   budget_policy?: "warn" | "stop";
   [extra: string]: AttrScalar | undefined;
 }

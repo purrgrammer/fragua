@@ -1,4 +1,4 @@
-// Structural lint — REARCHITECTURE.md §5, invariant I1.
+// Structural lint — ARCHITECTURE.md §5, invariant I1.
 //
 // The store module wraps every write in `db.transaction(() => ...)` or the
 // equivalent BEGIN IMMEDIATE / COMMIT pair. Inside those bodies we MUST NOT

@@ -23,7 +23,7 @@ export interface PiCodergenBackendOptions {
   systemPrompt?: string;
   /** Optional summariser used for `fidelity=summary:medium/high`. When
    * omitted those modes fall back to the deterministic `summary:low`
-   * template with a soft warning — behaviour matches Wave 2. */
+   * template with a soft warning. */
   summariser?: SummariserBackend;
   /** Skills discovered by the CLI at startup (see @swarm/workspace
    * `discoverSkills`). Filtered per-node via `node.attrs.skills` and
@@ -79,17 +79,15 @@ export class PiCodergenBackend implements CodergenBackend {
     return this.messageStore;
   }
 
-  /** Wave 6 checkpoint bridge. The executor calls this after each
-   * node transition so the saved snapshot's `pi_sessions` field has
-   * the full per-thread transcript. */
+  /** Checkpoint bridge. Serialise the per-thread transcript so a caller
+   * can save it alongside the rest of a run's state. */
   serialiseSessions(): Record<string, unknown> {
     return this.messageStore.serialise();
   }
 
-  /** Wave 6 resume bridge. On `execute({ resume: true })` the loaded
-   * checkpoint's `pi_sessions` replaces the backend's MessageStore so
-   * the first post-resume backend.run() sees the correct prior
-   * transcript under any shared thread_id. */
+  /** Resume bridge. Replace the backend's MessageStore with a previously-
+   * serialised snapshot so the first post-resume backend.run() sees the
+   * correct prior transcript under any shared thread_id. */
   hydrateSessions(sessions: Record<string, unknown>): void {
     this.messageStore.hydrate(sessions);
   }
@@ -406,18 +404,15 @@ function captureSettings(attrs: Record<string, unknown>):
   return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
-/** Wave 1 budget snapshot: cumulative counters are placeholders (0) until
- * Wave 4 wires a BudgetLedger; the ceilings are populated opportunistically
+/** Budget snapshot: cumulative counters are placeholders (0) until a real
+ * BudgetLedger is wired; the ceilings are populated opportunistically
  * when a workflow author sets them on the node. Returns `undefined` if
- * there is nothing useful to surface. */
+ * there is nothing useful to surface. Emits only when a ceiling is set
+ * — otherwise it's noise. */
 function captureBudget(
   attrs: Record<string, unknown>,
 ): { cumulative_cost_usd: number; cumulative_tokens: number; max_cost_usd?: number } | undefined {
   const maxCost = typeof attrs["max_cost_usd"] === "number" ? attrs["max_cost_usd"] : undefined;
-  // Wave 1 emits budget only when the author has actually set a ceiling,
-  // otherwise the field is noise. Wave 4 stops using this fallback the
-  // moment the executor hands us a `CodergenInput.budget` snapshot —
-  // real cumulative values replace these zeros.
   if (maxCost === undefined) return undefined;
   return { cumulative_cost_usd: 0, cumulative_tokens: 0, max_cost_usd: maxCost };
 }

@@ -16,8 +16,9 @@
 //   - `truncate`     : goal + run_id marker only (spec §3.3)
 //   - `compact`      : deterministic tier-1/2 digest of prior messages
 //   - `summary:low`  : deterministic narrative template (no LLM)
-//   - `summary:*`    : Wave 2 MVP falls back to summary:low with a
-//                      diagnostic; Wave 2b wires an LLM summariser.
+//   - `summary:medium` / `summary:high` : LLM summariser when a
+//     `summariser` backend is supplied; otherwise warns and falls back
+//     to `summary:low`.
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EventType, FidelityMode, SummariserBackend } from "@swarm/core";
@@ -79,17 +80,14 @@ const DEFAULT_SUMMARY_LAST_TEXT_CAP = 600;
 
 /** Build the user-prompt seed for a given fidelity mode.
  *
- * Wave 2: deterministic for `truncate` / `compact` / `summary:low`; the
- * `summary:medium` / `summary:high` branches warn and fall back to
- * `summary:low` behaviour.
- *
- * Wave 2b: when an optional `summariser` is supplied, `summary:medium`
- * and `summary:high` make a real LLM call to that backend to produce the
- * tail narrative. The call emits its own events under a synthetic node
- * id (see @swarm/core/types/summariser.ts), so its cost lands on the run
+ * Deterministic for `truncate` / `compact` / `summary:low`. For
+ * `summary:medium` and `summary:high`: when an optional `summariser` is
+ * supplied, makes a real LLM call to that backend to produce the tail
+ * narrative. The call emits its own events under a synthetic node id
+ * (see @swarm/core/types/summariser.ts), so its cost lands on the run
  * without contaminating the caller's `llm.start`. When no summariser is
- * available the fallback still warns — the behaviour difference is
- * visible in `events.jsonl`. */
+ * available the fallback warns and degrades to `summary:low` — the
+ * behaviour difference is visible in `events.jsonl`. */
 export async function buildFidelitySeed(params: {
   fidelity: FidelityMode;
   graphGoal: string | undefined;

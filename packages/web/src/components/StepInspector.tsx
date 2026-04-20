@@ -1,10 +1,9 @@
-// Wave 5 — Per-step context inspector. Fetches `StepSnapshot[]` from
+// Per-step context inspector. Fetches `StepSnapshot[]` from
 // `GET /runs/:id/steps` and renders collapsible sections for
 // Prompt, System prompt, Messages, Tools, Context files, Settings,
 // Budget, Cost. The conversation view (RunConversation) stays the
 // primary "what happened" surface; this panel answers "what exactly
-// did the agent see at step N?" — the question Waves 1–4 captured the
-// data to answer but had no UI for.
+// did the agent see at step N?".
 //
 // Design:
 //   - Server already folded the event stream into snapshots; the UI

@@ -104,11 +104,10 @@ export function shortenRunId(runId: string): string {
 }
 
 /** Display priority for the row's primary label:
- *   1. `title` — auto-generated summariser title (Wave 2b)
- *   2. `input` — raw $ARGUMENTS, clamped (so pre-Wave-2b runs still read
- *      as something useful once the backfill script fills titles)
- *   3. `workflowName` / `workflow` — legacy runs list fallback
- *   4. runId — last-resort so we never render an empty link */
+ *   1. `title` — auto-generated summariser title
+ *   2. `input` — raw $ARGUMENTS, clamped
+ *   3. `workflowName` / `workflow` — fallback
+ *   4. runId — last resort so we never render an empty link */
 export function displayTitle(row: RunSummary): string {
   if (row.title && row.title.length > 0) return row.title;
   if (row.input && row.input.length > 0) return clampInline(row.input, 80);

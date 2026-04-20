@@ -1,4 +1,4 @@
-// Remaining property-test matrix entries — REARCHITECTURE.md §10.
+// Remaining property-test matrix entries — ARCHITECTURE.md §10.
 //
 //   P6  orphan quarantine        — kill between INTENT and DONE → run quarantines
 //   P7  unquarantine retry       — intent.unquarantine:retry resumes & reuses idempotencyKey

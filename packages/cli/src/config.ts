@@ -21,7 +21,7 @@ export interface SwarmConfig {
     provider?: string;
     model?: string;
     permissions?: string;
-    /** Small-model summariser config (Wave 2b). Powers auto-title +
+    /** Small-model summariser config. Powers auto-title and
      * fidelity=summary:medium/high. Leave unset to disable summarisation
      * (runs proceed, but summary:* fidelities fall back to the
      * deterministic template). Per-provider defaults are used when
@@ -36,7 +36,7 @@ export interface SwarmConfig {
   auto_title?: "on" | "off";
   blocklist?: string[];
   workflows?: Record<string, string>;
-  /** Max concurrent run runs the daemon will claim from its queue.
+  /** Max concurrent runs the daemon will claim from its queue.
    * CLI `--concurrency` overrides this. Default 8 when unset. */
   concurrency?: number;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the

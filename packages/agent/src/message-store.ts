@@ -5,11 +5,12 @@
 // `backend.run()` would start with an empty transcript and `fidelity=full`
 // (the SPEC's "session reused via thread_id") would be a lie.
 //
-// Scope for Wave 1:
-// - in-process only; reset when the backend is reconstructed
-// - unbounded; a long-running run that accumulates huge transcripts
-//   pays the memory cost. Compact / summary fidelities are the pressure
-//   valve; disk persistence lands with checkpoint.pi_sessions (Wave 4+).
+// Scope:
+// - in-process only; reset when the backend is reconstructed.
+// - unbounded; a long-running run that accumulates huge transcripts pays
+//   the memory cost. `compact` / `summary:*` fidelities are the pressure
+//   valve. Disk persistence via `checkpoint.pi_sessions` is not yet wired
+//   (see serialise/hydrate below for the round-trip shape).
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
@@ -52,20 +53,18 @@ export class MessageStore {
     return [...this.map.keys()];
   }
 
-  /** Wave 6: serialise into a JSON-safe plain object for
-   * `checkpoint.pi_sessions`. Each entry is the per-thread transcript
-   * at checkpoint time — opaque to @swarm/core but round-trippable by
-   * `hydrate()` below. */
+  /** Serialise into a JSON-safe plain object for `checkpoint.pi_sessions`.
+   * Each entry is the per-thread transcript at checkpoint time — opaque
+   * to @swarm/core but round-trippable by `hydrate()` below. */
   serialise(): Record<string, AgentMessage[]> {
     const out: Record<string, AgentMessage[]> = {};
     for (const [k, v] of this.map.entries()) out[k] = v.slice();
     return out;
   }
 
-  /** Wave 6: inverse of `serialise`. Replaces the current store
-   * contents with the snapshot — used by the executor on resume so
-   * prior transcripts rejoin the store before the first post-resume
-   * backend.run(). */
+  /** Inverse of `serialise`. Replaces the current store contents with
+   * the snapshot — used on resume so prior transcripts rejoin the store
+   * before the first post-resume backend.run(). */
   hydrate(snapshot: Record<string, unknown>): void {
     this.map.clear();
     for (const [k, v] of Object.entries(snapshot)) {

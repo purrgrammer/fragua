@@ -1,4 +1,4 @@
-// Intent fold — REARCHITECTURE.md §6.
+// Intent fold — ARCHITECTURE.md §6.
 //
 // The daemon collects unapplied intents between node turns and reduces them
 // to a single decision. Cancel wins; otherwise we collapse pause / steer /
