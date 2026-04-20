@@ -57,10 +57,7 @@ export function Home(): JSX.Element {
   const stats = useMemo(() => computeStats(rows), [rows]);
   // Exclude currently-running runs from the recent list so they aren't
   // duplicated above.
-  const recent = useMemo(
-    () => rows.filter((r) => r.status !== "running").slice(0, RECENT_LIMIT),
-    [rows],
-  );
+  const recent = useMemo(() => rows.filter((r) => r.status !== "running").slice(0, RECENT_LIMIT), [rows]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -80,7 +77,7 @@ export function Home(): JSX.Element {
 // We deliberately don't double-probe /jobs — the health response is
 // the single source of truth.
 
-function Overview(): JSX.Element {
+function _Overview(): JSX.Element {
   const health = useHealth();
   const daemonOff = health.status === "error" || health.daemon === undefined;
 
@@ -409,4 +406,3 @@ function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return "—";
   return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 0 }).format(value);
 }
-

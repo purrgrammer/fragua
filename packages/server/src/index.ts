@@ -169,8 +169,8 @@ export {
 } from "./schemas.ts";
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
-export { envProviderPreflight } from "./store/routes.ts";
 export type { WorkflowModelValidator } from "./store/routes.ts";
+export { envProviderPreflight } from "./store/routes.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,

@@ -19,8 +19,7 @@
 // conditional/parallel) don't LLM-dispatch.
 
 import { parseDotSource } from "@swarm/core";
-import { KNOWN_PROVIDERS } from "./providers.ts";
-import { resolveModelOrNull } from "./providers.ts";
+import { KNOWN_PROVIDERS, resolveModelOrNull } from "./providers.ts";
 
 export interface ModelOffender {
   nodeId: string;

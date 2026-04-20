@@ -13,7 +13,9 @@ import { newRunId } from "./run-id.ts";
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared
  * `(provider, model)` pairs don't resolve in the provider registry. */
-export type WorkflowModelValidator = (dotSource: string) =>
+export type WorkflowModelValidator = (
+  dotSource: string,
+) =>
   | { ok: true }
   | { ok: false; offenders: Array<{ nodeId: string; provider?: string; model: string; reason: string }> };
 

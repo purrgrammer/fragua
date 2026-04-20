@@ -123,7 +123,7 @@ function UserPromptMessage({ text }: { text: string }): JSX.Element {
   return (
     <AIMessage from="user" data-testid="conversation-user-prompt">
       <MessageContent>
-        <p className="whitespace-pre-wrap">{text}</p>
+        <MessageResponse>{text}</MessageResponse>
       </MessageContent>
     </AIMessage>
   );

@@ -7,8 +7,8 @@
 // transcripts — a correctness bug invisible under a serial executor and
 // live under a concurrent one.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { MessageStore } from "../src/message-store.ts";
 
 function msg(role: AgentMessage["role"], text: string): AgentMessage {
@@ -114,7 +114,10 @@ describe("MessageStore", () => {
     s.set("r1", "main", [msg("user", "b")]);
     s.set("r2", "dev", [msg("user", "c")]);
 
-    const keys = s.keys().map(({ runId, threadId }) => `${runId}/${threadId}`).sort();
+    const keys = s
+      .keys()
+      .map(({ runId, threadId }) => `${runId}/${threadId}`)
+      .sort();
     expect(keys).toEqual(["r1/dev", "r1/main", "r2/dev"]);
   });
 
