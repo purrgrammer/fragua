@@ -9,9 +9,15 @@
 import { mkdirSync } from "node:fs";
 import { hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
-import { firstCredentialedProvider, makeCodergenHandler, PiCodergenBackend } from "@swarm/agent";
+import {
+  defaultSummariserModel,
+  firstCredentialedProvider,
+  makeCodergenHandler,
+  PiCodergenBackend,
+  PiSummariserBackend,
+} from "@swarm/agent";
 import * as handler from "@swarm/core/handler";
-import { autoDispatcherResolver, Dispatcher, startDaemon } from "@swarm/daemon";
+import { AutoTitler, autoDispatcherResolver, Dispatcher, startDaemon } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
@@ -174,6 +180,18 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   process.once("SIGINT", onSig);
   process.once("SIGTERM", onSig);
 
+  // Auto-title summariser — cheap cross-run call that labels each run
+  // post-enqueue. Uses `defaults.summariser.{provider,model}` when set;
+  // otherwise defaults to the cheapest known model for the primary
+  // provider. `auto_title: "off"` disables even when a backend is
+  // configured.
+  const autoTitler = buildAutoTitler({
+    store,
+    config,
+    primaryProvider: provider,
+    shutdownSignal: signalCtrl.signal,
+  });
+
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
@@ -186,6 +204,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   if (useLlm) {
     console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
   }
+  if (autoTitler.label !== undefined) {
+    console.log(chalk.dim(`  auto-title: ${autoTitler.label}`));
+  }
   console.log(chalk.dim(`  press Ctrl-C to stop`));
 
   let exitCode = 0;
@@ -197,6 +218,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       llmCall,
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
+      ...(autoTitler.titler ? { autoTitler: autoTitler.titler } : {}),
     });
     await handleRef.done;
   } catch (err) {
@@ -206,4 +228,24 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     store.close();
   }
   return exitCode;
+}
+
+function buildAutoTitler(args: {
+  store: SqliteStore;
+  config: Awaited<ReturnType<typeof loadConfig>>;
+  primaryProvider: string | undefined;
+  shutdownSignal: AbortSignal;
+}): { titler: AutoTitler | undefined; label: string | undefined } {
+  const { store, config, primaryProvider, shutdownSignal } = args;
+  if (config.auto_title === "off") {
+    return { titler: undefined, label: "off (config)" };
+  }
+  const sumProvider = config.defaults?.summariser?.provider ?? primaryProvider;
+  if (!sumProvider) return { titler: undefined, label: undefined };
+  const sumModel = config.defaults?.summariser?.model ?? defaultSummariserModel(sumProvider);
+  if (!sumModel) return { titler: undefined, label: `no default model for ${sumProvider}` };
+
+  const backend = new PiSummariserBackend({ provider: sumProvider, model: sumModel });
+  const titler = new AutoTitler({ backend, store, shutdownSignal, enabled: true });
+  return { titler, label: `${sumProvider}/${sumModel}` };
 }

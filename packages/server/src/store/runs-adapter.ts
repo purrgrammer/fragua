@@ -52,7 +52,7 @@ export function runStateToSummary(
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
-  const title = pickTitle(events);
+  const title = state.title && state.title.length > 0 ? state.title : pickTitle(events);
   if (title !== undefined) summary.title = title;
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;

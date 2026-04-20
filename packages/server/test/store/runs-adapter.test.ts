@@ -24,6 +24,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     readyAt: 1_000_000,
     nodeStartedAt: null,
     updatedAt: 1_000_000,
+    title: null,
     ...overrides,
   };
 }
