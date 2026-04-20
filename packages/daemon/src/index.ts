@@ -1,6 +1,8 @@
 export { AbortRegistry } from "./abort-registry.ts";
 export type { AutoDispatcherOpts } from "./auto-dispatcher.ts";
 export { autoDispatcherResolver } from "./auto-dispatcher.ts";
+export type { AutoTitlerOpts, TitleRequest } from "./auto-titler.ts";
+export { AutoTitler } from "./auto-titler.ts";
 export type { DispatcherResolver } from "./dispatch.ts";
 export { Dispatcher } from "./dispatch.ts";
 export type { DaemonHandle, DaemonMainOpts } from "./entrypoint.ts";

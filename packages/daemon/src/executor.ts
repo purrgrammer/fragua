@@ -12,6 +12,7 @@ import { type EdgeSelection, type Graph, parseDotSource, selectEdge } from "@swa
 import * as core from "@swarm/core/handler";
 import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore } from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
+import type { AutoTitler } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { CollectingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
@@ -35,6 +36,9 @@ export interface ExecutorOpts {
   maxTurnsForTesting?: number;
   /** AbortSignal that stops the executor loop. */
   shutdownSignal: AbortSignal;
+  /** Optional auto-titler. When set, `titleRun` fires once per run just
+   * after `fact.run_started` is durably committed. */
+  autoTitler?: AutoTitler;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -141,6 +145,17 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       ];
       const ok = await tryAppendFact(opts.store, runId, state.version, startFacts);
       if (!ok) continue; // OCC retry
+      if (opts.autoTitler) {
+        const input = routingString(state.routing, "input") ?? "";
+        const goal = graphFor(state.workflowSha)?.attrs.goal;
+        const req: import("./auto-titler.ts").TitleRequest = {
+          runId,
+          workflowSha: state.workflowSha,
+          input,
+        };
+        if (goal !== undefined) req.goal = goal;
+        opts.autoTitler.titleRun(req);
+      }
       continue; // Reload state next turn with the new run_started applied.
     }
 

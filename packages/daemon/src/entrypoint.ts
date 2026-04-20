@@ -9,6 +9,7 @@ import { hostname as osHostname } from "node:os";
 import type * as coreHandler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
+import type { AutoTitler } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
 import { startSupervisor } from "./supervisor.ts";
@@ -24,6 +25,11 @@ export interface DaemonMainOpts {
   lockTtlMs?: number;
   /** If omitted, SIGTERM/SIGINT will trigger shutdown. */
   shutdownSignal?: AbortSignal;
+  /** Optional auto-title summariser. When provided, the executor fires
+   * `autoTitler.titleRun` right after each run's `fact.run_started`
+   * append, and the daemon awaits `drain()` after the executor loop
+   * exits so in-flight title calls get a graceful shutdown. */
+  autoTitler?: AutoTitler;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -76,7 +82,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         },
       });
 
-      await runExecutor({
+      const executorOpts: Parameters<typeof runExecutor>[0] = {
         store: opts.store,
         dispatcher: opts.dispatcher,
         registry,
@@ -84,10 +90,13 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         llmCall: opts.llmCall,
         maxConcurrentRuns: opts.maxConcurrentRuns ?? DEFAULT_CONCURRENCY,
         shutdownSignal: ctrl.signal,
-      });
+      };
+      if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
+      await runExecutor(executorOpts);
 
       registry.tripAll(new Error("shutdown"));
       await supervisor.promise;
+      if (opts.autoTitler) await opts.autoTitler.drain();
     } finally {
       try {
         opts.store.releaseDaemonLock(pid);
