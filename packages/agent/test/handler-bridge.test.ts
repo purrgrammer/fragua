@@ -58,7 +58,12 @@ function stubBackend(
   };
 }
 
-async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
+async function ctxFor(
+  runId: string,
+  store: SqliteStore,
+  nodeId: string,
+  args: Readonly<Record<string, string>> = {},
+): Promise<handler.HandlerContext> {
   store.saveWorkflow("sha", "t", "digraph{}");
   store.enqueueRun({ runId, workflowSha: "sha" });
   const ac = new AbortController();
@@ -76,6 +81,7 @@ async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promis
     }),
     http: handler.makeHttpClient({ signal: ac.signal }),
     tools,
+    args,
     recorder: {
       recordIntent: () => {},
       recordDone: () => {},
@@ -157,6 +163,50 @@ describe("makeCodergenHandler", () => {
     if (result.kind === "halt") {
       expect(result.detail).toBe("provider unreachable");
     }
+    store.close();
+  });
+
+  test("substitutes ctx.args into node.attrs.prompt before backend.run()", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-sub", store, "n1", {
+      $ARGUMENTS: "rename foo() to bar()",
+      $RUN_ID: "r-sub",
+    });
+    let seenPrompt: string | undefined;
+    const capture: CodergenBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeCodergenHandler({
+      node: node({ attrs: { shape: "box", prompt: "Task: $ARGUMENTS (run=$RUN_ID)" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    expect(seenPrompt).toBe("Task: rename foo() to bar() (run=r-sub)");
+    store.close();
+  });
+
+  test("empty args collapse $ARGUMENTS to '' rather than leaking the literal", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-empty", store, "n1");
+    let seenPrompt: string | undefined;
+    const capture: CodergenBackend = {
+      async run(input) {
+        seenPrompt = input.prompt;
+        return ok({});
+      },
+    };
+    const spec = makeCodergenHandler({
+      node: node({ attrs: { shape: "box", prompt: "[$ARGUMENTS]" } }),
+      nextNode: "__end__",
+      backend: capture,
+    });
+    await spec.handler(ctx);
+    expect(seenPrompt).toBe("[]");
+    expect(seenPrompt?.includes("$ARGUMENTS")).toBe(false);
     store.close();
   });
 

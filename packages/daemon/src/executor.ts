@@ -168,6 +168,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       http: core.makeHttpClient({ signal }),
       tools: opts.tools,
       recorder,
+      args: buildSubstitutionArgs(runId, state.routing),
     };
     if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
@@ -346,4 +347,24 @@ function lastHitlSeq(unapplied: ReadonlyArray<{ type: string; seq: number }>): n
     if (e.type === "intent.hitl_input") return e.seq;
   }
   return 0;
+}
+
+/**
+ * Assemble the prompt-substitution args the handler bridge feeds into
+ * `substitute()`. `$ARGUMENTS` comes from `routing.input` (set by the
+ * enqueue surface — POST /runs body or CLI positional). `$RUN_ID` is the
+ * stable per-run id. `$WORKTREE_PATH` / `$LOG_DIR` are left for a
+ * follow-up commit when the daemon gains worktree provisioning;
+ * referencing them in prompts today collapses to "" per substitute()'s
+ * missing-token rule, which is still an improvement over the literal
+ * placeholder leaking to the LLM.
+ */
+export function buildSubstitutionArgs(
+  runId: string,
+  routing: Record<string, unknown>,
+): Record<string, string> {
+  const args: Record<string, string> = { $RUN_ID: runId };
+  const input = routing["input"];
+  if (typeof input === "string") args["$ARGUMENTS"] = input;
+  return args;
 }

@@ -1,9 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
-import { runOne } from "../src/executor.ts";
+import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
 import { wakePendingHitl } from "../src/wake-hitl.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
+
+describe("buildSubstitutionArgs", () => {
+  test("always sets $RUN_ID from the runId", () => {
+    const args = buildSubstitutionArgs("run-xyz", {});
+    expect(args["$RUN_ID"]).toBe("run-xyz");
+  });
+
+  test("sets $ARGUMENTS from routing.input when it is a string", () => {
+    const args = buildSubstitutionArgs("r", { input: "rename foo to bar" });
+    expect(args["$ARGUMENTS"]).toBe("rename foo to bar");
+  });
+
+  test("omits $ARGUMENTS when routing.input is missing or non-string", () => {
+    expect(buildSubstitutionArgs("r", {})["$ARGUMENTS"]).toBeUndefined();
+    expect(buildSubstitutionArgs("r", { input: 42 })["$ARGUMENTS"]).toBeUndefined();
+    expect(buildSubstitutionArgs("r", { input: null })["$ARGUMENTS"]).toBeUndefined();
+  });
+});
 
 describe("executor — happy path", () => {
   test("queued → running → completed via terminal echo", async () => {

@@ -102,6 +102,13 @@ export interface HandlerContext {
   readonly messages: MessagesApi;
   readonly artifacts: ArtifactsApi;
   readonly externalCall: ExternalCall;
+  /**
+   * Substitution args for prompt templating. Passed to `substitute()` before
+   * the prompt hits the LLM. Keys are the literal tokens ($ARGUMENTS,
+   * $RUN_ID, $WORKTREE_PATH, $LOG_DIR, $1..$9, etc.). The executor populates
+   * this from `run_state.routing` + ambient run info (runId, worktree path).
+   */
+  readonly args: Readonly<Record<string, string>>;
   /** Optional: HITL input delivered to a resumed wait.human node. */
   readonly hitlInput?: unknown;
   /** Optional: steering text folded in before this node run. */

@@ -22,6 +22,10 @@ export interface BuildContextOpts {
   http: HttpClient;
   tools: ToolRegistry;
   recorder: SideEffectRecorder;
+  /** Prompt-substitution args ($ARGUMENTS, $RUN_ID, etc.). Empty record
+   * when the caller has no positional input. Passed through to
+   * HandlerContext unchanged. */
+  args?: Readonly<Record<string, string>>;
   hitlInput?: unknown;
   steering?: string;
 }
@@ -89,6 +93,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     messages,
     artifacts,
     externalCall,
+    args: opts.args ?? {},
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
   };

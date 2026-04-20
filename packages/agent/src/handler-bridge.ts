@@ -6,7 +6,7 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import type { CodergenBackend, ContextMap, EventType, Node, Outcome } from "@swarm/core";
+import { type CodergenBackend, type ContextMap, type EventType, type Node, type Outcome, substitute } from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 
@@ -48,8 +48,12 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
 
   const run: handler.Handler = async (ctx) => {
     const node = opts.node;
-    const prompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
+    const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
     const context = mergeContext(opts.defaultContext, ctx.routing);
+    // Substitute $ARGUMENTS / $RUN_ID / etc. before the prompt hits the
+    // LLM. Without this the agent sees the literal placeholder and every
+    // workflow with an abort-on-empty guard halts on its first node.
+    const prompt = substitute(rawPrompt, { args: ctx.args, context });
 
     let tokens = 0;
     let costUsd = 0;

@@ -33,6 +33,7 @@ function stubCtx(
       getFrom: () => new Uint8Array(),
     },
     externalCall: async (_, fn) => fn("stub-key"),
+    args: {},
   };
   return { ...base, ...overrides };
 }
