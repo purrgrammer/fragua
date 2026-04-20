@@ -653,22 +653,27 @@ packages/
       parser/                          ← kept (DOT)
       handler.ts                       ← HandlerContext, HandlerSpec, Handler types
       handlers/
-        codegen.ts
-        tool.ts
-        conditional.ts
-        wait-human.ts                  ← NEW semantic: yields, no blocking
-        loop.ts                        ← graph-level cycle with loop_counter
-        parallel.ts
+        wait-human.ts                  ← yields, no blocking
+        (loop.ts removed — loops are backward edges + max_retries)
+      engine/
+        edge-selection.ts              ← 5-rule priority (attractor §3.3)
+        fan-in.ts                      ← heuristic ranking reducer (§4.9)
+        retry-policy.ts                ← per-node retry counter (§3.6)
+        substitution.ts                ← $ARGUMENTS / $nodeId.output
       llm-client.ts                    ← pre-wired abort + idempotency
       http-client.ts                   ← pre-wired abort
       tool-registry.ts                 ← side-effect tagging
       external-call.ts                 ← idempotency key + intent/done envelope
   daemon/                              ← REWRITTEN
     src/
-      loop.ts                          ← executor fiber
-      supervisor.ts                    ← 50ms tick: heartbeat + intents + watchdog
+      executor.ts                      ← executor fiber
+      supervisor.ts                    ← heartbeat + intents + watchdog tick
       abort-registry.ts                ← runId → AbortController map
       dispatch.ts                      ← node-kind → handler
+      auto-dispatcher.ts               ← shape → HandlerSpec fallback
+      result-to-facts.ts               ← HandlerResult → FactEvent[]
+      reaper.ts                        ← stale daemon-lock cleanup
+      wake-hitl.ts                     ← pending HITL scan
       entrypoint.ts                    ← CLI binary
   server/                              ← TRIMMED
     src/
@@ -694,7 +699,8 @@ packages/
 | `.swarm/runs/<id>/control.jsonl` | Intent events |
 | `.swarm/daemon/daemon.json` | `daemon_lock` row |
 | `packages/server/src/adapters/sqlite-job-queue.ts` | Folded into `run_state` |
-| In-handler for-loops (trapezium) | Graph cycles + `loop_counter` |
+| In-handler for-loops (trapezium shape + `until` attr) | Backward edges + `max_retries` on target (attractor §3.6) |
+| `stack.manager_loop` (house shape) | Never wired; no real workflow needed it |
 | `last_applied_control_id` tracking | `last_applied_seq` in projection |
 | Sink/source abstractions | Single `IEventStore` |
 | Filesystem-locking helpers | WAL + `BEGIN IMMEDIATE` |
@@ -773,7 +779,7 @@ and tracked.
 - **Worktree provisioning.** `$WORKTREE_PATH` / `$LOG_DIR` substitution args resolve to `""` because nothing provisions a git worktree per run. `AGENTS.md` describes a `git worktree add` step before the first node; the daemon does not yet run it. Workflows that rely on being inside a linked worktree (e.g. quick-change's merge node's precondition check) always hit the SKIP branch.
 - **Checkpoint / resume.** `PiCodergenBackend.serialiseSessions()` and `hydrateSessions()` round-trip an in-memory transcript, but no executor call site invokes them. A daemon restart loses `fidelity=full` session continuity; the run re-queues via `startupSweep` with an empty message store. SPEC §3.6's "fidelity=full degrades to summary:high on resume" rule is implemented at the unit level (`degradeOnResume`) but unreachable end-to-end.
 - **Auto-title summariser (emit side).** `run.title_generated` events are read by the adapter and surfaced on `RunSummary.title`. No call site fires the summariser to produce one. `config.yaml`'s `summariser:` + `auto_title: on` are accepted but only the read side cares today.
-- **Handler coverage.** `auto-dispatcher.ts` falls through to a noop transition for `loop`, `tool`, `parallel`, `parallel.fan_in`, `stack.manager_loop`. Workflows relying on these shapes must register real specs via `Dispatcher.register` before invoking the daemon. The `conditional` (diamond) and `start` (Mdiamond) shapes are wired — they defer to the executor's edge selector.
+- **Handler coverage.** The pure reducers are in place — `fan-in.ts` (attractor §4.9 heuristic ranking), `retry-policy.ts` (§3.6 retry counter), `edge-selection.ts` (§3.3 5-rule priority), `external-call.ts` (idempotency envelope) — all property-tested. Executor integration (parallel branch fanout, fan-in winner projection into routing, tool-node shell execution) is not yet wired: `auto-dispatcher.ts` falls through to a noop transition for `tool`, `parallel`, and `parallel.fan_in`. Workflows relying on these shapes must register real specs via `Dispatcher.register` before invoking the daemon. `start`, `exit`, `conditional`, `codergen`, and `wait.human` are fully wired.
 - **Per-node provider preflight.** `POST /runs` checks that the daemon has *some* provider API key set, but not that the specific provider pinned on each `node.attrs.provider` is reachable. A workflow that hardcodes an unconfigured provider fails at dispatch (visible via `fact.run_halted`), not at enqueue.
 
 ---

@@ -67,11 +67,16 @@ A workflow is a Graphviz DOT graph. Each node has a shape that maps to a handler
 | `box` | `codergen` (LLM call) |
 | `diamond` | `conditional` |
 | `hexagon` | `wait.human` |
-| `parallelogram` | `tool` |
+| `parallelogram` | `tool` (graph-level shell step) |
 | `component` | `parallel` |
 | `tripleoctagon` | `parallel.fan_in` |
-| `house` | `stack.manager_loop` |
-| `trapezium` | `loop` |
+
+Loops are **backward conditional edges** bounded by `max_retries` on the
+target node (attractor-spec §3.6 / §5.2) — there is no `loop` primitive.
+A node that should re-run on `outcome=retry` takes an edge back to itself
+or to an upstream node with `[condition="outcome=retry"]`, and its
+`max_retries` attribute caps how many times the retry counter can bump
+before the run halts with `reason=max_retries_exceeded`.
 
 Workflows are uploaded via `POST /workflows { name, dotSource }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha.
 

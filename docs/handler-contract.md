@@ -129,21 +129,29 @@ Declare your handler's risk level on the spec:
 
 ## Loops
 
-Graph-level only. A loop is a cycle in the DOT graph whose counter lives at `ctx.routing.loop_counter` (or `loop:<nodeId>` for nested loops). Use the provided handler:
+Graph-level only, via backward conditional edges (attractor §3.6 / §5.2).
+There is no `loop` primitive. To re-run a node on an outcome, add an edge
+back to it (or to an upstream node) guarded by a condition, and set
+`max_retries` on the target:
 
-```typescript
-import { handler } from "@swarm/core";
-
-const loopSpec = handler.makeLoopHandler({
-  bodyNode: "process",
-  exitNode: "done",
-  maxIterations: 5,
-});
+```dot
+  implement [
+    prompt = "..."
+    max_retries = 2        // caps the retry counter
+  ]
+  implement -> review
+  review    -> implement [condition="outcome=retry"]   // backward edge
 ```
 
-Each iteration is a node transition, so it's a steer point. Max iterations trips a `halt { reason: "max_loops" }`.
+`ctx.iteration` tracks the re-entry counter; the executor bumps it each
+time the backward edge re-enters. Pure retry-policy semantics live in
+`@swarm/core`'s `engine/retry-policy.ts` — `retryStep(state, status)`
+returns `advance` / `retry` / `fail` / `halt`. The executor consults it
+after every handler completion.
 
-**Do not write for-loops inside a handler.** An in-handler loop blocks the fiber, doesn't respect `ctx.signal` at the loop boundary, and can't be paused.
+**Do not write for-loops inside a handler.** An in-handler loop blocks
+the fiber, doesn't respect `ctx.signal` at the loop boundary, and can't
+be paused.
 
 ---
 
