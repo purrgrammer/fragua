@@ -35,23 +35,46 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-function resolveServerTarget(): string {
-  // Walk up from the web package to find the repo root's daemon state.
-  // The config file lives at `packages/web/vite.config.ts`; the daemon
-  // writes its pidfile at `<repo>/.swarm/daemon/daemon.json`.
+interface ProxyTarget {
+  /** Origin proxied requests are forwarded to (no path). */
+  target: string;
+  /** When true, strip the leading `/api` before forwarding (legacy daemon
+   * mode where the API lives at root). When false, forward the full
+   * `/api/...` path (matches `swarm serve --dev`, where the API is mounted
+   * under `/api`). */
+  stripApiPrefix: boolean;
+}
+
+function resolveServerTarget(): ProxyTarget {
+  // 1. Explicit env override from `swarm serve --dev` (preferred). The
+  //    parent process binds the API and tells Vite where to find it. The
+  //    URL already includes `/api`, so we strip it here and don't rewrite
+  //    on the way out — Vite forwards the full path verbatim.
+  const fromEnv = process.env["SWARM_API_URL"];
+  if (fromEnv) {
+    const trimmed = fromEnv.replace(/\/+$/, "");
+    const apiSuffixed = trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+    const origin = apiSuffixed.slice(0, -"/api".length);
+    return { target: origin, stripApiPrefix: false };
+  }
+  // 2. Legacy fallback: read the daemon pidfile and proxy to its built-in
+  //    HTTP (API at root, requires `/api` rewrite). Walks up from
+  //    `packages/web/vite.config.ts` to the repo root.
   const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
   try {
     const raw = readFileSync(resolve(repoRoot, ".swarm/daemon/daemon.json"), "utf8");
     const { port } = JSON.parse(raw) as { port?: number };
-    if (typeof port === "number" && port > 0) return `http://localhost:${port}`;
+    if (typeof port === "number" && port > 0) {
+      return { target: `http://localhost:${port}`, stripApiPrefix: true };
+    }
   } catch {
     // No daemon pidfile yet — fall through to the daemon's default port
     // so starting the daemon after Vite just works on next reload.
   }
-  return "http://localhost:3737";
+  return { target: "http://localhost:3737", stripApiPrefix: true };
 }
 
-const serverTarget = resolveServerTarget();
+const proxy = resolveServerTarget();
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -64,9 +87,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: serverTarget,
+        target: proxy.target,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
+        ...(proxy.stripApiPrefix
+          ? { rewrite: (path: string) => path.replace(/^\/api/, "") }
+          : {}),
       },
     },
   },

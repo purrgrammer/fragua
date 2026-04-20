@@ -31,6 +31,7 @@ cli
   .option("--port <n>", "TCP port to bind (default 0 = ephemeral; writes <db-dir>/serve.json)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
+  .option("--dev", "Spawn Vite for HMR'd frontend; API stays on <port>, UI prints separately")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -46,6 +47,7 @@ cli
       port: portExplicit ? portNum! : 0,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(options["dev"] === true ? { dev: true } : {}),
     });
     process.exit(code);
   });

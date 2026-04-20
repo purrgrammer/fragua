@@ -12,11 +12,12 @@
 // We use `Bun.serve` directly (Bun ≥ 1.2 is the primary runtime per AGENTS.md),
 // which avoids adding `@hono/node-server` as a dependency.
 
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SqliteStore } from "@swarm/store";
-import { createServer, type ServerPorts } from "@swarm/server";
+import { createServer, daemonInfoFromStore, type ServerPorts } from "@swarm/server";
 import chalk from "chalk";
 
 /**
@@ -50,6 +51,14 @@ export interface ServeCommandOptions {
    * CLI default-3000 path), 0 when `port` is explicitly set.
    */
   portRetries?: number;
+  /**
+   * Development mode. The API still runs on `<port>`; in addition we spawn
+   * Vite (HMR for the React app) as a child process and tell it to proxy
+   * `/api` back to us via the `SWARM_API_URL` env var. The Vite URL is the
+   * one humans should open. Backend module hot-reload isn't handled here
+   * — prefix the command with `bun --hot` for that.
+   */
+  dev?: boolean;
 }
 
 export interface ServerHandle {
@@ -84,10 +93,17 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const discoveryPath = resolve(dirname(storePath), "serve.json");
   const store = new SqliteStore({ path: storePath });
   const webDistDir = findWebDistDir();
+  // Default daemon detection: read the daemon_lock row (and runStateCounts)
+  // from the shared store on every /health request. Caller-provided
+  // `opts.ports.daemonInfo` wins (lets tests inject fixtures).
+  const ports: ServerPorts = {
+    ...(opts.ports ?? {}),
+    daemonInfo: opts.ports?.daemonInfo ?? daemonInfoFromStore({ store }),
+  };
   const app = createServer({
     cwd,
     store,
-    ...(opts.ports !== undefined ? { ports: opts.ports } : {}),
+    ports,
     ...(webDistDir !== undefined ? { webDistDir } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
@@ -179,9 +195,11 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
 
   console.log(chalk.green(`swarm serve listening on ${handle.origin}`));
   console.log(chalk.dim(`  store: ${handle.storePath}`));
-  if (handle.webDistDir) {
+  if (handle.webDistDir && !opts.dev) {
     console.log(chalk.dim(`  web:   ${handle.origin}/ (${handle.webDistDir})`));
     console.log(chalk.dim(`  api:   ${handle.url}`));
+  } else if (opts.dev) {
+    console.log(chalk.dim(`  api:   ${handle.origin}/api (HMR'd UI starts below)`));
   } else {
     console.log(chalk.dim(`  api:   ${handle.url}`));
     console.log(
@@ -190,12 +208,41 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   }
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
+  // --dev: spawn Vite as a child process. Its proxy reads SWARM_API_URL
+  // and forwards `/api/**` back to us with the path intact.
+  let viteChild: ChildProcess | undefined;
+  if (opts.dev) {
+    viteChild = spawn(
+      "bun",
+      ["run", "--filter", "@swarm/web", "dev"],
+      {
+        cwd: opts.cwd ?? process.cwd(),
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          SWARM_API_URL: `${handle.origin}/api`,
+        },
+      },
+    );
+    viteChild.on("exit", (code, signal) => {
+      if (signal !== "SIGINT" && signal !== "SIGTERM" && code !== 0) {
+        console.error(chalk.red(`vite exited with code ${code} — shutting down serve`));
+        process.kill(process.pid, "SIGINT");
+      }
+    });
+  }
+
   await new Promise<void>((resolveShutdown) => {
     let stopping = false;
     const stop = (signal: NodeJS.Signals) => {
       if (stopping) return;
       stopping = true;
       console.log(chalk.dim(`\n${signal} received — shutting down...`));
+      if (viteChild && viteChild.exitCode === null) {
+        try {
+          viteChild.kill("SIGINT");
+        } catch {}
+      }
       handle
         .close()
         .catch((err) => console.error(chalk.red(`serve: close failed — ${(err as Error).message}`)))
