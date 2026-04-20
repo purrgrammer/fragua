@@ -236,12 +236,11 @@ function typeStripTone(handler: string, goalGate: boolean): string | null {
       return "bg-sw-accent-warn";
     case "wait.human":
       return "bg-sw-accent-human";
-    case "loop":
-      return "bg-sw-accent-loop";
     case "parallel":
     case "parallel.fan_in":
-    case "stack.manager_loop":
       return "bg-sw-accent-idle";
+    case "tool":
+      return "bg-sw-accent-loop";
     default:
       return null;
   }
@@ -295,7 +294,6 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
         <span className="truncate" title={d.nodeId}>
           <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
         </span>
-        {d.iterationLabel ? <span>{d.iterationLabel}</span> : null}
         {d.model ? (
           <span className="truncate" title={d.model}>
             <span className="uppercase tracking-[0.06em]">model</span> <code className="text-sw-text">{d.model}</code>
@@ -396,8 +394,6 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
-  /** Pre-rendered iteration badge text ("×3 iterations") for loop nodes. */
-  iterationLabel: string | undefined;
   state: NodeState["state"] | null;
   lastEventSeq: number;
   hasIncoming: boolean;
@@ -467,7 +463,6 @@ export function toFlowGraph(
       handler: topo ? handlerOf(topo) : "unknown",
       goalGate: Boolean(topo?.attrs.goal_gate),
       model: topo?.attrs.model,
-      iterationLabel: iterationLabelFor(topo),
       state: stateEntry ? stateEntry.state : detail ? "pending" : null,
       lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),
@@ -544,14 +539,4 @@ function outcomeOf(edge: GraphEdge): "success" | "fail" | undefined {
   if (/\boutcome\s*=\s*success\b/.test(src) || /\bsuccess\b/.test(src)) return "success";
   if (/\boutcome\s*=\s*fail\b/.test(src) || /\bfail(ure)?\b/.test(src)) return "fail";
   return undefined;
-}
-
-/** Loop nodes (trapezium) surface their iteration cap in the card so
- *  operators don't need to open the inspector to see "how many rounds
- *  can this run?". Returns `undefined` for non-loop nodes. */
-function iterationLabelFor(topo: GraphNode | undefined): string | undefined {
-  if (!topo || topo.shape !== "trapezium") return undefined;
-  const max = topo.attrs.max_iterations;
-  if (typeof max === "number" && max > 0) return `×${max} iterations`;
-  return "loop";
 }

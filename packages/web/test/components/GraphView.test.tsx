@@ -243,35 +243,6 @@ describe("toFlowGraph — layout + metadata", () => {
     expect((done?.x ?? 0) > (start?.x ?? 0)).toBe(true);
   });
 
-  it("loop (trapezium) nodes carry an iteration label", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      loop [shape=trapezium, max_iterations=3, until="APPROVED", label="implement and review"]
-      done [shape=Msquare]
-      start -> loop -> done
-    }`;
-    const graph = parseDotSource(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const loopData = flowNodes.find((n) => n.id === "loop")?.data as {
-      iterationLabel?: string;
-      handler: string;
-    };
-    expect(loopData.handler).toBe("loop");
-    expect(loopData.iterationLabel).toBe("×3 iterations");
-  });
-
-  it("non-loop nodes have no iteration label", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      a [shape=box]
-      start -> a
-    }`;
-    const graph = parseDotSource(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const aData = flowNodes.find((n) => n.id === "a")?.data as { iterationLabel?: string };
-    expect(aData.iterationLabel).toBeUndefined();
-  });
-
   it("surfaces the model attribute in the node data", () => {
     const src = `digraph g {
       start [shape=Mdiamond]

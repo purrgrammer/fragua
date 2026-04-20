@@ -10,7 +10,7 @@ import { useDom } from "../setup.ts";
 
 const DOT_SOURCE = `digraph demo {
   a [shape=box, label="Planner", model="opus-4", prompt="plan the work"]
-  b [shape=trapezium, label="Loop", max_iterations=3, until="done"]
+  b [shape=hexagon, label="Review", prompt="human approval"]
   c [shape=box, label="Coder", allowed_tools="shell,ast_search", system_prompt="strict"]
   a -> b
   b -> c
@@ -43,16 +43,14 @@ describe("NodeInspector", () => {
     expect(q.getByTestId("node-inspector-prompt").textContent).toBe("plan the work");
   });
 
-  it("shows loop config for a trapezium node", () => {
+  it("renders a wait.human node header without a codergen prompt block", () => {
     const nodes = nodesFromDot();
     const b = nodes["b"];
     expect(b).toBeTruthy();
     if (!b) return;
     const { container } = render(<NodeInspector node={b} />);
-    const text = container.textContent ?? "";
-    expect(text.toLowerCase()).toContain("loop");
-    expect(text).toContain("3");
-    expect(text).toContain("done");
+    const panel = within(container).getByTestId("node-inspector");
+    expect(panel.getAttribute("data-handler")).toBe("wait.human");
   });
 
   it("lists allowed tools and system prompt override", () => {

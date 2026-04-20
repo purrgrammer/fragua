@@ -61,7 +61,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       const nextNode = result.nextNode ?? "__end__";
       const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
-        iteration: loopCounterOf(ctx.state.routing),
+        iteration: nodeRetryCount(ctx.state.routing),
         tokens: result.tokens,
         costUsd: result.costUsd,
         nextNode,
@@ -139,7 +139,10 @@ export function cancelToFacts(intentSeq: number): FactEvent[] {
   return [{ type: "fact.run_cancelled", payload: { intentSeq } }];
 }
 
-function loopCounterOf(routing: Record<string, unknown>): number {
+/** Per-node retry counter. Shares the `loop_counter` routing key with the
+ * executor's `nodeRetryCount` for backward-compat with events predating
+ * the attractor alignment. */
+function nodeRetryCount(routing: Record<string, unknown>): number {
   const v = routing["loop_counter"];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }

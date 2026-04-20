@@ -153,7 +153,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     const signal = AbortSignal.any(signals);
     opts.registry.register(runId, steerCtrl);
 
-    const iteration = loopCounterOf(state.routing);
+    const iteration = nodeRetryCount(state.routing);
     const recorder = new CollectingRecorder(currentNode, iteration);
     const observability: { type: string; payload: Record<string, unknown> }[] = [];
 
@@ -415,7 +415,11 @@ function routingString(routing: Record<string, unknown>, key: string): string | 
   return typeof v === "string" ? v : undefined;
 }
 
-function loopCounterOf(routing: Record<string, unknown>): number {
+/** Read the per-node retry counter from routing. Attractor §3.6: this
+ * bumps each time a backward edge re-enters a node after a non-success
+ * outcome. Stored under `loop_counter` for backward compatibility with
+ * events written before the shape was renamed. */
+function nodeRetryCount(routing: Record<string, unknown>): number {
   const v = routing["loop_counter"];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
@@ -462,10 +466,7 @@ function recordEdgeSelected(
   buffer.push({ type: "edge.selected", payload });
 }
 
-export function buildSubstitutionArgs(
-  runId: string,
-  routing: Record<string, unknown>,
-): Record<string, string> {
+export function buildSubstitutionArgs(runId: string, routing: Record<string, unknown>): Record<string, string> {
   const args: Record<string, string> = { $RUN_ID: runId };
   const input = routing["input"];
   if (typeof input === "string") args["$ARGUMENTS"] = input;

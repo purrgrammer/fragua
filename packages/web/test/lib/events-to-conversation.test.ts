@@ -3,7 +3,7 @@
 // Three flavours of coverage:
 //   1. Synthetic event sequences that exercise each branch of the
 //      reducer in isolation (streaming, reasoning consolidation, tool
-//      lifecycle, trapezium loop multi-turn, determinism).
+//      lifecycle, multi-turn retries on one node, determinism).
 //   2. A fixture smoke test: fold a real `.swarm/runs/<id>/events.jsonl`
 //      and assert shape invariants (≥1 section per executed node, no
 //      thrown errors, costs attributed to assistant messages).
@@ -169,36 +169,36 @@ describe("eventsToConversation — synthetic sequences", () => {
     expect(tool.errorText).toBe("permission denied");
   });
 
-  it("trapezium-loop node with 3 iterations yields 3 turns in ONE section", () => {
+  it("multi-turn node (retry via backward edge) yields 3 turns in ONE section", () => {
     const mkTurn = (i: number): RawEvent[] => [
-      ev("agent.turn_start", { node_id: "implement_and_review" }),
+      ev("agent.turn_start", { node_id: "implement" }),
       ev("agent.message_start", {
-        node_id: "implement_and_review",
+        node_id: "implement",
         data: { role: "assistant" },
       }),
       ev("llm.text_delta", {
-        node_id: "implement_and_review",
+        node_id: "implement",
         data: { delta: `iteration ${i}`, content_index: 0 },
       }),
       ev("agent.message_end", {
-        node_id: "implement_and_review",
+        node_id: "implement",
         data: { role: "assistant" },
       }),
-      ev("agent.turn_end", { node_id: "implement_and_review" }),
+      ev("agent.turn_end", { node_id: "implement" }),
     ];
     const stream: RawEvent[] = [
-      ev("node.started", { node_id: "implement_and_review" }),
+      ev("node.started", { node_id: "implement" }),
       ...mkTurn(1),
       ...mkTurn(2),
       ...mkTurn(3),
       ev("node.completed", {
-        node_id: "implement_and_review",
+        node_id: "implement",
         data: { outcome: "pass" },
       }),
     ];
     const out = eventsToConversation(stream);
     expect(out).toHaveLength(1);
-    expect(out[0]?.nodeId).toBe("implement_and_review");
+    expect(out[0]?.nodeId).toBe("implement");
     expect(out[0]?.turns).toHaveLength(3);
     expect(out[0]?.status).toBe("completed");
   });

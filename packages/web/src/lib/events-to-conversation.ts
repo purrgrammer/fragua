@@ -17,7 +17,7 @@
 //     user message inside the active section/turn.
 //
 //   - Turns: one `Turn` per `agent.turn_start` within the current node
-//     section. A trapezium loop node that runs three iterations emits
+//     section. A node that retries via a backward edge three times emits
 //     three turn_starts inside the *same* node_id, so those three turns
 //     all live under one section — matching the spec's "three turns in
 //     one section, not three sections" rule.

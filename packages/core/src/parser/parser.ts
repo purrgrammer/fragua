@@ -349,9 +349,7 @@ function isNodeShape(s: string): s is NodeShape {
     s === "hexagon" ||
     s === "component" ||
     s === "tripleoctagon" ||
-    s === "parallelogram" ||
-    s === "house" ||
-    s === "trapezium"
+    s === "parallelogram"
   );
 }
 
@@ -378,13 +376,7 @@ function toAttrPairs(attrs: Record<string, unknown>): AttrPairs {
 
 // ---- attribute coercion -----------------------------------------------
 
-const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
-  "goal_gate",
-  "auto_status",
-  "allow_partial",
-  "loop_restart",
-  "skills_disabled",
-]);
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate", "auto_status", "allow_partial", "skills_disabled"]);
 
 const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "default_max_retries", "idle_timeout"]);
 

@@ -89,19 +89,6 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Loop */}
-      {(attrs.max_iterations !== undefined || attrs.until !== undefined || attrs.fresh_context !== undefined) && (
-        <Section title="loop">
-          {attrs.max_iterations !== undefined && (
-            <Field label="max iterations" value={<code className="text-sw-text">{attrs.max_iterations}</code>} />
-          )}
-          {attrs.until && <Field label="until" value={<code className="text-sw-text">{attrs.until}</code>} />}
-          {attrs.fresh_context !== undefined && (
-            <Field label="fresh context" value={<code className="text-sw-text">{String(attrs.fresh_context)}</code>} />
-          )}
-        </Section>
-      )}
-
       {/* Parallel */}
       {(attrs.fan_in !== undefined || attrs.join_policy !== undefined) && (
         <Section title="parallel">

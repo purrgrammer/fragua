@@ -2,7 +2,10 @@
 
 import type { FidelityMode } from "./fidelity.ts";
 
-/** Attractor node shapes, each mapping to a handler. */
+/** Attractor node shapes, each mapping to a handler. The canonical 8 from
+ * attractor-spec §2.8. `loop` and `stack.manager_loop` are intentionally
+ * absent — loops are backward conditional edges bounded by `max_retries`
+ * on the target node (§3.6 / §5.2). */
 export type NodeShape =
   | "Mdiamond" // start
   | "Msquare" // exit
@@ -11,9 +14,7 @@ export type NodeShape =
   | "hexagon" // wait.human
   | "component" // parallel
   | "tripleoctagon" // parallel.fan_in
-  | "parallelogram" // tool
-  | "house" // stack.manager_loop
-  | "trapezium"; // loop
+  | "parallelogram"; // tool
 
 export const HANDLER_BY_SHAPE = {
   Mdiamond: "start",
@@ -24,8 +25,6 @@ export const HANDLER_BY_SHAPE = {
   component: "parallel",
   tripleoctagon: "parallel.fan_in",
   parallelogram: "tool",
-  house: "stack.manager_loop",
-  trapezium: "loop",
 } as const satisfies Record<NodeShape, string>;
 
 export type HandlerType = (typeof HANDLER_BY_SHAPE)[NodeShape];
@@ -65,10 +64,6 @@ export interface NodeAttrs {
   fallback_retry_target?: string;
   auto_status?: boolean;
   allow_partial?: boolean;
-  /** Loop-node config (trapezium shape). */
-  until?: string;
-  max_iterations?: number;
-  fresh_context?: boolean;
   /** Parallel-node config (component shape). */
   fan_in?: string;
   join_policy?: "wait_all" | "first_success";
@@ -96,7 +91,6 @@ export interface EdgeAttrs {
   weight?: number;
   fidelity?: FidelityMode;
   thread_id?: string;
-  loop_restart?: boolean;
   [extra: string]: AttrScalar | undefined;
 }
 

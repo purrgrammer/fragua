@@ -91,7 +91,11 @@ export type ExternalCall = <T>(params: ExternalCallParams, fn: (idempotencyKey: 
 export interface HandlerContext {
   readonly runId: string;
   readonly nodeId: string;
-  /** 0 outside loops; from routing.loop_counter inside loops. */
+  /** Per-node re-entry counter. 0 on first entry; bumped by the executor
+   * every time a backward edge returns control to this node (attractor
+   * §3.6 retry semantics). Used to key idempotency hashes so repeated
+   * retries of the same external call don't dedupe to a single provider
+   * request. */
   readonly iteration: number;
   /** Composed AbortSignal: steer | timeout | shutdown. Respecting this is contract. */
   readonly signal: AbortSignal;

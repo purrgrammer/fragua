@@ -122,15 +122,13 @@ function specForNode(
       };
     // Shapes NOT yet implemented end-to-end — handlers return a noop
     // transition through the selector so the run progresses instead of
-    // deadlocking. Behaviour is incomplete: `loop` iteration counting,
-    // `tool` invocation, and `parallel` fork/join aren't modelled here.
-    // Workflows that rely on these shapes need to register real specs
-    // via Dispatcher.register before invoking the daemon.
-    case "loop":
+    // deadlocking. Behaviour is incomplete: `tool` invocation and
+    // `parallel` fork/join aren't modelled here. Workflows that rely
+    // on these shapes need to register real specs via Dispatcher.register
+    // before invoking the daemon.
     case "tool":
     case "parallel":
     case "parallel.fan_in":
-    case "stack.manager_loop":
     default:
       return transitionSpec(kind, first);
   }
@@ -167,10 +165,6 @@ function handlerKindOf(attrs: { shape?: string; type?: string }): string {
       return "parallel";
     case "tripleoctagon":
       return "parallel.fan_in";
-    case "house":
-      return "stack.manager_loop";
-    case "trapezium":
-      return "loop";
     case "box":
     default:
       return "codergen";

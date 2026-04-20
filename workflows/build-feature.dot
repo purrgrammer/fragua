@@ -13,37 +13,41 @@
 //     --input="..."
 //
 // Stages:
-//   1. plan                 — single read-only discovery + planning pass.
-//                             No bash, no writes, no subagent. Agent reads
-//                             the repo with glob/grep/read_file/git_read
-//                             and emits a concrete plan.
-//   2. implement_and_review — trapezium loop: edit files, spawn a subagent
-//                             as read-only reviewer, iterate until the
-//                             reviewer emits <promise>APPROVED</promise>
-//                             or max_iterations=3 is hit.
-//   3. verify               — run `bun run ci` and iterate on failures.
-//   4. update_docs          — sync docs/SPEC.md, docs/PLAN.md, AGENTS.md if
-//                             user-visible behavior / conventions shifted.
-//   5. commit               — stage touched files and commit per AGENTS.md
-//                             §Commit conventions. The commit body IS the
-//                             run summary — there is no separate summary.
-//   6. merge                — rebase the worktree branch onto main and
-//                             fast-forward. Skips cleanly on the main
-//                             checkout or when ahead-count is zero.
+//   1. plan        — read-only discovery + planning pass. No bash, no
+//                    writes. Agent reads the repo with glob/grep/read_file/
+//                    git_read and emits a concrete plan.
+//   2. implement   — edit files, run typecheck, stop when the plan is
+//                    landed. `thread_id="dev"` keeps context between
+//                    implement + verify so the verifier can recall edits.
+//   3. review      — FRESH thread, FRESH model, read-only tools. Reads
+//                    the plan + `git diff HEAD` and emits APPROVE or
+//                    `<abort>reviewer rejected: …</abort>`. Self-review
+//                    is poor — the reviewer never sees the implementer's
+//                    conversation, only the artifact (the diff).
+//   4. verify      — run `bun run ci` and iterate on failures.
+//   5. update_docs — sync docs/SPEC.md, docs/PLAN.md, AGENTS.md if
+//                    user-visible behavior / conventions shifted.
+//   6. commit      — stage touched files and commit per AGENTS.md
+//                    §Commit conventions. Commit body IS the run summary.
+//   7. merge       — rebase the worktree branch onto main and fast-forward.
+//                    Skips cleanly on the main checkout or when ahead-count
+//                    is zero.
 //
 // Scope-safety: `plan` has no write tools and no local:bash, so the agent
-// literally cannot implement the feature prematurely. That was a real
-// failure mode in the old explore+plan split — an agent used shell
-// redirection to write files during "explore" and skipped planning.
+// literally cannot implement the feature prematurely.
+//
+// Review independence: `review` is a separate graph node (not a subagent
+// call), on a fresh thread, with read-only tools. REJECT → outcome=fail →
+// run halts for a human to intervene. A rejected review means the plan
+// itself was wrong or the implementation drifted; silently looping back
+// rarely helps and burns tokens.
 //
 // Context-management notes:
-//   - thread_id="dev" is shared only between implement_and_review and
-//     verify so the verifier can recall the edits it just made.
-//     update_docs, commit, and merge run on fresh threads and read state
-//     via git, which keeps the implement-loop conversation from bleeding
-//     into unrelated nodes.
+//   - thread_id="dev" is shared between implement and verify so verify
+//     remembers the edits. review / update_docs / commit / merge each run
+//     on fresh threads and read state via git.
 //   - AGENTS.md is attached as context_files only on `plan`. Downstream
-//     nodes that need a convention cite the rule inline.
+//     nodes cite any needed rule inline.
 //   - Every node's system prompt starts with a <run-environment> block
 //     injected by the CLI (worktree path, run id, log dir, bootstrap
 //     status). Agents don't need to introspect their cwd.
@@ -54,7 +58,7 @@ digraph build_feature {
     label       = "build-feature"
     default_fidelity = "compact"
     default_max_retries = 1
-    retry_target = "implement_and_review"
+    retry_target = "implement"
   ]
 
   start [shape=Mdiamond]
@@ -66,13 +70,18 @@ digraph build_feature {
     fidelity = "compact"
   ]
 
-  implement_and_review [
-    shape = trapezium
-    until = "APPROVED"
-    max_iterations = 3
-    prompt = "You are implementing the plan ($plan.output).\n\nEach iteration, do all three steps in order:\n  (1) IMPLEMENT — apply any remaining plan items. Prefer local:apply_patch for multi-file or multi-hunk changes, local:edit_file for a single surgical replacement, and local:write_file only for new files or whole-file rewrites. Use local:glob/local:grep to locate call sites before editing. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package (via local:bash) and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n  (2) REVIEW — call local:subagent with: prompt = the full plan + a diff of what you changed (from `git diff`) + this instruction: \"You are a senior reviewer. Read the listed files and judge whether the implementation matches the plan, tests cover the new behavior, and there are no obvious bugs or scope creep. Respond with either \\\"APPROVE: <one-line reason>\\\" or \\\"REJECT: <numbered list of concrete fixes>\\\".\" Set allowed_tools to [\"local:read_file\",\"local:glob\",\"local:grep\",\"local:git_read\"] (read-only reviewer — no bash).\n  (3) DECIDE — if the reviewer's verdict starts with APPROVE, emit exactly <promise>APPROVED</promise> as your final message (nothing else). If it starts with REJECT, acknowledge the fixes you will make next iteration and STOP (the loop will re-invoke you)."
-    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:glob, local:grep, local:bash, local:subagent, local:load_skill"
+  implement [
+    prompt = "You are implementing the plan ($plan.output).\n\nApply every plan item. Prefer local:apply_patch for multi-file or multi-hunk changes, local:edit_file for a single surgical replacement, and local:write_file only for new files or whole-file rewrites. Use local:glob/local:grep to locate call sites before editing. Stay inside the package(s) named in the plan. After editing, run `bun run --filter='@swarm/<pkg>' typecheck` on every modified package (via local:bash) and fix any errors. Do NOT modify docs/SPEC.md or docs/PLAN.md unless the plan says to.\n\nWhen finished, emit a concise summary of the landed work: (1) files touched, (2) public surface added/changed, (3) tests added, (4) any plan items you skipped and why. Stop — a separate review node will judge your work."
+    allowed_tools = "local:read_file, local:write_file, local:edit_file, local:apply_patch, local:glob, local:grep, local:bash, local:load_skill"
     thread_id = "dev"
+    max_retries = 2
+    model = "claude-sonnet-4-6"
+  ]
+
+  review [
+    prompt = "You are a senior code reviewer on a FRESH thread with no memory of how the changes were produced. You judge the artifact (the diff), not the process.\n\nInputs you have:\n  - The plan that was committed to: $plan.output\n  - The implementation summary: $implement.output\n  - The actual diff — get it via local:git_read subcommand=\"diff\" args=[\"HEAD\"].\n\nSteps:\n  1. Run local:git_read subcommand=\"diff\" args=[\"HEAD\"].\n  2. For each changed file, local:read_file the current state and confirm the edits match the plan.\n  3. Judge four things independently:\n       (a) Does the diff implement the plan's stated scope? No more, no less.\n       (b) Are new behaviors covered by tests? Read the test files and verify they assert what the plan said they should.\n       (c) Any obvious bugs, type errors the compiler would miss, or security issues?\n       (d) Any scope creep — edits to files the plan didn't name?\n  4. Respond with EXACTLY ONE of:\n       APPROVE: <one-line reason the diff is shippable>\n       <abort>REJECT: <one-line summary>. fixes: <numbered list, 1-4 items></abort>\n     APPROVE ⇒ outcome=success; the run proceeds to verify. REJECT ⇒ outcome=fail; the run halts for a human to triage. Do NOT hedge; do NOT loop; if you're unsure, REJECT with a concrete concern.\n\nYou have read-only tools. You cannot run bash or edit files."
+    allowed_tools = "local:read_file, local:glob, local:grep, local:git_read"
+    fidelity = "compact"
     model = "claude-sonnet-4-6"
   ]
 
@@ -114,14 +123,17 @@ digraph build_feature {
 
   start -> plan
 
-  // Early exits: when plan emits `<abort>…</abort>`, the backend turns that
-  // into a `fail` outcome and we route straight to `done`. The unconditional
-  // edges below only fire on `outcome=success` because the condition-matched
-  // edges are evaluated first (see docs/SPEC.md §3.8).
+  // Early exits: when plan / review emit `<abort>…</abort>`, the backend
+  // turns that into a `fail` outcome and we route straight to `done`. The
+  // unconditional edges below only fire on `outcome=success` because the
+  // condition-matched edges are evaluated first (see docs/SPEC.md §3.8).
   plan -> done [condition="outcome=fail"]
-  plan -> implement_and_review
+  plan -> implement
 
-  implement_and_review -> verify
+  implement -> review
+  review -> done [condition="outcome=fail", label="rejected"]
+  review -> verify
+
   verify -> update_docs [condition="outcome=success"]
   verify -> done        [condition="outcome=fail"]
   update_docs -> commit
