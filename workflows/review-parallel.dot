@@ -1,0 +1,141 @@
+// review-parallel.dot — reference workflow covering every node kind.
+//
+// Purpose: one workflow every swarm-adjacent example uses to verify the
+// graph runtime understands the full shape vocabulary from attractor §2.8.
+// Every canonical handler kind appears at least once:
+//
+//   Mdiamond       → start               (start)
+//   Msquare        → exit                (done)
+//   box            → codergen            (plan, approach_*, summarize)
+//   diamond        → conditional         (gate)
+//   hexagon        → wait.human          (human_signoff)
+//   component      → parallel            (explore)
+//   tripleoctagon  → parallel.fan_in     (pick_best)
+//   parallelogram  → tool                (run_tests)
+//
+// It is not designed for production use — the prompts are minimal, the
+// parallel branches are deliberate toy explorations — but it exercises
+// the end-to-end runtime for a full tour of the primitives.
+//
+// Semantics reminders:
+//
+//   - Parallel (component) runs deliberation-only. Each branch gets an
+//     in-memory clone of context but MUST NOT mutate the worktree —
+//     write-equivalent side effects happen AFTER fan_in via a dedicated
+//     codergen / tool node. Enforced by restricting allowed_tools on
+//     branch nodes to read-only.
+//
+//   - Fan-in (tripleoctagon) is the attractor §4.9 heuristic reducer:
+//     ranks candidates by (outcome_rank, -score, id) and emits the
+//     winner's summary as context."fan_in.winner". When `prompt` is set
+//     the reducer switches to LLM-based evaluation; omitted here so the
+//     deterministic heuristic runs.
+//
+//   - Tool (parallelogram) is the graph-level shell-step primitive
+//     (attractor §4.10). `tool_command` is templated from routing at
+//     dispatch time. Distinct from agent-callable tools (read / write /
+//     edit / bash) that LLMs invoke inside a codergen turn.
+//
+//   - Conditional (diamond) only evaluates outgoing edge conditions
+//     against the current context + prior outcome; it has no prompt and
+//     does no LLM work. Edges must supply `condition=` or the validator
+//     flags W003.
+
+digraph review_parallel {
+  graph [
+    goal        = "Produce a ranked multi-angle review of a diff, then a signoff-gated test run."
+    label       = "review-parallel"
+    default_fidelity = "compact"
+  ]
+
+  start [shape=Mdiamond]
+
+  plan [
+    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY (goal). End with `<promise>BRIEF_READY</promise>`."
+    allowed_tools = "local:read_file, local:list_dir, local:git_read"
+    fidelity = "compact"
+  ]
+
+  explore [
+    shape = component
+    fan_in = pick_best
+    join_policy = "wait_all"
+  ]
+
+  approach_correctness [
+    prompt = "Using the brief ($plan.output), read the diff via `git diff HEAD` and identify up to 3 concrete CORRECTNESS risks — logic bugs, off-by-one, missing null checks. Each risk gets a line: `RISK: <one-line> (file:line)`. If you find none, say `NO_RISKS`."
+    allowed_tools = "local:read_file, local:grep, local:git_read"
+    fidelity = "compact"
+  ]
+
+  approach_style [
+    prompt = "Using the brief ($plan.output), scan the diff for STYLE / consistency regressions — mismatched naming, inconsistent error handling, unused imports. One line per finding: `STYLE: <one-line> (file:line)`. No findings → `NO_FINDINGS`."
+    allowed_tools = "local:read_file, local:grep, local:git_read"
+    fidelity = "compact"
+  ]
+
+  approach_security [
+    prompt = "Using the brief ($plan.output), look for SECURITY concerns in the diff — unvalidated input, secret leaks, auth bypasses, injection risks. One line per concern: `SEC: <one-line> (file:line)`. No concerns → `NO_CONCERNS`."
+    allowed_tools = "local:read_file, local:grep, local:git_read"
+    fidelity = "compact"
+  ]
+
+  pick_best [
+    shape = tripleoctagon
+    // No `prompt` → heuristic branch of attractor §4.9 fires: rank by
+    // (outcome_rank, -score, branchId) and surface the winner's summary.
+  ]
+
+  gate [
+    shape = diamond
+    // Conditional node — evaluates outgoing edge conditions against
+    // `context` + the outcome of the preceding node. No prompt, no LLM.
+    // Routes to human signoff when the winning reviewer scored above
+    // the risk threshold, otherwise jumps straight to the test run.
+  ]
+
+  human_signoff [
+    shape = hexagon
+    prompt = "A reviewer flagged high-risk findings. Paste an APPROVE or REJECT comment to continue."
+  ]
+
+  run_tests [
+    shape = parallelogram
+    tool_command = "bun test"
+    // tool node — deterministic shell step; stdout + exit code become
+    // the outcome via status.json. No LLM involved. max_retries lets
+    // transient CI flakes retry without re-entering the full review.
+    max_retries = 2
+    goal_gate = true
+  ]
+
+  summarize [
+    prompt = "Combine the winning review ($pick_best.output) and the test result ($run_tests.output) into a 5-line run summary. Final line: `REVIEW_DONE`."
+    fidelity = "compact"
+  ]
+
+  done [shape=Msquare]
+
+  start -> plan
+  plan -> explore
+
+  explore -> approach_correctness
+  explore -> approach_style
+  explore -> approach_security
+
+  approach_correctness -> pick_best
+  approach_style       -> pick_best
+  approach_security    -> pick_best
+
+  pick_best -> gate
+
+  // Conditional routing — risk tier drives the branch.
+  gate -> human_signoff [condition="context.risk=high"]
+  gate -> run_tests     [condition="context.risk!=high"]
+  gate -> run_tests
+
+  human_signoff -> run_tests
+  run_tests -> summarize  [condition="outcome=success"]
+  run_tests -> done       [condition="outcome=fail"]
+  summarize -> done
+}
