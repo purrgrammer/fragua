@@ -46,6 +46,7 @@ describe("RunDetail", () => {
       status: "running",
       lastEventSeq: 3,
       nodes: [],
+      selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -76,6 +77,7 @@ describe("RunDetail", () => {
       status: "success",
       lastEventSeq: 4,
       nodes: [],
+      selectedEdges: [],
       costUsd: 0.42,
       inputTokens: 2500,
       outputTokens: 500,
@@ -109,6 +111,7 @@ describe("RunDetail", () => {
       status: "running",
       lastEventSeq: 1,
       nodes: [],
+      selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -135,6 +138,7 @@ describe("RunDetail", () => {
       status: "success",
       lastEventSeq: 2,
       nodes: [],
+      selectedEdges: [],
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -184,6 +188,7 @@ describe("RunDetail", () => {
       status: "running",
       lastEventSeq: 1,
       nodes: [{ nodeId: "implement", state: "running", lastEventSeq: 1 }],
+      selectedEdges: [{ from: "start", to: "implement" }],
       workflowSource: `digraph demo {
         start [shape=Mdiamond]
         implement [shape=box, label="Implement", model="claude-sonnet-4-5"]

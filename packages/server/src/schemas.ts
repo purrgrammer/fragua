@@ -42,6 +42,16 @@ export const NodeState = Type.Object({
 });
 export type NodeState = Static<typeof NodeState>;
 
+/** `(from, to)` pair for an edge the executor actually traversed. Projected
+ * from the run's `edge.selected` event stream. Lets the UI fade edges that
+ * were never taken so the executed path pops visually. Multiple entries for
+ * the same pair are allowed (back-edges re-entered across iterations). */
+export const SelectedEdge = Type.Object({
+  from: Type.String(),
+  to: Type.String(),
+});
+export type SelectedEdge = Static<typeof SelectedEdge>;
+
 export const RunDetail = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
@@ -56,6 +66,7 @@ export const RunDetail = Type.Object({
   ]),
   lastEventSeq: Type.Integer({ minimum: 0 }),
   nodes: Type.Array(NodeState),
+  selectedEdges: Type.Array(SelectedEdge),
   workflowSource: Type.Optional(Type.String()),
   costUsd: Type.Number({ minimum: 0, default: 0 }),
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),

@@ -78,6 +78,10 @@ export type FactEvent =
         /** Optional: LLM provider model id, e.g. "gemini-1.5-pro". */
         modelName?: string;
         nextNode: string;
+        /** Outcome status the handler (or edge selector) decided — lets the
+         * UI distinguish "completed OK" from "completed with outcome=fail"
+         * without walking `edge.selected` / `fact.run_halted`. */
+        outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
       };
     }
   | {

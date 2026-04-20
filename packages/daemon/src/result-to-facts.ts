@@ -70,6 +70,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         payload.outputRef = `${result.outputRef.nodeId}:${result.outputRef.key}`;
       }
       if (result.modelName != null) payload.modelName = result.modelName;
+      if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {

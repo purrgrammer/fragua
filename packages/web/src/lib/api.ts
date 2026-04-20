@@ -70,6 +70,13 @@ export interface NodeState {
  * client-side by `@swarm/core`'s `parseDotSource` so the server isn't a
  * second parser.
  */
+/** `(from, to)` pair for an edge the executor traversed — see server's
+ *  `SelectedEdge` schema. Ordered log; duplicates allowed. */
+export interface SelectedEdge {
+  from: string;
+  to: string;
+}
+
 export interface RunDetail {
   runId: string;
   workflow?: string;
@@ -78,6 +85,7 @@ export interface RunDetail {
   status: "running" | "success" | "fail" | "canceled" | "unknown";
   lastEventSeq: number;
   nodes: NodeState[];
+  selectedEdges: SelectedEdge[];
   workflowSource?: string;
   costUsd: number;
   inputTokens: number;
@@ -428,6 +436,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     status?: unknown;
     lastEventSeq?: unknown;
     nodes?: unknown;
+    selectedEdges?: unknown;
     workflowSource?: unknown;
     costUsd?: unknown;
     inputTokens?: unknown;
@@ -442,6 +451,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     typeof o.status === "string" &&
     typeof o.lastEventSeq === "number" &&
     Array.isArray(o.nodes) &&
+    Array.isArray(o.selectedEdges) &&
     (o.workflowSource === undefined || typeof o.workflowSource === "string") &&
     (o.costUsd === undefined || typeof o.costUsd === "number") &&
     (o.inputTokens === undefined || typeof o.inputTokens === "number") &&

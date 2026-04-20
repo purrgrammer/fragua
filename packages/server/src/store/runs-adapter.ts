@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { IEventStore, RunState, RunStatus, StoredEvent } from "@swarm/store";
-import type { NodeState, RunDetail, RunSummary } from "../schemas.ts";
+import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -90,6 +90,7 @@ export function runStateToDetail(
     ...summary,
     lastEventSeq: state.lastAppliedSeq,
     nodes: deriveNodeStates(events),
+    selectedEdges: deriveSelectedEdges(events),
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
   return detail;
@@ -98,11 +99,13 @@ export function runStateToDetail(
 /**
  * Walk the event log and emit one NodeState per nodeId seen. State is
  * derived from the latest transition fact on that node:
- *   - node_started + node_completed → completed
- *   - node_started only              → running
- *   - node_aborted                   → failed
- *   - (nothing)                      → pending (not emitted; graph layer
- *     will show pending for nodes absent from the list)
+ *   - node_started + node_completed(outcomeStatus≠fail) → completed
+ *   - node_started + node_completed(outcomeStatus=fail) → failed
+ *   - node_started only                                 → running
+ *   - node_aborted                                      → failed
+ *   - (nothing)                                         → pending (not
+ *     emitted; graph layer renders pending for nodes absent from the list,
+ *     which the UI then fades to mark "never executed").
  */
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const byNode = new Map<string, { state: NodeState["state"]; lastEventSeq: number }>();
@@ -117,9 +120,11 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
       case "fact.node_started":
         bump(nodeId, "running", ev.seq);
         break;
-      case "fact.node_completed":
-        bump(nodeId, "completed", ev.seq);
+      case "fact.node_completed": {
+        const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
+        bump(nodeId, outcome === "fail" ? "failed" : "completed", ev.seq);
         break;
+      }
       case "fact.node_aborted":
         bump(nodeId, "failed", ev.seq);
         break;
@@ -135,11 +140,29 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   }));
 }
 
+/** Project `edge.selected` events into the `(from, to)` pairs the executor
+ *  traversed. Order preserved. Duplicates kept — a back-edge re-entered N
+ *  times emits N entries, which lets the UI reason about iteration if it
+ *  cares. */
+function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
+  const out: SelectedEdge[] = [];
+  for (const ev of events) {
+    if (ev.type !== "edge.selected") continue;
+    const p = ev.payload as { from?: unknown; to?: unknown };
+    if (typeof p.from === "string" && typeof p.to === "string") {
+      out.push({ from: p.from, to: p.to });
+    }
+  }
+  return out;
+}
+
 function nodeIdOf(event: StoredEvent): string | null {
   if (!event.type.startsWith("fact.")) return null;
   const p = event.payload as { nodeId?: unknown };
   return typeof p.nodeId === "string" ? p.nodeId : null;
 }
+
+export { deriveNodeStates, deriveSelectedEdges };
 
 /**
  * Enumerate every run in the store. Uses a raw SQL escape hatch — we

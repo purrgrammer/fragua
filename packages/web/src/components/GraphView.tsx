@@ -265,8 +265,10 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
       data-node-id={d.nodeId}
       data-state={d.state}
       data-handler={handlerLabel}
+      data-dim={d.dim ? "true" : undefined}
       className={cn(
-        "relative w-60 overflow-hidden transition-colors duration-[var(--sw-duration-status)]",
+        "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
+        d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
         d.selected && !d.active && "ring-2 ring-sw-accent-idle",
       )}
@@ -352,6 +354,8 @@ function stateStyle(state: NodeState["state"]): { tone: string; pulse: boolean }
  * reads red regardless of the structural variant.
  */
 function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
+  // `data.dim` is threaded down via FlowEdge.data and each edge variant
+  // fades both its SVG path and its HTML label pill in lockstep.
   const d = props.data;
   const outcome = d?.outcome;
   if (d?.isBackEdge) return <AiEdge.Loop {...props} outcome={outcome} />;
@@ -367,6 +371,7 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
     isSkipEdge?: boolean;
     label?: string;
     outcome?: "success" | "fail";
+    dim?: boolean;
   };
 };
 
@@ -400,6 +405,11 @@ interface SwarmNodeData extends Record<string, unknown> {
   hasOutgoing: boolean;
   active: boolean;
   selected: boolean;
+  /** `true` when the executor hasn't reached this node — either "not yet"
+   *  on a live run or "never will" on a terminal run. Rendered at reduced
+   *  opacity so the executed path visually dominates. Always `false` in
+   *  workflow-detail mode (no run, everything dims-equally would be noise). */
+  dim: boolean;
   orientation: LayoutOrientation;
 }
 
@@ -433,9 +443,24 @@ export function toFlowGraph(
 ): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
   const { activeNodeId = null, selectedNodeId = null, orientation = "TB" } = opts;
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
+  // `selectedEdges` is an ordered log of every (from,to) pair the executor
+  // traversed. A Set lookup is enough because multiple traversals of the
+  // same pair all mean "taken"; iteration count isn't surfaced visually yet.
+  const takenEdges = new Set(detail?.selectedEdges.map((e) => edgeKey(e.from, e.to)) ?? []);
+  // A node is "reached" if it received a `fact.node_*` event OR if some
+  // selected edge points at it. Terminal nodes (Msquare) never emit their
+  // own node_started/node_completed — the executor goes straight to
+  // run_halted/run_completed — so without the edge fallback they'd render
+  // as never-reached even when the run actually terminated on them.
+  const reached = new Set<string>(stateById.keys());
+  for (const e of detail?.selectedEdges ?? []) reached.add(e.to);
   const incoming = new Set(graph.edges.map((e) => e.to));
   const outgoing = new Set(graph.edges.map((e) => e.from));
   const isRunning = detail?.status === "running";
+  // "dim" applies only when a run exists — in workflow-detail mode
+  // (no `detail`) every node/edge should render at full opacity because
+  // the whole thing is a static topology inspection.
+  const hasRun = detail != null;
 
   // Union DOT topology with detail.nodes so runs whose event stream
   // knows about a node not in the (stale) DOT still render it.
@@ -469,6 +494,9 @@ export function toFlowGraph(
       hasOutgoing: outgoing.has(id),
       active: activeNodeId === id,
       selected: selectedNodeId === id,
+      // Unreached nodes during a run fade. Workflow-detail mode leaves
+      // everything at full opacity.
+      dim: hasRun && !reached.has(id),
       orientation,
     };
     return {
@@ -491,6 +519,11 @@ export function toFlowGraph(
     const useSideHandles = isBackEdge || isSkipEdge;
     const label = edgeLabelOf(e);
     const outcome = outcomeOf(e);
+    // Untaken edges fade. During a run, an edge is "taken" iff it appears
+    // in `detail.selectedEdges`; outside a run (workflow-detail view)
+    // everything renders at full opacity.
+    const taken = takenEdges.has(edgeKey(e.from, e.to));
+    const dim = hasRun && !taken;
     // Outcome wins over the generic skip/back marker color, so a failure
     // path renders red regardless of whether it's a skip-edge or not.
     const marker =
@@ -508,7 +541,7 @@ export function toFlowGraph(
       source: e.from,
       target: e.to,
       type: EDGE_TYPE,
-      data: { animated: Boolean(isRunning) && !isBackEdge, isBackEdge, isSkipEdge, label, outcome },
+      data: { animated: Boolean(isRunning) && !isBackEdge && taken, isBackEdge, isSkipEdge, label, outcome, dim },
       sourceHandle: useSideHandles ? LOOP_HANDLE_SOURCE : undefined,
       targetHandle: useSideHandles ? LOOP_HANDLE_TARGET : undefined,
       markerEnd: marker,

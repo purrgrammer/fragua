@@ -63,6 +63,7 @@ describe("api — /runs", () => {
       status: "success",
       lastEventSeq: 5,
       nodes: [],
+      selectedEdges: [],
     };
     mock = installFetchMock({ "/api/runs/abc%2Fweird": () => json(body) });
     const res = await api.getRun("abc/weird");
@@ -80,6 +81,7 @@ describe("api — /runs", () => {
           status: "running",
           lastEventSeq: 2,
           nodes: [],
+          selectedEdges: [],
           workflowSource: source,
         }),
     });
@@ -96,6 +98,7 @@ describe("api — /runs", () => {
           status: "unknown",
           lastEventSeq: 0,
           nodes: [],
+          selectedEdges: [],
         }),
     });
     const res = await api.getRun("r1");

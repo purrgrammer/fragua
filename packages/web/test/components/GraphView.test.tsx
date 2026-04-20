@@ -55,6 +55,7 @@ function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
       { nodeId: "start", state: "completed", lastEventSeq: 1 },
       { nodeId: "middle", state: "running", lastEventSeq: 2 },
     ],
+    selectedEdges: [{ from: "start", to: "middle" }],
     workflowSource: WORKFLOW_SOURCE,
     costUsd: 0,
     inputTokens: 0,

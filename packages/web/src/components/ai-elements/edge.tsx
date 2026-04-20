@@ -9,7 +9,15 @@ type EdgeLabelProps = {
   label: string;
   /** Edge variant — switches the pill tone. */
   tone?: EdgeTone;
+  /** Fade when the executor didn't traverse this edge. */
+  dim?: boolean;
 };
+
+/** Edges the executor never traversed render at reduced opacity. The same
+ *  factor applies to both the SVG path and the HTML label pill so they
+ *  fade in lock-step — EdgeLabelRenderer renders pills to a sibling DOM
+ *  tree, so style on the path alone wouldn't reach them. */
+const DIM_OPACITY = 0.3;
 
 /**
  * Build a wide arc path for skip/back edges whose handles live on the
@@ -35,7 +43,7 @@ const wideArcPath = (sx: number, sy: number, tx: number, ty: number): [string, n
 // Small inline pill rendered at the edge's midpoint. Shows DOT edge
 // `condition` / `label` attrs ("outcome=success", etc.) so readers can
 // tell branching edges apart without opening the inspector.
-const EdgeLabel = ({ labelX, labelY, label, tone = "muted" }: EdgeLabelProps) => {
+const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim }: EdgeLabelProps) => {
   const toneClass =
     tone === "warn"
       ? "bg-sw-surface text-sw-accent-warn border-sw-accent-warn/40"
@@ -53,6 +61,7 @@ const EdgeLabel = ({ labelX, labelY, label, tone = "muted" }: EdgeLabelProps) =>
           position: "absolute",
           transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
           pointerEvents: "all",
+          opacity: dim ? DIM_OPACITY : 1,
         }}
         className={`pointer-events-auto rounded-sw-default border px-1 py-0.5 text-sw-xs uppercase tracking-[0.06em] ${toneClass}`}
       >
@@ -62,7 +71,7 @@ const EdgeLabel = ({ labelX, labelY, label, tone = "muted" }: EdgeLabelProps) =>
   );
 };
 
-type TemporaryData = { label?: string };
+type TemporaryData = { label?: string; dim?: boolean };
 
 /** Outcome coloring — when set, the stroke + label pill track the
  *  outcome accent regardless of the structural edge variant. */
@@ -112,7 +121,9 @@ const Temporary = ({
         targetY,
       });
 
-  const label = (data as TemporaryData | undefined)?.label;
+  const d = data as TemporaryData | undefined;
+  const label = d?.label;
+  const dim = d?.dim;
   const outcomeStroke = strokeForOutcome(outcome);
   const outcomeTone = toneForOutcome(outcome);
 
@@ -128,9 +139,12 @@ const Temporary = ({
           stroke: outcomeStroke ?? "var(--sw-border)",
           strokeDasharray: "5, 5",
           strokeWidth: 1,
+          opacity: dim ? DIM_OPACITY : 1,
         }}
       />
-      {label ? <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "muted"} /> : null}
+      {label ? (
+        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "muted"} dim={dim} />
+      ) : null}
     </>
   );
 };
@@ -142,7 +156,9 @@ const Temporary = ({
 const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome }: EdgeProps & OutcomeProp) => {
   const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY);
 
-  const label = (data as TemporaryData | undefined)?.label;
+  const d = data as TemporaryData | undefined;
+  const label = d?.label;
+  const dim = d?.dim;
   const outcomeStroke = strokeForOutcome(outcome);
   const outcomeTone = toneForOutcome(outcome);
 
@@ -156,9 +172,12 @@ const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome
           stroke: outcomeStroke ?? "var(--sw-accent-warn)",
           strokeDasharray: "4, 4",
           strokeWidth: 1,
+          opacity: dim ? DIM_OPACITY : 1,
         }}
       />
-      {label ? <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "warn"} /> : null}
+      {label ? (
+        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "warn"} dim={dim} />
+      ) : null}
     </>
   );
 };
@@ -190,7 +209,9 @@ const Animated = ({
     targetY,
   });
 
-  const label = (data as TemporaryData | undefined)?.label;
+  const d = data as TemporaryData | undefined;
+  const label = d?.label;
+  const dim = d?.dim;
   const outcomeStroke = strokeForOutcome(outcome);
   const outcomeTone = toneForOutcome(outcome);
 
@@ -207,10 +228,13 @@ const Animated = ({
         style={{
           stroke: outcomeStroke ?? "var(--sw-accent-thinking)",
           strokeWidth: 1,
+          opacity: dim ? DIM_OPACITY : 1,
           ...style,
         }}
       />
-      {label ? <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "thinking"} /> : null}
+      {label ? (
+        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "thinking"} dim={dim} />
+      ) : null}
     </>
   );
 };
