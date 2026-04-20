@@ -1,7 +1,7 @@
 // Collects side-effect facts emitted inside the handler body so the
 // executor can commit them in the same transaction as node_completed.
 
-import type { handler } from "@swarm/core";
+import type * as handler from "@swarm/core/handler";
 import type { FactEvent } from "@swarm/store";
 
 type SideEffectRecorder = handler.SideEffectRecorder;

@@ -6,7 +6,7 @@
 // its current turn; supervisor exits; release lock.
 
 import { hostname as osHostname } from "node:os";
-import type { handler as coreHandler } from "@swarm/core";
+import type * as coreHandler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { Dispatcher } from "./dispatch.ts";

@@ -8,7 +8,8 @@
 // forward so the executor can move the state machine. Real runtime usage
 // plugs a richer dispatcher built from packages/agent's backends.
 
-import { handler, parseDotSource } from "@swarm/core";
+import { parseDotSource } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import type { Node } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";

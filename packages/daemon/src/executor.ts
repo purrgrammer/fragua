@@ -8,7 +8,7 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
-import { handler as core } from "@swarm/core";
+import * as core from "@swarm/core/handler";
 import {
   CURRENT_SCHEMA_VERSION,
   ConcurrencyError,

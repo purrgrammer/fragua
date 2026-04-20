@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handler } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import { createServer } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
 import { AbortRegistry } from "../src/abort-registry.ts";

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { handler, ok } from "@swarm/core";
+import { ok } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import type { CodergenBackend, Node } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";

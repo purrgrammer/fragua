@@ -6,7 +6,7 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import type { handler } from "@swarm/core";
+import type * as handler from "@swarm/core/handler";
 import type { CodergenBackend, ContextMap, EventType, Node, Outcome } from "@swarm/core";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 

@@ -1,7 +1,7 @@
 // Translate a HandlerResult + intent decision into the FactEvent batch that
 // the executor will commit in one appendFact.
 
-import type { handler } from "@swarm/core";
+import type * as handler from "@swarm/core/handler";
 import type { FactEvent, RunState } from "@swarm/store";
 
 type HandlerResult = handler.HandlerResult;

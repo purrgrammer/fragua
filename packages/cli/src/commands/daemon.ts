@@ -9,7 +9,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { firstCredentialedProvider, makeCodergenHandler, PiCodergenBackend } from "@swarm/agent";
-import { handler } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import {
   autoDispatcherResolver,
   Dispatcher,

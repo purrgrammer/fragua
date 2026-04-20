@@ -8,7 +8,7 @@
 //   P20 abort loop ceiling       — K consecutive aborts with no progress → halt
 
 import { describe, expect, test } from "bun:test";
-import { handler } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import { ConcurrencyError, sha256Hex as sha256 } from "@swarm/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";

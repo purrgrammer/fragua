@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handler } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePendingHitl } from "../src/wake-hitl.ts";

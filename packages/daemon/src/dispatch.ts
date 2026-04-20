@@ -4,7 +4,7 @@
 // impl registers one spec per (workflow, nodeId) pair; callers responsible
 // for wiring. No graph parsing happens here — that stays in core/parser.
 
-import type { handler } from "@swarm/core";
+import type * as handler from "@swarm/core/handler";
 
 type HandlerSpec = handler.HandlerSpec;
 

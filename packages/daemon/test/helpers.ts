@@ -1,4 +1,4 @@
-import { handler } from "@swarm/core";
+import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { Dispatcher } from "../src/dispatch.ts";
 
