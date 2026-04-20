@@ -6,12 +6,19 @@
 //   1. Start with the node set from `nodes` plus any node ids appearing
 //      in `edges` that weren't in `nodes` (defensive — the DOT source
 //      and the event stream can disagree for aborted runs).
-//   2. For each node, compute depth = 1 + max(depth(predecessors)) with
-//      depth = 0 for sources. Memoised so cycles degrade gracefully.
-//   3. Bucket by depth to produce layers; sort each layer by id so
+//   2. DFS-classify edges into "tree/forward" vs "back" (target is an
+//      ancestor in the DFS stack). Back-edges are structural cycle
+//      returns and must be ignored by the depth computation — otherwise
+//      the cycle target inherits depth from its post-cycle successor
+//      and forward siblings end up at the same layer (the bug that
+//      collapsed `draft` and `review` onto one row).
+//   3. For each node, compute depth = 1 + max(depth(predecessors)) using
+//      forward edges only (the DAG that remains after stripping back-
+//      edges). Memoised on the acyclic subgraph — no cycles possible.
+//   4. Bucket by depth to produce layers; sort each layer by id so
 //      layout is stable across renders (React-Flow is position-driven
 //      and shifts look like "animations" if we let the order jitter).
-//   4. Project depth onto the primary axis and index-within-layer onto
+//   5. Project depth onto the primary axis and index-within-layer onto
 //      the secondary axis. `orientation: "TB"` (default) puts the
 //      longest path vertically so workflows read top-to-bottom —
 //      matches how humans read a DAG and how DOT is usually drawn.
@@ -45,6 +52,83 @@ export interface LayoutOptions {
   orientation?: LayoutOrientation;
 }
 
+/** Stable key for an edge's (from, to) pair. Shared between back-edge
+ *  classification and edge routing in GraphView so the two agree on
+ *  what counts as a cycle return. */
+export const edgeKey = (from: string, to: string): string => `${from}->${to}`;
+
+export interface ClassifiedGraph {
+  ids: Set<string>;
+  /** Back-edges keyed by `edgeKey(from, to)`. A back-edge's target is
+   *  an ancestor in the DFS tree — the structural cycle return. */
+  backEdgeKeys: Set<string>;
+  /** Longest-path depth on the DAG remaining after back-edges are
+   *  stripped. Used both to lay out nodes and to spot skip-edges
+   *  (forward edges whose target depth jumps past intermediate layers). */
+  depthOf: Map<string, number>;
+}
+
+/**
+ * DFS-classify a graph into back-edges + forward-edge depths.
+ *
+ * Why this is shared: if GraphView classified back-edges on a different
+ * walk from layoutDag, the two could disagree — and the user would see
+ * a forward-looking edge that the layout treated as a cycle return
+ * (layer collapse) while the edge renderer still drew it straight.
+ */
+export function classifyGraph(input: LayoutInput): ClassifiedGraph {
+  const ids = new Set<string>();
+  for (const n of input.nodes) ids.add(n.id);
+  for (const e of input.edges) {
+    ids.add(e.from);
+    ids.add(e.to);
+  }
+
+  // Insertion-order iteration makes classification deterministic —
+  // DOT source order reflects the author's intended flow direction.
+  const adj = new Map<string, string[]>();
+  for (const id of ids) adj.set(id, []);
+  for (const e of input.edges) {
+    if (ids.has(e.from) && ids.has(e.to)) adj.get(e.from)?.push(e.to);
+  }
+  const backEdgeKeys = new Set<string>();
+  const color = new Map<string, 0 | 1 | 2>(); // 0=white, 1=gray (on stack), 2=black
+  for (const id of ids) color.set(id, 0);
+  const dfs = (u: string): void => {
+    color.set(u, 1);
+    for (const v of adj.get(u) ?? []) {
+      const c = color.get(v);
+      if (c === 1) backEdgeKeys.add(edgeKey(u, v));
+      else if (c === 0) dfs(v);
+    }
+    color.set(u, 2);
+  };
+  for (const id of ids) if (color.get(id) === 0) dfs(id);
+
+  // Longest-path depth on the back-edge-stripped DAG. Acyclic by
+  // construction, so a plain memoised walk is enough.
+  const predecessors = new Map<string, string[]>();
+  for (const id of ids) predecessors.set(id, []);
+  for (const e of input.edges) {
+    if (!ids.has(e.from) || !ids.has(e.to)) continue;
+    if (backEdgeKeys.has(edgeKey(e.from, e.to))) continue;
+    predecessors.get(e.to)?.push(e.from);
+  }
+  const cache = new Map<string, number>();
+  const walk = (id: string): number => {
+    const cached = cache.get(id);
+    if (cached !== undefined) return cached;
+    let d = 0;
+    for (const p of predecessors.get(id) ?? []) d = Math.max(d, walk(p) + 1);
+    cache.set(id, d);
+    return d;
+  };
+  const depthOf = new Map<string, number>();
+  for (const id of ids) depthOf.set(id, walk(id));
+
+  return { ids, backEdgeKeys, depthOf };
+}
+
 export function layoutDag(input: LayoutInput, opts: LayoutOptions = {}): PositionedNode[] {
   const orientation: LayoutOrientation = opts.orientation ?? "TB";
   // Defaults tuned for TB: layer spacing (vertical) tighter than cross
@@ -53,45 +137,11 @@ export function layoutDag(input: LayoutInput, opts: LayoutOptions = {}): Positio
   const layerSize = opts.layerSize ?? (orientation === "TB" ? 140 : 260);
   const crossSize = opts.crossSize ?? (orientation === "TB" ? 280 : 120);
 
-  const ids = new Set<string>();
-  for (const n of input.nodes) ids.add(n.id);
-  for (const e of input.edges) {
-    ids.add(e.from);
-    ids.add(e.to);
-  }
-
-  const predecessors = new Map<string, string[]>();
-  for (const id of ids) predecessors.set(id, []);
-  for (const e of input.edges) {
-    if (!ids.has(e.from) || !ids.has(e.to)) continue;
-    predecessors.get(e.to)?.push(e.from);
-  }
-
-  const depthCache = new Map<string, number>();
-  const visiting = new Set<string>();
-
-  const depthOf = (id: string): number => {
-    const cached = depthCache.get(id);
-    if (cached !== undefined) return cached;
-    if (visiting.has(id)) {
-      // Cycle: break by returning 0 for this re-entry. The outer walk
-      // will memoise a non-zero answer for the first path through.
-      return 0;
-    }
-    visiting.add(id);
-    const preds = predecessors.get(id) ?? [];
-    let d = 0;
-    for (const p of preds) {
-      d = Math.max(d, depthOf(p) + 1);
-    }
-    visiting.delete(id);
-    depthCache.set(id, d);
-    return d;
-  };
+  const { ids, depthOf } = classifyGraph(input);
 
   const byDepth = new Map<number, string[]>();
   for (const id of ids) {
-    const d = depthOf(id);
+    const d = depthOf.get(id) ?? 0;
     const bucket = byDepth.get(d) ?? [];
     bucket.push(id);
     byDepth.set(d, bucket);

@@ -174,6 +174,8 @@
   --color-sw-accent-thinking: var(--sw-accent-thinking);
   --color-sw-accent-idle: var(--sw-accent-idle);
   --color-sw-accent-warn: var(--sw-accent-warn);
+  --color-sw-accent-human: var(--sw-accent-human);
+  --color-sw-accent-loop: var(--sw-accent-loop);
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -271,4 +273,23 @@ body {
     animation: none;
     opacity: 0.7;
   }
+}
+
+/*
+ * React Flow — hide the default handle circles. The swarm graph is a
+ * read-only visualisation, so the little circles at each handle point
+ * read as extra arrow-like decoration (and make edges look bidirectional
+ * because the arrowhead at the target + the circle at the source frame
+ * the edge symmetrically). xyflow still needs the handle elements in the
+ * DOM for edge positioning; we just blank them visually.
+ */
+.react-flow__handle {
+  background: transparent;
+  border: none;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }

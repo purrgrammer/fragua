@@ -53,6 +53,17 @@
   /* accent.warn: muted orange — resource pressure, soft threshold */
   --sw-accent-warn: oklch(0.60 0.10 48);
 
+  /* accent.human: calm steel blue — awaiting human (HITL / paused_hitl).
+   * Cool-family hue deliberately sits opposite the warm thinking/warn
+   * accents so HITL reads distinctly from loop/retry states. */
+  --sw-accent-human: oklch(0.58 0.10 230);
+
+  /* accent.loop: teal/cyan — iteration / cycling control-flow.
+   * Sits between success (green, 148) and human (blue, 230) so the four
+   * structural accents (warn/loop/human/success) fan out across the hue
+   * wheel without colliding. */
+  --sw-accent-loop: oklch(0.58 0.09 195);
+
   /* — Typography scale ————————————————————————————————————————————————
    * Hierarchy via weight/case/spacing — NOT size.
    * xs=13px  sm=15px(default body)  base=16px  md=18px  lg=22px
@@ -124,6 +135,12 @@
 
   /* accent.warn: muted orange — lifted slightly */
   --sw-accent-warn: oklch(0.66 0.10 48);
+
+  /* accent.human: calm steel blue — lifted slightly for dark bg. */
+  --sw-accent-human: oklch(0.66 0.10 230);
+
+  /* accent.loop: teal/cyan — lifted slightly for dark bg. */
+  --sw-accent-loop: oklch(0.66 0.09 195);
 
   /* Typography scale tokens are theme-independent (rem values, not colors).
    * Re-declared to make dark block self-contained for readability; values

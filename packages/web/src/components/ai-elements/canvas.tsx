@@ -23,12 +23,17 @@ type CanvasProps = ReactFlowProps & {
 
 const deleteKeyCode = ["Backspace", "Delete"];
 
+// Hide the xyflow attribution badge ("React Flow" watermark).
+// Our canvas is a product surface — third-party branding is ornament.
+const proOptions = { hideAttribution: true } as const;
+
 export const Canvas = ({ children, style, ...props }: CanvasProps) => (
   <ReactFlow
     deleteKeyCode={deleteKeyCode}
     fitView
     panOnDrag={false}
     panOnScroll
+    proOptions={proOptions}
     selectionOnDrag={true}
     style={{ background: "var(--sw-bg)", ...style }}
     zoomOnDoubleClick={false}

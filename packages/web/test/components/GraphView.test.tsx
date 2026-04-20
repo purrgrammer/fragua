@@ -5,14 +5,19 @@
 // deleted. What we assert now:
 //
 //   - `toFlowGraph()` (the pure transform) produces one FlowEdge per
-//     edge declared in the DOT source, anchored to the right source/
-//     target ids. This is the regression test for "GraphView stopped
-//     drawing edges" — the transform is the single source of truth and
-//     asserting on it sidesteps React-Flow's happy-dom layout gap.
+//     edge declared in the DOT source, including edges that touch
+//     start/exit terminals — terminals stay visible because labelled
+//     exit edges like `verify -> done [condition="outcome=fail"]`
+//     carry meaning.
 //   - Rendered output carries a `data-node-id` attribute per graph node
 //     (happy-dom CAN mount the custom Node component) so Playwright /
 //     unit tests targeting specific nodes keep working.
 //   - Lifecycle state flows through to `data-state` on each node.
+//   - Back-edges (target at an earlier layout depth than source) are
+//     marked `isBackEdge` so the edge renderer picks the Loop variant.
+//   - Edge `condition` / `label` DOT attrs surface as edge.data.label so
+//     operators can tell branching edges apart without opening the
+//     inspector.
 //   - With no workflowSource the component renders the purpose-built
 //     empty state rather than crashing.
 //   - `onNodeClick` fires with the clicked node id.
@@ -95,6 +100,63 @@ describe("toFlowGraph — pure transform", () => {
     expect(active.active).toBe(true);
     const other = flowNodes.find((n) => n.id === "start")?.data as { active: boolean };
     expect(other.active).toBe(false);
+  });
+
+  it("every edge carries a markerEnd so direction is unambiguous", () => {
+    const graph = parseDotSource(WORKFLOW_SOURCE);
+    const { flowEdges } = toFlowGraph(null, graph);
+    for (const e of flowEdges) {
+      expect(e.markerEnd).toBeDefined();
+    }
+  });
+});
+
+describe("toFlowGraph — back-edge detection + edge labels", () => {
+  it("marks back-edges whose target sits at an earlier depth as isBackEdge", () => {
+    const src = `digraph g {
+      a [shape=box]
+      b [shape=box]
+      c [shape=box]
+      a -> b -> c
+      c -> a [condition="outcome=retry"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const byPair = new Map(flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { isBackEdge?: boolean }]));
+    expect(byPair.get("a->b")?.isBackEdge).toBe(false);
+    expect(byPair.get("b->c")?.isBackEdge).toBe(false);
+    expect(byPair.get("c->a")?.isBackEdge).toBe(true);
+  });
+
+  it("back-edges route through the side handles so they arc outside the column", () => {
+    const src = `digraph g {
+      a [shape=box]
+      b [shape=box]
+      a -> b -> a
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const back = flowEdges.find((e) => e.source === "b" && e.target === "a");
+    expect(back?.sourceHandle).toBe("loop-source");
+    expect(back?.targetHandle).toBe("loop-target");
+    const forward = flowEdges.find((e) => e.source === "a" && e.target === "b");
+    expect(forward?.sourceHandle).toBeUndefined();
+    expect(forward?.targetHandle).toBeUndefined();
+  });
+
+  it("surfaces edge condition (and label fallback) as edge.data.label", () => {
+    const src = `digraph g {
+      a [shape=box]
+      b [shape=box]
+      c [shape=box]
+      a -> b [condition="outcome=success"]
+      a -> c [label="fallback"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const byPair = new Map(flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { label?: string }]));
+    expect(byPair.get("a->b")?.label).toBe("outcome=success");
+    expect(byPair.get("a->c")?.label).toBe("fallback");
   });
 });
 
