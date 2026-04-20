@@ -8,7 +8,7 @@
 
 import cac from "cac";
 import chalk from "chalk";
-import { daemonCommand } from "../src/commands/daemon.ts";
+import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import { providersCommand } from "../src/commands/providers.ts";
 import { runCommand } from "../src/commands/run.ts";
@@ -48,6 +48,22 @@ cli
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(options["dev"] === true ? { dev: true } : {}),
+    });
+    process.exit(code);
+  });
+
+cli
+  .command("daemon stop", "SIGTERM the running daemon identified by the store's daemon_lock row")
+  .option("--cwd <path>", "Base directory (default process.cwd)")
+  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const code = await daemonStopCommand({
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
     });
     process.exit(code);
   });
