@@ -38,6 +38,9 @@ function HealthProvider({ children }: { children: ReactNode }): JSX.Element {
     if (isPending) return { status: "loading", error: null };
     if (error) return { status: "error", error: error instanceof Error ? error.message : String(error) };
     if (data && !data.ok) return { status: "error", error: "server reported ok: false" };
+    // Server is up but no daemon lock → job queue is offline. Show as
+    // a distinct state so operators notice when the daemon crashed.
+    if (data && !data.daemon) return { status: "no-daemon", error: null };
     return { status: "connected", error: null, daemon: data?.daemon };
   }, [isPending, error, data]);
 

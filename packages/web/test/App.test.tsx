@@ -37,9 +37,21 @@ describe("App", () => {
     cleanup();
   });
 
-  it("renders the connected badge when /health returns ok", async () => {
+  it("renders the connected badge when /health returns ok with a daemon snapshot", async () => {
     const { container, fetchMock } = mountApp({
-      "/api/health": () => json({ ok: true }),
+      "/api/health": () =>
+        json({
+          ok: true,
+          daemon: {
+            pid: 1234,
+            port: 0,
+            startedAt: "2024-01-01T00:00:00.000Z",
+            version: "test",
+            concurrency: 0,
+            inflight: 0,
+            queued: 0,
+          },
+        }),
       "/api/pipelines": () => json([]),
     });
     const q = within(container);
@@ -48,6 +60,22 @@ describe("App", () => {
         expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("connected");
       });
       expect(q.getByTestId("health-badge").textContent).toContain("connected");
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  it("renders the no-daemon badge when /health returns ok without a daemon key", async () => {
+    const { container, fetchMock } = mountApp({
+      "/api/health": () => json({ ok: true }),
+      "/api/pipelines": () => json([]),
+    });
+    const q = within(container);
+    try {
+      await waitFor(() => {
+        expect(q.getByTestId("health-badge").getAttribute("data-status")).toBe("no-daemon");
+      });
+      expect(q.getByTestId("health-badge").textContent).toContain("no daemon");
     } finally {
       fetchMock.restore();
     }

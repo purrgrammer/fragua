@@ -108,7 +108,14 @@ function SidebarStatusBadge(): JSX.Element {
   // HealthBadge component so the styling stays in lockstep with the
   // old top-bar version (single source of truth).
   if (state === "collapsed") {
-    const tone = status === "connected" ? "bg-emerald-500" : status === "error" ? "bg-rose-500" : "bg-slate-400";
+    const tone =
+      status === "connected"
+        ? "bg-emerald-500"
+        : status === "error"
+          ? "bg-rose-500"
+          : status === "no-daemon"
+            ? "bg-amber-500"
+            : "bg-slate-400";
     return (
       <div
         data-testid="sidebar-health-dot"
