@@ -6,6 +6,7 @@
 // of other shapes (Mdiamond start, Msquare exit, hexagon wait.human, etc.)
 // stay on the trivial transitions.
 
+import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -17,9 +18,17 @@ import {
   PiSummariserBackend,
 } from "@swarm/agent";
 import * as handler from "@swarm/core/handler";
-import { AutoTitler, autoDispatcherResolver, Dispatcher, startDaemon } from "@swarm/daemon";
+import {
+  AutoTitler,
+  autoDispatcherResolver,
+  Dispatcher,
+  LocalEnvironmentProvisioner,
+  type Provisioner,
+  startDaemon,
+  WorktreeProvisioner,
+} from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
-import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
+import { ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
 
@@ -154,10 +163,11 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   if (useLlm) {
-    const env = new LocalEnvironment({ cwd });
+    // `env` is wired per-run via the WorktreeProvisioner below —
+    // the backend reads it off `CodergenInput` on each call, so we
+    // intentionally leave `backendOpts.env` unset here.
     const backendOpts = {
       registry: new ToolRegistry(),
-      env,
       defaultModel: { provider: provider!, model: model! },
     };
     codergenFactory = (node, nextNode) =>
@@ -192,6 +202,24 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     shutdownSignal: signalCtrl.signal,
   });
 
+  // Worktree provisioner — every run gets a `git worktree` with its
+  // own branch so agents never mutate the user's working copy and
+  // concurrent runs don't stomp on each other. `project.bootstrap`
+  // from config.yaml runs once per fresh worktree (e.g. `bun install
+  // --frozen-lockfile`). Falls back to a shared LocalEnvironment if
+  // the cwd isn't inside a git repo — tests + demo paths shouldn't
+  // require a worktree to get off the ground.
+  const provisioner: Provisioner = (await isGitRepo(cwd))
+    ? new WorktreeProvisioner({
+        repoRoot: cwd,
+        ...(config.project?.bootstrap ? { bootstrap: config.project.bootstrap } : {}),
+      })
+    : new LocalEnvironmentProvisioner(cwd);
+  const provisionerLabel =
+    provisioner instanceof WorktreeProvisioner
+      ? `worktree (.swarm/worktrees/<run-id>${config.project?.bootstrap ? `, bootstrap: "${config.project.bootstrap}"` : ""})`
+      : `local (cwd=${cwd}, no git repo detected)`;
+
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
@@ -207,6 +235,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   if (autoTitler.label !== undefined) {
     console.log(chalk.dim(`  auto-title: ${autoTitler.label}`));
   }
+  console.log(chalk.dim(`  runtime: ${provisionerLabel}`));
   console.log(chalk.dim(`  press Ctrl-C to stop`));
 
   let exitCode = 0;
@@ -219,6 +248,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
       ...(autoTitler.titler ? { autoTitler: autoTitler.titler } : {}),
+      provisioner,
     });
     await handleRef.done;
   } catch (err) {
@@ -228,6 +258,20 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     store.close();
   }
   return exitCode;
+}
+
+/** Cheap `git rev-parse --is-inside-work-tree` check. Non-git cwds
+ * fall back to a LocalEnvironmentProvisioner so test suites / demo
+ * runs don't require a repo. */
+function isGitRepo(cwd: string): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.on("close", (code) => resolvePromise(code === 0));
+    child.on("error", () => resolvePromise(false));
+  });
 }
 
 function buildAutoTitler(args: {
