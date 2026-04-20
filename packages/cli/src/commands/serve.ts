@@ -189,7 +189,11 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   } else {
     console.log(chalk.dim(`  api:   ${handle.url}`));
     console.log(chalk.dim(`  web:   API-only — build the UI with \`bun run --filter @swarm/web build\``));
-    console.log(chalk.dim(`         or run Vite separately: \`SWARM_API_URL=${handle.origin}/api bun run --filter @swarm/web dev\``));
+    console.log(
+      chalk.dim(
+        `         or run Vite separately: \`SWARM_API_URL=${handle.origin}/api bun run --filter @swarm/web dev\``,
+      ),
+    );
   }
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
