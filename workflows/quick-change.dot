@@ -11,7 +11,7 @@
 digraph quick_change {
   graph [
     goal        = "Land a small, self-contained change on swarm. Human merges the diff."
-    label       = "swarm: quick-change"
+    label       = "quick-change"
     default_fidelity = "compact"
     default_max_retries = 1
     retry_target = "implement"

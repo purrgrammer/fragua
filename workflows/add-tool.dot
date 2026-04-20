@@ -8,7 +8,7 @@
 digraph add_tool {
   graph [
     goal        = "Add a new tool to @swarm/workspace with tests, passing CI."
-    label       = "swarm: add-tool"
+    label       = "add-tool"
     default_fidelity = "compact"
     default_max_retries = 1
     retry_target = "implement"

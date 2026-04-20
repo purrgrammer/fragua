@@ -1,0 +1,76 @@
+// hitl-approval.dot — two human-in-the-loop checkpoints.
+//
+// Flow:
+//   start → draft (codergen) → review (HITL) → gate
+//   gate --approved--> confirm (HITL) --publish--> publish → done
+//   gate --revise----> draft   (back-edge, retry drafting)
+//   confirm --cancel-> done    (skip-edge, bail out before publish)
+//
+// Shapes exercised (for the visualiser):
+//   - Mdiamond (start), Msquare (done)
+//   - box      (codergen default — draft, publish)
+//   - hexagon  (wait.human / HITL — review, confirm)
+//   - diamond  (conditional / gate — route)
+//
+// Run:
+//   bun run packages/cli/bin/swarm.ts run workflows/hitl-approval.dot \
+//     --input="draft a changelog entry for the new HITL UI"
+//
+// On `paused_hitl`, resume the run with an intent event:
+//   bun run packages/cli/bin/swarm.ts resume <run-id> --input="APPROVED"
+//   bun run packages/cli/bin/swarm.ts resume <run-id> --input="REVISE: tighten the summary"
+
+digraph hitl_approval {
+  graph [
+    goal  = "Produce an artifact the human explicitly signed off on."
+    label = "HITL approval"
+    default_fidelity    = "compact"
+    default_max_retries = 1
+  ]
+
+  start [shape=Mdiamond]
+
+  draft [
+    shape  = box
+    prompt = "Draft the artifact requested by the user: $ARGUMENTS.\n\nIf the prior round's reviewer said `REVISE: <note>`, address that note specifically. Keep the artifact under 200 words and end your final message with `<promise>DRAFT_READY</promise>`."
+    allowed_tools = "local:read_file, local:grep, local:edit_file, local:write_file"
+  ]
+
+  review [
+    shape  = hexagon
+    prompt = "Reviewer: read the current draft and respond with either\n  APPROVED\nor\n  REVISE: <short note>\n\nThe run will resume automatically with your answer."
+  ]
+
+  gate [
+    shape  = diamond
+    prompt = "Parse the reviewer's input.\nIf it starts with `APPROVED` emit `outcome=success`, otherwise emit `outcome=fail` (caller will loop back to draft)."
+  ]
+
+  confirm [
+    shape  = hexagon
+    prompt = "Final confirmation: publish this artifact? Reply `PUBLISH` to proceed or `CANCEL` to bail out before the irreversible publish step."
+  ]
+
+  publish [
+    shape  = box
+    prompt = "Publish the approved artifact. Use local:bash for any required side effects. End with `PUBLISHED: <ref>`."
+    allowed_tools = "local:read_file, local:write_file, local:bash"
+    max_retries = 2
+  ]
+
+  done [shape=Msquare]
+
+  start -> draft
+  draft -> review
+  review -> gate
+
+  // Approved → final human gate; revise → back to draft (back-edge).
+  gate -> confirm [condition="outcome=success"]
+  gate -> draft   [condition="outcome=fail"]
+
+  // Final human checkpoint: PUBLISH vs CANCEL.
+  confirm -> publish [condition="outcome=success"]
+  confirm -> done    [condition="outcome=fail"]
+
+  publish -> done
+}

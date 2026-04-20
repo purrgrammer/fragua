@@ -7,7 +7,7 @@
 digraph fix_bug {
   graph [
     goal        = "Turn a bug report into a minimal regression test + fix that leaves CI green."
-    label       = "swarm: fix-bug"
+    label       = "fix-bug"
     default_fidelity = "compact"
     default_max_retries = 1
     retry_target = "fix"
