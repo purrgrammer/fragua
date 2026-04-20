@@ -762,6 +762,20 @@ packages/
 - **Workflow hot-reload for in-flight runs** — not planned; `workflow_sha` pinned.
 - **Per-workflow concurrency caps** — add when needed; easy via partial-index counts.
 
+### 13.1 Declared-but-not-yet-wired
+
+Features whose types, events, or surfaces exist but whose runtime
+enforcement isn't built. A reader of the code will see attrs / event
+names that don't do anything yet. Listed here so they're discoverable
+and tracked.
+
+- **Budget ledger.** `graph.attrs.budget_usd`, `graph.attrs.budget_tokens`, `graph.attrs.budget_policy`, `node.attrs.max_cost_usd`, `node.attrs.max_tokens` all parse and serialise. `BudgetSnapshot` event payload is declared. `budget.warn` / `budget.stop` event types are declared. No code reads cumulative spend and fires the events; no handler honours the ceiling. Runs exceed their declared budget silently.
+- **Worktree provisioning.** `$WORKTREE_PATH` / `$LOG_DIR` substitution args resolve to `""` because nothing provisions a git worktree per run. `AGENTS.md` describes a `git worktree add` step before the first node; the daemon does not yet run it. Workflows that rely on being inside a linked worktree (e.g. quick-change's merge node's precondition check) always hit the SKIP branch.
+- **Checkpoint / resume.** `PiCodergenBackend.serialiseSessions()` and `hydrateSessions()` round-trip an in-memory transcript, but no executor call site invokes them. A daemon restart loses `fidelity=full` session continuity; the run re-queues via `startupSweep` with an empty message store. SPEC §3.6's "fidelity=full degrades to summary:high on resume" rule is implemented at the unit level (`degradeOnResume`) but unreachable end-to-end.
+- **Auto-title summariser (emit side).** `run.title_generated` events are read by the adapter and surfaced on `RunSummary.title`. No call site fires the summariser to produce one. `config.yaml`'s `summariser:` + `auto_title: on` are accepted but only the read side cares today.
+- **Handler coverage.** `auto-dispatcher.ts` falls through to a noop transition for `loop`, `tool`, `parallel`, `parallel.fan_in`, `stack.manager_loop`. Workflows relying on these shapes must register real specs via `Dispatcher.register` before invoking the daemon. The `conditional` (diamond) and `start` (Mdiamond) shapes are wired — they defer to the executor's edge selector.
+- **Per-node provider preflight.** `POST /runs` checks that the daemon has *some* provider API key set, but not that the specific provider pinned on each `node.attrs.provider` is reachable. A workflow that hardcodes an unconfigured provider fails at dispatch (visible via `fact.run_halted`), not at enqueue.
+
 ---
 
 ## 14. Risks ranked
