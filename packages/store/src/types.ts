@@ -28,6 +28,12 @@ export interface RunState {
   readyAt: number;
   nodeStartedAt: number | null;
   updatedAt: number;
+  /** Auto-generated run title (short prose, ≤80 chars by convention).
+   * Populated by the daemon's auto-titler after `fact.run_started` via
+   * `setRunTitle`. `null` until the summariser produces one; `null` is
+   * also the terminal state when summarisation is disabled or failed —
+   * the UI falls back to `routing.input` ($ARGUMENTS) in that case. */
+  title: string | null;
 }
 
 // ─────────────── Intent events (writer: "web", no OCC) ───────────────
@@ -364,6 +370,13 @@ export interface IEventStore {
   enqueueRun(params: EnqueueRunParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;
   startupSweep(): SweepResult;
+  /**
+   * Project an auto-generated title onto `run_state.title`. Idempotent —
+   * last-writer wins. Never bumps `version` (the title is a UI hint, not
+   * part of the causal state machine). No-op when `runId` is unknown so
+   * late-arriving titles for cancelled/deleted runs don't throw.
+   */
+  setRunTitle(runId: string, title: string): void;
 
   // ─── State reads
   getState(runId: string): RunState | null;

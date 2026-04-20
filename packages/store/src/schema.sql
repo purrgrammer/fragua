@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   ready_at INTEGER NOT NULL,
   node_started_at INTEGER,
   updated_at INTEGER NOT NULL,
+  title TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   total_tokens INTEGER GENERATED ALWAYS AS

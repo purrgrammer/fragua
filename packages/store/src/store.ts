@@ -54,6 +54,7 @@ interface RunStateRow {
   ready_at: number;
   node_started_at: number | null;
   updated_at: number;
+  title: string | null;
 }
 
 type CommitListener = (runId: string, seq: number) => void;
@@ -285,6 +286,14 @@ export class SqliteStore implements IEventStore {
 
   startupSweep(): SweepResult {
     return startupSweep(this.db, this.now);
+  }
+
+  setRunTitle(runId: string, title: string): void {
+    const clipped = title.length > 200 ? title.slice(0, 200) : title;
+    const now = this.now();
+    this.writeTxn(() => {
+      this.db.query("UPDATE run_state SET title = ?, updated_at = ? WHERE run_id = ?").run(clipped, now, runId);
+    });
   }
 
   // ─────────────── State reads ───────────────
@@ -721,7 +730,8 @@ export class SqliteStore implements IEventStore {
         .query<RunStateRow, [string]>(
           `SELECT run_id, version, status, current_node, workflow_sha,
                   schema_version, routing, metrics, next_seq, last_applied_seq,
-                  priority, enqueued_at, ready_at, node_started_at, updated_at
+                  priority, enqueued_at, ready_at, node_started_at, updated_at,
+                  title
              FROM run_state
             WHERE run_id = ?`,
         )
@@ -748,6 +758,7 @@ export class SqliteStore implements IEventStore {
       readyAt: row.ready_at,
       nodeStartedAt: row.node_started_at,
       updatedAt: row.updated_at,
+      title: row.title,
     };
   }
 
