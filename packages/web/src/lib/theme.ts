@@ -6,7 +6,8 @@
 // This module owns three concerns and nothing else:
 //
 //   1. Persist the user's choice in `localStorage` under
-//      `swarm.web.theme` so reloads restore it.
+//      `swarm.web.theme` so reloads restore it.  The default theme
+//      when no preference has been stored is "light".
 //   2. Resolve "system" against `prefers-color-scheme` and keep that
 //      resolution in sync with OS-level changes while "system" is
 //      active.
@@ -25,11 +26,11 @@ export type Theme = "light" | "dark" | "system";
 const STORAGE_KEY = "swarm.web.theme";
 const VALID: readonly Theme[] = ["light", "dark", "system"];
 
-/** Read the persisted preference, defaulting to "system". */
+/** Read the persisted preference, defaulting to "light". */
 export function readStoredTheme(): Theme {
-  if (typeof localStorage === "undefined") return "system";
+  if (typeof localStorage === "undefined") return "light";
   const raw = localStorage.getItem(STORAGE_KEY);
-  return (VALID as readonly string[]).includes(raw ?? "") ? (raw as Theme) : "system";
+  return (VALID as readonly string[]).includes(raw ?? "") ? (raw as Theme) : "light";
 }
 
 /** Resolve "system" via `prefers-color-scheme`; pass-through otherwise. */
