@@ -356,12 +356,10 @@ describe("eventsToConversation — synthetic sequences", () => {
 });
 
 describe("toolTypeFromName", () => {
-  it("passes bare identifiers through and scrubs legacy namespaced names", () => {
+  it("prefixes the tool name with `tool-` for AI Elements' ToolHeader", () => {
     expect(toolTypeFromName("bash")).toBe("tool-bash");
     expect(toolTypeFromName("read")).toBe("tool-read");
-    // Legacy payloads may still carry a prefix — make sure they still
-    // render rather than crashing the UI.
-    expect(toolTypeFromName("mcp:github.list_issues")).toBe("tool-mcp_github_list_issues");
+    expect(toolTypeFromName("edit")).toBe("tool-edit");
   });
 });
 

@@ -33,7 +33,7 @@ digraph hitl_approval {
   draft [
     shape  = box
     prompt = "Draft the artifact requested by the user: $ARGUMENTS.\n\nIf the prior round's reviewer said `REVISE: <note>`, address that note specifically. Keep the artifact under 200 words and end your final message with `<promise>DRAFT_READY</promise>`."
-    allowed_tools = "local:read_file, local:grep, local:edit_file, local:write_file"
+    allowed_tools = "read, write, edit, bash"
   ]
 
   review [
@@ -53,8 +53,8 @@ digraph hitl_approval {
 
   publish [
     shape  = box
-    prompt = "Publish the approved artifact. Use local:bash for any required side effects. End with `PUBLISHED: <ref>`."
-    allowed_tools = "local:read_file, local:write_file, local:bash"
+    prompt = "Publish the approved artifact. Use `bash` for any required side effects. End with `PUBLISHED: <ref>`."
+    allowed_tools = "read, write, edit, bash"
     max_retries = 2
   ]
 

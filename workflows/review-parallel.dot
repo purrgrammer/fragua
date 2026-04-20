@@ -51,8 +51,8 @@ digraph review_parallel {
   start [shape=Mdiamond]
 
   plan [
-    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY (goal). End with `<promise>BRIEF_READY</promise>`."
-    allowed_tools = "local:read_file, local:list_dir, local:git_read"
+    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY (goal). Use `read` for file inspection and `bash` for `git log`, `git diff`, or `ls`. End with `<promise>BRIEF_READY</promise>`."
+    allowed_tools = "read, bash"
     fidelity = "compact"
   ]
 
@@ -63,20 +63,20 @@ digraph review_parallel {
   ]
 
   approach_correctness [
-    prompt = "Using the brief ($plan.output), read the diff via `git diff HEAD` and identify up to 3 concrete CORRECTNESS risks — logic bugs, off-by-one, missing null checks. Each risk gets a line: `RISK: <one-line> (file:line)`. If you find none, say `NO_RISKS`."
-    allowed_tools = "local:read_file, local:grep, local:git_read"
+    prompt = "Using the brief ($plan.output), run `git diff HEAD` via `bash` and identify up to 3 concrete CORRECTNESS risks — logic bugs, off-by-one, missing null checks. Each risk gets a line: `RISK: <one-line> (file:line)`. If you find none, say `NO_RISKS`. Read-only: `read` and `bash` for git/grep are allowed; `edit` and `write` are not."
+    allowed_tools = "read, bash"
     fidelity = "compact"
   ]
 
   approach_style [
-    prompt = "Using the brief ($plan.output), scan the diff for STYLE / consistency regressions — mismatched naming, inconsistent error handling, unused imports. One line per finding: `STYLE: <one-line> (file:line)`. No findings → `NO_FINDINGS`."
-    allowed_tools = "local:read_file, local:grep, local:git_read"
+    prompt = "Using the brief ($plan.output), run `git diff HEAD` via `bash` and scan for STYLE / consistency regressions — mismatched naming, inconsistent error handling, unused imports. One line per finding: `STYLE: <one-line> (file:line)`. No findings → `NO_FINDINGS`. Read-only."
+    allowed_tools = "read, bash"
     fidelity = "compact"
   ]
 
   approach_security [
-    prompt = "Using the brief ($plan.output), look for SECURITY concerns in the diff — unvalidated input, secret leaks, auth bypasses, injection risks. One line per concern: `SEC: <one-line> (file:line)`. No concerns → `NO_CONCERNS`."
-    allowed_tools = "local:read_file, local:grep, local:git_read"
+    prompt = "Using the brief ($plan.output), run `git diff HEAD` via `bash` and look for SECURITY concerns — unvalidated input, secret leaks, auth bypasses, injection risks. One line per concern: `SEC: <one-line> (file:line)`. No concerns → `NO_CONCERNS`. Read-only."
+    allowed_tools = "read, bash"
     fidelity = "compact"
   ]
 

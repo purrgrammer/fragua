@@ -699,14 +699,9 @@ function stringifyToolError(result: unknown, err: unknown): string {
   return "tool error";
 }
 
-/**
- * AI Elements' `ToolHeader` expects `type="tool-<name>"`. Tool names are
- * bare identifiers post-trim (`read`, `write`, `edit`, `bash`) so the
- * mapping is straightforward, but we still scrub any non-alphanumeric
- * characters as a defence for legacy event payloads that might still
- * carry a namespaced name.
- */
+/** AI Elements' `ToolHeader` expects `type="tool-<name>"`. Tool names
+ * are bare identifiers (`read`, `write`, `edit`, `bash`, or workspace-
+ * registered custom tools), so pass-through is sufficient. */
 export function toolTypeFromName(toolName: string): `tool-${string}` {
-  const safe = toolName.replace(/[^a-zA-Z0-9_]/g, "_");
-  return `tool-${safe}` as `tool-${string}`;
+  return `tool-${toolName}` as `tool-${string}`;
 }
