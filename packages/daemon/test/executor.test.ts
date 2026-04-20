@@ -149,6 +149,70 @@ describe("executor — edge selection", () => {
     r.store.close();
   });
 
+  test("terminal reached via outcome=fail edge ends the run in 'halted' state, not 'completed'", async () => {
+    // Repro of the "run claims success but nothing got done" bug the
+    // quick-change workflow exhibited: implement aborts, router picks
+    // the fail-conditioned edge to done (Msquare terminal). The run
+    // must NOT report status=completed — the graph exited via a failure
+    // branch. Mapped to UI status="fail" via mapStatus(halted).
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      implement [shape=box];
+      verify [shape=box];
+      done [shape=Msquare];
+      start -> implement;
+      implement -> done [condition="outcome=fail"];
+      implement -> verify;
+      verify -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "implement", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "fail",
+        tokens: 1,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "halt-1", "start");
+    r.store.claimNextRun(1);
+    await runOne("halt-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const state = r.store.getState("halt-1")!;
+    expect(state.status).toBe("halted");
+    const events = r.store.getEvents("halt-1");
+    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect(halted).not.toBeUndefined();
+    const payload = halted!.payload as { reason: string; detail?: string };
+    expect(payload.reason).toBe("aborted_exit");
+    // No run_completed event should have fired — the run didn't succeed.
+    expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    r.store.close();
+  });
+
   test("handler with explicit nextNode bypasses selector (no edge.selected event)", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {

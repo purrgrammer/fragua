@@ -51,7 +51,7 @@ export type IntentType = IntentEvent["type"];
 
 // ─────────────── Fact events (writer: "daemon", OCC-checked) ───────────
 
-export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" | "error";
+export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" | "error" | "aborted_exit";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 

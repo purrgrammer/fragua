@@ -73,10 +73,22 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {
-        facts.push({
-          type: "fact.run_completed",
-          payload: { finalNode: nextNode },
-        });
+        // A terminal reached via an explicit fail outcome (either the
+        // handler returned outcomeStatus="fail" or the edge selector
+        // picked a `condition="outcome=fail"` edge that led here) ends
+        // the run in a failure state, not success. Reducer maps
+        // "halted" to the UI's "fail" status.
+        if (result.outcomeStatus === "fail") {
+          facts.push({
+            type: "fact.run_halted",
+            payload: { reason: "aborted_exit", detail: `reached ${nextNode} via outcome=fail` },
+          });
+        } else {
+          facts.push({
+            type: "fact.run_completed",
+            payload: { finalNode: nextNode },
+          });
+        }
       } else {
         facts.push({
           type: "fact.node_started",
