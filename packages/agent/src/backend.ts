@@ -136,6 +136,19 @@ export class PiCodergenBackend implements CodergenBackend {
     if (allow) selectOpts.allow = allow;
     if (deny) selectOpts.deny = deny;
     const selectedTools = this.registry.select(selectOpts);
+    // Fail loudly when the node asked for tools but the registry produced
+    // none. Silent empty-tools is the worst kind of misconfig — the model
+    // happily generates `<tool_call>` XML as plain text and the run looks
+    // like it succeeded while nothing actually ran. Caller should populate
+    // the registry (e.g. `registry.registerAll(CORE_TOOLS)`) before
+    // constructing the backend.
+    if (allow && allow.length > 0 && selectedTools.length === 0) {
+      const registered = this.registry.list().map((t) => t.name);
+      return fail(
+        `allowed_tools=[${allow.join(", ")}] requested but none matched the backend registry (registered: [${registered.join(", ")}]). ` +
+          "The registry must be populated before backend.run() — call `registry.registerAll(CORE_TOOLS)` at daemon setup.",
+      );
+    }
 
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt, and mint a scoped

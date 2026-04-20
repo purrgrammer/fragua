@@ -28,7 +28,7 @@ import {
   WorktreeProvisioner,
 } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
-import { ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
 
@@ -166,8 +166,17 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // `env` is wired per-run via the WorktreeProvisioner below —
     // the backend reads it off `CodergenInput` on each call, so we
     // intentionally leave `backendOpts.env` unset here.
+    // Register the four core tools (read / write / edit / bash) on the
+    // backend registry. Without this the registry is empty, pi-agent-core
+    // gets `tools: []`, and the model has no schemas to structure tool
+    // calls against — it falls back to emitting `<tool_call>` XML as raw
+    // text (mimicking what it saw in training). Symptom: zero
+    // `tool.execution_*` events across an entire run and the agent
+    // "hallucinates" command output that never ran.
+    const registry = new ToolRegistry();
+    registry.registerAll(CORE_TOOLS);
     const backendOpts = {
-      registry: new ToolRegistry(),
+      registry,
       defaultModel: { provider: provider!, model: model! },
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
