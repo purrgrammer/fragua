@@ -139,11 +139,12 @@ export function cancelToFacts(intentSeq: number): FactEvent[] {
   return [{ type: "fact.run_cancelled", payload: { intentSeq } }];
 }
 
-/** Per-node retry counter. Shares the `loop_counter` routing key with the
- * executor's `nodeRetryCount` for backward-compat with events predating
- * the attractor alignment. */
+/** Per-node retry counter (attractor §3.6) — bumped each time a
+ * backward edge re-enters a node after a non-success outcome. Shares
+ * the `retry_count` routing key with `executor.ts` so the two reads
+ * stay in sync. */
 function nodeRetryCount(routing: Record<string, unknown>): number {
-  const v = routing["loop_counter"];
+  const v = routing["retry_count"];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 

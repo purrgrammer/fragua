@@ -12,8 +12,8 @@
 - **Single coordination surface: one SQLite database.** All state, events, queue, locks, artifacts. Two processes (daemon, web server) both read and write. WAL mode handles multi-process access.
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
-- **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `NODE_ABORTED` with partial metrics, executor re-enters (or halts) based on new state.
-- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `YIELD_HITL`, the executor emits `RUN_PAUSED_HITL`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
+- **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
+- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `yield_hitl`, the executor emits `fact.run_paused_hitl`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
 - **Content-addressed blobs with sha256.** Tool outputs never inline in event payloads. Handlers write raw content to content-addressed `blobs`; events carry a ref + bounded preview.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
@@ -59,7 +59,7 @@ ctx.artifacts.get(key)                                          // implicit curr
 ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cross-scope
 ```
 
-`iteration` comes from `ctx.routing.loop_counter`, maintained by the graph-cycle handler (0 outside loops). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
+`iteration` is the per-node retry counter (attractor §3.6), bumped each time a backward edge re-enters a node after a non-success outcome (0 on first entry). Downstream nodes receive `ArtifactRef { runId, nodeId, iteration, key }` through routing, never raw strings.
 
 ### 1.3 Unix socket IPC is net-negative
 **Attack.** `.sock` cleanup, `EADDRINUSE`, permission errors, reconnect bookkeeping — hundreds of lines for something SQLite already does in <0.1ms per query.
@@ -119,7 +119,7 @@ Consolidated into the supervisor fiber (1.3). Heartbeat, intent detection, and s
 Unchanged. `Promise.race` with hard timeout bounds damage; leaked handlers emit `fact.handler_timeout_leaked` for accounting honesty.
 
 ### 1.9 Mid-flight abort replay
-Covered by provider idempotency keys (1.1) and graph-cycle loop_counter (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
+Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
 
 ### 1.10 Remaining concerns
 - **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
@@ -279,7 +279,7 @@ CREATE TABLE daemon_lock (
 | `fact.run_paused_hitl` | `nodeId`, `prompt` | Yielded for human input |
 | `fact.run_resumed` | `fromStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'`, `detail?` | Terminal failure |
+| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'`, `detail?` | Terminal failure |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
 | `fact.run_quarantined` | `reason: 'orphan_side_effect'\|...`, `orphanedIntents?: seq[]` | Awaiting operator |
 | `fact.run_requeued_after_crash` | `prevNode?` | Startup sweep requeued |
@@ -372,7 +372,7 @@ export type HandlerSpec = {
 export type HandlerContext = Readonly<{
   runId: string;
   nodeId: string;
-  iteration: number;                     // 0 outside loops; from routing.loop_counter
+  iteration: number;                     // per-node retry counter (§3.6); 0 on first entry
   signal: AbortSignal;                   // AbortSignal.any([steer, timeout, shutdown])
   routing: Readonly<Record<string, unknown>>;
   llm: LlmClient;                        // pre-wired with signal, accounting
@@ -606,7 +606,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P5 | Crash recovery requeue | Kill at random SQL boundary | Startup sweep requeues all `running`; no half-applied txn |
 | P6 | Orphan quarantine | Kill between `intent` and `done` | Startup → run `quarantined`; no re-run |
 | P7 | Unquarantine retry | `intent.unquarantine:retry` | Run resumes; tool re-executes with same `idempotencyKey` |
-| P8 | Mid-flight abort → replay | Abort at random await points | `NODE_ABORTED` present; next turn converges; external tool count ≤ 1 per `idempotencyKey` |
+| P8 | Mid-flight abort → replay | Abort at random await points | `fact.node_aborted` present; next turn converges; external tool count ≤ 1 per `idempotencyKey` |
 | P9 | Daemon singleton | Start two daemons | Second exits non-zero; lock unchanged |
 | P10 | Concurrency bound | Enqueue 100 runs, `MAX=4` | `COUNT(status='running') ≤ 4` at every snapshot |
 | P11 | HITL durability | Pause → kill → restart → input | Progresses from exact stop point |
@@ -630,36 +630,37 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 
 ```
 packages/
-  store/                              ← NEW
+  store/
     src/
       schema.sql
       pragmas.ts
       migrations.ts
-      write-queue.ts
       store.ts                         ← IEventStore impl
-      reducers.ts                      ← intent fold, fact-from-result
+      reducers.ts                      ← fact fold
       sweep.ts                         ← startup sweep (requeue + quarantine)
       types.ts
-    tests/
-      property/                        ← P1..P24
-      unit/
-  core/                                ← TRIMMED
+    test/                              ← property + unit
+  core/
     src/
-      parser/                          ← kept (DOT)
-      handler.ts                       ← HandlerContext, HandlerSpec, Handler types
-      handlers/
-        wait-human.ts                  ← yields, no blocking
-        (loop.ts removed — loops are backward edges + max_retries)
+      parser/                          ← DOT parser
+      handler/                         ← HandlerContext, HandlerSpec, Handler
+        handlers/                      ← wait-human, tool, parallel, fan-in, ...
+        context.ts                     ← buildHandlerContext (per-call env)
+        external-call.ts               ← idempotency key + intent/done envelope
       engine/
         edge-selection.ts              ← 5-rule priority (attractor §3.3)
         fan-in.ts                      ← heuristic ranking reducer (§4.9)
         retry-policy.ts                ← per-node retry counter (§3.6)
-        substitution.ts                ← $ARGUMENTS / $nodeId.output
-      llm-client.ts                    ← pre-wired abort + idempotency
-      http-client.ts                   ← pre-wired abort
-      tool-registry.ts                 ← side-effect tagging
-      external-call.ts                 ← idempotency key + intent/done envelope
-  daemon/                              ← REWRITTEN
+        fidelity.ts                    ← mode resolution + degradeOnResume
+        substitution.ts                ← $ARGUMENTS / $RUN_ID / $WORKTREE_PATH / $LOG_DIR / $nodeId.output
+      types/
+        execution.ts                   ← ExecutionEnvironment interface
+        events.ts                      ← fact + intent + observability
+        summariser.ts                  ← SummariserBackend port
+        ...
+      executor/
+        types.ts                       ← CodergenBackend, CodergenInput
+  daemon/
     src/
       executor.ts                      ← executor fiber
       supervisor.ts                    ← heartbeat + intents + watchdog tick
@@ -667,17 +668,36 @@ packages/
       dispatch.ts                      ← node-kind → handler
       auto-dispatcher.ts               ← shape → HandlerSpec fallback
       result-to-facts.ts               ← HandlerResult → FactEvent[]
-      reaper.ts                        ← stale daemon-lock cleanup
       wake-hitl.ts                     ← pending HITL scan
-      entrypoint.ts                    ← CLI binary
-  server/                              ← TRIMMED
+      auto-titler.ts                   ← run.title_generated summariser
+      worktree-provisioner.ts          ← per-run WorktreeEnvironment map
+      entrypoint.ts                    ← startDaemon
+  agent/
     src/
-      routes.ts                        ← Hono routes
-      sse.ts                           ← polling SSE streams
-      entrypoint.ts
-  web/                                 ← kept; hooks updated for new event shapes
-  cli/                                 ← kept; commands map to intent writes
-  workspace/                           ← kept
+      backend.ts                       ← PiCodergenBackend (pi-agent-core)
+      handler-bridge.ts                ← makeCodergenHandler (CodergenBackend → HandlerSpec)
+      summariser.ts                    ← PiSummariserBackend
+      fidelity.ts                      ← buildFidelitySeed (summariser-backed)
+      event-bridge.ts                  ← pi-agent AgentEvent → swarm EventType
+      tool-adapter.ts                  ← swarm Tool → pi AgentTool
+      message-store.ts                 ← in-process per-thread transcript cache
+      system-prompt.ts                 ← buildSystemPrompt (context-files + skills + runEnv)
+  server/
+    src/
+      index.ts                         ← createServer
+      store/
+        routes.ts                      ← intents (POST), SSE
+        runs-routes.ts                 ← runs/messages/events/steps reads
+        runs-adapter.ts                ← RunSummary / RunDetail projection
+        steps.ts                       ← llm.start fold → Step[]
+  workspace/
+    src/
+      local-env.ts                     ← LocalEnvironment (process cwd)
+      worktree-env.ts                  ← WorktreeEnvironment (git worktree per run)
+      tools.ts                         ← read / write / edit / bash
+      skills/                          ← SKILL.md discovery + catalog
+  web/                                 ← UI (React + Tanstack Router)
+  cli/                                 ← bin/swarm.ts + commands/*.ts
 ```
 
 
@@ -702,7 +722,7 @@ and tracked.
 
 - **Budget ledger.** `graph.attrs.budget_usd`, `graph.attrs.budget_tokens`, `graph.attrs.budget_policy`, `node.attrs.max_cost_usd`, `node.attrs.max_tokens` all parse and serialise. `BudgetSnapshot` event payload is declared. `budget.warn` / `budget.stop` event types are declared. No code reads cumulative spend and fires the events; no handler honours the ceiling. Runs exceed their declared budget silently.
 - *(retired)* ~~Worktree provisioning.~~ Wired. `WorktreeProvisioner` (`@swarm/daemon`) maintains a per-runId `Map<runId, ExecutionEnvironment>`; the executor calls `ensure(runId)` before the first dispatch and `dispose(runId)` once the run reaches a terminal status (completed / cancelled / halted). `paused_hitl` + `quarantined` runs keep their worktree so a resume picks up exactly where it left off — including across daemon restarts, since `WorktreeEnvironment.init()` detects an existing registered worktree (via `git worktree list --porcelain`) and reuses it without re-running bootstrap. `$WORKTREE_PATH` / `$LOG_DIR` substitution args now resolve to real paths. Non-git cwds fall back to a shared `LocalEnvironmentProvisioner` (tests + demo paths).
-- *(retired)* ~~Checkpoint / resume.~~ Wired through the `messages` table (schema v3 adds `payload_json` to carry structured `AgentMessage` JSON alongside the plaintext preview). `PiCodergenBackend` calls `CodergenInput.persistMessage` at each `message_end`; handler-bridge loads the prior transcript from the store into `CodergenInput.priorMessages` before every `backend.run()`. Resume detection is purely derived: `(prior non-empty) ∧ ¬(this process wrote this thread)` ⇒ apply `degradeOnResume` per SPEC §3.6. A separate `GET /runs/:id/messages` endpoint serves the transcript to the frontend directly (no event-log reassembly). The `PayloadTooLargeError` / §I7 cap stays intact — message content never rides on the event envelope, it goes to `messages.content` (TEXT, unlimited).
+- *(retired)* ~~Checkpoint / resume.~~ Wired through the `messages` table. `PiCodergenBackend` calls `CodergenInput.persistMessage` at each `message_end` to land plaintext content in `messages.content` (TEXT, unbounded — §I7 cap stays intact because message content never rides the event envelope). Handler-bridge loads the prior transcript from the store into `CodergenInput.priorMessages` as synthesised `AgentMessage`s before every `backend.run()`. Resume detection is purely derived: `(prior non-empty) ∧ ¬(this process wrote this thread)` ⇒ apply `degradeOnResume` per SPEC §3.6 (fidelity=full → summary:high). The degrade makes plaintext sufficient — tool_use blocks don't need to survive a daemon restart. A separate `GET /runs/:id/messages` endpoint serves the transcript to the frontend directly.
 - *(retired)* ~~Auto-title summariser (emit side).~~ Wired. `AutoTitler` (@swarm/daemon) fires once per run right after `fact.run_started`, emits `summary.*` + `cost.recorded` + `run.title_generated` under the synthetic `__summary.title` node id, and projects the result onto `run_state.title` via `setRunTitle`. The daemon `drain()`s pending title calls on shutdown so in-flight summariser streams cancel via the shared `shutdownSignal`. `auto_title: "off"` disables even when a summariser is configured; failures (missing keys, network errors) leave `title = null` and the UI falls back to `routing.input`.
 - **Handler coverage.** All 8 canonical kinds from attractor §2.8 are now wired end-to-end through `auto-dispatcher.ts`: `start`, `exit`, `conditional`, `codergen`, `wait.human`, `tool`, `parallel`, and `parallel.fan_in`. The pure reducers behind them — `fan-in.ts`, `retry-policy.ts`, `edge-selection.ts`, `external-call.ts` — are all property-tested. Parallel is v1 "deliberation-only" (regime C): branches deep-clone routing but share the run's worktree and must stay read-only. HITL inside a parallel branch is coerced to `fail`; multi-worktree parallel and LLM-evaluated fan_in (attractor §4.9's `prompt`-set branch) are deferred.
 - **Per-node provider preflight.** `POST /runs` checks that the daemon has *some* provider API key set, but not that the specific provider pinned on each `node.attrs.provider` is reachable. A workflow that hardcodes an unconfigured provider fails at dispatch (visible via `fact.run_halted`), not at enqueue.

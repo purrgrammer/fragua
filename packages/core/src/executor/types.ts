@@ -40,14 +40,12 @@ export interface CodergenInput {
   priorMessages?: readonly unknown[];
   /** Sink for persisting LLM-visible assistant / tool messages as they
    * complete. The backend calls this once per finished agent message
-   * with its reconstituted content plus the structured payload so
-   * resume can rehydrate the exact AgentMessage shape. The handler-
-   * bridge wires it to `ctx.messages.append` so rows land in the
-   * `messages` table (no 4KB payload cap, unlike the events table —
-   * §I7 vs §I9). When omitted, messages don't land anywhere — fine
-   * for tests that only care about events. `payloadJson` is a JSON-
-   * serialized AgentMessage; the messages table stores it verbatim. */
-  persistMessage?: (role: "assistant" | "tool" | "user" | "system", content: string, payloadJson?: string) => void;
+   * with the flattened content. The handler-bridge wires it to
+   * `ctx.messages.append` so rows land in the `messages` table (no
+   * 4KB payload cap, unlike the events table — §I7 vs §I9). When
+   * omitted, messages don't land anywhere — fine for tests that only
+   * care about events. */
+  persistMessage?: (role: "assistant" | "tool" | "user" | "system", content: string) => void;
   /** Per-run shell + filesystem environment. When set, the backend
    * uses this for tool execution (read/write/edit/bash) and context-
    * file loads instead of falling back to its construction-time env.

@@ -3,28 +3,26 @@
 // Invariants guarded here:
 //
 //   1. Each finished agent message lands in `messages` with flattened
-//      `content` (UI plaintext) AND structured `payload_json`
-//      (AgentMessage JSON). payload_json is lossless — required to
-//      rehydrate tool_use blocks + tool_result shapes on resume.
+//      plaintext `content`. Resume always degrades fidelity=full →
+//      summary:high (SPEC §3.6), so plaintext is sufficient — the
+//      structured AgentMessage shape never needs to cross a daemon
+//      restart.
 //   2. The handler-bridge loads prior messages from the store before
 //      each backend.run() so a fresh backend instance post-restart
-//      sees history as `input.priorMessages`.
-//   3. `fidelity=full` survives a daemon restart: the store carries
-//      the transcript across process boundaries and the second
-//      backend instance sees it via `priorMessages`.
-//   4. pi-agent-core roles (`toolResult`) map onto swarm's MessageRole
+//      sees history as `input.priorMessages` (synthesised AgentMessages
+//      from plaintext).
+//   3. pi-agent-core roles (`toolResult`) map onto swarm's MessageRole
 //      (`tool`) so persistence round-trips cleanly.
-//   5. Event payloads never carry the message content — only the
+//   4. Event payloads never carry the message content — only the
 //      messages table does — so §I7 (4KB event cap) stays intact even
 //      for 8 KB+ assistant turns.
-//   6. v1 → v3 schema migration adds the payload_json column without
-//      dropping existing rows or other tables.
 
 import { describe, expect, test } from "bun:test";
 import type { CodergenBackend, CodergenInput, Node } from "@swarm/core";
 import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
+import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { computeResumeDecision, PiCodergenBackend } from "../src/backend.ts";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";
 
@@ -85,12 +83,7 @@ function makeInstrumentedBackend(): {
         fidelity: input.fidelity,
         priorMessagesLen: input.priorMessages?.length ?? 0,
       });
-      const msg = {
-        role: "assistant",
-        content: [{ type: "text", text: `reply to ${input.prompt}` }],
-        timestamp: Date.now(),
-      };
-      input.persistMessage?.("assistant", `reply to ${input.prompt}`, JSON.stringify(msg));
+      input.persistMessage?.("assistant", `reply to ${input.prompt}`);
       return ok({ notes: "ok", context_updates: {} });
     },
   };
@@ -98,7 +91,7 @@ function makeInstrumentedBackend(): {
 }
 
 describe("messages table populates on persistMessage", () => {
-  test("content + payloadJson round-trip", async () => {
+  test("plaintext content round-trip", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r1", store, "n1");
     const { backend } = makeInstrumentedBackend();
@@ -108,10 +101,6 @@ describe("messages table populates on persistMessage", () => {
     expect(msgs).toHaveLength(1);
     expect(msgs[0]?.role).toBe("assistant");
     expect(msgs[0]?.content).toBe("reply to hello");
-    expect(msgs[0]?.payloadJson).toBeDefined();
-    const parsed = JSON.parse(msgs[0]!.payloadJson!);
-    expect(parsed.role).toBe("assistant");
-    expect(parsed.content[0].text).toBe("reply to hello");
     store.close();
   });
 
@@ -120,7 +109,7 @@ describe("messages table populates on persistMessage", () => {
     const ctx = await ctxFor("r2", store, "n1");
     const backend: CodergenBackend = {
       async run(input) {
-        input.persistMessage?.("tool", "grep output", JSON.stringify({ role: "toolResult", content: "grep output" }));
+        input.persistMessage?.("tool", "grep output");
         return ok({ notes: "", context_updates: {} });
       },
     };
@@ -143,11 +132,6 @@ describe("handler-bridge priorMessages hydration", () => {
       content: "earlier",
       nodeId: "n1",
       iteration: 0,
-      payloadJson: JSON.stringify({
-        role: "assistant",
-        content: [{ type: "text", text: "earlier" }],
-        timestamp: 1,
-      }),
     });
 
     const { backend, calls } = makeInstrumentedBackend();
@@ -159,7 +143,7 @@ describe("handler-bridge priorMessages hydration", () => {
     store.close();
   });
 
-  test("no prior messages → priorMessages is empty (not undefined lengths aside)", async () => {
+  test("no prior messages → priorMessages is empty, fidelity preserved", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
     const { backend, calls } = makeInstrumentedBackend();
@@ -168,28 +152,10 @@ describe("handler-bridge priorMessages hydration", () => {
     expect(calls[0]?.fidelity).toBe("full");
     store.close();
   });
-
-  test("fallback: synthesises AgentMessage from content when payloadJson is null (legacy rows)", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "digraph{}");
-    store.enqueueRun({ runId: "r4", workflowSha: "sha" });
-    store.appendMessage("r4", {
-      role: "assistant",
-      content: "legacy row without payload_json",
-      nodeId: "n1",
-      iteration: 0,
-      payloadJson: null,
-    });
-    const { backend, calls } = makeInstrumentedBackend();
-    await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(await ctxFor("r4", store, "n1"));
-    expect(calls[0]?.priorMessagesLen).toBe(1);
-    store.close();
-  });
 });
 
 describe("PiCodergenBackend resume surface", () => {
   test("hasInProcessWrite starts false for every (run, thread)", () => {
-    const { LocalEnvironment, ToolRegistry } = require("@swarm/workspace") as typeof import("@swarm/workspace");
     const b = new PiCodergenBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
@@ -293,11 +259,7 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
     const huge = "x".repeat(8192);
     const backend: CodergenBackend = {
       async run(input) {
-        input.persistMessage?.(
-          "assistant",
-          huge,
-          JSON.stringify({ role: "assistant", content: [{ type: "text", text: huge }], timestamp: 1 }),
-        );
+        input.persistMessage?.("assistant", huge);
         await input.emit?.("agent.message_end", { role: "assistant" });
         return ok({ notes: "", context_updates: {} });
       },
@@ -312,73 +274,5 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
       expect(size).toBeLessThan(4096);
     }
     store.close();
-  });
-});
-
-describe("v1 → v3 schema migration", () => {
-  test("existing v1 DB picks up title + payload_json on migrate", async () => {
-    const { mkdtempSync, rmSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { Database } = await import("bun:sqlite");
-
-    const dir = mkdtempSync(join(tmpdir(), "swarm-migrate-"));
-    const path = join(dir, "swarm.db");
-
-    // Hand-build a v1 DB (no title on run_state, no payload_json on messages).
-    const db = new Database(path);
-    db.exec(`PRAGMA journal_mode = WAL;`);
-    db.exec(`
-      CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id=1), version INTEGER NOT NULL) STRICT;
-      INSERT INTO schema_version VALUES (1, 1);
-      CREATE TABLE workflows (sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
-      CREATE TABLE run_state (
-        run_id TEXT PRIMARY KEY, version INTEGER NOT NULL, status TEXT NOT NULL CHECK (status IN ('queued','running','paused_hitl','completed','cancelled','halted','quarantined')),
-        current_node TEXT, workflow_sha TEXT NOT NULL REFERENCES workflows(sha), schema_version INTEGER NOT NULL,
-        routing TEXT NOT NULL CHECK (length(routing) < 8192), metrics TEXT NOT NULL, next_seq INTEGER NOT NULL DEFAULT 1,
-        last_applied_seq INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
-        enqueued_at INTEGER NOT NULL, ready_at INTEGER NOT NULL, node_started_at INTEGER, updated_at INTEGER NOT NULL
-      ) STRICT;
-      CREATE TABLE events (run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, writer TEXT NOT NULL CHECK (writer IN ('daemon','web')), payload TEXT NOT NULL CHECK (length(payload) < 4096), ts INTEGER NOT NULL, PRIMARY KEY (run_id, seq)) STRICT, WITHOUT ROWID;
-      CREATE TABLE messages (run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, role TEXT NOT NULL CHECK (role IN ('system','user','assistant','tool')), content TEXT NOT NULL, node_id TEXT, iteration INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (run_id, ordinal)) STRICT, WITHOUT ROWID;
-      CREATE TABLE blobs (sha256 TEXT NOT NULL UNIQUE, content BLOB NOT NULL, size_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL) STRICT;
-      CREATE TABLE artifacts (run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL, iteration INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, blob_sha TEXT NOT NULL REFERENCES blobs(sha256), mime TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (run_id, node_id, iteration, key)) STRICT, WITHOUT ROWID;
-      CREATE TABLE daemon_lock (id INTEGER PRIMARY KEY CHECK (id=1), pid INTEGER NOT NULL, hostname TEXT NOT NULL, started_at INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL) STRICT;
-    `);
-    // Insert a legacy run + message.
-    db.query(`INSERT INTO workflows (sha, name, dot_source, created_at) VALUES ('s', 'w', 'digraph{}', 1)`).run();
-    db.query(
-      `INSERT INTO run_state
-       (run_id, version, status, current_node, workflow_sha, schema_version,
-        routing, metrics, next_seq, last_applied_seq, priority,
-        enqueued_at, ready_at, node_started_at, updated_at)
-       VALUES ('r-legacy', 1, 'queued', NULL, 's', 1, '{}', '{"totalTokens":0,"totalCostUsd":0,"loopCounts":{},"models":{}}', 1, 0, 0, 1, 1, NULL, 1)`,
-    ).run();
-    db.query(
-      `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration) VALUES ('r-legacy', 1, 'assistant', 'legacy text', 'n1', 0)`,
-    ).run();
-    db.close();
-
-    // Open with the current-code SqliteStore → migrate runs.
-    const store = new SqliteStore({ path });
-    const msgs = store.getMessages("r-legacy");
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]?.content).toBe("legacy text");
-    expect(msgs[0]?.payloadJson).toBeNull();
-
-    // New appends carry payload_json, old rows keep null.
-    store.appendMessage("r-legacy", {
-      role: "user",
-      content: "new",
-      nodeId: "n1",
-      iteration: 0,
-      payloadJson: JSON.stringify({ role: "user", content: "new" }),
-    });
-    const msgs2 = store.getMessages("r-legacy");
-    expect(msgs2).toHaveLength(2);
-    expect(msgs2[1]?.payloadJson).toBeDefined();
-
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
   });
 });

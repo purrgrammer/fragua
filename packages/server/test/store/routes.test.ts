@@ -247,7 +247,7 @@ describe("GET /runs/:id/messages", () => {
     expect(body.code).toBe("not_found");
   });
 
-  test("returns appended messages with payloadJson round-trip", async () => {
+  test("returns appended messages with plaintext content", async () => {
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
     store.enqueueRun({ runId: "msgs-one", workflowSha: "wf" });
@@ -256,20 +256,17 @@ describe("GET /runs/:id/messages", () => {
       content: "hello",
       nodeId: "n1",
       iteration: 0,
-      payloadJson: JSON.stringify({ role: "assistant", content: [{ type: "text", text: "hello" }] }),
     });
     const res = await app.request("/runs/msgs-one/messages");
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{
       role: string;
       content: string;
-      payloadJson: string | null;
       nodeId: string | null;
     }>;
     expect(body).toHaveLength(1);
     expect(body[0]!.role).toBe("assistant");
     expect(body[0]!.content).toBe("hello");
-    expect(body[0]!.payloadJson).toContain('"role":"assistant"');
   });
 
   test("filters by nodeId + sinceOrdinal", async () => {

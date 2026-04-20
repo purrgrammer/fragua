@@ -115,8 +115,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
-      persistMessage: (role, content, payloadJson) => {
-        ctx.messages.append(role, content, payloadJson);
+      persistMessage: (role, content) => {
+        ctx.messages.append(role, content);
       },
     });
 
@@ -196,46 +196,21 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
  * thread id is also a node id (the common case: `thread_id` defaults
  * to the source node id). Falls back to all messages when there's no
  * direct match so authors who set `thread_id="dev"` don't get empty
- * history. Returns `undefined` when nothing is persisted so the
- * backend can skip resume-detection and use its in-process cache.
+ * history. Returns `undefined` when nothing is persisted.
  *
- * `payload_json` carries the full structured AgentMessage; if absent
- * on a row (legacy appends / stub tests), fall back to synthesising a
- * plain-text message from `content` + `role` — the backend treats
- * both shapes uniformly. */
+ * Rows synthesise minimal AgentMessages from (role, content). Resume
+ * always degrades `fidelity=full` → `summary:high` (SPEC §3.6), so
+ * the seed builder only needs text — tool_use blocks never have to
+ * survive a daemon restart. */
 function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly unknown[] | undefined {
-  // Prefer messages tagged with the exact thread_id as node_id (common
-  // default). When empty, return all run messages so wide threads
-  // (`thread_id="dev"`) still hydrate.
-  //
-  // `ctx.messages.since(0)` inherits a 10k default cap — fine for the
-  // UI path, not for resume where a silent truncation loses context.
-  // Task tracking: the context.ts cap should become a tail query, but
-  // today we work around it by accepting what the API gives us and
-  // documenting the limit as a known ceiling for resume fidelity.
   const byNode = ctx.messages.since(0).filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : ctx.messages.since(0);
   if (rows.length === 0) return undefined;
-  const out: unknown[] = [];
-  for (const row of rows) {
-    if (row.payloadJson) {
-      try {
-        out.push(JSON.parse(row.payloadJson));
-        continue;
-      } catch {
-        // Fallthrough to text-only reconstruction.
-      }
-    }
-    // Synthesise a minimal AgentMessage — enough for non-full fidelity
-    // modes to summarise against; `fidelity=full` resume degrades per
-    // §3.6 so the exact shape is irrelevant on first resumed call.
-    out.push({
-      role: row.role,
-      content: [{ type: "text", text: row.content }],
-      timestamp: Date.now(),
-    });
-  }
-  return out;
+  return rows.map((row) => ({
+    role: row.role,
+    content: [{ type: "text", text: row.content }],
+    timestamp: Date.now(),
+  }));
 }
 
 function extractTextFromMessage(data: Record<string, unknown>): string {

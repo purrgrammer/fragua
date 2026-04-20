@@ -377,10 +377,10 @@ export class SqliteStore implements IEventStore {
       ordinal = (max?.m ?? 0) + 1;
       this.db
         .query(
-          `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration, payload_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0, row.payloadJson ?? null);
+        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0);
     });
     return { ordinal };
   }
@@ -395,12 +395,11 @@ export class SqliteStore implements IEventStore {
       content: string;
       node_id: string | null;
       iteration: number;
-      payload_json: string | null;
     };
     if (opts.nodeId != null) {
       return this.db
         .query<Row, [string, number, string, number]>(
-          `SELECT run_id, ordinal, role, content, node_id, iteration, payload_json
+          `SELECT run_id, ordinal, role, content, node_id, iteration
              FROM messages
             WHERE run_id = ? AND ordinal > ? AND node_id = ?
             ORDER BY ordinal ASC
@@ -411,7 +410,7 @@ export class SqliteStore implements IEventStore {
     }
     return this.db
       .query<Row, [string, number, number]>(
-        `SELECT run_id, ordinal, role, content, node_id, iteration, payload_json
+        `SELECT run_id, ordinal, role, content, node_id, iteration
            FROM messages
           WHERE run_id = ? AND ordinal > ?
           ORDER BY ordinal ASC
@@ -758,7 +757,6 @@ export class SqliteStore implements IEventStore {
     content: string;
     node_id: string | null;
     iteration: number;
-    payload_json?: string | null;
   }): Message => ({
     runId: r.run_id,
     ordinal: r.ordinal,
@@ -766,7 +764,6 @@ export class SqliteStore implements IEventStore {
     content: r.content,
     nodeId: r.node_id,
     iteration: r.iteration,
-    payloadJson: r.payload_json ?? null,
   });
 
   private bumpSeq(runId: string): number {

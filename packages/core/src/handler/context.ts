@@ -51,13 +51,12 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const { runId, nodeId, iteration, store } = opts;
 
   const messages: MessagesApi = {
-    append(role: MessageRole, content: string, payloadJson?: string) {
+    append(role: MessageRole, content: string) {
       return store.appendMessage(runId, {
         role,
         content,
         nodeId,
         iteration,
-        payloadJson: payloadJson ?? null,
       });
     },
     recent(n) {

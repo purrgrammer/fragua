@@ -210,13 +210,6 @@ export interface Message {
   content: string;
   nodeId: string | null;
   iteration: number;
-  /** Full structured pi-agent-core `AgentMessage` JSON. Populated by
-   * `PiCodergenBackend` so a daemon restart can rehydrate a
-   * `fidelity=full` thread with the original tool_use blocks, images,
-   * etc. — content alone is lossy for anything but plaintext. `null`
-   * for legacy rows + synthetic-caller appends that only need the
-   * plaintext preview (e.g. tests). */
-  payloadJson?: string | null;
 }
 
 export interface ArtifactScope {

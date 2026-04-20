@@ -317,26 +317,19 @@ export class PiCodergenBackend implements CodergenBackend {
           await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
         }
         // Persist the fully-assembled message to the messages table.
-        // Payload content is unbounded — if we shoved it onto the
-        // event envelope we'd bust the 4KB I7 cap on the first sizable
+        // Content is unbounded — if we shoved it onto the event
+        // envelope we'd bust the 4KB I7 cap on the first sizable
         // assistant turn. Messages table's `content` is TEXT with no
-        // such limit, matching §I9's "LLM-visible preview" split.
-        //
-        // We pass BOTH the flattened `content` (for UI rendering) and
-        // the full AgentMessage JSON (for resume-path rehydration —
-        // the flattened text is lossy for tool_use blocks, images,
-        // and structured tool_result payloads). pi-agent-core's
-        // `toolResult` role maps onto swarm's `"tool"` MessageRole;
-        // anything else unexpected is skipped (custom UI-only messages
-        // that don't round-trip through pi-ai).
+        // such limit (§I9). Resume always degrades `fidelity=full` →
+        // `summary:high` (SPEC §3.6), so a plaintext flatten is
+        // sufficient — tool_use blocks don't need to survive. pi-
+        // agent-core's `toolResult` role maps onto swarm's `"tool"`
+        // MessageRole; UI-only custom messages are skipped.
         if (input.persistMessage) {
           const mappedRole = mapAgentRoleToMessageRole(event.message.role);
           if (mappedRole !== undefined) {
             const content = extractMessageText(event.message);
-            const payload = safeStringify(event.message);
-            if (content.length > 0 || payload !== undefined) {
-              input.persistMessage(mappedRole, content, payload);
-            }
+            if (content.length > 0) input.persistMessage(mappedRole, content);
           }
         }
       }
@@ -485,14 +478,6 @@ export function computeResumeDecision(args: {
   const resumed = !args.isFresh && args.threadId != null && args.externalPriorLen > 0 && !args.hasInProcessWrite;
   const effectiveFidelity: FidelityMode = resumed ? degradeOnResume(args.fidelity) : args.fidelity;
   return { resumed, effectiveFidelity };
-}
-
-function safeStringify(value: unknown): string | undefined {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
 }
 
 /** pi-agent-core's AgentMessage role space (`user`, `assistant`,
