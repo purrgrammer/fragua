@@ -15,11 +15,12 @@ import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
+import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
-import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
+import { formatTokensCompact, formatTokensLong, formatUsd } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
 import { useRunConversation } from "../lib/useRunConversation.ts";
@@ -173,7 +174,7 @@ function DetailMetaLine({ detail }: { detail: RunDetailT }): JSX.Element {
   return (
     <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-slate-600">
       <span>
-        status: <span data-testid="detail-status">{statusLabel(detail.status)}</span>
+        status: <RunStatusBadge status={detail.status} data-testid="detail-status" />
       </span>
       <span>·</span>
       <span title={`duration ${formatDuration(detail.durationMs, { fallback: "unknown" })}`}>

@@ -21,7 +21,7 @@
 
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
-import { statusLabel } from "../lib/format.ts";
+import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
 
 /** Number of leading runId chars shown in hover tooltips or callers
@@ -67,7 +67,7 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
         ) : null}
       </td>
       <td className="py-2 pr-4 text-right">
-        <StatusPill status={row.status} />
+        <RunStatusBadge status={row.status} />
       </td>
     </tr>
   );
@@ -91,7 +91,7 @@ function CompactRow({ row }: { row: RunSummary }): JSX.Element {
           {wf}
         </Badge>
       ) : null}
-      <StatusPill status={row.status} />
+      <RunStatusBadge status={row.status} />
     </Link>
   );
 }
@@ -132,23 +132,6 @@ function clampInline(s: string, cap: number): string {
   return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
-export function StatusPill({ status }: { status: RunSummary["status"] }): JSX.Element {
-  const tone =
-    status === "success"
-      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-      : status === "fail"
-        ? "bg-rose-100 text-rose-800 border-rose-300"
-        : status === "running"
-          ? "bg-violet-100 text-violet-800 border-violet-300"
-          : status === "canceled"
-            ? "bg-amber-100 text-amber-800 border-amber-300"
-            : "bg-slate-100 text-slate-700 border-slate-300";
-  return (
-    <span
-      data-testid={`status-${status}`}
-      className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tone}`}
-    >
-      {statusLabel(status)}
-    </span>
-  );
-}
+/** @deprecated Import `RunStatusBadge` from `./RunStatusBadge.tsx` directly.
+ *  This alias exists only for backwards-compat with any external callers. */
+export { RunStatusBadge as StatusPill } from "./RunStatusBadge.tsx";
