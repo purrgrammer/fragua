@@ -14,7 +14,7 @@
 // first node executes; a non-zero exit fails the run.
 
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { LocalEnvironment, type LocalEnvironmentOptions } from "./local-env.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
@@ -83,21 +83,35 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   }
 
   /** Create the worktree + branch, prepare the log dir, and run the
-   * project's bootstrap command if configured. Idempotent. */
+   * project's bootstrap command if configured. Idempotent across
+   * process restarts: if the target worktree directory already exists
+   * and `git worktree list` confirms it's a registered worktree for
+   * this repo, the existing one is reused (no `git worktree add`, no
+   * re-bootstrap) so a HITL-paused run can survive a daemon restart
+   * without double-provisioning. */
   async init(): Promise<void> {
     if (this.initialized) return;
     await mkdir(join(this.repoRoot, ".swarm", "worktrees"), { recursive: true });
-    const args = ["worktree", "add"];
-    if (this.baseRef !== undefined) {
-      args.push("-b", this.branch, this.worktreePath, this.baseRef);
-    } else {
-      args.push("-b", this.branch, this.worktreePath);
+
+    const alreadyProvisioned = await this.isExistingWorktree();
+    if (!alreadyProvisioned) {
+      const args = ["worktree", "add"];
+      if (this.baseRef !== undefined) {
+        args.push("-b", this.branch, this.worktreePath, this.baseRef);
+      } else {
+        args.push("-b", this.branch, this.worktreePath);
+      }
+      await runGit(this.repoRoot, args);
     }
-    await runGit(this.repoRoot, args);
+
     if (this.logDir !== undefined) {
       await mkdir(this.logDir, { recursive: true });
     }
-    if (this.bootstrap !== undefined) {
+    // Only bootstrap on FRESH provisioning — a resumed run's worktree
+    // already has dependencies installed from the pre-crash life, and
+    // re-running `bun install` etc. wastes a few minutes every resume
+    // at best and churns lockfiles at worst.
+    if (this.bootstrap !== undefined && !alreadyProvisioned) {
       if (typeof this.bootstrap === "string") {
         const result = await this.local.exec(this.bootstrap, { timeoutMs: this.bootstrapTimeoutMs });
         if (result.exitCode !== 0) {
@@ -111,6 +125,43 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       (this as { bootstrapRan: boolean }).bootstrapRan = true;
     }
     this.initialized = true;
+  }
+
+  /** Detect a pre-existing worktree for this run. Checks:
+   *   1. The target directory exists (cheap).
+   *   2. `git worktree list --porcelain` from the repo root lists it.
+   *
+   * The second check guards against a stale directory left behind
+   * after an unclean dispose (user ran `rm -rf` on the worktree but
+   * the branch is still registered). In that case we'd rather fail
+   * loudly than silently reuse a broken state. */
+  private async isExistingWorktree(): Promise<boolean> {
+    let targetReal: string;
+    try {
+      await access(this.worktreePath);
+      targetReal = await realpath(this.worktreePath);
+    } catch {
+      return false;
+    }
+    try {
+      const { stdout } = await runGitCapture(this.repoRoot, ["worktree", "list", "--porcelain"]);
+      // `--porcelain` emits records separated by blank lines; each
+      // starts with `worktree <path>`. Compare realpaths — on macOS
+      // `/var/...` is a symlink to `/private/var/...` and git emits
+      // the resolved form, so a raw string compare loses.
+      for (const line of stdout.split("\n")) {
+        if (!line.startsWith("worktree ")) continue;
+        const path = line.slice("worktree ".length).trim();
+        try {
+          if ((await realpath(path)) === targetReal) return true;
+        } catch {
+          // entry removed between list + realpath; ignore
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   /** Remove the worktree and its branch. No-op if keepAfterDispose or already disposed. */
@@ -170,6 +221,25 @@ function runGit(cwd: string, args: string[]): Promise<void> {
     });
     child.on("close", (code) => {
       if (code === 0) resolvePromise();
+      else rejectPromise(new Error(`git ${args.join(" ")} failed (exit ${code}): ${stderr.trim()}`));
+    });
+    child.on("error", rejectPromise);
+  });
+}
+
+function runGitCapture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolvePromise({ stdout, stderr });
       else rejectPromise(new Error(`git ${args.join(" ")} failed (exit ${code}): ${stderr.trim()}`));
     });
     child.on("error", rejectPromise);

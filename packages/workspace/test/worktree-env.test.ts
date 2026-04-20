@@ -174,4 +174,40 @@ describe("WorktreeEnvironment", () => {
       await env.dispose();
     }
   });
+
+  test("init is idempotent across process restarts — reuses existing worktree", async () => {
+    // Simulate a daemon restart: the first env init()s, then a fresh
+    // env instance (no shared state) calls init() against the same
+    // runId. The branch + dir already exist on disk, so init() must
+    // reuse them rather than re-run `git worktree add` (which would
+    // fail because the branch is already checked out).
+    let bootstrapCount = 0;
+    const first = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "resume",
+      bootstrap: async () => {
+        bootstrapCount++;
+      },
+    });
+    await first.init();
+    expect(bootstrapCount).toBe(1);
+    expect(first.bootstrapRan).toBe(true);
+
+    // Pretend the daemon restarted — construct a new env with the
+    // same runId. init() should observe the existing worktree and
+    // skip `git worktree add` + bootstrap.
+    const second = new WorktreeEnvironment({
+      repoRoot: repo,
+      runId: "resume",
+      bootstrap: async () => {
+        bootstrapCount++;
+      },
+    });
+    await second.init();
+    expect(bootstrapCount).toBe(1); // bootstrap NOT rerun on resume
+    expect(second.bootstrapRan).toBe(false); // marker reflects no fresh bootstrap this instance
+
+    await second.dispose();
+    expect(existsSync(second.worktreePath)).toBe(false);
+  });
 });
