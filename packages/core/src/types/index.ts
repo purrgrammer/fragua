@@ -1,6 +1,7 @@
 export * from "./condition.ts";
 export * from "./context.ts";
 export * from "./events.ts";
+export * from "./execution.ts";
 export * from "./fidelity.ts";
 export * from "./graph.ts";
 export * from "./outcome.ts";

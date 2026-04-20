@@ -1,40 +1,13 @@
-// ExecutionEnvironment + Tool primitives for swarm.
+// Tool primitives for swarm. The ExecutionEnvironment contract now
+// lives in @swarm/core (see `types/execution.ts`) so HandlerContext
+// can carry an env without inducing a core→workspace dependency. We
+// re-export the types here for legacy import paths.
 // See docs/SPEC.md §3.4.
 
 import type { TSchema } from "@sinclair/typebox";
-import type { ContextValue } from "@swarm/core";
+import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@swarm/core";
 
-/** Raw bytes/text environment a tool runs against. Swap implementations for
- * local disk, Docker, worktree, remote, etc. */
-export interface ExecutionEnvironment {
-  /** Absolute path of the working directory for this run. */
-  cwd(): string;
-  /** Read a text file. Path is resolved against cwd() when relative. */
-  readFile(path: string): Promise<string>;
-  /** Write a text file (atomic replace). */
-  writeFile(path: string, contents: string): Promise<void>;
-  /** Check if a file exists. */
-  exists(path: string): Promise<boolean>;
-  /** Execute a shell command. Returns stdout/stderr/exit code. */
-  exec(command: string, opts?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> }): Promise<ExecResult>;
-  /** List entries in a directory (non-recursive). */
-  listDir(path: string): Promise<DirEntry[]>;
-  /** Glob against env.cwd() (or override via opts.cwd). Returns sorted, cwd-relative paths. */
-  glob(pattern: string, opts?: { cwd?: string }): Promise<string[]>;
-}
-
-export interface DirEntry {
-  name: string;
-  kind: "file" | "directory" | "symlink" | "other";
-}
-
-export interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  /** Total wall-clock ms. */
-  durationMs: number;
-}
+export type { DirEntry, ExecResult, ExecutionEnvironment };
 
 /** Per-tool truncation policy (applied before the value goes to the LLM). */
 export interface TruncationPolicy {
