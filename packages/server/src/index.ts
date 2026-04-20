@@ -1,9 +1,8 @@
 // Public entry point for @swarm/server.
 //
-// Exports a `createServer(opts)` factory that returns a configured Hono app.
-// The new shape is DB-first: the store is required; the fs-based
-// RunReader is gone. WorkflowReader (listing DOT files on disk) is
-// still optional for the Workflows page.
+// DB-first: `store` is required; reads and intent writes both go through
+// @swarm/store. `workflowReader` (disk-backed DOT listing) stays optional
+// for the Workflows page.
 
 import { Hono } from "hono";
 import type { IEventStore } from "@swarm/store";

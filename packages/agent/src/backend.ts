@@ -114,16 +114,6 @@ export class PiCodergenBackend implements CodergenBackend {
       return fail(`model "${provider}/${modelId}" has no valid API binding (api="${String(model.api)}").`);
     }
 
-    // Wave 4 budget pre-flight. The executor flips `budget_stopped` to
-    // true on the shared ref as soon as the BudgetLedger sees a stop
-    // verdict on a prior cost.recorded event. We must bail here before
-    // spending any more on agent.prompt() — returning non_retryable so
-    // the goal-gate retry machinery doesn't relaunch the same call.
-    if (input.budget_stopped === true) {
-      const reason = budgetStopReason(input.budget);
-      return fail(reason, { non_retryable: true });
-    }
-
     const selectOpts: { allow?: string[]; deny?: string[] } = {};
     const allow = input.node.attrs.allowed_tools as string[] | undefined;
     const deny = input.node.attrs.denied_tools as string[] | undefined;
@@ -190,8 +180,8 @@ export class PiCodergenBackend implements CodergenBackend {
     // `cost.recorded` for a summary:medium/high call carry the right
     // node_id on their envelope — not the caller's.
     const syntheticEmit = input.emit
-      ? async (type: EventType, data: Record<string, unknown>, node_id: string) => {
-          await input.emitAt?.(type, data, node_id);
+      ? async (type: EventType, data: Record<string, unknown>, _node_id: string) => {
+          await input.emit?.(type, data);
         }
       : undefined;
     const { seed, warnings: fidelityWarnings } = await buildFidelitySeed({
@@ -246,10 +236,7 @@ export class PiCodergenBackend implements CodergenBackend {
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
       if (effectiveSkills.length > 0) llmStart["skills"] = effectiveSkills.map(toCatalogRecord);
-      // Prefer the real cumulative snapshot the executor just handed us.
-      // Fall back to the Wave-1 placeholder shape only when no BudgetLedger
-      // is wired (runs without any budget attrs configured).
-      const budget = input.budget !== undefined ? toBudgetEventShape(input.budget) : captureBudget(input.node.attrs);
+      const budget = captureBudget(input.node.attrs);
       if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
     }
@@ -435,37 +422,3 @@ function captureBudget(
   return { cumulative_cost_usd: 0, cumulative_tokens: 0, max_cost_usd: maxCost };
 }
 
-/** Build a failure reason for the non_retryable fail returned when
- * `input.budget_stopped` is set by the executor. Stable across sites. */
-function budgetStopReason(budget: CodergenInput["budget"]): string {
-  if (!budget) return "budget ceiling exceeded";
-  const parts: string[] = [];
-  if (typeof budget.max_cost_usd === "number") parts.push(`node max_cost_usd=${budget.max_cost_usd}`);
-  if (typeof budget.run_max_cost_usd === "number") parts.push(`run budget_usd=${budget.run_max_cost_usd}`);
-  const cap = parts.length > 0 ? ` (${parts.join(" · ")})` : "";
-  return `budget ceiling exceeded — cumulative $${budget.cumulative_cost_usd.toFixed(6)} / ${budget.cumulative_tokens} tokens${cap}`;
-}
-
-/** Reshape the executor-supplied BudgetQuery into the LlmStartData.budget
- * event shape. Close but not identical — the event shape omits the
- * per-node cumulative breakdown (BudgetLedger.snapshot carries that
- * separately for server-side consumers). */
-function toBudgetEventShape(q: NonNullable<CodergenInput["budget"]>): {
-  cumulative_cost_usd: number;
-  cumulative_tokens: number;
-  max_cost_usd?: number;
-  run_max_cost_usd?: number;
-} {
-  const out: {
-    cumulative_cost_usd: number;
-    cumulative_tokens: number;
-    max_cost_usd?: number;
-    run_max_cost_usd?: number;
-  } = {
-    cumulative_cost_usd: q.cumulative_cost_usd,
-    cumulative_tokens: q.cumulative_tokens,
-  };
-  if (typeof q.max_cost_usd === "number") out.max_cost_usd = q.max_cost_usd;
-  if (typeof q.run_max_cost_usd === "number") out.run_max_cost_usd = q.run_max_cost_usd;
-  return out;
-}

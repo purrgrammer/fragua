@@ -11,7 +11,6 @@ import chalk from "chalk";
 import { daemonCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import { providersCommand } from "../src/commands/providers.ts";
-import { replayCommand } from "../src/commands/replay.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
@@ -22,13 +21,6 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
   const code = await validateCommand(workflow);
   process.exit(code);
 });
-
-cli
-  .command("replay <events>", "Print a summary of a run from its JSONL events file")
-  .action(async (eventsPath: string) => {
-    const code = await replayCommand(eventsPath);
-    process.exit(code);
-  });
 
 cli.command("providers", "List supported LLM providers and which ones have credentials").action(() => {
   process.exit(providersCommand());

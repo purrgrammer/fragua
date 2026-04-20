@@ -16,7 +16,6 @@
     "@mariozechner/pi-agent-core": "0.67.6",
     "@mariozechner/pi-ai": "0.67.6",
     "@swarm/core": "workspace:*",
-    "@swarm/events": "workspace:*",
     "@swarm/workspace": "workspace:*"
   },
   "devDependencies": {

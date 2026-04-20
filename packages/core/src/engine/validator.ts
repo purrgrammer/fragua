@@ -2,8 +2,21 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import type { Edge, Graph } from "../types/graph.ts";
-import { isEmptyCondition } from "./condition.ts";
-import { collectReferences } from "./substitution.ts";
+
+function isEmptyCondition(cond: string | undefined): boolean {
+  return !cond || cond.trim() === "";
+}
+
+const NODE_OUTPUT_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.|\b)/g;
+
+function collectReferences(template: string): { nodeIds: string[] } {
+  const nodeIds: string[] = [];
+  for (const m of template.matchAll(NODE_OUTPUT_RE)) {
+    const id = m[1];
+    if (id && !nodeIds.includes(id)) nodeIds.push(id);
+  }
+  return { nodeIds };
+}
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 

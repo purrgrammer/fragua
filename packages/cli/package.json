@@ -19,7 +19,6 @@
     "@swarm/agent": "workspace:*",
     "@swarm/core": "workspace:*",
     "@swarm/daemon": "workspace:*",
-    "@swarm/events": "workspace:*",
     "@swarm/server": "workspace:*",
     "@swarm/store": "workspace:*",
     "@swarm/workspace": "workspace:*",
