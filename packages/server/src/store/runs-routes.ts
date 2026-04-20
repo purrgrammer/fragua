@@ -76,5 +76,36 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     return c.json(eventsToSteps(events));
   });
 
+  // LLM-visible message transcript (§I9). Sourced from the messages
+  // table, populated by PiCodergenBackend as each agent turn ends.
+  // Optional `?nodeId=` filter for per-thread history; `?sinceOrdinal=`
+  // for resume-style pagination. `payloadJson` is included so resume-
+  // aware clients can rehydrate structured AgentMessage shapes without
+  // re-parsing the event log.
+  app.get("/runs/:id/messages", (c) => {
+    const runId = c.req.param("id");
+    if (store.getState(runId) == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    // No silent cap: a finished run's transcript is the point of this
+    // endpoint. Clients that need paging can use `?sinceOrdinal=`. The
+    // store's default `limit` still applies when `?limit=` is unset,
+    // but we bump it here so a long run isn't truncated mid-read.
+    const nodeIdParam = c.req.query("nodeId");
+    const sinceParam = c.req.query("sinceOrdinal");
+    const limitParam = c.req.query("limit");
+    const opts: Parameters<typeof store.getMessages>[1] = { limit: Number.MAX_SAFE_INTEGER };
+    if (nodeIdParam) opts.nodeId = nodeIdParam;
+    if (sinceParam) {
+      const n = Number(sinceParam);
+      if (Number.isFinite(n) && n >= 0) opts.sinceOrdinal = Math.floor(n);
+    }
+    if (limitParam) {
+      const n = Number(limitParam);
+      if (Number.isFinite(n) && n > 0) opts.limit = Math.floor(n);
+    }
+    return c.json(store.getMessages(runId, opts));
+  });
+
   return app;
 }

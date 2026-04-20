@@ -237,6 +237,59 @@ describe("GET /runs/:id/steps", () => {
   });
 });
 
+describe("GET /runs/:id/messages", () => {
+  test("unknown run → 404 with code=not_found", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    const res = await app.request("/runs/missing/messages");
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).toBe("not_found");
+  });
+
+  test("returns appended messages with payloadJson round-trip", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    store.enqueueRun({ runId: "msgs-one", workflowSha: "wf" });
+    store.appendMessage("msgs-one", {
+      role: "assistant",
+      content: "hello",
+      nodeId: "n1",
+      iteration: 0,
+      payloadJson: JSON.stringify({ role: "assistant", content: [{ type: "text", text: "hello" }] }),
+    });
+    const res = await app.request("/runs/msgs-one/messages");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{
+      role: string;
+      content: string;
+      payloadJson: string | null;
+      nodeId: string | null;
+    }>;
+    expect(body).toHaveLength(1);
+    expect(body[0]!.role).toBe("assistant");
+    expect(body[0]!.content).toBe("hello");
+    expect(body[0]!.payloadJson).toContain('"role":"assistant"');
+  });
+
+  test("filters by nodeId + sinceOrdinal", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    store.enqueueRun({ runId: "msgs-filter", workflowSha: "wf" });
+    store.appendMessage("msgs-filter", { role: "user", content: "one", nodeId: "a", iteration: 0 });
+    store.appendMessage("msgs-filter", { role: "assistant", content: "two", nodeId: "a", iteration: 0 });
+    store.appendMessage("msgs-filter", { role: "user", content: "three", nodeId: "b", iteration: 0 });
+
+    const byNodeRes = await app.request("/runs/msgs-filter/messages?nodeId=a");
+    const byNode = (await byNodeRes.json()) as Array<{ content: string }>;
+    expect(byNode.map((m) => m.content)).toEqual(["one", "two"]);
+
+    const sinceRes = await app.request("/runs/msgs-filter/messages?sinceOrdinal=1");
+    const sinceOne = (await sinceRes.json()) as Array<{ ordinal: number }>;
+    expect(sinceOne.map((m) => m.ordinal)).toEqual([2, 3]);
+  });
+});
+
 describe("intent-write routes", () => {
   test.each([
     ["steer", "/steer", { text: "go" }, "intent.steering_requested"],
