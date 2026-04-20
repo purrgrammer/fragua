@@ -213,6 +213,66 @@ describe("executor — edge selection", () => {
     r.store.close();
   });
 
+  test("diamond-shape `conditional` node routes via edge conditions (no registered handler)", async () => {
+    // The auto-dispatcher's conditional case leaves nextNode unset so
+    // the executor's selector picks based on state.routing. Here we seed
+    // routing.approved=true and expect the edge tagged
+    // `condition="context.approved = true"` to win.
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      gate [shape=diamond];
+      yes [shape=box];
+      no [shape=box];
+      done [shape=Msquare];
+      start -> gate;
+      gate -> yes [condition="context.approved = true"];
+      gate -> no;
+      yes -> done;
+      no -> done;
+    }`;
+    const r = rig({ dot });
+    // Use the auto-dispatcher for graph-driven handlers (start, gate,
+    // done) and manual register() for yes/no to keep the test terminal.
+    const { autoDispatcherResolver } = await import("../src/auto-dispatcher.ts");
+    r.dispatcher.setResolver(autoDispatcherResolver({ store: r.store }));
+    r.dispatcher.register(r.workflowSha, "yes", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "no", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    r.store.enqueueRun({
+      runId: "cond-1",
+      workflowSha: r.workflowSha,
+      initialRouting: { start_node: "start", approved: true },
+    });
+    r.store.claimNextRun(1);
+    await runOne("cond-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const events = r.store.getEvents("cond-1");
+    // From `gate`, the fact.node_completed should report nextNode=yes.
+    const gateRow = events.find(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "gate",
+    );
+    expect(gateRow).not.toBeUndefined();
+    expect((gateRow!.payload as { nextNode: string }).nextNode).toBe("yes");
+    r.store.close();
+  });
+
   test("handler with explicit nextNode bypasses selector (no edge.selected event)", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {

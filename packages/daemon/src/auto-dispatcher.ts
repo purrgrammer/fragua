@@ -98,6 +98,39 @@ function specForNode(
           costUsd: 0,
         }),
       };
+    case "conditional":
+      // Branching-point: no work beyond evaluating the outgoing edge
+      // conditions against state.routing. Leaving nextNode unset lets
+      // the executor's edge selector apply the 5-rule priority; empty
+      // outcomeStatus defaults to "success" for unconditional fallthrough.
+      return {
+        kind: "conditional",
+        sideEffect: "none",
+        maxMs: 50,
+        handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
+      };
+    case "start":
+      // Entry sentinel. Conventionally a single unconditional edge to
+      // the first real node. Defer to the selector for consistency with
+      // the rest of the graph — works correctly for the one-outgoing-
+      // edge case AND for start nodes with conditions (rare but legal).
+      return {
+        kind: "start",
+        sideEffect: "none",
+        maxMs: 50,
+        handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
+      };
+    // Shapes NOT yet implemented end-to-end — handlers return a noop
+    // transition through the selector so the run progresses instead of
+    // deadlocking. Behaviour is incomplete: `loop` iteration counting,
+    // `tool` invocation, and `parallel` fork/join aren't modelled here.
+    // Workflows that rely on these shapes need to register real specs
+    // via Dispatcher.register before invoking the daemon.
+    case "loop":
+    case "tool":
+    case "parallel":
+    case "parallel.fan_in":
+    case "stack.manager_loop":
     default:
       return transitionSpec(kind, first);
   }
