@@ -145,8 +145,8 @@ their `allowed_tools` to read-only sets and have the follow-up node
     fan_in   = pick_best     // required — points at the fan_in node
     join_policy = "wait_all" // or "first_success"
   ]
-  approach_a [ prompt = "..." allowed_tools = "local:read_file, local:grep" ]
-  approach_b [ prompt = "..." allowed_tools = "local:read_file, local:grep" ]
+  approach_a [ prompt = "..." allowed_tools = "read, bash" ]
+  approach_b [ prompt = "..." allowed_tools = "read, bash" ]
   pick_best [ shape = tripleoctagon ]   // heuristic ranking by (status, -score, id)
 
   explore -> approach_a
@@ -165,6 +165,38 @@ Limits (v1): a branch that returns `yield_hitl` is coerced to `fail`
 with a documented reason; nested HITL in a parallel fan-out is not
 supported. A branch's `externalCall` intent/done facts attribute to
 the parent parallel node's id for idempotency purposes.
+
+## Agent tools (LLM-callable, inside a codergen turn)
+
+The agent-callable tool surface is deliberately minimal:
+
+| Tool   | Purpose                                                           |
+|--------|-------------------------------------------------------------------|
+| `read` | Read a UTF-8 file                                                 |
+| `write`| Write / overwrite a file (creates parent dirs)                    |
+| `edit` | Replace a unique substring in a file                              |
+| `bash` | Run a shell command (ls, grep, git, curl, any other mutation)     |
+
+Tool names are bare identifiers — no `local:` prefix, no namespace.
+The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
+
+Anything an agent used to need a dedicated tool for
+(`list_dir` / `glob` / `grep` / `git_read` / `apply_patch` /
+`web_fetch` / `subagent` / `load_skill`) now goes through `bash` (or,
+for skills, through `read` against the SKILL.md `<location>` in the
+system-prompt catalog). This is the "less is more" directive: agents
+spend tokens on thinking, not on picking between seven tools that all
+do variants of the same thing.
+
+Narrowing per-node is structural. A node's `allowed_tools = "read, bash"`
+filters the agent's tool set at construction time via
+`ToolRegistry.select` — the agent literally does not see `edit` or
+`write` in that call. Prompt prose that says "you have read-only tools"
+is descriptive; the enforcement is the narrowing.
+
+Custom tools can be added later by `ToolRegistry.register()`-ing an
+additional `Tool` at daemon startup. They share the same bare-identifier
+rule and slot in alongside the four builtins.
 
 ## Tool nodes (graph-level shell)
 
