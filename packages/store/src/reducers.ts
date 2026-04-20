@@ -109,7 +109,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     // Events that don't change projection scalars:
-    case "fact.steering_applied":
+    case "fact.intents_folded":
     case "fact.side_effect_intent":
     case "fact.side_effect_done":
     case "fact.side_effect_failed":

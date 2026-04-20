@@ -8,7 +8,7 @@ type HandlerResult = handler.HandlerResult;
 
 export interface ResultContext {
   state: RunState;
-  /** Intents folded before the handler ran; we cite them in steering_applied. */
+  /** Intents folded before the handler ran; we cite them in intents_folded. */
   appliedIntentSeqs: number[];
   /** Side-effect facts recorded during the handler (from SideEffectRecorder). */
   sideEffectFacts: FactEvent[];
@@ -27,12 +27,12 @@ export interface ResultContext {
 export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEvent[] {
   const facts: FactEvent[] = [];
 
-  // Pre-facts: steering_applied + run_resumed if applicable.
+  // Pre-facts: intents_folded + run_resumed if applicable.
   if (ctx.appliedIntentSeqs.length > 0) {
     const folded = ctx.appliedIntentSeqs.join(",");
     for (const seq of ctx.appliedIntentSeqs) {
       facts.push({
-        type: "fact.steering_applied",
+        type: "fact.intents_folded",
         payload: { intentSeq: seq, folded },
       });
     }

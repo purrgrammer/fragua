@@ -85,7 +85,7 @@ export type FactEvent =
       };
     }
   | {
-      type: "fact.steering_applied";
+      type: "fact.intents_folded";
       payload: { intentSeq: number; folded: string };
     }
   | {
