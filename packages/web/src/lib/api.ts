@@ -314,9 +314,8 @@ export async function getRunEvents(id: string): Promise<RunEventsPayload> {
   // expected an `{events, lastSeq}` envelope; we adapt on the client so
   // the callers that need `lastSeq` for SSE resume still work, and we
   // don't tie the public REST surface to an envelope format.
-  const events = await getJson<unknown[]>(
-    `/runs/${encodeURIComponent(id)}/events.json`,
-    (v): v is unknown[] => Array.isArray(v),
+  const events = await getJson<unknown[]>(`/runs/${encodeURIComponent(id)}/events.json`, (v): v is unknown[] =>
+    Array.isArray(v),
   );
   const last = events[events.length - 1] as { seq?: unknown } | undefined;
   const lastSeq = typeof last?.seq === "number" ? last.seq : 0;

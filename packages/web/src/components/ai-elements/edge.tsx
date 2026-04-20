@@ -221,7 +221,6 @@ const Animated = ({
   return (
     <>
       <BaseEdge
-        className="sw-pulse"
         id={id}
         markerEnd={markerEnd}
         path={edgePath}
