@@ -396,28 +396,11 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       if (!ok) continue; // OCC retry — rebuild from fresh state
     }
   } finally {
-    // Only tear down the worktree when the run has durably reached a
-    // terminal status (completed / cancelled / halted). paused_hitl
-    // + quarantined runs keep the worktree around so the next
-    // resume / unquarantine picks up exactly where it left off.
-    // Provisioner is expected to be idempotent; double-dispose is
-    // handled internally as a no-op.
-    if (opts.provisioner) {
-      const finalState = opts.store.getState(runId);
-      if (
-        finalState != null &&
-        (finalState.status === "completed" || finalState.status === "cancelled" || finalState.status === "halted")
-      ) {
-        try {
-          await opts.provisioner.dispose(runId);
-        } catch (err) {
-          // Best-effort — a dispose failure shouldn't cascade into
-          // the executor. Log via stderr for post-mortem.
-          // eslint-disable-next-line no-console
-          console.warn(`[executor] worktree dispose failed for run ${runId}:`, err);
-        }
-      }
-    }
+    // Worktree dispose disabled: a hallucinated run that emits a
+    // well-formed terminator is currently indistinguishable from a real
+    // one, and auto-dispose erases the forensics needed to tell them
+    // apart. Keep the worktree + branch around until the executor can
+    // verify terminal outcomes against real git state.
   }
 }
 
