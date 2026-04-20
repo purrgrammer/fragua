@@ -68,7 +68,7 @@ export function RunDetail(): JSX.Element {
           <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
             ← all runs
           </Link>
-          <h2 className="mt-1 truncate text-lg font-semibold" title={id}>
+          <h2 className="mt-1 truncate text-lg font-semibold" title={detail ? headingTitle(detail) : id}>
             {detail ? headingText(detail) : shortenRunId(id)}
           </h2>
           <p className="mt-0.5 truncate font-mono text-xs text-slate-500" title={id}>
@@ -236,6 +236,16 @@ function headingText(detail: RunDetailT): string {
     return single.length > 80 ? `${single.slice(0, 79)}…` : single;
   }
   return shortenRunId(detail.runId);
+}
+
+/** Full text for the <h2 title> tooltip — always uses the raw runId when there is no human-readable heading. */
+function headingTitle(detail: RunDetailT): string {
+  if (detail.title && detail.title.length > 0) return detail.title;
+  if (detail.input && detail.input.length > 0) {
+    const single = detail.input.replace(/\s+/g, " ").trim();
+    return single.length > 80 ? `${single.slice(0, 79)}…` : single;
+  }
+  return detail.runId;
 }
 
 function RunGraphTab({

@@ -246,7 +246,7 @@ function RunningCard({ row, now }: { row: RunSummary; now: number }): JSX.Elemen
       <Card size="sm" className="hover:bg-muted/40 transition-colors">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <span className="truncate" title={displayTooltip(row)}>
+            <span className="min-w-0 truncate" title={displayTooltip(row)}>
               {displayTitle(row)}
             </span>
             <Shimmer className="ml-auto text-xs font-medium" as="span">
