@@ -36,7 +36,7 @@ defaults:
   # falls back to the deterministic `summary:low` template with a warning.
   summariser:
     provider: openrouter
-    model: anthropic/claude-haiku-4.5
+    model: anthropic/claude-haiku-4.6
 
 # Auto-generated run titles from $ARGUMENTS. "on" (default) kicks off a
 # fire-and-forget summariser call at run start and emits
