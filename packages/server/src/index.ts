@@ -12,7 +12,7 @@ import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
-import { createRoutes as createStoreRoutes } from "./store/routes.ts";
+import { envProviderPreflight, createRoutes as createStoreRoutes } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
 
 export interface ServerOptions {
@@ -29,6 +29,11 @@ export interface ServerOptions {
    * under `/api/*` (matching the client's BASE_URL = "/api"). Leave unset
    * for API-only deployments or tests. */
   webDistDir?: string;
+  /** Optional enqueue preflight; passed through to the store routes.
+   * When set, POST /runs rejects with code="provider_unavailable" if the
+   * resolver returns `ok: false`. The CLI's `serve` / `daemon` commands
+   * wire `envProviderPreflight` by default; leave unset in tests. */
+  preflightProviders?: () => { ok: true } | { ok: false; detail: string };
 }
 
 function buildApiApp(opts: ServerOptions): Hono {
@@ -40,7 +45,13 @@ function buildApiApp(opts: ServerOptions): Hono {
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
-  api.route("/", createStoreRoutes({ store: opts.store }));
+  api.route(
+    "/",
+    createStoreRoutes({
+      store: opts.store,
+      ...(opts.preflightProviders !== undefined ? { preflightProviders: opts.preflightProviders } : {}),
+    }),
+  );
   return api;
 }
 
@@ -149,6 +160,7 @@ export {
 } from "./schemas.ts";
 export type { ServerDeps } from "./store/index.ts";
 export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
+export { envProviderPreflight } from "./store/routes.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,

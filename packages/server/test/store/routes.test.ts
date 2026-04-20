@@ -110,6 +110,88 @@ describe("POST /runs — enqueue", () => {
     const state = store.getState(runId);
     expect("input" in state!.routing).toBe(false);
   });
+
+  test("preflightProviders returning ok:false rejects with code=provider_unavailable", async () => {
+    const { createRoutes: fresh } = await import("../../src/store/routes.ts");
+    const s = new SqliteStore({ path: ":memory:" });
+    s.saveWorkflow("wf", "t", "digraph {}");
+    const app = fresh({
+      store: s,
+      preflightProviders: () => ({ ok: false, detail: "no keys set" }),
+    });
+    const res = await app.fetch(
+      new Request("http://test/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workflowSha: "wf" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code?: string; error?: string };
+    expect(body.code).toBe("provider_unavailable");
+    expect(body.error).toBe("no keys set");
+    s.close();
+  });
+
+  test("preflightProviders returning ok:true allows the enqueue through", async () => {
+    const { createRoutes: fresh } = await import("../../src/store/routes.ts");
+    const s = new SqliteStore({ path: ":memory:" });
+    s.saveWorkflow("wf", "t", "digraph {}");
+    const app = fresh({
+      store: s,
+      preflightProviders: () => ({ ok: true }),
+    });
+    const res = await app.fetch(
+      new Request("http://test/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workflowSha: "wf" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    s.close();
+  });
+
+  test("no preflightProviders dep → no preflight, enqueue always considered", async () => {
+    const res = await req("POST", "/runs", { workflowSha: "wf" });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("envProviderPreflight", () => {
+  test("ok when at least one known provider env var is set", async () => {
+    const { envProviderPreflight } = await import("../../src/store/routes.ts");
+    const prev = process.env["ANTHROPIC_API_KEY"];
+    process.env["ANTHROPIC_API_KEY"] = "test-key";
+    try {
+      expect(envProviderPreflight()).toEqual({ ok: true });
+    } finally {
+      if (prev === undefined) delete process.env["ANTHROPIC_API_KEY"];
+      else process.env["ANTHROPIC_API_KEY"] = prev;
+    }
+  });
+
+  test("fails with detail listing expected env keys when none are set", async () => {
+    const { envProviderPreflight } = await import("../../src/store/routes.ts");
+    const knownKeys = ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY"];
+    const saved: Record<string, string | undefined> = {};
+    for (const k of knownKeys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    try {
+      const res = envProviderPreflight();
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        for (const k of knownKeys) expect(res.detail).toContain(k);
+      }
+    } finally {
+      for (const k of knownKeys) {
+        const v = saved[k];
+        if (v !== undefined) process.env[k] = v;
+      }
+    }
+  });
 });
 
 describe("GET /runs/:id/steps", () => {

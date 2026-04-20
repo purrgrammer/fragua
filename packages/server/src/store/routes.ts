@@ -16,9 +16,45 @@ export interface ServerDeps {
   ssePollMs?: number;
   /** Used by tests to deterministically cap stream lifetimes. */
   now?: () => number;
+  /**
+   * Preflight: resolves to {ok: true} when at least one provider API key
+   * is available in the daemon's environment, {ok: false, ...} when the
+   * daemon has no credentials for any supported LLM provider. Returns
+   * undefined to skip preflight (tests, API-only mode). Injected rather
+   * than hard-coded so tests can force both branches and future work
+   * can check per-workflow provider overrides.
+   */
+  preflightProviders?: () => { ok: true } | { ok: false; detail: string };
 }
 
 const DEFAULT_SSE_POLL_MS = 100;
+
+/** Known provider env vars. Order matches `swarm providers` display. */
+const PROVIDER_ENV_KEYS: ReadonlyArray<{ provider: string; envKey: string }> = [
+  { provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
+  { provider: "openrouter", envKey: "OPENROUTER_API_KEY" },
+  { provider: "openai", envKey: "OPENAI_API_KEY" },
+  { provider: "google", envKey: "GEMINI_API_KEY" },
+  { provider: "groq", envKey: "GROQ_API_KEY" },
+];
+
+/** Default env-based preflight. Rejects only when NO provider env var
+ * is set — the daemon can't make any LLM call at all. Doesn't validate
+ * per-node provider overrides; a workflow that pins an unconfigured
+ * provider still fails at dispatch time (visible via fact.run_halted).
+ */
+export function envProviderPreflight(): { ok: true } | { ok: false; detail: string } {
+  const present: string[] = [];
+  for (const { provider, envKey } of PROVIDER_ENV_KEYS) {
+    if ((process.env[envKey] ?? "").length > 0) present.push(provider);
+  }
+  if (present.length > 0) return { ok: true };
+  const expected = PROVIDER_ENV_KEYS.map((p) => p.envKey).join(", ");
+  return {
+    ok: false,
+    detail: `no provider API key set on the daemon (expected one of ${expected})`,
+  };
+}
 
 export function createRoutes(deps: ServerDeps): Hono {
   const app = new Hono();
@@ -56,6 +92,12 @@ export function createRoutes(deps: ServerDeps): Hono {
     }>(c);
     if (!body || typeof body.workflowSha !== "string") {
       return c.json({ error: "workflowSha required" }, 400);
+    }
+    if (deps.preflightProviders != null) {
+      const check = deps.preflightProviders();
+      if (!check.ok) {
+        return c.json({ error: check.detail, code: "provider_unavailable" }, 400);
+      }
     }
     const runId = body.runId ?? newRunId();
     const initialRouting: Record<string, unknown> = { ...(body.routing ?? {}) };
