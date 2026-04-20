@@ -6,6 +6,7 @@
 // helpers, which the executor wires to the event store.
 
 import type { ArtifactRef, ArtifactScope, Message, MessageRole } from "@swarm/store";
+import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
 
@@ -130,6 +131,13 @@ export interface HandlerContext {
   readonly hitlInput?: unknown;
   /** Optional: steering text folded in before this node run. */
   readonly steering?: string;
+  /** Per-run shell + filesystem environment. Set by the executor when a
+   * WorktreeProvisioner is wired — points at the run's isolated
+   * worktree. When unset (tests, bare LocalEnvironment daemons)
+   * handlers can fall back to a process-cwd default. Handlers that
+   * spawn subprocesses or read files MUST prefer this over
+   * `process.cwd()` so concurrent runs don't step on each other. */
+  readonly env?: ExecutionEnvironment;
 }
 
 export type HandlerResult =

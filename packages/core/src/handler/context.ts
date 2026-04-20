@@ -1,4 +1,5 @@
 import type { ArtifactRef, ArtifactScope, IEventStore, Message, MessageRole } from "@swarm/store";
+import type { ExecutionEnvironment } from "../types/execution.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {
   ArtifactsApi,
@@ -33,6 +34,10 @@ export interface BuildContextOpts {
   emitObservability?: (type: string, payload: Record<string, unknown>) => void;
   hitlInput?: unknown;
   steering?: string;
+  /** Per-run filesystem + shell environment. When set, handlers run
+   * inside this env's cwd rather than the daemon's process cwd. Wired
+   * by the executor when a `WorktreeProvisioner` is in play. */
+  env?: ExecutionEnvironment;
 }
 
 /**
@@ -115,6 +120,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     emit,
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
+    ...(opts.env !== undefined ? { env: opts.env } : {}),
   };
   return ctx;
 }

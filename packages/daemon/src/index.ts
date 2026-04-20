@@ -22,3 +22,5 @@ export {
   IntentArrivedError,
   startSupervisor,
 } from "./supervisor.ts";
+export type { Provisioner, WorktreeProvisionerOptions } from "./worktree-provisioner.ts";
+export { LocalEnvironmentProvisioner, WorktreeProvisioner } from "./worktree-provisioner.ts";

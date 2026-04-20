@@ -4,6 +4,7 @@
 
 import type { ContextMap } from "../types/context.ts";
 import type { EventType } from "../types/events.ts";
+import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import type { Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
@@ -47,4 +48,9 @@ export interface CodergenInput {
    * for tests that only care about events. `payloadJson` is a JSON-
    * serialized AgentMessage; the messages table stores it verbatim. */
   persistMessage?: (role: "assistant" | "tool" | "user" | "system", content: string, payloadJson?: string) => void;
+  /** Per-run shell + filesystem environment. When set, the backend
+   * uses this for tool execution (read/write/edit/bash) and context-
+   * file loads instead of falling back to its construction-time env.
+   * This is how per-run worktree isolation reaches the agent. */
+  env?: ExecutionEnvironment;
 }

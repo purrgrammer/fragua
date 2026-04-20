@@ -13,6 +13,7 @@ import type { AutoTitler } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
 import { startSupervisor } from "./supervisor.ts";
+import type { Provisioner } from "./worktree-provisioner.ts";
 
 export interface DaemonMainOpts {
   store: IEventStore;
@@ -30,6 +31,12 @@ export interface DaemonMainOpts {
    * append, and the daemon awaits `drain()` after the executor loop
    * exits so in-flight title calls get a graceful shutdown. */
   autoTitler?: AutoTitler;
+  /** Optional worktree provisioner. When set, every run runs inside
+   * a dedicated `git worktree` with its own branch — the executor
+   * calls `ensure(runId)` before dispatch and `dispose(runId)` on
+   * terminal status. Omit to run every handler inside the daemon's
+   * process cwd (legacy / test behaviour). */
+  provisioner?: Provisioner;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -92,6 +99,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         shutdownSignal: ctrl.signal,
       };
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
+      if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
       await runExecutor(executorOpts);
 
       registry.tripAll(new Error("shutdown"));

@@ -14,7 +14,11 @@ import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
   registry: ToolRegistry;
-  env: ExecutionEnvironment;
+  /** Default shell/filesystem environment. Used when `CodergenInput.env`
+   * is unset (tests, bare LocalEnvironment daemons). Production daemons
+   * with a WorktreeProvisioner wire a per-run env via `CodergenInput`
+   * and can leave this unset. */
+  env?: ExecutionEnvironment;
   /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel. */
   resolveModel?: (provider: string, modelId: string) => Model<string>;
   /** Model + provider used when a node doesn't specify them. */
@@ -41,7 +45,7 @@ export interface PiCodergenBackendOptions {
 
 export class PiCodergenBackend implements CodergenBackend {
   private readonly registry: ToolRegistry;
-  private readonly env: ExecutionEnvironment;
+  private readonly env: ExecutionEnvironment | undefined;
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
   private readonly defaultModel: { provider: string; model: string };
   private readonly systemPrompt: string;
@@ -147,21 +151,40 @@ export class PiCodergenBackend implements CodergenBackend {
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
     const effectiveSkills = filterSkillsForNode(this.skills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
-    const tools = selectedTools.map((t) => toAgentTool(t, this.env));
+    // Prefer per-call env (wired via HandlerContext → CodergenInput by
+    // the executor when a WorktreeProvisioner is active). Falls back
+    // to the construction-time env for tests + callers that still pass
+    // a shared LocalEnvironment.
+    const effectiveEnv = input.env ?? this.env;
+    if (!effectiveEnv) {
+      return fail(
+        "PiCodergenBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
+      );
+    }
+    const tools = selectedTools.map((t) => toAgentTool(t, effectiveEnv));
 
     const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
-    const { text: contextBlock, warnings, files: contextFileRecords } = await loadContextFiles(this.env, contextFiles);
+    const {
+      text: contextBlock,
+      warnings,
+      files: contextFileRecords,
+    } = await loadContextFiles(effectiveEnv, contextFiles);
     if (input.emit) {
       for (const msg of warnings) await input.emit("agent.warning", { message: msg });
     }
     const perNodeSystemPrompt =
       typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
+    // Prefer a per-call RunEnvironment derived from the provisioned
+    // worktree env. Falls back to the construction-time runEnv for
+    // tests. We detect a `WorktreeEnvironment` structurally so this
+    // module stays free of the workspace-layer dependency.
+    const effectiveRunEnv = deriveRunEnv(effectiveEnv, input.run_id) ?? this.runEnv;
     const systemPrompt = buildSystemPrompt({
       global: this.systemPrompt,
       perNode: perNodeSystemPrompt,
       contextBlock,
       skillsCatalog,
-      ...(this.runEnv !== undefined ? { runEnv: this.runEnv } : {}),
+      ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
     });
 
     // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out
@@ -409,6 +432,28 @@ export class PiCodergenBackend implements CodergenBackend {
 
 function sessionKey(runId: string, threadId: string): string {
   return `${runId}::${threadId}`;
+}
+
+/** Structurally derive a `RunEnvironment` from the execution env when
+ * it looks like a `WorktreeEnvironment` (has `worktreePath` / `runId`
+ * / optional `logDir`). Returns `undefined` for a bare
+ * `LocalEnvironment` so the system-prompt block is omitted — there's
+ * no worktree to describe. */
+function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment | undefined {
+  const wt = env as unknown as {
+    worktreePath?: unknown;
+    runId?: unknown;
+    logDir?: unknown;
+    bootstrapCommand?: unknown;
+  };
+  if (typeof wt.worktreePath !== "string" || wt.worktreePath.length === 0) return undefined;
+  const out: RunEnvironment = {
+    worktreePath: wt.worktreePath,
+    runId: typeof wt.runId === "string" ? wt.runId : runId,
+  };
+  if (typeof wt.logDir === "string" && wt.logDir.length > 0) out.logDir = wt.logDir;
+  if (typeof wt.bootstrapCommand === "string") out.bootstrapCommand = wt.bootstrapCommand;
+  return out;
 }
 
 /** Pure resume-decision helper, extracted for unit testability.

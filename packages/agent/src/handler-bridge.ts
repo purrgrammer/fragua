@@ -114,6 +114,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       workflow_sha: "",
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
+      ...(ctx.env !== undefined ? { env: ctx.env } : {}),
       persistMessage: (role, content, payloadJson) => {
         ctx.messages.append(role, content, payloadJson);
       },
