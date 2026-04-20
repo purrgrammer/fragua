@@ -37,3 +37,5 @@ temp/
 *.tmp
 .claude/
 git.md
+
+attractor/
