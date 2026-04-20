@@ -8,7 +8,7 @@
 
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { makeCodergenHandler, PiCodergenBackend } from "@swarm/agent";
+import { firstCredentialedProvider, makeCodergenHandler, PiCodergenBackend } from "@swarm/agent";
 import { handler } from "@swarm/core";
 import {
   autoDispatcherResolver,
@@ -18,10 +18,13 @@ import {
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
 
 export interface DaemonCommandOptions {
   /** Working directory used to resolve the store path. Default `process.cwd()`. */
   cwd?: string;
+  /** Explicit store path. Overrides `<cwd>/.swarm/swarm.db`. */
+  dbPath?: string;
   /** Max concurrent runs. Default 4. */
   concurrency?: number;
   /** LLM provider. When set with `--model`, enables the real codergen path. */
@@ -32,7 +35,7 @@ export interface DaemonCommandOptions {
 
 export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
   mkdirSync(dirname(storePath), { recursive: true });
 
   const store = new SqliteStore({ path: storePath });
@@ -46,15 +49,38 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     model: "stub",
   });
 
-  // Configure the LLM-backed codergen factory when provider+model are set.
-  const useLlm = opts.provider != null && opts.model != null;
+  // Resolve provider/model. Precedence: CLI flags > .swarm/config.yaml
+  // defaults > env autodetect > stub.
+  const config = await loadConfig(cwd);
+  const cfgProvider = config.defaults?.provider;
+  const cfgModel = config.defaults?.model;
+  let provider = opts.provider;
+  let model = opts.model;
+  let llmSource: "flags" | "config" | "env" | "stub" = "stub";
+  if (provider != null && model != null) {
+    llmSource = "flags";
+  } else if (provider == null && model == null && cfgProvider && cfgModel) {
+    provider = cfgProvider;
+    model = cfgModel;
+    llmSource = "config";
+  } else if (provider == null && model == null) {
+    const auto = firstCredentialedProvider();
+    if (auto?.defaultModel) {
+      provider = auto.name;
+      model = auto.defaultModel;
+      llmSource = "env";
+    }
+  }
+  const concurrency = opts.concurrency ?? config.concurrency ?? 4;
+
+  const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   if (useLlm) {
     const env = new LocalEnvironment({ cwd });
     const backendOpts = {
       registry: new ToolRegistry(),
       env,
-      defaultModel: { provider: opts.provider!, model: opts.model! },
+      defaultModel: { provider: provider!, model: model! },
     };
     codergenFactory = (node, nextNode) =>
       makeCodergenHandler({
@@ -63,6 +89,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
         backendOpts,
       });
   }
+  void PiCodergenBackend;
   dispatcher.setResolver(
     autoDispatcherResolver({
       store,
@@ -77,12 +104,20 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
-  console.log(chalk.dim(`  concurrency: ${opts.concurrency ?? 4}`));
-  console.log(
-    chalk.dim(
-      `  llm: ${useLlm ? `${opts.provider}/${opts.model}` : "stub (provide --provider + --model for real LLM)"}`,
-    ),
-  );
+  console.log(chalk.dim(`  concurrency: ${concurrency}`));
+  const sourceSuffix =
+    llmSource === "env"
+      ? " (auto-detected from env)"
+      : llmSource === "config"
+        ? " (from .swarm/config.yaml)"
+        : "";
+  const llmLabel = useLlm
+    ? `${provider}/${model}${sourceSuffix}`
+    : "stub (set a provider API key, or pass --provider + --model)";
+  console.log(chalk.dim(`  llm default: ${llmLabel}`));
+  if (useLlm) {
+    console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
+  }
   console.log(chalk.dim(`  press Ctrl-C to stop`));
 
   let exitCode = 0;
@@ -92,14 +127,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       dispatcher,
       tools,
       llmCall,
-      ...(opts.concurrency !== undefined
-        ? { maxConcurrentRuns: opts.concurrency }
-        : {}),
+      maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
     });
-    // Keep PiCodergenBackend imported so bun tree-shaker doesn't drop it
-    // when useLlm is false at startup.
-    void PiCodergenBackend;
     await handleRef.done;
   } catch (err) {
     console.error(chalk.red(`daemon error: ${(err as Error).message}`));

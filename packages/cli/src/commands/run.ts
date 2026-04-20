@@ -10,12 +10,23 @@
 // `swarm daemon` + `swarm serve`.
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import chalk from "chalk";
+
+async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(searchPath, "utf8");
+    const parsed = JSON.parse(raw) as { url?: unknown };
+    return typeof parsed.url === "string" ? parsed.url : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface RunCommandOptions {
   workflow: string;
-  /** Base URL of the running server. Default `http://localhost:3000`. */
+  /** Base URL of the running server. When omitted, reads `.swarm/serve.json`
+   * (written by `swarm serve`), then falls back to `http://localhost:3000`. */
   url?: string;
   /** Priority tie-breaker. Higher runs first. Default 0. */
   priority?: number;
@@ -25,6 +36,9 @@ export interface RunCommandOptions {
   follow?: boolean;
   /** Base directory used to resolve relative workflow paths. Default cwd. */
   cwd?: string;
+  /** Store path. When set, discovers the server URL at `<dirname(db)>/serve.json`
+   * instead of `<cwd>/.swarm/serve.json`. Pairs with `swarm serve --db`. */
+  dbPath?: string;
 }
 
 const TERMINAL_TYPES = new Set<string>([
@@ -36,8 +50,12 @@ const TERMINAL_TYPES = new Set<string>([
 ]);
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
-  const baseUrl = (opts.url ?? "http://localhost:3000").replace(/\/$/, "");
   const cwd = opts.cwd ?? process.cwd();
+  const discoveryPath = opts.dbPath
+    ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
+    : resolve(cwd, ".swarm/serve.json");
+  const resolvedUrl = opts.url ?? (await discoverServerUrl(discoveryPath)) ?? "http://localhost:3000";
+  const baseUrl = resolvedUrl.replace(/\/$/, "");
   const dotPath = resolve(cwd, opts.workflow);
   const name = basename(opts.workflow);
 

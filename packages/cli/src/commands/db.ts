@@ -12,6 +12,8 @@ import chalk from "chalk";
 export interface DbCommandOptions {
   action: "vacuum" | "gc-blobs" | "backup";
   cwd?: string;
+  /** Explicit store path. Overrides `<cwd>/.swarm/swarm.db`. */
+  dbPath?: string;
   /** For `backup` — destination path. */
   to?: string;
   /** For `gc-blobs` — max rows to remove in one pass. */
@@ -20,7 +22,7 @@ export interface DbCommandOptions {
 
 export async function dbCommand(opts: DbCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const storePath = resolve(cwd, ".swarm/swarm.db");
+  const storePath = opts.dbPath ? resolve(opts.dbPath) : resolve(cwd, ".swarm/swarm.db");
   if (!existsSync(storePath)) {
     console.error(chalk.red(`db ${opts.action}: no store at ${storePath}`));
     return 1;

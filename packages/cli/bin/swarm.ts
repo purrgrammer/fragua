@@ -28,8 +28,9 @@ cli.command("providers", "List supported LLM providers and which ones have crede
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port to bind (default 3000; pass 0 for ephemeral)")
+  .option("--port <n>", "TCP port to bind (default 0 = ephemeral; writes <db-dir>/serve.json)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
+  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -38,9 +39,13 @@ cli
     const portRaw = options["port"];
     const portNum =
       typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
+    const portExplicit = portNum !== undefined && Number.isFinite(portNum);
     const code = await serveCommand({
-      ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
+      // Default to 0 (ephemeral) — the URL is published to <db-dir>/serve.json
+      // so `swarm run` and friends discover it automatically.
+      port: portExplicit ? portNum! : 0,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
     });
     process.exit(code);
   });
@@ -49,8 +54,9 @@ cli
   .command("daemon", "Run the store-backed execution daemon in the foreground")
   .option("--concurrency <n>", "Max concurrent runs (default 4)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--provider <name>", "LLM provider (e.g. anthropic)")
-  .option("--model <id>", "Model id (e.g. claude-opus-4-7)")
+  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
+  .option("--provider <name>", "LLM provider override (default: auto-detected from env)")
+  .option("--model <id>", "Model id override (e.g. claude-opus-4-7)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -65,6 +71,7 @@ cli
           : undefined;
     const code = await daemonCommand({
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(concurrency !== undefined && Number.isFinite(concurrency)
         ? { concurrency }
         : {}),
@@ -82,6 +89,7 @@ cli
   .option("--to <path>", "`backup` only: destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
+  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
   .action(async (action: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -102,6 +110,7 @@ cli
     const code = await dbCommand({
       action,
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       ...(pick("to") !== undefined ? { to: pick("to")! } : {}),
       ...(limit !== undefined && Number.isFinite(limit) ? { limit } : {}),
     });
@@ -113,10 +122,11 @@ cli
     "run <workflow>",
     "Upload a DOT workflow, enqueue a run, stream events to stdout",
   )
-  .option("--url <url>", "Server URL (default http://localhost:3000)")
+  .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")
   .option("--cwd <path>", "Base directory for relative workflow paths")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
   .action(async (workflow: string, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -134,6 +144,7 @@ cli
       ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
       ...(priority !== undefined && Number.isFinite(priority) ? { priority } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
       // cac renders `--no-follow` as `options.follow === false`.
       ...(options["follow"] === false ? { follow: false } : {}),
     });

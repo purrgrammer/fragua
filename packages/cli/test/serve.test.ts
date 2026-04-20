@@ -30,7 +30,10 @@ describe("startServer", () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
     handle = await startServer({ port: 0, cwd: scratch });
     expect(handle.port).toBeGreaterThan(0);
-    expect(handle.url).toBe(`http://localhost:${handle.port}`);
+    expect(handle.origin).toBe(`http://localhost:${handle.port}`);
+    // In web mode the canonical API URL is scoped under `/api`; in API-only
+    // mode it equals origin. Either is fine — we just care both are set.
+    expect(handle.url.startsWith(handle.origin)).toBe(true);
     expect(typeof handle.close).toBe("function");
   });
 
