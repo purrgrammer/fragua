@@ -19,9 +19,11 @@ export function mapStatus(status: RunStatus): UiStatus {
     case "halted":
       return "fail";
     case "running":
-    case "queued":
-    case "paused_hitl":
       return "running";
+    case "queued":
+      return "queued";
+    case "paused_hitl":
+      return "paused";
     case "quarantined":
       return "fail";
   }

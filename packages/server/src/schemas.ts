@@ -10,7 +10,9 @@ export const RunSummary = Type.Object({
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
   status: Type.Union([
+    Type.Literal("queued"),
     Type.Literal("running"),
+    Type.Literal("paused"),
     Type.Literal("success"),
     Type.Literal("fail"),
     Type.Literal("canceled"),
@@ -58,7 +60,9 @@ export const RunDetail = Type.Object({
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
   status: Type.Union([
+    Type.Literal("queued"),
     Type.Literal("running"),
+    Type.Literal("paused"),
     Type.Literal("success"),
     Type.Literal("fail"),
     Type.Literal("canceled"),

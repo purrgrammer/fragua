@@ -1,17 +1,25 @@
-// Home dashboard — four sections. Overview is a workflow launcher
-// that drives `POST /jobs` through the same query cache the rest of
-// the page reads, so a successful submit triggers an invalidate →
-// refetch and the new run surfaces in the Running strip without a
-// reload. Running + Stats + Recent are three projections of
-// `GET /runs`.
-//
-// Layout (top → bottom): Overview, Running, Stats, Recent.
+// Home dashboard — Stats + Runs (running + recent collapsed into one
+// section). Overview launcher is temporarily disabled (its POST /jobs
+// endpoint is gone); bring it back when the enqueue API is restored.
 //
 // Cadence: the 5s poll lives on the query factory
 // (`queries.runs.list`'s `refetchInterval`). No local timer needed.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
+import {
+  Ban,
+  CheckCircle2,
+  Coins,
+  DollarSign,
+  Hash,
+  Hourglass,
+  Pause,
+  Play,
+  Target,
+  Timer,
+  XCircle,
+  Zap,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -28,8 +36,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
-import { Shimmer } from "../components/ai-elements/shimmer.tsx";
-import { displayTitle, displayTooltip, RunRow, shortenRunId } from "../components/RunRow.tsx";
+import { RunRow } from "../components/RunRow.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
@@ -44,26 +51,24 @@ const RECENT_LIMIT = 10;
 
 export function Home(): JSX.Element {
   const { data, isPending } = useQuery(queries.runs.list());
-  const [now, setNow] = useState<number>(() => Date.now());
-
-  // One-second ticker keeps the "elapsed" on the running strip live.
-  // Not a query — it's derived from `Date.now()`, which doesn't belong in
-  // the cache.
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(t);
-  }, []);
 
   const rows = data ?? [];
   const running = useMemo(() => rows.filter((r) => r.status === "running"), [rows]);
   const stats = useMemo(() => computeStats(rows), [rows]);
+  // Exclude currently-running runs from the recent list so they aren't
+  // duplicated above.
+  const recent = useMemo(
+    () => rows.filter((r) => r.status !== "running").slice(0, RECENT_LIMIT),
+    [rows],
+  );
 
   return (
     <div className="flex flex-col gap-8">
-      <Overview />
-      <RunningStrip running={running} now={now} loading={isPending} />
+      {/* Overview launcher temporarily removed — hits POST /jobs, which
+          no longer exists on the daemon. Restore once the enqueue API is
+          wired up again. */}
       <StatsTiles stats={stats} loading={isPending} />
-      <RecentRuns rows={rows.slice(0, RECENT_LIMIT)} loading={isPending} />
+      <RunsSection running={running} recent={recent} loading={isPending} />
     </div>
   );
 }
@@ -197,74 +202,58 @@ function Overview(): JSX.Element {
   );
 }
 
-// ── Running strip ────────────────────────────────────────────────────
+// ── Runs section (running + recent in one block) ─────────────────────
 
-interface RunningStripProps {
+interface RunsSectionProps {
   running: RunSummary[];
-  now: number;
+  recent: RunSummary[];
   loading: boolean;
 }
 
-function RunningStrip({ running, now, loading }: RunningStripProps): JSX.Element {
+function RunsSection({ running, recent, loading }: RunsSectionProps): JSX.Element {
+  const hasAny = running.length > 0 || recent.length > 0;
   return (
-    <section data-testid="running-strip" className="flex flex-col gap-3">
-      <h2 className="font-heading text-base font-semibold">Running</h2>
+    <section data-testid="runs-section" className="flex flex-col gap-4">
+      <div className="flex items-baseline justify-between">
+        <h2 className="font-heading text-base font-semibold">Runs</h2>
+        <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground">
+          View all →
+        </Link>
+      </div>
+
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
         </div>
-      ) : running.length === 0 ? (
+      ) : !hasAny ? (
         <EmptyState
-          data-testid="running-empty"
+          data-testid="runs-empty"
           icon={<Play className="size-6" />}
-          title="No runs in progress"
-          description="Launch one with `swarm run` and it'll appear here."
+          title="No runs yet"
+          description="They'll show up here as soon as `swarm run` records one."
           className="min-h-[160px]"
         />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {running.map((row) => (
-            <RunningCard key={row.runId} row={row} now={now} />
-          ))}
+        <div className="flex flex-col gap-2">
+          {running.length > 0 && (
+            <div data-testid="running-strip" className="flex flex-col gap-2">
+              {running.map((row) => (
+                <RunRow key={row.runId} row={row} variant="compact" />
+              ))}
+            </div>
+          )}
+          {recent.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {recent.map((row) => (
+                <RunRow key={row.runId} row={row} variant="compact" />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>
-  );
-}
-
-function RunningCard({ row, now }: { row: RunSummary; now: number }): JSX.Element {
-  const startedMs = Date.parse(row.startedAt);
-  const elapsed = Number.isFinite(startedMs) ? Math.max(0, now - startedMs) : undefined;
-  return (
-    <Link
-      to={`/runs/${row.runId}`}
-      data-testid={`running-card-${row.runId}`}
-      className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
-    >
-      <Card size="sm" className="hover:bg-muted/40 transition-colors">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <span className="min-w-0 truncate" title={displayTooltip(row)}>
-              {displayTitle(row)}
-            </span>
-            <Shimmer className="ml-auto text-xs font-medium" as="span">
-              running
-            </Shimmer>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="font-mono" title={row.runId}>
-            {shortenRunId(row.runId)}
-          </span>
-          <span className="flex items-center gap-3 tabular-nums">
-            <span title="elapsed">{formatDuration(elapsed)}</span>
-            <span title="events">{row.eventCount} ev</span>
-          </span>
-        </CardContent>
-      </Card>
-    </Link>
   );
 }
 
@@ -277,20 +266,69 @@ interface StatsTilesProps {
 
 function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
   return (
-    <section data-testid="stats-tiles" className="flex flex-col gap-3">
+    <section data-testid="stats-tiles" className="flex flex-col gap-6">
       <h2 className="font-heading text-base font-semibold">Stats</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+
+      <StatsGroup label="Queue" testId="stats-queue">
+        <StatTile
+          label="Running"
+          value={loading ? null : String(stats.running)}
+          icon={<Play className="size-4" />}
+          testId="tile-running"
+        />
+        <StatTile
+          label="Queued"
+          value={loading ? null : String(stats.queued)}
+          icon={<Hourglass className="size-4" />}
+          testId="tile-queued"
+        />
+        <StatTile
+          label="Paused"
+          value={loading ? null : String(stats.paused)}
+          icon={<Pause className="size-4" />}
+          testId="tile-paused"
+        />
         <StatTile
           label="Total runs"
           value={loading ? null : String(stats.totalRuns)}
           icon={<Hash className="size-4" />}
           testId="tile-total"
         />
+      </StatsGroup>
+
+      <StatsGroup label="Outcomes" testId="stats-outcomes">
+        <StatTile
+          label="Succeeded"
+          value={loading ? null : String(stats.succeeded)}
+          icon={<CheckCircle2 className="size-4" />}
+          testId="tile-succeeded"
+        />
+        <StatTile
+          label="Failed"
+          value={loading ? null : String(stats.failed)}
+          icon={<XCircle className="size-4" />}
+          testId="tile-failed"
+        />
+        <StatTile
+          label="Canceled"
+          value={loading ? null : String(stats.canceled)}
+          icon={<Ban className="size-4" />}
+          testId="tile-canceled"
+        />
         <StatTile
           label="Success rate"
           value={loading ? null : formatPercent(stats.successRate)}
-          icon={<CheckCircle2 className="size-4" />}
+          icon={<Target className="size-4" />}
           testId="tile-success"
+        />
+      </StatsGroup>
+
+      <StatsGroup label="Resources" testId="stats-resources">
+        <StatTile
+          label="Avg duration"
+          value={loading ? null : stats.avgDurationMs === undefined ? "—" : formatDuration(stats.avgDurationMs)}
+          icon={<Timer className="size-4" />}
+          testId="tile-duration"
         />
         <StatTile
           label="Total spend"
@@ -317,14 +355,23 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           icon={<Zap className="size-4" />}
           testId="tile-cache"
         />
-        <StatTile
-          label="Avg duration"
-          value={loading ? null : stats.avgDurationMs === undefined ? "—" : formatDuration(stats.avgDurationMs)}
-          icon={<Timer className="size-4" />}
-          testId="tile-duration"
-        />
-      </div>
+      </StatsGroup>
     </section>
+  );
+}
+
+interface StatsGroupProps {
+  label: string;
+  testId: string;
+  children: React.ReactNode;
+}
+
+function StatsGroup({ label, testId, children }: StatsGroupProps): JSX.Element {
+  return (
+    <div data-testid={testId} className="flex flex-col gap-2">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</h3>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{children}</div>
+    </div>
   );
 }
 
@@ -363,43 +410,3 @@ function formatPercent(value: number): string {
   return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 0 }).format(value);
 }
 
-// ── Recent runs ──────────────────────────────────────────────────────
-
-interface RecentRunsProps {
-  rows: RunSummary[];
-  loading: boolean;
-}
-
-function RecentRuns({ rows, loading }: RecentRunsProps): JSX.Element {
-  return (
-    <section data-testid="recent-runs" className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between">
-        <h2 className="font-heading text-base font-semibold">Recent runs</h2>
-        <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground">
-          View all →
-        </Link>
-      </div>
-      {loading ? (
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-10" />
-          <Skeleton className="h-10" />
-          <Skeleton className="h-10" />
-        </div>
-      ) : rows.length === 0 ? (
-        <EmptyState
-          data-testid="recent-empty"
-          icon={<Play className="size-6" />}
-          title="No runs yet"
-          description="They'll show up here as soon as `swarm run` records one."
-          className="min-h-[160px]"
-        />
-      ) : (
-        <div className="flex flex-col gap-2">
-          {rows.map((row) => (
-            <RunRow key={row.runId} row={row} variant="compact" />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}

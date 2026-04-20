@@ -45,7 +45,7 @@ export interface RunSummary {
   workflow?: string;
   workflowName?: string;
   startedAt: string;
-  status: "running" | "success" | "fail" | "canceled" | "unknown";
+  status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   eventCount: number;
   costUsd: number;
   inputTokens: number;
@@ -82,7 +82,7 @@ export interface RunDetail {
   workflow?: string;
   workflowName?: string;
   startedAt: string;
-  status: "running" | "success" | "fail" | "canceled" | "unknown";
+  status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   lastEventSeq: number;
   nodes: NodeState[];
   selectedEdges: SelectedEdge[];

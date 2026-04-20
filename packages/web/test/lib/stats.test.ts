@@ -33,7 +33,9 @@ describe("computeStats", () => {
   it("returns all-zero tiles for an empty list", () => {
     const s = computeStats([]);
     expect(s.totalRuns).toBe(0);
+    expect(s.queued).toBe(0);
     expect(s.running).toBe(0);
+    expect(s.paused).toBe(0);
     expect(s.succeeded).toBe(0);
     expect(s.failed).toBe(0);
     expect(s.canceled).toBe(0);
@@ -54,12 +56,29 @@ describe("computeStats", () => {
       row({ runId: "d", status: "success", durationMs: 30_000 }),
       row({ runId: "e", status: "unknown" }),
       row({ runId: "f", status: "canceled", durationMs: 5_000 }),
+      row({ runId: "g", status: "queued" }),
+      row({ runId: "h", status: "queued" }),
+      row({ runId: "i", status: "paused" }),
     ]);
-    expect(s.totalRuns).toBe(6);
+    expect(s.totalRuns).toBe(9);
+    expect(s.queued).toBe(2);
     expect(s.running).toBe(1);
+    expect(s.paused).toBe(1);
     expect(s.succeeded).toBe(2);
     expect(s.failed).toBe(1);
     expect(s.canceled).toBe(1);
+  });
+
+  it("queued and paused runs are excluded from successRate and avgDurationMs", () => {
+    const s = computeStats([
+      row({ runId: "a", status: "success", durationMs: 10_000 }),
+      row({ runId: "b", status: "fail", durationMs: 20_000 }),
+      row({ runId: "c", status: "queued" }),
+      row({ runId: "d", status: "paused" }),
+    ]);
+    // Only success + fail count toward successRate / avgDurationMs.
+    expect(s.successRate).toBeCloseTo(0.5, 6);
+    expect(s.avgDurationMs).toBe(15_000);
   });
 
   it("excludes canceled runs from successRate and avgDurationMs", () => {

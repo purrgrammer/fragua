@@ -106,7 +106,7 @@ useDom();
 describe("Home route", () => {
   afterEach(() => cleanup());
 
-  it("shows the running-strip empty state when nothing is in progress", async () => {
+  it("Runs section omits the running strip when nothing is executing", async () => {
     const client = withRows([
       row({ runId: "a", status: "success", durationMs: 1_000 }),
       row({ runId: "b", status: "fail", durationMs: 2_000 }),
@@ -114,12 +114,21 @@ describe("Home route", () => {
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("running-empty")).toBeTruthy();
+      expect(q.getByTestId("runs-section")).toBeTruthy();
     });
-    expect(container.querySelectorAll("[data-testid^=running-card-]").length).toBe(0);
+    expect(q.queryByTestId("running-strip")).toBeNull();
   });
 
-  it("renders one card per running run", async () => {
+  it("Runs section shows the empty state when no runs exist at all", async () => {
+    const client = withRows([]);
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("runs-empty")).toBeTruthy();
+    });
+  });
+
+  it("renders running runs in the running strip (not duplicated below)", async () => {
     const client = withRows([
       row({ runId: "live-1", status: "running", workflow: "wf-A", eventCount: 7 }),
       row({ runId: "live-2", status: "running", workflow: "wf-B", eventCount: 3 }),
@@ -128,10 +137,36 @@ describe("Home route", () => {
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("running-card-live-1")).toBeTruthy();
+      expect(q.getByTestId("running-strip")).toBeTruthy();
     });
-    expect(q.getByTestId("running-card-live-2")).toBeTruthy();
-    expect(q.queryByTestId("running-card-done")).toBeNull();
+    const strip = q.getByTestId("running-strip");
+    expect(within(strip).getByTestId("recent-run-live-1")).toBeTruthy();
+    expect(within(strip).getByTestId("recent-run-live-2")).toBeTruthy();
+    expect(within(strip).queryByTestId("recent-run-done")).toBeNull();
+    // The "done" run appears only once in the recent list, not duplicated.
+    expect(container.querySelectorAll("[data-testid=recent-run-done]").length).toBe(1);
+    // Running runs only appear inside the strip, not again below.
+    expect(container.querySelectorAll("[data-testid=recent-run-live-1]").length).toBe(1);
+  });
+
+  it("running strip excludes queued and paused runs (they are not actively executing)", async () => {
+    const client = withRows([
+      row({ runId: "active", status: "running" }),
+      row({ runId: "waiting", status: "queued" }),
+      row({ runId: "on-hold", status: "paused" }),
+    ]);
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("running-strip")).toBeTruthy();
+    });
+    const strip = q.getByTestId("running-strip");
+    expect(within(strip).getByTestId("recent-run-active")).toBeTruthy();
+    expect(within(strip).queryByTestId("recent-run-waiting")).toBeNull();
+    expect(within(strip).queryByTestId("recent-run-on-hold")).toBeNull();
+    // Queued + paused show up in the recent list below the strip.
+    expect(q.getByTestId("recent-run-waiting")).toBeTruthy();
+    expect(q.getByTestId("recent-run-on-hold")).toBeTruthy();
   });
 
   it("renders the six stats tiles populated from the reducer", async () => {
@@ -170,7 +205,39 @@ describe("Home route", () => {
     expect(q.getByTestId("tile-duration").textContent).toContain("15s");
   });
 
-  it("renders at most ten rows in Recent runs", async () => {
+  it("renders the Queue and Outcomes tiles with per-status counts", async () => {
+    const client = withRows([
+      row({ runId: "r1", status: "running" }),
+      row({ runId: "r2", status: "running" }),
+      row({ runId: "q1", status: "queued" }),
+      row({ runId: "q2", status: "queued" }),
+      row({ runId: "q3", status: "queued" }),
+      row({ runId: "p1", status: "paused" }),
+      row({ runId: "s1", status: "success", durationMs: 1_000 }),
+      row({ runId: "f1", status: "fail", durationMs: 1_000 }),
+      row({ runId: "c1", status: "canceled" }),
+    ]);
+    const { container } = mount(client);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("tile-running")).toBeTruthy();
+    });
+    expect(q.getByTestId("tile-running").textContent).toContain("2");
+    expect(q.getByTestId("tile-queued").textContent).toContain("3");
+    expect(q.getByTestId("tile-paused").textContent).toContain("1");
+    expect(q.getByTestId("tile-total").textContent).toContain("9");
+
+    expect(q.getByTestId("tile-succeeded").textContent).toContain("1");
+    expect(q.getByTestId("tile-failed").textContent).toContain("1");
+    expect(q.getByTestId("tile-canceled").textContent).toContain("1");
+
+    // The three groups are present as distinct sections.
+    expect(q.getByTestId("stats-queue")).toBeTruthy();
+    expect(q.getByTestId("stats-outcomes")).toBeTruthy();
+    expect(q.getByTestId("stats-resources")).toBeTruthy();
+  });
+
+  it("renders at most ten row entries under the Runs section", async () => {
     const many: RunSummary[] = Array.from({ length: 15 }, (_, i) =>
       row({
         runId: `run-${i.toString().padStart(2, "0")}`,
@@ -183,8 +250,9 @@ describe("Home route", () => {
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("recent-runs")).toBeTruthy();
+      expect(q.getByTestId("runs-section")).toBeTruthy();
     });
+    // RunRow (variant="compact") renders an <a> with data-testid="recent-run-<id>".
     const rows = container.querySelectorAll("[data-testid^=recent-run-]");
     expect(rows.length).toBe(10);
   });
@@ -195,8 +263,8 @@ describe("Home route", () => {
     });
     try {
       const { container } = mount();
-      expect(within(container).getByTestId("running-strip")).toBeTruthy();
-      expect(within(container).queryByTestId("running-empty")).toBeNull();
+      expect(within(container).getByTestId("runs-section")).toBeTruthy();
+      expect(within(container).queryByTestId("runs-empty")).toBeNull();
       expect(container.querySelectorAll(".sw-pulse").length).toBeGreaterThan(0);
     } finally {
       mock.restore();
@@ -204,7 +272,10 @@ describe("Home route", () => {
   });
 });
 
-describe("Home / Overview launcher", () => {
+// Overview launcher is temporarily commented out on Home until POST /jobs
+// is restored on the daemon. Re-enable this suite when the component
+// comes back.
+describe.skip("Home / Overview launcher", () => {
   afterEach(() => cleanup());
 
   const workflows: WorkflowSummary[] = [workflow("build-feature", "Build feature"), workflow("fix-bug")];

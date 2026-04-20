@@ -19,8 +19,15 @@ import type { RunSummary } from "./api.ts";
 export interface DashboardStats {
   /** Total number of runs in the input. */
   totalRuns: number;
-  /** Count of runs whose latest status is `"running"`. */
+  /** Count of runs whose latest status is `"queued"` — waiting for a
+   * concurrency slot. */
+  queued: number;
+  /** Count of runs whose latest status is `"running"` — actively
+   * executing a node. */
   running: number;
+  /** Count of runs whose latest status is `"paused"` — suspended at a
+   * human-in-the-loop checkpoint, resumable. */
+  paused: number;
   /** Count of runs whose latest status is `"success"`. */
   succeeded: number;
   /** Count of runs whose latest status is `"fail"`. */
@@ -62,7 +69,9 @@ export interface DashboardStats {
 
 /** Fold a list of run summaries into one set of dashboard tiles. */
 export function computeStats(runs: readonly RunSummary[]): DashboardStats {
+  let queued = 0;
   let running = 0;
+  let paused = 0;
   let succeeded = 0;
   let failed = 0;
   let canceled = 0;
@@ -75,7 +84,9 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
   let durationCount = 0;
 
   for (const p of runs) {
-    if (p.status === "running") running += 1;
+    if (p.status === "queued") queued += 1;
+    else if (p.status === "running") running += 1;
+    else if (p.status === "paused") paused += 1;
     else if (p.status === "success") succeeded += 1;
     else if (p.status === "fail") failed += 1;
     else if (p.status === "canceled") canceled += 1;
@@ -103,7 +114,9 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
 
   return {
     totalRuns: runs.length,
+    queued,
     running,
+    paused,
     succeeded,
     failed,
     canceled,
