@@ -10,9 +10,7 @@ export interface TestRig {
   workflowSha: string;
 }
 
-export function rig(
-  workflow: { sha?: string; name?: string; dot?: string } = {},
-): TestRig {
+export function rig(workflow: { sha?: string; name?: string; dot?: string } = {}): TestRig {
   const store = new SqliteStore({ path: ":memory:" });
   const sha = workflow.sha ?? "wf";
   store.saveWorkflow(sha, workflow.name ?? "t", workflow.dot ?? "digraph{}");
@@ -27,11 +25,7 @@ export function rig(
   return { store, dispatcher, tools, llmCall, workflowSha: sha };
 }
 
-export function registerTerminalEcho(
-  dispatcher: Dispatcher,
-  sha: string,
-  nodeId: string,
-): void {
+export function registerTerminalEcho(dispatcher: Dispatcher, sha: string, nodeId: string): void {
   dispatcher.register(sha, nodeId, {
     kind: "echo",
     sideEffect: "none",
@@ -45,12 +39,7 @@ export function registerTerminalEcho(
   });
 }
 
-export function enqueue(
-  rig: TestRig,
-  runId: string,
-  startNode: string,
-  priority = 0,
-): void {
+export function enqueue(rig: TestRig, runId: string, startNode: string, priority = 0): void {
   rig.store.enqueueRun({
     runId,
     workflowSha: rig.workflowSha,

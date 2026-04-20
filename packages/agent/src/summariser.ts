@@ -3,7 +3,7 @@
 // `completeSimple` to streaming so UIs can render titles / narratives
 // as they arrive. Used by:
 //
-//   - execute() to generate the async pipeline title from $ARGUMENTS
+//   - execute() to generate the async run title from $ARGUMENTS
 //   - PiCodergenBackend to produce the tail for fidelity=summary:medium/high
 //
 // Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).
@@ -231,7 +231,7 @@ export class PiSummariserBackend implements SummariserBackend {
 function systemPromptFor(input: SummariseInput): string {
   if (input.purpose === "title") {
     return [
-      "You generate concise 3-8 word titles for automated pipelines.",
+      "You generate concise 3-8 word titles for automated runs.",
       "Output ONLY the title itself — no quotes, no trailing punctuation, no leading phrases like 'Title:'.",
       "Keep it human-readable and specific to the task. Plain English.",
     ].join("\n");
@@ -248,7 +248,7 @@ function systemPromptFor(input: SummariseInput): string {
 function userContentFor(input: SummariseInput): string {
   const goalFragment = input.goal ? `Goal: ${input.goal}\n\n` : "";
   if (input.purpose === "title") {
-    return `${goalFragment}Pipeline input to title:\n${input.input}`;
+    return `${goalFragment}Run input to title:\n${input.input}`;
   }
   return `${goalFragment}Prior conversation to compress:\n${input.input}`;
 }

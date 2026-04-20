@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeLoopHandler, makeLoopExitHandler } from "../../src/handler/handlers/loop.ts";
+import { makeLoopExitHandler, makeLoopHandler } from "../../src/handler/handlers/loop.ts";
 import { makeWaitHumanHandler } from "../../src/handler/handlers/wait-human.ts";
 import type { HandlerContext } from "../../src/handler/types.ts";
 
@@ -14,7 +14,13 @@ function stubCtx(
     routing: overrides.routing ?? {},
     llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
     http: { fetch: async () => new Response("") },
-    tools: { get: () => { throw new Error("no tools"); }, has: () => false, list: () => [] },
+    tools: {
+      get: () => {
+        throw new Error("no tools");
+      },
+      has: () => false,
+      list: () => [],
+    },
     messages: {
       append: () => ({ ordinal: 0 }),
       recent: () => [],
@@ -47,9 +53,7 @@ describe("loop handler", () => {
 
   test("subsequent entries increment counter", async () => {
     const spec = makeLoopHandler(cfg);
-    const result = await spec.handler(
-      stubCtx({ nodeId: "loop1", routing: { "loop:loop1": 2 } }),
-    );
+    const result = await spec.handler(stubCtx({ nodeId: "loop1", routing: { "loop:loop1": 2 } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.routingDelta?.["loop:loop1"]).toBe(3);
@@ -58,9 +62,7 @@ describe("loop handler", () => {
 
   test("exceeding max halts with max_loops", async () => {
     const spec = makeLoopHandler(cfg);
-    const result = await spec.handler(
-      stubCtx({ nodeId: "loop1", routing: { "loop:loop1": 3 } }),
-    );
+    const result = await spec.handler(stubCtx({ nodeId: "loop1", routing: { "loop:loop1": 3 } }));
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") expect(result.reason).toBe("max_loops");
   });
@@ -88,9 +90,7 @@ describe("wait.human handler", () => {
 
   test("call with hitlInput transitions to nextNode and stores input", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(
-      stubCtx({ nodeId: "wait", hitlInput: { answer: "approve" } }),
-    );
+    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: { answer: "approve" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.nextNode).toBe("after");

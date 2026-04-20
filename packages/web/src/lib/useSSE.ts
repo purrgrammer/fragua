@@ -119,9 +119,9 @@ export function useSSE(url: string | null | undefined, opts: UseSSEOptions = {})
     es.addEventListener("message", append as EventListener);
     // Known named events from our server — extend here as the schema grows.
     const named = [
-      "pipeline.started",
-      "pipeline.completed",
-      "pipeline.failed",
+      "run.started",
+      "run.completed",
+      "run.failed",
       "node.started",
       "node.completed",
       "node.failed",

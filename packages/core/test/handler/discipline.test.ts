@@ -7,7 +7,7 @@
 // AbortSignal, idempotency keys, or accounting on those paths.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const HANDLERS_DIR = join(__dirname, "..", "..", "src", "handler", "handlers");
@@ -82,9 +82,7 @@ describe("handler discipline", () => {
       }
     }
     if (offenders.length > 0) {
-      const msg = offenders
-        .map((o) => `  ${o.file}:${o.line} → ${o.rule} (${o.reason})`)
-        .join("\n");
+      const msg = offenders.map((o) => `  ${o.file}:${o.line} → ${o.rule} (${o.reason})`).join("\n");
       throw new Error(`Handler discipline violations:\n${msg}`);
     }
     expect(offenders).toHaveLength(0);

@@ -9,10 +9,10 @@
 //     terminal runs exist.
 
 import { describe, expect, it } from "bun:test";
-import type { PipelineSummary } from "../../src/lib/api.ts";
+import type { RunSummary } from "../../src/lib/api.ts";
 import { computeStats } from "../../src/lib/stats.ts";
 
-function row(overrides: Partial<PipelineSummary> = {}): PipelineSummary {
+function row(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     runId: overrides.runId ?? "r",
     startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",

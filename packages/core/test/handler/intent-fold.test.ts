@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { foldIntents } from "../../src/handler/intent-fold.ts";
 import type { StoredEvent } from "@swarm/store";
+import { foldIntents } from "../../src/handler/intent-fold.ts";
 
 function ev(seq: number, type: string, payload: unknown): StoredEvent {
   return {
@@ -60,9 +60,7 @@ describe("foldIntents", () => {
   });
 
   test("priority adjustment lands in routingDelta", () => {
-    const out = foldIntents([
-      ev(1, "intent.priority_adjusted", { newPriority: 9, note: "bump" }),
-    ]);
+    const out = foldIntents([ev(1, "intent.priority_adjusted", { newPriority: 9, note: "bump" })]);
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.routingDelta["priority"]).toBe(9);

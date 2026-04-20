@@ -1,4 +1,4 @@
-// Pipeline Context: shared KV carried through a run. See docs/SPEC.md §3.2.
+// Run Context: shared KV carried through a run. See docs/SPEC.md §3.2.
 
 import type { ContextValue } from "./outcome.ts";
 

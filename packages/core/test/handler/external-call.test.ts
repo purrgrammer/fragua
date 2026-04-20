@@ -29,10 +29,7 @@ describe("externalCall", () => {
       iteration: 0,
       recorder: rec,
     });
-    const result = await call(
-      { toolName: "charge", argsHash: "h" },
-      async (key) => `ok:${key}`,
-    );
+    const result = await call({ toolName: "charge", argsHash: "h" }, async (key) => `ok:${key}`);
     expect(log.intents).toHaveLength(1);
     expect(log.dones).toHaveLength(1);
     expect(log.faileds).toHaveLength(0);
@@ -44,8 +41,7 @@ describe("externalCall", () => {
   test("same inputs → same idempotency key (replay safety)", async () => {
     const { rec: r1 } = recorder();
     const { rec: r2 } = recorder();
-    const mk = (rec: SideEffectRecorder) =>
-      makeExternalCall({ runId: "r", nodeId: "n", iteration: 2, recorder: rec });
+    const mk = (rec: SideEffectRecorder) => makeExternalCall({ runId: "r", nodeId: "n", iteration: 2, recorder: rec });
     const keys: string[] = [];
     await mk(r1)({ toolName: "t", argsHash: "a", attempt: 3 }, async (k) => {
       keys.push(k);

@@ -1,11 +1,11 @@
-// Compact row component for pipeline summaries. Two variants share the
+// Compact row component for run summaries. Two variants share the
 // same three-element shape: title (link), workflow (neutral badge), and
 // status (right-aligned pill). Any per-run detail — started-at, cost,
-// tokens, events, duration — lives on the pipeline detail page, not the
+// tokens, events, duration — lives on the run detail page, not the
 // list row. This keeps the list easy to scan at a glance.
 //
 // Variants:
-//   - `"default"` — table-row layout used by `PipelinesList` inside a
+//   - `"default"` — table-row layout used by `RunsList` inside a
 //     `<table>`. Renders a `<tr>` so the surrounding `<thead>` /
 //     `<tbody>` semantics survive. Status lives in its own right-most
 //     `<td>`.
@@ -17,10 +17,10 @@
 // `min-w-0` parent. Without `min-w-0` flex/grid children refuse to
 // shrink below their intrinsic content width and long titles blow
 // out the row, which is how we used to get horizontal scroll on
-// the Pipelines list.
+// the Runs list.
 
 import { Link } from "react-router-dom";
-import type { PipelineSummary } from "../lib/api.ts";
+import type { RunSummary } from "../lib/api.ts";
 import { statusLabel } from "../lib/format.ts";
 import { Badge } from "./ui/badge.tsx";
 
@@ -29,19 +29,19 @@ import { Badge } from "./ui/badge.tsx";
  *  an export because Home's `RunningCard` imports it. */
 const RUN_ID_SHORT_LEN = 8;
 
-export interface PipelineRowProps {
-  row: PipelineSummary;
+export interface RunRowProps {
+  row: RunSummary;
   variant?: "default" | "compact";
 }
 
-export function PipelineRow({ row, variant = "default" }: PipelineRowProps): JSX.Element {
+export function RunRow({ row, variant = "default" }: RunRowProps): JSX.Element {
   if (variant === "compact") return <CompactRow row={row} />;
   return <TableRow row={row} />;
 }
 
 /** Default variant — one `<tr>` with three `<td>`s:
  *  Title link · Workflow badge · Status pill (right-aligned). */
-function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
+function TableRow({ row }: { row: RunSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
   // Design skill: "Hover on hot rows — omit hover animation on list rows
   // users traverse hundreds of times per session." The previous
@@ -76,7 +76,7 @@ function TableRow({ row }: { row: PipelineSummary }): JSX.Element {
 /** Compact variant — whole row is one `<a>`, so keyboards / screen
  *  readers see exactly one focusable element per row. Status pinned
  *  to the right with `ml-auto`. */
-function CompactRow({ row }: { row: PipelineSummary }): JSX.Element {
+function CompactRow({ row }: { row: RunSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
   return (
     <Link
@@ -107,9 +107,9 @@ export function shortenRunId(runId: string): string {
  *   1. `title` — auto-generated summariser title (Wave 2b)
  *   2. `input` — raw $ARGUMENTS, clamped (so pre-Wave-2b runs still read
  *      as something useful once the backfill script fills titles)
- *   3. `workflowName` / `workflow` — legacy pipelines list fallback
+ *   3. `workflowName` / `workflow` — legacy runs list fallback
  *   4. runId — last-resort so we never render an empty link */
-export function displayTitle(row: PipelineSummary): string {
+export function displayTitle(row: RunSummary): string {
   if (row.title && row.title.length > 0) return row.title;
   if (row.input && row.input.length > 0) return clampInline(row.input, 80);
   return row.workflowName ?? row.workflow ?? row.runId;
@@ -118,7 +118,7 @@ export function displayTitle(row: PipelineSummary): string {
 /** Tooltip with the untruncated input + workflow + runId — so hovering
  *  reveals everything the row hid (including the full runId, which is
  *  no longer shown as a cell). */
-export function displayTooltip(row: PipelineSummary): string {
+export function displayTooltip(row: RunSummary): string {
   const parts: string[] = [];
   if (row.title) parts.push(`title: ${row.title}`);
   if (row.input) parts.push(`input: ${row.input}`);
@@ -133,7 +133,7 @@ function clampInline(s: string, cap: number): string {
   return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
-export function StatusPill({ status }: { status: PipelineSummary["status"] }): JSX.Element {
+export function StatusPill({ status }: { status: RunSummary["status"] }): JSX.Element {
   const tone =
     status === "success"
       ? "bg-emerald-100 text-emerald-800 border-emerald-300"

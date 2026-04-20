@@ -1,7 +1,7 @@
 // GraphView tests — the AI-Elements / @xyflow/react path.
 //
 // Pre-P5.13 this file exercised the server-rendered SVG injection. Those
-// cases are gone: the SVG route + `getPipelineGraph()` API surface were
+// cases are gone: the SVG route + `getRunGraph()` API surface were
 // deleted. What we assert now:
 //
 //   - `toFlowGraph()` (the pure transform) produces one FlowEdge per
@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { parseDotSource } from "@swarm/core";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
-import type { PipelineDetail } from "../../src/lib/api.ts";
+import type { RunDetail } from "../../src/lib/api.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -45,7 +45,7 @@ const WORKFLOW_SOURCE = `digraph demo {
   middle -> done
 }`;
 
-function makeDetail(overrides: Partial<PipelineDetail> = {}): PipelineDetail {
+function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
   return {
     runId: "r1",
     startedAt: "2024-01-01T00:00:00.000Z",
@@ -190,7 +190,7 @@ describe("GraphView — rendering", () => {
 
   it("shows the purpose-built empty state when workflowSource is absent", () => {
     const detail = makeDetail();
-    const withoutSource: PipelineDetail = { ...detail, workflowSource: undefined };
+    const withoutSource: RunDetail = { ...detail, workflowSource: undefined };
     const { container } = render(<GraphView detail={withoutSource} />);
     const empty = within(container).getByTestId("graphview-nograph");
     expect(empty.textContent ?? "").toMatch(/No graph available/i);

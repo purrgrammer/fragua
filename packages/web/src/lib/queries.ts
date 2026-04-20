@@ -11,18 +11,18 @@ export const queries = {
       staleTime: 0,
     }),
 
-  pipelines: {
-    all: () => ["pipelines"] as const,
+  runs: {
+    all: () => ["runs"] as const,
     list: () =>
       queryOptions({
-        queryKey: [...queries.pipelines.all(), "list"] as const,
-        queryFn: api.listPipelines,
+        queryKey: [...queries.runs.all(), "list"] as const,
+        queryFn: api.listRuns,
         refetchInterval: 5_000,
       }),
     detail: (id: string) =>
       queryOptions({
-        queryKey: [...queries.pipelines.all(), "detail", id] as const,
-        queryFn: () => api.getPipeline(id),
+        queryKey: [...queries.runs.all(), "detail", id] as const,
+        queryFn: () => api.getRun(id),
       }),
   },
 

@@ -1,22 +1,22 @@
 export { AbortRegistry } from "./abort-registry.ts";
+export type { AutoDispatcherOpts } from "./auto-dispatcher.ts";
+export { autoDispatcherResolver } from "./auto-dispatcher.ts";
+export type { DispatcherResolver } from "./dispatch.ts";
 export { Dispatcher } from "./dispatch.ts";
+export type { DaemonHandle, DaemonMainOpts } from "./entrypoint.ts";
+export { DaemonAlreadyRunningError, startDaemon } from "./entrypoint.ts";
+export type { ExecutorOpts } from "./executor.ts";
+export { runExecutor, runOne } from "./executor.ts";
 export { CollectingRecorder } from "./recorder.ts";
+export type { ResultContext } from "./result-to-facts.ts";
 export {
   abortResultToFacts,
   cancelToFacts,
   resultToFacts,
 } from "./result-to-facts.ts";
-export type { ResultContext } from "./result-to-facts.ts";
-export { runExecutor, runOne } from "./executor.ts";
-export type { ExecutorOpts } from "./executor.ts";
-export {
-  startSupervisor,
-  IntentArrivedError,
-  HandlerLeakedError,
-} from "./supervisor.ts";
 export type { SupervisorOpts } from "./supervisor.ts";
-export { startDaemon, DaemonAlreadyRunningError } from "./entrypoint.ts";
-export type { DaemonMainOpts, DaemonHandle } from "./entrypoint.ts";
-export { autoDispatcherResolver } from "./auto-dispatcher.ts";
-export type { AutoDispatcherOpts } from "./auto-dispatcher.ts";
-export type { DispatcherResolver } from "./dispatch.ts";
+export {
+  HandlerLeakedError,
+  IntentArrivedError,
+  startSupervisor,
+} from "./supervisor.ts";

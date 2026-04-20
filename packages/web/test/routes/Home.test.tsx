@@ -13,14 +13,14 @@ import type { ReactNode } from "react";
 // controlled inputs.
 import { Simulate } from "react-dom/test-utils";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import type { PipelineSummary, WorkflowSummary } from "../../src/lib/api.ts";
+import type { RunSummary, WorkflowSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { HealthContext, type HealthContextValue, type HealthDaemonSnapshot } from "../../src/types/health.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-function row(overrides: Partial<PipelineSummary> = {}): PipelineSummary {
+function row(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     runId: overrides.runId ?? "run-x",
     startedAt: overrides.startedAt ?? "2024-01-01T00:00:00Z",
@@ -91,9 +91,9 @@ function typeInto(el: HTMLTextAreaElement, value: string): void {
   Simulate.change(el);
 }
 
-function withRows(rows: PipelineSummary[]) {
+function withRows(rows: RunSummary[]) {
   const client = createTestQueryClient();
-  client.setQueryData(queries.pipelines.list().queryKey, rows);
+  client.setQueryData(queries.runs.list().queryKey, rows);
   return client;
 }
 
@@ -119,7 +119,7 @@ describe("Home route", () => {
     expect(container.querySelectorAll("[data-testid^=running-card-]").length).toBe(0);
   });
 
-  it("renders one card per running pipeline", async () => {
+  it("renders one card per running run", async () => {
     const client = withRows([
       row({ runId: "live-1", status: "running", workflow: "wf-A", eventCount: 7 }),
       row({ runId: "live-2", status: "running", workflow: "wf-B", eventCount: 3 }),
@@ -171,7 +171,7 @@ describe("Home route", () => {
   });
 
   it("renders at most ten rows in Recent runs", async () => {
-    const many: PipelineSummary[] = Array.from({ length: 15 }, (_, i) =>
+    const many: RunSummary[] = Array.from({ length: 15 }, (_, i) =>
       row({
         runId: `run-${i.toString().padStart(2, "0")}`,
         startedAt: `2024-01-${(i + 1).toString().padStart(2, "0")}T00:00:00Z`,
@@ -191,7 +191,7 @@ describe("Home route", () => {
 
   it("shows skeletons before the first response resolves", () => {
     const mock = installFetchMock({
-      "/api/pipelines": () => new Promise<Response>(() => {}),
+      "/api/runs": () => new Promise<Response>(() => {}),
     });
     try {
       const { container } = mount();
@@ -216,7 +216,7 @@ describe("Home / Overview launcher", () => {
     > = {},
   ) {
     return installFetchMock({
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
       "/api/workflows": () => json(workflows),
       ...extra,
     });
@@ -262,13 +262,13 @@ describe("Home / Overview launcher", () => {
     }
   });
 
-  it("on submit: POSTs /jobs with workflow path, invalidates queries, navigates to the pipeline", async () => {
+  it("on submit: POSTs /jobs with workflow path, invalidates queries, navigates to the run", async () => {
     let jobsPosts = 0;
-    let pipelinesReloads = 0;
+    let runsReloads = 0;
     let lastBody: unknown;
     const mock = installFetchMock({
-      "/api/pipelines": () => {
-        pipelinesReloads += 1;
+      "/api/runs": () => {
+        runsReloads += 1;
         return json([]);
       },
       "/api/workflows": () => json(workflows),
@@ -300,14 +300,14 @@ describe("Home / Overview launcher", () => {
       // Body carries the workflow PATH (so old daemons work too) + input.
       expect(lastBody).toEqual({ workflow: "workflows/build-feature.dot", input: "draft the release notes" });
 
-      // Pipelines query was invalidated → at least one re-fetch.
+      // Runs query was invalidated → at least one re-fetch.
       await waitFor(() => {
-        expect(pipelinesReloads).toBeGreaterThanOrEqual(1);
+        expect(runsReloads).toBeGreaterThanOrEqual(1);
       });
 
       // Navigated away from Home — the overview section is no longer in
-      // the tree. (Asserting on the PipelineDetail page's contents would
-      // require mocking the pipeline-detail + events endpoints too.)
+      // the tree. (Asserting on the RunDetail page's contents would
+      // require mocking the run-detail + events endpoints too.)
       await waitFor(() => {
         expect(within(container).queryByTestId("overview")).toBeNull();
       });
@@ -318,7 +318,7 @@ describe("Home / Overview launcher", () => {
 
   it("on server error: shows an inline error message; input is preserved", async () => {
     const mock = installFetchMock({
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
       "/api/workflows": () => json(workflows),
       "/api/jobs": () => new Response("daemon offline", { status: 503 }),
     });

@@ -9,11 +9,7 @@ export function emptyMetrics(): RunMetrics {
   };
 }
 
-const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>([
-  "completed",
-  "cancelled",
-  "halted",
-]);
+const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>(["completed", "cancelled", "halted"]);
 
 export function isTerminal(status: RunStatus): boolean {
   return TERMINAL.has(status);
@@ -60,8 +56,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
           costUsd: bucket.costUsd + p.costUsd,
         };
       }
-      next.metrics.loopCounts[p.nodeId] =
-        (next.metrics.loopCounts[p.nodeId] ?? 0) + 1;
+      next.metrics.loopCounts[p.nodeId] = (next.metrics.loopCounts[p.nodeId] ?? 0) + 1;
       next.currentNode = p.nextNode;
       next.nodeStartedAt = now;
       return next;
@@ -126,11 +121,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
   }
 }
 
-export function foldFacts(
-  initial: RunState,
-  facts: FactEvent[],
-  now: number,
-): RunState {
+export function foldFacts(initial: RunState, facts: FactEvent[], now: number): RunState {
   let state = initial;
   for (const f of facts) state = applyFact(state, f, now);
   return state;

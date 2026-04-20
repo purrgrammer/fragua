@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ArtifactTooLargeError,
   ConcurrencyError,
+  type FactEvent,
+  type IntentEvent,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   PayloadTooLargeError,
-  type FactEvent,
-  type IntentEvent,
-  ArtifactTooLargeError,
 } from "../src/index.ts";
 import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
 
@@ -35,9 +35,7 @@ describe("SqliteStore — lifecycle", () => {
 
   test("unknown workflow rejects enqueue", async () => {
     const store = freshStore();
-    expect(() =>
-      store.enqueueRun({ runId: "r1", workflowSha: "missing" }),
-    ).toThrow(/unknown workflow/);
+    expect(() => store.enqueueRun({ runId: "r1", workflowSha: "missing" })).toThrow(/unknown workflow/);
     store.close();
   });
 
@@ -90,9 +88,7 @@ describe("SqliteStore — appendFact", () => {
     expect(result.committed).toBe(true);
     expect(result.newVersion).toBe(state.version + 1);
 
-    expect(() => store.appendFact(runId, [fact], state.version)).toThrow(
-      ConcurrencyError,
-    );
+    expect(() => store.appendFact(runId, [fact], state.version)).toThrow(ConcurrencyError);
     store.close();
   });
 
@@ -214,21 +210,11 @@ describe("SqliteStore — artifacts & blobs", () => {
     const runId = await seedRun(store);
     const content = new TextEncoder().encode("hello");
 
-    const a = store.putArtifact(
-      { runId, nodeId: "n1", iteration: 0, key: "k" },
-      content,
-      "text/plain",
-    );
-    const b = store.putArtifact(
-      { runId, nodeId: "n1", iteration: 1, key: "k" },
-      content,
-      "text/plain",
-    );
+    const a = store.putArtifact({ runId, nodeId: "n1", iteration: 0, key: "k" }, content, "text/plain");
+    const b = store.putArtifact({ runId, nodeId: "n1", iteration: 1, key: "k" }, content, "text/plain");
     expect(a.sha256).toBe(b.sha256);
 
-    const blobCount = (
-      store as unknown as { db: import("bun:sqlite").Database }
-    ).db
+    const blobCount = (store as unknown as { db: import("bun:sqlite").Database }).db
       .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM blobs")
       .get();
     expect(blobCount!.n).toBe(1);
@@ -241,17 +227,10 @@ describe("SqliteStore — artifacts & blobs", () => {
     const store = freshStore();
     const runId = await seedRun(store);
     for (let i = 0; i < 3; i++) {
-      store.putArtifact(
-        { runId, nodeId: "loop", iteration: i, key: "out" },
-        new TextEncoder().encode(`iter-${i}`),
-      );
+      store.putArtifact({ runId, nodeId: "loop", iteration: i, key: "out" }, new TextEncoder().encode(`iter-${i}`));
     }
-    const rows = (
-      store as unknown as { db: import("bun:sqlite").Database }
-    ).db
-      .query<{ n: number }, [string]>(
-        "SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?",
-      )
+    const rows = (store as unknown as { db: import("bun:sqlite").Database }).db
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?")
       .get(runId)!;
     expect(rows.n).toBe(3);
     store.close();
@@ -261,12 +240,7 @@ describe("SqliteStore — artifacts & blobs", () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const big = new Uint8Array(MAX_BLOB_BYTES + 1);
-    expect(() =>
-      store.putArtifact(
-        { runId, nodeId: "n", iteration: 0, key: "k" },
-        big,
-      ),
-    ).toThrow(ArtifactTooLargeError);
+    expect(() => store.putArtifact({ runId, nodeId: "n", iteration: 0, key: "k" }, big)).toThrow(ArtifactTooLargeError);
     store.close();
   });
 });
@@ -349,17 +323,15 @@ describe("SqliteStore — gcBlobs", () => {
   test("deletes orphan blobs, preserves referenced ones", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
-    const ref = store.putArtifact(
-      { runId, nodeId: "n", iteration: 0, key: "k" },
-      new TextEncoder().encode("keep"),
-    );
+    const ref = store.putArtifact({ runId, nodeId: "n", iteration: 0, key: "k" }, new TextEncoder().encode("keep"));
     // Inject an orphan blob directly.
-    const db = (
-      store as unknown as { db: import("bun:sqlite").Database }
-    ).db;
-    db.query(
-      "INSERT INTO blobs (sha256, content, size_bytes, created_at) VALUES (?, ?, ?, ?)",
-    ).run("orphan-sha", new Uint8Array([1, 2, 3]), 3, 1);
+    const db = (store as unknown as { db: import("bun:sqlite").Database }).db;
+    db.query("INSERT INTO blobs (sha256, content, size_bytes, created_at) VALUES (?, ?, ?, ?)").run(
+      "orphan-sha",
+      new Uint8Array([1, 2, 3]),
+      3,
+      1,
+    );
 
     const { deleted } = store.gcBlobs();
     expect(deleted).toBeGreaterThanOrEqual(1);

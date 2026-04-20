@@ -37,20 +37,20 @@ Call shape:
 import { useQuery } from "@tanstack/react-query";
 import { queries } from "../lib/queries.ts";
 
-const { data, isPending, isError } = useQuery(queries.pipelines.list());
+const { data, isPending, isError } = useQuery(queries.runs.list());
 ```
 
 Invalidate a whole domain:
 
 ```ts
-qc.invalidateQueries({ queryKey: queries.pipelines.all() });
+qc.invalidateQueries({ queryKey: queries.runs.all() });
 ```
 
-`lib/api.ts` exports plain async functions — `listPipelines()`, `getPipeline(id)`, etc. The factory's `queryFn` calls them directly; nothing threads through props.
+`lib/api.ts` exports plain async functions — `listRuns()`, `getRun(id)`, etc. The factory's `queryFn` calls them directly; nothing threads through props.
 
 Three properties fall out of this shape:
 
-- **Composable keys.** `queries.pipelines.all()` is the root; `list` and `detail(id)` extend it. Invalidating the root blows away every pipelines query in the cache in one line.
+- **Composable keys.** `queries.runs.all()` is the root; `list` and `detail(id)` extend it. Invalidating the root blows away every runs query in the cache in one line.
 - **Type-safe end to end.** `queryOptions()` preserves the return type of `queryFn`, so `useQuery(...).data` is fully typed with no generics at the call site.
 - **Build vs execute separated.** The factory returns config. `useQuery`, `queryClient.prefetchQuery`, and `queryClient.invalidateQueries` all consume the same object — so you can prefetch on hover with the exact config the route will use.
 
@@ -78,7 +78,7 @@ const { mutate: cancel, isPending } = useMutation({
 });
 ```
 
-Invalidate at the `all()` root of every domain the mutation touches — cancelling a job also changes a pipeline's state, so invalidate both `queries.jobs.all()` and `queries.pipelines.all()`. Err on the side of invalidating more: the cost is one refetch, the bug-cost of a stale view is much higher.
+Invalidate at the `all()` root of every domain the mutation touches — cancelling a job also changes a run's state, so invalidate both `queries.jobs.all()` and `queries.runs.all()`. Err on the side of invalidating more: the cost is one refetch, the bug-cost of a stale view is much higher.
 
 ### SSE is not react-query
 
@@ -125,7 +125,7 @@ Defer form libraries (React Hook Form, etc.) until a form has ≥5 fields or cro
 
 - `useEffect` + `cancelled` flag to fetch → you reimplement retry, dedup, cache, and staleness badly. Use `useQuery`.
 - `useState` holding fetched server data → the cache belongs in the query client so every view sees the same thing.
-- Hand-written `['pipelines']` key at a call site → factory-only, so invalidation can't drift.
+- Hand-written `['runs']` key at a call site → factory-only, so invalidation can't drift.
 - `useMemo` around a string literal or a cheap `.filter()` → the memoization costs more than the work.
 - Route file >300 lines → split. The route should read as a sequence of hook calls + layout.
 - `any` in props → type it, or take `unknown` and narrow at the boundary.

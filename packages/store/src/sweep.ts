@@ -55,10 +55,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
   // Pre-serialize quarantine payloads so the write txn is pure DB work.
   const quarantinePayloads = new Map<string, string>();
   for (const [runId, seqs] of quarantined) {
-    quarantinePayloads.set(
-      runId,
-      JSON.stringify({ reason: "orphan_side_effect", orphanedIntents: seqs }),
-    );
+    quarantinePayloads.set(runId, JSON.stringify({ reason: "orphan_side_effect", orphanedIntents: seqs }));
   }
 
   const running = db
@@ -70,10 +67,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
     .all();
   const requeuePayloads = new Map<string, string>();
   for (const row of running) {
-    requeuePayloads.set(
-      row.run_id,
-      JSON.stringify(row.current_node != null ? { prevNode: row.current_node } : {}),
-    );
+    requeuePayloads.set(row.run_id, JSON.stringify(row.current_node != null ? { prevNode: row.current_node } : {}));
   }
 
   db.exec("BEGIN IMMEDIATE");
@@ -82,10 +76,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
     for (const [runId, _seqs] of quarantined) {
       const ts = now();
       const stateRow = db
-        .query<
-          { version: number; status: string; next_seq: number },
-          [string]
-        >(
+        .query<{ version: number; status: string; next_seq: number }, [string]>(
           "SELECT version, status, next_seq FROM run_state WHERE run_id = ?",
         )
         .get(runId);
@@ -100,15 +91,12 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
       }
 
       const seq = bumpSeq(db, runId);
-      db
-        .query(
-          `INSERT INTO events (run_id, seq, type, writer, payload, ts)
+      db.query(
+        `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`,
-        )
-        .run(runId, seq, quarantinePayloads.get(runId)!, ts);
-      db
-        .query(
-          `UPDATE run_state SET
+      ).run(runId, seq, quarantinePayloads.get(runId)!, ts);
+      db.query(
+        `UPDATE run_state SET
              status = 'quarantined',
              current_node = NULL,
              node_started_at = NULL,
@@ -116,35 +104,24 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
              last_applied_seq = ?,
              updated_at = ?
            WHERE run_id = ?`,
-        )
-        .run(seq, ts, runId);
+      ).run(seq, ts, runId);
     }
 
     // Requeue runs still in 'running'. Re-read status here (inside the txn)
     // because the quarantine loop above may have moved some of them.
     for (const row of running) {
       const current = db
-        .query<{ status: string }, [string]>(
-          "SELECT status FROM run_state WHERE run_id = ?",
-        )
+        .query<{ status: string }, [string]>("SELECT status FROM run_state WHERE run_id = ?")
         .get(row.run_id);
       if (current == null || current.status !== "running") continue;
       const ts = now();
       const seq = bumpSeq(db, row.run_id);
-      db
-        .query(
-          `INSERT INTO events (run_id, seq, type, writer, payload, ts)
+      db.query(
+        `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_requeued_after_crash', 'daemon', ?, ?)`,
-        )
-        .run(
-          row.run_id,
-          seq,
-          requeuePayloads.get(row.run_id) ?? "{}",
-          ts,
-        );
-      db
-        .query(
-          `UPDATE run_state SET
+      ).run(row.run_id, seq, requeuePayloads.get(row.run_id) ?? "{}", ts);
+      db.query(
+        `UPDATE run_state SET
              status = 'queued',
              current_node = NULL,
              node_started_at = NULL,
@@ -153,8 +130,7 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
              last_applied_seq = ?,
              updated_at = ?
            WHERE run_id = ?`,
-        )
-        .run(ts, seq, ts, row.run_id);
+      ).run(ts, seq, ts, row.run_id);
       requeued.push(row.run_id);
     }
 

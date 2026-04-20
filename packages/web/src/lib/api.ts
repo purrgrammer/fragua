@@ -40,7 +40,7 @@ export interface HealthResponse {
   };
 }
 
-export interface PipelineSummary {
+export interface RunSummary {
   runId: string;
   workflow?: string;
   workflowName?: string;
@@ -64,13 +64,13 @@ export interface NodeState {
 }
 
 /**
- * `workflowSource` is the raw DOT captured on `pipeline.started`; absent
+ * `workflowSource` is the raw DOT captured on `run.started`; absent
  * when the run predates source capture. There is intentionally NO
  * `edges` field — topology lives in the DOT source and is parsed
  * client-side by `@swarm/core`'s `parseDotSource` so the server isn't a
  * second parser.
  */
-export interface PipelineDetail {
+export interface RunDetail {
   runId: string;
   workflow?: string;
   workflowName?: string;
@@ -193,7 +193,7 @@ export class ApiError extends Error {
   }
 }
 
-export interface PipelineEventsPayload {
+export interface RunEventsPayload {
   events: unknown[];
   lastSeq: number;
 }
@@ -262,8 +262,8 @@ const isAcceptedId = (v: unknown): v is { id: string } =>
 
 // ── URL helpers ─────────────────────────────────────────────────────
 
-export function getPipelineEventsUrl(id: string): string {
-  return url(`/pipelines/${encodeURIComponent(id)}/events`);
+export function getRunEventsUrl(id: string): string {
+  return url(`/runs/${encodeURIComponent(id)}/events`);
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────
@@ -275,12 +275,12 @@ export async function health(): Promise<HealthResponse> {
   );
 }
 
-export async function listPipelines(): Promise<PipelineSummary[]> {
-  return getJson("/pipelines", (v): v is PipelineSummary[] => Array.isArray(v) && v.every(isPipelineSummary));
+export async function listRuns(): Promise<RunSummary[]> {
+  return getJson("/runs", (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
 }
 
-export async function getPipeline(id: string): Promise<PipelineDetail> {
-  return getJson(`/pipelines/${encodeURIComponent(id)}`, isPipelineDetail);
+export async function getRun(id: string): Promise<RunDetail> {
+  return getJson(`/runs/${encodeURIComponent(id)}`, isRunDetail);
 }
 
 export async function listWorkflows(): Promise<WorkflowSummary[]> {
@@ -300,10 +300,10 @@ export async function getSkill(name: string): Promise<SkillDetail> {
   return getJson(`/skills/${encodeURIComponent(name)}`, isSkillDetail);
 }
 
-export async function getPipelineEvents(id: string): Promise<PipelineEventsPayload> {
+export async function getRunEvents(id: string): Promise<RunEventsPayload> {
   return getJson(
-    `/pipelines/${encodeURIComponent(id)}/events.json`,
-    (v): v is PipelineEventsPayload =>
+    `/runs/${encodeURIComponent(id)}/events.json`,
+    (v): v is RunEventsPayload =>
       typeof v === "object" &&
       v !== null &&
       Array.isArray((v as { events?: unknown }).events) &&
@@ -311,9 +311,9 @@ export async function getPipelineEvents(id: string): Promise<PipelineEventsPaylo
   );
 }
 
-export async function getPipelineSteps(id: string): Promise<StepSnapshot[]> {
+export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
   return getJson(
-    `/pipelines/${encodeURIComponent(id)}/steps`,
+    `/runs/${encodeURIComponent(id)}/steps`,
     (v): v is StepSnapshot[] => Array.isArray(v) && v.every(isStepSnapshot),
   );
 }
@@ -370,21 +370,21 @@ export async function enqueueJob(input: {
 }
 
 export async function steerRun(id: string, message: string): Promise<{ id: string }> {
-  return postJson(`/pipelines/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
 }
 
 export async function pauseRun(id: string, reason?: string): Promise<{ id: string }> {
   const body = reason !== undefined ? { reason } : undefined;
-  return postJson(`/pipelines/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
 }
 
 export async function resumeRun(id: string): Promise<{ id: string }> {
-  return postJson(`/pipelines/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
 }
 
 export async function cancelRun(id: string, reason?: string): Promise<{ id: string }> {
   const body = reason !== undefined ? { reason } : undefined;
-  return postJson(`/pipelines/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
 }
 
 // ── Shape validators ────────────────────────────────────────────────
@@ -392,7 +392,7 @@ export async function cancelRun(id: string, reason?: string): Promise<{ id: stri
 // those payloads would break dev UX against mixed versions. Validators
 // require identity/status and coerce missing metrics to zero downstream.
 
-function isPipelineSummary(v: unknown): v is PipelineSummary {
+function isRunSummary(v: unknown): v is RunSummary {
   if (typeof v !== "object" || v === null) return false;
   const o = v as {
     runId?: unknown;
@@ -420,7 +420,7 @@ function isPipelineSummary(v: unknown): v is PipelineSummary {
   );
 }
 
-function isPipelineDetail(v: unknown): v is PipelineDetail {
+function isRunDetail(v: unknown): v is RunDetail {
   if (typeof v !== "object" || v === null) return false;
   const o = v as {
     runId?: unknown;

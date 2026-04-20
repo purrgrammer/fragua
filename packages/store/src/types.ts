@@ -1,13 +1,6 @@
 // swarm store — public types. Mirrors §4 of docs/REARCHITECTURE.md.
 
-export type RunStatus =
-  | "queued"
-  | "running"
-  | "paused_hitl"
-  | "completed"
-  | "cancelled"
-  | "halted"
-  | "quarantined";
+export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
 
 export type EventWriter = "daemon" | "web";
 
@@ -58,12 +51,7 @@ export type IntentType = IntentEvent["type"];
 
 // ─────────────── Fact events (writer: "daemon", OCC-checked) ───────────
 
-export type HaltReason =
-  | "budget"
-  | "max_loops"
-  | "abort_loop"
-  | "schema_drift"
-  | "error";
+export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" | "error";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -258,38 +246,46 @@ export class ConcurrencyError extends Error {
     public readonly expectedVersion: number,
     public readonly actualVersion: number,
   ) {
-    super(
-      `concurrency conflict: expected version ${expectedVersion}, got ${actualVersion}`,
-    );
+    super(`concurrency conflict: expected version ${expectedVersion}, got ${actualVersion}`);
     this.name = "ConcurrencyError";
   }
 }
 
 export class ArtifactTooLargeError extends Error {
-  constructor(public readonly sizeBytes: number, public readonly max: number) {
+  constructor(
+    public readonly sizeBytes: number,
+    public readonly max: number,
+  ) {
     super(`artifact too large: ${sizeBytes} > ${max}`);
     this.name = "ArtifactTooLargeError";
   }
 }
 
 export class SchemaDriftError extends Error {
-  constructor(public readonly runVersion: number, public readonly codeVersion: number) {
-    super(
-      `schema drift: run pinned to v${runVersion}, code is v${codeVersion}`,
-    );
+  constructor(
+    public readonly runVersion: number,
+    public readonly codeVersion: number,
+  ) {
+    super(`schema drift: run pinned to v${runVersion}, code is v${codeVersion}`);
     this.name = "SchemaDriftError";
   }
 }
 
 export class QuarantineError extends Error {
-  constructor(public readonly runId: string, public readonly reason: QuarantineReason) {
+  constructor(
+    public readonly runId: string,
+    public readonly reason: QuarantineReason,
+  ) {
     super(`run ${runId} is quarantined: ${reason}`);
     this.name = "QuarantineError";
   }
 }
 
 export class PayloadTooLargeError extends Error {
-  constructor(public readonly sizeBytes: number, public readonly max: number) {
+  constructor(
+    public readonly sizeBytes: number,
+    public readonly max: number,
+  ) {
     super(`event payload too large: ${sizeBytes} > ${max}`);
     this.name = "PayloadTooLargeError";
   }
@@ -329,12 +325,7 @@ export interface SweepResult {
 
 export interface IEventStore {
   // ─── Writes
-  appendFact(
-    runId: string,
-    events: FactEvent[],
-    expectedVersion: number,
-    opts?: AppendFactOpts,
-  ): FactAppendResult;
+  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
 
   // ─── Run lifecycle
@@ -348,17 +339,16 @@ export interface IEventStore {
   getUnappliedIntents(runId: string): StoredEvent[];
 
   // ─── Messages
-  appendMessage(runId: string, row: Omit<Message, "runId" | "ordinal">): {
+  appendMessage(
+    runId: string,
+    row: Omit<Message, "runId" | "ordinal">,
+  ): {
     ordinal: number;
   };
   getMessages(runId: string, opts?: GetMessagesOpts): Message[];
 
   // ─── Artifacts
-  putArtifact(
-    scope: ArtifactScope,
-    content: Uint8Array,
-    mime?: string,
-  ): ArtifactRef;
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef;
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;

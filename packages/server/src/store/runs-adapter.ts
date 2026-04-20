@@ -1,21 +1,14 @@
-// Store → PipelineSummary / PipelineDetail adapter.
+// Store → RunSummary / RunDetail adapter.
 //
-// The web UI still talks to the legacy /pipelines/* endpoints and renders
-// PipelineSummary rows. Under the rearchitecture the authoritative data
-// lives in @swarm/store (run_state + events). This module projects a
-// RunState + its event tail into the shapes the UI expects, so we keep
-// the UI intact while the backend is DB-native.
+// The authoritative data lives in @swarm/store (run_state + events); this
+// module projects a RunState + its event tail into the shapes the
+// `/runs` REST endpoints hand to the web UI.
 
 import type { Database } from "bun:sqlite";
-import type {
-  IEventStore,
-  RunState,
-  RunStatus,
-  StoredEvent,
-} from "@swarm/store";
-import type { NodeState, PipelineDetail, PipelineSummary } from "../schemas.ts";
+import type { IEventStore, RunState, RunStatus, StoredEvent } from "@swarm/store";
+import type { NodeState, RunDetail, RunSummary } from "../schemas.ts";
 
-export type UiStatus = PipelineSummary["status"];
+export type UiStatus = RunSummary["status"];
 
 export function mapStatus(status: RunStatus): UiStatus {
   switch (status) {
@@ -34,21 +27,18 @@ export function mapStatus(status: RunStatus): UiStatus {
   }
 }
 
-/** Build a PipelineSummary from a run's projection + its event tail. */
+/** Build a RunSummary from a run's projection + its event tail. */
 export function runStateToSummary(
   state: RunState,
   events: StoredEvent[],
   workflowName: string | undefined,
-): PipelineSummary {
+): RunSummary {
   const first = events[0];
   const last = events[events.length - 1];
   const startedAt = first != null ? new Date(first.ts).toISOString() : new Date(state.enqueuedAt).toISOString();
-  const durationMs =
-    first != null && last != null && last.ts >= first.ts
-      ? last.ts - first.ts
-      : undefined;
+  const durationMs = first != null && last != null && last.ts >= first.ts ? last.ts - first.ts : undefined;
 
-  const summary: PipelineSummary = {
+  const summary: RunSummary = {
     runId: state.runId,
     startedAt,
     status: mapStatus(state.status),
@@ -65,15 +55,15 @@ export function runStateToSummary(
   return summary;
 }
 
-/** Build a PipelineDetail from a run's projection + its full event log. */
+/** Build a RunDetail from a run's projection + its full event log. */
 export function runStateToDetail(
   state: RunState,
   events: StoredEvent[],
   workflowName: string | undefined,
   workflowSource: string | undefined,
-): PipelineDetail {
+): RunDetail {
   const summary = runStateToSummary(state, events, workflowName);
-  const detail: PipelineDetail = {
+  const detail: RunDetail = {
     ...summary,
     lastEventSeq: state.lastAppliedSeq,
     nodes: deriveNodeStates(events),
@@ -92,10 +82,7 @@ export function runStateToDetail(
  *     will show pending for nodes absent from the list)
  */
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
-  const byNode = new Map<
-    string,
-    { state: NodeState["state"]; lastEventSeq: number }
-  >();
+  const byNode = new Map<string, { state: NodeState["state"]; lastEventSeq: number }>();
   const bump = (nodeId: string, state: NodeState["state"], seq: number) => {
     byNode.set(nodeId, { state, lastEventSeq: seq });
   };
@@ -140,9 +127,7 @@ export function listRuns(store: IEventStore): string[] {
   const db = (store as unknown as { db?: Database }).db;
   if (db == null) return [];
   return db
-    .query<{ run_id: string }, []>(
-      "SELECT run_id FROM run_state ORDER BY updated_at DESC",
-    )
+    .query<{ run_id: string }, []>("SELECT run_id FROM run_state ORDER BY updated_at DESC")
     .all()
     .map((r) => r.run_id);
 }

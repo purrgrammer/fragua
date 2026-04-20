@@ -7,12 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as handler from "@swarm/core/handler";
-import {
-  AbortRegistry,
-  autoDispatcherResolver,
-  Dispatcher,
-  runExecutor,
-} from "@swarm/daemon";
+import { AbortRegistry, autoDispatcherResolver, Dispatcher, runExecutor } from "@swarm/daemon";
 import { createServer } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
 import { runCommand } from "../src/commands/run.ts";
@@ -122,10 +117,7 @@ describe("swarm run", () => {
       const workflowDir = mkdtempSync(join(tmpdir(), "swarm-wf-"));
       tmps.push(workflowDir);
       const dotPath = join(workflowDir, "echo.dot");
-      writeFileSync(
-        dotPath,
-        `digraph { start [shape=Mdiamond]; end [shape=Msquare]; start -> end; }`,
-      );
+      writeFileSync(dotPath, `digraph { start [shape=Mdiamond]; end [shape=Msquare]; start -> end; }`);
 
       const code = await runCommand({
         workflow: dotPath,

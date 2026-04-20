@@ -1,4 +1,4 @@
-// Route-level tests for PipelinesList. We seed the react-query cache via
+// Route-level tests for RunsList. We seed the react-query cache via
 // `setQueryData` for happy-path renders (no network), and install a URL-
 // routing fake `fetch` when a test needs to exercise the loading or
 // error paths.
@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import type { PipelineSummary } from "../../src/lib/api.ts";
+import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
@@ -17,13 +17,13 @@ function mount(client = createTestQueryClient(), path = "/runs") {
   return renderWithClient(<RouterProvider router={router} />, { client });
 }
 
-describe("PipelinesList", () => {
+describe("RunsList", () => {
   useDom();
   afterEach(() => cleanup());
 
   it("renders a three-column header: Title / Workflow / Status (nothing else)", async () => {
     const client = createTestQueryClient();
-    client.setQueryData(queries.pipelines.list().queryKey, [
+    client.setQueryData(queries.runs.list().queryKey, [
       {
         runId: "r1",
         workflow: "wf-A",
@@ -34,15 +34,15 @@ describe("PipelinesList", () => {
         inputTokens: 0,
         outputTokens: 0,
       },
-    ] satisfies PipelineSummary[]);
+    ] satisfies RunSummary[]);
 
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
+      expect(q.getByTestId("runs-table")).toBeTruthy();
     });
 
-    const headers = Array.from(q.getByTestId("pipelines-table").querySelectorAll("thead th")).map((th) =>
+    const headers = Array.from(q.getByTestId("runs-table").querySelectorAll("thead th")).map((th) =>
       (th.textContent ?? "").trim(),
     );
 
@@ -53,8 +53,8 @@ describe("PipelinesList", () => {
     }
   });
 
-  it("renders one row per pipeline with title link, workflow badge, and a status pill on the right", async () => {
-    const rows: PipelineSummary[] = [
+  it("renders one row per run with title link, workflow badge, and a status pill on the right", async () => {
+    const rows: RunSummary[] = [
       {
         runId: "r1",
         title: "Summarise the weekly digest",
@@ -80,13 +80,13 @@ describe("PipelinesList", () => {
       },
     ];
     const client = createTestQueryClient();
-    client.setQueryData(queries.pipelines.list().queryKey, rows);
+    client.setQueryData(queries.runs.list().queryKey, rows);
 
     const { container } = mount(client);
     const q = within(container);
 
     await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
+      expect(q.getByTestId("runs-table")).toBeTruthy();
     });
 
     expect(q.getByText("Summarise the weekly digest")).toBeTruthy();
@@ -114,7 +114,7 @@ describe("PipelinesList", () => {
   });
 
   it("omits the workflow badge when the row has no workflow", async () => {
-    const rows: PipelineSummary[] = [
+    const rows: RunSummary[] = [
       {
         runId: "no-wf",
         title: "Ad-hoc run",
@@ -127,12 +127,12 @@ describe("PipelinesList", () => {
       },
     ];
     const client = createTestQueryClient();
-    client.setQueryData(queries.pipelines.list().queryKey, rows);
+    client.setQueryData(queries.runs.list().queryKey, rows);
 
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("pipelines-table")).toBeTruthy();
+      expect(q.getByTestId("runs-table")).toBeTruthy();
     });
 
     const titleLink = q.getByText("Ad-hoc run").closest("a") as HTMLElement;
@@ -143,11 +143,11 @@ describe("PipelinesList", () => {
 
   it("shows a loading indicator while pending", async () => {
     const mock = installFetchMock({
-      "/api/pipelines": () => new Promise<Response>(() => {}),
+      "/api/runs": () => new Promise<Response>(() => {}),
     });
     try {
       const { container } = mount();
-      expect(within(container).getByTestId("pipelines-loading")).toBeTruthy();
+      expect(within(container).getByTestId("runs-loading")).toBeTruthy();
     } finally {
       mock.restore();
     }
@@ -157,15 +157,14 @@ describe("PipelinesList", () => {
     const origWarn = console.warn;
     console.warn = () => {};
     const mock = installFetchMock({
-      "/api/pipelines": () =>
-        new Response("nope-should-not-render", { status: 500, statusText: "Internal Server Error" }),
+      "/api/runs": () => new Response("nope-should-not-render", { status: 500, statusText: "Internal Server Error" }),
     });
     try {
       const { container } = mount();
       await waitFor(() => {
-        expect(within(container).getByTestId("pipelines-error")).toBeTruthy();
+        expect(within(container).getByTestId("runs-error")).toBeTruthy();
       });
-      expect(within(container).getByRole("heading", { name: "Pipelines" })).toBeTruthy();
+      expect(within(container).getByRole("heading", { name: "Runs" })).toBeTruthy();
       expect(container.textContent ?? "").not.toContain("nope-should-not-render");
     } finally {
       mock.restore();
@@ -175,15 +174,15 @@ describe("PipelinesList", () => {
 
   it("suppresses the empty-state flash by pre-seeded cache", async () => {
     const client = createTestQueryClient();
-    client.setQueryData(queries.pipelines.list().queryKey, [] as PipelineSummary[]);
+    client.setQueryData(queries.runs.list().queryKey, [] as RunSummary[]);
 
     // Install a fetch fallback so a refetch stays deterministic even though
     // the component will not render a network error with seeded cache.
-    const mock = installFetchMock({ "/api/pipelines": () => json([]) });
+    const mock = installFetchMock({ "/api/runs": () => json([]) });
     try {
       const { container } = mount(client);
       await waitFor(() => {
-        expect(within(container).getByTestId("pipelines-empty")).toBeTruthy();
+        expect(within(container).getByTestId("runs-empty")).toBeTruthy();
       });
     } finally {
       mock.restore();

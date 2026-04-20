@@ -6,14 +6,14 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
-import { Hono } from "hono";
 import type { IEventStore } from "@swarm/store";
+import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
-import { storePipelinesRoutes } from "./store/pipelines-routes.ts";
 import { createRoutes as createStoreRoutes } from "./store/routes.ts";
+import { storeRunsRoutes } from "./store/runs-routes.ts";
 
 export interface ServerOptions {
   /** SQLite event store — the backbone for all reads and intent writes. */
@@ -34,18 +34,12 @@ export interface ServerOptions {
 function buildApiApp(opts: ServerOptions): Hono {
   const ports = opts.ports ?? {};
   const workflowsDir = opts.workflowsDir ?? "workflows";
-  const workflowReader: WorkflowReader =
-    ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
+  const workflowReader: WorkflowReader = ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
 
   const api = new Hono();
-  api.route(
-    "/",
-    healthRoutes(
-      ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {},
-    ),
-  );
+  api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader }));
-  api.route("/", storePipelinesRoutes({ store: opts.store, workflowReader }));
+  api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
   api.route("/", createStoreRoutes({ store: opts.store }));
   return api;
 }
@@ -139,26 +133,26 @@ export type {
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";
-export {
-  DAEMON_LIVENESS_TTL_MS,
-  daemonInfoFromStore,
-} from "./routes/health.ts";
 export type {
   DaemonInfoFromStoreOptions,
   HealthDaemonInfo,
 } from "./routes/health.ts";
 export {
+  DAEMON_LIVENESS_TTL_MS,
+  daemonInfoFromStore,
+} from "./routes/health.ts";
+export {
   ErrorBody,
   NodeState,
-  PipelineDetail,
-  PipelineSummary,
+  RunDetail,
+  RunSummary,
 } from "./schemas.ts";
-export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
-export { storePipelinesRoutes } from "./store/pipelines-routes.ts";
 export type { ServerDeps } from "./store/index.ts";
+export { createRoutes as createStoreRoutes, newRunId } from "./store/index.ts";
 export {
   listRuns as listStoreRuns,
   mapStatus,
   runStateToDetail,
   runStateToSummary,
-} from "./store/pipelines-adapter.ts";
+} from "./store/runs-adapter.ts";
+export { storeRunsRoutes } from "./store/runs-routes.ts";

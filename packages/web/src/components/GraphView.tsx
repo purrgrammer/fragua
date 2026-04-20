@@ -3,8 +3,8 @@
 //
 // Two call shapes:
 //
-//   1. Pipeline-live:  <GraphView runId=… />           (or detail=…)
-//      Topology from `PipelineDetail.workflowSource`, lifecycle state
+//   1. Run-live:  <GraphView runId=… />           (or detail=…)
+//      Topology from `RunDetail.workflowSource`, lifecycle state
 //      from `detail.nodes[]`. Edges animate while the run is running.
 //
 //   2. Workflow-detail:  <GraphView graph=… source=… />
@@ -25,12 +25,12 @@
 // Node DOM contract: each rendered node carries `data-node-id="<id>"`
 // so existing tests (and any future Playwright) can target them.
 
-import { type Edge as GraphEdge, type Graph, type Node as GraphNode, handlerOf, parseDotSource } from "@swarm/core";
+import { type Graph, type Edge as GraphEdge, type Node as GraphNode, handlerOf, parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { Handle, MarkerType, Position } from "@xyflow/react";
 import { useCallback, useEffect, useMemo } from "react";
-import type { NodeState, PipelineDetail } from "../lib/api.ts";
+import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
 import { queries } from "../lib/queries.ts";
@@ -41,14 +41,14 @@ import { Node as AiNode, NodeContent, NodeHeader, NodeTitle } from "./ai-element
 import { EmptyState } from "./ui/empty-state.tsx";
 
 export interface GraphViewProps {
-  /** When provided (and no `detail`/`graph`), we fetch `/pipelines/:runId`. */
+  /** When provided (and no `detail`/`graph`), we fetch `/runs/:runId`. */
   runId?: string;
   /**
-   * Pre-fetched pipeline detail. Takes precedence over `runId` — used
-   * when the parent is already loading the detail (e.g. PipelineDetail
+   * Pre-fetched run detail. Takes precedence over `runId` — used
+   * when the parent is already loading the detail (e.g. RunDetail
    * page). Supplies workflow source AND live lifecycle state.
    */
-  detail?: PipelineDetail;
+  detail?: RunDetail;
   /**
    * Pre-parsed topology for the static workflow-detail view. When this
    * is set `detail`/`runId` are ignored and every node renders neutral.
@@ -107,7 +107,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 
   const qc = useQueryClient();
   const query = useQuery({
-    ...queries.pipelines.detail(runId ?? ""),
+    ...queries.runs.detail(runId ?? ""),
     enabled: !!runId && !detailProp && !graphProp,
   });
 
@@ -115,7 +115,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refetchKey is the trigger.
   useEffect(() => {
     if (runId && !detailProp && !graphProp) {
-      void qc.invalidateQueries({ queryKey: queries.pipelines.detail(runId).queryKey });
+      void qc.invalidateQueries({ queryKey: queries.runs.detail(runId).queryKey });
     }
   }, [refetchKey]);
 
@@ -415,7 +415,7 @@ export interface ToFlowGraphOptions {
 
 /**
  * Build `FlowNode[]` + `FlowEdge[]` from a parsed `Graph` and (optionally)
- * a `PipelineDetail`. Exported as a pure function so tests can exercise
+ * a `RunDetail`. Exported as a pure function so tests can exercise
  * the transform without mounting React.
  *
  * When `detail` is null the transform runs in workflow-detail mode:
@@ -431,7 +431,7 @@ export interface ToFlowGraphOptions {
  * `done` being in the graph so the labeled terminal edge exists.
  */
 export function toFlowGraph(
-  detail: PipelineDetail | null,
+  detail: RunDetail | null,
   graph: Graph,
   opts: ToFlowGraphOptions = {},
 ): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {

@@ -4,7 +4,7 @@
 // Used by:
 //   - `WorkflowDetail` (static view)  — driven by a parsed `Node` with
 //     no lifecycle state.
-//   - `PipelineGraphTab` (live view)  — same `Node` plus a matching
+//   - `RunGraphTab` (live view)  — same `Node` plus a matching
 //     `NodeState` entry from the event stream, so the inspector can
 //     show current state + lastEventSeq alongside the static config.
 //

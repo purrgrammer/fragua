@@ -14,17 +14,11 @@ const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
 export function migrate(db: Database): void {
   db.transaction(() => {
     db.exec(SCHEMA_SQL);
-    const row = db
-      .query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1")
-      .get();
+    const row = db.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get();
     if (row == null) {
-      db.query(
-        "INSERT INTO schema_version (id, version) VALUES (1, ?)",
-      ).run(CURRENT_SCHEMA_VERSION);
+      db.query("INSERT INTO schema_version (id, version) VALUES (1, ?)").run(CURRENT_SCHEMA_VERSION);
     } else if (row.version !== CURRENT_SCHEMA_VERSION) {
-      throw new Error(
-        `schema drift: db has version ${row.version}, code expects ${CURRENT_SCHEMA_VERSION}`,
-      );
+      throw new Error(`schema drift: db has version ${row.version}, code expects ${CURRENT_SCHEMA_VERSION}`);
     }
   })();
 }

@@ -8,7 +8,7 @@
 //      and assert shape invariants (≥1 section per executed node, no
 //      thrown errors, costs attributed to assistant messages).
 //   3. Edge cases: unknown event types ignored, missing node_id events
-//      (pipeline.*) dropped from conversation but still inform status.
+//      (run.*) dropped from conversation but still inform status.
 //
 // Fixtures are checked into the repo under `.swarm/runs/` — they're
 // large (~23k lines) so we stream the short fixture rather than load
@@ -232,13 +232,13 @@ describe("eventsToConversation — synthetic sequences", () => {
     expect(assistant?.modelId).toBe("claude-haiku-4-5");
   });
 
-  it("drops pipeline-lifecycle events from conversation content", () => {
+  it("drops run-lifecycle events from conversation content", () => {
     const out = eventsToConversation([
-      ev("pipeline.started", { node_id: null, data: { graph_id: "g" } }),
+      ev("run.started", { node_id: null, data: { graph_id: "g" } }),
       ev("node.started", { node_id: "a" }),
       ev("edge.selected", { node_id: "a", data: { from: "a", to: "b", rule: "weight" } }),
       ev("node.completed", { node_id: "a", data: { outcome: "pass" } }),
-      ev("pipeline.completed", { node_id: null }),
+      ev("run.completed", { node_id: null }),
     ]);
     expect(out).toHaveLength(1);
     expect(out[0]?.turns).toEqual([]);

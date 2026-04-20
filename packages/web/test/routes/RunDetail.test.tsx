@@ -1,9 +1,9 @@
-// Route-level tests for PipelineDetail.
+// Route-level tests for RunDetail.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import type { PipelineDetail as PipelineDetailT } from "../../src/lib/api.ts";
+import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
@@ -16,30 +16,30 @@ function mount(client: ReturnType<typeof createTestQueryClient>, path: string) {
 
 /**
  * Seed the detail query for a given runId, and install a fake fetch that
- * satisfies the SSE-bootstrap endpoint (`/pipelines/:id/events.json`)
+ * satisfies the SSE-bootstrap endpoint (`/runs/:id/events.json`)
  * with an empty payload so `useRunConversation` settles into a clean
  * state without real network.
  */
-function prepare(id: string, detail: PipelineDetailT) {
+function prepare(id: string, detail: RunDetailT) {
   const client = createTestQueryClient();
-  client.setQueryData(queries.pipelines.detail(id).queryKey, detail);
+  client.setQueryData(queries.runs.detail(id).queryKey, detail);
   const mock = installFetchMock(
     {
-      [`/api/pipelines/${encodeURIComponent(id)}/events.json`]: () => json([]),
-      [`/api/pipelines/${encodeURIComponent(id)}/steps`]: () => json([]),
-      [`/api/pipelines/${encodeURIComponent(id)}`]: () => json(detail),
+      [`/api/runs/${encodeURIComponent(id)}/events.json`]: () => json([]),
+      [`/api/runs/${encodeURIComponent(id)}/steps`]: () => json([]),
+      [`/api/runs/${encodeURIComponent(id)}`]: () => json(detail),
     },
     () => json([]),
   );
   return { client, mock };
 }
 
-describe("PipelineDetail", () => {
+describe("RunDetail", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("fetches the pipeline for the :id from the URL and renders the conversation region", async () => {
-    const detail: PipelineDetailT = {
+  it("fetches the run for the :id from the URL and renders the conversation region", async () => {
+    const detail: RunDetailT = {
       runId: "abc12345xyz",
       workflowName: "build-feature",
       startedAt: "2024-01-01T00:00:00Z",
@@ -69,7 +69,7 @@ describe("PipelineDetail", () => {
   });
 
   it("renders cost + tokens + duration in the header when metrics are present", async () => {
-    const detail: PipelineDetailT = {
+    const detail: RunDetailT = {
       runId: "run-metrics",
       workflowName: "w",
       startedAt: "2024-01-01T00:00:00Z",
@@ -103,7 +103,7 @@ describe("PipelineDetail", () => {
   });
 
   it("renders '—' for missing metrics without leaking raw values", async () => {
-    const detail: PipelineDetailT = {
+    const detail: RunDetailT = {
       runId: "run-empty",
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
@@ -129,7 +129,7 @@ describe("PipelineDetail", () => {
   });
 
   it("never renders the raw ISO startedAt string to the user", async () => {
-    const detail: PipelineDetailT = {
+    const detail: RunDetailT = {
       runId: "run-dates",
       startedAt: "2024-06-01T12:34:56Z",
       status: "success",
@@ -159,9 +159,9 @@ describe("PipelineDetail", () => {
     console.warn = () => {};
     const mock = installFetchMock(
       {
-        "/api/pipelines/run-999": () =>
+        "/api/runs/run-999": () =>
           new Response("secret-detail-error", { status: 500, statusText: "Internal Server Error" }),
-        "/api/pipelines/run-999/events.json": () => json([]),
+        "/api/runs/run-999/events.json": () => json([]),
       },
       () => json([]),
     );
@@ -177,7 +177,7 @@ describe("PipelineDetail", () => {
     }
   });
   it("exposes a Graph tab that renders the live graph + inspector when the tab is active", async () => {
-    const detail: PipelineDetailT = {
+    const detail: RunDetailT = {
       runId: "run-graph",
       workflowName: "demo",
       startedAt: "2024-01-01T00:00:00Z",
@@ -210,7 +210,7 @@ describe("PipelineDetail", () => {
       await waitFor(() => {
         expect(q.getByTestId("graph-region")).toBeTruthy();
       });
-      // Orientation is top-to-bottom for the pipeline graph tab.
+      // Orientation is top-to-bottom for the run graph tab.
       const canvas = q.getByTestId("graphview");
       expect(canvas.getAttribute("data-orientation")).toBe("TB");
       // Inspector empty until a node is clicked.

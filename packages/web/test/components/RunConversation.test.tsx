@@ -1,4 +1,4 @@
-// PipelineConversation component tests.
+// RunConversation component tests.
 //
 // We assert the DOM-level contract the task spec calls out:
 //   - `data-testid="node-section-<id>"` per section.
@@ -13,15 +13,15 @@
 //   - Stable `data-testid`s: `turn-<turnId>`, `tool-<toolCallId>`,
 //     `reasoning-<messageId>`.
 //
-// We build the `PipelineConversation` tree by running the pure reducer
+// We build the `RunConversation` tree by running the pure reducer
 // over synthetic events — that way the tests double as an end-to-end
 // contract check across reducer + component.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
-import { PipelineConversation } from "../../src/components/PipelineConversation.tsx";
+import { RunConversation } from "../../src/components/RunConversation.tsx";
 import {
-  type PipelineConversation as ConversationTree,
+  type RunConversation as ConversationTree,
   eventsToConversation,
   type RawEvent,
 } from "../../src/lib/events-to-conversation.ts";
@@ -36,7 +36,7 @@ function ev(type: string, opts: Partial<RawEvent> = {}): RawEvent {
   };
 }
 
-/** A three-node pipeline with one reasoning + one tool call in the middle. */
+/** A three-node run with one reasoning + one tool call in the middle. */
 function buildConversation(): ConversationTree {
   return eventsToConversation([
     ev("node.started", { node_id: "start" }),
@@ -93,13 +93,13 @@ function buildConversation(): ConversationTree {
   ]);
 }
 
-describe("PipelineConversation", () => {
+describe("RunConversation", () => {
   useDom();
   afterEach(() => cleanup());
 
   it("renders one section per node with stable data-testids", () => {
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     expect(within(container).getByTestId("node-section-start")).toBeTruthy();
     expect(within(container).getByTestId("node-section-explore")).toBeTruthy();
     expect(within(container).getByTestId("node-section-done")).toBeTruthy();
@@ -107,7 +107,7 @@ describe("PipelineConversation", () => {
 
   it("renders a step header at the same level as messages, not as a collapsible", () => {
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     // Three sections expected (start / explore / done); each has a plain
     // node-id label, not the old "Node: <id>" checkpoint trigger.
     const sections = container.querySelectorAll("[data-testid^='node-section-']");
@@ -127,7 +127,7 @@ describe("PipelineConversation", () => {
 
   it("renders a Reasoning block for messages with thinking parts", () => {
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     const reasoningBlocks = container.querySelectorAll("[data-testid^='reasoning-']");
     // Exactly one assistant message had a thinking delta → one reasoning block.
     expect(reasoningBlocks.length).toBe(1);
@@ -135,7 +135,7 @@ describe("PipelineConversation", () => {
 
   it("renders the Tool block with the mapped swarm tool name in its header", () => {
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     const toolBlock = within(container).getByTestId("tool-call_read");
     expect(toolBlock).toBeTruthy();
     // Header shows the human-readable label from the TOOL_PRESENTATION
@@ -148,7 +148,7 @@ describe("PipelineConversation", () => {
 
   it("renders turn ids as stable data-testids", () => {
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     const turns = container.querySelectorAll("[data-testid^='turn-']");
     // One turn in the explore section (start/done had no agent turns).
     expect(turns.length).toBe(1);
@@ -162,24 +162,21 @@ describe("PipelineConversation", () => {
     // commented out. Re-enable this assertion when the byline comes
     // back in a layout that reads cleanly.
     const conv = buildConversation();
-    const { container } = render(<PipelineConversation conversation={conv} />);
+    const { container } = render(<RunConversation conversation={conv} />);
     const body = container.textContent ?? "";
     expect(body).not.toContain("claude-haiku-4-5");
     expect(body).not.toMatch(/\$0\.00/);
   });
 
   it("renders an empty state when there are no sections", () => {
-    const { container } = render(<PipelineConversation conversation={[]} />);
+    const { container } = render(<RunConversation conversation={[]} />);
     expect(within(container).getByTestId("conversation-empty")).toBeTruthy();
   });
 
   it("prefers server-side nodeStates over the reducer's section.status", () => {
     const conv: ConversationTree = [{ nodeId: "explore", status: "running", turns: [] }];
     const { container } = render(
-      <PipelineConversation
-        conversation={conv}
-        nodeStates={[{ nodeId: "explore", state: "failed", lastEventSeq: 1 }]}
-      />,
+      <RunConversation conversation={conv} nodeStates={[{ nodeId: "explore", state: "failed", lastEventSeq: 1 }]} />,
     );
     const section = within(container).getByTestId("node-section-explore");
     expect(section.getAttribute("data-status")).toBe("failed");
@@ -197,7 +194,7 @@ describe("PipelineConversation", () => {
         data: { delta: "partial", content_index: 0 },
       }),
     ]);
-    const { container } = render(<PipelineConversation conversation={conv} isLive={true} />);
+    const { container } = render(<RunConversation conversation={conv} isLive={true} />);
     const shimmers = container.querySelectorAll("*");
     // Two shimmer usages: section header (node is running + isLive) and
     // message-level streaming pill. Assert at least one "streaming…" appears.

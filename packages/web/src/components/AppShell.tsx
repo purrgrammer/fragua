@@ -18,7 +18,7 @@
 //   - `<main>` is `flex-1 min-h-0 min-w-0 overflow-auto` so any
 //     oversized page content scrolls inside the main region instead
 //     of inflating the viewport. Pages that want to be full-bleed
-//     (e.g. the pipeline conversation) use `h-full` + `min-h-0`.
+//     (e.g. the run conversation) use `h-full` + `min-h-0`.
 //
 // Connection status is read from `HealthContext` (App is the
 // publisher). Pulling it via context — instead of threading it

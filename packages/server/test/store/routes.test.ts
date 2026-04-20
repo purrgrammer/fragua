@@ -2,7 +2,6 @@
 //
 // Covers:
 //   - All seven intent-write endpoints land an event on the store
-//   - GET /runs/:id returns the projection; 404 for unknown
 //   - GET /runs/:id/events supports sinceSeq filtering
 //   - GET /metrics/global aggregates via generated columns + json_each pivot
 //   - P19: SSE replay via Last-Event-ID
@@ -55,12 +54,8 @@ describe("POST /workflows — upload", () => {
 
   test("idempotent on same source — same sha, no duplicate row", async () => {
     const src = "digraph X { a -> b }";
-    const a = (await (
-      await req("POST", "/workflows", { name: "x", dotSource: src })
-    ).json()) as { sha: string };
-    const b = (await (
-      await req("POST", "/workflows", { name: "x", dotSource: src })
-    ).json()) as { sha: string };
+    const a = (await (await req("POST", "/workflows", { name: "x", dotSource: src })).json()) as { sha: string };
+    const b = (await (await req("POST", "/workflows", { name: "x", dotSource: src })).json()) as { sha: string };
     expect(a.sha).toBe(b.sha);
   });
 });
@@ -95,23 +90,15 @@ describe("intent-write routes", () => {
     ["pause", "/pause", undefined, "intent.pause_requested"],
     ["cancel", "/cancel", { reason: "stop" }, "intent.cancel_requested"],
     ["hitl", "/hitl", { input: "approved" }, "intent.hitl_input"],
-    [
-      "unquarantine",
-      "/unquarantine",
-      { resolution: "retry", note: "try again" },
-      "intent.unquarantine",
-    ],
+    ["unquarantine", "/unquarantine", { resolution: "retry", note: "try again" }, "intent.unquarantine"],
     ["priority", "/priority", { newPriority: 5 }, "intent.priority_adjusted"],
-  ] as const)(
-    "POST /runs/:id/%s writes an %s intent",
-    async (_label, path, body, type) => {
-      store.enqueueRun({ runId: "r", workflowSha: "wf" });
-      const res = await req("POST", `/runs/r${path}`, body);
-      expect(res.status).toBe(200);
-      const events = store.getEvents("r");
-      expect(events.some((e) => e.type === type)).toBe(true);
-    },
-  );
+  ] as const)("POST /runs/:id/%s writes an %s intent", async (_label, path, body, type) => {
+    store.enqueueRun({ runId: "r", workflowSha: "wf" });
+    const res = await req("POST", `/runs/r${path}`, body);
+    expect(res.status).toBe(200);
+    const events = store.getEvents("r");
+    expect(events.some((e) => e.type === type)).toBe(true);
+  });
 
   test("POST /runs/:id/steer rejects empty text", async () => {
     store.enqueueRun({ runId: "r", workflowSha: "wf" });
@@ -129,20 +116,6 @@ describe("intent-write routes", () => {
 });
 
 describe("reads", () => {
-  test("GET /runs/:id returns the projection", async () => {
-    store.enqueueRun({ runId: "r", workflowSha: "wf" });
-    const res = await req("GET", "/runs/r");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { runId: string; status: string };
-    expect(body.runId).toBe("r");
-    expect(body.status).toBe("queued");
-  });
-
-  test("GET /runs/:id returns 404 for missing run", async () => {
-    const res = await req("GET", "/runs/missing");
-    expect(res.status).toBe(404);
-  });
-
   test("GET /runs/:id/events supports since= filter", async () => {
     store.enqueueRun({ runId: "r", workflowSha: "wf" });
     store.appendIntent("r", { type: "intent.pause_requested", payload: {} });
@@ -154,9 +127,7 @@ describe("reads", () => {
     const all = (await (await req("GET", "/runs/r/events")).json()) as {
       seq: number;
     }[];
-    const after1 = (await (
-      await req("GET", "/runs/r/events?since=1")
-    ).json()) as { seq: number }[];
+    const after1 = (await (await req("GET", "/runs/r/events?since=1")).json()) as { seq: number }[];
     expect(all).toHaveLength(3);
     expect(after1).toHaveLength(2);
     expect(after1[0]!.seq).toBeGreaterThan(1);
@@ -214,9 +185,7 @@ describe("GET /metrics/global", () => {
     expect(body.total_tokens).toBe(100);
     expect(body.total_usd).toBeCloseTo(0.02, 6);
     expect(body.successful).toBe(1);
-    const pro = body.breakdownByModel.find(
-      (r) => r.model_name === "gemini-1.5-pro",
-    );
+    const pro = body.breakdownByModel.find((r) => r.model_name === "gemini-1.5-pro");
     expect(pro).toBeDefined();
     expect(pro!.tokens).toBe(100);
     expect(pro!.cost_usd).toBeCloseTo(0.02, 6);

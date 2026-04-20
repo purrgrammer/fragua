@@ -108,9 +108,7 @@ describe("P7 — unquarantine retry reuses idempotencyKey", () => {
     // Re-deriving the idempotency key with the same inputs produces
     // the same hash — this is the replay-safety contract.
     const replayKey = sha256(`rp7\x00start\x000\x00h\x001`);
-    const intentEvent = r.store
-      .getEvents("rp7")
-      .find((e) => e.type === "fact.side_effect_intent")!;
+    const intentEvent = r.store.getEvents("rp7").find((e) => e.type === "fact.side_effect_intent")!;
     expect((intentEvent.payload as { idempotencyKey: string }).idempotencyKey).not.toBe(replayKey); // test used a static key
     // But any fresh handler using externalCall() with the same canonical
     // inputs would derive a deterministic key:
@@ -146,10 +144,7 @@ describe("P8 — mid-flight abort replay: external call ≤ 1 per key", () => {
     ).rejects.toBe(abortErr);
 
     // 2nd attempt with same (run, node, iter, args, attempt) → same key.
-    const second = await call(
-      { toolName: "t", argsHash: "a", attempt: 1 },
-      async () => "ok",
-    );
+    const second = await call({ toolName: "t", argsHash: "a", attempt: 1 }, async () => "ok");
     expect(second).toBe("ok");
 
     // Both intents use the same key. First aborted (no done/failed).
@@ -169,14 +164,8 @@ describe("P16 — blob GC preserves shared blobs, removes orphans", () => {
     enqueue(r, "rp16a", "start");
     enqueue(r, "rp16b", "start");
     const content = new TextEncoder().encode("shared");
-    const refA = r.store.putArtifact(
-      { runId: "rp16a", nodeId: "n", iteration: 0, key: "k" },
-      content,
-    );
-    r.store.putArtifact(
-      { runId: "rp16b", nodeId: "n", iteration: 0, key: "k" },
-      content,
-    );
+    const refA = r.store.putArtifact({ runId: "rp16a", nodeId: "n", iteration: 0, key: "k" }, content);
+    r.store.putArtifact({ runId: "rp16b", nodeId: "n", iteration: 0, key: "k" }, content);
 
     // Delete all artifacts belonging to run A (simulating a run purge).
     const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
@@ -268,9 +257,7 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
 
     const state = r.store.getState("rp20")!;
     expect(state.status).toBe("halted");
-    const halt = r.store
-      .getEvents("rp20")
-      .find((e) => e.type === "fact.run_halted")!;
+    const halt = r.store.getEvents("rp20").find((e) => e.type === "fact.run_halted")!;
     expect((halt.payload as { reason: string }).reason).toBe("abort_loop");
     r.store.close();
   });

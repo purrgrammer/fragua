@@ -1,10 +1,4 @@
-import type {
-  ArtifactRef,
-  ArtifactScope,
-  IEventStore,
-  Message,
-  MessageRole,
-} from "@swarm/store";
+import type { ArtifactRef, ArtifactScope, IEventStore, Message, MessageRole } from "@swarm/store";
 import { makeExternalCall } from "./external-call.ts";
 import type {
   ArtifactsApi,
@@ -62,15 +56,8 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
 
   const artifacts: ArtifactsApi = {
     put(key, content, mime): ArtifactRef {
-      const bytes =
-        typeof content === "string"
-          ? new TextEncoder().encode(content)
-          : content;
-      return store.putArtifact(
-        { runId, nodeId, iteration, key },
-        bytes,
-        mime,
-      );
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+      return store.putArtifact({ runId, nodeId, iteration, key }, bytes, mime);
     },
     get(key) {
       return store.getArtifact({ runId, nodeId, iteration, key });

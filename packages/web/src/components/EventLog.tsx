@@ -1,11 +1,11 @@
 // EventLog — renders the raw store event stream for a run.
 //
-// Replaces the old PipelineConversation for the DB-backed rearchitecture:
+// Replaces the old RunConversation for the DB-backed rearchitecture:
 // events are fact.* / intent.* shapes, not agent.turn_start / llm.*.
 // We display each event as a row with seq, type, and a short payload summary.
 //
 // Data: polled every 2s via TanStack Query against
-// `GET /pipelines/:id/events.json`. Switch to SSE later if latency matters;
+// `GET /runs/:id/events.json`. Switch to SSE later if latency matters;
 // polling is fine for single-user local deployments and trivially correct.
 
 import { useQuery } from "@tanstack/react-query";
@@ -30,7 +30,7 @@ export function EventLog({ runId, refetchKey }: EventLogProps): JSX.Element {
   const query = useQuery({
     queryKey: ["run-events", runId, refetchKey],
     queryFn: async () => {
-      const res = await fetch(`/api/pipelines/${encodeURIComponent(runId)}/events.json`);
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events.json`);
       if (!res.ok) throw new Error(`events ${res.status}`);
       return (await res.json()) as StoredEvent[];
     },
@@ -66,11 +66,7 @@ export function EventLog({ runId, refetchKey }: EventLogProps): JSX.Element {
   }
 
   return (
-    <ol
-      data-testid="event-log"
-      className="divide-y text-xs font-mono"
-      aria-label="Event log"
-    >
+    <ol data-testid="event-log" className="divide-y text-xs font-mono" aria-label="Event log">
       {events.map((event) => (
         <li
           key={event.seq}
@@ -78,18 +74,11 @@ export function EventLog({ runId, refetchKey }: EventLogProps): JSX.Element {
           className="flex items-start gap-3 px-3 py-1.5"
           data-writer={event.writer}
         >
-          <span className="w-10 shrink-0 text-right text-muted-foreground">
-            {event.seq}
-          </span>
+          <span className="w-10 shrink-0 text-right text-muted-foreground">{event.seq}</span>
           <span className={writerColor(event.writer)}>{symbolFor(event.type)}</span>
           <span className={typeColor(event.type)}>{event.type}</span>
-          <span className="min-w-0 flex-1 truncate text-slate-500">
-            {summarize(event.payload)}
-          </span>
-          <time
-            className="shrink-0 text-slate-400"
-            dateTime={new Date(event.ts).toISOString()}
-          >
+          <span className="min-w-0 flex-1 truncate text-slate-500">{summarize(event.payload)}</span>
+          <time className="shrink-0 text-slate-400" dateTime={new Date(event.ts).toISOString()}>
             {formatTime(event.ts)}
           </time>
         </li>

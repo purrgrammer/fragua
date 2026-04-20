@@ -8,9 +8,9 @@
 // forward so the executor can move the state machine. Real runtime usage
 // plugs a richer dispatcher built from packages/agent's backends.
 
+import type { Node } from "@swarm/core";
 import { parseDotSource } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
-import type { Node } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 
@@ -64,9 +64,7 @@ function specsForGraph(
     const useFactory = kind === "codergen" && codergenFactory != null;
     specs.set(
       node.id,
-      useFactory
-        ? codergenFactory(node, first)
-        : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
+      useFactory ? codergenFactory(node, first) : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
     );
   }
   return specs;

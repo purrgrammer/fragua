@@ -1,13 +1,13 @@
-// PipelineConversation — the primary surface of `/pipelines/:id`.
+// RunConversation — the primary surface of `/runs/:id`.
 //
-// Renders the full pipeline run as a single scrollable conversation,
+// Renders the full run run as a single scrollable conversation,
 // using Vercel AI Elements: `Conversation`, `Message`, `MessageResponse`,
 // `Reasoning`, `Tool`, `Shimmer`. No nesting, no per-section collapse —
 // one continuous thread with lightweight step markers.
 //
-// Data flow: the route hands us the parsed `PipelineConversation` tree
+// Data flow: the route hands us the parsed `RunConversation` tree
 // (from `events-to-conversation.ts`) plus the server-side node states
-// from `PipelineDetail.nodes`. When both disagree, the server wins —
+// from `RunDetail.nodes`. When both disagree, the server wins —
 // handles the replay / reconnect mid-run case where the reducer hasn't
 // seen the close event yet.
 //
@@ -31,7 +31,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import type { NodeState } from "@/lib/api";
 import {
-  type PipelineConversation as ConversationTree,
+  type RunConversation as ConversationTree,
   type NodeSection,
   type NodeSectionStatus,
   type Part,
@@ -40,7 +40,7 @@ import {
 import { statusLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export interface PipelineConversationProps {
+export interface RunConversationProps {
   /** Parsed conversation tree (from `eventsToConversation`). */
   conversation: ConversationTree;
   /** Optional server-side node states — preferred for section status. */
@@ -60,14 +60,14 @@ export interface PipelineConversationProps {
   className?: string;
 }
 
-export function PipelineConversation({
+export function RunConversation({
   conversation,
   nodeStates,
   isLive = false,
   isLoading = false,
   userInput,
   className,
-}: PipelineConversationProps): JSX.Element {
+}: RunConversationProps): JSX.Element {
   // Merge: server state wins when present (handles replay / reconnect
   // where the reducer hasn't seen the close event yet).
   const sections = useMemo<NodeSection[]>(() => {
@@ -164,7 +164,7 @@ function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Elem
         <NodeInputBlock section={section} />
         {/* Turns render as a flat list — no per-iteration grouping.
             Loop nodes just emit multiple turns in encounter order.
-            Empty sections (pipeline-lifecycle-only nodes like `start` /
+            Empty sections (run-lifecycle-only nodes like `start` /
             `done`, or a node we haven't seen events for yet) render
             just the header — no placeholder text. */}
         {section.turns.map((turn) => (

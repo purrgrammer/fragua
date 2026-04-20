@@ -15,8 +15,8 @@ import fc from "fast-check";
 import {
   applyFact,
   emptyMetrics,
-  foldFacts,
   type FactEvent,
+  foldFacts,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   type RunState,
@@ -29,34 +29,31 @@ const getDb = (s: unknown): AnyDb => (s as { db: AnyDb }).db;
 describe("P1 — seq monotonic & contiguous per run", () => {
   test("appendFact + appendIntent produce 1..N with no gaps", async () => {
     await fc.assert(
-      fc.asyncProperty(
-        fc.array(fc.boolean(), { minLength: 5, maxLength: 30 }),
-        async (ops) => {
-          const store = freshStore();
-          const runId = await seedRun(store);
-          for (const isFact of ops) {
-            const s = store.getState(runId)!;
-            if (isFact) {
-              const fact: FactEvent = {
-                type: "fact.node_started",
-                payload: { nodeId: "n", iteration: 0 },
-              };
-              store.appendFact(runId, [fact], s.version);
-            } else {
-              store.appendIntent(runId, {
-                type: "intent.pause_requested",
-                payload: {},
-              });
-            }
+      fc.asyncProperty(fc.array(fc.boolean(), { minLength: 5, maxLength: 30 }), async (ops) => {
+        const store = freshStore();
+        const runId = await seedRun(store);
+        for (const isFact of ops) {
+          const s = store.getState(runId)!;
+          if (isFact) {
+            const fact: FactEvent = {
+              type: "fact.node_started",
+              payload: { nodeId: "n", iteration: 0 },
+            };
+            store.appendFact(runId, [fact], s.version);
+          } else {
+            store.appendIntent(runId, {
+              type: "intent.pause_requested",
+              payload: {},
+            });
           }
-          const events = store.getEvents(runId);
-          for (let i = 0; i < events.length; i++) {
-            expect(events[i]!.seq).toBe(i + 1);
-          }
-          expect(store.getState(runId)!.nextSeq).toBe(events.length + 1);
-          store.close();
-        },
-      ),
+        }
+        const events = store.getEvents(runId);
+        for (let i = 0; i < events.length; i++) {
+          expect(events[i]!.seq).toBe(i + 1);
+        }
+        expect(store.getState(runId)!.nextSeq).toBe(events.length + 1);
+        store.close();
+      }),
       { numRuns: 25 },
     );
   });
@@ -140,17 +137,14 @@ describe("P4 — projection equals fold of facts", () => {
           }
 
           expect(state.metrics.totalTokens).toBe(memory.metrics.totalTokens);
-          expect(state.metrics.totalCostUsd).toBeCloseTo(
-            memory.metrics.totalCostUsd,
-            6,
-          );
+          expect(state.metrics.totalCostUsd).toBeCloseTo(memory.metrics.totalCostUsd, 6);
           expect(state.metrics.models).toEqual(memory.metrics.models);
 
           // Also: fold of facts on disk produces same projection tails.
           const facts = store
             .getEvents(runId)
             .filter((e) => e.type.startsWith("fact."))
-            .map((e) => ({ type: e.type, payload: e.payload } as FactEvent));
+            .map((e) => ({ type: e.type, payload: e.payload }) as FactEvent);
           const from0: RunState = {
             ...store.getState(runId)!,
             metrics: emptyMetrics(),
@@ -159,10 +153,7 @@ describe("P4 — projection equals fold of facts", () => {
           };
           const folded = foldFacts(from0, facts, state.updatedAt);
           expect(folded.metrics.totalTokens).toBe(state.metrics.totalTokens);
-          expect(folded.metrics.totalCostUsd).toBeCloseTo(
-            state.metrics.totalCostUsd,
-            6,
-          );
+          expect(folded.metrics.totalCostUsd).toBeCloseTo(state.metrics.totalCostUsd, 6);
 
           store.close();
         },
@@ -231,32 +222,22 @@ describe("P13 — routing bound", () => {
 describe("P14 — blob dedup", () => {
   test("identical content across many artifact rows → single blob row", async () => {
     await fc.assert(
-      fc.asyncProperty(
-        fc.integer({ min: 2, max: 10 }),
-        async (copies) => {
-          const store = freshStore();
-          const runId = await seedRun(store);
-          const content = new TextEncoder().encode("same-content");
-          for (let i = 0; i < copies; i++) {
-            store.putArtifact(
-              { runId, nodeId: "n", iteration: i, key: "k" },
-              content,
-            );
-          }
-          const db = getDb(store);
-          const blobCount =
-            db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM blobs")
-              .get()!.n;
-          const artCount = db
-            .query<{ n: number }, [string]>(
-              "SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?",
-            )
-            .get(runId)!.n;
-          expect(blobCount).toBe(1);
-          expect(artCount).toBe(copies);
-          store.close();
-        },
-      ),
+      fc.asyncProperty(fc.integer({ min: 2, max: 10 }), async (copies) => {
+        const store = freshStore();
+        const runId = await seedRun(store);
+        const content = new TextEncoder().encode("same-content");
+        for (let i = 0; i < copies; i++) {
+          store.putArtifact({ runId, nodeId: "n", iteration: i, key: "k" }, content);
+        }
+        const db = getDb(store);
+        const blobCount = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM blobs").get()!.n;
+        const artCount = db
+          .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?")
+          .get(runId)!.n;
+        expect(blobCount).toBe(1);
+        expect(artCount).toBe(copies);
+        store.close();
+      }),
       { numRuns: 10 },
     );
   });
@@ -272,41 +253,22 @@ describe("P22 — cascade delete", () => {
       nodeId: null,
       iteration: 0,
     });
-    const ref = store.putArtifact(
-      { runId, nodeId: "n", iteration: 0, key: "k" },
-      new TextEncoder().encode("x"),
-    );
+    const ref = store.putArtifact({ runId, nodeId: "n", iteration: 0, key: "k" }, new TextEncoder().encode("x"));
     const db = getDb(store);
     db.query("DELETE FROM run_state WHERE run_id = ?").run(runId);
 
+    expect(db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM events WHERE run_id = ?").get(runId)!.n).toBe(
+      0,
+    );
+    expect(db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM messages WHERE run_id = ?").get(runId)!.n).toBe(
+      0,
+    );
     expect(
-      db
-        .query<{ n: number }, [string]>(
-          "SELECT COUNT(*) AS n FROM events WHERE run_id = ?",
-        )
-        .get(runId)!.n,
-    ).toBe(0);
-    expect(
-      db
-        .query<{ n: number }, [string]>(
-          "SELECT COUNT(*) AS n FROM messages WHERE run_id = ?",
-        )
-        .get(runId)!.n,
-    ).toBe(0);
-    expect(
-      db
-        .query<{ n: number }, [string]>(
-          "SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?",
-        )
-        .get(runId)!.n,
+      db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?").get(runId)!.n,
     ).toBe(0);
     // Blob still present (not cascaded).
     expect(
-      db
-        .query<{ n: number }, [string]>(
-          "SELECT COUNT(*) AS n FROM blobs WHERE sha256 = ?",
-        )
-        .get(ref.sha256)!.n,
+      db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM blobs WHERE sha256 = ?").get(ref.sha256)!.n,
     ).toBe(1);
     store.close();
   });
@@ -316,13 +278,7 @@ describe("P23 — STRICT enforcement", () => {
   test("string into integer column rejected by SQLite", () => {
     const store = freshStore();
     const db = getDb(store);
-    expect(() =>
-      db
-        .query(
-          "INSERT INTO schema_version (id, version) VALUES (2, ?)",
-        )
-        .run("not-an-int"),
-    ).toThrow();
+    expect(() => db.query("INSERT INTO schema_version (id, version) VALUES (2, ?)").run("not-an-int")).toThrow();
     store.close();
   });
 
@@ -330,11 +286,7 @@ describe("P23 — STRICT enforcement", () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const db = getDb(store);
-    expect(() =>
-      db
-        .query("UPDATE run_state SET status = 'bogus' WHERE run_id = ?")
-        .run(runId),
-    ).toThrow();
+    expect(() => db.query("UPDATE run_state SET status = 'bogus' WHERE run_id = ?").run(runId)).toThrow();
     store.close();
   });
 });

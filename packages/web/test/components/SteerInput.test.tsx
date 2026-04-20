@@ -2,7 +2,7 @@
 //
 // We mock the `steerRun` API call at the `globalThis.fetch` boundary —
 // SteerInput imports `steerRun` from `lib/api.ts`, which POSTs to
-// `/api/pipelines/:id/steer` and expects `{ id }` back (202).
+// `/api/runs/:id/steer` and expects `{ id }` back (202).
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -14,7 +14,7 @@ import type { ReconcileEvent } from "../../src/lib/usePendingSteers.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
-const STEER_URL = "/api/pipelines/run-1/steer";
+const STEER_URL = "/api/runs/run-1/steer";
 
 function controlRequested(id: string): ReconcileEvent {
   return { type: "control.requested", data: { id, command: "steer", payload: { message: "x" } } };

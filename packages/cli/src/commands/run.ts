@@ -148,9 +148,7 @@ function parseSSE(frame: string): SSEEvent | null {
   }
   if (data.length === 0) return null;
   try {
-    return id !== undefined
-      ? { id, type, data: JSON.parse(data) }
-      : { type, data: JSON.parse(data) };
+    return id !== undefined ? { id, type, data: JSON.parse(data) } : { type, data: JSON.parse(data) };
   } catch {
     return { type, data };
   }
@@ -159,14 +157,13 @@ function parseSSE(frame: string): SSEEvent | null {
 function renderEvent(event: SSEEvent): void {
   const payload = event.data as { seq?: number; payload?: unknown };
   const seq = payload.seq ?? event.id ?? "-";
-  const color =
-    event.type.startsWith("fact.run_completed")
-      ? chalk.green
-      : event.type.startsWith("fact.run_halted") || event.type.startsWith("fact.run_cancelled")
-        ? chalk.red
-        : event.type.startsWith("intent.")
-          ? chalk.blue
-          : chalk.dim;
+  const color = event.type.startsWith("fact.run_completed")
+    ? chalk.green
+    : event.type.startsWith("fact.run_halted") || event.type.startsWith("fact.run_cancelled")
+      ? chalk.red
+      : event.type.startsWith("intent.")
+        ? chalk.blue
+        : chalk.dim;
   console.log(`${chalk.dim(`[${seq}]`)} ${color(event.type)} ${JSON.stringify(payload.payload ?? {})}`);
 }
 

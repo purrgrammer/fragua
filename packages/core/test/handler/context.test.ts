@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";
 import { buildHandlerContext } from "../../src/handler/context.ts";
-import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import { makeHttpClient } from "../../src/handler/http-client.ts";
 import { makeLlmClient } from "../../src/handler/llm-client.ts";
+import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import type { SideEffectRecorder } from "../../src/handler/types.ts";
 
 function seedStore() {
@@ -126,8 +126,8 @@ describe("InMemoryToolRegistry", () => {
     expect(r.list()).toEqual(["echo"]);
     expect(r.get("echo").name).toBe("echo");
     expect(() => r.get("missing")).toThrow(/unknown tool/);
-    expect(() =>
-      r.register({ name: "echo", sideEffect: "none", handler: async () => 0 }),
-    ).toThrow(/already registered/);
+    expect(() => r.register({ name: "echo", sideEffect: "none", handler: async () => 0 })).toThrow(
+      /already registered/,
+    );
   });
 });

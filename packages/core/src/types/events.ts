@@ -5,11 +5,11 @@ import type { FidelityMode } from "./fidelity.ts";
 import type { Outcome } from "./outcome.ts";
 
 export type EventType =
-  // Pipeline lifecycle
-  | "pipeline.started"
-  | "pipeline.completed"
-  | "pipeline.failed"
-  | "pipeline.canceled"
+  // Run lifecycle
+  | "run.started"
+  | "run.completed"
+  | "run.failed"
+  | "run.canceled"
   // Node lifecycle
   | "node.started"
   | "node.completed"
@@ -52,7 +52,7 @@ export type EventType =
   // discriminated by `data.command`; see ControlCommand below. Each
   // request appears as exactly one `control.requested` event followed by
   // exactly one `control.applied` *or* `control.rejected` — never both,
-  // never neither. `pipeline.canceled` is the terminal event that cancel
+  // never neither. `run.canceled` is the terminal event that cancel
   // produces as a side-effect of `control.applied`.
   | "control.requested"
   | "control.applied"
@@ -64,7 +64,7 @@ export type EventType =
   | "summary.started"
   | "summary.text_delta"
   | "summary.completed"
-  | "pipeline.title_generated"
+  | "run.title_generated"
   // Budget (Wave 4) — emitted by the BudgetLedger when a per-node or
   // run-level ceiling is crossed. `budget.warn` is advisory (~80% of
   // ceiling by default); `budget.stop` fires once the ceiling is
@@ -306,13 +306,13 @@ export interface SummaryCompletedData {
   error?: string;
 }
 
-/** Fires after the asynchronous pipeline-title summary completes. The
- * pipeline.started event is deliberately *not* held on the title — it
+/** Fires after the asynchronous run-title summary completes. The
+ * run.started event is deliberately *not* held on the title — it
  * fires immediately with `$ARGUMENTS` as the placeholder title, and this
  * event swaps in the generated title when it's ready. UI renders the
  * before/after transparently. Emitted with `node_id = "__summary.title"`
  * to stay co-located with its summariser events. */
-export interface PipelineTitleGeneratedData {
+export interface RunTitleGeneratedData {
   title: string;
   /** References the `summary.completed` event by its synthetic node id so
    * the UI can link "title" → "how was it generated + how much did it cost". */
@@ -421,10 +421,10 @@ export interface ControlRejectedData {
   reason: "not_paused" | "already_terminal" | "unknown_command" | string;
 }
 
-/** `pipeline.canceled.data` — terminal event emitted as a side-effect of
+/** `run.canceled.data` — terminal event emitted as a side-effect of
  * a successful cancel, or by the runtime when an external abort signal
  * (SIGTERM / AbortController) tripped before a control request landed. */
-export interface PipelineCanceledData {
+export interface RunCanceledData {
   /** What caused the cancel. `control.cancel` is the happy path; `signal`
    * covers SIGTERM / parent-process death. */
   cause: "control.cancel" | "signal";

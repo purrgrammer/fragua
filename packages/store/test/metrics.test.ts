@@ -58,9 +58,7 @@ describe("store metrics", () => {
       },
     };
     s.appendFact("r3", [fact], state.version);
-    expect(() => s.appendFact("r3", [fact], state.version)).toThrow(
-      ConcurrencyError,
-    );
+    expect(() => s.appendFact("r3", [fact], state.version)).toThrow(ConcurrencyError);
     const m = s.metricsSnapshot();
     expect(m.occConflicts).toBe(1);
     s.close();

@@ -294,10 +294,10 @@ export class PiCodergenBackend implements CodergenBackend {
     // Self-abort: an agent may decide its task is unreachable (missing target,
     // contradictory constraints, external blocker) and emit `<abort>reason</abort>`.
     // Treating that as a `fail` outcome lets workflows wire an early-exit edge
-    // with `condition="outcome=fail"` instead of forwarding the whole pipeline
+    // with `condition="outcome=fail"` instead of forwarding the whole run
     // through a no-op plan → implement → verify chain. We also flag it
     // `non_retryable` so the goal-gate retry machinery doesn't relaunch the
-    // pipeline after an explicit stop.
+    // run after an explicit stop.
     const notes = summarizeMessage(last);
     const aborted = parseAbortMarker(notes);
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
@@ -421,4 +421,3 @@ function captureBudget(
   if (maxCost === undefined) return undefined;
   return { cumulative_cost_usd: 0, cumulative_tokens: 0, max_cost_usd: maxCost };
 }
-

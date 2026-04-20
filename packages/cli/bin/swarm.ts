@@ -74,9 +74,7 @@ cli
     const code = await daemonCommand({
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(concurrency !== undefined && Number.isFinite(concurrency)
-        ? { concurrency }
-        : {}),
+      ...(concurrency !== undefined && Number.isFinite(concurrency) ? { concurrency } : {}),
       ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
       ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
     });
@@ -84,10 +82,7 @@ cli
   });
 
 cli
-  .command(
-    "db <action>",
-    "DB maintenance: vacuum | gc-blobs | backup",
-  )
+  .command("db <action>", "DB maintenance: vacuum | gc-blobs | backup")
   .option("--to <path>", "`backup` only: destination path")
   .option("--limit <n>", "`gc-blobs` only: max rows per pass (default 1000)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
@@ -120,10 +115,7 @@ cli
   });
 
 cli
-  .command(
-    "run <workflow>",
-    "Upload a DOT workflow, enqueue a run, stream events to stdout",
-  )
+  .command("run <workflow>", "Upload a DOT workflow, enqueue a run, stream events to stdout")
   .option("--url <url>", "Server URL (default: discovered via serve.json, else localhost:3000)")
   .option("--priority <n>", "Priority tie-breaker (default 0)")
   .option("--no-follow", "Print the run id and exit without streaming")

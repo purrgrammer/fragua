@@ -1,13 +1,13 @@
-// One-off backfill: append a synthetic `pipeline.failed` / `pipeline.canceled`
-// / `pipeline.completed` event to a run's `events.jsonl` when the worker died
-// before emitting one. Without a terminal event the /pipelines reducer derives
+// One-off backfill: append a synthetic `run.failed` / `run.canceled`
+// / `run.completed` event to a run's `events.jsonl` when the worker died
+// before emitting one. Without a terminal event the /runs reducer derives
 // status="running" in perpetuity even though the job queue already marked the
 // row terminal.
 //
 // Matches the job-queue status → event-type one-for-one:
-//   failed   → pipeline.failed
-//   canceled → pipeline.canceled
-//   success  → pipeline.completed
+//   failed   → run.failed
+//   canceled → run.canceled
+//   success  → run.completed
 //
 // Idempotent: skips runs whose events.jsonl already carries any of those three
 // events. Append-only: never rewrites existing lines. The synthetic event
@@ -31,12 +31,12 @@ interface JobRow {
   error?: string;
 }
 
-const TERMINAL_EVENT_TYPES = new Set(["pipeline.completed", "pipeline.failed", "pipeline.canceled"]);
+const TERMINAL_EVENT_TYPES = new Set(["run.completed", "run.failed", "run.canceled"]);
 
-const STATUS_TO_EVENT: Record<string, "pipeline.failed" | "pipeline.canceled" | "pipeline.completed"> = {
-  failed: "pipeline.failed",
-  canceled: "pipeline.canceled",
-  success: "pipeline.completed",
+const STATUS_TO_EVENT: Record<string, "run.failed" | "run.canceled" | "run.completed"> = {
+  failed: "run.failed",
+  canceled: "run.canceled",
+  success: "run.completed",
 };
 
 interface Args {

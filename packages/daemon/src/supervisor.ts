@@ -77,15 +77,9 @@ export function startSupervisor(opts: SupervisorOpts): {
           if (state.status !== "running") continue;
           if (state.nodeStartedAt == null) continue;
           if (state.currentNode == null) continue;
-          const maxMs = opts.handlerMaxMsFor(
-            state.workflowSha,
-            state.currentNode,
-          );
+          const maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
           if (now - state.nodeStartedAt > maxMs + leakGrace) {
-            opts.registry.trip(
-              runId,
-              new HandlerLeakedError(runId, state.currentNode),
-            );
+            opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));
           }
         }
       }
@@ -118,14 +112,20 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export class IntentArrivedError extends Error {
-  constructor(public readonly runId: string, public readonly seq: number) {
+  constructor(
+    public readonly runId: string,
+    public readonly seq: number,
+  ) {
     super(`new intent ${seq} arrived for ${runId}`);
     this.name = "AbortError";
   }
 }
 
 export class HandlerLeakedError extends Error {
-  constructor(public readonly runId: string, public readonly nodeId: string) {
+  constructor(
+    public readonly runId: string,
+    public readonly nodeId: string,
+  ) {
     super(`handler leaked on ${runId}/${nodeId}`);
     this.name = "AbortError";
   }

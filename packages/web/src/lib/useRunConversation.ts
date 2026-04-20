@@ -1,4 +1,4 @@
-// useRunConversation — primary data hook for the pipeline conversation view.
+// useRunConversation — primary data hook for the run conversation view.
 //
 // Why a purpose-built hook instead of `useSSE` + batch reducer:
 //   - Runs produce tens of thousands of events. Keeping a raw event
@@ -11,7 +11,7 @@
 //
 // Architecture:
 //   1. On mount, fetch the full historical event array from
-//      `GET /api/pipelines/:id/events.json`. Fold every event through
+//      `GET /api/runs/:id/events.json`. Fold every event through
 //      `applyEvent` into a single `ReducerState`. This produces the
 //      complete conversation tree for whatever has already happened.
 //   2. Open an EventSource on the same `/events` path (text/event-stream).
@@ -28,20 +28,20 @@
 // just has no new SSE frames after the initial replay catches up.
 //
 // Re-render strategy: the reducer mutates state in place. After each
-// applyEvent we publish a fresh `PipelineConversation` via
+// applyEvent we publish a fresh `RunConversation` via
 // `toConversation(state)` — React's shallow compare sees a new top-level
 // array and re-renders. A small `revision` counter is also exposed so
 // consumers can key memoized children on it when fine-grained control
 // matters.
 
 import { useEffect, useRef, useState } from "react";
-import { getPipelineEvents, getPipelineEventsUrl } from "./api.ts";
+import { getRunEvents, getRunEventsUrl } from "./api.ts";
 import {
   applyEvent,
   createReducerState,
-  type PipelineConversation,
   type RawEvent,
   type ReducerState,
+  type RunConversation,
   toConversation,
 } from "./events-to-conversation.ts";
 
@@ -54,7 +54,7 @@ export type RunConversationStatus =
 
 export interface UseRunConversationResult {
   /** Folded conversation tree. Fresh top-level array on each update. */
-  conversation: PipelineConversation;
+  conversation: RunConversation;
   /** Connection status across both bootstrap and stream phases. */
   status: RunConversationStatus;
   /** Last SSE sequence id applied. Useful for diagnostics and manual resume. */
@@ -81,10 +81,10 @@ export interface UseRunConversationOptions {
  * that exact name, so we register all known types up-front. Extend this list
  * when new event types land in core. */
 const KNOWN_EVENT_TYPES: readonly string[] = [
-  "pipeline.started",
-  "pipeline.completed",
-  "pipeline.failed",
-  "pipeline.canceled",
+  "run.started",
+  "run.completed",
+  "run.failed",
+  "run.canceled",
   "node.started",
   "node.completed",
   "node.failed",
@@ -162,7 +162,7 @@ export function useRunConversation(
   runId: string | null | undefined,
   opts: UseRunConversationOptions = {},
 ): UseRunConversationResult {
-  const [conversation, setConversation] = useState<PipelineConversation>([]);
+  const [conversation, setConversation] = useState<RunConversation>([]);
   const [status, setStatus] = useState<RunConversationStatus>(runId ? "loading" : "idle");
   const [lastSeq, setLastSeq] = useState(0);
   const [revision, setRevision] = useState(0);
@@ -196,7 +196,7 @@ export function useRunConversation(
     let cancelled = false;
 
     // ── Phase 1: bootstrap via REST ──────────────────────────────────
-    getPipelineEvents(runId)
+    getRunEvents(runId)
       .then((payload) => {
         if (cancelled) return;
         const historical = coerceRawEvents(payload.events);
@@ -254,7 +254,7 @@ export function useRunConversation(
         setStatus("closed");
         return;
       }
-      const url = getPipelineEventsUrl(runId!);
+      const url = getRunEventsUrl(runId!);
       es = new Ctor(url);
       setStatus("live");
 

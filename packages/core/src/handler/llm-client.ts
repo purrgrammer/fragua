@@ -4,10 +4,7 @@ export interface LlmAccounting {
   addUsage(params: { tokens: number; costUsd: number; model: string }): void;
 }
 
-export type LlmCallFn = (
-  params: LlmCallParams,
-  signal: AbortSignal,
-) => Promise<LlmResult>;
+export type LlmCallFn = (params: LlmCallParams, signal: AbortSignal) => Promise<LlmResult>;
 
 export interface LlmClientOpts {
   signal: AbortSignal;

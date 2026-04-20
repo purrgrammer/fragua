@@ -41,11 +41,7 @@ export interface HttpClient {
   fetch(input: string | URL, init?: RequestInit): Promise<Response>;
 }
 
-export type ToolHandler<A, R> = (
-  args: A,
-  signal: AbortSignal,
-  idempotencyKey?: string,
-) => Promise<R>;
+export type ToolHandler<A, R> = (args: A, signal: AbortSignal, idempotencyKey?: string) => Promise<R>;
 
 export interface ToolDescriptor<A = unknown, R = unknown> {
   name: string;
@@ -73,23 +69,9 @@ export interface ArtifactsApi {
 }
 
 export interface SideEffectRecorder {
-  recordIntent(params: {
-    toolName: string;
-    argsHash: string;
-    attempt: number;
-    idempotencyKey: string;
-  }): void;
-  recordDone(params: {
-    idempotencyKey: string;
-    artifactKey: string;
-    tokens?: number;
-    costUsd?: number;
-  }): void;
-  recordFailed(params: {
-    idempotencyKey: string;
-    errorCode: string;
-    retriable: boolean;
-  }): void;
+  recordIntent(params: { toolName: string; argsHash: string; attempt: number; idempotencyKey: string }): void;
+  recordDone(params: { idempotencyKey: string; artifactKey: string; tokens?: number; costUsd?: number }): void;
+  recordFailed(params: { idempotencyKey: string; errorCode: string; retriable: boolean }): void;
 }
 
 export interface ExternalCallParams {
@@ -104,10 +86,7 @@ export interface ExternalCallParams {
  * or provider-specific equivalent), and we wrap the call with the INTENT
  * and DONE/FAILED facts.
  */
-export type ExternalCall = <T>(
-  params: ExternalCallParams,
-  fn: (idempotencyKey: string) => Promise<T>,
-) => Promise<T>;
+export type ExternalCall = <T>(params: ExternalCallParams, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
 
 export interface HandlerContext {
   readonly runId: string;

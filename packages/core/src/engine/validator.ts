@@ -125,7 +125,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   }
 
   // W003: no fail-edge (or unconditional fallback) from codergen/tool nodes
-  // with only conditional edges. A pipeline can silently terminate otherwise.
+  // with only conditional edges. A run can silently terminate otherwise.
   for (const n of nodes) {
     if (n.shape === "Mdiamond" || n.shape === "Msquare") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
@@ -136,7 +136,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({
         severity: "warning",
         code: "W003",
-        message: `node "${n.id}" has only conditional edges and no "outcome=fail" catch-all; pipeline may silently terminate on failure`,
+        message: `node "${n.id}" has only conditional edges and no "outcome=fail" catch-all; run may silently terminate on failure`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });

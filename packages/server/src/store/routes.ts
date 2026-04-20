@@ -5,9 +5,9 @@
 // the daemon is offline.
 
 import type { Database } from "bun:sqlite";
+import { type IEventStore, type StoredEvent, sha256Hex } from "@swarm/store";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { sha256Hex, type IEventStore, type StoredEvent } from "@swarm/store";
 import { newRunId } from "./run-id.ts";
 
 export interface ServerDeps {
@@ -116,12 +116,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       resolution?: "treat_as_done" | "retry" | "cancel";
       note?: string;
     }>(c);
-    if (
-      !body ||
-      (body.resolution !== "treat_as_done" &&
-        body.resolution !== "retry" &&
-        body.resolution !== "cancel")
-    ) {
+    if (!body || (body.resolution !== "treat_as_done" && body.resolution !== "retry" && body.resolution !== "cancel")) {
       return c.json({ error: "resolution required" }, 400);
     }
     const { seq } = deps.store.appendIntent(c.req.param("id"), {
@@ -144,12 +139,10 @@ export function createRoutes(deps: ServerDeps): Hono {
   });
 
   // ─── Reads ──────────────────────────────────────────────────
-
-  app.get("/runs/:id", (c) => {
-    const state = deps.store.getState(c.req.param("id"));
-    if (state == null) return c.json({ error: "not found" }, 404);
-    return c.json(state);
-  });
+  //
+  // `GET /runs/:id` is served by `storeRunsRoutes` (RunDetail shape).
+  // Raw events + messages stay here because they want `since`/`limit`
+  // pagination that the detail adapter doesn't expose.
 
   app.get("/runs/:id/events", (c) => {
     const sinceSeq = Number(c.req.query("since") ?? 0);
@@ -214,8 +207,7 @@ export function createRoutes(deps: ServerDeps): Hono {
 
   app.get("/metrics/global", (c) => {
     const windowHours = Number(c.req.query("windowHours") ?? 24 * 30);
-    const cutoffMs =
-      (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
+    const cutoffMs = (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
     const db = unsafeDb(deps.store);
     if (db == null) return c.json({ error: "metrics unavailable" }, 503);
 
@@ -261,10 +253,7 @@ export function createRoutes(deps: ServerDeps): Hono {
 
     // Per-model breakdown via json_each pivot.
     const models = db
-      .query<
-        { model_name: string; tokens: number; cost_usd: number },
-        [number]
-      >(
+      .query<{ model_name: string; tokens: number; cost_usd: number }, [number]>(
         `SELECT
            kv.key  AS model_name,
            SUM(CAST(json_extract(kv.value, '$.tokens') AS INTEGER))  AS tokens,

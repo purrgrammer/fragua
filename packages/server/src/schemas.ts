@@ -3,8 +3,8 @@
 
 import { type Static, Type } from "@sinclair/typebox";
 
-/** Summary row returned by `GET /pipelines`. */
-export const PipelineSummary = Type.Object({
+/** Summary row returned by `GET /runs`. */
+export const RunSummary = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
@@ -26,7 +26,7 @@ export const PipelineSummary = Type.Object({
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
 });
-export type PipelineSummary = Static<typeof PipelineSummary>;
+export type RunSummary = Static<typeof RunSummary>;
 
 export const NodeState = Type.Object({
   nodeId: Type.String(),
@@ -42,7 +42,7 @@ export const NodeState = Type.Object({
 });
 export type NodeState = Static<typeof NodeState>;
 
-export const PipelineDetail = Type.Object({
+export const RunDetail = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
@@ -66,7 +66,7 @@ export const PipelineDetail = Type.Object({
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
 });
-export type PipelineDetail = Static<typeof PipelineDetail>;
+export type RunDetail = Static<typeof RunDetail>;
 
 export const ErrorBody = Type.Object({
   error: Type.String(),

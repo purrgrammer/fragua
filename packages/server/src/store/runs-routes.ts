@@ -1,21 +1,21 @@
-// Store-backed /pipelines/* and /runs/* reads for the web UI.
+// Store-backed /runs/* summary + detail reads for the web UI.
 //
-// Everything a PipelineSummary / PipelineDetail carries is derived from
+// Everything a RunSummary / RunDetail carries is derived from
 // run_state + the event log. Workflow name/source comes from the
 // workflows table (saveWorkflow writes DOT on enqueue).
 
-import { Hono } from "hono";
 import type { IEventStore } from "@swarm/store";
-import { listRuns, runStateToDetail, runStateToSummary } from "./pipelines-adapter.ts";
+import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
+import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
 
-export interface PipelinesRoutesOpts {
+export interface RunsRoutesOpts {
   store: IEventStore;
   /** Optional workflow reader for resolving workflow display names. */
   workflowReader?: WorkflowReader;
 }
 
-export function storePipelinesRoutes(opts: PipelinesRoutesOpts): Hono {
+export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   const app = new Hono();
   const { store } = opts;
 
@@ -30,7 +30,7 @@ export function storePipelinesRoutes(opts: PipelinesRoutesOpts): Hono {
     return undefined;
   }
 
-  app.get("/pipelines", async (c) => {
+  app.get("/runs", async (c) => {
     const ids = listRuns(store);
     const summaries = [];
     for (const runId of ids) {
@@ -43,14 +43,11 @@ export function storePipelinesRoutes(opts: PipelinesRoutesOpts): Hono {
     return c.json(summaries);
   });
 
-  app.get("/pipelines/:id", async (c) => {
+  app.get("/runs/:id", async (c) => {
     const runId = c.req.param("id");
     const state = store.getState(runId);
     if (state == null) {
-      return c.json(
-        { error: "run not found", code: "not_found", details: { runId } },
-        404,
-      );
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
     const events = store.getEvents(runId, { limit: 10_000 });
     const wf = store.getWorkflow(state.workflowSha);
@@ -61,7 +58,7 @@ export function storePipelinesRoutes(opts: PipelinesRoutesOpts): Hono {
 
   // Bulk events endpoint the UI mounts on detail. Returns raw store events
   // as-is (fact.* and intent.* payloads); the web adapter translates.
-  app.get("/pipelines/:id/events.json", (c) => {
+  app.get("/runs/:id/events.json", (c) => {
     const runId = c.req.param("id");
     if (store.getState(runId) == null) {
       return c.json({ error: "run not found" }, 404);

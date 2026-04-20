@@ -14,10 +14,7 @@ type HandlerSpec = handler.HandlerSpec;
  * auto-dispatcher uses it to lazily parse a DOT workflow the first
  * time the daemon sees it.
  */
-export type DispatcherResolver = (
-  workflowSha: string,
-  nodeId: string,
-) => HandlerSpec | null;
+export type DispatcherResolver = (workflowSha: string, nodeId: string) => HandlerSpec | null;
 
 export class Dispatcher {
   private readonly specs = new Map<string, HandlerSpec>();

@@ -1,4 +1,4 @@
-// SteerInput — mid-run steering composer for a running pipeline.
+// SteerInput — mid-run steering composer for a running run.
 //
 // Renders a compact stack of in-flight steer messages above a standard
 // AI-Elements `PromptInput`. On submit, we POST to `/steer` via

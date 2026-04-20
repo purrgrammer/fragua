@@ -92,11 +92,7 @@ describe("executor — multi-step graph", () => {
 describe("executor — HITL yield and resume", () => {
   test("yields paused_hitl, resumes after intent.hitl_input", async () => {
     const r = rig();
-    r.dispatcher.register(
-      r.workflowSha,
-      "ask",
-      handler.makeWaitHumanHandler({ prompt: "ok?", nextNode: "__end__" }),
-    );
+    r.dispatcher.register(r.workflowSha, "ask", handler.makeWaitHumanHandler({ prompt: "ok?", nextNode: "__end__" }));
     enqueue(r, "run3", "ask");
     r.store.claimNextRun(1);
 
@@ -186,9 +182,7 @@ describe("executor — schema drift", () => {
     enqueue(r, "run5", "start");
     // Forcibly rewrite schema_version on the row to simulate drift.
     const db = (r.store as unknown as { db: import("bun:sqlite").Database }).db;
-    db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run(
-      "run5",
-    );
+    db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run("run5");
 
     r.store.claimNextRun(1);
     const ac = new AbortController();
@@ -204,9 +198,7 @@ describe("executor — schema drift", () => {
     });
     const state = r.store.getState("run5")!;
     expect(state.status).toBe("halted");
-    const halt = r.store
-      .getEvents("run5")
-      .find((e) => e.type === "fact.run_halted")!;
+    const halt = r.store.getEvents("run5").find((e) => e.type === "fact.run_halted")!;
     expect((halt.payload as { reason: string }).reason).toBe("schema_drift");
     r.store.close();
   });

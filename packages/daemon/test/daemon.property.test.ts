@@ -15,9 +15,9 @@ import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
-import { runOne } from "../src/executor.ts";
-import { startDaemon, DaemonAlreadyRunningError } from "../src/entrypoint.ts";
 import { Dispatcher } from "../src/dispatch.ts";
+import { DaemonAlreadyRunningError, startDaemon } from "../src/entrypoint.ts";
+import { runOne } from "../src/executor.ts";
 import { wakePendingHitl } from "../src/wake-hitl.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
@@ -35,16 +35,7 @@ describe("P3 — intents never lost", () => {
   test("random intents submitted during run remain visible in the event log", async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(
-          fc.constantFrom(
-            "pause",
-            "steer",
-            "steer",
-            "hitl",
-            "priority",
-          ),
-          { minLength: 1, maxLength: 8 },
-        ),
+        fc.array(fc.constantFrom("pause", "steer", "steer", "hitl", "priority"), { minLength: 1, maxLength: 8 }),
         async (kinds) => {
           const r = rig();
           closers.push(() => r.store.close());
@@ -90,9 +81,7 @@ describe("P3 — intents never lost", () => {
             }
           }
 
-          const events = r.store
-            .getEvents("rp3")
-            .filter((e) => e.writer === "web" && e.type !== "intent.run_enqueued");
+          const events = r.store.getEvents("rp3").filter((e) => e.writer === "web" && e.type !== "intent.run_enqueued");
           expect(events).toHaveLength(kinds.length);
         },
       ),
@@ -164,11 +153,7 @@ describe("P11 — HITL durability across simulated crash", () => {
     const s1 = new SqliteStore({ path: dbPath });
     s1.saveWorkflow("wf", "t", "digraph{}");
     const dispatcher = new Dispatcher();
-    dispatcher.register(
-      "wf",
-      "ask",
-      handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }),
-    );
+    dispatcher.register("wf", "ask", handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }));
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
       content: "",
@@ -226,11 +211,7 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
   test("when N runs wake via HITL back to back, claim order matches wake order", async () => {
     const r = rig();
     closers.push(() => r.store.close());
-    r.dispatcher.register(
-      r.workflowSha,
-      "ask",
-      handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }),
-    );
+    r.dispatcher.register(r.workflowSha, "ask", handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }));
 
     // Prime: three runs all pause at HITL.
     const ids = ["q1", "q2", "q3"];

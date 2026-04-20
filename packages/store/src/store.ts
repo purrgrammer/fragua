@@ -1,21 +1,17 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
-import { migrate } from "./migrations.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
+import { migrate } from "./migrations.ts";
+import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
-  ArtifactTooLargeError,
-  ConcurrencyError,
-  MAX_BLOB_BYTES,
-  MAX_EVENT_PAYLOAD_BYTES,
-  MAX_ROUTING_BYTES,
-  PayloadTooLargeError,
   type AppendFactOpts,
   type ArtifactRef,
   type ArtifactScope,
+  ArtifactTooLargeError,
+  ConcurrencyError,
   type DaemonLockResult,
   type DaemonLockRow,
   type EnqueueRunParams,
@@ -27,8 +23,12 @@ import {
   type IEventStore,
   type IntentAppendResult,
   type IntentEvent,
+  MAX_BLOB_BYTES,
+  MAX_EVENT_PAYLOAD_BYTES,
+  MAX_ROUTING_BYTES,
   type Message,
   type MessageRole,
+  PayloadTooLargeError,
   type RunMetrics,
   type RunState,
   type RunStatus,
@@ -84,12 +84,7 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Writes ───────────────
 
-  appendFact(
-    runId: string,
-    events: FactEvent[],
-    expectedVersion: number,
-    opts: AppendFactOpts = {},
-  ): FactAppendResult {
+  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts: AppendFactOpts = {}): FactAppendResult {
     if (events.length === 0) {
       throw new Error("appendFact requires at least one event");
     }
@@ -100,44 +95,39 @@ export class SqliteStore implements IEventStore {
 
     try {
       this.writeTxn(() => {
-      const row = this.selectRunRow(runId);
-      if (row == null) throw new Error(`unknown run ${runId}`);
-      if (row.version !== expectedVersion) {
-        throw new ConcurrencyError(expectedVersion, row.version);
-      }
+        const row = this.selectRunRow(runId);
+        if (row == null) throw new Error(`unknown run ${runId}`);
+        if (row.version !== expectedVersion) {
+          throw new ConcurrencyError(expectedVersion, row.version);
+        }
 
-      let state = this.rowToState(row);
+        let state = this.rowToState(row);
 
-      for (const event of events) {
-        const payload = this.validatePayload(event.payload);
-        const seq = this.bumpSeq(runId);
-        seqs.push(seq);
-        this.db
-          .query(
-            "INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'daemon', ?, ?)",
-          )
-          .run(runId, seq, event.type, payload, ts);
-        state = applyFact(state, event, ts);
-      }
+        for (const event of events) {
+          const payload = this.validatePayload(event.payload);
+          const seq = this.bumpSeq(runId);
+          seqs.push(seq);
+          this.db
+            .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'daemon', ?, ?)")
+            .run(runId, seq, event.type, payload, ts);
+          state = applyFact(state, event, ts);
+        }
 
-      if (opts.routingPatch != null) {
+        if (opts.routingPatch != null) {
+          state = {
+            ...state,
+            routing: { ...state.routing, ...opts.routingPatch },
+          };
+        }
+
         state = {
           ...state,
-          routing: { ...state.routing, ...opts.routingPatch },
+          version: state.version + 1,
+          lastAppliedSeq: opts.advanceAppliedTo != null ? opts.advanceAppliedTo : state.lastAppliedSeq,
         };
-      }
 
-      state = {
-        ...state,
-        version: state.version + 1,
-        lastAppliedSeq:
-          opts.advanceAppliedTo != null
-            ? opts.advanceAppliedTo
-            : state.lastAppliedSeq,
-      };
-
-      this.writeProjection(state);
-      newVersion = state.version;
+        this.writeProjection(state);
+        newVersion = state.version;
       });
       this.metrics.recordWrite(performance.now() - startAt, "fact");
     } catch (err) {
@@ -161,9 +151,7 @@ export class SqliteStore implements IEventStore {
       if (row == null) throw new Error(`unknown run ${runId}`);
       seq = this.bumpSeq(runId);
       this.db
-        .query(
-          "INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'web', ?, ?)",
-        )
+        .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'web', ?, ?)")
         .run(runId, seq, event.type, payload, ts);
     });
     this.metrics.recordWrite(performance.now() - startAt, "intent");
@@ -184,9 +172,7 @@ export class SqliteStore implements IEventStore {
 
     this.writeTxn(() => {
       const workflow = this.db
-        .query<{ sha: string }, [string]>(
-          "SELECT sha FROM workflows WHERE sha = ?",
-        )
+        .query<{ sha: string }, [string]>("SELECT sha FROM workflows WHERE sha = ?")
         .get(params.workflowSha);
       if (workflow == null) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
@@ -237,9 +223,7 @@ export class SqliteStore implements IEventStore {
 
     this.writeTxn(() => {
       const running = this.db
-        .query<{ n: number }, []>(
-          "SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'",
-        )
+        .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'")
         .get();
       if ((running?.n ?? 0) >= maxInFlight) return;
 
@@ -254,10 +238,7 @@ export class SqliteStore implements IEventStore {
       if (row == null) return;
 
       const res = this.db
-        .query<
-          { run_id: string },
-          [number, number, string, number]
-        >(
+        .query<{ run_id: string }, [number, number, string, number]>(
           `UPDATE run_state
               SET status = 'running',
                   node_started_at = ?,
@@ -350,16 +331,11 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Messages ───────────────
 
-  appendMessage(
-    runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
-  ): { ordinal: number } {
+  appendMessage(runId: string, row: Omit<Message, "runId" | "ordinal">): { ordinal: number } {
     let ordinal = 0;
     this.writeTxn(() => {
       const max = this.db
-        .query<{ m: number | null }, [string]>(
-          "SELECT MAX(ordinal) AS m FROM messages WHERE run_id = ?",
-        )
+        .query<{ m: number | null }, [string]>("SELECT MAX(ordinal) AS m FROM messages WHERE run_id = ?")
         .get(runId);
       ordinal = (max?.m ?? 0) + 1;
       this.db
@@ -367,14 +343,7 @@ export class SqliteStore implements IEventStore {
           `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration)
            VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(
-          runId,
-          ordinal,
-          row.role,
-          row.content,
-          row.nodeId,
-          row.iteration ?? 0,
-        );
+        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0);
     });
     return { ordinal };
   }
@@ -428,11 +397,7 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Artifacts ───────────────
 
-  putArtifact(
-    scope: ArtifactScope,
-    content: Uint8Array,
-    mime?: string,
-  ): ArtifactRef {
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef {
     if (content.byteLength > MAX_BLOB_BYTES) {
       throw new ArtifactTooLargeError(content.byteLength, MAX_BLOB_BYTES);
     }
@@ -457,15 +422,7 @@ export class SqliteStore implements IEventStore {
              mime     = excluded.mime,
              created_at = excluded.created_at`,
         )
-        .run(
-          scope.runId,
-          scope.nodeId,
-          scope.iteration,
-          scope.key,
-          sha,
-          mime ?? null,
-          now,
-        );
+        .run(scope.runId, scope.nodeId, scope.iteration, scope.key, sha, mime ?? null, now);
     });
 
     return {
@@ -479,14 +436,10 @@ export class SqliteStore implements IEventStore {
   getArtifact(scope: ArtifactScope): Uint8Array {
     const ref = this.getArtifactRef(scope);
     if (ref == null) {
-      throw new Error(
-        `artifact not found: ${scope.runId}/${scope.nodeId}#${scope.iteration}:${scope.key}`,
-      );
+      throw new Error(`artifact not found: ${scope.runId}/${scope.nodeId}#${scope.iteration}:${scope.key}`);
     }
     const blob = this.db
-      .query<{ content: Uint8Array }, [string]>(
-        "SELECT content FROM blobs WHERE sha256 = ?",
-      )
+      .query<{ content: Uint8Array }, [string]>("SELECT content FROM blobs WHERE sha256 = ?")
       .get(ref.sha256);
     if (blob == null) throw new Error(`blob missing for sha ${ref.sha256}`);
     return blob.content;
@@ -533,10 +486,7 @@ export class SqliteStore implements IEventStore {
     };
 
     const intent = this.db
-      .query<
-        { payload: string },
-        [string, string]
-      >(
+      .query<{ payload: string }, [string, string]>(
         `SELECT payload FROM events
           WHERE run_id = ? AND type = 'fact.side_effect_intent'
             AND json_extract(payload, '$.idempotencyKey') = ?
@@ -605,32 +555,22 @@ export class SqliteStore implements IEventStore {
   heartbeatDaemonLock(pid: number): void {
     const now = this.now();
     this.writeTxn(() => {
-      this.db
-        .query(
-          "UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?",
-        )
-        .run(now, pid);
+      this.db.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?").run(now, pid);
     });
   }
 
   releaseDaemonLock(pid: number): void {
     this.writeTxn(() => {
-      this.db
-        .query("DELETE FROM daemon_lock WHERE id = 1 AND pid = ?")
-        .run(pid);
+      this.db.query("DELETE FROM daemon_lock WHERE id = 1 AND pid = ?").run(pid);
     });
   }
 
   runStateCounts(): { running: number; queued: number } {
     const running = this.db
-      .query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'",
-      )
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'")
       .get();
     const queued = this.db
-      .query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'",
-      )
+      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'")
       .get();
     return { running: running?.n ?? 0, queued: queued?.n ?? 0 };
   }
@@ -645,9 +585,7 @@ export class SqliteStore implements IEventStore {
           heartbeat_at: number;
         },
         []
-      >(
-        "SELECT pid, hostname, started_at, heartbeat_at FROM daemon_lock WHERE id = 1",
-      )
+      >("SELECT pid, hostname, started_at, heartbeat_at FROM daemon_lock WHERE id = 1")
       .get();
     if (row == null) return null;
     return {
@@ -683,9 +621,7 @@ export class SqliteStore implements IEventStore {
           created_at: number;
         },
         [string]
-      >(
-        "SELECT sha, name, dot_source, created_at FROM workflows WHERE sha = ?",
-      )
+      >("SELECT sha, name, dot_source, created_at FROM workflows WHERE sha = ?")
       .get(sha);
     if (row == null) return null;
     return {

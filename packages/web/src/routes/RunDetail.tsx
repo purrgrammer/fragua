@@ -1,4 +1,4 @@
-// GET /pipelines/:id → run detail page.
+// GET /runs/:id → run detail page.
 //
 // Tabs:
 //   Events       — raw store event log (new fact.* / intent.* shapes)
@@ -14,11 +14,11 @@ import { Link, useParams } from "react-router-dom";
 import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
-import { PipelineConversation } from "../components/PipelineConversation.tsx";
+import { RunConversation } from "../components/RunConversation.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
-import type { PipelineDetail as PipelineDetailT } from "../lib/api.ts";
+import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { formatTokensCompact, formatTokensLong, formatUsd, statusLabel } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative, toIsoTitle } from "../lib/time.ts";
@@ -26,7 +26,7 @@ import { useRunConversation } from "../lib/useRunConversation.ts";
 
 type TabId = "events" | "conversation" | "graph" | "steps";
 
-export function PipelineDetail(): JSX.Element {
+export function RunDetail(): JSX.Element {
   const { id = "" } = useParams();
   const [view, setView] = useState<TabId>("conversation");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -36,12 +36,12 @@ export function PipelineDetail(): JSX.Element {
   const isLive = convStatus === "live" || convStatus === "loading";
 
   const qc = useQueryClient();
-  const { data: detail, isError } = useQuery({ ...queries.pipelines.detail(id), enabled: !!id });
+  const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
 
   // Keep header metrics live with the event stream.
   // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
   useEffect(() => {
-    if (id) void qc.invalidateQueries({ queryKey: queries.pipelines.detail(id).queryKey });
+    if (id) void qc.invalidateQueries({ queryKey: queries.runs.detail(id).queryKey });
   }, [totalEvents]);
 
   if (!id) {
@@ -92,10 +92,18 @@ export function PipelineDetail(): JSX.Element {
       {!(isError && !detail) && (
         <>
           <div role="tablist" aria-label="Detail view" className="flex gap-2 text-xs">
-            <TabButton current={view} id="conversation" onSelect={setView}>Conversation</TabButton>
-            <TabButton current={view} id="events" onSelect={setView}>Events</TabButton>
-            <TabButton current={view} id="graph" onSelect={setView}>Graph</TabButton>
-            <TabButton current={view} id="steps" onSelect={setView}>Steps</TabButton>
+            <TabButton current={view} id="conversation" onSelect={setView}>
+              Conversation
+            </TabButton>
+            <TabButton current={view} id="events" onSelect={setView}>
+              Events
+            </TabButton>
+            <TabButton current={view} id="graph" onSelect={setView}>
+              Graph
+            </TabButton>
+            <TabButton current={view} id="steps" onSelect={setView}>
+              Steps
+            </TabButton>
           </div>
           <div
             data-testid={`${view}-region`}
@@ -103,7 +111,7 @@ export function PipelineDetail(): JSX.Element {
           >
             {view === "events" && <EventLog runId={id} refetchKey={totalEvents} />}
             {view === "conversation" && (
-              <PipelineConversation
+              <RunConversation
                 conversation={conversation}
                 nodeStates={detail?.nodes}
                 isLive={isLive}
@@ -112,7 +120,7 @@ export function PipelineDetail(): JSX.Element {
               />
             )}
             {view === "graph" && (
-              <PipelineGraphTab
+              <RunGraphTab
                 detail={detail ?? null}
                 refetchKey={totalEvents}
                 selectedNodeId={selectedNodeId}
@@ -121,9 +129,7 @@ export function PipelineDetail(): JSX.Element {
             )}
             {view === "steps" && <StepInspector runId={id} totalEvents={totalEvents} />}
           </div>
-          {view === "conversation" && detail?.status === "running" && (
-            <SteerInput runId={id} events={controlEvents} />
-          )}
+          {view === "conversation" && detail?.status === "running" && <SteerInput runId={id} events={controlEvents} />}
         </>
       )}
     </section>
@@ -155,7 +161,7 @@ function TabButton({
   );
 }
 
-function DetailMetaLine({ detail }: { detail: PipelineDetailT }): JSX.Element {
+function DetailMetaLine({ detail }: { detail: RunDetailT }): JSX.Element {
   const totalTokens = detail.inputTokens + detail.outputTokens;
   const hasUsage = detail.costUsd > 0 || totalTokens > 0;
   const workflowLabel = detail.workflowName ?? detail.workflow;
@@ -218,7 +224,7 @@ function shortenRunId(runId: string): string {
   return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
 }
 
-function headingText(detail: PipelineDetailT): string {
+function headingText(detail: RunDetailT): string {
   if (detail.title && detail.title.length > 0) return detail.title;
   if (detail.input && detail.input.length > 0) {
     const single = detail.input.replace(/\s+/g, " ").trim();
@@ -227,13 +233,13 @@ function headingText(detail: PipelineDetailT): string {
   return shortenRunId(detail.runId);
 }
 
-function PipelineGraphTab({
+function RunGraphTab({
   detail,
   refetchKey,
   selectedNodeId,
   onSelect,
 }: {
-  detail: PipelineDetailT | null;
+  detail: RunDetailT | null;
   refetchKey: number;
   selectedNodeId: string | null;
   onSelect: (id: string) => void;

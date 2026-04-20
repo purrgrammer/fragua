@@ -104,7 +104,10 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
 }
 
 export class DaemonAlreadyRunningError extends Error {
-  constructor(public readonly pid: number, public readonly hostname: string) {
+  constructor(
+    public readonly pid: number,
+    public readonly hostname: string,
+  ) {
     super(`daemon already running: pid=${pid} host=${hostname}`);
     this.name = "DaemonAlreadyRunningError";
   }

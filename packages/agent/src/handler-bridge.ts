@@ -6,8 +6,8 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import type * as handler from "@swarm/core/handler";
 import type { CodergenBackend, ContextMap, EventType, Node, Outcome } from "@swarm/core";
+import type * as handler from "@swarm/core/handler";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 
 export interface MakeCodergenHandlerOpts {
@@ -43,9 +43,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     (opts.backendOpts != null
       ? new PiCodergenBackend(opts.backendOpts)
       : (() => {
-          throw new Error(
-            "makeCodergenHandler: provide `backend` or `backendOpts`",
-          );
+          throw new Error("makeCodergenHandler: provide `backend` or `backendOpts`");
         })());
 
   const run: handler.Handler = async (ctx) => {
@@ -122,10 +120,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
   };
 }
 
-function mergeContext(
-  defaults: ContextMap | undefined,
-  routing: Readonly<Record<string, unknown>>,
-): ContextMap {
+function mergeContext(defaults: ContextMap | undefined, routing: Readonly<Record<string, unknown>>): ContextMap {
   const out: ContextMap = { ...(defaults ?? {}) };
   for (const [k, v] of Object.entries(routing)) {
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
@@ -135,9 +130,7 @@ function mergeContext(
   return out;
 }
 
-function contextUpdatesToRouting(
-  updates: Outcome["context_updates"],
-): Record<string, unknown> {
+function contextUpdatesToRouting(updates: Outcome["context_updates"]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(updates)) out[k] = v;
   return out;

@@ -104,7 +104,7 @@ export function mergeSystemPrompt(base: string, extension: string): string {
 export interface RunEnvironment {
   /** Absolute path the agent is working inside. */
   worktreePath: string;
-  /** Opaque session id, stable across the whole pipeline. */
+  /** Opaque session id, stable across the whole run. */
   runId: string;
   /** Per-run dir for service logs / port files / sidecar state. */
   logDir?: string | undefined;

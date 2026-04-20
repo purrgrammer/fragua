@@ -16,8 +16,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SqliteStore } from "@swarm/store";
 import { createServer, daemonInfoFromStore, type ServerPorts } from "@swarm/server";
+import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 
 /**
@@ -142,11 +142,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   try {
     writeFileSync(
       discoveryPath,
-      JSON.stringify(
-        { url, origin, port, pid: process.pid, storePath, webDistDir: webDistDir ?? null },
-        null,
-        2,
-      ),
+      JSON.stringify({ url, origin, port, pid: process.pid, storePath, webDistDir: webDistDir ?? null }, null, 2),
     );
   } catch {
     // Non-fatal: discovery file is a convenience, not a requirement.
@@ -202,9 +198,7 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
     console.log(chalk.dim(`  api:   ${handle.origin}/api (HMR'd UI starts below)`));
   } else {
     console.log(chalk.dim(`  api:   ${handle.url}`));
-    console.log(
-      chalk.dim(`  web:   API-only — build the UI with \`bun run --filter @swarm/web build\``),
-    );
+    console.log(chalk.dim(`  web:   API-only — build the UI with \`bun run --filter @swarm/web build\``));
   }
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
@@ -212,18 +206,14 @@ export async function serveCommand(opts: ServeCommandOptions = {}): Promise<numb
   // and forwards `/api/**` back to us with the path intact.
   let viteChild: ChildProcess | undefined;
   if (opts.dev) {
-    viteChild = spawn(
-      "bun",
-      ["run", "--filter", "@swarm/web", "dev"],
-      {
-        cwd: opts.cwd ?? process.cwd(),
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          SWARM_API_URL: `${handle.origin}/api`,
-        },
+    viteChild = spawn("bun", ["run", "--filter", "@swarm/web", "dev"], {
+      cwd: opts.cwd ?? process.cwd(),
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        SWARM_API_URL: `${handle.origin}/api`,
       },
-    );
+    });
     viteChild.on("exit", (code, signal) => {
       if (signal !== "SIGINT" && signal !== "SIGTERM" && code !== 0) {
         console.error(chalk.red(`vite exited with code ${code} — shutting down serve`));

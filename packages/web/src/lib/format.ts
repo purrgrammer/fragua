@@ -2,7 +2,7 @@
 // here so components never hand-roll `Intl.NumberFormat` calls inline
 // (the same discipline we enforce for dates).
 //
-// Scope today: pipeline-metrics rendering — USD costs and token counts
+// Scope today: run-metrics rendering — USD costs and token counts
 // in the list + detail header. We keep the API tiny and add helpers as
 // new call sites appear rather than pre-building a library.
 
@@ -73,7 +73,7 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
 }
 
 /**
- * User-facing label for a pipeline status. Mapping lives here (not in
+ * User-facing label for a run status. Mapping lives here (not in
  * components) so the raw wire value (`"fail"`) stays intact on the data
  * layer while the copy reads naturally. `data-testid` / `data-status`
  * attributes continue to use the raw value; only visible text goes

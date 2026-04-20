@@ -10,11 +10,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { firstCredentialedProvider, makeCodergenHandler, PiCodergenBackend } from "@swarm/agent";
 import * as handler from "@swarm/core/handler";
-import {
-  autoDispatcherResolver,
-  Dispatcher,
-  startDaemon,
-} from "@swarm/daemon";
+import { autoDispatcherResolver, Dispatcher, startDaemon } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
@@ -106,11 +102,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
   const sourceSuffix =
-    llmSource === "env"
-      ? " (auto-detected from env)"
-      : llmSource === "config"
-        ? " (from .swarm/config.yaml)"
-        : "";
+    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.yaml)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
     : "stub (set a provider API key, or pass --provider + --model)";

@@ -1,7 +1,7 @@
 // Wave 5 — Per-step context inspector. Fetches `StepSnapshot[]` from
-// `GET /pipelines/:id/steps` and renders collapsible sections for
+// `GET /runs/:id/steps` and renders collapsible sections for
 // Prompt, System prompt, Messages, Tools, Context files, Settings,
-// Budget, Cost. The conversation view (PipelineConversation) stays the
+// Budget, Cost. The conversation view (RunConversation) stays the
 // primary "what happened" surface; this panel answers "what exactly
 // did the agent see at step N?" — the question Waves 1–4 captured the
 // data to answer but had no UI for.
@@ -17,7 +17,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { getPipelineSteps, type StepSnapshot } from "../lib/api.ts";
+import { getRunSteps, type StepSnapshot } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
 
@@ -31,14 +31,14 @@ export interface StepInspectorProps {
 
 export function StepInspector({ runId, totalEvents }: StepInspectorProps): JSX.Element {
   const qc = useQueryClient();
-  const queryKey = ["pipelines", "steps", runId] as const;
+  const queryKey = ["runs", "steps", runId] as const;
   const {
     data: steps,
     isPending,
     isError,
   } = useQuery({
     queryKey,
-    queryFn: () => getPipelineSteps(runId),
+    queryFn: () => getRunSteps(runId),
   });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and queryKey are stable.

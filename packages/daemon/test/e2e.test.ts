@@ -1,8 +1,8 @@
 // End-to-end integration: web server writes intent → store → daemon runs →
-// UI reads projection through /pipelines/*.
+// UI reads projection through /runs/*.
 //
 // M5 bar: fresh DB → enqueue a run → daemon executes → completed state is
-// visible via the same GET /pipelines/:id endpoint the UI calls.
+// visible via the same GET /runs/:id endpoint the UI calls.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -17,7 +17,7 @@ import { runOne } from "../src/executor.ts";
 import { wakePendingHitl } from "../src/wake-hitl.ts";
 
 describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
-  test("enqueue via POST /runs → daemon runs → GET /pipelines/:id shows success", async () => {
+  test("enqueue via POST /runs → daemon runs → GET /runs/:id shows success", async () => {
     const dir = mkdtempSync(join(tmpdir(), "swarm-e2e-"));
     const store = new SqliteStore({ path: join(dir, "swarm.db") });
     store.saveWorkflow("wf-sha", "echo-wf", "digraph Echo { start -> __end__ }");
@@ -72,8 +72,8 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
       shutdownSignal: ac.signal,
     });
 
-    // 3. UI hits GET /pipelines/:id — sees success with adapter-derived shape.
-    const detailRes = await app.request(`/pipelines/${runId}`);
+    // 3. UI hits GET /runs/:id — sees success with adapter-derived shape.
+    const detailRes = await app.request(`/runs/${runId}`);
     expect(detailRes.status).toBe(200);
     const detail = (await detailRes.json()) as {
       runId: string;
@@ -101,9 +101,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     };
     expect(metrics.total_runs).toBe(1);
     expect(metrics.total_tokens).toBe(42);
-    expect(
-      metrics.breakdownByModel.find((m) => m.model_name === "stub-model")?.tokens,
-    ).toBe(42);
+    expect(metrics.breakdownByModel.find((m) => m.model_name === "stub-model")?.tokens).toBe(42);
 
     store.close();
   });
@@ -116,11 +114,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const s1 = new SqliteStore({ path: dbPath });
     s1.saveWorkflow("wf-sha", "hitl-wf", "digraph { ask -> __end__ }");
     const dispatcher = new Dispatcher();
-    dispatcher.register(
-      "wf-sha",
-      "ask",
-      handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }),
-    );
+    dispatcher.register("wf-sha", "ask", handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }));
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
       content: "",
@@ -168,11 +162,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     expect(s2.getState(runId)!.status).toBe("paused_hitl");
     // Re-register the dispatcher (in-memory state doesn't survive).
     const dispatcher2 = new Dispatcher();
-    dispatcher2.register(
-      "wf-sha",
-      "ask",
-      handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }),
-    );
+    dispatcher2.register("wf-sha", "ask", handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }));
 
     wakePendingHitl(s2);
     s2.claimNextRun(1);
@@ -189,7 +179,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     });
 
     const app2 = createServer({ store: s2 });
-    const finalRes = await app2.request(`/pipelines/${runId}`);
+    const finalRes = await app2.request(`/runs/${runId}`);
     const finalDetail = (await finalRes.json()) as { status: string };
     expect(finalDetail.status).toBe("success");
     s2.close();

@@ -14,12 +14,7 @@ export class CollectingRecorder implements SideEffectRecorder {
     private readonly iteration: number,
   ) {}
 
-  recordIntent(params: {
-    toolName: string;
-    argsHash: string;
-    attempt: number;
-    idempotencyKey: string;
-  }): void {
+  recordIntent(params: { toolName: string; argsHash: string; attempt: number; idempotencyKey: string }): void {
     this.facts.push({
       type: "fact.side_effect_intent",
       payload: {
@@ -33,16 +28,8 @@ export class CollectingRecorder implements SideEffectRecorder {
     });
   }
 
-  recordDone(params: {
-    idempotencyKey: string;
-    artifactKey: string;
-    tokens?: number;
-    costUsd?: number;
-  }): void {
-    const payload: Extract<
-      FactEvent,
-      { type: "fact.side_effect_done" }
-    >["payload"] = {
+  recordDone(params: { idempotencyKey: string; artifactKey: string; tokens?: number; costUsd?: number }): void {
+    const payload: Extract<FactEvent, { type: "fact.side_effect_done" }>["payload"] = {
       idempotencyKey: params.idempotencyKey,
       artifactKey: params.artifactKey,
     };
@@ -51,11 +38,7 @@ export class CollectingRecorder implements SideEffectRecorder {
     this.facts.push({ type: "fact.side_effect_done", payload });
   }
 
-  recordFailed(params: {
-    idempotencyKey: string;
-    errorCode: string;
-    retriable: boolean;
-  }): void {
+  recordFailed(params: { idempotencyKey: string; errorCode: string; retriable: boolean }): void {
     this.facts.push({
       type: "fact.side_effect_failed",
       payload: {

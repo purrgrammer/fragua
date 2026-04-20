@@ -59,17 +59,17 @@ Skill sha: `ee2cf77064c2ff226cddc6d3108501dd3c1ccafa7495e54480d4a9381e15d539`
 
 ## Routes (traffic order)
 - [ ] packages/web/src/routes/Home.tsx
-- [ ] packages/web/src/routes/PipelinesList.tsx
-- [ ] packages/web/src/routes/PipelineDetail.tsx
+- [ ] packages/web/src/routes/RunsList.tsx
+- [ ] packages/web/src/routes/RunDetail.tsx
 - [ ] packages/web/src/routes/SkillsList.tsx
 - [ ] packages/web/src/routes/SkillDetail.tsx
 - [ ] packages/web/src/routes/Settings.tsx
 - [ ] packages/web/src/routes/Workflows.tsx
 
 ## Component Details
-- [ ] packages/web/src/components/PipelineRow.tsx
+- [ ] packages/web/src/components/RunRow.tsx
 - [ ] packages/web/src/components/StepInspector.tsx
-- [ ] packages/web/src/components/PipelineConversation.tsx
+- [ ] packages/web/src/components/RunConversation.tsx
 - [ ] packages/web/src/components/GraphView.tsx
 - [ ] packages/web/src/components/HealthBadge.tsx
 

@@ -71,9 +71,6 @@ export class Metrics {
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  const idx = Math.min(
-    sorted.length - 1,
-    Math.max(0, Math.floor(p * sorted.length)),
-  );
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * sorted.length)));
   return sorted[idx]!;
 }

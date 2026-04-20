@@ -139,16 +139,7 @@ const Temporary = ({
 // distinctly from forward flow; the markerEnd arrow lands on the earlier
 // step so the loop direction is unambiguous. The host (GraphView) routes
 // these through right-side handles so the arc sits outside the main flow.
-const Loop = ({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  markerEnd,
-  data,
-  outcome,
-}: EdgeProps & OutcomeProp) => {
+const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome }: EdgeProps & OutcomeProp) => {
   const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY);
 
   const label = (data as TemporaryData | undefined)?.label;

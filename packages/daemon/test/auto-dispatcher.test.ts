@@ -55,9 +55,7 @@ describe("autoDispatcherResolver", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
-    expect(() => dispatcher.get("missing-sha", "x")).toThrow(
-      /no handler registered/,
-    );
+    expect(() => dispatcher.get("missing-sha", "x")).toThrow(/no handler registered/);
     store.close();
   });
 });

@@ -20,8 +20,7 @@ export function makeHttpClient(opts: HttpClientOpts): HttpClient {
       if (opts.defaultTimeoutMs != null) {
         signals.push(AbortSignal.timeout(opts.defaultTimeoutMs));
       }
-      const signal =
-        signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+      const signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
       return impl(input, { ...init, signal });
     },
   };

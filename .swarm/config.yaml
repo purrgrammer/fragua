@@ -22,14 +22,14 @@ defaults:
   #   provider: google          | GEMINI_API_KEY
   #   provider: groq            | GROQ_API_KEY
   provider: openrouter
-  model: anthropic/claude-opus-4.7
+  model: anthropic/claude-haiku-4.7
 
   # Tool permission mode. Phase 2 supports unsafe only. Phase 6 will add
   # classifier + interactive.
   permissions: unsafe
 
   # Weak-model summariser (Wave 2b). Powers:
-  #   - async pipeline-title generation from $ARGUMENTS (see `auto_title`)
+  #   - async run-title generation from $ARGUMENTS (see `auto_title`)
   #   - fidelity=summary:medium|high compression of prior node transcripts
   # Always cheaper than the primary coding model. Leave unset to disable
   # all summarisation — title generation silently skips; fidelity=summary:*
@@ -38,9 +38,9 @@ defaults:
     provider: openrouter
     model: anthropic/claude-haiku-4.5
 
-# Auto-generated pipeline titles from $ARGUMENTS. "on" (default) kicks off a
-# fire-and-forget summariser call at pipeline start and emits
-# pipeline.title_generated when it resolves. "off" disables. CLI flag
+# Auto-generated run titles from $ARGUMENTS. "on" (default) kicks off a
+# fire-and-forget summariser call at run start and emits
+# run.title_generated when it resolves. "off" disables. CLI flag
 # --no-auto-title wins over this.
 auto_title: on
 

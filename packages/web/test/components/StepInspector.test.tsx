@@ -1,6 +1,6 @@
 // StepInspector renders the per-step panels (Prompt, System prompt,
 // Messages, Tools, Context files, Settings, Budget, Final text) from a
-// `StepSnapshot[]` pulled via `getPipelineSteps`.
+// `StepSnapshot[]` pulled via `getRunSteps`.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
@@ -28,7 +28,7 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
 
 function mount(runId: string, steps: StepSnapshot[]) {
   const client = createTestQueryClient();
-  client.setQueryData(["pipelines", "steps", runId], steps);
+  client.setQueryData(["runs", "steps", runId], steps);
   return renderWithClient(<StepInspector runId={runId} />, { client });
 }
 
@@ -45,7 +45,7 @@ describe("StepInspector", () => {
     // Delay the mock fetch so the test sees the loading state.
     let resolve: (r: Response) => void = () => {};
     const mock = installFetchMock({
-      "/api/pipelines/r1/steps": () =>
+      "/api/runs/r1/steps": () =>
         new Promise<Response>((r) => {
           resolve = r;
         }),

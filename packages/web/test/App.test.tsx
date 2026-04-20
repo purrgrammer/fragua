@@ -52,7 +52,7 @@ describe("App", () => {
             queued: 0,
           },
         }),
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
     });
     const q = within(container);
     try {
@@ -68,7 +68,7 @@ describe("App", () => {
   it("renders the no-daemon badge when /health returns ok without a daemon key", async () => {
     const { container, fetchMock } = mountApp({
       "/api/health": () => json({ ok: true }),
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
     });
     const q = within(container);
     try {
@@ -84,7 +84,7 @@ describe("App", () => {
   it("renders the error badge when /health rejects", async () => {
     const { container, fetchMock } = mountApp({
       "/api/health": () => new Response("boom", { status: 500, statusText: "Internal Server Error" }),
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
     });
     const q = within(container);
     try {
@@ -102,7 +102,7 @@ describe("App", () => {
   it("renders the error badge when /health reports ok:false", async () => {
     const { container, fetchMock } = mountApp({
       "/api/health": () => json({ ok: false }),
-      "/api/pipelines": () => json([]),
+      "/api/runs": () => json([]),
     });
     const q = within(container);
     try {
@@ -114,12 +114,12 @@ describe("App", () => {
     }
   });
 
-  it("renders the pipelines list at the `/pipelines` route", async () => {
-    // `/` is the Home dashboard; the table-shaped list lives at `/pipelines`.
+  it("renders the runs list at the `/runs` route", async () => {
+    // `/` is the Home dashboard; the table-shaped list lives at `/runs`.
     const { container, fetchMock } = mountApp(
       {
         "/api/health": () => json({ ok: true }),
-        "/api/pipelines": () =>
+        "/api/runs": () =>
           json([
             {
               runId: "run-1",
@@ -137,11 +137,11 @@ describe("App", () => {
     );
     try {
       await waitFor(() => {
-        expect(within(container).getByTestId("pipelines-table")).toBeTruthy();
+        expect(within(container).getByTestId("runs-table")).toBeTruthy();
       });
       const link = container.querySelector('a[href="/runs/run-1"]');
       expect(link).toBeTruthy();
-      const tbodyRows = container.querySelectorAll("[data-testid='pipelines-table'] tbody tr");
+      const tbodyRows = container.querySelectorAll("[data-testid='runs-table'] tbody tr");
       expect(tbodyRows.length).toBe(1);
     } finally {
       fetchMock.restore();

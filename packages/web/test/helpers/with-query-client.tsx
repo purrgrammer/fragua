@@ -37,7 +37,7 @@ type RouteHandler = (req: { url: string; method: string; init?: RequestInit }) =
  *
  * Example:
  *   const { restore } = installFetchMock({
- *     "/api/pipelines": () => json([row1, row2]),
+ *     "/api/runs": () => json([row1, row2]),
  *     "/api/health":    () => json({ ok: true }),
  *   });
  */

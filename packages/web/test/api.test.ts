@@ -43,20 +43,20 @@ describe("api — /health", () => {
   });
 });
 
-describe("api — /pipelines", () => {
-  it("listPipelines GETs /api/pipelines and parses the array", async () => {
+describe("api — /runs", () => {
+  it("listRuns GETs /api/runs and parses the array", async () => {
     const rows = [
       { runId: "r1", startedAt: "2024-01-01T00:00:00Z", status: "success", eventCount: 3 },
       { runId: "r2", startedAt: "2024-01-02T00:00:00Z", status: "running", eventCount: 1 },
     ];
-    mock = installFetchMock({ "/api/pipelines": () => json(rows) });
-    const out = await api.listPipelines();
-    expect(mock.calls[0]?.url).toBe("/api/pipelines");
+    mock = installFetchMock({ "/api/runs": () => json(rows) });
+    const out = await api.listRuns();
+    expect(mock.calls[0]?.url).toBe("/api/runs");
     expect(out).toHaveLength(2);
     expect(out[0]?.runId).toBe("r1");
   });
 
-  it("getPipeline encodes the id and GETs /api/pipelines/:id", async () => {
+  it("getRun encodes the id and GETs /api/runs/:id", async () => {
     const body = {
       runId: "abc/weird",
       startedAt: "2024-01-01T00:00:00Z",
@@ -64,16 +64,16 @@ describe("api — /pipelines", () => {
       lastEventSeq: 5,
       nodes: [],
     };
-    mock = installFetchMock({ "/api/pipelines/abc%2Fweird": () => json(body) });
-    const res = await api.getPipeline("abc/weird");
-    expect(mock.calls[0]?.url).toBe("/api/pipelines/abc%2Fweird");
+    mock = installFetchMock({ "/api/runs/abc%2Fweird": () => json(body) });
+    const res = await api.getRun("abc/weird");
+    expect(mock.calls[0]?.url).toBe("/api/runs/abc%2Fweird");
     expect(res.runId).toBe("abc/weird");
   });
 
-  it("getPipeline surfaces workflowSource (raw DOT) when present", async () => {
+  it("getRun surfaces workflowSource (raw DOT) when present", async () => {
     const source = "digraph g { a -> b }";
     mock = installFetchMock({
-      "/api/pipelines/r1": () =>
+      "/api/runs/r1": () =>
         json({
           runId: "r1",
           startedAt: "2024-01-01T00:00:00Z",
@@ -83,13 +83,13 @@ describe("api — /pipelines", () => {
           workflowSource: source,
         }),
     });
-    const res = await api.getPipeline("r1");
+    const res = await api.getRun("r1");
     expect(res.workflowSource).toBe(source);
   });
 
-  it("getPipeline accepts a response that omits workflowSource (older servers)", async () => {
+  it("getRun accepts a response that omits workflowSource (older servers)", async () => {
     mock = installFetchMock({
-      "/api/pipelines/r1": () =>
+      "/api/runs/r1": () =>
         json({
           runId: "r1",
           startedAt: "2024-01-01T00:00:00Z",
@@ -98,19 +98,19 @@ describe("api — /pipelines", () => {
           nodes: [],
         }),
     });
-    const res = await api.getPipeline("r1");
+    const res = await api.getRun("r1");
     expect(res.workflowSource).toBeUndefined();
   });
 
-  it("listPipelines rejects with ApiError on 5xx", async () => {
-    mock = mockResponse("/api/pipelines", new Response("boom", { status: 503, statusText: "Service Unavailable" }));
+  it("listRuns rejects with ApiError on 5xx", async () => {
+    mock = mockResponse("/api/runs", new Response("boom", { status: 503, statusText: "Service Unavailable" }));
     try {
-      await api.listPipelines();
+      await api.listRuns();
       throw new Error("expected rejection");
     } catch (err) {
       expect(err).toBeInstanceOf(api.ApiError);
       expect((err as api.ApiError).status).toBe(503);
-      expect((err as api.ApiError).url).toBe("/api/pipelines");
+      expect((err as api.ApiError).url).toBe("/api/runs");
     }
   });
 });
@@ -136,24 +136,24 @@ describe("api — /workflows", () => {
 });
 
 describe("api — URL helpers are relative and /api-prefixed", () => {
-  it("getPipelineEventsUrl returns a relative /api/pipelines/:id/events", () => {
-    const u = api.getPipelineEventsUrl("abc");
-    expect(u).toBe("/api/pipelines/abc/events");
+  it("getRunEventsUrl returns a relative /api/runs/:id/events", () => {
+    const u = api.getRunEventsUrl("abc");
+    expect(u).toBe("/api/runs/abc/events");
     expect(u.startsWith("/api/")).toBe(true);
     expect(u).not.toMatch(/^https?:/);
     expect(u).not.toContain("localhost");
   });
 
   it("URL helpers encode unsafe id chars", () => {
-    expect(api.getPipelineEventsUrl("a/b c")).toBe("/api/pipelines/a%2Fb%20c/events");
+    expect(api.getRunEventsUrl("a/b c")).toBe("/api/runs/a%2Fb%20c/events");
   });
 });
 
 describe("api — control channel", () => {
-  it("steerRun POSTs to /pipelines/:id/steer with a message body and returns { id }", async () => {
+  it("steerRun POSTs to /runs/:id/steer with a message body and returns { id }", async () => {
     const calls: Array<{ body?: string }> = [];
     mock = installFetchMock({
-      "/api/pipelines/run-7/steer": ({ init }) => {
+      "/api/runs/run-7/steer": ({ init }) => {
         calls.push({ body: init?.body as string });
         return json({ id: "abc-123" }, { status: 202 });
       },
@@ -167,7 +167,7 @@ describe("api — control channel", () => {
   it("pauseRun omits body when reason is undefined", async () => {
     const bodies: Array<string | undefined> = [];
     mock = installFetchMock({
-      "/api/pipelines/run-7/pause": ({ init }) => {
+      "/api/runs/run-7/pause": ({ init }) => {
         bodies.push(init?.body as string | undefined);
         return json({ id: "p1" }, { status: 202 });
       },
@@ -180,7 +180,7 @@ describe("api — control channel", () => {
   it("pauseRun includes reason when provided", async () => {
     const bodies: string[] = [];
     mock = installFetchMock({
-      "/api/pipelines/run-7/pause": ({ init }) => {
+      "/api/runs/run-7/pause": ({ init }) => {
         bodies.push(init?.body as string);
         return json({ id: "p2" }, { status: 202 });
       },
@@ -192,32 +192,32 @@ describe("api — control channel", () => {
   it("resumeRun POSTs with no body", async () => {
     const bodies: Array<string | undefined> = [];
     mock = installFetchMock({
-      "/api/pipelines/run-7/resume": ({ init }) => {
+      "/api/runs/run-7/resume": ({ init }) => {
         bodies.push(init?.body as string | undefined);
         return json({ id: "r1" }, { status: 202 });
       },
     });
     await api.resumeRun("run-7");
-    expect(mock.calls[0]?.url).toBe("/api/pipelines/run-7/resume");
+    expect(mock.calls[0]?.url).toBe("/api/runs/run-7/resume");
     expect(bodies[0]).toBeUndefined();
   });
 
   it("cancelRun propagates reason and url-encodes the id", async () => {
     const bodies: string[] = [];
     mock = installFetchMock({
-      "/api/pipelines/a%2Fb%20c/cancel": ({ init }) => {
+      "/api/runs/a%2Fb%20c/cancel": ({ init }) => {
         bodies.push(init?.body as string);
         return json({ id: "c1" }, { status: 202 });
       },
     });
     await api.cancelRun("a/b c", "wrong branch");
-    expect(mock.calls[0]?.url).toBe("/api/pipelines/a%2Fb%20c/cancel");
+    expect(mock.calls[0]?.url).toBe("/api/runs/a%2Fb%20c/cancel");
     expect(JSON.parse(bodies[0] ?? "")).toEqual({ reason: "wrong branch" });
   });
 
   it("non-2xx responses throw ApiError with the status", async () => {
     mock = mockResponse(
-      "/api/pipelines/ghost/steer",
+      "/api/runs/ghost/steer",
       new Response(JSON.stringify({ error: "run not found" }), { status: 404 }),
     );
     try {

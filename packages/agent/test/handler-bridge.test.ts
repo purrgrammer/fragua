@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import type { CodergenBackend, Node } from "@swarm/core";
 import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
-import type { CodergenBackend, Node } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";
 
@@ -58,11 +58,7 @@ function stubBackend(
   };
 }
 
-async function ctxFor(
-  runId: string,
-  store: SqliteStore,
-  nodeId: string,
-): Promise<handler.HandlerContext> {
+async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
   store.saveWorkflow("sha", "t", "digraph{}");
   store.enqueueRun({ runId, workflowSha: "sha" });
   const ac = new AbortController();
@@ -141,7 +137,14 @@ describe("makeCodergenHandler", () => {
     const ctx = await ctxFor("r3", store, "n1");
     const failing: CodergenBackend = {
       async run() {
-        return { status: "fail", context_updates: {}, preferred_label: "", suggested_next_ids: [], notes: "", failure_reason: "provider unreachable" };
+        return {
+          status: "fail",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+          failure_reason: "provider unreachable",
+        };
       },
     };
     const spec = makeCodergenHandler({

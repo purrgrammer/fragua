@@ -1,8 +1,8 @@
 // startupSweep — REARCHITECTURE.md §1.4 and §1.1.
 
 import { describe, expect, test } from "bun:test";
-import { freshStore, seedRun } from "./helpers.ts";
 import type { FactEvent } from "../src/index.ts";
+import { freshStore, seedRun } from "./helpers.ts";
 
 describe("startupSweep", () => {
   test("requeues runs that were 'running' at crash time", async () => {
@@ -29,9 +29,7 @@ describe("startupSweep", () => {
 
     // A fact.run_requeued_after_crash event is in the log.
     const events = store.getEvents(runId);
-    expect(
-      events.some((e) => e.type === "fact.run_requeued_after_crash"),
-    ).toBe(true);
+    expect(events.some((e) => e.type === "fact.run_requeued_after_crash")).toBe(true);
     store.close();
   });
 

@@ -4,7 +4,7 @@ Vite + React + Tailwind client for the swarm HTTP/SSE server.
 
 At the current phase this package is a **scaffold**: it renders a shell with
 a health-check badge that confirms the React app can reach `@swarm/server`
-through the Vite dev proxy. Pipelines sidebar, graph view, timeline, and
+through the Vite dev proxy. Runs sidebar, graph view, timeline, and
 step drilldown land in follow-up tasks (P5.06 – P5.08).
 
 ## Commands

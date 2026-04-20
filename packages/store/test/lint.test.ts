@@ -12,13 +12,10 @@
 // caught via a small allowlist keyed off the file path.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const ROOTS = [
-  join(__dirname, "..", "src"),
-  join(__dirname, "..", "..", "daemon", "src"),
-];
+const ROOTS = [join(__dirname, "..", "src"), join(__dirname, "..", "..", "daemon", "src")];
 
 /** Files we trust to break the rule because they never run inside a txn. */
 const ALLOWLIST = new Set<string>([
@@ -101,9 +98,7 @@ describe("I1 — no await / JSON.stringify inside transaction bodies", () => {
 
   test("no offenders", () => {
     if (offenders.length > 0) {
-      const msg = offenders
-        .map((o) => `  ${o.file}: ${o.kind} in txn body\n    ${o.snippet}`)
-        .join("\n");
+      const msg = offenders.map((o) => `  ${o.file}: ${o.kind} in txn body\n    ${o.snippet}`).join("\n");
       throw new Error(`I1 violations found:\n${msg}`);
     }
     expect(offenders).toHaveLength(0);

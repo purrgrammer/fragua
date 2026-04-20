@@ -1,9 +1,5 @@
 import { sha256Hex } from "@swarm/store";
-import type {
-  ExternalCall,
-  ExternalCallParams,
-  SideEffectRecorder,
-} from "./types.ts";
+import type { ExternalCall, ExternalCallParams, SideEffectRecorder } from "./types.ts";
 
 export interface MakeExternalCallOpts {
   runId: string;

@@ -1,5 +1,5 @@
 // events-to-conversation — pure reducer folding a swarm event stream into
-// a conversation tree for the AI-Elements-driven pipeline view (P5.08).
+// a conversation tree for the AI-Elements-driven run view (P5.08).
 //
 // Design notes:
 //
@@ -8,8 +8,8 @@
 //     I/O, no randomness. This is what lets tests feed the same events
 //     twice and compare with `expect.toEqual`.
 //
-//   - We scope sections by `node_id`. Events missing `node_id` (pipeline
-//     lifecycle: `pipeline.*`, `edge.*`, `interview.*`, `checkpoint.*`,
+//   - We scope sections by `node_id`. Events missing `node_id` (run
+//     lifecycle: `run.*`, `edge.*`, `interview.*`, `checkpoint.*`,
 //     `steering.requested`, ...) never produce conversation content — but
 //     `node.started|completed|failed|retrying|skipped` still drive the
 //     `NodeSection.status` projection. `steering.injected` *does* carry a
@@ -132,7 +132,7 @@ export interface ToolCallPart {
   errorText?: string;
 }
 
-export type PipelineConversation = NodeSection[];
+export type RunConversation = NodeSection[];
 
 /** Minimal shape of the raw event records the reducer consumes. */
 export interface RawEvent {
@@ -200,10 +200,10 @@ export function createReducerState(): ReducerState {
   };
 }
 
-/** Project the reducer state into the public `PipelineConversation` tree.
+/** Project the reducer state into the public `RunConversation` tree.
  * Always returns a fresh array; state is not aliased into the output so
  * callers can hand it to React without fear of mutation after the fact. */
-export function toConversation(state: ReducerState): PipelineConversation {
+export function toConversation(state: ReducerState): RunConversation {
   return Array.from(state.sections.values());
 }
 
@@ -543,7 +543,7 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
     // `control.requested(steer)` is the moment a steer message lands on
     // the run's control.jsonl; surface it as a user turn exactly like the
     // legacy `steering.injected` so the UX is unchanged. pause / resume /
-    // cancel are pipeline-scoped (no node_id) and surface as lifecycle
+    // cancel are run-scoped (no node_id) and surface as lifecycle
     // banners rather than chat bubbles — the conversation reducer skips
     // them and the banner layer (future) reads them directly off the
     // event stream.
@@ -592,7 +592,7 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
 
     default:
       // Ignore events that don't affect the conversation projection
-      // (pipeline.*, edge.*, interview.*, steering.requested, agent.start,
+      // (run.*, edge.*, interview.*, steering.requested, agent.start,
       // agent.end, checkpoint.*).
       break;
   }
@@ -604,7 +604,7 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
  * paths share the exact same semantics — same input, same output, bit
  * for bit. Keep this signature stable; tests depend on it.
  */
-export function eventsToConversation(events: readonly RawEvent[]): PipelineConversation {
+export function eventsToConversation(events: readonly RawEvent[]): RunConversation {
   const state = createReducerState();
   for (const ev of events) applyEvent(state, ev);
   return toConversation(state);
@@ -634,7 +634,7 @@ function stringifyToolError(result: unknown, err: unknown): string {
  * Convenience: the swarm tool-name convention is `domain:tool` (e.g.
  * `local:bash`). AI Elements' `ToolHeader` expects `type="tool-<name>"`
  * and its derivation splits on `-`, so `:` must be rewritten. Used by
- * `PipelineConversation` but exported for tests.
+ * `RunConversation` but exported for tests.
  */
 export function toolTypeFromName(toolName: string): `tool-${string}` {
   const safe = toolName.replace(/[^a-zA-Z0-9_]/g, "_");

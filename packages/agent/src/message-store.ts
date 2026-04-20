@@ -7,7 +7,7 @@
 //
 // Scope for Wave 1:
 // - in-process only; reset when the backend is reconstructed
-// - unbounded; a long-running pipeline that accumulates huge transcripts
+// - unbounded; a long-running run that accumulates huge transcripts
 //   pays the memory cost. Compact / summary fidelities are the pressure
 //   valve; disk persistence lands with checkpoint.pi_sessions (Wave 4+).
 

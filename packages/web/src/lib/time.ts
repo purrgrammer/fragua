@@ -113,7 +113,7 @@ export function toIsoTitle(input: TimeInput): string {
 
 /**
  * Format a millisecond duration as "1m 23s" / "45s" / "2h 5m". Used for
- * pipeline run durations. Negative / invalid → fallback.
+ * run run durations. Negative / invalid → fallback.
  */
 export function formatDuration(ms: number | null | undefined, opts: FormatOptions = {}): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) {

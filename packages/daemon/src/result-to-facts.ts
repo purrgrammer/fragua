@@ -24,10 +24,7 @@ export interface ResultContext {
  * We never call this when the handler was aborted mid-flight; that path uses
  * abortResultToFacts instead.
  */
-export function resultToFacts(
-  result: HandlerResult,
-  ctx: ResultContext,
-): FactEvent[] {
+export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEvent[] {
   const facts: FactEvent[] = [];
 
   // Pre-facts: steering_applied + run_resumed if applicable.
@@ -57,10 +54,7 @@ export function resultToFacts(
   // Result-specific facts.
   switch (result.kind) {
     case "transition": {
-      const payload: Extract<
-        FactEvent,
-        { type: "fact.node_completed" }
-      >["payload"] = {
+      const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
         iteration: loopCounterOf(ctx.state.routing),
         tokens: result.tokens,
@@ -94,10 +88,7 @@ export function resultToFacts(
       return facts;
     }
     case "halt": {
-      const payload: Extract<
-        FactEvent,
-        { type: "fact.run_halted" }
-      >["payload"] = { reason: result.reason };
+      const payload: Extract<FactEvent, { type: "fact.run_halted" }>["payload"] = { reason: result.reason };
       if (result.detail != null) payload.detail = result.detail;
       facts.push({ type: "fact.run_halted", payload });
       return facts;

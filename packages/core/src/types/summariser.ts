@@ -5,7 +5,7 @@
 // 1. Summarisation runs on a different (cheaper) model than the node
 //    being summarised — exposing it as its own port makes that swap
 //    explicit rather than implicit.
-// 2. It's invoked by both `execute()` (pipeline title) and backends
+// 2. It's invoked by both `execute()` (run title) and backends
 //    (fidelity=summary:medium/high), so it lives in core so both sides
 //    can depend on it.
 // 3. It has its own event surface (summary.started / summary.completed /
@@ -60,7 +60,7 @@ export interface SummariseOutput {
   text: string;
   /** True when the backend produced a usable summary; false on any
    * error. Callers fall back to a deterministic template when false
-   * so a missing API key or network blip doesn't break a pipeline. */
+   * so a missing API key or network blip doesn't break a run. */
   ok: boolean;
   /** Populated on `!ok` to explain the fallback. */
   error?: string;

@@ -3,12 +3,12 @@
 // the page reads, so a successful submit triggers an invalidate →
 // refetch and the new run surfaces in the Running strip without a
 // reload. Running + Stats + Recent are three projections of
-// `GET /pipelines`.
+// `GET /runs`.
 //
 // Layout (top → bottom): Overview, Running, Stats, Recent.
 //
 // Cadence: the 5s poll lives on the query factory
-// (`queries.pipelines.list`'s `refetchInterval`). No local timer needed.
+// (`queries.runs.list`'s `refetchInterval`). No local timer needed.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Coins, DollarSign, Hash, Play, Timer, Zap } from "lucide-react";
@@ -29,11 +29,11 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
 import { Shimmer } from "../components/ai-elements/shimmer.tsx";
-import { displayTitle, displayTooltip, PipelineRow, shortenRunId } from "../components/PipelineRow.tsx";
+import { displayTitle, displayTooltip, RunRow, shortenRunId } from "../components/RunRow.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
-import { enqueueJob, type PipelineSummary } from "../lib/api.ts";
+import { enqueueJob, type RunSummary } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
@@ -43,7 +43,7 @@ import { useHealth } from "../types/health.ts";
 const RECENT_LIMIT = 10;
 
 export function Home(): JSX.Element {
-  const { data, isPending } = useQuery(queries.pipelines.list());
+  const { data, isPending } = useQuery(queries.runs.list());
   const [now, setNow] = useState<number>(() => Date.now());
 
   // One-second ticker keeps the "elapsed" on the running strip live.
@@ -105,7 +105,7 @@ function Overview(): JSX.Element {
       enqueueJob({ workflow: vars.workflowPath, input: vars.input }),
     onSuccess: (data) => {
       setInput("");
-      void qc.invalidateQueries({ queryKey: queries.pipelines.all() });
+      void qc.invalidateQueries({ queryKey: queries.runs.all() });
       void qc.invalidateQueries({ queryKey: queries.jobs.all() });
       navigate(`/runs/${data.runId}`);
     },
@@ -200,7 +200,7 @@ function Overview(): JSX.Element {
 // ── Running strip ────────────────────────────────────────────────────
 
 interface RunningStripProps {
-  running: PipelineSummary[];
+  running: RunSummary[];
   now: number;
   loading: boolean;
 }
@@ -234,7 +234,7 @@ function RunningStrip({ running, now, loading }: RunningStripProps): JSX.Element
   );
 }
 
-function RunningCard({ row, now }: { row: PipelineSummary; now: number }): JSX.Element {
+function RunningCard({ row, now }: { row: RunSummary; now: number }): JSX.Element {
   const startedMs = Date.parse(row.startedAt);
   const elapsed = Number.isFinite(startedMs) ? Math.max(0, now - startedMs) : undefined;
   return (
@@ -366,7 +366,7 @@ function formatPercent(value: number): string {
 // ── Recent runs ──────────────────────────────────────────────────────
 
 interface RecentRunsProps {
-  rows: PipelineSummary[];
+  rows: RunSummary[];
   loading: boolean;
 }
 
@@ -396,7 +396,7 @@ function RecentRuns({ rows, loading }: RecentRunsProps): JSX.Element {
       ) : (
         <div className="flex flex-col gap-2">
           {rows.map((row) => (
-            <PipelineRow key={row.runId} row={row} variant="compact" />
+            <RunRow key={row.runId} row={row} variant="compact" />
           ))}
         </div>
       )}

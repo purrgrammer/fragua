@@ -9,20 +9,11 @@
 // No files, no sockets, no IPC. Just the store.
 
 import * as core from "@swarm/core/handler";
-import {
-  CURRENT_SCHEMA_VERSION,
-  ConcurrencyError,
-  type FactEvent,
-  type IEventStore,
-} from "@swarm/store";
-import { AbortRegistry } from "./abort-registry.ts";
+import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore } from "@swarm/store";
+import type { AbortRegistry } from "./abort-registry.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { CollectingRecorder } from "./recorder.ts";
-import {
-  abortResultToFacts,
-  cancelToFacts,
-  resultToFacts,
-} from "./result-to-facts.ts";
+import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
 import { wakePendingHitl } from "./wake-hitl.ts";
 
 type HandlerResult = core.HandlerResult;
@@ -85,17 +76,12 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
 
     // Schema drift refusal.
     if (state.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-      await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        [
-          {
-            type: "fact.run_halted",
-            payload: { reason: "schema_drift" },
-          },
-        ],
-      );
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.run_halted",
+          payload: { reason: "schema_drift" },
+        },
+      ]);
       return;
     }
 
@@ -104,30 +90,20 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     const decision = core.foldIntents(unapplied);
 
     if (decision.kind === "cancel") {
-      await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        cancelToFacts(decision.intentSeq),
-      );
+      await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
       return;
     }
 
     if (decision.shouldPause) {
-      await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        [
-          {
-            type: "fact.run_paused_hitl",
-            payload: {
-              nodeId: state.currentNode ?? "",
-              prompt: "paused by operator",
-            },
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.run_paused_hitl",
+          payload: {
+            nodeId: state.currentNode ?? "",
+            prompt: "paused by operator",
           },
-        ],
-      );
+        },
+      ]);
       return;
     }
 
@@ -135,10 +111,8 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     // leaves current_node NULL — treat that as the "just-claimed" signal and
     // emit run_started to pin the start node. The start node comes from
     // routing.start_node, defaulting to "start".
-    let currentNode = state.currentNode;
-    const needsStart =
-      state.currentNode == null &&
-      (state.status === "queued" || state.status === "running");
+    const currentNode = state.currentNode;
+    const needsStart = state.currentNode == null && (state.status === "queued" || state.status === "running");
     if (needsStart) {
       const start = routingString(state.routing, "start_node") ?? "start";
       const startFacts: FactEvent[] = [
@@ -151,12 +125,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
           },
         },
       ];
-      const ok = await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        startFacts,
-      );
+      const ok = await tryAppendFact(opts.store, runId, state.version, startFacts);
       if (!ok) continue; // OCC retry
       continue; // Reload state next turn with the new run_started applied.
     }
@@ -166,11 +135,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     // Dispatch.
     const spec = opts.dispatcher.get(state.workflowSha, currentNode);
     const steerCtrl = new AbortController();
-    const signals: AbortSignal[] = [
-      steerCtrl.signal,
-      AbortSignal.timeout(spec.maxMs),
-      opts.shutdownSignal,
-    ];
+    const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
     const signal = AbortSignal.any(signals);
     opts.registry.register(runId, steerCtrl);
 
@@ -231,21 +196,16 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     }
 
     if (leakedTimeout) {
-      await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        [
-          {
-            type: "fact.handler_timeout_leaked",
-            payload: { nodeId: currentNode, leakedAt: Date.now() },
-          },
-          {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: "handler_leaked" },
-          },
-        ],
-      );
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.handler_timeout_leaked",
+          payload: { nodeId: currentNode, leakedAt: Date.now() },
+        },
+        {
+          type: "fact.run_halted",
+          payload: { reason: "error", detail: "handler_leaked" },
+        },
+      ]);
       return;
     }
 
@@ -284,40 +244,26 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     // didn't set these explicitly.
     if (result.kind === "transition") {
       if (result.tokens === 0 && totalTokens > 0) result.tokens = totalTokens;
-      if (result.costUsd === 0 && totalCostUsd > 0)
-        result.costUsd = totalCostUsd;
-      if (result.modelName == null && lastModel != null)
-        result.modelName = lastModel;
+      if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
+      if (result.modelName == null && lastModel != null) result.modelName = lastModel;
     }
 
     const factsCtx = {
       state,
       appliedIntentSeqs: decision.appliedSeqs,
       sideEffectFacts: recorder.drain(),
-      ...(decision.hitlInput !== undefined && unapplied.length > 0
-        ? { hitlInputSeq: lastHitlSeq(unapplied) }
-        : {}),
+      ...(decision.hitlInput !== undefined && unapplied.length > 0 ? { hitlInputSeq: lastHitlSeq(unapplied) } : {}),
     };
     const facts = resultToFacts(result, factsCtx);
     const routingPatch = mergeRoutingPatches(decision.routingDelta, result);
-    const advanceAppliedTo =
-      decision.appliedSeqs.length > 0
-        ? Math.max(...decision.appliedSeqs)
-        : undefined;
+    const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
     const appendOpts: {
       routingPatch?: Record<string, unknown>;
       advanceAppliedTo?: number;
     } = {};
     if (routingPatch !== undefined) appendOpts.routingPatch = routingPatch;
-    if (advanceAppliedTo !== undefined)
-      appendOpts.advanceAppliedTo = advanceAppliedTo;
-    const ok = await tryAppendFact(
-      opts.store,
-      runId,
-      state.version,
-      facts,
-      appendOpts,
-    );
+    if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
+    const ok = await tryAppendFact(opts.store, runId, state.version, facts, appendOpts);
     if (!ok) continue; // OCC retry — rebuild from fresh state
   }
 }
@@ -346,10 +292,7 @@ function mergeRoutingPatches(
   fromIntents: Record<string, unknown>,
   result: core.HandlerResult,
 ): Record<string, unknown> | undefined {
-  const fromResult =
-    result.kind === "transition" || result.kind === "yield_hitl"
-      ? result.routingDelta
-      : undefined;
+  const fromResult = result.kind === "transition" || result.kind === "yield_hitl" ? result.routingDelta : undefined;
   const merged: Record<string, unknown> = { ...fromIntents, ...fromResult };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -387,10 +330,7 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-function routingString(
-  routing: Record<string, unknown>,
-  key: string,
-): string | undefined {
+function routingString(routing: Record<string, unknown>, key: string): string | undefined {
   const v = routing[key];
   return typeof v === "string" ? v : undefined;
 }
@@ -400,13 +340,10 @@ function loopCounterOf(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-function lastHitlSeq(
-  unapplied: ReadonlyArray<{ type: string; seq: number }>,
-): number {
+function lastHitlSeq(unapplied: ReadonlyArray<{ type: string; seq: number }>): number {
   for (let i = unapplied.length - 1; i >= 0; i--) {
     const e = unapplied[i]!;
     if (e.type === "intent.hitl_input") return e.seq;
   }
   return 0;
 }
-

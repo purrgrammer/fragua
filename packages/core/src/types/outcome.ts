@@ -27,7 +27,7 @@ export const OutcomeSchema = Type.Object(
      * When true, an unrecovered failure must NOT trigger a goal-gate retry
      * via `graph.attrs.retry_target`. Used for intentional aborts (e.g. a
      * node can't proceed because the task target is missing) so we don't
-     * burn tokens re-running the pipeline after an explicit stop.
+     * burn tokens re-running the run after an explicit stop.
      */
     non_retryable: Type.Optional(Type.Boolean()),
   },

@@ -31,12 +31,12 @@ export interface SwarmConfig {
       model?: string;
     };
   };
-  /** Policy for auto-generated pipeline titles. Omit or set `"on"` to
+  /** Policy for auto-generated run titles. Omit or set `"on"` to
    * enable (default); `"off"` disables regardless of CLI flag. */
   auto_title?: "on" | "off";
   blocklist?: string[];
   workflows?: Record<string, string>;
-  /** Max concurrent pipeline runs the daemon will claim from its queue.
+  /** Max concurrent run runs the daemon will claim from its queue.
    * CLI `--concurrency` overrides this. Default 8 when unset. */
   concurrency?: number;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the

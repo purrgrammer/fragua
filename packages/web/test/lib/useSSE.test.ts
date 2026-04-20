@@ -62,7 +62,7 @@ describe("useSSE", () => {
 
   it("transitions connecting → open and accumulates events", async () => {
     const { result } = renderHook(() =>
-      useSSE("/api/pipelines/r1/events", { eventSourceImpl: FakeEventSource as unknown as typeof EventSource }),
+      useSSE("/api/runs/r1/events", { eventSourceImpl: FakeEventSource as unknown as typeof EventSource }),
     );
 
     // Effect runs on first render; the fake should exist.
@@ -96,7 +96,7 @@ describe("useSSE", () => {
 
   it("closes the EventSource on unmount", async () => {
     const { unmount } = renderHook(() =>
-      useSSE("/api/pipelines/r1/events", { eventSourceImpl: FakeEventSource as unknown as typeof EventSource }),
+      useSSE("/api/runs/r1/events", { eventSourceImpl: FakeEventSource as unknown as typeof EventSource }),
     );
     await waitFor(() => {
       expect(FakeEventSource.instances.length).toBe(1);
@@ -118,7 +118,7 @@ describe("useSSE", () => {
 
   it("honours the filter option", async () => {
     const { result } = renderHook(() =>
-      useSSE("/api/pipelines/r1/events", {
+      useSSE("/api/runs/r1/events", {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         filter: (t) => t.startsWith("node."),
       }),
@@ -130,7 +130,7 @@ describe("useSSE", () => {
     if (!es) return;
     act(() => {
       es._emit("node.started", "{}", "1");
-      es._emit("pipeline.started", "{}", "2");
+      es._emit("run.started", "{}", "2");
       es._emit("node.completed", "{}", "3");
     });
     await waitFor(() => {

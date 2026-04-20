@@ -1,4 +1,4 @@
-// Pure reducer that turns a `PipelineSummary[]` into the numbers the
+// Pure reducer that turns a `RunSummary[]` into the numbers the
 // Home dashboard renders. Lives next to `format.ts` / `time.ts` so the
 // "no inline number-crunching in JSX" discipline applies — components
 // import the reducer; they never re-fold cost/duration themselves.
@@ -14,7 +14,7 @@
 //   3. The source of truth for our parity tests in @swarm/server's
 //      stats route — keeping the two implementations honest.
 
-import type { PipelineSummary } from "./api.ts";
+import type { RunSummary } from "./api.ts";
 
 export interface DashboardStats {
   /** Total number of runs in the input. */
@@ -54,14 +54,14 @@ export interface DashboardStats {
   /**
    * Average `durationMs` over terminal runs only. Omitted (not zero)
    * when no terminal runs have a measurable duration — keeps the wire
-   * shape consistent with `PipelineSummary.durationMs` and lets the UI
+   * shape consistent with `RunSummary.durationMs` and lets the UI
    * render "—" instead of a fake "0ms".
    */
   avgDurationMs?: number;
 }
 
-/** Fold a list of pipeline summaries into one set of dashboard tiles. */
-export function computeStats(pipelines: readonly PipelineSummary[]): DashboardStats {
+/** Fold a list of run summaries into one set of dashboard tiles. */
+export function computeStats(runs: readonly RunSummary[]): DashboardStats {
   let running = 0;
   let succeeded = 0;
   let failed = 0;
@@ -74,7 +74,7 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
   let durationSum = 0;
   let durationCount = 0;
 
-  for (const p of pipelines) {
+  for (const p of runs) {
     if (p.status === "running") running += 1;
     else if (p.status === "success") succeeded += 1;
     else if (p.status === "fail") failed += 1;
@@ -102,7 +102,7 @@ export function computeStats(pipelines: readonly PipelineSummary[]): DashboardSt
   const cacheHitRate = readDenom > 0 ? totalCacheReadTokens / readDenom : undefined;
 
   return {
-    totalRuns: pipelines.length,
+    totalRuns: runs.length,
     running,
     succeeded,
     failed,

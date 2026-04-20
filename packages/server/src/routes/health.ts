@@ -55,9 +55,7 @@ export interface DaemonInfoFromStoreOptions {
  *    `runStateCounts()`. `port` is 0 because the daemon process doesn't
  *    bind one; `concurrency` is 0 because it isn't recorded in the lock.
  */
-export function daemonInfoFromStore(
-  opts: DaemonInfoFromStoreOptions,
-): () => HealthDaemonInfo {
+export function daemonInfoFromStore(opts: DaemonInfoFromStoreOptions): () => HealthDaemonInfo {
   const ttl = opts.ttlMs ?? DAEMON_LIVENESS_TTL_MS;
   const now = opts.now ?? Date.now;
   const version = opts.version ?? "unknown";
