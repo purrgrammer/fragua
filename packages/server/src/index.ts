@@ -112,6 +112,12 @@ export function createServer(opts: ServerOptions): Hono {
     if (pathname.includes("\0") || pathname.split("/").some((p) => p === "..")) {
       return c.notFound();
     }
+    // /api/* is owned by the API. If we reach here it means the API didn't
+    // match — return JSON 404 instead of the SPA shell so curl/fetch get a
+    // sensible error and the browser doesn't render the app at /api.
+    if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return c.json({ error: "not_found", path: pathname }, 404);
+    }
     if (pathname !== "/") {
       const filePath = join(distDir, pathname);
       if (filePath.startsWith(distDir)) {
@@ -133,7 +139,14 @@ export type {
   WorkflowReader,
   WorkflowSummary,
 } from "./ports.ts";
-export type { HealthDaemonInfo } from "./routes/health.ts";
+export {
+  DAEMON_LIVENESS_TTL_MS,
+  daemonInfoFromStore,
+} from "./routes/health.ts";
+export type {
+  DaemonInfoFromStoreOptions,
+  HealthDaemonInfo,
+} from "./routes/health.ts";
 export {
   ErrorBody,
   NodeState,

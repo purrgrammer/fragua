@@ -23,7 +23,62 @@
 // the standalone `swarm serve` path leaves it unset. That keeps
 // `createServer()` free of daemon lifecycle concerns.
 
+import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
+
+/** Daemons heartbeat at ~10s; treat 30s without one as dead. Matches
+ * `DEFAULT_LOCK_TTL_MS` in `@swarm/daemon`. */
+export const DAEMON_LIVENESS_TTL_MS = 30_000;
+
+export interface DaemonInfoFromStoreOptions {
+  store: IEventStore;
+  /** ISO startup time of the *server* — only used in the placeholder
+   * fallback if the lock row is missing `started_at` (it never is). */
+  fallbackStartedAt?: string;
+  /** CLI/server version, surfaced to the web UI. */
+  version?: string;
+  /** Heartbeat TTL. Defaults to {@link DAEMON_LIVENESS_TTL_MS}. */
+  ttlMs?: number;
+  /** Wall-clock provider (testing). */
+  now?: () => number;
+}
+
+/**
+ * Build a `daemonInfo` callback from the shared store. The daemon and the
+ * server live in different processes; the SQLite store is their sync point.
+ *
+ * On each request:
+ *  - Read `currentDaemonLock()`.
+ *  - If absent OR heartbeat older than `ttlMs` → throw, so the health route
+ *    omits the `daemon` key and the web UI shows "daemon not running".
+ *  - Otherwise return a HealthDaemonInfo built from the lock row +
+ *    `runStateCounts()`. `port` is 0 because the daemon process doesn't
+ *    bind one; `concurrency` is 0 because it isn't recorded in the lock.
+ */
+export function daemonInfoFromStore(
+  opts: DaemonInfoFromStoreOptions,
+): () => HealthDaemonInfo {
+  const ttl = opts.ttlMs ?? DAEMON_LIVENESS_TTL_MS;
+  const now = opts.now ?? Date.now;
+  const version = opts.version ?? "unknown";
+  return () => {
+    const lock = opts.store.currentDaemonLock();
+    if (lock == null) throw new Error("daemon not running");
+    if (now() - lock.heartbeatAt > ttl) {
+      throw new Error("daemon heartbeat stale");
+    }
+    const counts = opts.store.runStateCounts();
+    return {
+      pid: lock.pid,
+      port: 0,
+      startedAt: new Date(lock.startedAt).toISOString(),
+      version,
+      concurrency: 0,
+      inflight: counts.running,
+      queued: counts.queued,
+    };
+  };
+}
 
 export interface HealthDaemonInfo {
   pid: number;
