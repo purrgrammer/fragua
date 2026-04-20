@@ -162,10 +162,11 @@ function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Elem
 
       <div id={`node-section-body-${section.nodeId}`} className="mt-1">
         <NodeInputBlock section={section} />
+        <NodeSummaryBlock section={section} />
         {/* Turns render as a flat list — no per-iteration grouping.
-            Loop nodes just emit multiple turns in encounter order.
-            Empty sections (run-lifecycle-only nodes like `start` /
-            `done`, or a node we haven't seen events for yet) render
+            Retry loops (backward edges) emit multiple turns in encounter
+            order. Empty sections (run-lifecycle-only nodes like `start`
+            / `done`, or a node we haven't seen events for yet) render
             just the header — no placeholder text. */}
         {section.turns.map((turn) => (
           <TurnBlock key={turn.turnId} turn={turn} isLive={isLive} />
@@ -173,6 +174,96 @@ function SectionBlock({ section, isLive, isFirst }: SectionBlockProps): JSX.Elem
       </div>
     </section>
   );
+}
+
+/**
+ * One-line summary rendered for non-LLM handler kinds: graph-level tool
+ * nodes emit `tool.completed`, parallel nodes emit `parallel.completed`,
+ * and fan_in nodes emit `fan_in.completed`. Without this block these
+ * sections would render as bare headers — visible in the event log but
+ * silent in the conversation view.
+ */
+function NodeSummaryBlock({ section }: { section: NodeSection }): JSX.Element | null {
+  const { toolSummary, parallelSummary, fanInSummary } = section;
+  if (!toolSummary && !parallelSummary && !fanInSummary) return null;
+
+  return (
+    <div
+      data-testid={`node-summary-${section.nodeId}`}
+      className="mb-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs"
+    >
+      {toolSummary && (
+        <div data-testid={`tool-summary-${section.nodeId}`} className="flex flex-wrap items-baseline gap-2">
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">tool</span>
+          <span
+            className={cn(
+              "inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px]",
+              toolSummary.exitCode === 0
+                ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
+                : "bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200",
+            )}
+          >
+            exit {toolSummary.exitCode}
+          </span>
+          <span className="font-mono text-[10px] text-muted-foreground">{formatDuration(toolSummary.durationMs)}</span>
+          {toolSummary.command && (
+            <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">{toolSummary.command}</code>
+          )}
+        </div>
+      )}
+      {parallelSummary && (
+        <div data-testid={`parallel-summary-${section.nodeId}`} className="flex flex-wrap items-baseline gap-2">
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">parallel</span>
+          <span className="font-mono text-[10px] text-muted-foreground">join: {parallelSummary.joinPolicy}</span>
+          <span className="flex flex-wrap gap-1">
+            {parallelSummary.branches.map((b) => (
+              <span
+                key={b.branchId}
+                className={cn(
+                  "inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px]",
+                  b.status === "success"
+                    ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
+                    : b.status === "fail"
+                      ? "bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200"
+                      : "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
+                )}
+              >
+                {b.branchId} · {b.status}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      {fanInSummary && (
+        <div data-testid={`fanin-summary-${section.nodeId}`} className="flex flex-wrap items-baseline gap-2">
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">fan-in</span>
+          {fanInSummary.allFailed ? (
+            <span className="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 font-mono text-[10px] text-rose-900 dark:bg-rose-950 dark:text-rose-200">
+              all branches failed
+            </span>
+          ) : (
+            <>
+              <span className="font-mono text-[10px] text-muted-foreground">winner:</span>
+              <code className="font-mono text-[11px] text-foreground">{fanInSummary.winner ?? "—"}</code>
+            </>
+          )}
+          {fanInSummary.rankedOrder.length > 1 && (
+            <span className="font-mono text-[10px] text-muted-foreground">
+              rank: {fanInSummary.rankedOrder.join(" > ")}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.floor((ms % 60_000) / 1000);
+  return `${mins}m${secs.toString().padStart(2, "0")}s`;
 }
 
 // --------------------------------------------------------------------

@@ -84,6 +84,31 @@ export interface NodeSection {
   contextFiles?: string[];
   contextKeys?: string[];
   nodeOutputsInScope?: string[];
+  /** Populated for graph-level tool (parallelogram) nodes on
+   * `tool.completed`. Surfaces the exit code, captured output size, and
+   * duration so the conversation view can render a one-line summary
+   * even when there's no LLM activity on this node. */
+  toolSummary?: {
+    command: string;
+    exitCode: number;
+    durationMs: number;
+    stdoutBytes: number;
+    stderrBytes: number;
+  };
+  /** Populated for `parallel` (component) nodes on `parallel.completed`.
+   * Captures the branch statuses so the section header can show a
+   * "3 branches: ✓ ✓ ✗" chip. */
+  parallelSummary?: {
+    joinPolicy: "wait_all" | "first_success";
+    branches: { branchId: string; status: string }[];
+  };
+  /** Populated for `parallel.fan_in` (tripleoctagon) nodes on
+   * `fan_in.completed`. Shows the winner and rank order. */
+  fanInSummary?: {
+    winner: string | null;
+    allFailed: boolean;
+    rankedOrder: string[];
+  };
 }
 
 export interface Turn {
@@ -515,6 +540,50 @@ export function applyEvent(state: ReducerState, ev: RawEvent): void {
         slot.state = "output-available";
         slot.output = result;
       }
+      break;
+    }
+
+    // ----- Graph-level tool / parallel / fan_in summaries -----
+    // These events come from the swarm handlers themselves (not pi-agent)
+    // and summarise a non-LLM node's outcome. Populating the per-section
+    // summary field lets the conversation view show a one-line chip
+    // without needing a full agent turn.
+    case "tool.completed": {
+      if (!nodeId) break;
+      const section = sectionFor(state, nodeId);
+      section.toolSummary = {
+        command: String(data["command"] ?? ""),
+        exitCode: Number(data["exitCode"] ?? 0),
+        durationMs: Number(data["durationMs"] ?? 0),
+        stdoutBytes: Number(data["stdoutBytes"] ?? 0),
+        stderrBytes: Number(data["stderrBytes"] ?? 0),
+      };
+      break;
+    }
+    case "parallel.completed": {
+      if (!nodeId) break;
+      const section = sectionFor(state, nodeId);
+      const branches = Array.isArray(data["branches"]) ? (data["branches"] as unknown[]) : [];
+      section.parallelSummary = {
+        joinPolicy: data["joinPolicy"] === "first_success" ? "first_success" : "wait_all",
+        branches: branches
+          .filter((b): b is { branchId: unknown; status: unknown } => b !== null && typeof b === "object")
+          .map((b) => ({
+            branchId: String(b.branchId ?? ""),
+            status: String(b.status ?? ""),
+          })),
+      };
+      break;
+    }
+    case "fan_in.completed": {
+      if (!nodeId) break;
+      const section = sectionFor(state, nodeId);
+      const winner = data["winner"];
+      section.fanInSummary = {
+        winner: typeof winner === "string" ? winner : null,
+        allFailed: Boolean(data["allFailed"]),
+        rankedOrder: Array.isArray(data["rankedOrder"]) ? (data["rankedOrder"] as unknown[]).map((x) => String(x)) : [],
+      };
       break;
     }
 
