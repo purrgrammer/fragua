@@ -621,6 +621,20 @@ export class SqliteStore implements IEventStore {
     });
   }
 
+  runStateCounts(): { running: number; queued: number } {
+    const running = this.db
+      .query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'",
+      )
+      .get();
+    const queued = this.db
+      .query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'",
+      )
+      .get();
+    return { running: running?.n ?? 0, queued: queued?.n ?? 0 };
+  }
+
   currentDaemonLock(): DaemonLockRow | null {
     const row = this.db
       .query<

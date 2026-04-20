@@ -369,6 +369,8 @@ export interface IEventStore {
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
+  /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
+  runStateCounts(): { running: number; queued: number };
 
   // ─── Workflows
   saveWorkflow(sha: string, name: string, dotSource: string): void;
