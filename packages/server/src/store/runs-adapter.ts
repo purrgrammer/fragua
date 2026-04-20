@@ -52,7 +52,30 @@ export function runStateToSummary(
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
+  const title = pickTitle(events);
+  if (title !== undefined) summary.title = title;
+  const input = pickInput(state.routing);
+  if (input !== undefined) summary.input = input;
   return summary;
+}
+
+/** Pick the most recent auto-generated title from the event stream.
+ * `run.title_generated` events are emitted by the async summariser
+ * after a run starts; we take the last one so re-triggered titles
+ * supersede stale ones. */
+function pickTitle(events: StoredEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]!;
+    if (ev.type !== "run.title_generated") continue;
+    const payload = ev.payload as { title?: unknown };
+    if (typeof payload.title === "string" && payload.title.length > 0) return payload.title;
+  }
+  return undefined;
+}
+
+function pickInput(routing: Record<string, unknown>): string | undefined {
+  const v = routing["input"];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
 /** Build a RunDetail from a run's projection + its full event log. */
