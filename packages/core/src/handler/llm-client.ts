@@ -1,7 +1,19 @@
 import type { LlmCallParams, LlmClient, LlmResult } from "./types.ts";
 
 export interface LlmAccounting {
-  addUsage(params: { tokens: number; costUsd: number; model: string }): void;
+  addUsage(params: {
+    tokens: number;
+    costUsd: number;
+    model: string;
+    /** Input/output/cache split. Optional because the legacy
+     * `LlmCallFn` contract (`LlmResult`) only carries a flat `tokens`
+     * scalar — tool handlers driving a non-streaming LLM don't have
+     * the split. The executor treats missing fields as 0. */
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  }): void;
 }
 
 export type LlmCallFn = (params: LlmCallParams, signal: AbortSignal) => Promise<LlmResult>;

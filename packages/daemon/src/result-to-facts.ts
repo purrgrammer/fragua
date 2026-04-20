@@ -71,6 +71,17 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
+      // Input/output/cache split — emit only when non-zero so legacy
+      // handlers without the split keep their payload size unchanged
+      // (§I7 keeps events ≤4KB).
+      if (result.inputTokens != null && result.inputTokens > 0) payload.inputTokens = result.inputTokens;
+      if (result.outputTokens != null && result.outputTokens > 0) payload.outputTokens = result.outputTokens;
+      if (result.cacheReadTokens != null && result.cacheReadTokens > 0) {
+        payload.cacheReadTokens = result.cacheReadTokens;
+      }
+      if (result.cacheWriteTokens != null && result.cacheWriteTokens > 0) {
+        payload.cacheWriteTokens = result.cacheWriteTokens;
+      }
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {
@@ -118,22 +129,32 @@ export function abortResultToFacts(
   nodeId: string,
   iteration: number,
   cause: string,
-  partial: { tokens: number; costUsd: number },
+  partial: {
+    tokens: number;
+    costUsd: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  },
   sideEffectFacts: FactEvent[],
 ): FactEvent[] {
-  return [
-    ...sideEffectFacts,
-    {
-      type: "fact.node_aborted",
-      payload: {
-        nodeId,
-        iteration,
-        cause,
-        partialTokens: partial.tokens,
-        partialCostUsd: partial.costUsd,
-      },
-    },
-  ];
+  const payload: Extract<FactEvent, { type: "fact.node_aborted" }>["payload"] = {
+    nodeId,
+    iteration,
+    cause,
+    partialTokens: partial.tokens,
+    partialCostUsd: partial.costUsd,
+  };
+  if (partial.inputTokens != null && partial.inputTokens > 0) payload.partialInputTokens = partial.inputTokens;
+  if (partial.outputTokens != null && partial.outputTokens > 0) payload.partialOutputTokens = partial.outputTokens;
+  if (partial.cacheReadTokens != null && partial.cacheReadTokens > 0) {
+    payload.partialCacheReadTokens = partial.cacheReadTokens;
+  }
+  if (partial.cacheWriteTokens != null && partial.cacheWriteTokens > 0) {
+    payload.partialCacheWriteTokens = partial.cacheWriteTokens;
+  }
+  return [...sideEffectFacts, { type: "fact.node_aborted", payload }];
 }
 
 export function cancelToFacts(intentSeq: number): FactEvent[] {

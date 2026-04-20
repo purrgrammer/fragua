@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.67.6",
-    "@mariozechner/pi-ai": "0.67.6",
+    "@mariozechner/pi-agent-core": "0.67.68",
+    "@mariozechner/pi-ai": "0.67.68",
     "@swarm/core": "workspace:*",
     "@swarm/workspace": "workspace:*"
   },

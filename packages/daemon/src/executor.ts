@@ -207,11 +207,19 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
 
       let totalTokens = 0;
       let totalCostUsd = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalCacheReadTokens = 0;
+      let totalCacheWriteTokens = 0;
       let lastModel: string | undefined;
       const accounting: core.LlmAccounting = {
-        addUsage: ({ tokens, costUsd, model }) => {
+        addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
           totalTokens += tokens;
           totalCostUsd += costUsd;
+          totalInputTokens += inputTokens ?? 0;
+          totalOutputTokens += outputTokens ?? 0;
+          totalCacheReadTokens += cacheReadTokens ?? 0;
+          totalCacheWriteTokens += cacheWriteTokens ?? 0;
           lastModel = model;
         },
       };
@@ -305,7 +313,14 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
           currentNode,
           iteration,
           "aborted",
-          { tokens: totalTokens, costUsd: totalCostUsd },
+          {
+            tokens: totalTokens,
+            costUsd: totalCostUsd,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            cacheReadTokens: totalCacheReadTokens,
+            cacheWriteTokens: totalCacheWriteTokens,
+          },
           recorder.drain(),
         );
         await tryAppendFact(opts.store, runId, state.version, facts);
@@ -335,6 +350,19 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       if (result.kind === "transition") {
         if (result.tokens === 0 && totalTokens > 0) result.tokens = totalTokens;
         if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
+        // Split fields: only fill from executor accounting when the handler
+        // didn't already report any. Handlers that already know their own
+        // split (handler-bridge aggregating cost.recorded) win — the
+        // executor's LlmAccounting doesn't see codergen calls that go
+        // through the agent backend.
+        if ((result.inputTokens ?? 0) === 0 && totalInputTokens > 0) result.inputTokens = totalInputTokens;
+        if ((result.outputTokens ?? 0) === 0 && totalOutputTokens > 0) result.outputTokens = totalOutputTokens;
+        if ((result.cacheReadTokens ?? 0) === 0 && totalCacheReadTokens > 0) {
+          result.cacheReadTokens = totalCacheReadTokens;
+        }
+        if ((result.cacheWriteTokens ?? 0) === 0 && totalCacheWriteTokens > 0) {
+          result.cacheWriteTokens = totalCacheWriteTokens;
+        }
         if (result.modelName == null && lastModel != null) result.modelName = lastModel;
 
         // Edge selection: when the handler left `nextNode` unset, pick from

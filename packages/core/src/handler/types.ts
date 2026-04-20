@@ -163,6 +163,16 @@ export type HandlerResult =
       routingDelta?: Record<string, unknown>;
       tokens: number;
       costUsd: number;
+      /** Input/output/cache split accumulated across every `cost.recorded`
+       * event the node emitted. Optional so legacy handlers that only
+       * report `tokens` + `costUsd` (e.g. tool handlers, wait.human)
+       * keep compiling. The executor writes these straight into
+       * `fact.node_completed` so the run-level reducer can compute a
+       * cache-hit rate. */
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
       modelName?: string;
     }
   | {

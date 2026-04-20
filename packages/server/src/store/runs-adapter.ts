@@ -38,16 +38,25 @@ export function runStateToSummary(
   const startedAt = first != null ? new Date(first.ts).toISOString() : new Date(state.enqueuedAt).toISOString();
   const durationMs = first != null && last != null && last.ts >= first.ts ? last.ts - first.ts : undefined;
 
+  // Pre-split runs have 0 for every split field — in that case fall back
+  // to treating `totalTokens` as input so old runs still show a token
+  // count somewhere instead of rendering "0 / 0 / 0 / 0". We detect this
+  // as "none of the four split fields ever incremented" — a post-split
+  // run that genuinely had zero output tokens (tool-only turn, maybe) is
+  // indistinguishable at this layer, but that's fine: it's still 0.
+  const m = state.metrics;
+  const hasSplit =
+    m.totalInputTokens > 0 || m.totalOutputTokens > 0 || m.totalCacheReadTokens > 0 || m.totalCacheWriteTokens > 0;
   const summary: RunSummary = {
     runId: state.runId,
     startedAt,
     status: mapStatus(state.status),
     eventCount: events.length,
-    costUsd: state.metrics.totalCostUsd,
-    inputTokens: state.metrics.totalTokens,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
+    costUsd: m.totalCostUsd,
+    inputTokens: hasSplit ? m.totalInputTokens : m.totalTokens,
+    outputTokens: m.totalOutputTokens,
+    cacheReadTokens: m.totalCacheReadTokens,
+    cacheWriteTokens: m.totalCacheWriteTokens,
   };
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;

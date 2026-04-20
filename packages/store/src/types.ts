@@ -5,8 +5,24 @@ export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "ca
 export type EventWriter = "daemon" | "web";
 
 export interface RunMetrics {
+  /** Grand total across input + output + cacheRead + cacheWrite. Matches
+   * pi-ai's `usage.totalTokens` summed across calls. Kept for back-compat
+   * with existing aggregates; prefer the split fields below for new work. */
   totalTokens: number;
   totalCostUsd: number;
+  /** Fresh prompt tokens (excludes cache hits on providers that track
+   * them separately, e.g. Anthropic). Zero on older runs that predate
+   * the split — reducers accept missing fields defensively. */
+  totalInputTokens: number;
+  /** Generated output tokens (includes reasoning/thinking tokens on
+   * providers that bundle them into `output_tokens`, e.g. Anthropic). */
+  totalOutputTokens: number;
+  /** Prompt-cache hits. Counted separately from `totalInputTokens` so
+   * the dashboard can compute a cache hit rate. */
+  totalCacheReadTokens: number;
+  /** Cache priming tokens (ephemeral writes). Conflates 5m + 1h TTLs
+   * today because pi-ai reports a single number; split upstream. */
+  totalCacheWriteTokens: number;
   loopCounts: Record<string, number>;
   /** Per-model breakdown. Populated when a node reports modelName. */
   models: Record<string, { tokens: number; costUsd: number }>;
@@ -75,6 +91,13 @@ export type FactEvent =
         outputRef?: string;
         tokens: number;
         costUsd: number;
+        /** Input/output/cache split. Optional so older runs (pre-split)
+         * still round-trip through replay; the reducer defaults missing
+         * fields to 0 so totals never NaN. */
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
         /** Optional: LLM provider model id, e.g. "gemini-1.5-pro". */
         modelName?: string;
         nextNode: string;
@@ -92,6 +115,12 @@ export type FactEvent =
         cause: string;
         partialTokens: number;
         partialCostUsd: number;
+        /** Partial split for work done before the abort. Optional for
+         * back-compat with pre-split runs. */
+        partialInputTokens?: number;
+        partialOutputTokens?: number;
+        partialCacheReadTokens?: number;
+        partialCacheWriteTokens?: number;
       };
     }
   | {

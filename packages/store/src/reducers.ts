@@ -4,6 +4,10 @@ export function emptyMetrics(): RunMetrics {
   return {
     totalTokens: 0,
     totalCostUsd: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
     loopCounts: {},
     models: {},
   };
@@ -46,6 +50,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       const p = fact.payload;
       next.metrics.totalTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
+      next.metrics.totalInputTokens += p.inputTokens ?? 0;
+      next.metrics.totalOutputTokens += p.outputTokens ?? 0;
+      next.metrics.totalCacheReadTokens += p.cacheReadTokens ?? 0;
+      next.metrics.totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
       if (p.modelName) {
         const bucket = next.metrics.models[p.modelName] ?? {
           tokens: 0,
@@ -62,8 +70,13 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_aborted": {
-      next.metrics.totalTokens += fact.payload.partialTokens;
-      next.metrics.totalCostUsd += fact.payload.partialCostUsd;
+      const p = fact.payload;
+      next.metrics.totalTokens += p.partialTokens;
+      next.metrics.totalCostUsd += p.partialCostUsd;
+      next.metrics.totalInputTokens += p.partialInputTokens ?? 0;
+      next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
+      next.metrics.totalCacheReadTokens += p.partialCacheReadTokens ?? 0;
+      next.metrics.totalCacheWriteTokens += p.partialCacheWriteTokens ?? 0;
       return next;
     }
     case "fact.run_paused_hitl": {
@@ -135,6 +148,10 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
   return {
     totalTokens: m.totalTokens,
     totalCostUsd: m.totalCostUsd,
+    totalInputTokens: m.totalInputTokens,
+    totalOutputTokens: m.totalOutputTokens,
+    totalCacheReadTokens: m.totalCacheReadTokens,
+    totalCacheWriteTokens: m.totalCacheWriteTokens,
     loopCounts: { ...m.loopCounts },
     models,
   };

@@ -67,6 +67,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
 
     let tokens = 0;
     let costUsd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     let modelName: string | undefined;
 
     const emit = async (type: EventType, data: Record<string, unknown>) => {
@@ -77,6 +81,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       if (type === "cost.recorded") {
         tokens += numAt(data, "total_tokens");
         costUsd += numAt(data, "cost_usd");
+        inputTokens += numAt(data, "input_tokens");
+        outputTokens += numAt(data, "output_tokens");
+        cacheReadTokens += numAt(data, "cache_read_tokens");
+        cacheWriteTokens += numAt(data, "cache_write_tokens");
         const model = strAt(data, "model");
         if (model != null) modelName = model;
       } else if (type === "agent.message_end") {
@@ -151,6 +159,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
       tokens,
       costUsd,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
       ...(Object.keys(routingDelta).length > 0 ? { routingDelta } : {}),
       ...(modelName !== undefined ? { modelName } : {}),
     };
