@@ -8,6 +8,7 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
+import { type EdgeSelection, type Graph, parseDotSource, selectEdge } from "@swarm/core";
 import * as core from "@swarm/core/handler";
 import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore } from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
@@ -58,6 +59,19 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   let consecutiveAborts = 0;
   let turns = 0;
+  // Lazy per-run graph cache. Parsed once on first edge-selection need.
+  let cachedGraph: Graph | null = null;
+  const graphFor = (workflowSha: string): Graph | null => {
+    if (cachedGraph != null) return cachedGraph;
+    const wf = opts.store.getWorkflow(workflowSha);
+    if (wf == null) return null;
+    try {
+      cachedGraph = parseDotSource(wf.dotSource);
+      return cachedGraph;
+    } catch {
+      return null;
+    }
+  };
 
   while (!opts.shutdownSignal.aborted && turns < maxTurns) {
     turns++;
@@ -205,12 +219,12 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       opts.registry.unregister(runId);
     }
 
-    // Flush buffered agent/llm/tool events the handler emitted this turn.
-    // Runs before the terminal fact so the events table ordering matches the
-    // "happened during node N" intent. Best-effort: a flush failure logs and
-    // swallows rather than aborting the run — observability must never
-    // block state progress.
-    if (observability.length > 0) {
+    // Flush on abort/leak BEFORE those branches append their terminal
+    // fact. The main transition path flushes later, after edge selection
+    // has pushed its `edge.selected` event, so all observability for the
+    // turn lands in one ordered batch.
+    const flushObservability = (): void => {
+      if (observability.length === 0) return;
       try {
         opts.store.appendObservabilityEvents(runId, observability);
       } catch (err) {
@@ -218,9 +232,10 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
         console.warn(`[executor] observability flush failed for run ${runId}:`, err);
       }
       observability.length = 0;
-    }
+    };
 
     if (leakedTimeout) {
+      flushObservability();
       await tryAppendFact(opts.store, runId, state.version, [
         {
           type: "fact.handler_timeout_leaked",
@@ -235,6 +250,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
     }
 
     if (wasAborted) {
+      flushObservability();
       // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
       const facts = abortResultToFacts(
         currentNode,
@@ -271,7 +287,46 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       if (result.tokens === 0 && totalTokens > 0) result.tokens = totalTokens;
       if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
       if (result.modelName == null && lastModel != null) result.modelName = lastModel;
+
+      // Edge selection: when the handler left `nextNode` unset, pick from
+      // the current node's outgoing edges via the 5-rule selector (SPEC
+      // §3.8). With it set, the handler is bypassing routing on purpose.
+      if (result.nextNode == null) {
+        const graph = graphFor(state.workflowSha);
+        const srcNode = graph?.nodes[currentNode];
+        if (graph != null && srcNode != null) {
+          const selection = selectEdge({
+            graph,
+            source: srcNode,
+            outcome: {
+              status: result.outcomeStatus ?? "success",
+              context_updates: {},
+              preferred_label: result.preferredLabel ?? "",
+              suggested_next_ids: result.suggestedNextIds ?? [],
+              notes: "",
+            },
+            context: state.routing,
+          });
+          if (selection != null) {
+            result.nextNode = selection.edge.to;
+            recordEdgeSelected(observability, currentNode, selection);
+          } else {
+            // No outgoing edges or no viable selection — terminal.
+            result.nextNode = "__end__";
+          }
+        } else {
+          // Graph unavailable (already-running test fixtures without a
+          // parseable workflow) — terminal by default.
+          result.nextNode = "__end__";
+        }
+      }
     }
+
+    // All observability for this turn is now buffered (handler emissions
+    // + any edge.selected from the selector above). Flush before the
+    // terminal fact lands so consumers tailing /events see the trail
+    // followed by node_completed in causal order.
+    flushObservability();
 
     const factsCtx = {
       state,
@@ -383,6 +438,30 @@ function lastHitlSeq(unapplied: ReadonlyArray<{ type: string; seq: number }>): n
  * missing-token rule, which is still an improvement over the literal
  * placeholder leaking to the LLM.
  */
+/**
+ * Stamp the selected edge into the observability buffer so the UI and
+ * replay tools see exactly which rule picked the traversal. `edge.selected`
+ * is in the core EventType union; emitted alongside `fact.node_completed`
+ * at commit time.
+ */
+function recordEdgeSelected(
+  buffer: { type: string; payload: Record<string, unknown> }[],
+  fromNode: string,
+  selection: EdgeSelection,
+): void {
+  const payload: Record<string, unknown> = {
+    from: fromNode,
+    to: selection.edge.to,
+    rule: selection.rule,
+  };
+  if (selection.matched !== undefined) {
+    if (selection.rule === "condition") payload["matched_condition"] = selection.matched;
+    else if (selection.rule === "preferred_label") payload["matched_label"] = selection.matched;
+    else payload["matched"] = selection.matched;
+  }
+  buffer.push({ type: "edge.selected", payload });
+}
+
 export function buildSubstitutionArgs(
   runId: string,
   routing: Record<string, unknown>,

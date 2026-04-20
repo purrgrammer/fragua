@@ -16,8 +16,11 @@ export interface MakeCodergenHandlerOpts {
    * `node.attrs.prompt`, `node.attrs.provider`, `node.attrs.model`, etc.
    */
   node: Node;
-  /** The edge target this node transitions to on success. */
-  nextNode: string;
+  /**
+   * Fallback next-node id used only if the backend returns no
+   * `next_node_override` and the caller wants to bypass edge selection.
+   * Leave unset to defer to the executor's selectEdge. */
+  nextNode?: string;
   /** Backend instance used to drive the LLM. In production this is a
    * `PiCodergenBackend`; tests and mock workflows can pass any
    * `CodergenBackend`. Provide this OR `backendOpts`. */
@@ -107,11 +110,18 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       } satisfies HandlerResult;
     }
 
-    const nextNode = outcome.next_node_override ?? opts.nextNode;
     const routingDelta = contextUpdatesToRouting(outcome.context_updates);
+    // Only set `nextNode` for explicit overrides — otherwise the executor's
+    // edge selector picks based on the outcome fields below. `opts.nextNode`
+    // stays as a legacy-compat fallback for auto-dispatcher code paths that
+    // pre-compute a single outgoing edge (noop transition nodes).
+    const explicitNext = outcome.next_node_override ?? opts.nextNode;
     const result: HandlerResult = {
       kind: "transition",
-      nextNode,
+      outcomeStatus: outcome.status,
+      ...(outcome.preferred_label.length > 0 ? { preferredLabel: outcome.preferred_label } : {}),
+      ...(outcome.suggested_next_ids.length > 0 ? { suggestedNextIds: outcome.suggested_next_ids } : {}),
+      ...(explicitNext != null ? { nextNode: explicitNext } : {}),
       tokens,
       costUsd,
       ...(Object.keys(routingDelta).length > 0 ? { routingDelta } : {}),

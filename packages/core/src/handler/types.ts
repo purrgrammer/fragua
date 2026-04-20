@@ -127,7 +127,22 @@ export interface HandlerContext {
 export type HandlerResult =
   | {
       kind: "transition";
-      nextNode: string;
+      /** Explicit next node. When set, the executor uses it verbatim and
+       * skips edge selection entirely. Handlers that want the 5-rule
+       * selector (condition → preferred_label → suggested_next_ids →
+       * weight → lexical) should leave this unset and populate the
+       * `outcomeStatus` / `preferredLabel` / `suggestedNextIds` fields
+       * instead. */
+      nextNode?: string;
+      /** Outcome status — matched against edge `condition="outcome=<s>"`
+       * clauses by the executor's edge selector. Defaults to "success". */
+      outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+      /** Preferred edge label — matched against unconditional edges'
+       * `label` attr after condition matching fails. */
+      preferredLabel?: string;
+      /** Suggested next node ids in priority order — matched against
+       * unconditional edges' `to` after label matching fails. */
+      suggestedNextIds?: string[];
       outputRef?: ArtifactRef;
       routingDelta?: Record<string, unknown>;
       tokens: number;

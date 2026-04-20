@@ -22,7 +22,9 @@ export interface AutoDispatcherOpts {
    * Optional factory that builds a real codergen handler for `box`-shape
    * nodes. When provided, the auto-dispatcher uses it instead of the
    * trivial noop transition so any box node that reaches the daemon is
-   * executed via a real LLM backend.
+   * executed via a real LLM backend. `nextNode` is passed as a legacy
+   * fallback for factories that don't rely on the executor's edge
+   * selector; factories are free to ignore it.
    */
   codergenFactory?: (node: Node, nextNode: string) => HandlerSpec;
 }

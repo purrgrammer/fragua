@@ -23,6 +23,158 @@ describe("buildSubstitutionArgs", () => {
   });
 });
 
+describe("executor — edge selection", () => {
+  test("handler leaves nextNode unset → executor picks via condition (outcome=fail)", async () => {
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      implement [shape=box];
+      verify [shape=box];
+      done [shape=Msquare];
+      start -> implement;
+      implement -> done [condition="outcome=fail"];
+      implement -> verify;
+      verify -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "implement", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "fail",
+        tokens: 1,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "edge-1", "start");
+    r.store.claimNextRun(1);
+    await runOne("edge-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const events = r.store.getEvents("edge-1");
+    const completedImplement = events.find(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "implement",
+    );
+    expect(completedImplement).not.toBeUndefined();
+    expect((completedImplement!.payload as { nextNode: string }).nextNode).toBe("done");
+
+    const edgeSelected = events.find((e) => e.type === "edge.selected");
+    expect(edgeSelected).not.toBeUndefined();
+    const sel = edgeSelected!.payload as { from: string; to: string; rule: string; matched_condition?: string };
+    expect(sel.from).toBe("implement");
+    expect(sel.to).toBe("done");
+    expect(sel.rule).toBe("condition");
+    expect(sel.matched_condition).toBe("outcome=fail");
+    r.store.close();
+  });
+
+  test("outcome=success routes to unconditional edge, not the fail-conditioned one", async () => {
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      implement [shape=box];
+      verify [shape=box];
+      done [shape=Msquare];
+      start -> implement;
+      implement -> done [condition="outcome=fail"];
+      implement -> verify;
+      verify -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "implement", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "success",
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "verify", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "edge-2", "start");
+    r.store.claimNextRun(1);
+    await runOne("edge-2", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const events = r.store.getEvents("edge-2");
+    const implementRow = events.find(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "implement",
+    )!;
+    expect((implementRow.payload as { nextNode: string }).nextNode).toBe("verify");
+    r.store.close();
+  });
+
+  test("handler with explicit nextNode bypasses selector (no edge.selected event)", async () => {
+    const r = rig();
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "edge-3", "start");
+    r.store.claimNextRun(1);
+    await runOne("edge-3", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const types = r.store.getEvents("edge-3").map((e) => e.type);
+    expect(types).not.toContain("edge.selected");
+    r.store.close();
+  });
+});
+
 describe("executor — observability emission", () => {
   test("ctx.emit(type, data) calls land in the store as verbatim events", async () => {
     const r = rig();

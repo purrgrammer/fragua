@@ -54,12 +54,17 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
   // Result-specific facts.
   switch (result.kind) {
     case "transition": {
+      // The executor resolves edge selection before calling resultToFacts,
+      // so nextNode is populated by this point. Defaulting to __end__
+      // matches the "no outgoing edges" terminal rule if anything upstream
+      // missed the substitution.
+      const nextNode = result.nextNode ?? "__end__";
       const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
         nodeId: ctx.state.currentNode ?? "",
         iteration: loopCounterOf(ctx.state.routing),
         tokens: result.tokens,
         costUsd: result.costUsd,
-        nextNode: result.nextNode,
+        nextNode,
       };
       if (result.outputRef != null) {
         payload.outputRef = `${result.outputRef.nodeId}:${result.outputRef.key}`;
@@ -67,15 +72,15 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       if (result.modelName != null) payload.modelName = result.modelName;
       facts.push({ type: "fact.node_completed", payload });
 
-      if (isTerminalNode(result.nextNode)) {
+      if (isTerminalNode(nextNode)) {
         facts.push({
           type: "fact.run_completed",
-          payload: { finalNode: result.nextNode },
+          payload: { finalNode: nextNode },
         });
       } else {
         facts.push({
           type: "fact.node_started",
-          payload: { nodeId: result.nextNode, iteration: 0 },
+          payload: { nodeId: nextNode, iteration: 0 },
         });
       }
       return facts;
