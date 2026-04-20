@@ -8,6 +8,7 @@ import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
+import { eventsToSteps } from "./steps.ts";
 
 export interface RunsRoutesOpts {
   store: IEventStore;
@@ -64,6 +65,15 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       return c.json({ error: "run not found" }, 404);
     }
     return c.json(store.getEvents(runId, { limit: 10_000 }));
+  });
+
+  app.get("/runs/:id/steps", (c) => {
+    const runId = c.req.param("id");
+    if (store.getState(runId) == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    const events = store.getEvents(runId, { limit: 10_000 });
+    return c.json(eventsToSteps(events));
   });
 
   return app;

@@ -177,12 +177,19 @@ export interface ObservabilityEvent {
 export type AnyEvent = IntentEvent | FactEvent;
 export type EventType = AnyEvent["type"];
 
-export interface StoredEvent<E extends AnyEvent = AnyEvent> {
+/**
+ * What the store actually gives you back from the `events` table. The
+ * `type` column is a plain string in SQLite — the fact/intent unions are
+ * the TYPED-WRITE contract only, not a read-side constraint. Observability
+ * events (agent.*, llm.*, tool.*, cost.recorded) land in the same table
+ * under their verbatim types and must be readable without casts.
+ */
+export interface StoredEvent {
   runId: string;
   seq: number;
-  type: E["type"];
+  type: string;
   writer: EventWriter;
-  payload: E extends { payload: infer P } ? P : never;
+  payload: unknown;
   ts: number;
 }
 
