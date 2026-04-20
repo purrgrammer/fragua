@@ -2,6 +2,8 @@ export type { BuildContextOpts } from "./context.ts";
 export { buildHandlerContext } from "./context.ts";
 export type { MakeExternalCallOpts } from "./external-call.ts";
 export { makeExternalCall } from "./external-call.ts";
+export type { SpawnFn, ToolConfig, ToolRunResult } from "./handlers/tool.ts";
+export { makeToolHandler, runWithBun } from "./handlers/tool.ts";
 export type { WaitHumanConfig } from "./handlers/wait-human.ts";
 export { makeWaitHumanHandler } from "./handlers/wait-human.ts";
 export type { HttpClientOpts } from "./http-client.ts";

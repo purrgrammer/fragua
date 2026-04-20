@@ -198,6 +198,22 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E008: tool node (parallelogram) must carry a non-empty `tool_command`.
+  // Without it the executor has nothing to spawn and halts at dispatch.
+  for (const n of nodes) {
+    if (n.shape !== "parallelogram") continue;
+    const cmd = n.attrs.tool_command;
+    if (typeof cmd !== "string" || cmd.trim().length === 0) {
+      diags.push({
+        severity: "error",
+        code: "E008",
+        message: `tool node "${n.id}" must define a non-empty \`tool_command\` attribute`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
   // W005: duplicate edges (same from/to pair with identical attributes)
   const seen = new Map<string, Edge>();
   for (const e of graph.edges) {

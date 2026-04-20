@@ -99,6 +99,23 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
+      {/* Tool (graph-level shell step) */}
+      {typeof attrs.tool_command === "string" && attrs.tool_command.length > 0 && (
+        <Section title="tool">
+          <Field
+            label="command"
+            value={
+              <pre
+                className="whitespace-pre-wrap break-words rounded bg-sw-surface-muted p-sw-xs text-sw-xs text-sw-text"
+                data-testid="node-inspector-tool-command"
+              >
+                {attrs.tool_command}
+              </pre>
+            }
+          />
+        </Section>
+      )}
+
       {/* Tools */}
       {(allowedTools.length > 0 || deniedTools.length > 0) && (
         <Section title="tools">

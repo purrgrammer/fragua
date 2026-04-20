@@ -127,6 +127,34 @@ Declare your handler's risk level on the spec:
 
 ---
 
+## Tool nodes (graph-level shell)
+
+A `parallelogram`-shape node runs `node.attrs.tool_command` as a single
+shell invocation (attractor §4.10) — no LLM, no agent loop. Use it for
+deterministic steps: running tests, linters, git plumbing, small
+scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
+
+```dot
+  run_tests [
+    shape        = parallelogram
+    tool_command = "bun test $ARGUMENTS"
+    goal_gate    = true
+  ]
+```
+
+`tool_command` goes through the same substitution as codergen prompts:
+`$ARGUMENTS`, `$RUN_ID`, `$WORKTREE_PATH`, `$nodeId.output`,
+`${context.x}`. Stdout + stderr become artifacts keyed by
+`${nodeId}:stdout` / `${nodeId}:stderr`, so downstream codergen nodes
+can reference them via `$toolNodeId.output`.
+
+A tool node is not an agent tool. Agent-callable tools (read / write /
+edit / bash) are what an LLM invokes *inside* a codergen turn; the
+graph-level `tool` node is a distinct primitive for fixed shell steps
+with no LLM in the loop. See `workflows/ci-gate.dot` for a pure-tool
+example and `workflows/review-parallel.dot` for a tool node alongside
+parallel / fan_in / wait.human.
+
 ## Loops
 
 Graph-level only, via backward conditional edges (attractor §3.6 / §5.2).

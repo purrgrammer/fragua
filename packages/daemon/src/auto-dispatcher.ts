@@ -75,7 +75,7 @@ function specsForGraph(
 function specForNode(
   nodeId: string,
   outbound: string[],
-  attrs: { shape?: string; type?: string; prompt?: string },
+  attrs: { shape?: string; type?: string; prompt?: string; tool_command?: string },
 ): HandlerSpec {
   const first = outbound[0] ?? "__end__";
   const kind = handlerKindOf(attrs);
@@ -86,6 +86,14 @@ function specForNode(
         prompt: attrs.prompt ?? `waiting at ${nodeId}`,
         nextNode: first,
       });
+    case "tool": {
+      // `timeout` attr is a duration string (e.g. "2m"); not yet parsed —
+      // tool handler falls back to its 5-minute default. Workflows that
+      // need a tighter / wider window must register the spec manually
+      // via Dispatcher.register until duration-string parsing lands.
+      const cmd = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
+      return handler.makeToolHandler({ toolCommand: cmd });
+    }
     case "exit":
       return {
         kind: "exit",
@@ -120,13 +128,12 @@ function specForNode(
         maxMs: 50,
         handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
       };
-    // Shapes NOT yet implemented end-to-end — handlers return a noop
-    // transition through the selector so the run progresses instead of
-    // deadlocking. Behaviour is incomplete: `tool` invocation and
-    // `parallel` fork/join aren't modelled here. Workflows that rely
-    // on these shapes need to register real specs via Dispatcher.register
-    // before invoking the daemon.
-    case "tool":
+    // `parallel` and `parallel.fan_in` still fall through to a noop
+    // transition — their executor wiring is the next milestone. A
+    // workflow that ships with these shapes runs but the branches are
+    // not actually forked; fan_in sees an empty results list. A real
+    // parallel workflow must register dispatcher specs manually until
+    // those handlers land.
     case "parallel":
     case "parallel.fan_in":
     default:

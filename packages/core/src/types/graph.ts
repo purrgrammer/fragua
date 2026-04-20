@@ -67,6 +67,10 @@ export interface NodeAttrs {
   /** Parallel-node config (component shape). */
   fan_in?: string;
   join_policy?: "wait_all" | "first_success";
+  /** Tool-node config (parallelogram shape). Shell command executed by
+   * the tool handler. Substitution is applied: $ARGUMENTS, $RUN_ID,
+   * $nodeId.output, ${context.*}. */
+  tool_command?: string;
   /** Per-node cost ceiling in USD. When the run's cumulative cost crosses
    * this before the next call to this node's backend, `budget.stop` fires
    * and the node's next attempt returns a non-retryable failure. Soft
