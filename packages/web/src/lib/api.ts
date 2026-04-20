@@ -309,14 +309,18 @@ export async function getSkill(name: string): Promise<SkillDetail> {
 }
 
 export async function getRunEvents(id: string): Promise<RunEventsPayload> {
-  return getJson(
+  // The server returns a bare array of StoredEvents (see
+  // packages/server/src/store/runs-routes.ts). Older call sites here
+  // expected an `{events, lastSeq}` envelope; we adapt on the client so
+  // the callers that need `lastSeq` for SSE resume still work, and we
+  // don't tie the public REST surface to an envelope format.
+  const events = await getJson<unknown[]>(
     `/runs/${encodeURIComponent(id)}/events.json`,
-    (v): v is RunEventsPayload =>
-      typeof v === "object" &&
-      v !== null &&
-      Array.isArray((v as { events?: unknown }).events) &&
-      typeof (v as { lastSeq?: unknown }).lastSeq === "number",
+    (v): v is unknown[] => Array.isArray(v),
   );
+  const last = events[events.length - 1] as { seq?: unknown } | undefined;
+  const lastSeq = typeof last?.seq === "number" ? last.seq : 0;
+  return { events, lastSeq };
 }
 
 export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
