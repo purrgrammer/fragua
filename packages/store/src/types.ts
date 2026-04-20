@@ -158,6 +158,22 @@ export type FactEvent =
 
 export type FactType = FactEvent["type"];
 
+/**
+ * Observability events carry the agent / LLM / tool / cost streaming trail
+ * the UI projects into its conversation + step views. They ride alongside
+ * facts in the same `events` table (same `seq` space, monotonic) but are
+ * NOT reduced into `run_state` — they're pure audit. See
+ * {@link IEventStore.appendObservabilityEvents}.
+ *
+ * The `type` stays verbatim (`agent.turn_start`, `llm.text_delta`, etc.)
+ * so the SSE + REST paths expose them under their natural names, matching
+ * what `events-to-conversation.ts` folds.
+ */
+export interface ObservabilityEvent {
+  type: string;
+  payload: Record<string, unknown>;
+}
+
 export type AnyEvent = IntentEvent | FactEvent;
 export type EventType = AnyEvent["type"];
 
@@ -327,6 +343,15 @@ export interface IEventStore {
   // ─── Writes
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
+  /**
+   * Append observability events (agent.*, llm.*, tool.*, cost.recorded).
+   * They share the same seq space as facts/intents, so a consumer tailing
+   * `/runs/:id/events` sees them interleaved in causal order — but they do
+   * NOT trigger the reducer, do NOT bump `run_state.version`, and do NOT
+   * require an expectedVersion (so handlers can emit mid-step without
+   * racing the terminal appendFact).
+   */
+  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
 
   // ─── Run lifecycle
   enqueueRun(params: EnqueueRunParams): void;

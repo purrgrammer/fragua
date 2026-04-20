@@ -60,6 +60,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     let modelName: string | undefined;
 
     const emit = async (type: EventType, data: Record<string, unknown>) => {
+      // Persist every agent/llm/tool/cost/summary event to the store so the
+      // UI's conversation + step views have data to project. Writes are
+      // buffered by the executor and flushed once per turn, not per event.
+      ctx.emit(type, data);
       if (type === "cost.recorded") {
         tokens += numAt(data, "total_tokens");
         costUsd += numAt(data, "cost_usd");

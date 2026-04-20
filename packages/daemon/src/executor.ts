@@ -141,6 +141,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
 
     const iteration = loopCounterOf(state.routing);
     const recorder = new CollectingRecorder(currentNode, iteration);
+    const observability: { type: string; payload: Record<string, unknown> }[] = [];
 
     let totalTokens = 0;
     let totalCostUsd = 0;
@@ -169,6 +170,14 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       tools: opts.tools,
       recorder,
       args: buildSubstitutionArgs(runId, state.routing),
+      emitObservability: (type, payload) => {
+        // Stamp nodeId + iteration so the UI can scope without the
+        // handler having to thread it through every payload.
+        observability.push({
+          type,
+          payload: { nodeId: currentNode, iteration, ...payload },
+        });
+      },
     };
     if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
@@ -194,6 +203,21 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
       };
     } finally {
       opts.registry.unregister(runId);
+    }
+
+    // Flush buffered agent/llm/tool events the handler emitted this turn.
+    // Runs before the terminal fact so the events table ordering matches the
+    // "happened during node N" intent. Best-effort: a flush failure logs and
+    // swallows rather than aborting the run — observability must never
+    // block state progress.
+    if (observability.length > 0) {
+      try {
+        opts.store.appendObservabilityEvents(runId, observability);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[executor] observability flush failed for run ${runId}:`, err);
+      }
+      observability.length = 0;
     }
 
     if (leakedTimeout) {

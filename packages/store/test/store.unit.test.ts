@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ArtifactTooLargeError,
   ConcurrencyError,
+  CURRENT_SCHEMA_VERSION,
   type FactEvent,
   type IntentEvent,
   MAX_BLOB_BYTES,
@@ -200,6 +201,80 @@ describe("SqliteStore — intents", () => {
     expect(store.getState(runId)!.version).toBe(s.version);
     const unapplied = store.getUnappliedIntents(runId);
     expect(unapplied.some((e) => e.type === "intent.pause_requested")).toBe(true);
+    store.close();
+  });
+});
+
+describe("SqliteStore — appendObservabilityEvents", () => {
+  test("writes events verbatim with monotonically increasing seqs, doesn't bump version", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const before = store.getState(runId)!;
+
+    const res = store.appendObservabilityEvents(runId, [
+      { type: "agent.turn_start", payload: { nodeId: "n1", iteration: 0, turnId: "t1" } },
+      { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "hel" } },
+      { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "lo" } },
+      { type: "tool.execution_end", payload: { nodeId: "n1", iteration: 0, tool_name: "local:bash" } },
+    ]);
+
+    expect(res.seqs).toHaveLength(4);
+    for (let i = 1; i < res.seqs.length; i++) {
+      expect(res.seqs[i]!).toBeGreaterThan(res.seqs[i - 1]!);
+    }
+    expect(store.getState(runId)!.version).toBe(before.version);
+
+    const events = store.getEvents(runId);
+    const types = events.map((e) => e.type);
+    expect(types).toContain("agent.turn_start");
+    expect(types.filter((t) => t === "llm.text_delta")).toHaveLength(2);
+    expect(types).toContain("tool.execution_end");
+    store.close();
+  });
+
+  test("empty array is a no-op — no seqs, no writes", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const before = store.getEvents(runId).length;
+    const res = store.appendObservabilityEvents(runId, []);
+    expect(res.seqs).toEqual([]);
+    expect(store.getEvents(runId).length).toBe(before);
+    store.close();
+  });
+
+  test("observability seqs interleave with facts in commit order", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: CURRENT_SCHEMA_VERSION, startNode: "n1" } }],
+      s.version,
+    );
+    const obs1 = store.appendObservabilityEvents(runId, [
+      { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "a" } },
+    ]);
+    const obs2 = store.appendObservabilityEvents(runId, [
+      { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "b" } },
+    ]);
+    expect(obs2.seqs[0]!).toBeGreaterThan(obs1.seqs[0]!);
+    store.close();
+  });
+
+  test("rejects an event with an empty type string", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(() =>
+      store.appendObservabilityEvents(runId, [{ type: "", payload: {} }]),
+    ).toThrow();
+    store.close();
+  });
+
+  test("rejects writes to unknown runId", async () => {
+    const store = freshStore();
+    expect(() =>
+      store.appendObservabilityEvents("no-such-run", [{ type: "llm.text_delta", payload: {} }]),
+    ).toThrow();
     store.close();
   });
 });

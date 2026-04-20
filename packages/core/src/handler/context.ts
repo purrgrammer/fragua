@@ -26,6 +26,11 @@ export interface BuildContextOpts {
    * when the caller has no positional input. Passed through to
    * HandlerContext unchanged. */
   args?: Readonly<Record<string, string>>;
+  /** Observability sink. Every ctx.emit(type, payload) call routes here.
+   * The executor wires this to a collector it drains into
+   * store.appendObservabilityEvents after the node's terminal fact lands.
+   * If omitted, ctx.emit becomes a no-op (useful for tests). */
+  emitObservability?: (type: string, payload: Record<string, unknown>) => void;
   hitlInput?: unknown;
   steering?: string;
 }
@@ -81,6 +86,11 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     recorder: opts.recorder,
   });
 
+  const emitObs = opts.emitObservability ?? (() => {});
+  const emit = (type: string, payload: Record<string, unknown>): void => {
+    emitObs(type, payload);
+  };
+
   const ctx: HandlerContext = {
     runId,
     nodeId,
@@ -94,6 +104,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     artifacts,
     externalCall,
     args: opts.args ?? {},
+    emit,
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
   };

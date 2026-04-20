@@ -109,6 +109,15 @@ export interface HandlerContext {
    * this from `run_state.routing` + ambient run info (runId, worktree path).
    */
   readonly args: Readonly<Record<string, string>>;
+  /**
+   * Emit an observability event (agent.*, llm.*, tool.*, cost.recorded,
+   * summary.*). The executor persists these to the store under their
+   * verbatim type so the UI's conversation + step views can project them.
+   * Non-blocking: the actual write is buffered and flushed alongside the
+   * node's terminal fact. Calling this inside a handler is safe under
+   * abort — buffered events flush even if the handler throws.
+   */
+  readonly emit: (type: string, payload: Record<string, unknown>) => void;
   /** Optional: HITL input delivered to a resumed wait.human node. */
   readonly hitlInput?: unknown;
   /** Optional: steering text folded in before this node run. */

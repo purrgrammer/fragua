@@ -28,6 +28,7 @@ import {
   MAX_ROUTING_BYTES,
   type Message,
   type MessageRole,
+  type ObservabilityEvent,
   PayloadTooLargeError,
   type RunMetrics,
   type RunState,
@@ -158,6 +159,33 @@ export class SqliteStore implements IEventStore {
 
     this.emitCommit(runId, seq);
     return { seq, ts };
+  }
+
+  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] } {
+    if (events.length === 0) return { seqs: [] };
+    const ts = this.now();
+    const seqs: number[] = [];
+    const startAt = performance.now();
+
+    this.writeTxn(() => {
+      const row = this.selectRunRow(runId);
+      if (row == null) throw new Error(`unknown run ${runId}`);
+      for (const event of events) {
+        if (typeof event.type !== "string" || event.type.length === 0) {
+          throw new Error("observability event.type must be a non-empty string");
+        }
+        const payload = this.validatePayload(event.payload);
+        const seq = this.bumpSeq(runId);
+        seqs.push(seq);
+        this.db
+          .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'daemon', ?, ?)")
+          .run(runId, seq, event.type, payload, ts);
+      }
+    });
+    this.metrics.recordWrite(performance.now() - startAt, "fact");
+
+    if (seqs.length > 0) this.emitCommit(runId, seqs[seqs.length - 1]!);
+    return { seqs };
   }
 
   // ─────────────── Run lifecycle ───────────────

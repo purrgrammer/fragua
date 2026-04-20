@@ -23,6 +23,87 @@ describe("buildSubstitutionArgs", () => {
   });
 });
 
+describe("executor — observability emission", () => {
+  test("ctx.emit(type, data) calls land in the store as verbatim events", async () => {
+    const r = rig();
+    // Custom handler that emits a small agent.* trail before transitioning.
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async (ctx) => {
+        ctx.emit("agent.turn_start", { turnId: "t1" });
+        ctx.emit("llm.text_delta", { delta: "hel" });
+        ctx.emit("llm.text_delta", { delta: "lo" });
+        ctx.emit("agent.message_end", { role: "assistant" });
+        return { kind: "transition", nextNode: "__end__", tokens: 3, costUsd: 0 };
+      },
+    });
+    enqueue(r, "obs-1", "start");
+    r.store.claimNextRun(1);
+
+    const ac = new AbortController();
+    await runOne("obs-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: ac.signal,
+    });
+
+    const types = r.store.getEvents("obs-1").map((e) => e.type);
+    expect(types).toContain("agent.turn_start");
+    expect(types.filter((t) => t === "llm.text_delta")).toHaveLength(2);
+    expect(types).toContain("agent.message_end");
+    // Observability events arrive before fact.node_completed so the UI can
+    // project the conversation scoped to the node's lifetime.
+    const obsIdx = types.indexOf("agent.turn_start");
+    const factIdx = types.indexOf("fact.node_completed");
+    expect(obsIdx).toBeGreaterThan(-1);
+    expect(factIdx).toBeGreaterThan(obsIdx);
+    // Each stored event carries nodeId + iteration so the UI can scope them.
+    const firstObs = r.store.getEvents("obs-1").find((e) => e.type === "agent.turn_start")!;
+    expect((firstObs.payload as { nodeId: string }).nodeId).toBe("start");
+    expect((firstObs.payload as { iteration: number }).iteration).toBe(0);
+    r.store.close();
+  });
+
+  test("emit buffer flushes even when the handler throws / aborts", async () => {
+    const r = rig();
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async (ctx) => {
+        ctx.emit("llm.text_delta", { delta: "before-abort" });
+        const err = new Error("cancelled");
+        err.name = "AbortError";
+        throw err;
+      },
+    });
+    enqueue(r, "obs-abort", "start");
+    r.store.claimNextRun(1);
+
+    const ac = new AbortController();
+    await runOne("obs-abort", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 3,
+      shutdownSignal: ac.signal,
+    });
+    const types = r.store.getEvents("obs-abort").map((e) => e.type);
+    expect(types).toContain("llm.text_delta");
+    r.store.close();
+  });
+});
+
 describe("executor — happy path", () => {
   test("queued → running → completed via terminal echo", async () => {
     const r = rig();
