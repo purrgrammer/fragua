@@ -24,7 +24,7 @@
 //   - `conversation-empty`         — empty state
 
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@swarm/types";
-import { Fragment, type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -406,11 +406,7 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
 
   return (
     <AIMessage from="assistant" data-testid={testid}>
-      <MessageContent>
-        {blocks.map((block, k) => (
-          <Fragment key={k}>{block}</Fragment>
-        ))}
-      </MessageContent>
+      <MessageContent>{blocks}</MessageContent>
     </AIMessage>
   );
 }
@@ -425,9 +421,7 @@ function StreamingMessageRow({ streaming }: { streaming: StreamingMessage }): JS
   return (
     <AIMessage from="assistant" data-testid="streaming-message">
       <MessageContent>
-        {blocks.map((block, k) => (
-          <Fragment key={k}>{block}</Fragment>
-        ))}
+        {blocks}
         <Shimmer className="mt-1 text-[10px]">streaming…</Shimmer>
       </MessageContent>
     </AIMessage>

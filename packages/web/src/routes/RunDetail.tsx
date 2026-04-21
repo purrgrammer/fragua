@@ -13,7 +13,7 @@
 import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Coins, DollarSign, Timer } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -50,6 +50,11 @@ export function RunDetail(): JSX.Element {
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const handleNodeClick = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    document.getElementById(`node-${nodeId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   const qc = useQueryClient();
   const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
@@ -136,7 +141,7 @@ export function RunDetail(): JSX.Element {
                 detail={detail ?? null}
                 refetchKey={totalEvents}
                 selectedNodeId={selectedNodeId}
-                onSelect={setSelectedNodeId}
+                onSelect={handleNodeClick}
               />
             </TabsContent>
             <TabsContent value="steps" className="h-full">

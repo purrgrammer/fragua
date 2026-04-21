@@ -37,10 +37,9 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
 import { RunRow } from "../components/RunRow.tsx";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
-import { StatTile } from "../components/ui/stat-tile.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
+import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
 import { formatTokensCompact, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";

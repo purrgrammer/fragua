@@ -11,8 +11,6 @@
 // only imports @swarm/core. Putting the merge here and having every
 // consumer import from @swarm/types guarantees the merge activates.
 
-export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
-
 export type { AgentMessage, AgentToolCall, AgentToolResult } from "@mariozechner/pi-agent-core";
 export type {
   AssistantMessage,
@@ -24,6 +22,7 @@ export type {
   ToolResultMessage,
   UserMessage,
 } from "@mariozechner/pi-ai";
+export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
 
 /** Swarm-specific custom message type: the assembled system prompt
  * for a single LLM call. Persisted in the `messages` table so UIs
