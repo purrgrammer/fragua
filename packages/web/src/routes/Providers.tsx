@@ -9,7 +9,7 @@
 // over a non-local socket.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plug, Trash2 } from "lucide-react";
+import { Cpu, KeyRound, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui/badge.tsx";
@@ -87,7 +87,7 @@ export function Providers(): JSX.Element {
       {data && data.providers.length === 0 && (
         <EmptyState
           data-testid="providers-empty"
-          icon={<Plug className="size-6" />}
+          icon={<Cpu className="size-6" />}
           title="No providers registered"
           description="pi-ai should bundle the built-ins; something went wrong during registry load."
         />
