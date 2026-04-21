@@ -194,8 +194,8 @@ describe("PiCodergenBackend resume surface", () => {
   });
 });
 
-describe("computeResumeDecision — pure §3.6 logic", () => {
-  test("resume + fidelity=full → degrade to summary:high", () => {
+describe("computeResumeDecision — observational resume flag", () => {
+  test("resume + fidelity=full → flag set, fidelity unchanged", () => {
     const r = computeResumeDecision({
       fidelity: "full",
       isFresh: false,
@@ -204,10 +204,10 @@ describe("computeResumeDecision — pure §3.6 logic", () => {
       hasInProcessWrite: false,
     });
     expect(r.resumed).toBe(true);
-    expect(r.effectiveFidelity).toBe("summary:high");
+    expect(r.effectiveFidelity).toBe("full");
   });
 
-  test("resume + fidelity=compact → stays compact (non-full modes don't degrade)", () => {
+  test("resume + fidelity=compact → flag set, fidelity unchanged", () => {
     const r = computeResumeDecision({
       fidelity: "compact",
       isFresh: false,
@@ -322,9 +322,11 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
     expect(decision.effectiveFidelity).toBe("full");
   });
 
-  test("two backends with separate Sets reproduce the false-positive", () => {
-    // Documents the pre-fix behaviour so regressions get caught: without
-    // a shared Set, the second backend's decision wrongly flags resume.
+  test("two backends with separate Sets flag resumed=true but don't degrade", () => {
+    // Without a shared Set the second backend has no record of the
+    // first's writes and flags resume=true. That signal is now purely
+    // observational — effectiveFidelity stays whatever the node asked
+    // for.
     const a = new PiCodergenBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
@@ -334,9 +336,6 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
       env: new LocalEnvironment({ cwd: process.cwd() }),
     });
 
-    // `a`'s Set is private; we can't touch it. Instead we assert the
-    // shape: `b` never observes any of `a`'s writes, and a non-empty
-    // external prior alone trips the degrade.
     expect(b.hasInProcessWrite("r1", "dev")).toBe(false);
     const decision = computeResumeDecision({
       fidelity: "full",
@@ -346,9 +345,7 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
       hasInProcessWrite: b.hasInProcessWrite("r1", "dev"),
     });
     expect(decision.resumed).toBe(true);
-    expect(decision.effectiveFidelity).toBe("summary:high");
-    // Silence unused-var: `a` exists only to mirror the daemon's
-    // per-node construction pattern.
+    expect(decision.effectiveFidelity).toBe("full");
     void a;
   });
 

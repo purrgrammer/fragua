@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
-import { degradeOnResume, fail, ok } from "@swarm/core";
+import { fail, ok } from "@swarm/core";
 import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
 import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -50,16 +50,15 @@ export interface PiCodergenBackendOptions {
    * and which dependencies are installed. Omit for bare LocalEnvironment
    * runs that don't need the preamble. */
   runEnv?: RunEnvironment;
-  /** Shared "threads we've written to in THIS daemon process" registry,
-   * keyed by `runId::threadId`. Each codergen node builds its own
-   * `PiCodergenBackend` (see `packages/cli/src/commands/daemon.ts`), so a
-   * per-instance Set can't tell "same daemon, different node on the
-   * shared thread" from "different daemon after a restart" — the
-   * former must NOT count as a resume (§3.6 fidelity-degrade is a
-   * restart-only concern). Pass a daemon-scoped Set here so all backends
-   * share the signal; a true daemon restart rebuilds the Set empty and
-   * the degrade kicks in correctly. Omit in tests/one-shots to get the
-   * per-instance behaviour. */
+  /** Shared "threads we've written to" registry, keyed by `runId::threadId`.
+   * Each codergen node builds its own `PiCodergenBackend` (see
+   * `packages/cli/src/commands/daemon.ts`), so a per-instance Set can't
+   * tell "same daemon, different node on the shared thread" from
+   * "different daemon after a restart". Pass a daemon-scoped Set here so
+   * all backends share the signal. The daemon seeds it at boot from
+   * `store.listThreadsWithMessages()` so a post-restart dispatch on a
+   * pre-existing thread still finds its key present. Omit in
+   * tests/one-shots to get the per-instance behaviour. */
   inProcessWrites?: Set<string>;
 }
 
@@ -86,12 +85,13 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly summariser: SummariserBackend | undefined;
   private readonly skills: readonly Skill[];
   private readonly runEnv: RunEnvironment | undefined;
-  /** Per-(runId, threadId) flags marking threads we've *written* to in
-   * THIS daemon process. A load of a non-empty transcript for a
-   * (run, thread) whose key is missing here is the resume signal: the
-   * transcript is from a prior process, so the pi-ai sessionId is stale
-   * and fidelity=full must degrade to summary:high. Shared across every
-   * PiCodergenBackend in the daemon when the caller wires
+  /** Per-(runId, threadId) flags marking threads this daemon has dispatched
+   * on. A load of a non-empty transcript for a (run, thread) whose key is
+   * missing is the resume signal — purely observational now: fidelity is
+   * invariant across restarts, rehydration is byte-identical, and provider
+   * caches either key off the stable thread_id (OpenAI Responses) or the
+   * content itself (Anthropic / OpenAI Completions / Google). Shared across
+   * every PiCodergenBackend in the daemon when the caller wires
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
@@ -252,12 +252,13 @@ export class PiCodergenBackend implements CodergenBackend {
       this.messageStore.set(input.run_id, threadId, storedForThread);
     }
 
-    // Resume detection. When the executor hands us a non-empty
-    // transcript for a (runId, threadId) we haven't written to in
-    // *this* process, the pi-ai sessionId is from a prior daemon life
-    // and the provider's KV cache is gone. SPEC §3.6 says degrade
-    // fidelity=full to summary:high; other modes already build a seed
-    // from priorMessages so they're unaffected.
+    // Resume detection — purely observational. Fidelity is invariant
+    // across daemon restarts: rehydration from the messages table is
+    // byte-identical, so Anthropic / OpenAI-Completions / Google hit their
+    // content-addressed prompt caches on identical prefixes, and the
+    // OpenAI-Responses family's `prompt_cache_key` is derived from the
+    // stable `thread_id`. The flag lets us log "this thread was last
+    // written by a prior process" without changing any behaviour.
     const decision = computeResumeDecision({
       fidelity: input.fidelity,
       isFresh,
@@ -267,10 +268,12 @@ export class PiCodergenBackend implements CodergenBackend {
     });
     const resumed = decision.resumed;
     const effectiveFidelity = decision.effectiveFidelity;
-    const effectiveHydrate = resumed ? shouldHydrateFromStore(effectiveFidelity, isFresh) : hydrate;
-    if (resumed && input.emit) {
-      await input.emit("agent.warning", {
-        message: `resuming thread "${threadId}" after daemon restart — fidelity=${input.fidelity} degraded to ${effectiveFidelity}`,
+    const effectiveHydrate = hydrate;
+    if (resumed && input.emit && threadId) {
+      await input.emit("agent.info", {
+        event: "thread_rehydrated",
+        thread_id: threadId,
+        message_count: storedForThread.length,
       });
     }
 
@@ -515,22 +518,14 @@ function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment 
 
 /** Pure resume-decision helper, extracted for unit testability.
  *
- * Inputs:
- *   - `fidelity`: the mode declared on the node.
- *   - `isFresh`: `context="fresh"` was set; no cross-node sharing.
- *   - `threadId`: resolved thread id, or `undefined` if the node has
- *     none (no thread = no possible resume).
- *   - `externalPriorLen`: number of messages supplied via
- *     `CodergenInput.priorMessages`. Use `-1` to signal "caller did
- *     not supply priorMessages at all" (legacy / test paths) — those
- *     never count as resume.
- *   - `hasInProcessWrite`: `inProcessWrites` already has this
- *     `(runId, threadId)` — means we wrote it earlier in THIS process,
- *     so any transcript is ours and the provider cache is live.
- *
- * Returns `{ resumed, effectiveFidelity }` where `effectiveFidelity`
- * is the fidelity to actually use for the seed + session resolution.
- * `resumed=true` implies `fidelity=full` was degraded per §3.6.
+ * `resumed` is purely observational: true when the caller supplied a
+ * non-empty prior transcript for a (runId, threadId) that this process
+ * has no record of writing. Fidelity is invariant across restarts —
+ * rehydration is byte-identical and provider caches either content-hash
+ * or key off the stable `thread_id`, so a resumed dispatch and a
+ * same-process dispatch produce the same effective context. The flag
+ * exists to emit an `agent.info` `thread_rehydrated` signal, not to
+ * drive behaviour.
  */
 export function computeResumeDecision(args: {
   fidelity: FidelityMode;
@@ -540,8 +535,7 @@ export function computeResumeDecision(args: {
   hasInProcessWrite: boolean;
 }): { resumed: boolean; effectiveFidelity: FidelityMode } {
   const resumed = !args.isFresh && args.threadId != null && args.externalPriorLen > 0 && !args.hasInProcessWrite;
-  const effectiveFidelity: FidelityMode = resumed ? degradeOnResume(args.fidelity) : args.fidelity;
-  return { resumed, effectiveFidelity };
+  return { resumed, effectiveFidelity: args.fidelity };
 }
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {
