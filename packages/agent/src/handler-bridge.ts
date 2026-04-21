@@ -35,7 +35,8 @@ export interface MakeCodergenHandlerOpts {
   backend?: CodergenBackend;
   /** Builder used when `backend` is omitted. */
   backendOpts?: PiCodergenBackendOptions;
-  /** Hard per-call timeout; forwarded into HandlerSpec.maxMs. Default 5 min. */
+  /** Hard per-call timeout; forwarded into HandlerSpec.maxMs. Default 30 min
+   * (see DEFAULT_MAX_MS below for rationale). */
   maxMs?: number;
   /** Default ContextMap passed as CodergenInput.context. Merged with
    * ctx.routing at call time. */
@@ -46,7 +47,11 @@ type HandlerSpec = handler.HandlerSpec;
 type HandlerContext = handler.HandlerContext;
 type HandlerResult = handler.HandlerResult;
 
-const DEFAULT_MAX_MS = 5 * 60 * 1000;
+// Safety net for runaway tool loops, not a policy ceiling for legitimately
+// long agent work. Drop this cap once budget enforcement lands
+// (docs/ARCHITECTURE.md §13.1) — the $-budget is the correct fence; a
+// wall-clock ceiling is just a proxy for "something is wedged".
+const DEFAULT_MAX_MS = 30 * 60 * 1000;
 
 export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec {
   const backend: CodergenBackend =
