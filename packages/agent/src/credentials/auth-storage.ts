@@ -286,6 +286,30 @@ export class AuthStorage {
     return false;
   }
 
+  /** Describe where `getApiKey(provider)` would read from, for the
+   * user-facing CLI diagnostic. Never returns the key itself. The
+   * returned label is stable across runs for a given config (useful
+   * in docs / support threads). */
+  describeAuthSource(provider: string): string | null {
+    if (this.runtimeOverrides.has(provider)) return "runtime override";
+    const cred = this.data[provider];
+    if (cred?.type === "api_key") {
+      const k = cred.key;
+      if (k.startsWith("!")) return `auth.json api_key (shell: ${k.slice(1, 48)}${k.length > 49 ? "…" : ""})`;
+      if (process.env[k] !== undefined) return `auth.json api_key (env: ${k})`;
+      return "auth.json api_key (literal)";
+    }
+    if (cred?.type === "oauth") return "auth.json oauth";
+    // pi-ai's env-var map isn't exported (only getEnvApiKey(provider)
+    // returns the value). Naming the specific variable would mean
+    // mirroring the map and eating drift on every pi-ai release, so we
+    // just label "env" and let the user `env | grep <PROVIDER>` if
+    // they need the specific name. Revisit if pi-ai exports the map.
+    if (getEnvApiKey(provider)) return "env";
+    if (this.fallbackResolver?.(provider)) return "models.json custom provider";
+    return null;
+  }
+
   getAll(): AuthStorageData {
     return { ...this.data };
   }

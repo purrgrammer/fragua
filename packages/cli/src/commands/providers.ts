@@ -52,12 +52,12 @@ export function providersListCommand(): number {
   for (const [name, count] of rows) {
     const ready = auth.hasAuth(name);
     if (ready) credentialed++;
-    const cred = auth.get(name);
-    const credKind = cred?.type === "oauth" ? " (oauth)" : cred?.type === "api_key" ? " (api key)" : "";
+    const source = ready ? auth.describeAuthSource(name) : null;
     const mark = ready ? chalk.green("✓") : chalk.dim("·");
     const nameCol = name.padEnd(24);
     const countCol = `${count} model${count === 1 ? "" : "s"}`.padEnd(12);
-    console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(credKind)}`);
+    const sourceCol = source ? ` ${source}` : "";
+    console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(sourceCol)}`);
   }
   const err = registry.getError();
   if (err) {
@@ -172,8 +172,12 @@ export async function providersTestCommand(
     console.error(chalk.dim("  likely a !shell-command in auth.json failed — try running it directly"));
     return 1;
   }
+  const source = auth.describeAuthSource(provider) ?? "unknown";
+  const keyPreview = `${apiKey.slice(0, 6)}…${apiKey.slice(-4)} (${apiKey.length} chars)`;
 
   console.log(chalk.dim(`testing ${provider}/${model.id} …`));
+  console.log(chalk.dim(`  source: ${source}`));
+  console.log(chalk.dim(`  key:    ${keyPreview}`));
   const started = Date.now();
   let firstDeltaMs: number | undefined;
   let outputTokens = 0;
