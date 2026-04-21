@@ -7,11 +7,20 @@
 // Swarm-internal `system` rows (the assembled system prompt) collapse
 // by default.
 //
+// Messages group by `nodeId` into sections divided by a hairline
+// rule + a small section header carrying node id + status badge.
+// A streaming buffer from `useRunLive` renders at the tail of the
+// last section as a pending assistant message, fed by
+// `llm.text_delta` / `llm.thinking_delta` / `llm.toolcall_delta`
+// frames between `agent.message_start` and `agent.message_end`.
+//
 // `data-testid` hooks:
 //   - `conversation-user-prompt`   — the initial user-input message
+//   - `node-section-<nodeId>`      — one per node group
 //   - `message-<ordinal>`          — one per row
 //   - `tool-<toolCallId>`          — one per tool_call
 //   - `reasoning-<ordinal>-<idx>`  — one per thinking block
+//   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@swarm/types";
@@ -24,13 +33,22 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { RunMessageRow } from "@/lib/api";
+import type { NodeState, RunMessageRow } from "@/lib/api";
+import type { StreamingBlock, StreamingMessage } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
 export interface RunConversationProps {
   messages: RunMessageRow[];
+  /** In-flight assistant message buffer from `useRunLive`. When
+   * present, renders at the tail of its node section as a pending
+   * message with a streaming shimmer. */
+  streaming?: StreamingMessage | null;
+  /** Per-node state projection from `RunDetail.nodes`, used to drive
+   * the section header status dot + label. */
+  nodeStates?: readonly NodeState[];
   isLive?: boolean;
   isLoading?: boolean;
   /** Free-form text the run was launched with. Rendered as the first
@@ -42,14 +60,15 @@ export interface RunConversationProps {
 
 export function RunConversation({
   messages,
+  streaming = null,
+  nodeStates,
   isLive = false,
   isLoading = false,
   userInput,
   className,
 }: RunConversationProps): JSX.Element {
-  // Build a toolCallId → result map so each toolCall inside an
-  // assistant message can pull in its paired result inline (same
-  // convention as pi-mono's Messages.ts `toolResultsById`).
+  // toolCallId → result map, so each toolCall inside an assistant
+  // message pulls in its paired result inline.
   const toolResultsById = useMemo(() => {
     const map = new Map<string, ToolResultMessage>();
     for (const row of messages) {
@@ -60,14 +79,29 @@ export function RunConversation({
     return map;
   }, [messages]);
 
-  const visibleMessages = useMemo(
-    // toolResult rows are rendered inline with their paired toolCall,
-    // not as standalone bubbles.
-    () => messages.filter((row) => row.content.role !== "toolResult"),
-    [messages],
-  );
+  const stateByNodeId = useMemo(() => {
+    const map = new Map<string, NodeState>();
+    for (const n of nodeStates ?? []) map.set(n.nodeId, n);
+    return map;
+  }, [nodeStates]);
 
-  const empty = !isLoading && !userInput && visibleMessages.length === 0;
+  // Group contiguous rows by nodeId. A fresh section opens whenever
+  // the nodeId changes from the previous row. `null` / missing nodeIds
+  // collapse into a single "(unscoped)" section — shouldn't happen
+  // for agent-emitted messages but we guard defensively.
+  const sections = useMemo(() => groupByNode(messages), [messages]);
+  const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
+
+  // The streaming buffer belongs to whichever node the last frame
+  // tagged — usually the one whose section is currently the tail.
+  // Append to that section if it exists, otherwise create a new one.
+  const streamingNodeId = streaming?.nodeId ?? null;
+  const tailSection = visibleSections[visibleSections.length - 1];
+  const appendStreamingToTail =
+    streaming != null && streamingNodeId != null && tailSection != null && tailSection.nodeId === streamingNodeId;
+  const orphanStreaming = streaming != null && !appendStreamingToTail;
+
+  const empty = !isLoading && !userInput && visibleSections.length === 0 && streaming == null;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -83,14 +117,159 @@ export function RunConversation({
         ) : (
           <ConversationContent>
             {userInput && <UserPromptMessage text={userInput} />}
-            {visibleMessages.map((row) => (
-              <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
-            ))}
+            {visibleSections.map((section, i) => {
+              const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
+              const isTail = i === visibleSections.length - 1;
+              const showStreamHere = appendStreamingToTail && isTail;
+              return (
+                <NodeSection key={section.key} nodeId={section.nodeId} state={nodeState} isLive={isLive}>
+                  {section.rows.map((row) => (
+                    <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                  ))}
+                  {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                </NodeSection>
+              );
+            })}
+            {orphanStreaming && (
+              <NodeSection
+                nodeId={streamingNodeId}
+                state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
+                isLive={isLive}
+              >
+                <StreamingMessageRow streaming={streaming!} />
+              </NodeSection>
+            )}
           </ConversationContent>
         )}
         <ConversationScrollButton />
       </Conversation>
     </div>
+  );
+}
+
+// ─── Node section grouping ──────────────────────────────────────────
+
+interface Section {
+  key: string;
+  nodeId: string | null;
+  rows: RunMessageRow[];
+}
+
+function groupByNode(messages: RunMessageRow[]): Section[] {
+  const out: Section[] = [];
+  for (const row of messages) {
+    const nodeId = row.nodeId;
+    const last = out[out.length - 1];
+    if (last && last.nodeId === nodeId) {
+      last.rows.push(row);
+    } else {
+      out.push({ key: `${nodeId ?? "∅"}-${row.ordinal}`, nodeId, rows: [row] });
+    }
+  }
+  return out;
+}
+
+interface NodeSectionProps {
+  nodeId: string | null;
+  state?: NodeState;
+  isLive: boolean;
+  children: ReactNode;
+}
+
+function NodeSection({ nodeId, state, isLive, children }: NodeSectionProps): JSX.Element {
+  const label = nodeId ?? "unscoped";
+  const status: NodeState["state"] | "idle" = state?.state ?? "idle";
+  return (
+    <section
+      id={nodeId ? `node-${nodeId}` : undefined}
+      data-testid={nodeId ? `node-section-${nodeId}` : "node-section-unscoped"}
+      className="relative flex flex-col gap-3"
+    >
+      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-background/95 px-1 py-1 backdrop-blur-sm">
+        <StatusDot status={status} isLive={isLive} />
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/80">
+          {label}
+        </span>
+        {state && <NodeStatusLabel state={state.state} isLive={isLive} />}
+        <div className="ml-2 h-px flex-1 bg-border" aria-hidden />
+      </header>
+      <div className="flex flex-col gap-3 pl-4">{children}</div>
+    </section>
+  );
+}
+
+// ─── Status chips ────────────────────────────────────────────────
+
+const STATUS_TONE: Record<NodeState["state"] | "idle", { dot: string; label: string; ring: string }> = {
+  running: {
+    dot: "bg-violet-500",
+    label: "text-violet-700 dark:text-violet-300",
+    ring: "ring-violet-400/30",
+  },
+  completed: {
+    dot: "bg-emerald-500",
+    label: "text-emerald-700 dark:text-emerald-300",
+    ring: "ring-emerald-400/30",
+  },
+  failed: { dot: "bg-rose-500", label: "text-rose-700 dark:text-rose-300", ring: "ring-rose-400/30" },
+  retrying: {
+    dot: "bg-amber-500",
+    label: "text-amber-700 dark:text-amber-300",
+    ring: "ring-amber-400/30",
+  },
+  pending: {
+    dot: "bg-slate-400",
+    label: "text-slate-600 dark:text-slate-400",
+    ring: "ring-slate-300/30",
+  },
+  skipped: {
+    dot: "bg-slate-300",
+    label: "text-slate-500 dark:text-slate-400",
+    ring: "ring-slate-300/20",
+  },
+  idle: {
+    dot: "bg-slate-300",
+    label: "text-slate-500 dark:text-slate-400",
+    ring: "ring-slate-300/20",
+  },
+};
+
+function StatusDot({ status, isLive }: { status: NodeState["state"] | "idle"; isLive: boolean }): JSX.Element {
+  const tone = STATUS_TONE[status];
+  const pulse = status === "running" && isLive ? "sw-pulse" : "";
+  return (
+    <span
+      aria-hidden
+      data-status={status}
+      className={cn("inline-block size-2 rounded-full ring-2", tone.dot, tone.ring, pulse)}
+    />
+  );
+}
+
+function NodeStatusLabel({ state, isLive }: { state: NodeState["state"]; isLive: boolean }): JSX.Element {
+  const tone = STATUS_TONE[state];
+  const label =
+    state === "running"
+      ? isLive
+        ? "streaming"
+        : "in progress"
+      : state === "completed"
+        ? "done"
+        : state === "failed"
+          ? "failed"
+          : state === "retrying"
+            ? "retrying"
+            : state === "skipped"
+              ? "skipped"
+              : "pending";
+  return (
+    <span
+      data-testid={`node-status-${state}`}
+      data-status={state}
+      className={cn("font-mono text-[10px] uppercase tracking-[0.08em]", tone.label)}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -105,12 +284,8 @@ interface MessageRowProps {
 function MessageRow({ row, toolResultsById, isLive }: MessageRowProps): JSX.Element | null {
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
-  if (msg.role === "system") {
-    return <SystemPromptRow content={msg.content} testid={testid} />;
-  }
-  if (msg.role === "user") {
-    return <UserMessageRow message={msg} testid={testid} />;
-  }
+  if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
+  if (msg.role === "user") return <UserMessageRow message={msg} testid={testid} />;
   if (msg.role === "assistant") {
     return (
       <AssistantMessageRow
@@ -240,6 +415,52 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
   );
 }
 
+// ─── Streaming assistant (mid-message deltas) ─────────────────────
+
+function StreamingMessageRow({ streaming }: { streaming: StreamingMessage }): JSX.Element {
+  const blocks: ReactNode[] = streaming.blocks
+    .map((block, i) => renderStreamingBlock(block, i))
+    .filter((x): x is ReactNode => x !== null);
+
+  return (
+    <AIMessage from="assistant" data-testid="streaming-message">
+      <MessageContent>
+        {blocks.map((block, k) => (
+          <Fragment key={k}>{block}</Fragment>
+        ))}
+        <Shimmer className="mt-1 text-[10px]">streaming…</Shimmer>
+      </MessageContent>
+    </AIMessage>
+  );
+}
+
+function renderStreamingBlock(block: StreamingBlock, i: number): ReactNode {
+  if (block.type === "text") {
+    if (block.text.length === 0) return null;
+    return <MessageResponse key={`stream-t${i}`}>{block.text}</MessageResponse>;
+  }
+  if (block.type === "thinking") {
+    if (block.text.length === 0) return null;
+    return (
+      <Reasoning key={`stream-r${i}`} className="w-full" isStreaming>
+        <ReasoningTrigger />
+        <ReasoningContent>{block.text}</ReasoningContent>
+      </Reasoning>
+    );
+  }
+  if (block.type === "toolCall") {
+    return (
+      <Tool key={`stream-c${i}`}>
+        <ToolHeader type="tool-pending" state="input-streaming" title="…" />
+        <ToolContent>
+          <pre className="whitespace-pre-wrap font-mono text-[11px] text-muted-foreground">{block.argsText}</pre>
+        </ToolContent>
+      </Tool>
+    );
+  }
+  return null;
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────
 
 function flattenText(content: unknown): string {
@@ -255,8 +476,6 @@ function flattenText(content: unknown): string {
   return parts.join("\n");
 }
 
-/** Map a swarm tool name to AI-Elements' `tool-${string}` type
- * identifier. Keeps the Tool component's icon/label conventions. */
 function toolTypeFromName(name: string): `tool-${string}` {
   return `tool-${name}` as `tool-${string}`;
 }

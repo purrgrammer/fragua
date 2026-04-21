@@ -207,8 +207,7 @@ export type FactType = FactEvent["type"];
  * {@link IEventStore.appendObservabilityEvents}.
  *
  * The `type` stays verbatim (`agent.turn_start`, `llm.text_delta`, etc.)
- * so the SSE + REST paths expose them under their natural names, matching
- * what `events-to-conversation.ts` folds.
+ * so the SSE + REST paths expose them under their natural names.
  */
 export interface ObservabilityEvent {
   type: string;

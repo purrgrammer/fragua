@@ -13,7 +13,7 @@
 import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Coins, DollarSign, Timer } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -46,9 +46,10 @@ export function RunDetail(): JSX.Element {
   const shouldCanonicalize = !!id && rawView !== view;
 
   // All hooks before any conditional return — Rules of Hooks.
-  const { messages, status: liveStatus, totalEvents, controlEvents } = useRunLive(id || null);
+  const { messages, streaming, status: liveStatus, totalEvents, controlEvents } = useRunLive(id || null);
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const qc = useQueryClient();
   const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
@@ -79,7 +80,7 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} />
+      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} />
 
       {isError && !detail ? (
         <EmptyState
@@ -120,6 +121,8 @@ export function RunDetail(): JSX.Element {
             <TabsContent value="conversation" className="h-full">
               <RunConversation
                 messages={messages}
+                streaming={streaming}
+                nodeStates={detail?.nodes}
                 isLive={isLive}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
@@ -129,7 +132,12 @@ export function RunDetail(): JSX.Element {
               <EventLog runId={id} refetchKey={totalEvents} />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
-              <RunGraphTab detail={detail ?? null} refetchKey={totalEvents} />
+              <RunGraphTab
+                detail={detail ?? null}
+                refetchKey={totalEvents}
+                selectedNodeId={selectedNodeId}
+                onSelect={setSelectedNodeId}
+              />
             </TabsContent>
             <TabsContent value="steps" className="h-full">
               <StepInspector runId={id} totalEvents={totalEvents} />
@@ -145,7 +153,8 @@ export function RunDetail(): JSX.Element {
 
 // ─── Header: run-level title + stats strip ────────────────────────
 
-function DetailHeader({ detail, id }: { detail: RunDetailT | null; id: string }): JSX.Element {
+function DetailHeader({ detail, id, isLive }: { detail: RunDetailT | null; id: string; isLive: boolean }): JSX.Element {
+  const showLive = isLive && detail?.status === "running";
   return (
     <header className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 items-baseline gap-2">
@@ -157,6 +166,18 @@ function DetailHeader({ detail, id }: { detail: RunDetailT | null; id: string })
             <span className="text-xs text-muted-foreground/40">·</span>
             <span className="truncate text-xs text-muted-foreground" title={detail.workflow ?? ""}>
               {detail.workflowName}
+            </span>
+          </>
+        )}
+        {showLive && (
+          <>
+            <span className="text-xs text-muted-foreground/40">·</span>
+            <span
+              data-testid="detail-live-pill"
+              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-violet-700 dark:text-violet-300"
+            >
+              <span className="sw-pulse inline-block size-1.5 rounded-full bg-violet-500 ring-2 ring-violet-400/30" />
+              live
             </span>
           </>
         )}
@@ -252,7 +273,17 @@ function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
 
 // ─── Graph tab ────────────────────────────────────────────────────
 
-function RunGraphTab({ detail, refetchKey }: { detail: RunDetailT | null; refetchKey: number }): JSX.Element {
+function RunGraphTab({
+  detail,
+  refetchKey,
+  selectedNodeId,
+  onSelect,
+}: {
+  detail: RunDetailT | null;
+  refetchKey: number;
+  selectedNodeId: string | null;
+  onSelect: (id: string) => void;
+}): JSX.Element {
   const graph = useMemo(() => {
     if (!detail?.workflowSource) return null;
     try {
@@ -263,15 +294,24 @@ function RunGraphTab({ detail, refetchKey }: { detail: RunDetailT | null; refetc
   }, [detail?.workflowSource]);
 
   const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
+  const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
+  const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;
 
   return (
     <div className="grid h-full min-h-[480px] grid-cols-1 gap-4 p-2 md:grid-cols-[minmax(0,1fr)_360px]">
       <div className="min-h-[480px] min-w-0">
         {detail ? (
-          <GraphView detail={detail} orientation="TB" refetchKey={refetchKey} activeNodeId={activeNodeId} />
+          <GraphView
+            detail={detail}
+            orientation="TB"
+            refetchKey={refetchKey}
+            activeNodeId={activeNodeId}
+            selectedNodeId={selectedNodeId}
+            onNodeClick={onSelect}
+          />
         ) : null}
       </div>
-      <NodeInspector node={graph ? (graph.nodes[activeNodeId ?? ""] ?? null) : null} state={null} />
+      <NodeInspector node={selected} state={selectedState} />
     </div>
   );
 }
