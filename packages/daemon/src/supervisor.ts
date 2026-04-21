@@ -68,17 +68,21 @@ export function startSupervisor(opts: SupervisorOpts): {
         }
       }
 
-      // (c) Stuck-node watchdog. A run that's been 'running' for longer
-      // than handler.maxMs + grace gets its controller tripped.
+      // (c) Stuck-node watchdog. Uses the registry's in-process `startedAt`
+      // so daemon pauses and restart gaps don't count — the node's maxMs
+      // budget applies to active execution only. A run reclaimed via
+      // startup-sweep gets a fresh budget; wall-clock accrued before the
+      // crash is not charged.
       if (opts.handlerMaxMsFor != null) {
         for (const runId of opts.registry.activeRuns()) {
+          const elapsed = opts.registry.elapsedMs(runId);
+          if (elapsed == null) continue;
           const state = opts.store.getState(runId);
           if (state == null) continue;
           if (state.status !== "running") continue;
-          if (state.nodeStartedAt == null) continue;
           if (state.currentNode == null) continue;
           const maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
-          if (now - state.nodeStartedAt > maxMs + leakGrace) {
+          if (elapsed > maxMs + leakGrace) {
             opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));
           }
         }
