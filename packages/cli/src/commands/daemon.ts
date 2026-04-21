@@ -170,6 +170,23 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   }
   const concurrency = opts.concurrency ?? config.concurrency ?? 4;
 
+  const signalCtrl = new AbortController();
+  const onSig = () => signalCtrl.abort();
+  process.once("SIGINT", onSig);
+  process.once("SIGTERM", onSig);
+
+  // Shared summariser — one PiSummariserBackend per daemon process, used
+  // by BOTH the AutoTitler (run-title generation) AND every codergen
+  // backend's `fidelity=summary:medium/high` path. Without reuse the
+  // fidelity path has no backend wired and degrades to the deterministic
+  // `summary:low` template with a soft warning (visible in events.jsonl).
+  const summariserInfo = buildSummariserBackend({
+    config,
+    primaryProvider: provider,
+    modelRegistry,
+    getApiKey,
+  });
+
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   if (useLlm) {
@@ -197,6 +214,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
         return m as Model<string>;
       },
       getApiKey,
+      ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
     // The factory receives the first outgoing edge as a legacy-compat
@@ -216,11 +234,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     }),
   );
 
-  const signalCtrl = new AbortController();
-  const onSig = () => signalCtrl.abort();
-  process.once("SIGINT", onSig);
-  process.once("SIGTERM", onSig);
-
   // Auto-title summariser — cheap cross-run call that labels each run
   // post-enqueue. Uses `defaults.summariser.{provider,model}` when set;
   // otherwise defaults to the cheapest known model for the primary
@@ -229,9 +242,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const autoTitler = buildAutoTitler({
     store,
     config,
-    primaryProvider: provider,
-    modelRegistry,
-    getApiKey,
+    summariser: summariserInfo,
     shutdownSignal: signalCtrl.signal,
   });
 
@@ -307,23 +318,27 @@ function isGitRepo(cwd: string): Promise<boolean> {
   });
 }
 
-function buildAutoTitler(args: {
-  store: SqliteStore;
+interface SummariserInfo {
+  backend: PiSummariserBackend | undefined;
+  label: string | undefined;
+}
+
+/** Construct the shared `PiSummariserBackend` used by AutoTitler + every
+ * codergen backend's fidelity=summary:* path. Returns `{ backend:
+ * undefined }` when there's no usable provider/model combination — the
+ * caller decides how to surface that (AutoTitler disables itself;
+ * fidelity paths already warn + fall back to `summary:low`). */
+function buildSummariserBackend(args: {
   config: Awaited<ReturnType<typeof loadConfig>>;
   primaryProvider: string | undefined;
   modelRegistry: ModelRegistry;
   getApiKey: (provider: string) => Promise<string | undefined>;
-  shutdownSignal: AbortSignal;
-}): { titler: AutoTitler | undefined; label: string | undefined } {
-  const { store, config, primaryProvider, modelRegistry, getApiKey, shutdownSignal } = args;
-  if (config.auto_title === "off") {
-    return { titler: undefined, label: "off (config)" };
-  }
+}): SummariserInfo {
+  const { config, primaryProvider, modelRegistry, getApiKey } = args;
   const sumProvider = config.defaults?.summariser?.provider ?? primaryProvider;
-  if (!sumProvider) return { titler: undefined, label: undefined };
+  if (!sumProvider) return { backend: undefined, label: undefined };
   const sumModel = config.defaults?.summariser?.model ?? defaultSummariserModel(sumProvider);
-  if (!sumModel) return { titler: undefined, label: `no default model for ${sumProvider}` };
-
+  if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   const backend = new PiSummariserBackend({
     provider: sumProvider,
     model: sumModel,
@@ -334,6 +349,22 @@ function buildAutoTitler(args: {
     },
     getApiKey,
   });
-  const titler = new AutoTitler({ backend, store, shutdownSignal, enabled: true });
-  return { titler, label: `${sumProvider}/${sumModel}` };
+  return { backend, label: `${sumProvider}/${sumModel}` };
+}
+
+function buildAutoTitler(args: {
+  store: SqliteStore;
+  config: Awaited<ReturnType<typeof loadConfig>>;
+  summariser: SummariserInfo;
+  shutdownSignal: AbortSignal;
+}): { titler: AutoTitler | undefined; label: string | undefined } {
+  const { store, config, summariser, shutdownSignal } = args;
+  if (config.auto_title === "off") {
+    return { titler: undefined, label: "off (config)" };
+  }
+  if (!summariser.backend) {
+    return { titler: undefined, label: summariser.label };
+  }
+  const titler = new AutoTitler({ backend: summariser.backend, store, shutdownSignal, enabled: true });
+  return { titler, label: summariser.label };
 }
