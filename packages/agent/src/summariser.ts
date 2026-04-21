@@ -23,8 +23,14 @@ export interface PiSummariserBackendOptions {
    * point of a separate summariser is to avoid paying the coding model's
    * rate for compression work. */
   model: string;
-  /** Override model resolution (tests). */
+  /** Override model resolution (tests, or wiring a ModelRegistry). */
   resolveModel?: (provider: string, modelId: string) => Model<string>;
+  /** Optional credential resolver. Awaited before each streamSimple
+   * call; the returned key is passed as `apiKey` so a summariser
+   * pointed at a local provider (Ollama custom provider) or at a
+   * different account than the coding model works without relying on
+   * process.env. Typically `authStorage.getApiKey.bind(authStorage)`. */
+  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   /** Default cap on the generated summary length. `SummariseInput.max_output_tokens`
    * wins when set. */
   default_max_output_tokens?: number;
@@ -53,6 +59,7 @@ export class PiSummariserBackend implements SummariserBackend {
   private readonly provider: string;
   private readonly modelId: string;
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
+  private readonly getApiKey: ((provider: string) => Promise<string | undefined> | string | undefined) | undefined;
   private readonly defaultMaxOutputTokens: number;
 
   constructor(opts: PiSummariserBackendOptions) {
@@ -60,6 +67,7 @@ export class PiSummariserBackend implements SummariserBackend {
     this.modelId = opts.model;
     // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded by KnownProvider; we accept any string so OpenRouter / faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
+    this.getApiKey = opts.getApiKey;
     this.defaultMaxOutputTokens = opts.default_max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   }
 
@@ -109,6 +117,12 @@ export class PiSummariserBackend implements SummariserBackend {
 
     const messages: Message[] = [{ role: "user", content: userContent, timestamp: Date.now() }];
 
+    // Resolve credentials up front — one await here beats re-awaiting
+    // per-delta. AuthStorage caches the result, so the cost is the
+    // first lookup per run. Undefined is fine: pi-ai falls back to
+    // its own env-var resolution.
+    const apiKey = this.getApiKey ? await this.getApiKey(this.provider) : undefined;
+
     // Stream the summariser call so deltas can fire as the model emits
     // text. The `done` event carries the final AssistantMessage which
     // is what we use for cost + stopReason attribution; `text_delta`
@@ -119,7 +133,7 @@ export class PiSummariserBackend implements SummariserBackend {
         model,
         { systemPrompt, messages, tools: [] },
         // biome-ignore lint/suspicious/noExplicitAny: provider-specific maxTokens knob; pi-ai accepts it as an opaque options bag.
-        { signal: input.signal, maxTokens: maxOutputTokens } as any,
+        { signal: input.signal, maxTokens: maxOutputTokens, ...(apiKey !== undefined ? { apiKey } : {}) } as any,
       );
       for await (const ev of stream) {
         if (ev.type === "text_delta" && typeof ev.delta === "string" && ev.delta.length > 0) {

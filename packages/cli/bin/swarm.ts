@@ -10,7 +10,7 @@ import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
-import { providersCommand } from "../src/commands/providers.ts";
+import { providersHelpCommand, providersListCommand } from "../src/commands/providers.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
@@ -22,9 +22,25 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
   process.exit(code);
 });
 
-cli.command("providers", "List supported LLM providers and which ones have credentials").action(() => {
-  process.exit(providersCommand());
-});
+// `swarm providers [action]` — bare form prints subcommand help, per
+// the "top-level commands without arguments should list options"
+// convention. cac 6.x doesn't cleanly match multi-word commands
+// (`swarm providers ls` fell through to the parent), so actions are
+// dispatched via a positional.
+const UNIMPLEMENTED_PROVIDERS_ACTIONS = new Set(["add", "rm", "test", "login", "logout"]);
+cli
+  .command("providers [action]", "Manage LLM provider credentials + custom models (run without args for help)")
+  .action((action: string | undefined) => {
+    if (action === undefined) process.exit(providersHelpCommand());
+    if (action === "ls") process.exit(providersListCommand());
+    if (UNIMPLEMENTED_PROVIDERS_ACTIONS.has(action)) {
+      console.error(chalk.red(`providers ${action}: not yet implemented`));
+      process.exit(1);
+    }
+    console.error(chalk.red(`unknown providers action: ${action}`));
+    providersHelpCommand();
+    process.exit(1);
+  });
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
@@ -50,49 +66,56 @@ cli
     process.exit(code);
   });
 
+// `swarm daemon [action]` — bare form prints help; `start` runs the
+// daemon foreground; `stop` SIGTERMs the process holding the store
+// lock. cac 6.x doesn't cleanly match multi-word commands so actions
+// are dispatched via a positional (same pattern as providers / db).
 cli
-  .command("daemon stop", "SIGTERM the running daemon identified by the store's daemon_lock row")
+  .command("daemon [action]", "Run or stop the execution daemon (run without args for help)")
+  .option("--concurrency <n>", "`start` only: max concurrent runs (default 4)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
-  .action(async (options: Record<string, unknown>) => {
+  .option("--provider <name>", "`start` only: LLM provider override (default: auto-detected)")
+  .option("--model <id>", "`start` only: model id override (e.g. claude-opus-4-7)")
+  .action(async (action: string | undefined, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
       return typeof v === "string" ? v : undefined;
     };
-    const code = await daemonStopCommand({
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-    });
-    process.exit(code);
-  });
-
-cli
-  .command("daemon", "Run the store-backed execution daemon in the foreground")
-  .option("--concurrency <n>", "Max concurrent runs (default 4)")
-  .option("--cwd <path>", "Base directory (default process.cwd)")
-  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
-  .option("--provider <name>", "LLM provider override (default: auto-detected from env)")
-  .option("--model <id>", "Model id override (e.g. claude-opus-4-7)")
-  .action(async (options: Record<string, unknown>) => {
-    const pick = (key: string): string | undefined => {
-      const v = options[key];
-      return typeof v === "string" ? v : undefined;
-    };
-    const concurrencyRaw = options["concurrency"];
-    const concurrency =
-      typeof concurrencyRaw === "number"
-        ? concurrencyRaw
-        : typeof concurrencyRaw === "string"
-          ? Number.parseInt(concurrencyRaw, 10)
-          : undefined;
-    const code = await daemonCommand({
-      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
-      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
-      ...(concurrency !== undefined && Number.isFinite(concurrency) ? { concurrency } : {}),
-      ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
-      ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
-    });
-    process.exit(code);
+    if (action === undefined) {
+      console.log(chalk.bold("swarm daemon — run or stop the execution daemon\n"));
+      console.log("Subcommands:");
+      console.log(`  ${chalk.cyan("start")}    Run the store-backed daemon in the foreground (Ctrl-C to stop)`);
+      console.log(`  ${chalk.cyan("stop")}     SIGTERM the running daemon identified by the store's daemon_lock`);
+      process.exit(0);
+    }
+    if (action === "stop") {
+      const code = await daemonStopCommand({
+        ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      });
+      process.exit(code);
+    }
+    if (action === "start") {
+      const concurrencyRaw = options["concurrency"];
+      const concurrency =
+        typeof concurrencyRaw === "number"
+          ? concurrencyRaw
+          : typeof concurrencyRaw === "string"
+            ? Number.parseInt(concurrencyRaw, 10)
+            : undefined;
+      const code = await daemonCommand({
+        ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+        ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+        ...(concurrency !== undefined && Number.isFinite(concurrency) ? { concurrency } : {}),
+        ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
+        ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
+      });
+      process.exit(code);
+    }
+    console.error(chalk.red(`unknown daemon action: ${action}`));
+    console.error(chalk.dim("  valid actions: start | stop"));
+    process.exit(1);
   });
 
 cli

@@ -10,9 +10,12 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
+import type { Model } from "@mariozechner/pi-ai";
 import {
+  AuthStorage,
   defaultSummariserModel,
   firstCredentialedProvider,
+  ModelRegistry,
   makeCodergenHandler,
   PiCodergenBackend,
   PiSummariserBackend,
@@ -136,6 +139,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     model: "stub",
   });
 
+  // Credentials + model registry. Both are global (~/.swarm/{auth,models}.json)
+  // with the pi-coding-agent dirs as read-only fallback. Constructed once
+  // per daemon process; cheap to hold on to for the process lifetime.
+  const authStorage = AuthStorage.create();
+  const modelRegistry = ModelRegistry.create(authStorage);
+  const getApiKey = (p: string) => authStorage.getApiKey(p);
+
   // Resolve provider/model. Precedence: CLI flags > .swarm/config.yaml
   // defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
@@ -151,10 +161,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     model = cfgModel;
     llmSource = "config";
   } else if (provider == null && model == null) {
-    const auto = firstCredentialedProvider();
-    if (auto?.defaultModel) {
-      provider = auto.name;
-      model = auto.defaultModel;
+    const auto = firstCredentialedProvider(modelRegistry);
+    if (auto) {
+      provider = auto.provider;
+      model = auto.model.id;
       llmSource = "env";
     }
   }
@@ -178,6 +188,15 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     const backendOpts = {
       registry,
       defaultModel: { provider: provider!, model: model! },
+      // Route model resolution through the ModelRegistry so custom
+      // providers (Ollama etc.) and models.json overrides are honoured.
+      // Throws if the id is unknown — backend.run catches and surfaces.
+      resolveModel: (p: string, id: string): Model<string> => {
+        const m = modelRegistry.find(p, id);
+        if (!m) throw new Error(`model "${p}/${id}" not registered`);
+        return m as Model<string>;
+      },
+      getApiKey,
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
     // The factory receives the first outgoing edge as a legacy-compat
@@ -211,6 +230,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     store,
     config,
     primaryProvider: provider,
+    modelRegistry,
+    getApiKey,
     shutdownSignal: signalCtrl.signal,
   });
 
@@ -290,9 +311,11 @@ function buildAutoTitler(args: {
   store: SqliteStore;
   config: Awaited<ReturnType<typeof loadConfig>>;
   primaryProvider: string | undefined;
+  modelRegistry: ModelRegistry;
+  getApiKey: (provider: string) => Promise<string | undefined>;
   shutdownSignal: AbortSignal;
 }): { titler: AutoTitler | undefined; label: string | undefined } {
-  const { store, config, primaryProvider, shutdownSignal } = args;
+  const { store, config, primaryProvider, modelRegistry, getApiKey, shutdownSignal } = args;
   if (config.auto_title === "off") {
     return { titler: undefined, label: "off (config)" };
   }
@@ -301,7 +324,16 @@ function buildAutoTitler(args: {
   const sumModel = config.defaults?.summariser?.model ?? defaultSummariserModel(sumProvider);
   if (!sumModel) return { titler: undefined, label: `no default model for ${sumProvider}` };
 
-  const backend = new PiSummariserBackend({ provider: sumProvider, model: sumModel });
+  const backend = new PiSummariserBackend({
+    provider: sumProvider,
+    model: sumModel,
+    resolveModel: (p, id) => {
+      const m = modelRegistry.find(p, id);
+      if (!m) throw new Error(`summariser model "${p}/${id}" not registered`);
+      return m as Model<string>;
+    },
+    getApiKey,
+  });
   const titler = new AutoTitler({ backend, store, shutdownSignal, enabled: true });
   return { titler, label: `${sumProvider}/${sumModel}` };
 }

@@ -21,8 +21,15 @@ export interface PiCodergenBackendOptions {
    * with a WorktreeProvisioner wire a per-run env via `CodergenInput`
    * and can leave this unset. */
   env?: ExecutionEnvironment;
-  /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel. */
+  /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel.
+   * Daemons wire a ModelRegistry here so custom providers (Ollama etc.)
+   * and models.json overrides are honoured. */
   resolveModel?: (provider: string, modelId: string) => Model<string>;
+  /** Optional API-key resolver forwarded to pi-agent-core's `Agent`.
+   * When wired, the Agent calls this per-request to fetch credentials,
+   * so keys don't have to live in process.env. Typically
+   * `authStorage.getApiKey.bind(authStorage)`. */
+  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   /** Model + provider used when a node doesn't specify them. */
   defaultModel?: { provider: string; model: string };
   /** Optional system prompt prepended to every run. Tests may omit this. */
@@ -49,6 +56,7 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly registry: ToolRegistry;
   private readonly env: ExecutionEnvironment | undefined;
   private readonly resolveModel: (provider: string, modelId: string) => Model<string>;
+  private readonly getApiKey: ((provider: string) => Promise<string | undefined> | string | undefined) | undefined;
   private readonly defaultModel: { provider: string; model: string };
   private readonly systemPrompt: string;
   /** Per-run live-agent + pending-steer registry. Scoped by runId so two
@@ -80,6 +88,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.env = opts.env;
     // biome-ignore lint/suspicious/noExplicitAny: getModel is overloaded with KnownProvider; we intentionally accept any string so custom/faux providers work.
     this.resolveModel = opts.resolveModel ?? ((provider, modelId) => (getModel as any)(provider, modelId));
+    this.getApiKey = opts.getApiKey;
     this.defaultModel = opts.defaultModel ?? { provider: "anthropic", model: "claude-opus-4-7" };
     this.systemPrompt = opts.systemPrompt ?? "";
     this.messageStore = new MessageStore();
@@ -299,15 +308,19 @@ export class PiCodergenBackend implements CodergenBackend {
         ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
       },
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(this.getApiKey !== undefined ? { getApiKey: this.getApiKey } : {}),
     });
 
-    // Persist the system prompt as a role='system' message so the full
-    // text is recoverable from the messages table. Keeps `llm.start`
-    // under the 4KB event cap (§I7) — prior turns + a sizable
-    // system_prompt easily blow past it. The messages table is
-    // unbounded (§I9), so full content lives there.
+    // Persist the system prompt as a swarm `system` custom message
+    // (declaration-merged into pi-agent-core's CustomAgentMessages in
+    // @swarm/store) so the full text is recoverable from the messages
+    // table. Keeps `llm.start` under the 4KB event cap (§I7) — prior
+    // turns + a sizable system_prompt easily blow past it. The messages
+    // table is JSON + unbounded (§I9), so full content lives there.
+    // Filtered back out before feeding priorMessages to pi-agent-core —
+    // pi-ai carries the system prompt separately on each call.
     if (input.persistMessage && systemPrompt.length > 0) {
-      input.persistMessage("system", systemPrompt);
+      input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() });
     }
 
     // Emit the resolved LLM-call snapshot. See docs/SPEC.md §3.5 for the
@@ -350,15 +363,13 @@ export class PiCodergenBackend implements CodergenBackend {
         if (event.message.role === "assistant" && input.emit) {
           await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
         }
-        // Persist the fully-assembled message to the messages table
-        // (§I9 — unbounded TEXT, stays out of the 4KB event envelope
-        // §I7). tool_use + tool_result pairs are serialized with
-        // matching `tool_use_id` so the UI and any replay path can
-        // rebuild block-shaped content. pi-agent-core's `toolResult`
-        // role maps onto swarm's `"tool"`; UI-only custom messages are
-        // filtered out inside `persistAgentMessage`.
+        // Persist the fully-assembled AgentMessage to the messages
+        // table (§I9 — JSON, unbounded, stays out of the 4KB event
+        // envelope §I7). Full block structure round-trips: text,
+        // thinking (with thinkingSignature / redacted), toolCall (with
+        // thoughtSignature), toolResult (with toolCallId pairing).
         if (input.persistMessage) {
-          persistAgentMessage(event.message, input.persistMessage);
+          input.persistMessage(event.message);
         }
       }
     });
@@ -517,198 +528,6 @@ export function computeResumeDecision(args: {
   const resumed = !args.isFresh && args.threadId != null && args.externalPriorLen > 0 && !args.hasInProcessWrite;
   const effectiveFidelity: FidelityMode = resumed ? degradeOnResume(args.fidelity) : args.fidelity;
   return { resumed, effectiveFidelity };
-}
-
-/** pi-agent-core's AgentMessage role space (`user`, `assistant`,
- * `toolResult`, plus arbitrary custom strings) → swarm's narrower
- * MessageRole union (`system | user | assistant | tool`). Returns
- * undefined for custom / UI-only roles that have no swarm equivalent. */
-function mapAgentRoleToMessageRole(role: string): "assistant" | "tool" | "user" | "system" | undefined {
-  switch (role) {
-    case "assistant":
-      return "assistant";
-    case "user":
-      return "user";
-    case "system":
-      return "system";
-    case "toolResult":
-    case "tool":
-      return "tool";
-    default:
-      return undefined;
-  }
-}
-
-/** Loose shape covering every pi-agent-core `AgentMessage` variant we
- * care about (assistant, user, system, toolResult, custom). Unknown
- * roles fall through `mapAgentRoleToMessageRole` → no-op. */
-type AnyAgentMessage = {
-  role: string;
-  content?: unknown;
-  toolCallId?: string;
-  toolName?: string;
-  isError?: boolean;
-};
-
-type MessageRole = NonNullable<ReturnType<typeof mapAgentRoleToMessageRole>>;
-
-/** Serialize a pi-agent-core `AgentMessage` into the structured text
- * format stored in the `messages` table (§I9). Preserves the three
- * content-block types produced by pi-ai (text, thinking, toolCall)
- * with full provider-continuity metadata — Anthropic Extended
- * Thinking signatures and redacted-thinking payloads on thinking
- * blocks, Gemini `thoughtSignature` on tool calls, and the tool_use
- * ↔ tool_result pairing via shared `tool_use_id` — so UIs and future
- * fidelity=raw replay paths can reconstruct `AgentMessage[]` from a
- * single TEXT column.
- *
- * Format:
- *   assistant → blocks in order, joined by `\n\n`:
- *     text   → bare text, verbatim
- *     thinking →
- *       <thinking[ signature="..."][ redacted="true"]>
- *       reasoning text
- *       </thinking>
- *     toolCall →
- *       <tool_use id="..." name="..."[ thought_signature="..."]>
- *       {JSON-encoded arguments}
- *       </tool_use>
- *
- *   toolResult → the whole message wraps as
- *     <tool_result tool_use_id="..." tool_name="..." is_error="...">
- *     body (text blocks joined on `\n`)
- *     </tool_result>
- *
- * Plain-text messages (single text block, or `content: string`)
- * serialize to bare text. Image blocks and `textSignature` on text
- * blocks are dropped for now — the web UI doesn't render attachments
- * from the messages table, and text signatures only affect raw-replay
- * fidelity which the executor always degrades to summary:high on
- * resume (SPEC §3.6).
- *
- * A body that contains the literal closing-tag substring is a
- * theoretical ambiguity; parsers should use a non-greedy match. No
- * escaping is applied so the body stays human-readable. */
-export function serializeAgentMessage(message: AnyAgentMessage): string {
-  if (message.role === "toolResult" || message.role === "tool") {
-    return wrapToolResult(message);
-  }
-  return serializeBlocks(message.content);
-}
-
-function serializeBlocks(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    const rendered = renderBlock(block);
-    if (rendered !== null) parts.push(rendered);
-  }
-  return parts.join("\n\n").trim();
-}
-
-function renderBlock(block: unknown): string | null {
-  if (block == null || typeof block !== "object") return null;
-  const b = block as {
-    type?: unknown;
-    text?: unknown;
-    thinking?: unknown;
-    thinkingSignature?: unknown;
-    redacted?: unknown;
-    id?: unknown;
-    name?: unknown;
-    arguments?: unknown;
-    thoughtSignature?: unknown;
-  };
-  if (b.type === "text") {
-    return typeof b.text === "string" && b.text.length > 0 ? b.text : null;
-  }
-  if (b.type === "thinking") {
-    return renderThinkingBlock(b);
-  }
-  if (b.type === "toolCall") {
-    return renderToolCallBlock(b);
-  }
-  return null;
-}
-
-function renderThinkingBlock(b: {
-  thinking?: unknown;
-  thinkingSignature?: unknown;
-  redacted?: unknown;
-}): string | null {
-  if (typeof b.thinking !== "string" || b.thinking.length === 0) return null;
-  const attrs: string[] = [];
-  if (typeof b.thinkingSignature === "string" && b.thinkingSignature.length > 0) {
-    attrs.push(`signature="${escapeAttr(b.thinkingSignature)}"`);
-  }
-  if (b.redacted === true) attrs.push(`redacted="true"`);
-  const head = attrs.length > 0 ? `<thinking ${attrs.join(" ")}>` : `<thinking>`;
-  return `${head}\n${b.thinking}\n</thinking>`;
-}
-
-function renderToolCallBlock(b: {
-  id?: unknown;
-  name?: unknown;
-  arguments?: unknown;
-  thoughtSignature?: unknown;
-}): string {
-  const attrs = [`id="${escapeAttr(asString(b.id))}"`, `name="${escapeAttr(asString(b.name))}"`];
-  if (typeof b.thoughtSignature === "string" && b.thoughtSignature.length > 0) {
-    attrs.push(`thought_signature="${escapeAttr(b.thoughtSignature)}"`);
-  }
-  return `<tool_use ${attrs.join(" ")}>\n${stringifyArgs(b.arguments)}\n</tool_use>`;
-}
-
-function wrapToolResult(m: AnyAgentMessage): string {
-  const id = escapeAttr(asString(m.toolCallId));
-  const name = escapeAttr(asString(m.toolName));
-  const err = m.isError === true ? "true" : "false";
-  const body = extractTextBody(m.content);
-  return `<tool_result tool_use_id="${id}" tool_name="${name}" is_error="${err}">\n${body}\n</tool_result>`;
-}
-
-function extractTextBody(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block != null && typeof block === "object") {
-      const b = block as { type?: unknown; text?: unknown };
-      if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
-    }
-  }
-  return parts.join("\n");
-}
-
-function asString(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
-
-function stringifyArgs(v: unknown): string {
-  try {
-    return JSON.stringify(v ?? {});
-  } catch {
-    return "{}";
-  }
-}
-
-/** Persist a pi-agent-core `AgentMessage` via the supplied callback.
- * Filters custom / UI-only roles, serializes with structure preserved,
- * and writes one row. Empty content produces no row. */
-export function persistAgentMessage(
-  message: AnyAgentMessage,
-  persist: (role: MessageRole, content: string) => void,
-): void {
-  const role = mapAgentRoleToMessageRole(message.role);
-  if (role === undefined) return;
-  const content = serializeAgentMessage(message);
-  if (content.length === 0) return;
-  persist(role, content);
 }
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {
