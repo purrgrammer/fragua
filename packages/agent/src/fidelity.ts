@@ -2,8 +2,11 @@
 //
 // 1. Message-store policy per fidelity mode — which mode reads prior turns
 //    into `initialState.messages`, which writes them back after the run,
-//    which does neither (fresh semantics). The SPEC says only `full` keeps
-//    the session; every other mode is fresh + seeded.
+//    which does neither (fresh semantics). Only `full` keeps the session;
+//    every other mode is fresh + seeded. The policy is invariant across
+//    daemon restarts: a resumed dispatch on fidelity=full rehydrates the
+//    same transcript bytes it had before, so provider caches hit on
+//    identical prefixes.
 //
 // 2. sessionId policy for provider cache hits. pi-agent-core forwards
 //    `sessionId` to cache-aware backends as a hint — it does NOT control
