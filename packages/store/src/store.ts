@@ -404,6 +404,40 @@ export class SqliteStore implements IEventStore {
     return { ordinal };
   }
 
+  listThreadsWithMessages(): Array<{ runId: string; threadId: string }> {
+    type Row = { run_id: string; thread_id: string };
+    const fromMessages = this.db
+      .query<Row, []>(
+        `SELECT DISTINCT m.run_id AS run_id, m.node_id AS thread_id
+           FROM messages m
+           JOIN run_state r ON r.run_id = m.run_id
+          WHERE m.node_id IS NOT NULL
+            AND r.status IN ('queued','running','paused_hitl')`,
+      )
+      .all();
+    const fromEvents = this.db
+      .query<Row, []>(
+        `SELECT DISTINCT e.run_id AS run_id,
+                         CAST(json_extract(e.payload, '$.thread_id') AS TEXT) AS thread_id
+           FROM events e
+           JOIN run_state r ON r.run_id = e.run_id
+          WHERE e.type = 'llm.start'
+            AND json_extract(e.payload, '$.thread_id') IS NOT NULL
+            AND r.status IN ('queued','running','paused_hitl')`,
+      )
+      .all();
+    const seen = new Set<string>();
+    const out: Array<{ runId: string; threadId: string }> = [];
+    for (const row of [...fromMessages, ...fromEvents]) {
+      if (row.thread_id == null || row.thread_id === "") continue;
+      const key = `${row.run_id}\x00${row.thread_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ runId: row.run_id, threadId: row.thread_id });
+    }
+    return out;
+  }
+
   getMessages(runId: string, opts: GetMessagesOpts = {}): Message[] {
     const since = opts.sinceOrdinal ?? 0;
     const limit = opts.limit ?? 1000;

@@ -429,6 +429,20 @@ export interface IEventStore {
     ordinal: number;
   };
   getMessages(runId: string, opts?: GetMessagesOpts): Message[];
+  /**
+   * Distinct `(runId, threadId)` pairs that have ≥1 persisted message or
+   * `llm.start` event under a non-terminal run. Used at daemon boot to
+   * rehydrate the shared `inProcessWrites` set so a resumed codergen
+   * dispatch on a pre-existing thread doesn't misread its own transcript
+   * as a foreign one. `threadId` is derived from two sources unioned:
+   *  - distinct `messages.node_id` (covers the common `thread_id == node_id` case)
+   *  - distinct `json_extract(events.payload, '$.thread_id')` on `llm.start`
+   *    rows (covers graph-level / edge-level thread ids that don't match
+   *    any node id).
+   * Terminal runs (completed/cancelled/halted/quarantined) are excluded
+   * — their threads will never be dispatched again.
+   */
+  listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 
   // ─── Artifacts
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef;

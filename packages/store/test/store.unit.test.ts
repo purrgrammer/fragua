@@ -433,6 +433,100 @@ describe("SqliteStore — messages", () => {
   });
 });
 
+describe("SqliteStore — listThreadsWithMessages", () => {
+  test("returns distinct (runId, threadId) pairs from messages' node_id and llm.start thread_id", async () => {
+    const store = freshStore();
+    const r1 = await seedRun(store, { runId: "run-a" });
+    const r2 = await seedRun(store, { runId: "run-b" });
+
+    const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
+    store.appendMessage(r1, { content: userMsg, nodeId: "implement", iteration: 0 });
+    store.appendMessage(r1, { content: userMsg, nodeId: "implement", iteration: 0 });
+    store.appendMessage(r1, { content: userMsg, nodeId: "verify", iteration: 0 });
+    store.appendMessage(r2, { content: userMsg, nodeId: "plan", iteration: 0 });
+    store.appendMessage(r2, { content: userMsg, nodeId: null, iteration: 0 });
+
+    store.appendObservabilityEvents(r1, [
+      { type: "llm.start", payload: { nodeId: "implement", iteration: 0, thread_id: "dev" } },
+      { type: "llm.start", payload: { nodeId: "verify", iteration: 0, thread_id: "dev" } },
+    ]);
+
+    const rows = store.listThreadsWithMessages();
+    const set = new Set(rows.map((r) => `${r.runId}::${r.threadId}`));
+    expect(set.has("run-a::implement")).toBe(true);
+    expect(set.has("run-a::verify")).toBe(true);
+    expect(set.has("run-a::dev")).toBe(true);
+    expect(set.has("run-b::plan")).toBe(true);
+    expect(set.size).toBe(4);
+    store.close();
+  });
+
+  test("excludes terminal runs (completed / cancelled / halted)", async () => {
+    const store = freshStore();
+    const live = await seedRun(store, { runId: "live" });
+    const done = await seedRun(store, { runId: "done" });
+
+    const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
+    store.appendMessage(live, { content: userMsg, nodeId: "t1", iteration: 0 });
+    store.appendMessage(done, { content: userMsg, nodeId: "t1", iteration: 0 });
+
+    const s = store.getState(done)!;
+    store.appendFact(
+      done,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+        },
+      ],
+      s.version,
+    );
+    const s1 = store.getState(done)!;
+    store.appendFact(done, [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+
+    const rows = store.listThreadsWithMessages();
+    const runIds = new Set(rows.map((r) => r.runId));
+    expect(runIds.has("live")).toBe(true);
+    expect(runIds.has("done")).toBe(false);
+    store.close();
+  });
+
+  test("no messages, no llm.start events → empty array", async () => {
+    const store = freshStore();
+    await seedRun(store);
+    expect(store.listThreadsWithMessages()).toEqual([]);
+    store.close();
+  });
+
+  test("paused_hitl runs are included", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
+    store.appendMessage(runId, { content: userMsg, nodeId: "t1", iteration: 0 });
+    const s = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+        },
+      ],
+      s.version,
+    );
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_paused_hitl", payload: { nodeId: "a", prompt: "p" } }],
+      s1.version,
+    );
+    expect(store.getState(runId)!.status).toBe("paused_hitl");
+    const rows = store.listThreadsWithMessages();
+    expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);
+    store.close();
+  });
+});
+
 describe("SqliteStore — gcBlobs", () => {
   test("deletes orphan blobs, preserves referenced ones", async () => {
     const store = freshStore();
