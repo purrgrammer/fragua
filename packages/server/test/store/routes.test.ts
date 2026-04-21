@@ -59,6 +59,48 @@ describe("POST /workflows — upload", () => {
     expect(a.sha).toBe(b.sha);
   });
 
+  test("rejects malformed timeout attr with 400 + invalid_timeout_attr code", async () => {
+    const res = await req("POST", "/workflows", {
+      name: "bad",
+      dotSource: `digraph { start [shape=Mdiamond]; impl [shape=box, timeout="garbage"]; done [shape=Msquare]; start -> impl -> done; }`,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; code: string; offender: { nodeId: string; attr: string } };
+    expect(body.code).toBe("invalid_timeout_attr");
+    expect(body.offender.nodeId).toBe("impl");
+    expect(body.offender.attr).toBe("timeout");
+    expect(body.error).toMatch(/impl/);
+    expect(body.error).toMatch(/garbage/);
+  });
+
+  test("rejects zero / negative maxMs", async () => {
+    const res = await req("POST", "/workflows", {
+      name: "bad",
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, maxMs=0]; done [shape=Msquare]; start -> a -> done; }`,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe("invalid_timeout_attr");
+  });
+
+  test("accepts valid timeout strings", async () => {
+    for (const t of ["500ms", "30s", "5m", "2h"]) {
+      const res = await req("POST", "/workflows", {
+        name: "ok",
+        dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, timeout="${t}"]; done [shape=Msquare]; start -> a -> done; }`,
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  test("accepts valid numeric maxMs", async () => {
+    const res = await req("POST", "/workflows", {
+      name: "ok",
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, maxMs=1500]; done [shape=Msquare]; start -> a -> done; }`,
+    });
+    expect(res.status).toBe(200);
+  });
+
   test("validator rejects a workflow with unresolved model IDs", async () => {
     // Inject a stub validator — mirrors the daemon wiring. Production
     // uses @swarm/agent's validateWorkflowModels, but @swarm/server

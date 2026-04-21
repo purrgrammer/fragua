@@ -5,6 +5,7 @@
 // the daemon is offline.
 
 import type { Database } from "bun:sqlite";
+import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import { type IEventStore, type StoredEvent, sha256Hex } from "@swarm/store";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -73,6 +74,55 @@ export function envProviderPreflight(): { ok: true } | { ok: false; detail: stri
   };
 }
 
+/**
+ * Scan a DOT source for nodes with malformed `timeout=` or `maxMs=`
+ * attrs. Returns the first offender so the API can reject before a
+ * workflow is saved (and therefore before any run is enqueued against
+ * a broken sha). Returns `null` when every timeout attr parses, the
+ * DOT is unparseable (graph-validation errors surface elsewhere), or
+ * nothing is set.
+ */
+function findInvalidTimeoutAttr(
+  dotSource: string,
+): { nodeId: string; attr: "timeout" | "maxMs"; value: unknown; detail: string } | null {
+  let graph: ReturnType<typeof parseDotSource>;
+  try {
+    graph = parseDotSource(dotSource);
+  } catch {
+    return null;
+  }
+  for (const node of Object.values(graph.nodes)) {
+    const { timeout, maxMs } = node.attrs;
+    if (typeof maxMs === "number") {
+      try {
+        parseDurationMs(maxMs);
+      } catch (err) {
+        return {
+          nodeId: node.id,
+          attr: "maxMs",
+          value: maxMs,
+          detail: err instanceof InvalidDurationError ? err.message : String(err),
+        };
+      }
+    } else if (maxMs != null) {
+      return { nodeId: node.id, attr: "maxMs", value: maxMs, detail: "maxMs must be a positive integer (ms)" };
+    }
+    if (typeof timeout === "string") {
+      try {
+        parseDurationMs(timeout);
+      } catch (err) {
+        return {
+          nodeId: node.id,
+          attr: "timeout",
+          value: timeout,
+          detail: err instanceof InvalidDurationError ? err.message : String(err),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 /** Registry-backed preflight. Rejects only when no provider in the
  * registry has any configured credential — honours auth.json api_key,
  * auth.json oauth, env vars, and custom models.json providers. Returned
@@ -119,6 +169,17 @@ export function createRoutes(deps: ServerDeps): Hono {
           400,
         );
       }
+    }
+    const timeoutOffender = findInvalidTimeoutAttr(body.dotSource);
+    if (timeoutOffender != null) {
+      return c.json(
+        {
+          error: `node "${timeoutOffender.nodeId}": ${timeoutOffender.detail}`,
+          code: "invalid_timeout_attr",
+          offender: timeoutOffender,
+        },
+        400,
+      );
     }
     const sha = sha256Hex(body.dotSource);
     deps.store.saveWorkflow(sha, body.name, body.dotSource);
