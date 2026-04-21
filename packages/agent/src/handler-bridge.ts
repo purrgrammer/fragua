@@ -6,7 +6,6 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   type CodergenBackend,
   type ContextMap,
@@ -16,6 +15,7 @@ import {
   substitute,
 } from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
+import type { AgentMessage } from "@swarm/types";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 
 export interface MakeCodergenHandlerOpts {

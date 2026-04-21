@@ -20,9 +20,7 @@ describe("AnimatedNumber", () => {
   afterEach(() => cleanup());
 
   it("renders the formatted currency value with usdFormatOptions", () => {
-    const { container } = render(
-      <AnimatedNumber value={0.1234} format={usdFormatOptions(0.1234)} locale="en-US" />,
-    );
+    const { container } = render(<AnimatedNumber value={0.1234} format={usdFormatOptions(0.1234)} locale="en-US" />);
     // < $1 uses 3 fraction digits by contract.
     expect(container.textContent).toContain("$0.123");
   });
@@ -70,9 +68,7 @@ describe("AnimatedNumber", () => {
   });
 
   it("includes prefix and suffix in the rendered text", () => {
-    const { container } = render(
-      <AnimatedNumber value={5} prefix="~" suffix=" runs" locale="en-US" />,
-    );
+    const { container } = render(<AnimatedNumber value={5} prefix="~" suffix=" runs" locale="en-US" />);
     expect(container.textContent).toBe("~5 runs");
   });
 });

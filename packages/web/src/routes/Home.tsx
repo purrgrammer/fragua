@@ -37,8 +37,8 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
 import { RunRow } from "../components/RunRow.tsx";
-import { AnimatedNumber } from "../components/ui/animated-number.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
+import { StatTile } from "../components/ui/stat-tile.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
@@ -384,57 +384,6 @@ function StatsGroup({ label, testId, children }: StatsGroupProps): JSX.Element {
       <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</h3>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{children}</div>
     </div>
-  );
-}
-
-interface StatTileProps {
-  label: string;
-  /**
-   * `true` = render a loading skeleton (the ONLY trigger — the Skeleton
-   * branch must never stand in for "no data").
-   */
-  loading: boolean;
-  /**
-   * Animated numeric path. `undefined` (with `loading=false`) renders
-   * "—", never a skeleton. `AnimatedNumber` itself owns the fallback.
-   */
-  numericValue?: number;
-  format?: Intl.NumberFormatOptions;
-  /**
-   * Pre-formatted static text (percent, duration, etc.). Mutually
-   * exclusive with `numericValue`. `undefined` with `loading=false`
-   * renders "—".
-   */
-  value?: string;
-  /** Optional secondary line, rendered under the main value in muted text. */
-  hint?: string;
-  icon: JSX.Element;
-  testId: string;
-}
-
-function StatTile({ label, loading, numericValue, format, value, hint, icon, testId }: StatTileProps): JSX.Element {
-  return (
-    <Card size="sm" data-testid={testId} className="ring-0" title={hint}>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between text-xs font-medium text-muted-foreground">
-          <span>{label}</span>
-          <span aria-hidden="true">{icon}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <Skeleton className="h-7 w-20" />
-        ) : numericValue !== undefined || format !== undefined ? (
-          <AnimatedNumber
-            value={numericValue}
-            format={format}
-            className="font-heading text-2xl tabular-nums"
-          />
-        ) : (
-          <p className="font-heading text-2xl tabular-nums">{value ?? "—"}</p>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ArtifactRef, ArtifactScope, IEventStore, Message } from "@swarm/store";
+import type { AgentMessage } from "@swarm/types";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {

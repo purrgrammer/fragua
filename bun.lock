@@ -17,6 +17,7 @@
         "@mariozechner/pi-ai": "0.67.68",
         "@sinclair/typebox": "0.34.41",
         "@swarm/core": "workspace:*",
+        "@swarm/types": "workspace:*",
         "@swarm/workspace": "workspace:*",
         "ajv": "8.17.1",
         "proper-lockfile": "4.1.2",
@@ -63,10 +64,9 @@
       "name": "@swarm/core",
       "version": "0.0.0",
       "dependencies": {
-        "@mariozechner/pi-agent-core": "0.67.68",
-        "@mariozechner/pi-ai": "0.67.68",
         "@sinclair/typebox": "0.34.41",
         "@swarm/store": "workspace:*",
+        "@swarm/types": "workspace:*",
       },
       "devDependencies": {
         "fast-check": "3.23.1",
@@ -104,10 +104,21 @@
       "name": "@swarm/store",
       "version": "0.0.0",
       "dependencies": {
-        "@mariozechner/pi-agent-core": "0.67.68",
+        "@swarm/types": "workspace:*",
       },
       "devDependencies": {
         "fast-check": "3.23.1",
+        "typescript": "5.7.3",
+      },
+    },
+    "packages/types": {
+      "name": "@swarm/types",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mariozechner/pi-agent-core": "0.67.68",
+        "@mariozechner/pi-ai": "0.67.68",
+      },
+      "devDependencies": {
         "typescript": "5.7.3",
       },
     },
@@ -126,6 +137,7 @@
         "@streamdown/math": "1.0.2",
         "@streamdown/mermaid": "1.0.2",
         "@swarm/core": "workspace:*",
+        "@swarm/types": "workspace:*",
         "@tanstack/react-query": "5.99.1",
         "@xyflow/react": "12.10.2",
         "ai": "6.0.168",
@@ -795,6 +807,8 @@
     "@swarm/server": ["@swarm/server@workspace:packages/server"],
 
     "@swarm/store": ["@swarm/store@workspace:packages/store"],
+
+    "@swarm/types": ["@swarm/types@workspace:packages/types"],
 
     "@swarm/web": ["@swarm/web@workspace:packages/web"],
 

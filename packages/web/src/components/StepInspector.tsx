@@ -126,7 +126,8 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
           ⚡ <AnimatedNumber value={cacheRead} format={tokensCompactFormatOptions(cacheRead)} />
           {cacheWrite > 0 ? (
             <>
-              /+<AnimatedNumber value={cacheWrite} format={tokensCompactFormatOptions(cacheWrite)} />
+              /+
+              <AnimatedNumber value={cacheWrite} format={tokensCompactFormatOptions(cacheWrite)} />
             </>
           ) : null}
         </>

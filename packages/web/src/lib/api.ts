@@ -20,6 +20,8 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
+import type { AgentMessage } from "@swarm/types";
+
 export const BASE_URL = "/api";
 
 export interface HealthResponse {
@@ -327,6 +329,22 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
     `/runs/${encodeURIComponent(id)}/steps`,
     (v): v is StepSnapshot[] => Array.isArray(v) && v.every(isStepSnapshot),
   );
+}
+
+/** A messages-table row. `content` is a pi-agent-core `AgentMessage`
+ * (lossless JSON round-trip). `nodeId` / `iteration` are swarm's
+ * projection of which graph node emitted the turn. */
+export interface RunMessageRow {
+  runId: string;
+  ordinal: number;
+  content: AgentMessage;
+  nodeId: string | null;
+  iteration: number;
+}
+
+export async function getRunMessages(id: string, sinceOrdinal?: number): Promise<RunMessageRow[]> {
+  const qs = sinceOrdinal != null && sinceOrdinal > 0 ? `?sinceOrdinal=${sinceOrdinal}` : "";
+  return getJson(`/runs/${encodeURIComponent(id)}/messages${qs}`, (v): v is RunMessageRow[] => Array.isArray(v));
 }
 
 export async function listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]> {

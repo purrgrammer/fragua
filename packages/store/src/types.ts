@@ -1,24 +1,6 @@
 // swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-
-/** Swarm-specific custom message type: the assembled system prompt for
- * a single LLM call. Persisted so UIs and debuggers can reconstruct
- * exactly what the model saw, without hitting the 4KB cap on
- * `llm.start`'s event payload. Never re-fed to pi-ai as a priorMessage
- * — pi-ai carries the system prompt separately on each call. The
- * handler-bridge filters these rows out before building priorMessages. */
-export interface SystemPromptMessage {
-  role: "system";
-  content: string;
-  timestamp: number;
-}
-
-declare module "@mariozechner/pi-agent-core" {
-  interface CustomAgentMessages {
-    system: SystemPromptMessage;
-  }
-}
+import type { AgentMessage } from "@swarm/types";
 
 export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
 

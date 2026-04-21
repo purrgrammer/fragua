@@ -17,6 +17,7 @@
     "@mariozechner/pi-ai": "0.67.68",
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
+    "@swarm/types": "workspace:*",
     "@swarm/workspace": "workspace:*",
     "ajv": "8.17.1",
     "proper-lockfile": "4.1.2"

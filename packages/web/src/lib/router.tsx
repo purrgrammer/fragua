@@ -21,7 +21,12 @@ export function createRoutes(): RouteObject[] {
         { path: "workflows", element: <Workflows /> },
         { path: "workflows/:name", element: <WorkflowDetail /> },
         { path: "runs", element: <RunsList /> },
+        // Run detail is one component regardless of which tab is
+        // selected — the `:view` param (conversation | events | graph |
+        // steps) drives which pane renders. Bare `/runs/:id` redirects
+        // to `/runs/:id/conversation` (handled inside RunDetail).
         { path: "runs/:id", element: <RunDetail /> },
+        { path: "runs/:id/:view", element: <RunDetail /> },
         { path: "*", element: <NotFound /> },
       ],
     },

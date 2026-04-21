@@ -1,80 +1,17 @@
 // Event types. Immutable records written to the EventSink.
 // See docs/SPEC.md §3.5.
+//
+// The string-literal `EventType` union lives in `@swarm/types/events`
+// so web + agent + daemon can import it without pulling in core's
+// pure-reducer dep tree. Envelope shapes (data payloads, EventPayloadMap,
+// FactEvent / IntentEvent / ObservabilityEvent) stay here — they carry
+// core-specific types (Outcome, FidelityMode, SummaryPurpose).
 
+import type { EventType } from "@swarm/types";
 import type { FidelityMode } from "./fidelity.ts";
 import type { Outcome } from "./outcome.ts";
 
-export type EventType =
-  // Run lifecycle
-  | "run.started"
-  | "run.completed"
-  | "run.failed"
-  | "run.canceled"
-  // Node lifecycle
-  | "node.started"
-  | "node.completed"
-  | "node.failed"
-  | "node.retrying"
-  | "node.skipped"
-  // Edge selection
-  | "edge.selected"
-  // Checkpoint
-  | "checkpoint.saved"
-  // Interview
-  | "interview.started"
-  | "interview.completed"
-  | "interview.timeout"
-  // Agent layer (bridged from pi in Phase 2)
-  | "agent.start"
-  | "agent.end"
-  | "agent.turn_start"
-  | "agent.turn_end"
-  | "agent.message_start"
-  | "agent.message_update"
-  | "agent.message_end"
-  | "agent.warning"
-  // LLM layer
-  | "llm.start"
-  | "llm.text_delta"
-  | "llm.thinking_delta"
-  | "llm.toolcall_delta"
-  | "llm.done"
-  | "llm.error"
-  // Tool layer
-  | "tool.execution_start"
-  | "tool.execution_update"
-  | "tool.execution_end"
-  // Steering (legacy — kept for replay of pre-control-channel runs only).
-  // New code uses the `control.*` family below.
-  | "steering.requested"
-  | "steering.injected"
-  // Control channel (steer / pause / resume / cancel). A single family
-  // discriminated by `data.command`; see ControlCommand below. Each
-  // request appears as exactly one `control.requested` event followed by
-  // exactly one `control.applied` *or* `control.rejected` — never both,
-  // never neither. `run.canceled` is the terminal event that cancel
-  // produces as a side-effect of `control.applied`.
-  | "control.requested"
-  | "control.applied"
-  | "control.rejected"
-  // Summariser — each call rides as a synthetic node whose id is
-  // `__summary.<purpose-or-caller>` so cost + drilldown bucket naturally.
-  // `summary.text_delta` streams mid-call so UIs can render the title /
-  // narrative as it arrives rather than waiting for the full completion.
-  | "summary.started"
-  | "summary.text_delta"
-  | "summary.completed"
-  | "run.title_generated"
-  // Budget — emitted when a per-node or run-level ceiling is crossed.
-  // `budget.warn` is advisory (~80% of ceiling by default); `budget.stop`
-  // fires once the ceiling is breached and the executor turns subsequent
-  // codergen calls into non-retryable failures. Events ride under the
-  // synthetic node `__budget`. Enforcement not yet wired — the ceiling
-  // attrs on node/graph (`max_cost_usd`, `budget_usd`) are declarative.
-  | "budget.warn"
-  | "budget.stop"
-  // Cost
-  | "cost.recorded";
+export type { EventType } from "@swarm/types";
 
 /** Current event envelope version. Bumped when an incompatible field rename
  * or removal lands. Additive field changes do NOT bump this number; they're

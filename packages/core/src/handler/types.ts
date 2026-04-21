@@ -5,9 +5,8 @@
 // reach into the store directly. All side effects route through the context
 // helpers, which the executor wires to the event store.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Message as PiMessage } from "@mariozechner/pi-ai";
 import type { ArtifactRef, ArtifactScope, Message } from "@swarm/store";
+import type { AgentMessage, Message as PiMessage } from "@swarm/types";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";

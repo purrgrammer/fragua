@@ -14,10 +14,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.67.68",
-    "@mariozechner/pi-ai": "0.67.68",
     "@sinclair/typebox": "0.34.41",
-    "@swarm/store": "workspace:*"
+    "@swarm/store": "workspace:*",
+    "@swarm/types": "workspace:*"
   },
   "devDependencies": {
     "fast-check": "3.23.1",

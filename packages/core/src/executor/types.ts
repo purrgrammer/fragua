@@ -2,7 +2,7 @@
 // PiCodergenBackend implements so makeCodergenHandler can drive it inside
 // a HandlerContext.
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@swarm/types";
 import type { ContextMap } from "../types/context.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
