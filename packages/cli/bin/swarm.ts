@@ -6,12 +6,14 @@
 // rearchitecture. They will be reintroduced in M5 as thin shells over the
 // HTTP intent routes once the store-backed runtime is the default.
 
+import { resolveModelsPath } from "@swarm/agent";
 import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import {
   providersAddCommand,
+  providersAddCustomCommand,
   providersHelpCommand,
   providersListCommand,
   providersLoginCommand,
@@ -40,35 +42,47 @@ cli
     "providers [action] [target] [extra]",
     "Manage LLM provider credentials + custom models (run without args for help)",
   )
-  .action(async (action: string | undefined, target: string | undefined, extra: string | undefined) => {
-    switch (action) {
-      case undefined:
-        process.exit(providersHelpCommand());
-        break;
-      case "ls":
-        process.exit(providersListCommand());
-        break;
-      case "add":
-        process.exit(await providersAddCommand(target));
-        break;
-      case "rm":
-        process.exit(await providersRmCommand(target));
-        break;
-      case "test":
-        process.exit(await providersTestCommand(target, extra));
-        break;
-      case "login":
-        process.exit(await providersLoginCommand(target));
-        break;
-      case "logout":
-        process.exit(await providersLogoutCommand(target));
-        break;
-      default:
-        console.error(chalk.red(`unknown providers action: ${action}`));
-        providersHelpCommand();
-        process.exit(1);
-    }
-  });
+  .option("--custom", "`add` only: add a custom (OpenAI-compatible) provider to models.json")
+  .action(
+    async (
+      action: string | undefined,
+      target: string | undefined,
+      extra: string | undefined,
+      options: Record<string, unknown>,
+    ) => {
+      switch (action) {
+        case undefined:
+          process.exit(providersHelpCommand());
+          break;
+        case "ls":
+          process.exit(providersListCommand());
+          break;
+        case "add":
+          if (options["custom"]) {
+            process.exit(await providersAddCustomCommand(resolveModelsPath()));
+          } else {
+            process.exit(await providersAddCommand(target));
+          }
+          break;
+        case "rm":
+          process.exit(await providersRmCommand(target));
+          break;
+        case "test":
+          process.exit(await providersTestCommand(target, extra));
+          break;
+        case "login":
+          process.exit(await providersLoginCommand(target));
+          break;
+        case "logout":
+          process.exit(await providersLogoutCommand(target));
+          break;
+        default:
+          console.error(chalk.red(`unknown providers action: ${action}`));
+          providersHelpCommand();
+          process.exit(1);
+      }
+    },
+  );
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")

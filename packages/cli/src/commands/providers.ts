@@ -6,6 +6,8 @@
 // thin wrappers; auth.json remains human-editable and the CLI is one of
 // two ways to manage it.
 
+export { providersAddCustomCommand } from "./providers-custom.ts";
+
 import type { OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { AuthStorage, defaultModelPerProvider, getSwarmHome, ModelRegistry } from "@swarm/agent";
@@ -21,6 +23,7 @@ export function providersHelpCommand(): number {
   console.log("Subcommands:");
   console.log(`  ${chalk.cyan("ls")}                       List all providers + credentialed status`);
   console.log(`  ${chalk.cyan("add [provider]")}           Add API-key credentials interactively`);
+  console.log(`  ${chalk.cyan("add --custom")}             Add a custom (OpenAI-compatible) provider to models.json`);
   console.log(`  ${chalk.cyan("rm <provider>")}            Remove stored credentials`);
   console.log(`  ${chalk.cyan("test <provider> [model]")}  Stream a 1-token call to verify the setup`);
   console.log(`  ${chalk.cyan("login [provider]")}         Run the OAuth flow for a subscription-based provider`);
