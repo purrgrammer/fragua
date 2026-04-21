@@ -5,6 +5,10 @@
 //
 //   bun run packages/cli/bin/swarm.ts run workflows/quick-change.dot \
 //     --input="rename foo() to bar() in packages/core"
+//
+// Hardening notes (2026-04-21):
+//   - implement must ABORT on ambiguous input rather than silently guess
+//   - verify caps its own retry count so a stuck CI doesn't spin forever
 
 digraph quick_change {
   graph [
@@ -15,17 +19,19 @@ digraph quick_change {
   start [shape=Mdiamond]
 
   implement [
-    prompt = "Task (authoritative, do not substitute): $ARGUMENTS. If empty or ill-specified, emit `<abort>missing or blocked target</abort>`. If the task needs exploration, a plan, or review, emit `<abort>task too large for quick-change: use build-feature</abort>`. Otherwise make the change, run `bun run --filter='@swarm/<pkg>' typecheck` per modified package, and emit `IMPLEMENTED: <one line>`. Do not modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md."
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT conditions — emit the marker and stop:\n  - empty or ill-specified → `<abort>missing or blocked target</abort>`\n  - ambiguous (multiple reasonable interpretations) → `<abort>ambiguous: <specific question the user must answer></abort>`\n  - needs exploration, a plan, multi-package refactor, or shared-contract changes (HandlerContext, BuildContextOpts, executor internals, core engine reducers) → `<abort>task too large for quick-change: use build-feature</abort>`\n  - forbidden files are docs/SPEC.md, docs/PLAN.md, AGENTS.md — emit abort if the task requires touching them\n\nOTHERWISE implement the change. Rules:\n  - Stay in the package(s) named by the task. Don't drift.\n  - After edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. If typecheck still fails after 3 iterations, emit `<abort>typecheck blocked: <top error></abort>`.\n  - Don't add tests unless the task explicitly asks (quick-change is for changes small enough that verify catches regressions).\n\nEmit `IMPLEMENTED: <one-line summary of files touched>` on success."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4-6"
+    max_retries = 0
   ]
 
   verify [
-    prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
+    prompt = "Run `bun run ci`. If it fails, FIX the regression and re-run. Cap: 3 fix iterations. If CI is still red after 3 rounds, emit `<abort>CI unstable: <last failure signature></abort>` — don't keep burning budget.\n\nDo NOT disable tests, skip test files, or relax assertions to go green. That's what the failure signature is for. If a test is genuinely broken (pre-existing, unrelated to $implement.output), say so in the abort reason rather than silently skipping it.\n\nEmit `CI_GREEN` on a clean run."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4-6"
+    max_retries = 0
   ]
 
   commit [
