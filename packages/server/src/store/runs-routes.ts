@@ -79,9 +79,9 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // LLM-visible message transcript (§I9). Sourced from the messages
   // table, populated by PiCodergenBackend as each agent turn ends.
   // Optional `?nodeId=` filter for per-thread history; `?sinceOrdinal=`
-  // for resume-style pagination. Plaintext only — §3.6's
-  // fidelity=full → summary:high degrade on resume means we never
-  // need structured AgentMessage shapes to cross a daemon boundary.
+  // for resume-style pagination. AgentMessage JSON round-trips
+  // losslessly — the messages table is the source of truth for
+  // rehydrating prior turns across daemon restarts at fidelity=full.
   app.get("/runs/:id/messages", (c) => {
     const runId = c.req.param("id");
     if (store.getState(runId) == null) {
