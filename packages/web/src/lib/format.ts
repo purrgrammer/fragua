@@ -80,6 +80,27 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
 }
 
 /**
+ * Cache hit rate: `cacheReadTokens / (inputTokens + cacheReadTokens)`.
+ *
+ * Returns `'—'` when:
+ *   - either argument is `null` / `undefined` / `NaN` / non-finite, or
+ *   - the denominator (`inputTokens + cacheReadTokens`) is zero.
+ *
+ * Otherwise returns a one-decimal percentage string, e.g. `'42.0%'`.
+ */
+export function formatCacheHitRate(
+  cacheReadTokens: number | null | undefined,
+  inputTokens: number | null | undefined,
+): string {
+  if (!isFiniteNumber(cacheReadTokens) || !isFiniteNumber(inputTokens)) return "—";
+  const denom = inputTokens + cacheReadTokens;
+  if (denom === 0) return "—";
+  const rate = cacheReadTokens / denom;
+  if (!Number.isFinite(rate)) return "—";
+  return `${(rate * 100).toFixed(1)}%`;
+}
+
+/**
  * User-facing label for a run status. Mapping lives here (not in
  * components) so the raw wire value (`"fail"`) stays intact on the data
  * layer while the copy reads naturally. `data-testid` / `data-status`

@@ -26,7 +26,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
-import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
@@ -217,7 +217,7 @@ function DetailHeader({ detail, id, isLive }: { detail: RunDetailT | null; id: s
   );
 }
 
-function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
+export function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
   const loading = detail == null;
   const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
   const now = useNow(1_000, isLiveRun);
@@ -239,7 +239,7 @@ function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
             : "—";
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5" data-testid="detail-stats">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6" data-testid="detail-stats">
       <StatTile
         label="Status"
         loading={loading}
@@ -275,6 +275,17 @@ function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
         hint={
           detail
             ? `input ${detail.inputTokens.toLocaleString()} · output ${detail.outputTokens.toLocaleString()}`
+            : undefined
+        }
+      />
+      <StatTile
+        label="Cache hit rate"
+        loading={loading}
+        value={formatCacheHitRate(detail?.cacheReadTokens, detail?.inputTokens)}
+        testId="detail-cache-tile"
+        hint={
+          detail
+            ? `cache read ${(detail.cacheReadTokens ?? 0).toLocaleString()} · input ${detail.inputTokens.toLocaleString()}`
             : undefined
         }
       />
