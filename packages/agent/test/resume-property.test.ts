@@ -14,12 +14,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import {
-  type FauxResponseStep,
-  fauxAssistantMessage,
-  fauxText,
-  registerFauxProvider,
-} from "@mariozechner/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
 import type { FidelityMode, Node } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
@@ -287,9 +282,7 @@ describe("resume detection never false-positives within a live daemon", () => {
               const hadBefore = seen.has(key);
               // Snapshot the decision at dispatch time. We reuse the pure
               // helper against the same Set + the persisted transcript.
-              const priorBefore = store
-                .getMessages(op.runId)
-                .filter((m) => m.nodeId === op.threadId).length;
+              const priorBefore = store.getMessages(op.runId).filter((m) => m.nodeId === op.threadId).length;
               const decision = computeResumeDecision({
                 fidelity: "full",
                 isFresh: false,
@@ -319,63 +312,59 @@ describe("resume detection never false-positives within a live daemon", () => {
 describe("restart-at-turn-k preserves the final transcript byte-for-byte", () => {
   test("two runs diverging only in a single restart point converge on the same messages", async () => {
     await fc.assert(
-      fc.asyncProperty(
-        fc.integer({ min: 3, max: 4 }),
-        fc.integer({ min: 1, max: 3 }),
-        async (turns, k) => {
-          const restartAt = Math.min(k, turns - 1);
+      fc.asyncProperty(fc.integer({ min: 3, max: 4 }), fc.integer({ min: 1, max: 3 }), async (turns, k) => {
+        const restartAt = Math.min(k, turns - 1);
 
-          const runNoRestart = async (): Promise<AgentMessage[]> => {
-            const store = new SqliteStore({ path: ":memory:" });
-            const h = newDaemon(store, scriptedResponses(11, turns));
-            try {
-              const writes = new Set<string>();
-              const backend = h.makeBackend(writes);
-              let last: AgentMessage[] = [];
-              for (let i = 0; i < turns; i++) {
-                ({ finalMessages: last } = await h.dispatch(backend, "r", "dev", "full"));
-              }
-              return last;
-            } finally {
-              h.dispose();
-              store.close();
-            }
-          };
-
-          const runWithRestart = async (): Promise<AgentMessage[]> => {
-            const store = new SqliteStore({ path: ":memory:" });
-            const pre = newDaemon(store, scriptedResponses(11, restartAt));
+        const runNoRestart = async (): Promise<AgentMessage[]> => {
+          const store = new SqliteStore({ path: ":memory:" });
+          const h = newDaemon(store, scriptedResponses(11, turns));
+          try {
+            const writes = new Set<string>();
+            const backend = h.makeBackend(writes);
             let last: AgentMessage[] = [];
-            try {
-              const writes = new Set<string>();
-              const backend = pre.makeBackend(writes);
-              for (let i = 0; i < restartAt; i++) {
-                ({ finalMessages: last } = await pre.dispatch(backend, "r", "dev", "full"));
-              }
-            } finally {
-              pre.dispose();
-            }
-            // Simulated restart: reseed writes from store, spin a new
-            // faux provider with the remaining scripted turns.
-            const post = newDaemon(store, scriptedResponses(11, turns).slice(restartAt));
-            try {
-              const writes = reseedInProcessWrites(store);
-              const backend = post.makeBackend(writes);
-              for (let i = restartAt; i < turns; i++) {
-                ({ finalMessages: last } = await post.dispatch(backend, "r", "dev", "full"));
-              }
-            } finally {
-              post.dispose();
-              store.close();
+            for (let i = 0; i < turns; i++) {
+              ({ finalMessages: last } = await h.dispatch(backend, "r", "dev", "full"));
             }
             return last;
-          };
+          } finally {
+            h.dispose();
+            store.close();
+          }
+        };
 
-          const a = await runNoRestart();
-          const b = await runWithRestart();
-          expect(canonicalise(b)).toBe(canonicalise(a));
-        },
-      ),
+        const runWithRestart = async (): Promise<AgentMessage[]> => {
+          const store = new SqliteStore({ path: ":memory:" });
+          const pre = newDaemon(store, scriptedResponses(11, restartAt));
+          let last: AgentMessage[] = [];
+          try {
+            const writes = new Set<string>();
+            const backend = pre.makeBackend(writes);
+            for (let i = 0; i < restartAt; i++) {
+              ({ finalMessages: last } = await pre.dispatch(backend, "r", "dev", "full"));
+            }
+          } finally {
+            pre.dispose();
+          }
+          // Simulated restart: reseed writes from store, spin a new
+          // faux provider with the remaining scripted turns.
+          const post = newDaemon(store, scriptedResponses(11, turns).slice(restartAt));
+          try {
+            const writes = reseedInProcessWrites(store);
+            const backend = post.makeBackend(writes);
+            for (let i = restartAt; i < turns; i++) {
+              ({ finalMessages: last } = await post.dispatch(backend, "r", "dev", "full"));
+            }
+          } finally {
+            post.dispose();
+            store.close();
+          }
+          return last;
+        };
+
+        const a = await runNoRestart();
+        const b = await runWithRestart();
+        expect(canonicalise(b)).toBe(canonicalise(a));
+      }),
       { numRuns: 15 },
     );
   });

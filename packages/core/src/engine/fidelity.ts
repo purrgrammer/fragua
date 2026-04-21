@@ -31,10 +31,3 @@ export function resolveThreadId(ctx: FidelityContext): string | undefined {
   if (firstClass) return firstClass;
   return ctx.sourceNode?.id;
 }
-
-/** When resuming from a checkpoint, a node that previously used `full`
- * fidelity cannot be resumed with full session state (in-memory LLM sessions
- * aren't always serializable), so we degrade to `summary:high` per the spec. */
-export function degradeOnResume(mode: FidelityMode): FidelityMode {
-  return mode === "full" ? "summary:high" : mode;
-}
