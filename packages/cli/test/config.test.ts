@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../src/config.ts";
+import fc from "fast-check";
+import { loadConfig, resolveTimeouts } from "../src/config.ts";
 
 describe("loadConfig", () => {
   let scratch: string;
@@ -55,5 +56,80 @@ describe("loadConfig", () => {
     await writeFile(join(scratch, ".swarm/config.yaml"), "just-a-string", "utf8");
     const cfg = await loadConfig(scratch);
     expect(cfg).toEqual({});
+  });
+
+  test("parses the timeouts section", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(
+      join(scratch, ".swarm/config.yaml"),
+      `timeouts:\n  codergen: 30m\n  tool: "5m"\n  http: 30s\n  leak_grace: 10s\n`,
+      "utf8",
+    );
+    const cfg = await loadConfig(scratch);
+    expect(cfg.timeouts?.codergen).toBe("30m");
+    expect(cfg.timeouts?.tool).toBe("5m");
+    expect(cfg.timeouts?.http).toBe("30s");
+    expect(cfg.timeouts?.leak_grace).toBe("10s");
+  });
+});
+
+describe("resolveTimeouts", () => {
+  test("absent section → empty object", () => {
+    expect(resolveTimeouts({})).toEqual({});
+  });
+
+  test("each key parses through parseDurationMs", () => {
+    const r = resolveTimeouts({
+      timeouts: {
+        codergen: "30m",
+        tool: "5m",
+        bootstrap: 600_000,
+        shell: "30s",
+        http: "30s",
+        leak_grace: "10s",
+        shutdown_drain: "30s",
+      },
+    });
+    expect(r.codergen).toBe(30 * 60 * 1000);
+    expect(r.tool).toBe(5 * 60 * 1000);
+    expect(r.bootstrap).toBe(600_000);
+    expect(r.shell).toBe(30_000);
+    expect(r.http).toBe(30_000);
+    expect(r.leak_grace).toBe(10_000);
+    expect(r.shutdown_drain).toBe(30_000);
+  });
+
+  test("invalid value throws with config-prefixed message", () => {
+    expect(() => resolveTimeouts({ timeouts: { codergen: "garbage" } })).toThrow(/config: timeouts\.codergen:/);
+  });
+
+  test("unset keys stay undefined (caller falls through to handler defaults)", () => {
+    const r = resolveTimeouts({ timeouts: { codergen: "10m" } });
+    expect(r.codergen).toBe(10 * 60 * 1000);
+    expect(r.tool).toBeUndefined();
+    expect(r.http).toBeUndefined();
+  });
+
+  test("property — any valid duration string round-trips", () => {
+    const validDuration = fc
+      .tuple(fc.integer({ min: 1, max: 10_000 }), fc.constantFrom("ms", "s", "m", "h"))
+      .map(([n, u]) => [`${n}${u}`, n * ({ ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[u] ?? 1)] as const);
+    fc.assert(
+      fc.property(validDuration, ([input, expected]) => {
+        expect(resolveTimeouts({ timeouts: { codergen: input } }).codergen).toBe(expected);
+      }),
+    );
+  });
+
+  test("property — any invalid value surfaces a config-prefixed error", () => {
+    const badValue = fc.oneof(
+      fc.constantFrom("garbage", "", "   ", "0s", "-1", "5x", "1.5m"),
+      fc.integer({ min: -1_000, max: 0 }),
+    );
+    fc.assert(
+      fc.property(badValue, (v) => {
+        expect(() => resolveTimeouts({ timeouts: { codergen: v as string | number } })).toThrow(/config: timeouts\./);
+      }),
+    );
   });
 });

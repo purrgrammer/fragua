@@ -33,7 +33,7 @@ import {
 import { SqliteStore } from "@swarm/store";
 import { CORE_TOOLS, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
-import { loadConfig } from "../config.ts";
+import { loadConfig, resolveTimeouts } from "../config.ts";
 
 /**
  * Poll interval for `swarm daemon stop` — how often we check whether
@@ -149,6 +149,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // Resolve provider/model. Precedence: CLI flags > .swarm/config.yaml
   // defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
+  let timeouts: ReturnType<typeof resolveTimeouts>;
+  try {
+    timeouts = resolveTimeouts(config);
+  } catch (err) {
+    console.error(chalk.red((err as Error).message));
+    return 1;
+  }
   const cfgProvider = config.defaults?.provider;
   const cfgModel = config.defaults?.model;
   let provider = opts.provider;
@@ -249,10 +256,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     };
   }
   void PiCodergenBackend;
+  const defaultMaxMs: { codergen?: number; tool?: number } = {};
+  if (timeouts.codergen !== undefined) defaultMaxMs.codergen = timeouts.codergen;
+  if (timeouts.tool !== undefined) defaultMaxMs.tool = timeouts.tool;
   dispatcher.setResolver(
     autoDispatcherResolver({
       store,
       ...(codergenFactory ? { codergenFactory } : {}),
+      ...(Object.keys(defaultMaxMs).length > 0 ? { defaultMaxMs } : {}),
     }),
   );
 

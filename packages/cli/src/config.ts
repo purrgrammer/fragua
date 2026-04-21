@@ -4,6 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { parseDurationMs } from "@swarm/core";
 import YAML from "yaml";
 
 export interface SwarmConfig {
@@ -54,6 +55,55 @@ export interface SwarmConfig {
     /** Trust gate for project-scope skills. Default true. */
     trust_project?: boolean;
   };
+  /** Global per-kind timeout defaults. Each value accepts a duration
+   * string ("30s", "5m", "2h") or a raw millisecond integer. Per-node
+   * DOT `timeout=`/`maxMs=` attrs override these; handler built-in
+   * defaults apply when a kind is absent. Invalid values fail daemon
+   * startup loudly — silent fall-through would make runtime behavior
+   * silently diverge from authored intent. */
+  timeouts?: {
+    codergen?: string | number;
+    tool?: string | number;
+    bootstrap?: string | number;
+    shell?: string | number;
+    http?: string | number;
+    leak_grace?: string | number;
+    shutdown_drain?: string | number;
+  };
+}
+
+/** Every timeout key in `SwarmConfig.timeouts`, resolved to milliseconds.
+ * Populated by {@link resolveTimeouts}. Absent keys stay `undefined`
+ * so callers know to fall through to handler defaults. */
+export interface ResolvedTimeouts {
+  codergen?: number;
+  tool?: number;
+  bootstrap?: number;
+  shell?: number;
+  http?: number;
+  leak_grace?: number;
+  shutdown_drain?: number;
+}
+
+/** Parse and validate each present key in `cfg.timeouts`. Throws a
+ * caller-friendly Error on the first invalid value so the daemon
+ * startup path can surface the name + reason without a stack-trace
+ * dump. */
+export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
+  const out: ResolvedTimeouts = {};
+  if (cfg.timeouts == null) return out;
+  const keys = ["codergen", "tool", "bootstrap", "shell", "http", "leak_grace", "shutdown_drain"] as const;
+  for (const key of keys) {
+    const raw = cfg.timeouts[key];
+    if (raw == null) continue;
+    try {
+      out[key] = parseDurationMs(raw);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`config: timeouts.${key}: ${msg}`);
+    }
+  }
+  return out;
 }
 
 /** Load and parse `<cwd>/.swarm/config.yaml`. Returns `{}` if the file is
