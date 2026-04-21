@@ -1,5 +1,25 @@
 // swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
 
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+
+/** Swarm-specific custom message type: the assembled system prompt for
+ * a single LLM call. Persisted so UIs and debuggers can reconstruct
+ * exactly what the model saw, without hitting the 4KB cap on
+ * `llm.start`'s event payload. Never re-fed to pi-ai as a priorMessage
+ * — pi-ai carries the system prompt separately on each call. The
+ * handler-bridge filters these rows out before building priorMessages. */
+export interface SystemPromptMessage {
+  role: "system";
+  content: string;
+  timestamp: number;
+}
+
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    system: SystemPromptMessage;
+  }
+}
+
 export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
 
 export type EventWriter = "daemon" | "web";
@@ -234,13 +254,17 @@ export interface StoredEvent {
 
 // ─────────────── Messages and artifacts ───────────────
 
-export type MessageRole = "system" | "user" | "assistant" | "tool";
+/** pi-agent-core roles (including custom-message-type roles). Kept as
+ * `string` to match `AgentMessage["role"]` — no swarm-side narrowing. */
+export type MessageRole = AgentMessage["role"];
 
 export interface Message {
   runId: string;
   ordinal: number;
-  role: MessageRole;
-  content: string;
+  /** The pi-agent-core `AgentMessage` stored as-is. Round-trips through
+   * JSON.parse/stringify losslessly; same shape pi-ai hands us at
+   * `message_end` and accepts back as `priorMessages`. */
+  content: AgentMessage;
   nodeId: string | null;
   iteration: number;
 }

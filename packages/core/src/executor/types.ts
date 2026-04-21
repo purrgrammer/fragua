@@ -2,6 +2,7 @@
 // PiCodergenBackend implements so makeCodergenHandler can drive it inside
 // a HandlerContext.
 
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ContextMap } from "../types/context.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
@@ -33,19 +34,17 @@ export interface CodergenInput {
    * non-empty, the backend treats it as the authoritative history — it
    * overrides the in-process MessageStore cache. This is how
    * `fidelity=full` survives a daemon restart: the in-memory cache is
-   * empty after restart but the messages table still has the rows.
-   *
-   * Left as `unknown[]` at the core boundary so @swarm/core doesn't
-   * depend on pi-agent-core's AgentMessage shape; the backend casts. */
-  priorMessages?: readonly unknown[];
-  /** Sink for persisting LLM-visible assistant / tool messages as they
-   * complete. The backend calls this once per finished agent message
-   * with the flattened content. The handler-bridge wires it to
-   * `ctx.messages.append` so rows land in the `messages` table (no
-   * 4KB payload cap, unlike the events table — §I7 vs §I9). When
-   * omitted, messages don't land anywhere — fine for tests that only
-   * care about events. */
-  persistMessage?: (role: "assistant" | "tool" | "user" | "system", content: string) => void;
+   * empty after restart but the messages table still has the rows. */
+  priorMessages?: readonly AgentMessage[];
+  /** Sink for persisting LLM-visible messages as they complete. The
+   * backend calls this once per `agent.message_end` with the full
+   * `AgentMessage` (text + thinking + toolCall blocks, or toolResult +
+   * tool_use_id pairing, or a custom-type like `SystemPromptMessage`).
+   * The handler-bridge wires it to `ctx.messages.append` so rows land
+   * in the `messages` table (§I9 — JSON, unbounded, distinct from the
+   * 4KB event payload cap §I7). When omitted, messages don't land
+   * anywhere — fine for tests that only care about events. */
+  persistMessage?: (message: AgentMessage) => void;
   /** Per-run shell + filesystem environment. When set, the backend
    * uses this for tool execution (read/write/edit/bash) and context-
    * file loads instead of falling back to its construction-time env.

@@ -248,8 +248,7 @@ describe("P22 — cascade delete", () => {
     const store = freshStore();
     const runId = await seedRun(store);
     store.appendMessage(runId, {
-      role: "user",
-      content: "hi",
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
       nodeId: null,
       iteration: 0,
     });

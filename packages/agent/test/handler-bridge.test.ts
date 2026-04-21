@@ -40,18 +40,32 @@ function stubBackend(
         });
       }
       if (emitScript.assistantText != null) {
-        await input.emit?.("agent.message_end", {
+        input.persistMessage?.({
           role: "assistant",
-          message: { role: "assistant", content: emitScript.assistantText },
+          content: [{ type: "text", text: emitScript.assistantText }],
+          api: "anthropic" as never,
+          provider: "anthropic" as never,
+          model: emitScript.model ?? "claude-stub",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
         });
       }
       if (emitScript.toolText != null) {
-        await input.emit?.("agent.message_end", {
-          role: "tool",
-          message: {
-            role: "tool",
-            content: [{ type: "text", text: emitScript.toolText }],
-          },
+        input.persistMessage?.({
+          role: "toolResult",
+          toolCallId: "stub",
+          toolName: "stub",
+          content: [{ type: "text", text: emitScript.toolText }],
+          isError: false,
+          timestamp: 2,
         });
       }
       return ok({ notes: "done", context_updates: { result: "four" } });
@@ -132,10 +146,14 @@ describe("makeCodergenHandler", () => {
 
     await spec.handler(ctx);
     const msgs = store.getMessages("r2");
-    expect(msgs.map((m) => [m.role, m.content])).toEqual([
-      ["assistant", "hello"],
-      ["tool", "tool output"],
-    ]);
+    expect(msgs.map((m) => m.content.role)).toEqual(["assistant", "toolResult"]);
+    const first = msgs[0]?.content;
+    const second = msgs[1]?.content;
+    expect(first?.role === "assistant" && Array.isArray(first.content) && first.content[0]).toMatchObject({
+      type: "text",
+      text: "hello",
+    });
+    expect(second?.role === "toolResult" && second.content[0]).toMatchObject({ type: "text", text: "tool output" });
     store.close();
   });
 

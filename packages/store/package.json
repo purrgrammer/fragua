@@ -12,7 +12,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "0.67.68"
+  },
   "devDependencies": {
     "fast-check": "3.23.1",
     "typescript": "5.7.3"

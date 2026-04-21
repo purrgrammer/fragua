@@ -5,7 +5,9 @@
 // reach into the store directly. All side effects route through the context
 // helpers, which the executor wires to the event store.
 
-import type { ArtifactRef, ArtifactScope, Message, MessageRole } from "@swarm/store";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { Message as PiMessage } from "@mariozechner/pi-ai";
+import type { ArtifactRef, ArtifactScope, Message } from "@swarm/store";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
@@ -22,7 +24,12 @@ export type Handler = (ctx: HandlerContext) => Promise<HandlerResult>;
 
 export interface LlmCallParams {
   model: string;
-  messages: { role: MessageRole; content: string }[];
+  /** Prompt-to-LLM message list — pi-ai's `Message` union
+   * (`UserMessage | AssistantMessage | ToolResultMessage`). For richer
+   * per-turn history (thinking, custom-type messages) use the agent
+   * surface via `makeCodergenHandler` instead; this low-level helper
+   * is for bare single-call handlers. */
+  messages: PiMessage[];
   /** Soft token cap; provider-specific. */
   maxTokens?: number;
 }
@@ -57,11 +64,11 @@ export interface ToolRegistry {
 }
 
 export interface MessagesApi {
-  /** Append an LLM-visible message row. Plaintext only — resume paths
-   * always degrade `fidelity=full` to `summary:high` (SPEC §3.6) which
-   * only needs text, so the structural AgentMessage shape never
-   * crosses a daemon restart. */
-  append(role: MessageRole, content: string): { ordinal: number };
+  /** Append an LLM-visible message row. Stores the full pi-agent-core
+   * `AgentMessage` shape (including tool_use / tool_result / thinking
+   * block structure, signatures, custom types). Round-trips through
+   * JSON losslessly. */
+  append(message: AgentMessage): { ordinal: number };
   recent(n: number): Message[];
   since(ordinal: number): Message[];
 }

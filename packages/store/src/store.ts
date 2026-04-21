@@ -27,7 +27,6 @@ import {
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_ROUTING_BYTES,
   type Message,
-  type MessageRole,
   type ObservabilityEvent,
   PayloadTooLargeError,
   type RunMetrics,
@@ -397,10 +396,10 @@ export class SqliteStore implements IEventStore {
       ordinal = (max?.m ?? 0) + 1;
       this.db
         .query(
-          `INSERT INTO messages (run_id, ordinal, role, content, node_id, iteration)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (run_id, ordinal, content, node_id, iteration)
+           VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(runId, ordinal, row.role, row.content, row.nodeId, row.iteration ?? 0);
+        .run(runId, ordinal, JSON.stringify(row.content), row.nodeId, row.iteration ?? 0);
     });
     return { ordinal };
   }
@@ -411,7 +410,6 @@ export class SqliteStore implements IEventStore {
     type Row = {
       run_id: string;
       ordinal: number;
-      role: MessageRole;
       content: string;
       node_id: string | null;
       iteration: number;
@@ -419,7 +417,7 @@ export class SqliteStore implements IEventStore {
     if (opts.nodeId != null) {
       return this.db
         .query<Row, [string, number, string, number]>(
-          `SELECT run_id, ordinal, role, content, node_id, iteration
+          `SELECT run_id, ordinal, content, node_id, iteration
              FROM messages
             WHERE run_id = ? AND ordinal > ? AND node_id = ?
             ORDER BY ordinal ASC
@@ -430,7 +428,7 @@ export class SqliteStore implements IEventStore {
     }
     return this.db
       .query<Row, [string, number, number]>(
-        `SELECT run_id, ordinal, role, content, node_id, iteration
+        `SELECT run_id, ordinal, content, node_id, iteration
            FROM messages
           WHERE run_id = ? AND ordinal > ?
           ORDER BY ordinal ASC
@@ -786,15 +784,13 @@ export class SqliteStore implements IEventStore {
   private rowToMessage = (r: {
     run_id: string;
     ordinal: number;
-    role: MessageRole;
     content: string;
     node_id: string | null;
     iteration: number;
   }): Message => ({
     runId: r.run_id,
     ordinal: r.ordinal,
-    role: r.role,
-    content: r.content,
+    content: JSON.parse(r.content),
     nodeId: r.node_id,
     iteration: r.iteration,
   });

@@ -62,11 +62,17 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, run_id, seq);
 
+-- messages.content stores a pi-agent-core `AgentMessage` as JSON — the
+-- same shape pi-ai hands us at message_end and hands back as
+-- `priorMessages`. Round-trips through JSON.parse/stringify losslessly.
+-- `json_valid` catches writers that forget to stringify; `role` is
+-- extracted from the message JSON into a real column so UI filters and
+-- debug queries don't pay `json_extract` on hot paths.
 CREATE TABLE IF NOT EXISTS messages (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('system','user','assistant','tool')),
-  content TEXT NOT NULL,
+  content TEXT NOT NULL CHECK (json_valid(content)),
+  role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (run_id, ordinal)

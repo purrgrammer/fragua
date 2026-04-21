@@ -166,41 +166,53 @@ Observability event types outside the fact/intent union (`llm.start`, `llm.text_
 
 ## 5. Read the messages transcript
 
-The `messages` table is the LLM-visible transcript: every `system`, `user`, `assistant`, `tool` turn the agent produced, per (node, iteration). This is the right layer when:
+The `messages` table stores pi-agent-core `AgentMessage` objects as JSON (§I9) — the same shape pi-ai hands back at `message_end` and accepts as `priorMessages`. Block structure round-trips losslessly: text, thinking (with `thinkingSignature` + `redacted`), toolCall (with `thoughtSignature`), toolResult (with `toolCallId` pairing), plus swarm's `SystemPromptMessage` custom type (`role:"system"`) for the assembled per-call system prompt.
 
-- A codergen node produced the wrong output → read what it was told + what it said back.
-- A node aborted with a sentinel (`<abort>…</abort>`) → the reason is in the assistant turn.
-- A prompt template failed to substitute (`${context.foo}` appeared literally) → visible in the `user` role.
-- Context management is suspect (too much / too little prior state in the thread) → read the `system` turn + prior turns.
+Reach for the transcript when:
 
-Messages are **plaintext, unbounded** (invariant I9). Event payloads cap at 4KB; the transcript does not — the system prompt and prior-transcript snapshot live here, not in events.
+- A codergen node produced the wrong output → read its `content[]` blocks.
+- A node aborted with a sentinel (`<abort>…</abort>`) → the reason is in an assistant `TextContent` block.
+- A prompt template failed to substitute (`${context.foo}` appeared literally) → visible on `role:"user"` rows.
+- Context management is suspect → read the `role:"system"` row for the full assembled prompt, plus preceding turns.
+- Tool calls need pairing — `assistant.content[i]` with `type:"toolCall"` carries `{id, name, arguments}`; the following `role:"toolResult"` row carries `toolCallId` matching that id.
+
+Column layout: `content` is the JSON-serialized `AgentMessage` (validated by `CHECK(json_valid)`). `role` is a STORED generated column extracted from `$.role` — indexable, queryable without parsing. `node_id` + `iteration` are swarm's projection of which graph node emitted the turn.
 
 ```sh
-# HTTP (optional ?nodeId= and ?sinceOrdinal= for pagination)
-curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role, nodeId, iteration, preview: (.content[0:400])}'
+# HTTP — returns AgentMessage[] JSON directly.
+curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, nodeId, iteration}'
+curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, blocks: (.content.content // []) | map(.type)}'
 curl -fsS "$URL/runs/$RUN/messages?nodeId=plan" | jq '.'
 
-# SQLite — trim large content when scanning
+# SQLite — use json_extract for shape probes, or just pretty-print.
 sqlite3 -readonly .swarm/swarm.db <<SQL
 .mode line
-SELECT ordinal, role, node_id, iteration,
-       length(content) AS bytes,
-       substr(content, 1, 600) AS preview
+SELECT ordinal, role, node_id, iteration, length(content) AS bytes
 FROM messages WHERE run_id='<RUN>'
 ORDER BY ordinal;
+SQL
+
+# Show the full JSON of one row
+sqlite3 -readonly .swarm/swarm.db \
+  "SELECT content FROM messages WHERE run_id='<RUN>' AND ordinal=<N>;" | jq .
+
+# Inside-JSON queries (role census, tool_call count per row)
+sqlite3 -readonly .swarm/swarm.db <<SQL
+.mode column
+SELECT role, COUNT(*) AS n FROM messages WHERE run_id='<RUN>' GROUP BY role;
 SQL
 ```
 
 **Notes on what each role tells you:**
 
-- `role='system'` — the full assembled system prompt for that node-iteration's LLM call. Written by `PiCodergenBackend` to keep `llm.start` under the 4KB event cap. This is the only place the full system prompt lives verbatim — a `steps[]` record carries it too, but derived from this row.
-- `role='user'` — the substituted prompt the node's `.dot` `prompt = "…"` compiled into. Look here to verify `$ARGUMENTS`, `$nodeId.output`, `${context.*}` all resolved.
-- `role='assistant'` — agent turns. `<abort>reason</abort>` and `<promise>SENTINEL</promise>` show up here; that's where workflow-level sentinels are emitted.
-- `role='tool'` — tool results (pi-agent-core `toolResult` role is mapped down to `"tool"`). Long outputs (e.g. a full file read) may be here; iterate `sinceOrdinal` for paging.
+- `role='system'` — the full assembled system prompt for that node-iteration's LLM call, stored as a swarm-specific `SystemPromptMessage` custom type (`{role:"system", content: string, timestamp}`). Written by `PiCodergenBackend` to keep `llm.start` under the 4KB event cap. `handler-bridge.loadPriorMessagesForThread` filters these out before feeding priorMessages to pi-ai, which carries the system prompt separately.
+- `role='user'` — pi-ai `UserMessage`. `content` is `string | (TextContent | ImageContent)[]`. The substituted prompt the node's `.dot` `prompt = "…"` compiled into. Verify `$ARGUMENTS`, `$nodeId.output`, `${context.*}` all resolved.
+- `role='assistant'` — pi-ai `AssistantMessage`. `content` is `(TextContent | ThinkingContent | ToolCall)[]` in block order. `<abort>reason</abort>` and `<promise>SENTINEL</promise>` live in `TextContent.text`. Thinking blocks carry `thinkingSignature` (Anthropic Extended Thinking) + optional `redacted`. `ToolCall` carries `{id, name, arguments}` + optional `thoughtSignature` (Gemini).
+- `role='toolResult'` — pi-ai `ToolResultMessage`. `content` is `(TextContent | ImageContent)[]`. Top-level `toolCallId` pairs with the originating `assistant` message's `ToolCall.id`; `toolName` + `isError` are siblings.
 
 The transcript is populated at every `message_end` during `PiCodergenBackend.run()`, so it reflects the live state of an in-flight run — not just terminal ones.
 
-`thread_id` on a node shares the transcript across subsequent entries of nodes with the same `thread_id` (e.g. `build-feature.dot` uses `thread_id="dev"` to share context between `implement` and `verify`). You will see multiple nodes writing under the same effective thread — filter by `node_id` to narrow.
+`thread_id` on a node shares the transcript across subsequent entries of nodes with the same `thread_id` (e.g. `build-feature.dot` uses `thread_id="dev"` to share context between `implement` and `verify`). Filter by `node_id` to narrow.
 
 ---
 
@@ -327,8 +339,8 @@ sqlite3 -readonly .swarm/swarm.db \
 # Full timeline tail
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-50:]'
 
-# Messages
-curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role, nodeId, iteration, len: (.content|length)}'
+# Messages — content is AgentMessage JSON
+curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, nodeId, iteration}'
 curl -fsS "$URL/runs/$RUN/messages?nodeId=<NODE>" | jq
 
 # Step snapshots (prompts, models, tokens, cost)

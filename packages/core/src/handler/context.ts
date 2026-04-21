@@ -1,4 +1,5 @@
-import type { ArtifactRef, ArtifactScope, IEventStore, Message, MessageRole } from "@swarm/store";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ArtifactRef, ArtifactScope, IEventStore, Message } from "@swarm/store";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {
@@ -51,10 +52,9 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const { runId, nodeId, iteration, store } = opts;
 
   const messages: MessagesApi = {
-    append(role: MessageRole, content: string) {
+    append(message: AgentMessage) {
       return store.appendMessage(runId, {
-        role,
-        content,
+        content: message,
         nodeId,
         iteration,
       });

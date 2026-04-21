@@ -6,6 +6,7 @@
 // ctx.messages + running token/cost totals, then translate the Outcome
 // into a HandlerResult the executor can commit.
 
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   type CodergenBackend,
   type ContextMap,
@@ -87,18 +88,6 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
         cacheWriteTokens += numAt(data, "cache_write_tokens");
         const model = strAt(data, "model");
         if (model != null) modelName = model;
-      } else if (type === "agent.message_end") {
-        // Legacy stub-backend path: some CodergenBackend impls emit the
-        // full message on the `agent.message_end` event payload (see
-        // handler-bridge.test.ts' stubBackend). The real
-        // PiCodergenBackend takes the dedicated `persistMessage`
-        // callback below instead — which stays out of the 4KB event
-        // envelope.
-        const role = strAt(data, "role");
-        const content = extractTextFromMessage(data);
-        if (content.length > 0 && (role === "assistant" || role === "tool" || role === "user" || role === "system")) {
-          ctx.messages.append(role, content);
-        }
       }
     };
 
@@ -123,8 +112,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
-      persistMessage: (role, content) => {
-        ctx.messages.append(role, content);
+      persistMessage: (message) => {
+        ctx.messages.append(message);
       },
     });
 
@@ -203,45 +192,22 @@ function strAt(data: Record<string, unknown>, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-/** Hydrate the AgentMessage history for a (runId, threadId) pair from
- * the `messages` table. Filters by `node_id` if every node sharing the
- * thread id is also a node id (the common case: `thread_id` defaults
- * to the source node id). Falls back to all messages when there's no
- * direct match so authors who set `thread_id="dev"` don't get empty
- * history. Returns `undefined` when nothing is persisted.
- *
- * Rows synthesise minimal AgentMessages from (role, content). Resume
- * always degrades `fidelity=full` → `summary:high` (SPEC §3.6), so
- * the seed builder only needs text — tool_use blocks never have to
- * survive a daemon restart. */
-function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly unknown[] | undefined {
+/** Hydrate the pi-agent-core `AgentMessage[]` history for a
+ * (runId, threadId) pair from the `messages` table. Rows store the
+ * full AgentMessage as JSON (§I9), so this is a read-and-filter — no
+ * synthesis, no shape reconstruction. Filters by `node_id` when the
+ * thread id equals a node id (the common case); falls back to all
+ * messages otherwise so authors who set `thread_id="dev"` get their
+ * cross-node history. Swarm-internal `role:"system"` rows (the stored
+ * system prompt) are stripped — pi-ai carries the system prompt
+ * separately on each call via `Context.systemPrompt`. Returns
+ * `undefined` when nothing is persisted. */
+function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly AgentMessage[] | undefined {
   const byNode = ctx.messages.since(0).filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : ctx.messages.since(0);
   if (rows.length === 0) return undefined;
-  return rows.map((row) => ({
-    role: row.role,
-    content: [{ type: "text", text: row.content }],
-    timestamp: Date.now(),
-  }));
-}
-
-function extractTextFromMessage(data: Record<string, unknown>): string {
-  const msg = data["message"];
-  if (msg == null || typeof msg !== "object") return "";
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const item of content) {
-      if (typeof item === "string") parts.push(item);
-      else if (item != null && typeof item === "object") {
-        const text = (item as { text?: unknown }).text;
-        if (typeof text === "string") parts.push(text);
-      }
-    }
-    return parts.join("");
-  }
-  return "";
+  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system");
+  return messages.length > 0 ? messages : undefined;
 }
 
 export type { HandlerSpec, HandlerContext };

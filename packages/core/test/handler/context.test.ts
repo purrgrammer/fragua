@@ -41,10 +41,26 @@ describe("buildHandlerContext", () => {
       recorder: stubRecorder(),
     });
 
-    ctx.messages.append("user", "hi");
-    ctx.messages.append("assistant", "hello");
+    ctx.messages.append({ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 });
+    ctx.messages.append({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+      api: "anthropic" as never,
+      provider: "anthropic" as never,
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
     const recent = ctx.messages.recent(10);
-    expect(recent.map((m) => m.content)).toEqual(["hi", "hello"]);
+    expect(recent.map((m) => m.content.role)).toEqual(["user", "assistant"]);
     store.close();
   });
 

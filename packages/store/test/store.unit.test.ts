@@ -396,23 +396,39 @@ describe("SqliteStore — daemon lock", () => {
 });
 
 describe("SqliteStore — messages", () => {
-  test("append and read back in ordinal order", async () => {
+  test("append and read back in ordinal order, AgentMessage round-trips", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     store.appendMessage(runId, {
-      role: "user",
-      content: "hi",
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
       nodeId: null,
       iteration: 0,
     });
     store.appendMessage(runId, {
-      role: "assistant",
-      content: "hello",
+      content: {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        api: "anthropic" as never,
+        provider: "anthropic" as never,
+        model: "test",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      },
       nodeId: "a",
       iteration: 0,
     });
     const rows = store.getMessages(runId);
-    expect(rows.map((r) => r.content)).toEqual(["hi", "hello"]);
+    expect(rows.map((r) => r.content.role)).toEqual(["user", "assistant"]);
+    expect(rows[0]?.content).toMatchObject({ role: "user", content: [{ type: "text", text: "hi" }] });
+    expect(rows[1]?.content).toMatchObject({ role: "assistant", content: [{ type: "text", text: "hello" }] });
     store.close();
   });
 });

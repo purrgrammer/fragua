@@ -2,22 +2,20 @@
 //
 // Invariants guarded here:
 //
-//   1. Each finished agent message lands in `messages` with flattened
-//      plaintext `content`. Resume always degrades fidelity=full →
-//      summary:high (SPEC §3.6), so plaintext is sufficient — the
-//      structured AgentMessage shape never needs to cross a daemon
-//      restart.
+//   1. Each finished agent message lands in `messages` as a full pi-
+//      agent-core `AgentMessage` stored as JSON (§I9). No shape loss
+//      across a daemon restart.
 //   2. The handler-bridge loads prior messages from the store before
 //      each backend.run() so a fresh backend instance post-restart
-//      sees history as `input.priorMessages` (synthesised AgentMessages
-//      from plaintext).
-//   3. pi-agent-core roles (`toolResult`) map onto swarm's MessageRole
-//      (`tool`) so persistence round-trips cleanly.
-//   4. Event payloads never carry the message content — only the
+//      sees history via `input.priorMessages` (typed AgentMessage[]).
+//      Swarm-internal `role:"system"` rows (SystemPromptMessage) are
+//      filtered out — pi-ai carries the system prompt separately.
+//   3. Event payloads never carry the message content — only the
 //      messages table does — so §I7 (4KB event cap) stays intact even
 //      for 8 KB+ assistant turns.
 
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { CodergenBackend, CodergenInput, Node } from "@swarm/core";
 import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
@@ -70,6 +68,26 @@ async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promis
   });
 }
 
+function assistantMsg(text: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "anthropic" as never,
+    provider: "anthropic" as never,
+    model: "stub",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
 function makeInstrumentedBackend(): {
   backend: CodergenBackend;
   calls: Array<Pick<CodergenInput, "run_id" | "thread_id" | "fidelity"> & { priorMessagesLen: number }>;
@@ -83,7 +101,7 @@ function makeInstrumentedBackend(): {
         fidelity: input.fidelity,
         priorMessagesLen: input.priorMessages?.length ?? 0,
       });
-      input.persistMessage?.("assistant", `reply to ${input.prompt}`);
+      input.persistMessage?.(assistantMsg(`reply to ${input.prompt}`));
       return ok({ notes: "ok", context_updates: {} });
     },
   };
@@ -91,7 +109,7 @@ function makeInstrumentedBackend(): {
 }
 
 describe("messages table populates on persistMessage", () => {
-  test("plaintext content round-trip", async () => {
+  test("AgentMessage round-trips losslessly (text block preserved)", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r1", store, "n1");
     const { backend } = makeInstrumentedBackend();
@@ -99,24 +117,35 @@ describe("messages table populates on persistMessage", () => {
 
     const msgs = store.getMessages("r1");
     expect(msgs).toHaveLength(1);
-    expect(msgs[0]?.role).toBe("assistant");
-    expect(msgs[0]?.content).toBe("reply to hello");
+    const msg = msgs[0]?.content;
+    expect(msg?.role).toBe("assistant");
+    expect(msg?.role === "assistant" && msg.content[0]).toMatchObject({ type: "text", text: "reply to hello" });
     store.close();
   });
 
-  test("tool role maps through (toolResult → tool)", async () => {
+  test("toolResult preserves tool_use pairing fields", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r2", store, "n1");
     const backend: CodergenBackend = {
       async run(input) {
-        input.persistMessage?.("tool", "grep output");
+        input.persistMessage?.({
+          role: "toolResult",
+          toolCallId: "tc1",
+          toolName: "grep",
+          content: [{ type: "text", text: "grep output" }],
+          isError: false,
+          timestamp: 1,
+        });
         return ok({ notes: "", context_updates: {} });
       },
     };
     await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
     const msgs = store.getMessages("r2");
-    expect(msgs[0]?.role).toBe("tool");
-    expect(msgs[0]?.content).toBe("grep output");
+    const msg = msgs[0]?.content;
+    expect(msg?.role).toBe("toolResult");
+    expect(msg?.role === "toolResult" && msg.toolCallId).toBe("tc1");
+    expect(msg?.role === "toolResult" && msg.toolName).toBe("grep");
+    expect(msg?.role === "toolResult" && msg.isError).toBe(false);
     store.close();
   });
 });
@@ -128,8 +157,7 @@ describe("handler-bridge priorMessages hydration", () => {
     store.enqueueRun({ runId: "r1", workflowSha: "sha" });
 
     store.appendMessage("r1", {
-      role: "assistant",
-      content: "earlier",
+      content: assistantMsg("earlier"),
       nodeId: "n1",
       iteration: 0,
     });
@@ -259,7 +287,7 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
     const huge = "x".repeat(8192);
     const backend: CodergenBackend = {
       async run(input) {
-        input.persistMessage?.("assistant", huge);
+        input.persistMessage?.(assistantMsg(huge));
         await input.emit?.("agent.message_end", { role: "assistant" });
         return ok({ notes: "", context_updates: {} });
       },
@@ -267,7 +295,9 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
     await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
 
     const msgs = store.getMessages("r5");
-    expect(msgs[0]?.content.length).toBe(8192);
+    const msg = msgs[0]?.content;
+    const text = msg?.role === "assistant" ? ((msg.content[0] as { text: string } | undefined)?.text ?? "") : "";
+    expect(text.length).toBe(8192);
 
     for (const ev of store.getEvents("r5")) {
       const size = JSON.stringify(ev.payload).length;

@@ -93,23 +93,29 @@ canonicalization + per-key promise queue, map cleaned up when idle.
 
 ---
 
-## UI rendering of `<thinking>` / `<tool_use>` / `<tool_result>` tags
+## UI rendering of the messages transcript
 
-**Problem.** `messages.content` now carries structured tags (post
-`packages/agent/src/backend.ts` rewrite). `packages/web` still renders
-the column as plaintext. Result: `<tool_use id="..." name="read">{"path":"..."}</tool_use>`
-appears literally in `RunConversation`.
+**Status.** `messages.content` stores pi-agent-core `AgentMessage` JSON
+directly (no swarm-invented tag grammar). `packages/web` currently
+rebuilds the conversation from events, not from the messages table, so
+the UI isn't at risk of rendering raw JSON — but it *could* consume the
+`/runs/:id/messages` endpoint directly for fidelity.
 
-**Shape of the fix.** Parser in `packages/web` that splits content into a
-`Block[]` (text, thinking, tool_use, tool_result) — non-greedy matches,
-pairs tool_use↔tool_result by id within the message stream — and renders
-each with a dedicated component:
+**Shape of the fix when we get to it.**
 
-- `<thinking>` → collapsible panel with shimmer (see
+The web already imports pi-ai types; components switch on
+`message.content[].type` the way pi-mono's web-ui does
+(`ThinkingBlock.ts`, `Messages.ts`):
+
+- `text` → existing markdown renderer.
+- `thinking` → collapsible panel with shimmer (see
   [AI SDK Elements `reasoning`](https://elements.ai-sdk.dev/components/reasoning),
   optionally [`chain-of-thought`](https://elements.ai-sdk.dev/components/chain-of-thought)).
-- `<tool_use>` + matched `<tool_result>` → tool-call card with name,
-  args (JSON-pretty), result body, error flag.
-- text → existing markdown renderer.
+  Honor `thinkingSignature` + `redacted` if present.
+- `toolCall` (on assistant) + matched `toolResult` (following message) →
+  tool-call card with name, args (JSON-pretty), result body, error flag.
+  Pair by `toolCall.id === toolResult.toolCallId`, same as pi-mono's
+  `toolResultsById.get(chunk.id)`.
 
-Out of scope for the backend serialization PR; next UI pass.
+Components land one at a time — add `ThinkingBlock` first, then tool-call
+card, then polish. Each consumes the same parsed AgentMessage.
