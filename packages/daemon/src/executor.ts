@@ -50,6 +50,10 @@ export interface ExecutorOpts {
    * this, the executor returns anyway — the shutdown signal has
    * already tripped handler aborts. Defaults to 30s. */
   shutdownDrainMs?: number;
+  /** Default HTTP request timeout handed to `makeHttpClient` for each
+   * handler context. Absent = no default; per-request `init.signal`
+   * or `AbortSignal.timeout()` still apply. */
+  defaultHttpTimeoutMs?: number;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -307,7 +311,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
           call: opts.llmCall,
           accounting,
         }),
-        http: core.makeHttpClient({ signal }),
+        http: core.makeHttpClient(
+          opts.defaultHttpTimeoutMs != null
+            ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs }
+            : { signal },
+        ),
         tools: opts.tools,
         recorder,
         args: buildSubstitutionArgs(runId, state.routing, runEnv),

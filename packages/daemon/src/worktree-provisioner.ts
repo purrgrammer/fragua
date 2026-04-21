@@ -47,6 +47,12 @@ export interface WorktreeProvisionerOptions {
   /** Override factory for tests — produces an `ExecutionEnvironment`
    * given a runId. Short-circuits the real git-worktree path. */
   factory?: (runId: string) => Promise<ExecutionEnvironment>;
+  /** Forward into each fresh worktree as `bootstrapTimeoutMs`. */
+  bootstrapTimeoutMs?: number;
+  /** Forward into each fresh worktree's LocalEnvironment as
+   * `defaultTimeoutMs` — used when a handler's shell call doesn't
+   * pass its own `timeoutMs`. */
+  defaultShellTimeoutMs?: number;
 }
 
 export interface Provisioner {
@@ -62,6 +68,8 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly runsDir: string | null;
   private readonly keepAfterDispose: boolean;
   private readonly factory: ((runId: string) => Promise<ExecutionEnvironment>) | undefined;
+  private readonly bootstrapTimeoutMs: number | undefined;
+  private readonly defaultShellTimeoutMs: number | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
 
@@ -72,6 +80,8 @@ export class WorktreeProvisioner implements Provisioner {
     this.runsDir = opts.runsDir === undefined ? ".swarm/runs" : opts.runsDir;
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
     if (opts.factory !== undefined) this.factory = opts.factory;
+    if (opts.bootstrapTimeoutMs !== undefined) this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs;
+    if (opts.defaultShellTimeoutMs !== undefined) this.defaultShellTimeoutMs = opts.defaultShellTimeoutMs;
   }
 
   async ensure(runId: string): Promise<ExecutionEnvironment> {
@@ -113,6 +123,8 @@ export class WorktreeProvisioner implements Provisioner {
       keepAfterDispose: this.keepAfterDispose,
     };
     if (this.bootstrap !== undefined) opts.bootstrap = this.bootstrap;
+    if (this.bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = this.bootstrapTimeoutMs;
+    if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
     if (this.runsDir !== null) {
       opts.logDir = `${this.repoRoot}/${this.runsDir}/${runId}/logs`;
     }
@@ -129,8 +141,10 @@ export class WorktreeProvisioner implements Provisioner {
 export class LocalEnvironmentProvisioner implements Provisioner {
   private readonly shared: ExecutionEnvironment;
 
-  constructor(cwd: string = process.cwd()) {
-    this.shared = new LocalEnvironment({ cwd });
+  constructor(cwd: string = process.cwd(), opts: { defaultShellTimeoutMs?: number } = {}) {
+    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd };
+    if (opts.defaultShellTimeoutMs !== undefined) envOpts.defaultTimeoutMs = opts.defaultShellTimeoutMs;
+    this.shared = new LocalEnvironment(envOpts);
   }
 
   async ensure(_runId: string): Promise<ExecutionEnvironment> {

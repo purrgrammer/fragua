@@ -43,6 +43,12 @@ export interface DaemonMainOpts {
    * long-running node ahead of the executor's own deadline. Tests
    * can pass a smaller value. */
   unknownSpecFallbackMs?: number;
+  /** Forwarded into executor + supervisor as their leak grace. */
+  leakGraceMs?: number;
+  /** Forwarded into executor as shutdown-drain budget. */
+  shutdownDrainMs?: number;
+  /** Forwarded into executor's per-context `makeHttpClient`. */
+  defaultHttpTimeoutMs?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -89,7 +95,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       const registry = new AbortRegistry();
 
       const unknownSpecFallbackMs = opts.unknownSpecFallbackMs ?? DEFAULT_UNKNOWN_SPEC_FALLBACK_MS;
-      const supervisor = startSupervisor({
+      const supervisorOpts: Parameters<typeof startSupervisor>[0] = {
         store: opts.store,
         registry,
         pid,
@@ -98,7 +104,9 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
           if (!opts.dispatcher.has(sha, nodeId)) return unknownSpecFallbackMs;
           return opts.dispatcher.get(sha, nodeId).maxMs;
         },
-      });
+      };
+      if (opts.leakGraceMs !== undefined) supervisorOpts.nodeLeakGraceMs = opts.leakGraceMs;
+      const supervisor = startSupervisor(supervisorOpts);
 
       const executorOpts: Parameters<typeof runExecutor>[0] = {
         store: opts.store,
@@ -111,6 +119,9 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       };
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
       if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
+      if (opts.leakGraceMs !== undefined) executorOpts.leakGraceMs = opts.leakGraceMs;
+      if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;
+      if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;
       await runExecutor(executorOpts);
 
       registry.tripAll(new Error("shutdown"));

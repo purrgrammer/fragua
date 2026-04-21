@@ -290,8 +290,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     ? new WorktreeProvisioner({
         repoRoot: cwd,
         ...(config.project?.bootstrap ? { bootstrap: config.project.bootstrap } : {}),
+        ...(timeouts.bootstrap !== undefined ? { bootstrapTimeoutMs: timeouts.bootstrap } : {}),
+        ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
       })
-    : new LocalEnvironmentProvisioner(cwd);
+    : new LocalEnvironmentProvisioner(cwd, timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {});
   const provisionerLabel =
     provisioner instanceof WorktreeProvisioner
       ? `worktree (.swarm/worktrees/<run-id>${config.project?.bootstrap ? `, bootstrap: "${config.project.bootstrap}"` : ""})`
@@ -317,16 +319,20 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   let exitCode = 0;
   try {
-    const handleRef = startDaemon({
+    const daemonOpts: Parameters<typeof startDaemon>[0] = {
       store,
       dispatcher,
       tools,
       llmCall,
       maxConcurrentRuns: concurrency,
       shutdownSignal: signalCtrl.signal,
-      ...(autoTitler.titler ? { autoTitler: autoTitler.titler } : {}),
       provisioner,
-    });
+    };
+    if (autoTitler.titler) daemonOpts.autoTitler = autoTitler.titler;
+    if (timeouts.leak_grace !== undefined) daemonOpts.leakGraceMs = timeouts.leak_grace;
+    if (timeouts.shutdown_drain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdown_drain;
+    if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;
+    const handleRef = startDaemon(daemonOpts);
     await handleRef.done;
   } catch (err) {
     console.error(chalk.red(`daemon error: ${(err as Error).message}`));
