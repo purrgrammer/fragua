@@ -56,11 +56,10 @@ const PROVIDER_ENV_KEYS: ReadonlyArray<{ provider: string; envKey: string }> = [
   { provider: "groq", envKey: "GROQ_API_KEY" },
 ];
 
-/** Default env-based preflight. Rejects only when NO provider env var
- * is set — the daemon can't make any LLM call at all. Doesn't validate
- * per-node provider overrides; a workflow that pins an unconfigured
- * provider still fails at dispatch time (visible via fact.run_halted).
- */
+/** Legacy env-based preflight. Retained for callers that haven't been
+ * updated to the registry-backed version. New code should construct a
+ * preflight from an `AuthStorage` / `ModelRegistry` pair so it sees
+ * auth.json / OAuth tokens too — see `registryPreflight` below. */
 export function envProviderPreflight(): { ok: true } | { ok: false; detail: string } {
   const present: string[] = [];
   for (const { provider, envKey } of PROVIDER_ENV_KEYS) {
@@ -71,6 +70,23 @@ export function envProviderPreflight(): { ok: true } | { ok: false; detail: stri
   return {
     ok: false,
     detail: `no provider API key set on the daemon (expected one of ${expected})`,
+  };
+}
+
+/** Registry-backed preflight. Rejects only when no provider in the
+ * registry has any configured credential — honours auth.json api_key,
+ * auth.json oauth, env vars, and custom models.json providers. Returned
+ * as a closure so the caller can share one AuthStorage across calls. */
+export function registryPreflight(args: {
+  hasAnyAuth: () => boolean;
+}): () => { ok: true } | { ok: false; detail: string } {
+  return () => {
+    if (args.hasAnyAuth()) return { ok: true };
+    return {
+      ok: false,
+      detail:
+        "no provider credentials configured (auth.json, env, or models.json). run `swarm providers add <provider>` or `swarm providers login <provider>`.",
+    };
   };
 }
 

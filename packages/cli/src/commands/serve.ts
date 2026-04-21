@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@swarm/agent";
-import { createServer, daemonInfoFromStore, envProviderPreflight, type ServerPorts } from "@swarm/server";
+import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 
@@ -101,7 +101,9 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     cwd,
     store,
     ports,
-    preflightProviders: envProviderPreflight,
+    preflightProviders: registryPreflight({
+      hasAnyAuth: () => modelRegistry.getAvailable().length > 0,
+    }),
     validateWorkflowModels,
     authStorage,
     modelRegistry,
