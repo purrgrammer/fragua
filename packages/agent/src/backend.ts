@@ -50,6 +50,17 @@ export interface PiCodergenBackendOptions {
    * and which dependencies are installed. Omit for bare LocalEnvironment
    * runs that don't need the preamble. */
   runEnv?: RunEnvironment;
+  /** Shared "threads we've written to in THIS daemon process" registry,
+   * keyed by `runId::threadId`. Each codergen node builds its own
+   * `PiCodergenBackend` (see `packages/cli/src/commands/daemon.ts`), so a
+   * per-instance Set can't tell "same daemon, different node on the
+   * shared thread" from "different daemon after a restart" — the
+   * former must NOT count as a resume (§3.6 fidelity-degrade is a
+   * restart-only concern). Pass a daemon-scoped Set here so all backends
+   * share the signal; a true daemon restart rebuilds the Set empty and
+   * the degrade kicks in correctly. Omit in tests/one-shots to get the
+   * per-instance behaviour. */
+  inProcessWrites?: Set<string>;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -76,12 +87,14 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly skills: readonly Skill[];
   private readonly runEnv: RunEnvironment | undefined;
   /** Per-(runId, threadId) flags marking threads we've *written* to in
-   * THIS process. A load of a non-empty transcript for a (run, thread)
-   * whose key is missing here is the resume signal: the transcript is
-   * from a prior process, so the pi-ai sessionId is stale and
-   * fidelity=full must degrade to summary:high (SPEC §3.6). Purely
-   * in-memory — never persisted. */
-  private readonly inProcessWrites = new Set<string>();
+   * THIS daemon process. A load of a non-empty transcript for a
+   * (run, thread) whose key is missing here is the resume signal: the
+   * transcript is from a prior process, so the pi-ai sessionId is stale
+   * and fidelity=full must degrade to summary:high. Shared across every
+   * PiCodergenBackend in the daemon when the caller wires
+   * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
+   * per-instance otherwise. Purely in-memory — never persisted. */
+  private readonly inProcessWrites: Set<string>;
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -95,6 +108,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.summariser = opts.summariser;
     this.skills = opts.skills ?? [];
     this.runEnv = opts.runEnv;
+    this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
   }
 
   /** True when we've already persisted `threadId` for `runId` during

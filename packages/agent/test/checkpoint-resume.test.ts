@@ -280,6 +280,95 @@ describe("computeResumeDecision — pure §3.6 logic", () => {
   });
 });
 
+describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
+  // Regression for the build-feature false-positive resume: `implement`
+  // and `verify` on the shared `thread_id="dev"` each run through their
+  // own `PiCodergenBackend` instance (one backend per node, per
+  // `packages/cli/src/commands/daemon.ts`). Without a shared Set, the
+  // second node's fresh backend sees a non-empty prior transcript from
+  // the messages table and no in-process write record, so
+  // `computeResumeDecision` falsely flags a daemon restart and degrades
+  // fidelity=full to summary:high — burning budget with no merged diff.
+  test("two backends sharing a Set see each other's writes", () => {
+    const shared = new Set<string>();
+    const a = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+      inProcessWrites: shared,
+    });
+    const b = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+      inProcessWrites: shared,
+    });
+
+    expect(a.hasInProcessWrite("r1", "dev")).toBe(false);
+    expect(b.hasInProcessWrite("r1", "dev")).toBe(false);
+
+    // Simulate the `implement` backend finishing a run on (r1, "dev").
+    shared.add("r1::dev");
+
+    // The `verify` backend — constructed fresh but wired to the same
+    // shared Set — now sees the write and must NOT detect a resume.
+    expect(b.hasInProcessWrite("r1", "dev")).toBe(true);
+    const decision = computeResumeDecision({
+      fidelity: "full",
+      isFresh: false,
+      threadId: "dev",
+      externalPriorLen: 5,
+      hasInProcessWrite: b.hasInProcessWrite("r1", "dev"),
+    });
+    expect(decision.resumed).toBe(false);
+    expect(decision.effectiveFidelity).toBe("full");
+  });
+
+  test("two backends with separate Sets reproduce the false-positive", () => {
+    // Documents the pre-fix behaviour so regressions get caught: without
+    // a shared Set, the second backend's decision wrongly flags resume.
+    const a = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+    });
+    const b = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+    });
+
+    // `a`'s Set is private; we can't touch it. Instead we assert the
+    // shape: `b` never observes any of `a`'s writes, and a non-empty
+    // external prior alone trips the degrade.
+    expect(b.hasInProcessWrite("r1", "dev")).toBe(false);
+    const decision = computeResumeDecision({
+      fidelity: "full",
+      isFresh: false,
+      threadId: "dev",
+      externalPriorLen: 5,
+      hasInProcessWrite: b.hasInProcessWrite("r1", "dev"),
+    });
+    expect(decision.resumed).toBe(true);
+    expect(decision.effectiveFidelity).toBe("summary:high");
+    // Silence unused-var: `a` exists only to mirror the daemon's
+    // per-node construction pattern.
+    void a;
+  });
+
+  test("forgetRun only clears the target run's keys from the shared Set", () => {
+    const shared = new Set<string>();
+    const backend = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+      inProcessWrites: shared,
+    });
+    shared.add("r1::dev");
+    shared.add("r2::dev");
+    shared.add("r1::review");
+    backend.forgetRun("r1");
+    expect(shared.has("r1::dev")).toBe(false);
+    expect(shared.has("r1::review")).toBe(false);
+    expect(shared.has("r2::dev")).toBe(true);
+  });
+});
+
 describe("event payload cap (§I7) survives unbounded message content", () => {
   test("8KB assistant content lands in messages table, not event payload", async () => {
     const store = new SqliteStore({ path: ":memory:" });

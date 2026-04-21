@@ -202,6 +202,17 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // "hallucinates" command output that never ran.
     const registry = new ToolRegistry();
     registry.registerAll(CORE_TOOLS);
+    // Shared `inProcessWrites` — one Set for the whole daemon process so
+    // every codergen backend (one per workflow node — see the factory
+    // below) sees the same "we've written to this (runId, threadId) in
+    // THIS process" signal. Without sharing, two consecutive nodes on
+    // the same thread_id (e.g. `implement` and `verify` on
+    // `thread_id="dev"` in `workflows/build-feature.dot`) would trigger
+    // a false-positive resume: the second node's fresh backend sees a
+    // non-empty prior transcript (from the messages table) but an empty
+    // Set, and mis-detects a daemon restart. A real daemon restart still
+    // rebuilds the Set empty, so the degrade kicks in as designed.
+    const inProcessWrites = new Set<string>();
     const backendOpts = {
       registry,
       defaultModel: { provider: provider!, model: model! },
@@ -214,6 +225,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
         return m as Model<string>;
       },
       getApiKey,
+      inProcessWrites,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
