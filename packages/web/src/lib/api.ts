@@ -416,6 +416,102 @@ export async function cancelRun(id: string, reason?: string): Promise<{ id: stri
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
 }
 
+// ── Providers ────────────────────────────────────────────────────────
+
+export interface ProviderSummary {
+  name: string;
+  model_count: number;
+  credentialed: boolean;
+  /** Human label — "auth.json api_key (literal)", "env", "auth.json oauth", etc.
+   * Never contains the key itself. */
+  auth_source: string | null;
+  /** `api_key` / `oauth` when stored in ~/.swarm/auth.json; `null` when
+   * sourced from env or a custom models.json provider. */
+  auth_kind: "api_key" | "oauth" | null;
+  oauth_available: boolean;
+  default_model: string | null;
+}
+
+export interface ProviderModel {
+  id: string;
+  name: string;
+  api: string;
+  reasoning: boolean;
+  input: ("text" | "image")[];
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  baseUrl: string;
+}
+
+export interface ProviderDetail extends ProviderSummary {
+  models: ProviderModel[];
+}
+
+export interface ProvidersListResponse {
+  providers: ProviderSummary[];
+  models_json_error: string | null;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  provider?: string;
+  model?: string;
+  first_delta_ms?: number | null;
+  total_ms?: number;
+  output_tokens?: number;
+  error?: string;
+}
+
+export type ProviderCredentialKind = "literal" | "env" | "shell";
+
+export async function listProviders(): Promise<ProvidersListResponse> {
+  return getJson(
+    "/providers",
+    (v): v is ProvidersListResponse =>
+      typeof v === "object" && v !== null && Array.isArray((v as { providers?: unknown }).providers),
+  );
+}
+
+export async function getProvider(name: string): Promise<ProviderDetail> {
+  return getJson(
+    `/providers/${encodeURIComponent(name)}`,
+    (v): v is ProviderDetail =>
+      typeof v === "object" && v !== null && typeof (v as { name?: unknown }).name === "string",
+  );
+}
+
+export async function testProvider(name: string, model?: string): Promise<ProviderTestResult> {
+  const body = model !== undefined ? { model } : undefined;
+  return postJson(
+    `/providers/${encodeURIComponent(name)}/test`,
+    body,
+    (v): v is ProviderTestResult =>
+      typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean",
+  );
+}
+
+export async function setProviderCredentials(
+  name: string,
+  kind: ProviderCredentialKind,
+  value: string,
+): Promise<{ ok: boolean }> {
+  return postJson(
+    `/providers/${encodeURIComponent(name)}/credentials`,
+    { kind, value },
+    (v): v is { ok: boolean } => typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean",
+  );
+}
+
+export async function removeProviderCredentials(name: string): Promise<{ ok: boolean; removed: boolean }> {
+  const u = url(`/providers/${encodeURIComponent(name)}/credentials`);
+  const res = await fetch(u, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const body = (await res.json()) as { ok?: unknown; removed?: unknown };
+  if (typeof body.ok !== "boolean") throw new Error(`DELETE ${u} → malformed response`);
+  return { ok: body.ok, removed: typeof body.removed === "boolean" ? body.removed : false };
+}
+
 // ── Shape validators ────────────────────────────────────────────────
 // Soft-validate metric fields: older server builds may omit them. Rejecting
 // those payloads would break dev UX against mixed versions. Validators

@@ -66,4 +66,22 @@ export const queries = {
         refetchInterval: 2_000,
       }),
   },
+
+  providers: {
+    all: () => ["providers"] as const,
+    list: () =>
+      queryOptions({
+        queryKey: [...queries.providers.all(), "list"] as const,
+        queryFn: api.listProviders,
+        // No polling — the list is driven by explicit user actions
+        // (add/rm/test) that invalidate it via useMutation.onSuccess.
+        staleTime: 30_000,
+      }),
+    detail: (name: string) =>
+      queryOptions({
+        queryKey: [...queries.providers.all(), "detail", name] as const,
+        queryFn: () => api.getProvider(name),
+        staleTime: 30_000,
+      }),
+  },
 };

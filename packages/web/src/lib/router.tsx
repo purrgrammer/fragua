@@ -6,6 +6,8 @@
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
 import { AppShell } from "../components/AppShell.tsx";
 import { Home } from "../routes/Home.tsx";
+import { ProviderDetail } from "../routes/ProviderDetail.tsx";
+import { Providers } from "../routes/Providers.tsx";
 import { RunDetail } from "../routes/RunDetail.tsx";
 import { RunsList } from "../routes/RunsList.tsx";
 import { WorkflowDetail } from "../routes/WorkflowDetail.tsx";
@@ -20,6 +22,8 @@ export function createRoutes(): RouteObject[] {
         { index: true, element: <Home /> },
         { path: "workflows", element: <Workflows /> },
         { path: "workflows/:name", element: <WorkflowDetail /> },
+        { path: "providers", element: <Providers /> },
+        { path: "providers/:name", element: <ProviderDetail /> },
         { path: "runs", element: <RunsList /> },
         // Run detail is one component regardless of which tab is
         // selected — the `:view` param (conversation | events | graph |

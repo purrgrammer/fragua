@@ -129,6 +129,16 @@ export function crumbsFor(pathname: string, params: Record<string, string | unde
     crumbs.push({ label: "Workflows" });
     return crumbs;
   }
+  if (segments[0] === "providers") {
+    if (segments.length === 1) {
+      crumbs.push({ label: "Providers" });
+      return crumbs;
+    }
+    crumbs.push({ label: "Providers", href: "/providers" });
+    const provider = params["name"] ?? segments[1] ?? "";
+    crumbs.push({ label: provider });
+    return crumbs;
+  }
   if (segments[0] === "runs") {
     if (segments.length === 1) {
       crumbs.push({ label: "Runs" });
