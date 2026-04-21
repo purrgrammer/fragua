@@ -4,7 +4,7 @@
 import type { TruncationPolicy } from "./types.ts";
 
 const WARNING_TEMPLATE = (removed: number): string =>
-  `\n[WARNING: Tool output was truncated. ${removed} characters removed. The full output is available in the event stream.]\n`;
+  `\n[WARNING: Tool output was truncated. ${removed} characters removed.]\n`;
 
 export function truncate(output: string, policy: TruncationPolicy): string {
   let result = truncateChars(output, policy.max_chars, policy.mode);

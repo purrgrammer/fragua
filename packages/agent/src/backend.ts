@@ -350,21 +350,15 @@ export class PiCodergenBackend implements CodergenBackend {
         if (event.message.role === "assistant" && input.emit) {
           await input.emit("cost.recorded", costPayload(event.message as AssistantMessage));
         }
-        // Persist the fully-assembled message to the messages table.
-        // Content is unbounded — if we shoved it onto the event
-        // envelope we'd bust the 4KB I7 cap on the first sizable
-        // assistant turn. Messages table's `content` is TEXT with no
-        // such limit (§I9). Resume always degrades `fidelity=full` →
-        // `summary:high` (SPEC §3.6), so a plaintext flatten is
-        // sufficient — tool_use blocks don't need to survive. pi-
-        // agent-core's `toolResult` role maps onto swarm's `"tool"`
-        // MessageRole; UI-only custom messages are skipped.
+        // Persist the fully-assembled message to the messages table
+        // (§I9 — unbounded TEXT, stays out of the 4KB event envelope
+        // §I7). tool_use + tool_result pairs are serialized with
+        // matching `tool_use_id` so the UI and any replay path can
+        // rebuild block-shaped content. pi-agent-core's `toolResult`
+        // role maps onto swarm's `"tool"`; UI-only custom messages are
+        // filtered out inside `persistAgentMessage`.
         if (input.persistMessage) {
-          const mappedRole = mapAgentRoleToMessageRole(event.message.role);
-          if (mappedRole !== undefined) {
-            const content = extractMessageText(event.message);
-            if (content.length > 0) input.persistMessage(mappedRole, content);
-          }
+          persistAgentMessage(event.message, input.persistMessage);
         }
       }
     });
@@ -545,33 +539,176 @@ function mapAgentRoleToMessageRole(role: string): "assistant" | "tool" | "user" 
   }
 }
 
-/** Flatten pi-agent-core `AgentMessage.content` (string | ContentBlock[])
- * into a plain string suitable for the messages table. Mirrors
- * `summarizeMessage` but without the 4KB cap — the messages table has
- * no size limit. Tool result blocks are stringified best-effort. */
-function extractMessageText(message: { role: string; content?: unknown }): string {
-  const c = message.content;
-  if (typeof c === "string") return c;
-  if (!Array.isArray(c)) return "";
+/** Loose shape covering every pi-agent-core `AgentMessage` variant we
+ * care about (assistant, user, system, toolResult, custom). Unknown
+ * roles fall through `mapAgentRoleToMessageRole` → no-op. */
+type AnyAgentMessage = {
+  role: string;
+  content?: unknown;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+};
+
+type MessageRole = NonNullable<ReturnType<typeof mapAgentRoleToMessageRole>>;
+
+/** Serialize a pi-agent-core `AgentMessage` into the structured text
+ * format stored in the `messages` table (§I9). Preserves the three
+ * content-block types produced by pi-ai (text, thinking, toolCall)
+ * with full provider-continuity metadata — Anthropic Extended
+ * Thinking signatures and redacted-thinking payloads on thinking
+ * blocks, Gemini `thoughtSignature` on tool calls, and the tool_use
+ * ↔ tool_result pairing via shared `tool_use_id` — so UIs and future
+ * fidelity=raw replay paths can reconstruct `AgentMessage[]` from a
+ * single TEXT column.
+ *
+ * Format:
+ *   assistant → blocks in order, joined by `\n\n`:
+ *     text   → bare text, verbatim
+ *     thinking →
+ *       <thinking[ signature="..."][ redacted="true"]>
+ *       reasoning text
+ *       </thinking>
+ *     toolCall →
+ *       <tool_use id="..." name="..."[ thought_signature="..."]>
+ *       {JSON-encoded arguments}
+ *       </tool_use>
+ *
+ *   toolResult → the whole message wraps as
+ *     <tool_result tool_use_id="..." tool_name="..." is_error="...">
+ *     body (text blocks joined on `\n`)
+ *     </tool_result>
+ *
+ * Plain-text messages (single text block, or `content: string`)
+ * serialize to bare text. Image blocks and `textSignature` on text
+ * blocks are dropped for now — the web UI doesn't render attachments
+ * from the messages table, and text signatures only affect raw-replay
+ * fidelity which the executor always degrades to summary:high on
+ * resume (SPEC §3.6).
+ *
+ * A body that contains the literal closing-tag substring is a
+ * theoretical ambiguity; parsers should use a non-greedy match. No
+ * escaping is applied so the body stays human-readable. */
+export function serializeAgentMessage(message: AnyAgentMessage): string {
+  if (message.role === "toolResult" || message.role === "tool") {
+    return wrapToolResult(message);
+  }
+  return serializeBlocks(message.content);
+}
+
+function serializeBlocks(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
   const parts: string[] = [];
-  for (const block of c) {
-    if (block == null || typeof block !== "object") continue;
-    const b = block as { type?: string; text?: unknown; content?: unknown };
-    if (b.type === "text" && typeof b.text === "string") {
-      parts.push(b.text);
-    } else if (b.type === "tool_result") {
-      if (typeof b.content === "string") parts.push(b.content);
-      else if (Array.isArray(b.content)) {
-        for (const inner of b.content) {
-          if (inner && typeof inner === "object") {
-            const t = (inner as { text?: unknown }).text;
-            if (typeof t === "string") parts.push(t);
-          }
-        }
-      }
+  for (const block of content) {
+    const rendered = renderBlock(block);
+    if (rendered !== null) parts.push(rendered);
+  }
+  return parts.join("\n\n").trim();
+}
+
+function renderBlock(block: unknown): string | null {
+  if (block == null || typeof block !== "object") return null;
+  const b = block as {
+    type?: unknown;
+    text?: unknown;
+    thinking?: unknown;
+    thinkingSignature?: unknown;
+    redacted?: unknown;
+    id?: unknown;
+    name?: unknown;
+    arguments?: unknown;
+    thoughtSignature?: unknown;
+  };
+  if (b.type === "text") {
+    return typeof b.text === "string" && b.text.length > 0 ? b.text : null;
+  }
+  if (b.type === "thinking") {
+    return renderThinkingBlock(b);
+  }
+  if (b.type === "toolCall") {
+    return renderToolCallBlock(b);
+  }
+  return null;
+}
+
+function renderThinkingBlock(b: {
+  thinking?: unknown;
+  thinkingSignature?: unknown;
+  redacted?: unknown;
+}): string | null {
+  if (typeof b.thinking !== "string" || b.thinking.length === 0) return null;
+  const attrs: string[] = [];
+  if (typeof b.thinkingSignature === "string" && b.thinkingSignature.length > 0) {
+    attrs.push(`signature="${escapeAttr(b.thinkingSignature)}"`);
+  }
+  if (b.redacted === true) attrs.push(`redacted="true"`);
+  const head = attrs.length > 0 ? `<thinking ${attrs.join(" ")}>` : `<thinking>`;
+  return `${head}\n${b.thinking}\n</thinking>`;
+}
+
+function renderToolCallBlock(b: {
+  id?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  thoughtSignature?: unknown;
+}): string {
+  const attrs = [`id="${escapeAttr(asString(b.id))}"`, `name="${escapeAttr(asString(b.name))}"`];
+  if (typeof b.thoughtSignature === "string" && b.thoughtSignature.length > 0) {
+    attrs.push(`thought_signature="${escapeAttr(b.thoughtSignature)}"`);
+  }
+  return `<tool_use ${attrs.join(" ")}>\n${stringifyArgs(b.arguments)}\n</tool_use>`;
+}
+
+function wrapToolResult(m: AnyAgentMessage): string {
+  const id = escapeAttr(asString(m.toolCallId));
+  const name = escapeAttr(asString(m.toolName));
+  const err = m.isError === true ? "true" : "false";
+  const body = extractTextBody(m.content);
+  return `<tool_result tool_use_id="${id}" tool_name="${name}" is_error="${err}">\n${body}\n</tool_result>`;
+}
+
+function extractTextBody(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block != null && typeof block === "object") {
+      const b = block as { type?: unknown; text?: unknown };
+      if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
     }
   }
-  return parts.join("\n").trim();
+  return parts.join("\n");
+}
+
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function stringifyArgs(v: unknown): string {
+  try {
+    return JSON.stringify(v ?? {});
+  } catch {
+    return "{}";
+  }
+}
+
+/** Persist a pi-agent-core `AgentMessage` via the supplied callback.
+ * Filters custom / UI-only roles, serializes with structure preserved,
+ * and writes one row. Empty content produces no row. */
+export function persistAgentMessage(
+  message: AnyAgentMessage,
+  persist: (role: MessageRole, content: string) => void,
+): void {
+  const role = mapAgentRoleToMessageRole(message.role);
+  if (role === undefined) return;
+  const content = serializeAgentMessage(message);
+  if (content.length === 0) return;
+  persist(role, content);
 }
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {
