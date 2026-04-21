@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateWorkflowModels } from "@swarm/agent";
+import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@swarm/agent";
 import { createServer, daemonInfoFromStore, envProviderPreflight, type ServerPorts } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
@@ -92,12 +92,19 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     ...(opts.ports ?? {}),
     daemonInfo: opts.ports?.daemonInfo ?? daemonInfoFromStore({ store }),
   };
+  // Credential + model state for the /providers routes. Same pair the
+  // daemon uses, so the web UI and backend share a single view of which
+  // providers are credentialed.
+  const authStorage = AuthStorage.create();
+  const modelRegistry = ModelRegistry.create(authStorage);
   const app = createServer({
     cwd,
     store,
     ports,
     preflightProviders: envProviderPreflight,
     validateWorkflowModels,
+    authStorage,
+    modelRegistry,
     ...(webDistDir !== undefined ? { webDistDir } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections

@@ -27,38 +27,38 @@ digraph build_feature {
     prompt = "Implement $plan.output. Stay inside the package(s) the plan names. After edits, `bun run --filter='@swarm/<pkg>' typecheck` on every modified package; fix errors. Do NOT modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md unless the plan says so. Summarise: files touched, public surface, tests, any skipped plan items + why."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   review [
     prompt = "Fresh thread. Judge the diff, not the process. Inputs: $plan.output, $implement.output, and `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) New behavior is covered by tests that assert what the plan said.\n  (c) Obvious bugs, type errors the compiler missed, security issues.\n  (d) Scope creep — edits outside the plan's named files.\n\nReply EXACTLY one of:\n  APPROVE: <one line>\n  <abort>REJECT: <one line>. fixes: <numbered list, 1-4 items></abort>\n\nDon't hedge. If unsure, REJECT with a concrete concern. Read-only tools."
     allowed_tools = "read, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   verify [
     prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   update_docs [
     prompt = "Fresh thread — read state via git. `git diff --stat HEAD`. If empty, emit `DOCS_READY: no changes`. If only internal source/tests changed (nothing a docs reader would notice), emit `DOCS_READY: no changes`. Only user-visible shifts (public APIs, CLI flags, workflow contracts, repo layout, stack) warrant updates. Edit docs/SPEC.md / docs/PLAN.md / AGENTS.md as needed — minimal, on-topic, nothing outside those files. Emit `DOCS_READY: updated <files>` or `DOCS_READY: no changes`."
     allowed_tools = "read, write, edit, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   commit [
     prompt = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: pick `[P<n>]` phase tag from docs/PLAN.md (prefer current in-progress phase on doubt), `git add` explicit paths, commit with a HEREDOC message (imperative subject ≤72 chars; body stands alone as run summary). No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Keep iterating until it lands. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   merge [
     prompt = "Rebase this worktree's branch onto main and fast-forward main. Fresh thread — read state via git.\n\nSkip (emit `MERGE_SKIPPED: <reason>` and stop) if:\n  - not inside a work tree\n  - `git-common-dir` == `git-dir` (main checkout, not a linked worktree)\n  - on `main` or detached\n  - no commits ahead of main\n\nOtherwise:\n  1. `old_main=$(git rev-parse main)`\n  2. `git rebase \"$old_main\"`. On conflicts, resolve by keeping both sides when semantically possible (concatenate lists, union imports, merge type members); only drop one side on literal contradiction. Max 5 conflict rounds. On exhaustion: `git rebase --abort` and emit `<abort>merge conflicts unresolved</abort>`.\n  3. `git update-ref refs/heads/main \"$(git rev-parse HEAD)\" \"$old_main\"` (CAS — fails if main advanced). On CAS failure, loop back to step 1. Max 3 outer attempts; on exhaustion emit `<abort>merge race</abort>`.\n  4. Emit `MERGED: <short-sha> (was ${old_main:0:7})`.\n\nDon't push."
     allowed_tools = "read, write, edit, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   done [shape=Msquare]

@@ -6,11 +6,13 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
+import type { AuthStorage, ModelRegistry } from "@swarm/agent";
 import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
+import { providersRoutes } from "./routes/providers.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
 import { createRoutes as createStoreRoutes } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
@@ -40,6 +42,12 @@ export interface ServerOptions {
    * The CLI's `daemon` command wires in the real pi-ai-backed resolver;
    * tests can omit it or inject a stub. */
   validateWorkflowModels?: import("./store/routes.ts").WorkflowModelValidator;
+  /** When set, mounts `/providers*` for credential management + model
+   * listing. Omit in tests that don't exercise those routes. Both must
+   * be the same pair wired into the daemon / summariser so the web UI
+   * and backend share state. */
+  authStorage?: AuthStorage;
+  modelRegistry?: ModelRegistry;
 }
 
 function buildApiApp(opts: ServerOptions): Hono {
@@ -59,6 +67,9 @@ function buildApiApp(opts: ServerOptions): Hono {
       ...(opts.validateWorkflowModels !== undefined ? { validateWorkflowModels: opts.validateWorkflowModels } : {}),
     }),
   );
+  if (opts.authStorage && opts.modelRegistry) {
+    api.route("/", providersRoutes({ authStorage: opts.authStorage, modelRegistry: opts.modelRegistry }));
+  }
   return api;
 }
 
@@ -161,6 +172,7 @@ export {
   DAEMON_LIVENESS_TTL_MS,
   daemonInfoFromStore,
 } from "./routes/health.ts";
+export { providersRoutes } from "./routes/providers.ts";
 export {
   ErrorBody,
   NodeState,

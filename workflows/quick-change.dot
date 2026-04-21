@@ -18,26 +18,26 @@ digraph quick_change {
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS. If empty or ill-specified, emit `<abort>missing or blocked target</abort>`. If the task needs exploration, a plan, or review, emit `<abort>task too large for quick-change: use build-feature</abort>`. Otherwise make the change, run `bun run --filter='@swarm/<pkg>' typecheck` per modified package, and emit `IMPLEMENTED: <one line>`. Do not modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   verify [
     prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   commit [
     prompt = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: pick `[P<n>]` phase tag from docs/PLAN.md (prefer in-progress phase on doubt), `git add` explicit paths, commit with a HEREDOC message (imperative subject ≤72 chars; body explains why). No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   merge [
     prompt = "Rebase this worktree's branch onto main and fast-forward main. Fresh thread — read state via git.\n\nSkip (emit `MERGE_SKIPPED: <reason>` and stop) if:\n  - not inside a work tree\n  - `git-common-dir` == `git-dir` (main checkout, not a linked worktree)\n  - on `main` or detached\n  - no commits ahead of main\n\nOtherwise:\n  1. `old_main=$(git rev-parse main)`\n  2. `git rebase \"$old_main\"`. On conflicts, resolve by keeping both sides when semantically possible (concatenate lists, union imports, merge type members); only drop one side on literal contradiction. Max 5 conflict rounds. On exhaustion: `git rebase --abort` and emit `<abort>merge conflicts unresolved</abort>`.\n  3. `git update-ref refs/heads/main \"$(git rev-parse HEAD)\" \"$old_main\"` (CAS — fails if main advanced). On CAS failure, loop back to step 1. Max 3 outer attempts; on exhaustion emit `<abort>merge race</abort>`.\n  4. Emit `MERGED: <short-sha> (was ${old_main:0:7})`.\n\nDon't push."
     allowed_tools = "read, write, edit, bash"
-    model = "anthropic/claude-sonnet-4.6"
+    model = "claude-sonnet-4-6"
   ]
 
   done [shape=Msquare]

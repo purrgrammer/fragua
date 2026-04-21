@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "0.67.68",
     "@sinclair/typebox": "0.34.41",
+    "@swarm/agent": "workspace:*",
     "@swarm/core": "workspace:*",
     "@swarm/store": "workspace:*",
     "hono": "4.12.14"
