@@ -152,7 +152,7 @@ export function Providers(): JSX.Element {
                       {p.auth_kind !== null && (
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="destructive"
                           onClick={() => {
                             if (window.confirm(`Remove stored credentials for "${p.name}"?`)) {
                               rmMutation.mutate({ name: p.name });

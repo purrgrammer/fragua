@@ -177,7 +177,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
         {authKind !== null && (
           <Button
             size="sm"
-            variant="ghost"
+            variant="destructive"
             disabled={rmMutation.isPending}
             onClick={() => {
               if (window.confirm(`Remove stored credentials for "${name}"?`)) rmMutation.mutate();
