@@ -242,7 +242,11 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // the selector to pick based on outcome status + condition matching
     // (e.g. `implement -> done [condition="outcome=fail"]` vs the
     // unconditional `implement -> verify`).
-    codergenFactory = (node, _nextNode) => makeCodergenHandler({ node, backendOpts });
+    codergenFactory = (node, _nextNode, maxMs) => {
+      const factoryOpts: Parameters<typeof makeCodergenHandler>[0] = { node, backendOpts };
+      if (maxMs !== undefined) factoryOpts.maxMs = maxMs;
+      return makeCodergenHandler(factoryOpts);
+    };
   }
   void PiCodergenBackend;
   dispatcher.setResolver(

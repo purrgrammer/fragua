@@ -50,7 +50,13 @@ export interface NodeAttrs {
   thread_id?: string;
   goal_gate?: boolean;
   max_retries?: number;
+  /** Per-node hard timeout. Duration-string form (e.g. "30s", "5m", "2h")
+   * is parsed via `parseDurationMs`. Wins over `.swarm/config.yaml`
+   * `timeouts.<kind>` and the handler's built-in default. */
   timeout?: string;
+  /** Per-node hard timeout in raw milliseconds. Same precedence as
+   * `timeout` — either may be set, not both. */
+  maxMs?: number;
   idle_timeout?: number;
   reasoning_effort?: "low" | "medium" | "high";
   context?: ContextMode;

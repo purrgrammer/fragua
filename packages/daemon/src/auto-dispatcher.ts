@@ -9,8 +9,8 @@
 // `resolveChild` closures read from the specs map, and `fan_in` specs
 // that point at their paired parallel node.
 
-import type { Node } from "@swarm/core";
-import { parseDotSource } from "@swarm/core";
+import type { Node, NodeAttrs } from "@swarm/core";
+import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -26,9 +26,35 @@ export interface AutoDispatcherOpts {
    * trivial noop transition so any box node that reaches the daemon is
    * executed via a real LLM backend. `nextNode` is passed as a legacy
    * fallback for factories that don't rely on the executor's edge
-   * selector; factories are free to ignore it.
+   * selector; factories are free to ignore it. `maxMs` is resolved from
+   * the node's `timeout=`/`maxMs=` attrs (see `resolveMaxMs` below);
+   * factories forward it into the HandlerSpec.
    */
-  codergenFactory?: (node: Node, nextNode: string) => HandlerSpec;
+  codergenFactory?: (node: Node, nextNode: string, maxMs: number | undefined) => HandlerSpec;
+  /** Per-kind fallback `maxMs` when the DOT node declares neither
+   * `timeout` nor `maxMs`. Keyed by handler kind (`codergen`, `tool`).
+   * Absent kind → handler's own built-in default applies. */
+  defaultMaxMs?: { codergen?: number; tool?: number };
+}
+
+/**
+ * Resolve a handler's `maxMs` from a DOT node's attrs, falling back to
+ * `fallbackMs` (per-kind config) and finally the handler's own default.
+ * Precedence:
+ *   1. `attrs.maxMs` — numeric literal in ms
+ *   2. `attrs.timeout` — duration string ("30s", "5m", "2h", etc.)
+ *   3. caller-supplied fallback (undefined → handler default applies)
+ *
+ * Malformed values reach this function only when the DOT was parsed
+ * without enqueue-time validation (tests, direct-store inserts). We
+ * surface the parse error as a thrown `InvalidDurationError` — callers
+ * use `malformed*Spec` to return a clean halt fact instead of crashing
+ * the dispatcher.
+ */
+export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): number | undefined {
+  if (typeof attrs.maxMs === "number") return parseDurationMs(attrs.maxMs);
+  if (typeof attrs.timeout === "string") return parseDurationMs(attrs.timeout);
+  return fallbackMs;
 }
 
 /**
@@ -43,7 +69,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -52,7 +78,8 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
 
 function specsForGraph(
   dotSource: string,
-  codergenFactory?: (node: Node, nextNode: string) => HandlerSpec,
+  codergenFactory?: AutoDispatcherOpts["codergenFactory"],
+  defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   const outgoing = new Map<string, string[]>();
@@ -68,10 +95,23 @@ function specsForGraph(
     const kind = handlerKindOf(node.attrs);
     if (kind === "parallel" || kind === "parallel.fan_in") continue;
     const first = outgoing.get(node.id)?.[0] ?? "__end__";
+    let resolvedMaxMs: number | undefined;
+    try {
+      const fallback = kind === "codergen" ? defaultMaxMs?.codergen : kind === "tool" ? defaultMaxMs?.tool : undefined;
+      resolvedMaxMs = resolveMaxMs(node.attrs, fallback);
+    } catch (err) {
+      if (err instanceof InvalidDurationError) {
+        specs.set(node.id, malformedTimeoutSpec(node.id, err.message));
+        continue;
+      }
+      throw err;
+    }
     const useFactory = kind === "codergen" && codergenFactory != null;
     specs.set(
       node.id,
-      useFactory ? codergenFactory(node, first) : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs),
+      useFactory
+        ? codergenFactory(node, first, resolvedMaxMs)
+        : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs, resolvedMaxMs),
     );
   }
 
@@ -110,6 +150,19 @@ function specsForGraph(
   }
 
   return specs;
+}
+
+function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
+  return {
+    kind: "codergen",
+    sideEffect: "none",
+    maxMs: 50,
+    handler: async () => ({
+      kind: "halt",
+      reason: "error",
+      detail: `node "${nodeId}": ${message}`,
+    }),
+  };
 }
 
 /**
@@ -171,6 +224,7 @@ function specForNode(
   nodeId: string,
   outbound: string[],
   attrs: { shape?: string; type?: string; prompt?: string; tool_command?: string },
+  resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = outbound[0] ?? "__end__";
   const kind = handlerKindOf(attrs);
@@ -182,12 +236,10 @@ function specForNode(
         nextNode: first,
       });
     case "tool": {
-      // `timeout` attr is a duration string (e.g. "2m"); not yet parsed —
-      // tool handler falls back to its 5-minute default. Workflows that
-      // need a tighter / wider window must register the spec manually
-      // via Dispatcher.register until duration-string parsing lands.
       const cmd = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
-      return handler.makeToolHandler({ toolCommand: cmd });
+      const toolOpts: Parameters<typeof handler.makeToolHandler>[0] = { toolCommand: cmd };
+      if (resolvedMaxMs !== undefined) toolOpts.maxMs = resolvedMaxMs;
+      return handler.makeToolHandler(toolOpts);
     }
     case "exit":
       return {
