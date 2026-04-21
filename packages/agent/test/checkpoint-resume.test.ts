@@ -369,6 +369,66 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
   });
 });
 
+describe("daemon-boot inProcessWrites reconstruction", () => {
+  test("seeded Set from listThreadsWithMessages() prevents resume=true on known threads", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", "digraph{}");
+    store.enqueueRun({ runId: "r1", workflowSha: "sha" });
+    store.appendMessage("r1", {
+      content: assistantMsg("prior turn"),
+      nodeId: "dev",
+      iteration: 0,
+    });
+
+    const seeded = new Set<string>();
+    for (const pair of store.listThreadsWithMessages()) {
+      seeded.add(`${pair.runId}::${pair.threadId}`);
+    }
+
+    expect(seeded.has("r1::dev")).toBe(true);
+    const decision = computeResumeDecision({
+      fidelity: "full",
+      isFresh: false,
+      threadId: "dev",
+      externalPriorLen: 1,
+      hasInProcessWrite: seeded.has("r1::dev"),
+    });
+    expect(decision.resumed).toBe(false);
+    expect(decision.effectiveFidelity).toBe("full");
+    store.close();
+  });
+
+  test("reconstruction matches in-process Set after one dispatch", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const shared = new Set<string>();
+    const backend = new PiCodergenBackend({
+      registry: new ToolRegistry(),
+      env: new LocalEnvironment({ cwd: process.cwd() }),
+      inProcessWrites: shared,
+    });
+    const ctx = await ctxFor("r1", store, "dev");
+    const inner: CodergenBackend = {
+      async run(input) {
+        input.persistMessage?.(assistantMsg("r1 dev"));
+        return ok({ notes: "", context_updates: {} });
+      },
+    };
+    await makeCodergenHandler({ node: node({ id: "dev" }), backend: inner }).handler(ctx);
+
+    const live = new Set<string>(shared);
+    live.add("r1::dev");
+
+    const rebuilt = new Set<string>();
+    for (const pair of store.listThreadsWithMessages()) {
+      rebuilt.add(`${pair.runId}::${pair.threadId}`);
+    }
+
+    expect(rebuilt).toEqual(live);
+    void backend;
+    store.close();
+  });
+});
+
 describe("event payload cap (§I7) survives unbounded message content", () => {
   test("8KB assistant content lands in messages table, not event payload", async () => {
     const store = new SqliteStore({ path: ":memory:" });

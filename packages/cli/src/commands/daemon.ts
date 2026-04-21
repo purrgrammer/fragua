@@ -204,15 +204,21 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     registry.registerAll(CORE_TOOLS);
     // Shared `inProcessWrites` — one Set for the whole daemon process so
     // every codergen backend (one per workflow node — see the factory
-    // below) sees the same "we've written to this (runId, threadId) in
-    // THIS process" signal. Without sharing, two consecutive nodes on
-    // the same thread_id (e.g. `implement` and `verify` on
-    // `thread_id="dev"` in `workflows/build-feature.dot`) would trigger
-    // a false-positive resume: the second node's fresh backend sees a
-    // non-empty prior transcript (from the messages table) but an empty
-    // Set, and mis-detects a daemon restart. A real daemon restart still
-    // rebuilds the Set empty, so the degrade kicks in as designed.
+    // below) sees the same "we've written to this (runId, threadId)"
+    // signal. The Set's job is to stop `computeResumeDecision` from
+    // misreading a legitimate cross-node dispatch (e.g. `implement` →
+    // `verify` on shared `thread_id="dev"`) as a process-boundary resume.
+    //
+    // Seeded at boot from the messages table + llm.start events of
+    // non-terminal runs: a resumed node on a pre-existing thread finds
+    // its key already present and the decision stays `resumed=false`.
+    // Without this seed, an honest cross-restart resume would flip
+    // `resumed=true` purely on the basis of "we don't have this key yet"
+    // — which is observational but still noisy in event logs.
     const inProcessWrites = new Set<string>();
+    for (const pair of store.listThreadsWithMessages()) {
+      inProcessWrites.add(`${pair.runId}::${pair.threadId}`);
+    }
     const backendOpts = {
       registry,
       defaultModel: { provider: provider!, model: model! },
