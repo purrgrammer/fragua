@@ -14,7 +14,7 @@ Authoritative references: `docs/SPEC.md` §3 (primitives), §4 (validation), `do
 
 ## Fast path
 
-1. **Find a template.** `workflows/quick-change.dot` (5 nodes, shell+LLM), `workflows/build-feature.dot` (7 nodes, full pipeline with fresh-thread review), `workflows/review-parallel.dot` (every shape), `workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
+1. **Find a template.** `workflows/quick-change.dot` (5 nodes, shell+LLM), `workflows/build-feature.dot` (8 nodes, full pipeline with fresh-thread review + REJECT_FIXABLE salvage loop), `workflows/review-parallel.dot` (every shape), `workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
 2. **Sketch the shape, not the prose.** Nodes + edges first. Name the nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow — `implement -> verify -> commit`. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
 3. **Validate.** `bun run swarm validate workflows/my-thing.dot`. Fix every error; warnings are strong hints.
 4. **Smoke-run.** `bun run swarm run workflows/my-thing.dot --input="<realistic task>"` against a cheap model first (see §9) before wiring to Opus / Sonnet.
@@ -186,6 +186,27 @@ plan    [max_retries = 2]   # cap re-plans
 ```
 
 Don't chain four nodes into a loop when a single `max_retries`-capped self-edge does the job.
+
+### Fixable-reject salvage (REJECT_FIXABLE pattern)
+
+Full `plan → implement → review → plan` re-loops are expensive. Most rejections are narrow: a missing test, a forgotten import, a typo. For those, a separate `fix` node is cheaper than re-planning:
+
+```dot
+review  -> fix    [condition="outcome=fail", label="rejected"]
+review  -> verify
+fix     -> verify
+fix     -> done   [condition="outcome=fail"]
+```
+
+The reviewer emits one of three markers; the fix node branches on them:
+
+```
+APPROVE: <one line>
+<abort>REJECT_FIXABLE: <one line>. fixes: <numbered list, 1-3 mechanical items></abort>
+<abort>REJECT: <one line — architecture / scope / contract violation></abort>
+```
+
+Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`. See `workflows/build-feature.dot` for a wired-up example.
 
 ---
 

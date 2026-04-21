@@ -159,8 +159,9 @@ SQL
 - **`fact.side_effect_intent` without a matching `fact.side_effect_done`/`_failed`** by `idempotencyKey` — crash between the two quarantines the run on next daemon start. This is the orphan-side-effect invariant (ARCHITECTURE §1.1).
 - **`fact.handler_timeout_leaked`** — the executor hard-timed-out a handler that ignored `ctx.signal`. Handler bug; see `docs/handler-contract.md` §4 rule 1.
 - **`fact.daemon_takeover`** — another daemon reclaimed a stale lock. Expect to see `fact.run_requeued_after_crash` nearby on in-flight runs.
+- **`agent.info { event: "thread_rehydrated", thread_id, message_count }`** — a codergen node picked up a `thread_id` with prior messages that were not written by this backend instance (either a fresh node sharing the thread with a prior one, or a true daemon restart). Fidelity is invariant across this; the Agent's `initialState.messages` is seeded byte-identical to the pre-rehydrate state. Informational — not a warning. If you see this during a "why did my run skip context?" investigation, the answer is it didn't: the transcript was restored in full.
 
-Observability event types outside the fact/intent union (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`) are stamped with `nodeId` + `iteration` and fold into the step snapshot — don't try to read them raw, use §6.
+Observability event types outside the fact/intent union (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`, `agent.info`, `agent.warning`) are stamped with `nodeId` + `iteration` and fold into the step snapshot — don't try to read them raw, use §6.
 
 ---
 
