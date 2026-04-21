@@ -53,7 +53,7 @@ export interface ExecutorOpts {
 }
 
 const DEFAULT_POLL_MS = 50;
-const DEFAULT_LEAK_GRACE_MS = 5_000;
+const DEFAULT_LEAK_GRACE_MS = 10_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const ABORT_LOOP_CEILING = 5;
 

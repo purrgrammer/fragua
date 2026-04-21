@@ -37,10 +37,20 @@ export interface DaemonMainOpts {
    * terminal status. Omit to run every handler inside the daemon's
    * process cwd (legacy / test behaviour). */
   provisioner?: Provisioner;
+  /** Supervisor's leak watchdog fallback when the dispatcher cannot
+   * resolve a spec for the run's current node. Defaults to the
+   * codergen budget (30m) so the watchdog never trips a legitimate
+   * long-running node ahead of the executor's own deadline. Tests
+   * can pass a smaller value. */
+  unknownSpecFallbackMs?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 8;
+// Matches @swarm/agent's codergen default — the supervisor must never
+// trip a legitimate long-running codergen node just because the spec
+// wasn't resolvable at the moment of the leak check.
+const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 30 * 60 * 1000;
 
 export interface DaemonHandle {
   /** Resolves when the daemon loop exits cleanly. */
@@ -78,13 +88,14 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
 
       const registry = new AbortRegistry();
 
+      const unknownSpecFallbackMs = opts.unknownSpecFallbackMs ?? DEFAULT_UNKNOWN_SPEC_FALLBACK_MS;
       const supervisor = startSupervisor({
         store: opts.store,
         registry,
         pid,
         shutdownSignal: ctrl.signal,
         handlerMaxMsFor: (sha, nodeId) => {
-          if (!opts.dispatcher.has(sha, nodeId)) return 30_000;
+          if (!opts.dispatcher.has(sha, nodeId)) return unknownSpecFallbackMs;
           return opts.dispatcher.get(sha, nodeId).maxMs;
         },
       });

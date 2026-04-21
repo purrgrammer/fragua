@@ -103,7 +103,7 @@ describe("executor — timeout projects as fact.node_aborted cause=timeout", () 
       sideEffect: "external",
       maxMs: 20,
       handler: async (ctx) => {
-        await new Promise<never>((_, reject) => {
+        return await new Promise<never>((_, reject) => {
           const onAbort = () => {
             ctx.signal.removeEventListener("abort", onAbort);
             const e = new Error("aborted");
