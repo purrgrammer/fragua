@@ -10,7 +10,15 @@ import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
-import { providersHelpCommand, providersListCommand } from "../src/commands/providers.ts";
+import {
+  providersAddCommand,
+  providersHelpCommand,
+  providersListCommand,
+  providersLoginCommand,
+  providersLogoutCommand,
+  providersRmCommand,
+  providersTestCommand,
+} from "../src/commands/providers.ts";
 import { runCommand } from "../src/commands/run.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
@@ -27,19 +35,39 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
 // convention. cac 6.x doesn't cleanly match multi-word commands
 // (`swarm providers ls` fell through to the parent), so actions are
 // dispatched via a positional.
-const UNIMPLEMENTED_PROVIDERS_ACTIONS = new Set(["add", "rm", "test", "login", "logout"]);
 cli
-  .command("providers [action]", "Manage LLM provider credentials + custom models (run without args for help)")
-  .action((action: string | undefined) => {
-    if (action === undefined) process.exit(providersHelpCommand());
-    if (action === "ls") process.exit(providersListCommand());
-    if (UNIMPLEMENTED_PROVIDERS_ACTIONS.has(action)) {
-      console.error(chalk.red(`providers ${action}: not yet implemented`));
-      process.exit(1);
+  .command(
+    "providers [action] [target] [extra]",
+    "Manage LLM provider credentials + custom models (run without args for help)",
+  )
+  .action(async (action: string | undefined, target: string | undefined, extra: string | undefined) => {
+    switch (action) {
+      case undefined:
+        process.exit(providersHelpCommand());
+        break;
+      case "ls":
+        process.exit(providersListCommand());
+        break;
+      case "add":
+        process.exit(await providersAddCommand(target));
+        break;
+      case "rm":
+        process.exit(await providersRmCommand(target));
+        break;
+      case "test":
+        process.exit(await providersTestCommand(target, extra));
+        break;
+      case "login":
+        process.exit(await providersLoginCommand(target));
+        break;
+      case "logout":
+        process.exit(await providersLogoutCommand(target));
+        break;
+      default:
+        console.error(chalk.red(`unknown providers action: ${action}`));
+        providersHelpCommand();
+        process.exit(1);
     }
-    console.error(chalk.red(`unknown providers action: ${action}`));
-    providersHelpCommand();
-    process.exit(1);
   });
 
 cli
