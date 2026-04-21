@@ -24,6 +24,8 @@ export type {
 } from "@mariozechner/pi-ai";
 export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
 
+export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
+
 /** Swarm-specific custom message type: the assembled system prompt
  * for a single LLM call. Persisted in the `messages` table so UIs
  * and debuggers can reconstruct exactly what the model saw, without

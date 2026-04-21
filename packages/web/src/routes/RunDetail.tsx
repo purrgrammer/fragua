@@ -61,7 +61,7 @@ export function RunDetail(): JSX.Element {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
   useEffect(() => {
-    if (id) void qc.invalidateQueries({ queryKey: queries.runs.detail(id).queryKey });
+    if (id) void qc.refetchQueries({ queryKey: queries.runs.detail(id).queryKey });
   }, [totalEvents]);
 
   // Canonicalize the URL: bare /runs/:id → /runs/:id/conversation,
