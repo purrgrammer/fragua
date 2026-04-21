@@ -47,7 +47,11 @@ export interface ParallelConfig {
    * typically deep-clones routing and overrides nodeId + iteration;
    * this lets tests stub out context construction cheaply. */
   buildChildContext: (nodeId: string, parentCtx: HandlerContext) => HandlerContext;
-  /** Hard timeout for the whole fan-out. Default 10 minutes. */
+  /** Hard timeout for the whole fan-out. Optional: parallel is an
+   * orchestration layer, not a deadline in its own right — child
+   * handlers self-police via their own maxMs. Default: effectively
+   * unbounded (1 hour) so a child's own maxMs is the real fence.
+   * Set explicitly when a branch-wide wall-clock floor is required. */
   maxMs?: number;
 }
 
@@ -61,7 +65,8 @@ export interface ParallelBranchResult {
   failReason?: string;
 }
 
-const DEFAULT_MAX_MS = 10 * 60 * 1000;
+// Effectively unbounded. Children's own maxMs is the real fence.
+const DEFAULT_MAX_MS = 60 * 60 * 1000;
 
 export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
   const joinPolicy: JoinPolicy = cfg.joinPolicy ?? "wait_all";
