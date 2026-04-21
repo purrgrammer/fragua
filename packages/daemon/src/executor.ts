@@ -327,6 +327,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
 
       let result: HandlerResult;
       let wasAborted = false;
+      let abortCause: "timeout" | "aborted" = "aborted";
       let leakedTimeout = false;
       try {
         result = await Promise.race([
@@ -338,6 +339,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         ]);
       } catch (err) {
         wasAborted = isAbortError(err);
+        if (wasAborted) abortCause = classifyAbortCause(signal, err);
         result = {
           kind: "halt",
           reason: "error",
@@ -383,7 +385,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         const facts = abortResultToFacts(
           currentNode,
           iteration,
-          "aborted",
+          abortCause,
           {
             tokens: totalTokens,
             costUsd: totalCostUsd,
@@ -565,6 +567,22 @@ function isAbortError(err: unknown): boolean {
     return err.name === "AbortError" || err.name === "TimeoutError";
   }
   return false;
+}
+
+/**
+ * Decide whether an abort was due to the node's own maxMs deadline
+ * or an operator / shutdown / steer signal. Reads `signal.reason`
+ * first (set by the aborting source via `AbortSignal.any`'s
+ * reason-propagation) and falls back to the thrown error's name.
+ * A TimeoutError reason indicates the `AbortSignal.timeout(maxMs)`
+ * branch tripped; any other error name means an explicit abort
+ * tripped first.
+ */
+export function classifyAbortCause(signal: AbortSignal, err: unknown): "timeout" | "aborted" {
+  const reason = signal.aborted ? signal.reason : undefined;
+  if (reason instanceof Error && reason.name === "TimeoutError") return "timeout";
+  if (err instanceof Error && err.name === "TimeoutError") return "timeout";
+  return "aborted";
 }
 
 function errorMessage(err: unknown): string {
