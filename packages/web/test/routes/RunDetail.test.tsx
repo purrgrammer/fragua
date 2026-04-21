@@ -1,6 +1,6 @@
 // Route-level tests for RunDetail.
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
@@ -101,10 +101,13 @@ describe("RunDetail", () => {
   });
 
   it("renders '—' for missing metrics without leaking raw values", async () => {
+    // For a terminal run without durationMs the server value is authoritative
+    // (undefined → formatDuration → "—"). The cost tile also shows "—" since
+    // costUsd is 0 and there are no tokens.
     const detail: RunDetailT = {
       runId: "run-empty",
       startedAt: "2024-01-01T00:00:00Z",
-      status: "running",
+      status: "success",
       lastEventSeq: 1,
       nodes: [],
       selectedEdges: [],
@@ -119,6 +122,7 @@ describe("RunDetail", () => {
       await waitFor(() => {
         expect(q.getByTestId("detail-duration-tile")).toBeTruthy();
       });
+      // Terminal run with no durationMs → formatDuration(undefined) → "—".
       expect(q.getByTestId("detail-duration-tile").textContent).toContain("—");
     } finally {
       mock.restore();
@@ -176,6 +180,95 @@ describe("RunDetail", () => {
     } finally {
       mock.restore();
       console.warn = origWarn;
+    }
+  });
+
+  it("duration tile ticks every second while run is live (running)", async () => {
+    // Fix the system clock to a known point.
+    const base = new Date("2024-06-01T12:00:00.000Z");
+    setSystemTime(base);
+
+    // startedAt is 5 seconds before the frozen clock.
+    const startedAt = new Date(base.getTime() - 5_000).toISOString();
+    const detail: RunDetailT = {
+      runId: "run-ticking",
+      startedAt,
+      status: "running",
+      lastEventSeq: 1,
+      nodes: [],
+      selectedEdges: [],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    const { client, mock } = prepare("run-ticking", detail);
+    try {
+      const { container } = mount(client, "/runs/run-ticking");
+      const q = within(container);
+
+      // Initially Duration should read 5s.
+      await waitFor(() => {
+        expect(q.getByTestId("detail-duration-tile").textContent).toContain("5s");
+      });
+
+      // Advance fake clock by 2 seconds — the next setInterval tick will
+      // read Date.now() = base + 2000, giving base+2000 - (base-5000) = 7000ms.
+      setSystemTime(new Date(base.getTime() + 2_000));
+
+      // Wait for the 1-second interval to fire and re-render.
+      await waitFor(
+        () => {
+          expect(q.getByTestId("detail-duration-tile").textContent).toContain("7s");
+        },
+        { timeout: 3_000 },
+      );
+    } finally {
+      mock.restore();
+      // Reset system time so other tests are unaffected.
+      setSystemTime(new Date());
+    }
+  });
+
+  it("duration tile is frozen at server durationMs for terminal (success) runs", async () => {
+    // Fix the system clock to a known point.
+    const base = new Date("2024-06-01T12:00:00.000Z");
+    setSystemTime(base);
+
+    const startedAt = new Date(base.getTime() - 5_000).toISOString();
+    const detail: RunDetailT = {
+      runId: "run-terminal",
+      startedAt,
+      status: "success",
+      lastEventSeq: 5,
+      nodes: [],
+      selectedEdges: [],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      // Server durationMs is authoritative for terminal runs.
+      durationMs: 3_000,
+    };
+    const { client, mock } = prepare("run-terminal", detail);
+    try {
+      const { container } = mount(client, "/runs/run-terminal");
+      const q = within(container);
+
+      // Duration should read the server's 3s, not the 5s wall-clock delta.
+      await waitFor(() => {
+        expect(q.getByTestId("detail-duration-tile").textContent).toContain("3s");
+      });
+
+      // Advance fake clock by 10 seconds — terminal runs must NOT drift.
+      setSystemTime(new Date(base.getTime() + 10_000));
+
+      // Give the component time to potentially (incorrectly) re-render.
+      await Bun.sleep(1_200);
+
+      // Value must still be the server-supplied 3s.
+      expect(q.getByTestId("detail-duration-tile").textContent).toContain("3s");
+    } finally {
+      mock.restore();
+      setSystemTime(new Date());
     }
   });
 

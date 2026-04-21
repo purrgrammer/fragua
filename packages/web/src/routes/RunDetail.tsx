@@ -34,6 +34,23 @@ import { useRunLive } from "../lib/useRunLive.ts";
 const VIEWS = ["conversation", "events", "graph", "steps"] as const;
 type TabId = (typeof VIEWS)[number];
 
+/** Statuses where the run is still progressing and the clock should tick. */
+const LIVE_STATUSES = new Set<string>(["queued", "running", "paused"]);
+
+/**
+ * Returns a `Date.now()`-style timestamp that re-renders every `intervalMs`.
+ * When `enabled` is false the interval is never created (zero re-render cost).
+ */
+function useNow(intervalMs: number, enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs, enabled]);
+  return now;
+}
+
 function isTabId(x: string | undefined): x is TabId {
   return !!x && (VIEWS as readonly string[]).includes(x);
 }
@@ -202,6 +219,9 @@ function DetailHeader({ detail, id, isLive }: { detail: RunDetailT | null; id: s
 
 function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
   const loading = detail == null;
+  const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
+  const now = useNow(1_000, isLiveRun);
+  const durationMs = isLiveRun ? Math.max(0, now - Date.parse(detail.startedAt)) : detail?.durationMs;
   const totalTokens = detail ? detail.inputTokens + detail.outputTokens : 0;
   const nodes = detail?.nodes ?? [];
   const runningNode = nodes.find((n) => n.state === "running");
@@ -232,7 +252,7 @@ function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
       <StatTile
         label="Duration"
         loading={loading}
-        value={detail ? formatDuration(detail.durationMs) : undefined}
+        value={detail ? formatDuration(durationMs) : undefined}
         testId="detail-duration-tile"
         icon={<Timer className="size-4" />}
         hint={detail ? `started ${formatRelative(detail.startedAt)} (${formatDateTime(detail.startedAt)})` : undefined}
