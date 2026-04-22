@@ -141,7 +141,6 @@ describe("executor — timeout projects as fact.node_aborted cause=timeout", () 
     expect((aborted!.payload as { cause: string }).cause).toBe("timeout");
     r.store.close();
   });
-
 });
 
 describe("classifyAbortCause — properties", () => {

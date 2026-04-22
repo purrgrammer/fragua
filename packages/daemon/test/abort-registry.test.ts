@@ -97,23 +97,20 @@ describe("AbortRegistry — elapsedMs (pause-aware)", () => {
 describe("AbortRegistry — properties", () => {
   test("elapsed is always non-negative under monotonic clocks", () => {
     fc.assert(
-      fc.property(
-        fc.array(fc.integer({ min: 0, max: 10_000 }), { minLength: 1, maxLength: 50 }),
-        (advances) => {
-          const clk = fakeClock(0);
-          const reg = new AbortRegistry(clk.now);
-          reg.register("r", new AbortController());
-          let totalAdvance = 0;
-          for (const d of advances) {
-            clk.advance(d);
-            totalAdvance += d;
-            const e = reg.elapsedMs("r");
-            expect(e).toBeDefined();
-            expect(e).toBeGreaterThanOrEqual(0);
-            expect(e).toBe(totalAdvance);
-          }
-        },
-      ),
+      fc.property(fc.array(fc.integer({ min: 0, max: 10_000 }), { minLength: 1, maxLength: 50 }), (advances) => {
+        const clk = fakeClock(0);
+        const reg = new AbortRegistry(clk.now);
+        reg.register("r", new AbortController());
+        let totalAdvance = 0;
+        for (const d of advances) {
+          clk.advance(d);
+          totalAdvance += d;
+          const e = reg.elapsedMs("r");
+          expect(e).toBeDefined();
+          expect(e).toBeGreaterThanOrEqual(0);
+          expect(e).toBe(totalAdvance);
+        }
+      }),
     );
   });
 

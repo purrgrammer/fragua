@@ -312,9 +312,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
           accounting,
         }),
         http: core.makeHttpClient(
-          opts.defaultHttpTimeoutMs != null
-            ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs }
-            : { signal },
+          opts.defaultHttpTimeoutMs != null ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs } : { signal },
         ),
         tools: opts.tools,
         recorder,

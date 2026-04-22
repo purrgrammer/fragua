@@ -5,6 +5,8 @@ surrounding subsystem gets revisited.
 
 ---
 
+## adding custom provider does not work
+
 ## Preserve pre-truncation tool output to `artifacts`
 
 **Problem.** `packages/agent/src/tool-adapter.ts:29` runs `truncate()` on

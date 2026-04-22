@@ -128,9 +128,13 @@ describe("resolveMaxMs — properties", () => {
 
   test("numeric maxMs wins over fallback", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 1, max: 10_000_000 }), fc.option(fc.integer({ min: 1, max: 1_000_000 })), (ms, fb) => {
-        expect(resolveMaxMs({ maxMs: ms }, fb ?? undefined)).toBe(ms);
-      }),
+      fc.property(
+        fc.integer({ min: 1, max: 10_000_000 }),
+        fc.option(fc.integer({ min: 1, max: 1_000_000 })),
+        (ms, fb) => {
+          expect(resolveMaxMs({ maxMs: ms }, fb ?? undefined)).toBe(ms);
+        },
+      ),
     );
   });
 

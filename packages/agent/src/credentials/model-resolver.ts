@@ -38,7 +38,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   "google-antigravity": "gemini-3.1-pro-high",
   "google-vertex": "gemini-3-pro-preview",
   "github-copilot": "gpt-4o",
-  openrouter: "openai/gpt-5.1-codex",
+  openrouter: "nvidia/nemotron-3-super-120b-a12b:free",
   // vercel-ai-gateway uses dotted form (not the hyphen form used by
   // the direct-Anthropic provider). Upstream pi-coding-agent carries
   // `anthropic/claude-opus-4-6` here which targets a newer pi-ai; swarm

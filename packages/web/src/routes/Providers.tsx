@@ -17,6 +17,7 @@ import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import * as api from "../lib/api.ts";
+import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import { queries } from "../lib/queries.ts";
 
 export function Providers(): JSX.Element {
@@ -115,7 +116,10 @@ export function Providers(): JSX.Element {
                         className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
                         data-testid={`provider-link-${p.name}`}
                       >
-                        {p.name}
+                        <div className="flex flex-row gap-1 items-center">
+                          <ModelSelectorLogo provider={p.name} className="size-4" />
+                          {p.name}
+                        </div>
                       </Link>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{p.model_count}</TableCell>

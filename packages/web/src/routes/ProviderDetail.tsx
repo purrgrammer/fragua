@@ -12,6 +12,7 @@ import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
+import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 
@@ -43,8 +44,11 @@ export function ProviderDetail(): JSX.Element {
   return (
     <section className="flex w-full min-w-0 flex-col gap-4">
       <header className="flex items-baseline justify-between">
-        <div className="flex items-baseline gap-3">
-          <h2 className="font-heading text-base font-semibold">{data.name}</h2>
+        <div className="flex items-center gap-3">
+          <div className="flex flex-row items-center gap-1">
+            <ModelSelectorLogo provider={data.name} className="size-4" />
+            <h2 className="font-heading text-base font-semibold">{data.name}</h2>
+          </div>
           {data.credentialed ? (
             <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300">
               {data.auth_kind === "oauth" ? "oauth" : "ready"}

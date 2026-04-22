@@ -135,7 +135,9 @@ describe("parseDurationMs — properties", () => {
   test("result is always a positive safe integer (success path)", () => {
     const validInput = fc.oneof(
       fc.integer({ min: 1, max: 1_000_000 }),
-      fc.tuple(fc.integer({ min: 1, max: 1_000_000 }), fc.constantFrom("ms", "s", "m", "h")).map(([n, u]) => `${n}${u}`),
+      fc
+        .tuple(fc.integer({ min: 1, max: 1_000_000 }), fc.constantFrom("ms", "s", "m", "h"))
+        .map(([n, u]) => `${n}${u}`),
     );
     fc.assert(
       fc.property(validInput, (input) => {

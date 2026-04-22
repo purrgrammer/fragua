@@ -293,7 +293,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
         ...(timeouts.bootstrap !== undefined ? { bootstrapTimeoutMs: timeouts.bootstrap } : {}),
         ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
       })
-    : new LocalEnvironmentProvisioner(cwd, timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {});
+    : new LocalEnvironmentProvisioner(
+        cwd,
+        timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {},
+      );
   const provisionerLabel =
     provisioner instanceof WorktreeProvisioner
       ? `worktree (.swarm/worktrees/<run-id>${config.project?.bootstrap ? `, bootstrap: "${config.project.bootstrap}"` : ""})`
