@@ -1,4 +1,5 @@
 import { sha256Hex } from "@swarm/store";
+import { canonicalStringify } from "./canonical-stringify.ts";
 import type { ExternalCall, ExternalCallParams, SideEffectRecorder } from "./types.ts";
 
 export interface MakeExternalCallOpts {
@@ -11,7 +12,13 @@ export interface MakeExternalCallOpts {
 /**
  * Build the canonical externalCall helper for a single node execution.
  *
+ *   argsHash       = sha256(canonicalStringify(params.args))
  *   idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)
+ *
+ * Canonicalisation lives inside the framework so two handlers that build
+ * structurally-equal args via different code paths still produce the
+ * same idempotency key. Handlers never compute `argsHash` themselves —
+ * they pass `args: unknown` and trust the framework.
  *
  * The sequence is:
  *   1. Record fact.side_effect_intent (executor commits before fn runs).
@@ -29,13 +36,14 @@ export function makeExternalCall(opts: MakeExternalCallOpts): ExternalCall {
     fn: (idempotencyKey: string) => Promise<T>,
   ): Promise<T> {
     const attempt = params.attempt ?? 1;
+    const argsHash = sha256Hex(canonicalStringify(params.args));
     const idempotencyKey = sha256Hex(
-      `${opts.runId}\x00${opts.nodeId}\x00${opts.iteration}\x00${params.argsHash}\x00${attempt}`,
+      `${opts.runId}\x00${opts.nodeId}\x00${opts.iteration}\x00${argsHash}\x00${attempt}`,
     );
 
     opts.recorder.recordIntent({
       toolName: params.toolName,
-      argsHash: params.argsHash,
+      argsHash,
       attempt,
       idempotencyKey,
     });

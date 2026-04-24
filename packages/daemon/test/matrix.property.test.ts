@@ -138,13 +138,13 @@ describe("P8 — mid-flight abort replay: external call ≤ 1 per key", () => {
     // 1st attempt aborts mid-flight.
     const abortErr = Object.assign(new Error("aborted"), { name: "AbortError" });
     await expect(
-      call({ toolName: "t", argsHash: "a", attempt: 1 }, async () => {
+      call({ toolName: "t", args: { a: 1 }, attempt: 1 }, async () => {
         throw abortErr;
       }),
     ).rejects.toBe(abortErr);
 
     // 2nd attempt with same (run, node, iter, args, attempt) → same key.
-    const second = await call({ toolName: "t", argsHash: "a", attempt: 1 }, async () => "ok");
+    const second = await call({ toolName: "t", args: { a: 1 }, attempt: 1 }, async () => "ok");
     expect(second).toBe("ok");
 
     // Both intents use the same key. First aborted (no done/failed).

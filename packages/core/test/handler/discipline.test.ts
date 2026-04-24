@@ -138,7 +138,7 @@ describe("handler discipline", () => {
     const usesRe = /\bctx\.externalCall\s*\(/;
     const bad = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => ({ kind: "halt", reason: "error" }) };`;
     expect(externalRe.test(bad) && !usesRe.test(bad)).toBe(true);
-    const good = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => { await ctx.externalCall({ toolName: "t", argsHash: "" }, async () => null); return { kind: "halt", reason: "error" }; } };`;
+    const good = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => { await ctx.externalCall({ toolName: "t", args: {} }, async () => null); return { kind: "halt", reason: "error" }; } };`;
     expect(externalRe.test(good) && !usesRe.test(good)).toBe(false);
   });
 });

@@ -389,7 +389,7 @@ export type HandlerContext = Readonly<{
     ref(key: string): ArtifactRef | null;
     getFrom(scope: ArtifactScope): Uint8Array;
   };
-  externalCall: <T>(params: { toolName: string; argsHash: string; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
+  externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
   // No direct fetch, filesystem, DB, or process access.
 }>;
 
@@ -400,12 +400,15 @@ export type HandlerResult =
 ```
 
 `externalCall` is the canonical helper for `side_effect: "external"` tools. It:
-1. Computes `idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)`.
-2. Emits `fact.side_effect_intent` via the executor (not the handler directly).
-3. Invokes `fn(idempotencyKey)`; `fn` passes the key to the provider as an idempotency header.
-4. On success: emits `fact.side_effect_done`, returns result.
-5. On `AbortError`: does NOT emit `done`; executor will see orphan on replay if we crashed here.
-6. On clean failure: emits `fact.side_effect_failed`.
+1. Canonicalises `params.args` via `canonicalStringify` (sorted keys, rejects non-JSON-serialisable values) and hashes the result → `argsHash`.
+2. Computes `idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)`.
+3. Emits `fact.side_effect_intent` via the executor (not the handler directly).
+4. Invokes `fn(idempotencyKey)`; `fn` passes the key to the provider as an idempotency header.
+5. On success: emits `fact.side_effect_done`, returns result.
+6. On `AbortError`: does NOT emit `done`; executor will see orphan on replay if we crashed here.
+7. On clean failure: emits `fact.side_effect_failed`.
+
+Handlers never compute `argsHash` themselves. The framework owns canonicalisation so structurally-equal args across replay boundaries produce a stable key regardless of how the handler built them.
 
 ### Enforced at review
 - `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.

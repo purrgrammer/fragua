@@ -29,7 +29,7 @@ describe("externalCall", () => {
       iteration: 0,
       recorder: rec,
     });
-    const result = await call({ toolName: "charge", argsHash: "h" }, async (key) => `ok:${key}`);
+    const result = await call({ toolName: "charge", args: { h: 1 } }, async (key) => `ok:${key}`);
     expect(log.intents).toHaveLength(1);
     expect(log.dones).toHaveLength(1);
     expect(log.faileds).toHaveLength(0);
@@ -43,11 +43,11 @@ describe("externalCall", () => {
     const { rec: r2 } = recorder();
     const mk = (rec: SideEffectRecorder) => makeExternalCall({ runId: "r", nodeId: "n", iteration: 2, recorder: rec });
     const keys: string[] = [];
-    await mk(r1)({ toolName: "t", argsHash: "a", attempt: 3 }, async (k) => {
+    await mk(r1)({ toolName: "t", args: { a: 1 }, attempt: 3 }, async (k) => {
       keys.push(k);
       return 0;
     });
-    await mk(r2)({ toolName: "t", argsHash: "a", attempt: 3 }, async (k) => {
+    await mk(r2)({ toolName: "t", args: { a: 1 }, attempt: 3 }, async (k) => {
       keys.push(k);
       return 0;
     });
@@ -64,11 +64,11 @@ describe("externalCall", () => {
       recorder: rec,
     });
     const keys: string[] = [];
-    await call({ toolName: "t", argsHash: "a", attempt: 1 }, async (k) => {
+    await call({ toolName: "t", args: { a: 1 }, attempt: 1 }, async (k) => {
       keys.push(k);
       return 0;
     });
-    await call({ toolName: "t", argsHash: "a", attempt: 2 }, async (k) => {
+    await call({ toolName: "t", args: { a: 1 }, attempt: 2 }, async (k) => {
       keys.push(k);
       return 0;
     });
@@ -85,7 +85,7 @@ describe("externalCall", () => {
     });
     const err = new Error("boom");
     await expect(
-      call({ toolName: "t", argsHash: "a" }, async () => {
+      call({ toolName: "t", args: { a: 1 } }, async () => {
         throw err;
       }),
     ).rejects.toBe(err);
@@ -103,13 +103,32 @@ describe("externalCall", () => {
     });
     const abortErr = Object.assign(new Error("aborted"), { name: "AbortError" });
     await expect(
-      call({ toolName: "t", argsHash: "a" }, async () => {
+      call({ toolName: "t", args: { a: 1 } }, async () => {
         throw abortErr;
       }),
     ).rejects.toBe(abortErr);
     expect(log.intents).toHaveLength(1);
     expect(log.dones).toHaveLength(0);
     expect(log.faileds).toHaveLength(0);
+  });
+
+  test("args with different key insertion order produce the same idempotency key", async () => {
+    const { rec: r1, log: l1 } = recorder();
+    const { rec: r2, log: l2 } = recorder();
+    const mk = (rec: SideEffectRecorder) =>
+      makeExternalCall({ runId: "r", nodeId: "n", iteration: 0, recorder: rec });
+    await mk(r1)({ toolName: "t", args: { a: 1, b: [2, 3], c: { x: true, y: null } } }, async () => 0);
+    await mk(r2)({ toolName: "t", args: { c: { y: null, x: true }, b: [2, 3], a: 1 } }, async () => 0);
+    expect(l1.intents[0]!.idempotencyKey).toBe(l2.intents[0]!.idempotencyKey);
+    expect(l1.intents[0]!.argsHash).toBe(l2.intents[0]!.argsHash);
+  });
+
+  test("non-serialisable args throw CanonicalStringifyError", async () => {
+    const { rec } = recorder();
+    const call = makeExternalCall({ runId: "r", nodeId: "n", iteration: 0, recorder: rec });
+    await expect(call({ toolName: "t", args: { fn: () => 1 } }, async () => 0)).rejects.toThrow(
+      /canonicalStringify/,
+    );
   });
 
   test("TimeoutError also skips DONE/FAILED", async () => {
@@ -122,7 +141,7 @@ describe("externalCall", () => {
     });
     const err = Object.assign(new Error("timeout"), { name: "TimeoutError" });
     await expect(
-      call({ toolName: "t", argsHash: "a" }, async () => {
+      call({ toolName: "t", args: { a: 1 } }, async () => {
         throw err;
       }),
     ).rejects.toBe(err);

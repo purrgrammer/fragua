@@ -101,17 +101,19 @@ Persistent state goes through:
 - **`ctx.externalCall(...)`** — idempotency-keyed external call (see §3)
 
 ### 3. External side effects use `ctx.externalCall`
-Anything that moves money or makes a network call the caller can't reverse must route through `ctx.externalCall`. It computes a stable idempotency key from `sha256(runId + nodeId + iteration + argsHash + attempt)` and commits `fact.side_effect_intent` / `_done` / `_failed` around the call. If the daemon crashes between `intent` and `done`, the startup sweep quarantines the run rather than blindly re-running.
+Anything that moves money or makes a network call the caller can't reverse must route through `ctx.externalCall`. Pass the call's arguments as `args: unknown` — the framework canonicalises them (sorted keys, deterministic output), sha256s that to an `argsHash`, and derives the idempotency key as `sha256(runId + nodeId + iteration + argsHash + attempt)`. `fact.side_effect_intent` / `_done` / `_failed` wrap the call. If the daemon crashes between intent and done, the startup sweep quarantines the run rather than blindly re-running.
 
 ```typescript
 const result = await ctx.externalCall(
-  { toolName: "charge", argsHash: sha256(JSON.stringify(args)) },
+  { toolName: "charge", args: { customerId, amountCents } },
   async (idempotencyKey) => {
     // pass the key to your provider as an Idempotency-Key header or equivalent
-    return provider.charge(args, { idempotencyKey });
+    return provider.charge({ customerId, amountCents }, { idempotencyKey });
   },
 );
 ```
+
+`args` must be JSON-serialisable (plain objects, arrays, strings, finite numbers, booleans, `null`). Functions, `undefined`, `bigint`, `Symbol`, cyclic references, and non-finite numbers throw `CanonicalStringifyError`. Two objects with the same content but different key insertion order produce the same `argsHash` — the whole point of moving canonicalisation into the framework is that a handler that reconstructs args across a replay can't accidentally drift its hash.
 
 Declare your handler's risk level on the spec:
 

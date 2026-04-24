@@ -37,7 +37,6 @@
 //     non-idempotent, but the intent / done facts let the startup sweep
 //     quarantine a run whose daemon crashed mid-spawn.
 
-import { sha256Hex } from "@swarm/store";
 import { substitute } from "../../engine/substitution.ts";
 import type { ContextMap } from "../../types/context.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
@@ -87,12 +86,11 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     const context = mergeContext(cfg.defaultContext, ctx.routing);
     const command = substitute(rawCommand, { args: ctx.args, context });
 
-    const argsHash = sha256Hex(command);
-
     let ranResult: ToolRunResult | undefined;
     try {
-      ranResult = await ctx.externalCall({ toolName: "tool.shell", argsHash, attempt: ctx.iteration + 1 }, () =>
-        spawner(command, ctx.signal),
+      ranResult = await ctx.externalCall(
+        { toolName: "tool.shell", args: { command }, attempt: ctx.iteration + 1 },
+        () => spawner(command, ctx.signal),
       );
     } catch (err) {
       if (isAbortError(err)) {

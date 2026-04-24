@@ -87,7 +87,12 @@ export interface SideEffectRecorder {
 
 export interface ExternalCallParams {
   toolName: string;
-  argsHash: string;
+  /** Arbitrary JSON-serialisable value describing the call. The framework
+   * runs it through `canonicalStringify` (sorted keys, deterministic output)
+   * and sha256s the result to produce the stable `argsHash` that feeds the
+   * idempotency key. Passing a pre-hashed string is wrong — it defeats the
+   * point of canonicalising inside the framework. */
+  args: unknown;
   attempt?: number;
 }
 
