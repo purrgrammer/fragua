@@ -211,6 +211,15 @@ node with `allowed_tools = "read"` cannot invoke `bash` / `write` /
 `edit` at either boundary. Prompt prose that says "you have read-only
 tools" is descriptive; the enforcement is the narrowing.
 
+**`ctx.env` follows the same policy.** If the narrowed toolset carries
+no mutator (`bash` / `write` / `edit`), `ctx.env` is wrapped so
+`writeFile` and `exec` throw `ReadOnlyEnvError`. That way a handler
+that loses its *tools* to the allowed_tools filter also loses the raw
+env path that would otherwise bypass them — relevant when the codergen
+backend's agent tools sit on top of `ctx.env` (write → `env.writeFile`,
+bash → `env.exec`). Read-only methods (`readFile`, `exists`, `listDir`,
+`glob`) pass through.
+
 Custom tools can be added later by `ToolRegistry.register()`-ing an
 additional `Tool` at daemon startup. They share the same bare-identifier
 rule and slot in alongside the four builtins.

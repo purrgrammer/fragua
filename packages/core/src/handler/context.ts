@@ -1,6 +1,7 @@
 import type { ArtifactRef, ArtifactScope, IEventStore, Message } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
 import type { ExecutionEnvironment } from "../types/execution.ts";
+import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {
   ArtifactsApi,
@@ -117,6 +118,15 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
       ? opts.tools.select(narrowOpts)
       : opts.tools;
 
+  // Align the ExecutionEnvironment with the narrowed toolset. If no
+  // mutating tool (bash / write / edit) is visible, the env is wrapped
+  // so writeFile / exec throw — a handler that loses its write *tools*
+  // also loses the raw env path that would otherwise bypass them. Parallel
+  // branches rely on this to guarantee read-only filesystem access.
+  const envCanMutate = ENV_MUTATOR_TOOLS.some((t) => scopedTools.has(t));
+  const effectiveEnv =
+    opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
+
   const ctx: HandlerContext = {
     runId,
     nodeId,
@@ -133,7 +143,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     emit,
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
-    ...(opts.env !== undefined ? { env: opts.env } : {}),
+    ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
   };
   return ctx;
 }
