@@ -6,6 +6,8 @@
 // P12 event payload bound enforced
 // P13 routing bound enforced
 // P14 blob dedup (identical content → one blob row)
+// P15 artifact loop scoping — same (run, node, key) across N iterations
+//     produces N distinct rows, no PK violation
 // P22 cascade delete removes per-run children; blobs unchanged
 // P23 STRICT rejects type coercion
 // P24 claim atomicity — each queued run claimed by exactly one caller
@@ -240,6 +242,62 @@ describe("P14 — blob dedup", () => {
       }),
       { numRuns: 10 },
     );
+  });
+});
+
+describe("P15 — artifact loop scoping across iterations", () => {
+  test("same (runId, nodeId, key) across N iterations → N distinct rows, no PK violation", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 2, max: 8 }), async (n) => {
+        const store = freshStore();
+        const runId = await seedRun(store);
+        // Use a distinct byte per iteration so each write hits a fresh sha.
+        for (let i = 0; i < n; i++) {
+          store.putArtifact({ runId, nodeId: "loop", iteration: i, key: "out" }, new Uint8Array([i]));
+        }
+        const db = getDb(store);
+        const row = db
+          .query<
+            { count: number; max_iter: number; keys: number },
+            [string]
+          >(
+            `SELECT COUNT(*) AS count,
+                    MAX(iteration) AS max_iter,
+                    COUNT(DISTINCT key) AS keys
+               FROM artifacts
+              WHERE run_id = ? AND node_id = 'loop'`,
+          )
+          .get(runId)!;
+        expect(row.count).toBe(n);
+        expect(row.max_iter).toBe(n - 1);
+        expect(row.keys).toBe(1);
+
+        // Fetching each iteration returns the content written at that iteration.
+        for (let i = 0; i < n; i++) {
+          const bytes = store.getArtifact({ runId, nodeId: "loop", iteration: i, key: "out" });
+          expect(bytes[0]).toBe(i);
+        }
+        store.close();
+      }),
+      { numRuns: 15 },
+    );
+  });
+
+  test("PK violation when the same (run, node, iteration, key) is reinserted in-place", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const scope = { runId, nodeId: "n", iteration: 0, key: "k" };
+    // Two writes to the exact same scope should update in place (ON CONFLICT
+    // DO UPDATE), not throw. This is the flip side of P15: the PK exists.
+    store.putArtifact(scope, new TextEncoder().encode("v1"));
+    store.putArtifact(scope, new TextEncoder().encode("v2"));
+    const db = getDb(store);
+    const n = db
+      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?")
+      .get(runId)!.n;
+    expect(n).toBe(1);
+    expect(new TextDecoder().decode(store.getArtifact(scope))).toBe("v2");
+    store.close();
   });
 });
 

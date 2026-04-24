@@ -4,9 +4,11 @@
 //   P7  unquarantine retry       — intent.unquarantine:retry resumes & reuses idempotencyKey
 //   P8  mid-flight abort replay  — abort → next turn converges; external call ≤ 1 per key
 //   P16 blob GC                  — orphan blobs removed, shared blobs retained
+//   P17 schema drift refusal     — resume with mismatched schema_version → run_halted
 //   P18 zombie daemon commit     — reclaimed original fails OCC on commit
 //   P20 abort loop ceiling       — K consecutive aborts with no progress → halt
 
+import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
 import { ConcurrencyError, sha256Hex as sha256 } from "@swarm/store";
@@ -223,6 +225,48 @@ describe("P18 — reclaimed zombie daemon fails OCC on commit", () => {
         s0.version,
       ),
     ).toThrow(ConcurrencyError);
+    r.store.close();
+  });
+});
+
+// ─────────────── P17 ───────────────
+describe("P17 — schema drift refusal on resume", () => {
+  test("run pinned to a non-current schema_version → fact.run_halted { reason: 'schema_drift' }", async () => {
+    const r = rig();
+    // Handler would otherwise transition cleanly; the schema check runs
+    // before dispatch so the body never fires.
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 1_000,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rp17", "start");
+    const before = r.store.getState("rp17")!;
+
+    // Simulate a daemon starting against an older-pinned run: rewrite
+    // schema_version out from under the executor.
+    const db = (r.store as unknown as { db: Database }).db;
+    db.query("UPDATE run_state SET schema_version = 999 WHERE run_id = ?").run("rp17");
+
+    r.store.claimNextRun(1);
+    const ac = new AbortController();
+    await runOne("rp17", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 5,
+      shutdownSignal: ac.signal,
+    });
+
+    const after = r.store.getState("rp17")!;
+    expect(after.status).toBe("halted");
+    const halt = r.store.getEvents("rp17").find((e) => e.type === "fact.run_halted")!;
+    expect((halt.payload as { reason: string }).reason).toBe("schema_drift");
+    expect(after.version).toBeGreaterThan(before.version);
     r.store.close();
   });
 });
