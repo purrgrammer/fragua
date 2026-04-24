@@ -540,6 +540,78 @@ describe("executor — cancel", () => {
   });
 });
 
+describe("executor — allowed_tools hard filter at dispatch", () => {
+  test("a handler that reaches for a non-allowed tool halts cleanly, no leaked state", async () => {
+    // Node declares allowed_tools=["read"]; the handler violates the
+    // contract by asking for "bash". The executor's HandlerContext
+    // narrows ctx.tools via ToolRegistry.select, so ctx.tools.get("bash")
+    // throws synchronously — the outer executor maps that to a
+    // HandlerResult halt and appends fact.run_halted { reason: "error" }.
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      restricted [shape=box, allowed_tools="read"];
+      done [shape=Msquare];
+      start -> restricted;
+      restricted -> done;
+    }`;
+    const r = rig({ dot });
+
+    // Register the restricted tools in the registry so they exist at
+    // the global level; allowed_tools is what restricts them per-node.
+    r.tools.register({ name: "read", sideEffect: "none", handler: async () => undefined });
+    r.tools.register({ name: "bash", sideEffect: "external", handler: async () => undefined });
+
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "restricted", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "restricted", {
+      kind: "codergen",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async (ctx) => {
+        // Read is fine.
+        expect(() => ctx.tools.get("read")).not.toThrow();
+        expect(ctx.tools.has("bash")).toBe(false);
+        // Bash is not. This is what the executor must translate into a halt.
+        ctx.tools.get("bash");
+        // Unreachable.
+        return { kind: "transition", nextNode: "done", tokens: 0, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "rat", "start");
+    r.store.claimNextRun(1);
+    const ac = new AbortController();
+    await runOne("rat", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 20,
+      shutdownSignal: ac.signal,
+    });
+
+    const state = r.store.getState("rat")!;
+    expect(state.status).toBe("halted");
+    const halt = r.store.getEvents("rat").find((e) => e.type === "fact.run_halted")!;
+    const payload = halt.payload as { reason: string; detail?: string };
+    expect(payload.reason).toBe("error");
+    expect(payload.detail).toMatch(/unknown tool: bash/);
+    r.store.close();
+  });
+});
+
 describe("executor — schema drift", () => {
   test("run with mismatched schema_version halts with schema_drift", async () => {
     const r = rig();
