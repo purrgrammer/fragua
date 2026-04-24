@@ -88,6 +88,28 @@ describe("handler discipline", () => {
     expect(offenders).toHaveLength(0);
   });
 
+  // sideEffect: "external" is the contract that the startup sweep uses to
+  // quarantine orphaned intent/done pairs after a crash (ARCHITECTURE.md
+  // §1.1, §5). If a handler declares itself external but never calls
+  // ctx.externalCall, the intent/done facts never get written, the sweep
+  // finds nothing to quarantine, and replay silently double-executes.
+  test("every sideEffect:\"external\" handler in handlers/ uses ctx.externalCall", () => {
+    const externalRe = /sideEffect\s*:\s*["']external["']/;
+    const usesRe = /\bctx\.externalCall\s*\(/;
+    const offenders: string[] = [];
+    for (const file of collect(HANDLERS_DIR)) {
+      const src = readFileSync(file, "utf8");
+      if (externalRe.test(src) && !usesRe.test(src)) offenders.push(file);
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        `Handlers declaring sideEffect:"external" must call ctx.externalCall:\n` +
+          offenders.map((f) => `  ${f}`).join("\n"),
+      );
+    }
+    expect(offenders).toHaveLength(0);
+  });
+
   test("lint catches raw fetch in a synthetic handler source", () => {
     const bad = `
       export async function evil() {
@@ -109,5 +131,14 @@ describe("handler discipline", () => {
     const ok = `const res = await ctx.http.fetch("https://example.test");\n`;
     const hits = scan(ok);
     expect(hits.some((h) => h.rule === "raw fetch")).toBe(false);
+  });
+
+  test("external-without-externalCall check matches a synthetic bad handler", () => {
+    const externalRe = /sideEffect\s*:\s*["']external["']/;
+    const usesRe = /\bctx\.externalCall\s*\(/;
+    const bad = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => ({ kind: "halt", reason: "error" }) };`;
+    expect(externalRe.test(bad) && !usesRe.test(bad)).toBe(true);
+    const good = `export const spec = { kind: "x", sideEffect: "external", maxMs: 1, handler: async (ctx) => { await ctx.externalCall({ toolName: "t", argsHash: "" }, async () => null); return { kind: "halt", reason: "error" }; } };`;
+    expect(externalRe.test(good) && !usesRe.test(good)).toBe(false);
   });
 });
