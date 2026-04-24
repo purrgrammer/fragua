@@ -262,3 +262,48 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
     r.store.close();
   });
 });
+
+// ─────────────── max_loops ───────────────
+// Complements P20 (abort_loop): a handler that loops successfully without
+// ever aborting still needs a ceiling. Non-P-numbered; fills the
+// ARCHITECTURE.md §3 HaltReason=max_loops contract that had no executor-
+// side enforcement prior.
+describe("max_loops ceiling halts non-aborting runaway runs", () => {
+  test("dispatches > maxLoops → run_halted { reason: 'max_loops' }", async () => {
+    const r = rig();
+    // Self-looping handler: always transitions back to itself. Never aborts,
+    // never retries, so ABORT_LOOP_CEILING does not apply.
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        nextNode: "start",
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+    enqueue(r, "rpml", "start");
+    r.store.claimNextRun(1);
+
+    const ac = new AbortController();
+    await runOne("rpml", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxLoops: 3,
+      maxTurnsForTesting: 100,
+      shutdownSignal: ac.signal,
+    });
+
+    const state = r.store.getState("rpml")!;
+    expect(state.status).toBe("halted");
+    const halt = r.store.getEvents("rpml").find((e) => e.type === "fact.run_halted")!;
+    expect((halt.payload as { reason: string }).reason).toBe("max_loops");
+    r.store.close();
+  });
+});

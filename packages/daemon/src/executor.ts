@@ -35,6 +35,11 @@ export interface ExecutorOpts {
   leakGraceMs?: number;
   /** Hook for tests to stop after N turns; defaults to ∞. */
   maxTurnsForTesting?: number;
+  /** Production ceiling on handler dispatches within a single run. When
+   * exceeded, the run halts with `reason: "max_loops"`. Defaults to
+   * `DEFAULT_MAX_LOOPS`. Distinct from `maxTurnsForTesting`, which is a
+   * silent test escape hatch. */
+  maxLoops?: number;
   /** AbortSignal that stops the executor loop. */
   shutdownSignal: AbortSignal;
   /** Optional auto-titler. When set, `titleRun` fires once per run just
@@ -60,6 +65,7 @@ const DEFAULT_POLL_MS = 50;
 const DEFAULT_LEAK_GRACE_MS = 10_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const ABORT_LOOP_CEILING = 5;
+const DEFAULT_MAX_LOOPS = 1_000;
 
 /**
  * Executor loop. Claims queued runs and dispatches each on its own
@@ -143,8 +149,15 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
 async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
   const leakGrace = opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
+  const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   let consecutiveAborts = 0;
   let turns = 0;
+  // Dispatches counted for the max_loops ceiling. Incremented just before
+  // each `spec.handler(ctx)` call — OCC-retry `continue`s and schema/start
+  // bookkeeping iterations don't inflate the count. Pathological workflows
+  // that loop without ever aborting (so ABORT_LOOP_CEILING doesn't fire)
+  // halt here instead of running forever.
+  let dispatches = 0;
   let runEnv: ExecutionEnvironment | undefined;
   // Lazy per-run graph cache. Parsed once on first edge-selection need.
   let cachedGraph: Graph | null = null;
@@ -268,6 +281,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       }
 
       if (currentNode == null) return;
+
+      // Production ceiling on handler dispatches. A workflow that loops
+      // without ever aborting (so ABORT_LOOP_CEILING never fires) would
+      // otherwise run until budget or wall-clock killed it. This is the
+      // last-resort guard; workflow authors should bound loops via
+      // `max_retries` on backward edges.
+      if (dispatches >= maxLoops) {
+        await tryAppendFact(opts.store, runId, state.version, [
+          {
+            type: "fact.run_halted",
+            payload: { reason: "max_loops", detail: `exceeded ${maxLoops} dispatches` },
+          },
+        ]);
+        return;
+      }
+      dispatches++;
 
       // Dispatch.
       const spec = opts.dispatcher.get(state.workflowSha, currentNode);

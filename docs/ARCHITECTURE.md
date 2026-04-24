@@ -590,6 +590,7 @@ HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in eith
 | `SSE_POLL_MS` | 100 | Web SSE handler |
 | `LEAK_GRACE_MS` | 10000 | Hard timeout grace |
 | `ABORT_LOOP_CEILING` | 5 | Reducer → `RUN_HALTED` |
+| `MAX_LOOPS` | 1000 (configurable via `ExecutorOpts.maxLoops`) | Executor → `fact.run_halted { reason: "max_loops" }` |
 
 ---
 
