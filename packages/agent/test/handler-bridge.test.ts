@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CodergenBackend, Node, OutcomeStatus } from "@swarm/core";
 import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
-import { SqliteStore } from "@swarm/store";
+import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@swarm/store";
 import fc from "fast-check";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";
 
@@ -350,5 +350,70 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
       ),
       { numRuns: 30 },
     );
+  });
+});
+
+// Backend-emitted messages can theoretically exceed the 1 MiB cap when
+// a tool result ships a huge blob. The bridge must neither crash the
+// handler nor swallow the message silently; the contract is to spill to
+// an artifact and persist a tiny placeholder so the transcript retains
+// a retrievable pointer.
+describe("makeCodergenHandler — oversized messages spill to artifact", () => {
+  test("persistMessage on a >1 MiB message survives: placeholder + artifact", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-big-msg", store, "n1");
+
+    // Build an assistant message whose text is ~2 MiB — well past the cap.
+    const filler = "x".repeat(MAX_MESSAGE_CONTENT_BYTES * 2);
+    const backend: CodergenBackend = {
+      async run(input) {
+        input.persistMessage?.({
+          role: "assistant",
+          content: [{ type: "text", text: filler }],
+          api: "anthropic" as never,
+          provider: "anthropic" as never,
+          model: "claude-stub",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        });
+        return ok({});
+      },
+    };
+
+    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+
+    // A placeholder message should have landed on the transcript —
+    // marker text, not the filler.
+    const messages = store.getMessages("r-big-msg");
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    const lastBlocks = (messages[messages.length - 1]!.content as { content: Array<{ text?: string }> })
+      .content;
+    const placeholderText = lastBlocks.map((b) => b.text ?? "").join("");
+    expect(placeholderText).toMatch(/message too large/);
+    expect(placeholderText).toMatch(/spilled to artifact/);
+    expect(placeholderText).not.toContain("xxxxx"); // no leak of the giant filler
+
+    // The spill artifact exists and holds the full serialised message.
+    const spillKey = /spilled to artifact (\S+?)\]/.exec(placeholderText)?.[1];
+    expect(spillKey).toBeDefined();
+    const artifactBytes = store.getArtifact({
+      runId: "r-big-msg",
+      nodeId: "n1",
+      iteration: 0,
+      key: spillKey!,
+    });
+    expect(artifactBytes.length).toBeGreaterThan(MAX_MESSAGE_CONTENT_BYTES);
+
+    store.close();
   });
 });

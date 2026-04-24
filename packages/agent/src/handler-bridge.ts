@@ -15,6 +15,7 @@ import {
   substitute,
 } from "@swarm/core";
 import type * as handler from "@swarm/core/handler";
+import { MessageTooLargeError } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
 import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 
@@ -118,7 +119,39 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
       persistMessage: (message) => {
-        ctx.messages.append(message);
+        try {
+          ctx.messages.append(message);
+          return;
+        } catch (err) {
+          if (!(err instanceof MessageTooLargeError)) throw err;
+          // Spill the full message to an artifact so rehydration retains
+          // a retrievable pointer, then persist a tiny placeholder whose
+          // JSON serialisation comfortably fits under the 1 MiB message
+          // cap. Dropping the message entirely would break the transcript
+          // contract; crashing the handler would turn an oversized agent
+          // turn into a failed run.
+          let spillKey: string | undefined;
+          try {
+            spillKey = `__msg_spill_${Date.now()}`;
+            ctx.artifacts.put(spillKey, JSON.stringify(message), "application/json");
+          } catch {
+            spillKey = undefined;
+          }
+          const detail = spillKey
+            ? `[message too large (${err.sizeBytes} bytes); spilled to artifact ${spillKey}]`
+            : `[message too large (${err.sizeBytes} bytes); spill failed]`;
+          void emit("agent.warning", { message: detail });
+          try {
+            ctx.messages.append({
+              role: message.role,
+              content: [{ type: "text", text: detail }],
+              timestamp: (message as { timestamp?: number }).timestamp ?? Date.now(),
+            } as AgentMessage);
+          } catch {
+            // Placeholder somehow also over-limit — drop silently, the
+            // warning event already landed.
+          }
+        }
       },
     });
 
