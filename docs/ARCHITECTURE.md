@@ -9,12 +9,12 @@
 ## 0. Context and decisions
 
 ### What we're committing to
-- **Single coordination surface: one SQLite database.** All state, events, queue, locks, artifacts. Two processes (daemon, web server) both read and write. WAL mode handles multi-process access.
+- **Single coordination surface: one SQLite database.** All state, events, queue, locks, and artifact metadata. Two processes (daemon, web server) both read and write. WAL mode handles multi-process access. Artifact *content* lives on the filesystem under `blobsDir`, keyed by sha256 — keeping raw bytes out of the WAL.
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
 - **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
 - **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `yield_hitl`, the executor emits `fact.run_paused_hitl`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
-- **Content-addressed blobs with sha256.** Tool outputs never inline in event payloads. Handlers write raw content to content-addressed `blobs`; events carry a ref + bounded preview.
+- **Content-addressed blobs on disk.** Tool outputs never inline in event payloads or the WAL. Handlers write raw content to `<blobsDir>/<first2>/<sha256>`; a metadata row in `blobs` points at it. Events carry a ref + bounded preview. File-then-row commit ordering: a crash can leave orphan files (GC sweeps), never dangling rows.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
 - **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs.
@@ -31,7 +31,7 @@
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay | `SideEffectEnvelope.idempotencyKey`; startup sweep emits `fact.run_quarantined` |
 | **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
 | **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
-| **I8** | Raw tool output addressed by sha256 in `blobs`; artifacts are named refs scoped by `(run, node, iteration, key)` | Store API; handlers cannot emit raw content as fact payload |
+| **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)` | Store API writes file→row in that order so orphans are always files, never dangling rows |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages ≤ 1 MiB | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
 
@@ -125,7 +125,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
-- **Large BLOB page-split cascade** — `blobs` is **rowid** table; overflow pages handle big values efficiently. See §2.
+- **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
 - **Schema drift across long pauses** — `schema_version` pinned per run; daemon refuses to resume mismatches, emits `fact.run_halted { reason: "schema_drift" }`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
@@ -133,7 +133,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 
 ## 2. Schema
 
-All tables `STRICT`. All per-run tables cascade on run deletion. `WITHOUT ROWID` only on narrow rows; **`blobs` is a rowid table** to benefit from overflow pages for large BLOBs.
+All tables `STRICT`, all `WITHOUT ROWID`. Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
 
 ```sql
 -- Pragmas applied on every connection open
@@ -212,13 +212,12 @@ CREATE TABLE messages (                           -- append-mostly; never rewrit
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE blobs (                              -- content-addressed; ROWID table for BLOB overflow
-  sha256 TEXT NOT NULL UNIQUE,
-  content BLOB NOT NULL,
+-- Metadata only: bytes live at `<blobsDir>/<first2>/<sha256>` on disk.
+CREATE TABLE blobs (
+  sha256 TEXT PRIMARY KEY,
   size_bytes INTEGER NOT NULL,
   created_at INTEGER NOT NULL
-) STRICT;
-CREATE INDEX idx_blobs_sha ON blobs(sha256);
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE artifacts (                          -- per-(run,node,iteration) named refs
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -245,8 +244,8 @@ CREATE TABLE daemon_lock (
 **Size targets:**
 - `run_state` row: ~500 bytes; thousands of rows negligible.
 - `events` row: ~300 bytes; partial indexes small.
-- `messages` rows: variable, bounded by LLM message size.
-- `blobs`: up to 16MB per row; overflow pages handle efficiently on rowid table.
+- `messages` rows: ≤ 1 MiB per row (enforced; large values spill through `ctx.artifacts.put`).
+- `blobs` row: ~100 bytes (metadata only). Content files up to 16 MiB apiece live under `blobsDir`.
 
 ---
 

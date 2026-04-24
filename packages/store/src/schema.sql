@@ -83,15 +83,16 @@ CREATE TABLE IF NOT EXISTS messages (
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 
--- rowid table so large BLOBs live on overflow pages, not in the PK B-tree.
+-- Blob metadata only — the bytes live on the filesystem under the store's
+-- `blobsDir`, keyed by sha256. Keeping raw content out of SQLite keeps the
+-- WAL small under large-artifact workloads; the `blobs` row + content file
+-- are committed in that order so crashes leak orphan files (GC sweeps),
+-- never dangling row pointers.
 CREATE TABLE IF NOT EXISTS blobs (
-  sha256 TEXT NOT NULL UNIQUE,
-  content BLOB NOT NULL,
+  sha256 TEXT PRIMARY KEY,
   size_bytes INTEGER NOT NULL,
   created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_blobs_sha ON blobs(sha256);
+) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS artifacts (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,

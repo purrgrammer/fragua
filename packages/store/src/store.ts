@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { BlobFS } from "./blob-fs.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
@@ -62,11 +65,18 @@ type CommitListener = (runId: string, seq: number) => void;
 
 export interface SqliteStoreOpts {
   path?: string;
+  /** Directory for content-addressed blob files. Defaults to
+   * `<dirname(path)>/blobs` for file-backed DBs; for `:memory:` a fresh
+   * tmpdir is created and torn down on `close()`. */
+  blobsDir?: string;
   now?: () => number;
 }
 
 export class SqliteStore implements IEventStore {
   private readonly db: Database;
+  private readonly blobs: BlobFS;
+  private readonly blobsDirOwned: boolean;
+  private readonly blobsDir: string;
   private readonly now: () => number;
   private readonly listeners = new Set<CommitListener>();
   private readonly metrics = new Metrics();
@@ -83,6 +93,18 @@ export class SqliteStore implements IEventStore {
     applyPragmas(this.db);
     migrate(this.db);
     this.now = opts.now ?? (() => Date.now());
+
+    if (opts.blobsDir != null) {
+      this.blobsDir = opts.blobsDir;
+      this.blobsDirOwned = false;
+    } else if (path === ":memory:") {
+      this.blobsDir = mkdtempSync(join(tmpdir(), "swarm-blobs-"));
+      this.blobsDirOwned = true;
+    } else {
+      this.blobsDir = join(dirname(path), "blobs");
+      this.blobsDirOwned = false;
+    }
+    this.blobs = new BlobFS(this.blobsDir);
   }
 
   // ─────────────── Writes ───────────────
@@ -491,13 +513,18 @@ export class SqliteStore implements IEventStore {
     const now = this.now();
     const bytes = content.byteLength;
 
+    // File-then-row: write the content-addressed file before the DB row
+    // points at it. A crash between rename and INSERT leaves an orphan
+    // file; the `blobs` row never references missing content.
+    this.blobs.put(sha, content);
+
     this.writeTxn(() => {
       this.db
         .query(
-          `INSERT OR IGNORE INTO blobs (sha256, content, size_bytes, created_at)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO blobs (sha256, size_bytes, created_at)
+           VALUES (?, ?, ?)`,
         )
-        .run(sha, content, bytes, now);
+        .run(sha, bytes, now);
       this.db
         .query(
           `INSERT INTO artifacts
@@ -524,11 +551,10 @@ export class SqliteStore implements IEventStore {
     if (ref == null) {
       throw new Error(`artifact not found: ${scope.runId}/${scope.nodeId}#${scope.iteration}:${scope.key}`);
     }
-    const blob = this.db
-      .query<{ content: Uint8Array }, [string]>("SELECT content FROM blobs WHERE sha256 = ?")
-      .get(ref.sha256);
-    if (blob == null) throw new Error(`blob missing for sha ${ref.sha256}`);
-    return blob.content;
+    if (!this.blobs.has(ref.sha256)) {
+      throw new Error(`blob file missing for sha ${ref.sha256}`);
+    }
+    return this.blobs.get(ref.sha256);
   }
 
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null {
@@ -733,8 +759,10 @@ export class SqliteStore implements IEventStore {
 
   gcBlobs(maxRows?: number): { deleted: number } {
     const limit = maxRows ?? 1000;
-    const res = this.db
-      .query<{ n: number }, [number]>(
+    // Pass 1: drop `blobs` rows with no artifact referent. RETURNING feeds
+    // the file-delete pass so row-without-file is impossible mid-sweep.
+    const orphans = this.db
+      .query<{ sha256: string }, [number]>(
         `WITH orphans AS (
            SELECT b.sha256
              FROM blobs b
@@ -744,15 +772,38 @@ export class SqliteStore implements IEventStore {
          )
          DELETE FROM blobs
           WHERE sha256 IN (SELECT sha256 FROM orphans)
-        RETURNING 1 AS n`,
+        RETURNING sha256`,
       )
       .all(limit);
-    return { deleted: res.length };
+    for (const row of orphans) this.blobs.delete(row.sha256);
+
+    // Pass 2: remove blob files with no matching row. Catches files left
+    // behind when a row was deleted directly (cascade) or when a crash
+    // between put() and INSERT orphaned the file. Bounded by the same
+    // per-sweep limit to keep tail latency predictable.
+    let extraDeleted = 0;
+    const budget = limit - orphans.length;
+    if (budget > 0) {
+      const shas = this.blobs.listAllShas();
+      for (const sha of shas) {
+        if (extraDeleted >= budget) break;
+        const row = this.db
+          .query<{ sha256: string }, [string]>("SELECT sha256 FROM blobs WHERE sha256 = ?")
+          .get(sha);
+        if (row == null) {
+          this.blobs.delete(sha);
+          extraDeleted++;
+        }
+      }
+    }
+
+    return { deleted: orphans.length + extraDeleted };
   }
 
   close(): void {
     this.listeners.clear();
     this.db.close();
+    if (this.blobsDirOwned) this.blobs.destroy();
   }
 
   // ─────────────── Internals ───────────────

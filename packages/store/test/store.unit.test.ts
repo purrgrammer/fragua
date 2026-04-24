@@ -1,4 +1,6 @@
+import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import type { BlobFS } from "../src/blob-fs.ts";
 import {
   ArtifactTooLargeError,
   ConcurrencyError,
@@ -565,14 +567,9 @@ describe("SqliteStore — gcBlobs", () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const ref = store.putArtifact({ runId, nodeId: "n", iteration: 0, key: "k" }, new TextEncoder().encode("keep"));
-    // Inject an orphan blob directly.
-    const db = (store as unknown as { db: import("bun:sqlite").Database }).db;
-    db.query("INSERT INTO blobs (sha256, content, size_bytes, created_at) VALUES (?, ?, ?, ?)").run(
-      "orphan-sha",
-      new Uint8Array([1, 2, 3]),
-      3,
-      1,
-    );
+    // Inject an orphan blob row directly.
+    const db = (store as unknown as { db: Database }).db;
+    db.query("INSERT INTO blobs (sha256, size_bytes, created_at) VALUES (?, ?, ?)").run("orphan-sha", 3, 1);
 
     const { deleted } = store.gcBlobs();
     expect(deleted).toBeGreaterThanOrEqual(1);
@@ -583,6 +580,17 @@ describe("SqliteStore — gcBlobs", () => {
       .map((r) => r.sha256);
     expect(remain).toContain(ref.sha256);
     expect(remain).not.toContain("orphan-sha");
+    store.close();
+  });
+
+  test("sweeps orphan blob files with no matching row", async () => {
+    const store = freshStore();
+    const blobs = (store as unknown as { blobs: BlobFS }).blobs;
+    const stray = "a".repeat(64);
+    blobs.put(stray, new Uint8Array([9, 9, 9]));
+    expect(blobs.has(stray)).toBe(true);
+    store.gcBlobs();
+    expect(blobs.has(stray)).toBe(false);
     store.close();
   });
 });
