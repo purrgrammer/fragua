@@ -32,7 +32,7 @@
 | **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
 | **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
 | **I8** | Raw tool output addressed by sha256 in `blobs`; artifacts are named refs scoped by `(run, node, iteration, key)` | Store API; handlers cannot emit raw content as fact payload |
-| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`) | Handler API exposes `messages.append()` and `artifacts.put()` separately |
+| **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages ≤ 1 MiB | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
 
 ---
@@ -582,6 +582,7 @@ HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in eith
 | `MAX_EVENT_PAYLOAD_BYTES` | 4096 | `events.payload CHECK` |
 | `MAX_ROUTING_BYTES` | 8192 | `run_state.routing CHECK` |
 | `MAX_BLOB_BYTES` | 16 * 1024 * 1024 | Store module; throws `ArtifactTooLargeError` |
+| `MAX_MESSAGE_CONTENT_BYTES` | 1024 * 1024 | `messages.content CHECK` + store pre-check throws `MessageTooLargeError` |
 | `MAX_PREVIEW_CHARS` | 512 | Handler convention |
 | `MAX_CONCURRENT_RUNS` | 8 (configurable) | `claimNextRun` |
 | `LOCK_TTL_MS` | 30000 | Daemon lock reclaim |

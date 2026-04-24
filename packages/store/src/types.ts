@@ -358,11 +358,22 @@ export class PayloadTooLargeError extends Error {
   }
 }
 
+export class MessageTooLargeError extends Error {
+  constructor(
+    public readonly sizeBytes: number,
+    public readonly max: number,
+  ) {
+    super(`message too large: ${sizeBytes} > ${max} — spill via ctx.artifacts.put`);
+    this.name = "MessageTooLargeError";
+  }
+}
+
 // ─────────────── Size bounds ───────────────
 
 export const MAX_EVENT_PAYLOAD_BYTES = 4096;
 export const MAX_ROUTING_BYTES = 8192;
 export const MAX_BLOB_BYTES = 16 * 1024 * 1024;
+export const MAX_MESSAGE_CONTENT_BYTES = 1024 * 1024;
 export const MAX_PREVIEW_CHARS = 512;
 
 // ─────────────── Store interface ───────────────

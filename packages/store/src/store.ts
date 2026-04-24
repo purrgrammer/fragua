@@ -25,8 +25,10 @@ import {
   type IntentEvent,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
+  MAX_MESSAGE_CONTENT_BYTES,
   MAX_ROUTING_BYTES,
   type Message,
+  MessageTooLargeError,
   type ObservabilityEvent,
   PayloadTooLargeError,
   type RunMetrics,
@@ -388,6 +390,13 @@ export class SqliteStore implements IEventStore {
   // ─────────────── Messages ───────────────
 
   appendMessage(runId: string, row: Omit<Message, "runId" | "ordinal">): { ordinal: number } {
+    // Pre-check before entering the transaction so the caller sees a typed
+    // error rather than a CHECK constraint failure from SQLite. The schema
+    // CHECK is defence-in-depth for any path that bypasses this method.
+    const serialized = JSON.stringify(row.content);
+    if (serialized.length >= MAX_MESSAGE_CONTENT_BYTES) {
+      throw new MessageTooLargeError(serialized.length, MAX_MESSAGE_CONTENT_BYTES);
+    }
     let ordinal = 0;
     this.writeTxn(() => {
       const max = this.db
@@ -399,7 +408,7 @@ export class SqliteStore implements IEventStore {
           `INSERT INTO messages (run_id, ordinal, content, node_id, iteration)
            VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(runId, ordinal, JSON.stringify(row.content), row.nodeId, row.iteration ?? 0);
+        .run(runId, ordinal, serialized, row.nodeId, row.iteration ?? 0);
     });
     return { ordinal };
   }

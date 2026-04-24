@@ -7,7 +7,9 @@ import {
   type IntentEvent,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
+  MAX_MESSAGE_CONTENT_BYTES,
   MAX_ROUTING_BYTES,
+  MessageTooLargeError,
   PayloadTooLargeError,
 } from "../src/index.ts";
 import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
@@ -429,6 +431,41 @@ describe("SqliteStore — messages", () => {
     expect(rows.map((r) => r.content.role)).toEqual(["user", "assistant"]);
     expect(rows[0]?.content).toMatchObject({ role: "user", content: [{ type: "text", text: "hi" }] });
     expect(rows[1]?.content).toMatchObject({ role: "assistant", content: [{ type: "text", text: "hello" }] });
+    store.close();
+  });
+});
+
+describe("SqliteStore — message size bound", () => {
+  test(`appendMessage throws MessageTooLargeError at ${MAX_MESSAGE_CONTENT_BYTES} bytes`, async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    // Build a message whose JSON-serialized size exceeds the cap. The
+    // inner text field is filler; the role/content shape is irrelevant for
+    // the size check.
+    const filler = "x".repeat(MAX_MESSAGE_CONTENT_BYTES);
+    expect(() =>
+      store.appendMessage(runId, {
+        content: { role: "user", content: [{ type: "text", text: filler }], timestamp: 1 },
+        nodeId: null,
+        iteration: 0,
+      }),
+    ).toThrow(MessageTooLargeError);
+    // Nothing was inserted.
+    expect(store.getMessages(runId)).toHaveLength(0);
+    store.close();
+  });
+
+  test("messages just under the cap succeed", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    // Leave headroom for JSON overhead (role, timestamp, content wrapper).
+    const filler = "x".repeat(MAX_MESSAGE_CONTENT_BYTES - 256);
+    store.appendMessage(runId, {
+      content: { role: "user", content: [{ type: "text", text: filler }], timestamp: 1 },
+      nodeId: null,
+      iteration: 0,
+    });
+    expect(store.getMessages(runId)).toHaveLength(1);
     store.close();
   });
 });

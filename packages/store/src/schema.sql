@@ -68,10 +68,15 @@ CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, run_id, seq);
 -- `json_valid` catches writers that forget to stringify; `role` is
 -- extracted from the message JSON into a real column so UI filters and
 -- debug queries don't pay `json_extract` on hot paths.
+-- `length(content)` is bytes for BLOB and characters for TEXT; here content is
+-- TEXT, so the cap is in characters. 1 MiB of characters is far beyond any
+-- legitimate LLM turn — anything over that must spill to artifacts via
+-- `ctx.artifacts.put` (which is content-addressed and doesn't ride the WAL
+-- for every write).
 CREATE TABLE IF NOT EXISTS messages (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL,
-  content TEXT NOT NULL CHECK (json_valid(content)),
+  content TEXT NOT NULL CHECK (json_valid(content) AND length(content) < 1048576),
   role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
