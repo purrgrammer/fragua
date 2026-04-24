@@ -23,6 +23,12 @@ export interface BuildContextOpts {
   llm: LlmClient;
   http: HttpClient;
   tools: ToolRegistry;
+  /** Hard-filter applied to `tools` before it reaches `ctx.tools`. Sourced
+   * from `node.attrs.allowed_tools` / `denied_tools`; when set, a handler
+   * that calls `ctx.tools.get(name)` for a non-allowed tool gets the same
+   * error as for an unregistered tool. */
+  allowedTools?: readonly string[];
+  deniedTools?: readonly string[];
   recorder: SideEffectRecorder;
   /** Prompt-substitution args ($ARGUMENTS, $RUN_ID, etc.). Empty record
    * when the caller has no positional input. Passed through to
@@ -103,6 +109,14 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     emitObs(type, payload);
   };
 
+  const narrowOpts: { allow?: readonly string[]; deny?: readonly string[] } = {};
+  if (opts.allowedTools !== undefined) narrowOpts.allow = opts.allowedTools;
+  if (opts.deniedTools !== undefined) narrowOpts.deny = opts.deniedTools;
+  const scopedTools =
+    opts.allowedTools !== undefined || opts.deniedTools !== undefined
+      ? opts.tools.select(narrowOpts)
+      : opts.tools;
+
   const ctx: HandlerContext = {
     runId,
     nodeId,
@@ -111,7 +125,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     routing: opts.routing,
     llm: opts.llm,
     http: opts.http,
-    tools: opts.tools,
+    tools: scopedTools,
     messages,
     artifacts,
     externalCall,

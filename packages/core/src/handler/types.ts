@@ -60,6 +60,13 @@ export interface ToolRegistry {
   get<A = unknown, R = unknown>(name: string): ToolDescriptor<A, R>;
   has(name: string): boolean;
   list(): string[];
+  /** Return a narrowed view. `allow` is an allowlist; `deny` is a blocklist
+   * applied after allow. Tools outside the narrowed view are not visible to
+   * `has`, `get`, or `list` — `get("bash")` on a registry narrowed to
+   * `{ allow: ["read"] }` throws `unknown tool: bash`. This is the hard
+   * filter that `node.attrs.allowed_tools` hangs off at the HandlerContext
+   * boundary. */
+  select(opts: { allow?: readonly string[]; deny?: readonly string[] }): ToolRegistry;
 }
 
 export interface MessagesApi {

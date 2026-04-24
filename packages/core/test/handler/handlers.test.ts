@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { makeWaitHumanHandler } from "../../src/handler/handlers/wait-human.ts";
-import type { HandlerContext } from "../../src/handler/types.ts";
+import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
+
+const emptyRegistry: ToolRegistry = {
+  get: () => {
+    throw new Error("no tools");
+  },
+  has: () => false,
+  list: () => [],
+  select: () => emptyRegistry,
+};
 
 function stubCtx(
   overrides: Partial<HandlerContext> & { nodeId?: string; routing?: Record<string, unknown> } = {},
@@ -13,13 +22,7 @@ function stubCtx(
     routing: overrides.routing ?? {},
     llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
     http: { fetch: async () => new Response("") },
-    tools: {
-      get: () => {
-        throw new Error("no tools");
-      },
-      has: () => false,
-      list: () => [],
-    },
+    tools: emptyRegistry,
     messages: {
       append: () => ({ ordinal: 0 }),
       recent: () => [],

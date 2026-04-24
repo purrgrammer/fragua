@@ -328,6 +328,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         },
       };
 
+      // Hard-filter ctx.tools by the node's allowed_tools / denied_tools.
+      // A handler that reaches for `ctx.tools.get("bash")` on a node that
+      // didn't allow "bash" gets `unknown tool: bash`, same as for an
+      // unregistered tool. The filter lives at HandlerContext construction
+      // so every handler kind (codergen, tool, parallel branches, custom)
+      // respects the same structural enforcement.
+      const graph = graphFor(state.workflowSha);
+      const nodeAttrs = graph?.nodes[currentNode]?.attrs;
+      const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
+        ? (nodeAttrs.allowed_tools as readonly string[])
+        : undefined;
+      const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
+        ? (nodeAttrs.denied_tools as readonly string[])
+        : undefined;
+
       const ctxOpts: core.BuildContextOpts = {
         runId,
         nodeId: currentNode,
@@ -355,6 +370,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
           });
         },
       };
+      if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
+      if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
       if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
       if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
       if (runEnv !== undefined) ctxOpts.env = runEnv;

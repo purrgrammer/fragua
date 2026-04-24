@@ -3,10 +3,19 @@
 import { describe, expect, test } from "bun:test";
 import { makeFanInHandler } from "../../src/handler/handlers/fan-in.ts";
 import { makeParallelHandler, type ParallelBranchResult } from "../../src/handler/handlers/parallel.ts";
-import type { Handler, HandlerContext, HandlerSpec } from "../../src/handler/types.ts";
+import type { Handler, HandlerContext, HandlerSpec, ToolRegistry } from "../../src/handler/types.ts";
 
 type MutableHandlerContext = HandlerContext & {
   __emitted: { type: string; payload: Record<string, unknown> }[];
+};
+
+const emptyRegistry: ToolRegistry = {
+  get: () => {
+    throw new Error("no tools");
+  },
+  has: () => false,
+  list: () => [],
+  select: () => emptyRegistry,
 };
 
 function stubCtx(overrides: Partial<HandlerContext> = {}): MutableHandlerContext {
@@ -19,13 +28,7 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): MutableHandlerContext
     routing: overrides.routing ?? {},
     llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
     http: { fetch: async () => new Response("") },
-    tools: {
-      get: () => {
-        throw new Error("no tools");
-      },
-      has: () => false,
-      list: () => [],
-    },
+    tools: emptyRegistry,
     messages: {
       append: () => ({ ordinal: 0 }),
       recent: () => [],

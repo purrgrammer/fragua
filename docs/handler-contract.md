@@ -190,11 +190,26 @@ system-prompt catalog). This is the "less is more" directive: agents
 spend tokens on thinking, not on picking between seven tools that all
 do variants of the same thing.
 
-Narrowing per-node is structural. A node's `allowed_tools = "read, bash"`
-filters the agent's tool set at construction time via
-`ToolRegistry.select` — the agent literally does not see `edit` or
-`write` in that call. Prompt prose that says "you have read-only tools"
-is descriptive; the enforcement is the narrowing.
+Narrowing per-node is a hard filter, not a convention. A node's
+`allowed_tools = "read, bash"` applies at two boundaries, both built
+into the framework:
+
+1. **`ctx.tools`** — the executor calls `ToolRegistry.select({ allow, deny })`
+   before constructing the HandlerContext. A handler that reaches for
+   `ctx.tools.get("write")` on a read-only node gets `unknown tool: write`,
+   the same error it would get for an unregistered tool. The narrowed
+   registry also rejects `register()` so a handler can't smuggle a tool
+   back in.
+2. **Agent tool surface** — the codergen backend calls `select(...)` on its
+   workspace ToolRegistry before passing the resulting array to pi-ai, so
+   the LLM literally does not see disallowed tools in its tool menu. If
+   `allowed_tools` names zero registered tools, the backend fails the
+   call loudly rather than handing the model an empty menu.
+
+Parallel branches rely on this narrowing to stay read-only: a branch
+node with `allowed_tools = "read"` cannot invoke `bash` / `write` /
+`edit` at either boundary. Prompt prose that says "you have read-only
+tools" is descriptive; the enforcement is the narrowing.
 
 Custom tools can be added later by `ToolRegistry.register()`-ing an
 additional `Tool` at daemon startup. They share the same bare-identifier

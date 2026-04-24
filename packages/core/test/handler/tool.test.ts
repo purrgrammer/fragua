@@ -7,12 +7,21 @@
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
 import { makeToolHandler, runWithBun, type SpawnFn, type ToolRunResult } from "../../src/handler/handlers/tool.ts";
-import type { HandlerContext, SideEffectRecorder } from "../../src/handler/types.ts";
+import type { HandlerContext, SideEffectRecorder, ToolRegistry } from "../../src/handler/types.ts";
 
 interface ArtifactRecord {
   key: string;
   content: string;
 }
+
+const emptyRegistry: ToolRegistry = {
+  get: () => {
+    throw new Error("no tools");
+  },
+  has: () => false,
+  list: () => [],
+  select: () => emptyRegistry,
+};
 
 function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
   __emitted: { type: string; payload: Record<string, unknown> }[];
@@ -37,13 +46,7 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     routing: overrides.routing ?? {},
     llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
     http: { fetch: async () => new Response("") },
-    tools: {
-      get: () => {
-        throw new Error("no tools");
-      },
-      has: () => false,
-      list: () => [],
-    },
+    tools: emptyRegistry,
     messages: {
       append: () => ({ ordinal: 0 }),
       recent: () => [],
