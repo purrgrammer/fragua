@@ -49,6 +49,11 @@ export interface DaemonMainOpts {
   shutdownDrainMs?: number;
   /** Forwarded into executor's per-context `makeHttpClient`. */
   defaultHttpTimeoutMs?: number;
+  /** Run-level handler-dispatch ceiling. A pathological workflow that
+   * loops without ever aborting halts with `reason: "max_loops"` once
+   * this many handlers have run for the same run_id. Defaults to the
+   * executor's built-in (1000). */
+  maxLoops?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -122,6 +127,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.leakGraceMs !== undefined) executorOpts.leakGraceMs = opts.leakGraceMs;
       if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;
       if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;
+      if (opts.maxLoops !== undefined) executorOpts.maxLoops = opts.maxLoops;
       await runExecutor(executorOpts);
 
       registry.tripAll(new Error("shutdown"));

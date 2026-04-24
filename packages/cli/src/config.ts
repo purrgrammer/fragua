@@ -40,6 +40,12 @@ export interface SwarmConfig {
   /** Max concurrent runs the daemon will claim from its queue.
    * CLI `--concurrency` overrides this. Default 8 when unset. */
   concurrency?: number;
+  /** Per-run ceiling on handler dispatches. A workflow that loops
+   * indefinitely without aborting halts with `reason: "max_loops"` once
+   * this many dispatches have run on the same run. Absent = executor
+   * default (1000). Raise it for long-running HITL workflows that
+   * legitimately iterate through many nodes across many human turns. */
+  max_loops?: number;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the
    * well-known paths (`.agents/skills`, `.claude/skills`
    * under both project and user scopes). See `packages/workspace/src/skills`

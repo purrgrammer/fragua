@@ -105,6 +105,49 @@ describe("P5 — startup sweep requeues running runs", () => {
   });
 });
 
+describe("startDaemon — maxLoops plumbed through to executor", () => {
+  test("maxLoops forwarded from DaemonMainOpts → runExecutor halts a looping run", async () => {
+    const r = rig();
+    closers.push(() => r.store.close());
+    // Self-looping handler: every dispatch transitions back to "start".
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "start", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rml", "start");
+
+    const shutdown = new AbortController();
+    const handle = startDaemon({
+      store: r.store,
+      dispatcher: r.dispatcher,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      pid: 9911,
+      hostname: "hostMaxLoops",
+      maxConcurrentRuns: 1,
+      maxLoops: 2,
+      shutdownSignal: shutdown.signal,
+    });
+
+    // Poll the run state; halt should fire within a handful of ticks.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const s = r.store.getState("rml");
+      if (s?.status === "halted") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    shutdown.abort();
+    await handle.done.catch(() => undefined);
+
+    const final = r.store.getState("rml")!;
+    expect(final.status).toBe("halted");
+    const halt = r.store.getEvents("rml").find((e) => e.type === "fact.run_halted")!;
+    expect((halt.payload as { reason: string }).reason).toBe("max_loops");
+  });
+});
+
 describe("P9 — daemon singleton", () => {
   test("a second daemon with a fresh heartbeat is refused", async () => {
     const r = rig();
