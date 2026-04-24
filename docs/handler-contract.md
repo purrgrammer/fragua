@@ -1,6 +1,6 @@
 # Handler contract
 
-How to write a handler for a swarm node. Companion to [REARCHITECTURE.md](./REARCHITECTURE.md) §5; this doc is the practical guide.
+How to write a handler for a swarm node. Companion to [ARCHITECTURE.md](./ARCHITECTURE.md) §5; this doc is the practical guide.
 
 ---
 

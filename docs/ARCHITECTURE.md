@@ -389,7 +389,7 @@ export type HandlerContext = Readonly<{
     ref(key: string): ArtifactRef | null;
     getFrom(scope: ArtifactScope): Uint8Array;
   };
-  externalCall: <T>(fn: (key: string) => Promise<T>, argsHash: string, attempt?: number) => Promise<T>;
+  externalCall: <T>(params: { toolName: string; argsHash: string; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
   // No direct fetch, filesystem, DB, or process access.
 }>;
 
@@ -588,7 +588,7 @@ HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in eith
 | `HEARTBEAT_INTERVAL_MS` | 5000 | Supervisor fiber |
 | `SUPERVISOR_TICK_MS` | 50 | Supervisor fiber |
 | `SSE_POLL_MS` | 100 | Web SSE handler |
-| `LEAK_GRACE_MS` | 5000 | Hard timeout grace |
+| `LEAK_GRACE_MS` | 10000 | Hard timeout grace |
 | `ABORT_LOOP_CEILING` | 5 | Reducer → `RUN_HALTED` |
 
 ---
