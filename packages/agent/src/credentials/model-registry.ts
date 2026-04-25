@@ -15,6 +15,14 @@
 //
 // Swarm-specific deltas:
 // - `getAgentDir()` → swarm's `resolveModelsPath()`.
+// - Constructor auto-wires `AuthStorage.setFallbackResolver` so custom
+//   providers declared in models.json surface through every AuthStorage
+//   touchpoint (`hasAuth`, `describeAuthSource`, `getApiKey`). Pi's
+//   call sites all go through `getApiKeyAndHeaders` which already
+//   reads the registry directly; swarm's daemon threads a bare
+//   `getApiKey(provider)` callback into the agent backend, so without
+//   the wire a models.json-only provider looks uncredentialed end-
+//   to-end.
 // - Otherwise a near-verbatim port; extension registration (custom
 //   streamSimple + OAuth provider) preserved since summariser /
 //   custom-provider flows may need it.
@@ -42,6 +50,7 @@ import type { AuthStorage } from "./auth-storage.ts";
 import { resolveModelsPath } from "./paths.ts";
 import {
   clearConfigValueCache,
+  resolveConfigValue,
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
@@ -293,6 +302,13 @@ export class ModelRegistry {
     private modelsJsonPath: string | undefined,
   ) {
     this.loadModels();
+    authStorage.setFallbackResolver((provider) => this.resolveCustomProviderApiKey(provider));
+  }
+
+  private resolveCustomProviderApiKey(provider: string): string | undefined {
+    const cfg = this.providerRequestConfigs.get(provider);
+    if (!cfg?.apiKey) return undefined;
+    return resolveConfigValue(cfg.apiKey);
   }
 
   /** File-backed. Reads ~/.swarm/models.json (with pi fallback). */

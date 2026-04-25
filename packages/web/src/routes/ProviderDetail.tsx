@@ -74,41 +74,39 @@ export function ProviderDetail(): JSX.Element {
       <section>
         <h3 className="font-heading text-sm font-semibold">Models ({data.models.length})</h3>
         <div className="mt-2 w-full min-w-0 overflow-x-auto">
-          <Table className="table-fixed" data-testid="models-table">
+          <Table data-testid="models-table">
             <TableHeader>
               <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead className="w-32">API</TableHead>
-                <TableHead className="w-28">Context</TableHead>
-                <TableHead className="w-28">Max out</TableHead>
-                <TableHead className="w-36">Cost (in/out)</TableHead>
-                <TableHead className="w-20">Inputs</TableHead>
-                <TableHead className="w-20">Reason</TableHead>
+                <TableHead className="min-w-[14rem]">ID</TableHead>
+                <TableHead>API</TableHead>
+                <TableHead>Context</TableHead>
+                <TableHead>Max out</TableHead>
+                <TableHead>Cost (in/out)</TableHead>
+                <TableHead>Inputs</TableHead>
+                <TableHead>Reason</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.models.map((m) => (
                 <TableRow key={m.id} data-testid={`model-row-${m.id}`}>
-                  <TableCell className="max-w-0 truncate font-mono text-xs" title={m.id}>
+                  <TableCell className="whitespace-nowrap font-mono text-xs" title={m.id}>
                     {m.id}
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{m.api}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{formatTokens(m.contextWindow)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{formatTokens(m.maxTokens)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{m.api}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTokens(m.contextWindow)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">{formatTokens(m.maxTokens)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     ${m.cost.input.toFixed(2)} / ${m.cost.output.toFixed(2)}
                   </TableCell>
-                  <TableCell className="text-xs">{m.input.join("+")}</TableCell>
-                  <TableCell className="text-xs">{m.reasoning ? "yes" : "—"}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">{m.input.join("+")}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">{m.reasoning ? "yes" : "—"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </div>
-        <p className="text-muted-foreground mt-2 text-xs">
-          Cost is USD per million tokens, from pi-ai's registry. Override stale values via{" "}
-          <code className="font-mono">~/.swarm/models.json</code> <code className="font-mono">modelOverrides</code>.
-        </p>
       </section>
     </section>
   );
