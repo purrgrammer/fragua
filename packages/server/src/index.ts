@@ -14,7 +14,7 @@ import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { providersRoutes } from "./routes/providers.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
-import { createRoutes as createStoreRoutes } from "./store/routes.ts";
+import { createRoutes as createStoreRoutes, type WorkflowModelValidator } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
 
 export interface ServerOptions {
@@ -41,7 +41,10 @@ export interface ServerOptions {
    * `(provider, model)` pair the provider registry doesn't recognise.
    * The CLI's `daemon` command wires in the real pi-ai-backed resolver;
    * tests can omit it or inject a stub. */
-  validateWorkflowModels?: import("./store/routes.ts").WorkflowModelValidator;
+  validateWorkflowModels?: WorkflowModelValidator;
+  /** Backpressure cap on queued runs. POST /runs returns 429 with a
+   * Retry-After header when the cap is met. Undefined = uncapped. */
+  maxQueuedRuns?: number;
   /** When set, mounts `/providers*` for credential management + model
    * listing. Omit in tests that don't exercise those routes. Both must
    * be the same pair wired into the daemon / summariser so the web UI
@@ -65,6 +68,7 @@ function buildApiApp(opts: ServerOptions): Hono {
       store: opts.store,
       ...(opts.preflightProviders !== undefined ? { preflightProviders: opts.preflightProviders } : {}),
       ...(opts.validateWorkflowModels !== undefined ? { validateWorkflowModels: opts.validateWorkflowModels } : {}),
+      ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
     }),
   );
   if (opts.authStorage && opts.modelRegistry) {

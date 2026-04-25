@@ -97,6 +97,13 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // providers are credentialed.
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
+  // Backpressure cap on `status='queued'` runs. Opt-in via env so a
+  // misconfigured client can't fill `run_state` indefinitely; default
+  // is uncapped (current behaviour). Non-positive / unparseable values
+  // are silently ignored — operators get an explicit knob without us
+  // having to validate it.
+  const maxQueuedRunsEnv = Number.parseInt(process.env["SWARM_MAX_QUEUED_RUNS"] ?? "", 10);
+  const maxQueuedRuns = Number.isFinite(maxQueuedRunsEnv) && maxQueuedRunsEnv > 0 ? maxQueuedRunsEnv : undefined;
   const app = createServer({
     cwd,
     store,
@@ -107,6 +114,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     validateWorkflowModels,
     authStorage,
     modelRegistry,
+    ...(maxQueuedRuns !== undefined ? { maxQueuedRuns } : {}),
     ...(webDistDir !== undefined ? { webDistDir } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections

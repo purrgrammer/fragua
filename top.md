@@ -23,7 +23,7 @@
 | 7 | 🟡 | Daemon health: server route exists, UI staleness banner does not | open |
 | 8 | 🟡 | Quarantine triage UI missing — operator must hand-craft `intent.unquarantine` | open |
 | 9 | 🟡 | ~~Timeout-leaked handlers keep running and burning tokens~~ | ✅ resolved |
-| 10 | 🟡 | No load-shed / `max_queued_runs` / backpressure at enqueue | open |
+| 10 | 🟡 | ~~No load-shed / `max_queued_runs` / backpressure at enqueue~~ | ✅ resolved |
 | 11 | 🟡 | No authN/Z on server endpoints | open |
 | 12 | 🟡 | ~~`onCommit` API is effectively dead code (only tests subscribe)~~ | ✅ resolved |
 | 13 | 🟡 | Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use | open |
@@ -155,15 +155,15 @@ The handler's signal was already aborted at `maxMs` via `AbortSignal.timeout(spe
 
 ---
 
-### 10. 🟡 No load-shed / backpressure
+### 10. ✅ ~~No load-shed / backpressure~~
 
-**Evidence**
-- `enqueueRun` succeeds unconditionally
-- No `max_queued_runs` config
-- Misconfigured client can fill `run_state` indefinitely
+**Resolution.** Added `ServerDeps.maxQueuedRuns` (and the matching `ServerOptions.maxQueuedRuns` on `createServer`). When set, `POST /runs` checks `runStateCounts().queued` and returns `429 { code: "queue_full" }` with `Retry-After: 30` once the cap is met. Default is uncapped (current behaviour preserved). The `serve` CLI reads `SWARM_MAX_QUEUED_RUNS` and passes it through, so operators flip a knob without flag plumbing. Queue depth was already on `/health.daemon.queued`.
 
-**Proposed approach**
-Add `MAX_QUEUED_RUNS` config (default 10000?), check at `POST /runs` and return 429 with `Retry-After`. Surface queue depth in `health`.
+Only `queued` runs count against the cap — `running` is bounded separately by `MAX_CONCURRENT_RUNS=8`.
+
+**Tests:** 2 new in `packages/server/test/store/routes.test.ts` — capped server returns 429 with the right body + header on overflow; uncapped server accepts past any threshold.
+
+**Files touched:** `packages/server/src/store/routes.ts`, `packages/server/src/index.ts`, `packages/cli/src/commands/serve.ts`, `packages/server/test/store/routes.test.ts`.
 
 ---
 
@@ -318,3 +318,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #6** Schema-version compat range. New `MIN_COMPATIBLE_SCHEMA_VERSION` paired with `CURRENT_SCHEMA_VERSION` defines an inclusive resume range; additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only and keep paused runs alive across deploys. Migration accepts the range, runs additive ALTER TABLEs, and updates the version row to CURRENT. Out-of-range still halts (drift below MIN, downgrade-refused above CURRENT). 6 new tests + extended P17. All 1143 tests green.
 - **2026-04-25 — #9** Timeout-leak budget + bug fix. Discovered while wiring the budget that the original leak detection was dead code: `timeoutReject(...).then(_ => leakedTimeout = true)` never fired because `.then` on the fulfillment branch of a rejecting promise is a no-op. Replaced with a sentinel-resolve so leaks are unambiguously detected. Added per-process LeakBudget with configurable cap (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires callback to `ctrl.abort()`. 2 new tests pin the under-limit and exactly-N-fires behavior. All 1145 tests green.
 - **2026-04-25 — #12** Deleted `onCommit` dead code. Zero callers (tests, daemon, server, agent, web — all clean). The in-process listener pattern can't cross the web → daemon process boundary anyway, so it would never have helped the supervisor it claimed to. ARCHITECTURE.md §4 updated with the rationale. Same 1145 tests green.
+- **2026-04-25 — #10** Queue-depth backpressure. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns`. Opt-in (default uncapped) via `ServerDeps.maxQueuedRuns` or the `SWARM_MAX_QUEUED_RUNS` env var read by `serve`. 2 new tests. All 1147 tests green.

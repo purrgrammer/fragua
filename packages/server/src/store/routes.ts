@@ -44,6 +44,16 @@ export interface ServerDeps {
    * resolver on startup.
    */
   validateWorkflowModels?: WorkflowModelValidator;
+  /**
+   * Backpressure cap on `status='queued'` runs. When the queue depth
+   * meets or exceeds this number, `POST /runs` returns 429 with a
+   * `Retry-After: 30` header instead of accepting the enqueue.
+   * `running` runs are NOT counted (those are bounded separately by the
+   * daemon's `maxConcurrentRuns`). Undefined = uncapped (current
+   * behaviour). Set this to bound the blast radius of a misconfigured
+   * client that otherwise fills `run_state` without limit.
+   */
+  maxQueuedRuns?: number;
 }
 
 const DEFAULT_SSE_POLL_MS = 100;
@@ -205,6 +215,19 @@ export function createRoutes(deps: ServerDeps): Hono {
       const check = deps.preflightProviders();
       if (!check.ok) {
         return c.json({ error: check.detail, code: "provider_unavailable" }, 400);
+      }
+    }
+    if (deps.maxQueuedRuns != null) {
+      const queued = deps.store.runStateCounts().queued;
+      if (queued >= deps.maxQueuedRuns) {
+        c.header("Retry-After", "30");
+        return c.json(
+          {
+            error: `queue full: ${queued} runs queued, cap is ${deps.maxQueuedRuns}`,
+            code: "queue_full",
+          },
+          429,
+        );
       }
     }
     const runId = body.runId ?? newRunId();

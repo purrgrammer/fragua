@@ -211,6 +211,36 @@ describe("POST /runs — enqueue", () => {
     expect("input" in state!.routing).toBe(false);
   });
 
+  test("queue-full backpressure: 429 with Retry-After when maxQueuedRuns is met", async () => {
+    // Build a fresh server with a small cap so we can drive it past.
+    const capped = createRoutes({ store, maxQueuedRuns: 2 });
+    const cReq = (method: string, path: string, body?: unknown): Promise<Response> => {
+      const init: RequestInit = { method };
+      if (body !== undefined) {
+        init.body = JSON.stringify(body);
+        init.headers = { "content-type": "application/json" };
+      }
+      return Promise.resolve(capped.fetch(new Request(`http://test${path}`, init)));
+    };
+
+    // Two enqueues fit; the third trips the cap.
+    expect((await cReq("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
+    expect((await cReq("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
+    const overflow = await cReq("POST", "/runs", { workflowSha: "wf" });
+    expect(overflow.status).toBe(429);
+    expect(overflow.headers.get("Retry-After")).toBe("30");
+    const body = (await overflow.json()) as { error: string; code: string };
+    expect(body.code).toBe("queue_full");
+    expect(body.error).toMatch(/queue full/i);
+  });
+
+  test("uncapped server (default) accepts past any threshold", async () => {
+    // baseline: same shape as the queue-full test, but without the cap.
+    expect((await req("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
+    expect((await req("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
+    expect((await req("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
+  });
+
   test("preflightProviders returning ok:false rejects with code=provider_unavailable", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });
