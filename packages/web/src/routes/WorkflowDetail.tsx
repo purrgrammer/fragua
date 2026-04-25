@@ -100,6 +100,7 @@ export function WorkflowDetail(): JSX.Element {
   }
 
   const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
+  const goal = graph?.attrs.goal;
 
   return (
     <section data-testid="workflow-detail" className="flex h-full w-full min-w-0 flex-col gap-4">
@@ -114,6 +115,11 @@ export function WorkflowDetail(): JSX.Element {
         >
           {detail.label ?? detail.name}
         </h2>
+        {goal && (
+          <p data-testid="workflow-detail-goal" className="mt-2 text-sw-sm text-sw-text">
+            {goal}
+          </p>
+        )}
         <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sw-xs text-sw-muted">
           <span>
             name: <code className="text-sw-text">{detail.name}</code>
