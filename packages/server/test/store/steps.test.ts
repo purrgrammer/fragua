@@ -157,6 +157,36 @@ describe("eventsToSteps", () => {
     expect(s!.finalText).toBe("");
   });
 
+  test("multiple cost.recorded events under one llm.start accumulate (not overwrite)", () => {
+    const events = [
+      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
+      ev("cost.recorded", 1100, {
+        nodeId: "n1",
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 500,
+        cost_usd: 0.001,
+        cache_read_tokens: 500,
+      }),
+      ev("cost.recorded", 1200, {
+        nodeId: "n1",
+        input_tokens: 50,
+        output_tokens: 200,
+        total_tokens: 250,
+        cost_usd: 0.005,
+        cache_read_tokens: 0,
+      }),
+    ];
+    const [s] = eventsToSteps(events);
+    expect(s!.cost).toEqual({
+      input_tokens: 50,
+      output_tokens: 200,
+      total_tokens: 750,
+      cost_usd: 0.006,
+      cache_read_tokens: 500,
+    });
+  });
+
   test("skills array is coerced safely, scope defaults to 'project' on unknown values", () => {
     const events = [
       ev("llm.start", 1000, {

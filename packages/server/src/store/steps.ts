@@ -152,7 +152,25 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
 
     if (ev.type === "cost.recorded") {
       const cost = costField(data);
-      if (cost) step.cost = cost;
+      if (cost) {
+        if (!step.cost) {
+          step.cost = cost;
+        } else {
+          // Accumulate across multiple cost.recorded events under the same llm.start.
+          step.cost.input_tokens += cost.input_tokens;
+          step.cost.output_tokens += cost.output_tokens;
+          step.cost.cost_usd += cost.cost_usd;
+          if (cost.cache_read_tokens !== undefined) {
+            step.cost.cache_read_tokens = (step.cost.cache_read_tokens ?? 0) + cost.cache_read_tokens;
+          }
+          if (cost.cache_write_tokens !== undefined) {
+            step.cost.cache_write_tokens = (step.cost.cache_write_tokens ?? 0) + cost.cache_write_tokens;
+          }
+          if (cost.total_tokens !== undefined) {
+            step.cost.total_tokens = (step.cost.total_tokens ?? 0) + cost.total_tokens;
+          }
+        }
+      }
     }
   }
 

@@ -15,7 +15,7 @@
 //   - Pure display; no mutation, no state beyond the fetch.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import { getProvider, getRunSteps, type ProviderModel, type StepSnapshot } from "../lib/api.ts";
 import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
@@ -141,30 +141,24 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
   const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
   const totalTokens = step.cost !== undefined ? (step.cost.total_tokens ?? inputTokens + outputTokens) : 0;
 
-  // usedTokens for the context ring: input (which occupies the context window).
-  // Fall back to totalTokens when we have no context window denominator.
-  const usedTokens = inputTokens || totalTokens;
+  // usedTokens for the context ring: total tokens sent to the model (input + cache reads).
+  // cache_read_tokens count against the context window just like fresh input.
+  const usedTokens = totalTokens || inputTokens + cacheReadTokens || 1;
   // If we have a known context window, use it; otherwise use usedTokens so the
   // ring shows 100% (informational, not misleading about capacity).
   const maxTokens = contextWindow && contextWindow > 0 ? contextWindow : usedTokens || 1;
-  const hasContextWindow = !!(contextWindow && contextWindow > 0);
 
   // modelId for tokenlens cost calculation (format: "provider:modelId").
   const tokenlensModelId = step.provider && step.model ? `${step.provider}:${step.model}` : undefined;
 
-  // Fix #2: controlled open state so clicking the trigger opens the card.
-  const [contextOpen, setContextOpen] = useState(false);
-  const handleContextClick = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
-    e.preventDefault(); // stop <details> toggle
-    setContextOpen((v) => !v);
-  }, []);
-  const handleContextKeyDown = useCallback((e: React.KeyboardEvent) => {
-    e.preventDefault();
+  // Stop the click from toggling the <details> element when interacting with the popover trigger.
+  const stopDetailsPropagation = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
   }, []);
 
-  // Fix #3: show circle when contextWindow is known and we have token data,
-  // regardless of whether cost_usd has been recorded yet.
-  const showContextCircle = hasContextWindow && (inputTokens > 0 || outputTokens > 0);
+  // Show the context circle whenever we have any token data recorded for this step.
+  // hasContextWindow controls whether the ring shows a meaningful fraction or just 100%.
+  const showContextCircle = step.cost !== undefined && (inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0);
 
   return (
     <details data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card">
@@ -175,13 +169,11 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
             <span key={m.key}>{m.node}</span>
           ))}
           {showContextCircle && (
-            // biome-ignore lint/a11y/noStaticElementInteractions: stop <details> toggle when interacting with the hover-card trigger
-            <span onClick={handleContextClick} onKeyDown={handleContextKeyDown}>
+            // biome-ignore lint/a11y/noStaticElementInteractions: stop <details> toggle when interacting with the popover trigger
+            <span onClick={stopDetailsPropagation} onKeyDown={stopDetailsPropagation}>
               <Context
                 maxTokens={maxTokens}
                 usedTokens={usedTokens}
-                open={contextOpen}
-                onOpenChange={setContextOpen}
                 usage={{
                   inputTokens,
                   outputTokens,
@@ -200,7 +192,6 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
                 }}
                 modelId={tokenlensModelId}
               >
-                {/* Fix #1: match surrounding text-xs metrics — strip Button padding/size */}
                 <ContextTrigger className="h-auto p-0 text-xs" />
                 <ContextContent>
                   <ContextContentHeader />
