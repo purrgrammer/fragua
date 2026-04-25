@@ -16,7 +16,7 @@
 |---|---|---|---|
 | 1 | 🔴 | ~~`externalCall` buffers intent in memory — hard-crash defeats orphan quarantine~~ | ✅ resolved |
 | 2 | 🔴 | ~~Replay semantics for non-external work undefined (artifacts silently overwrite, messages duplicate)~~ | ✅ resolved |
-| 3 | 🔴 | Intent fold lacks formal truth table for simultaneous combinations | open |
+| 3 | 🔴 | ~~Intent fold lacks formal truth table for simultaneous combinations~~ | ✅ resolved |
 | 4 | 🔴 | Budget ledger declared-but-not-wired | open |
 | 5 | 🔴 | `canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented) | open |
 | 6 | 🟡 | Schema drift halts paused runs on any version bump (no additive vs breaking distinction) | open |
@@ -36,6 +36,7 @@
 | 20 | 🟢 | Fan-in heuristic version not pinned per run — replay determinism risk | open |
 | 21 | 🟢 | First-class simulation (`swarm simulate`) not delivered | open |
 | 22 | 🟢 | Provider credentials live in process env — should move to DB (per existing memory note) | open |
+| 23 | 🟡 | Pending-intent driver missing — `intent.unquarantine` and `intent.cancel_requested` on non-running states (paused_hitl / quarantined) are persisted by the server but never consumed by the daemon (uncovered while resolving #3) | open |
 
 ---
 
@@ -67,15 +68,11 @@ Files touched: `packages/daemon/src/{recorder,executor,result-to-facts,index}.ts
 
 ---
 
-### 3. 🔴 Intent fold lacks formal truth table
+### 3. ✅ ~~Intent fold lacks formal truth table~~
 
-**Evidence**
-- `packages/core/src/handler/intent-fold.ts:20-85` — handles cancel-wins, steering concat, last-wins hitl, pause boolean, priority adjustment
-- `packages/core/test/handler/intent-fold.test.ts` — covers single-intent cases; no combinatorial coverage
-- Edge cases: `cancel + steer` (steer dropped silently? recorded? `appliedSeqs` only attached on the proceed path), N steers (concatenated with `\n` — order non-deterministic across writers), `unquarantine` arriving on non-quarantined run (silently dropped), `hitl_input` on `running` (silently dropped)
+**Resolution.** Truth table formalised in [`docs/intent-fold.md`](docs/intent-fold.md). Implementation in `intent-fold.ts` rewritten to honor seven precedence rules (R1–R7), per-state preconditions, and a new `intent.dropped` observability event for every intent that doesn't effect a state change. New `shouldPauseAfterDispatch` decision flag captures the pause-defers-to-after-handler semantics for steer/hitl + pause batches. P27 (200 fast-check runs) asserts the table holds across all `RunStatus` × intent-batch combinations.
 
-**Proposed approach**
-Lift the fold into a documented truth table (one row per intent combination, deterministic outcome). Add `foldIntents.property.test.ts` using fast-check to enumerate all 2^N combinations and assert the table. Document semantics in `docs/handler-contract.md` or a new `docs/intent-fold.md`.
+**Files touched:** `packages/core/src/handler/intent-fold.ts`, `packages/daemon/src/executor.ts` (wired runStatus + dropped emission + shouldPauseAfterDispatch handling), `packages/core/test/handler/intent-fold.test.ts` (10 unit cases), `packages/daemon/test/matrix.property.test.ts` (P27), `docs/intent-fold.md` (new), `docs/ARCHITECTURE.md` (matrix).
 
 ---
 
@@ -289,7 +286,28 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 
 ---
 
+### 23. 🟡 Pending-intent driver missing
+
+**Evidence**
+- `packages/server/src/store/routes.ts:271-281` — `POST /runs/:id/unquarantine` persists `intent.unquarantine`
+- `packages/daemon/src/wake-hitl.ts` — only checks for `intent.hitl_input`; doesn't process unquarantine or cancel
+- `packages/daemon/src/executor.ts:182-189` — paused/quarantined runs are skipped before the fold runs
+- Surfaced while writing `docs/intent-fold.md` (issue #3)
+
+**Gap**
+- `intent.unquarantine` on a `quarantined` run: never consumed; run sits forever
+- `intent.cancel_requested` on a `paused_hitl` run: never consumed; the operator's cancel is silently ignored
+
+**Proposed approach** New `wakePendingIntents` (or extend `wakePendingHitl`) at the top of the executor loop. Walks runs in non-dispatching states (`paused_hitl`, `quarantined`) and consumes:
+- `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel" }` on quarantined runs → emit `fact.run_resumed` (or `fact.run_cancelled`)
+- `intent.cancel_requested` on paused/quarantined runs → emit `fact.run_cancelled`
+
+The fold itself stays as-is. This is purely about delivering state-changing intents that don't go through dispatch.
+
+---
+
 ## Loop log
 
 - **2026-04-25 — #1** Pre-commit recorder. Replaced buffered `CollectingRecorder` with `CommittingRecorder`; each side-effect fact now lands in its own short txn before `fn` runs. Closes the hard-crash quarantine gap described in §1.1. Added P25 property test. All 1084 tests green.
 - **2026-04-25 — #2** Replay semantics. Artifacts gained collision-detection (no-op on same content, throws on diff content unless `replace: true`); messages gained opt-in dedup via a new `content_hash` column (additive migration, no version bump). Default behaviour matches the natural pattern: artifacts are typically deterministic (replay-safe by default), messages carry timestamps (caller opts into dedup explicitly). Tool node passes `replace: true` for stdout/stderr. P26 added; existing P15 reframed; new store-unit and store-property tests cover the edges. All 1087 tests green.
+- **2026-04-25 — #3** Intent fold truth table. Rewrote `foldIntents` with seven precedence rules, per-state preconditions, and a new `intent.dropped` observability event. New `shouldPauseAfterDispatch` decision flag captures pause-defers-to-after-handler semantics when steer/hitl arrive in the same batch as pause (per user feedback: specific intents must not be dropped implicitly). Documented in new `docs/intent-fold.md`. P27 (200 fast-check runs) asserts the table; 10 unit cases cover the headline rules. Surfaced item #23 (pending-intent driver missing for unquarantine + cancel-on-paused). All 1094 tests green.

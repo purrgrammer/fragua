@@ -202,7 +202,17 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
 
       // Fold unapplied intents into a single decision.
       const unapplied = opts.store.getUnappliedIntents(runId);
-      const decision = core.foldIntents(unapplied);
+      const decision = core.foldIntents(unapplied, state.status);
+
+      // Audit dropped intents before any state transition so SSE consumers
+      // see them in causal order with the eventual fact.
+      if (decision.dropped.length > 0) {
+        const obs = decision.dropped.map((d) => ({
+          type: "intent.dropped",
+          payload: { originalSeq: d.seq, originalType: d.type, reason: d.reason },
+        }));
+        opts.store.appendObservabilityEvents(runId, obs);
+      }
 
       if (decision.kind === "cancel") {
         await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
@@ -210,15 +220,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       }
 
       if (decision.shouldPause) {
-        await tryAppendFact(opts.store, runId, state.version, [
-          {
-            type: "fact.run_paused_hitl",
-            payload: {
-              nodeId: state.currentNode ?? "",
-              prompt: "paused by operator",
+        await tryAppendFact(
+          opts.store,
+          runId,
+          state.version,
+          [
+            {
+              type: "fact.run_paused_hitl",
+              payload: {
+                nodeId: state.currentNode ?? "",
+                prompt: "paused by operator",
+              },
             },
-          },
-        ]);
+          ],
+          // Advance lastAppliedSeq so the pause intent (and any hitched-along
+          // intents that were folded into appliedSeqs) doesn't refire on
+          // the next dispatch after wake-hitl moves the run back to queued.
+          decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
+        );
         return;
       }
 
@@ -541,7 +560,28 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         appliedIntentSeqs: decision.appliedSeqs,
         ...(decision.hitlInput !== undefined && unapplied.length > 0 ? { hitlInputSeq: lastHitlSeq(unapplied) } : {}),
       };
-      const facts = resultToFacts(result, factsCtx);
+      let facts = resultToFacts(result, factsCtx);
+
+      // R3 — pause defers when paired with steer/hitl: keep the
+      // node_completed accounting, then pause instead of advancing to
+      // the next node. wake-hitl will rouse the run on the next
+      // intent.hitl_input. Terminal halts (run_halted) beat pause; we
+      // only swap the success continuations (node_started / run_completed).
+      if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
+        const swapTypes = new Set(["fact.node_started", "fact.run_completed"]);
+        const swapped = facts.some((f) => swapTypes.has(f.type));
+        if (swapped) {
+          facts = facts.filter((f) => !swapTypes.has(f.type));
+          facts.push({
+            type: "fact.run_paused_hitl",
+            payload: {
+              nodeId: state.currentNode ?? "",
+              prompt: "paused by operator (after-dispatch)",
+            },
+          });
+        }
+      }
+
       const routingPatch = mergeRoutingPatches(decision.routingDelta, result);
       const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
       const appendOpts: {

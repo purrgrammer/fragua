@@ -630,6 +630,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P24 | Claim atomicity | K fibers racing `claimNextRun` | Each popped run claimed by exactly one fiber |
 | P25 | Pre-commit recorder durability | `recordIntent` then no `recordDone` (simulated hard crash) | Intent fact in `events` before recorder returns; sweep quarantines without a matching done having ever existed |
 | P26 | Artifact replay safety | Same-scope `putArtifact` calls with identical / differing content | Identical → no-op (existing ref); differing → `ArtifactCollisionError` unless `{ replace: true }`; only one row per scope |
+| P27 | Intent fold truth table | Random batches of intents × all `RunStatus` values | Cancel always wins if present; pause coexists with steer/hitl as `shouldPauseAfterDispatch`; multi-instance hitl/priority last-wins; every intent ends up applied or in `dropped`; per-state preconditions enforced. See [`docs/intent-fold.md`](./intent-fold.md) |
 
 ---
 

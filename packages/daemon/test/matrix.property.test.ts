@@ -11,7 +11,8 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
-import { ConcurrencyError, sha256Hex as sha256 } from "@swarm/store";
+import { ConcurrencyError, type StoredEvent, sha256Hex as sha256 } from "@swarm/store";
+import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
@@ -258,6 +259,135 @@ describe("P25 — pre-commit recorder durability across hard crash", () => {
     // — the assertion is that no quarantine fires.
     expect(r.store.getState("rp25b")!.status).not.toBe("quarantined");
     r.store.close();
+  });
+});
+
+// ─────────────── P27 ───────────────
+// foldIntents truth table — exhaustive property-style coverage of the
+// fold semantics documented in `docs/intent-fold.md`. fast-check
+// generates random batches of intents under all run statuses and
+// asserts the precedence rules R1..R7.
+describe("P27 — intent-fold truth table holds across random batches", () => {
+  test("invariants under random intent batches × run status", () => {
+    const seq = (n: number) => n + 1; // 1-based
+    const intentArb = fc.oneof(
+      fc.record({
+        type: fc.constant("intent.cancel_requested"),
+        payload: fc.record({ reason: fc.option(fc.string({ maxLength: 16 }), { nil: undefined }) }),
+      }),
+      fc.record({ type: fc.constant("intent.pause_requested"), payload: fc.constant({}) }),
+      fc.record({
+        type: fc.constant("intent.steering_requested"),
+        payload: fc.record({ text: fc.string({ minLength: 1, maxLength: 12 }) }),
+      }),
+      fc.record({
+        type: fc.constant("intent.hitl_input"),
+        payload: fc.record({ input: fc.oneof(fc.integer(), fc.string({ maxLength: 12 })) }),
+      }),
+      fc.record({
+        type: fc.constant("intent.priority_adjusted"),
+        payload: fc.record({ newPriority: fc.integer(), note: fc.string({ maxLength: 8 }) }),
+      }),
+    );
+    const statusArb = fc.constantFrom("queued", "running", "paused_hitl", "quarantined");
+
+    fc.assert(
+      fc.property(fc.array(intentArb, { minLength: 0, maxLength: 6 }), statusArb, (intents, status) => {
+        const events: StoredEvent[] = intents.map((it, i) => ({
+          runId: "rp27",
+          seq: seq(i),
+          type: it.type as StoredEvent["type"],
+          writer: "web",
+          payload: it.payload as StoredEvent["payload"],
+          ts: i,
+        }));
+        const decision = handler.foldIntents(events, status);
+
+        // Invariant 1: every input intent is accounted for. For cancel,
+        // every non-cancel intent (and later cancels) is in `dropped`.
+        // For proceed, every applied-or-dropped seq covers the input set.
+        if (decision.kind === "cancel") {
+          const droppedSeqs = new Set(decision.dropped.map((d) => d.seq));
+          for (const ev of events) {
+            if (ev.seq === decision.intentSeq) continue;
+            expect(droppedSeqs.has(ev.seq)).toBe(true);
+          }
+        } else {
+          const covered = new Set([...decision.appliedSeqs, ...decision.dropped.map((d) => d.seq)]);
+          for (const ev of events) expect(covered.has(ev.seq)).toBe(true);
+        }
+
+        // Invariant 2: cancel always wins if present.
+        const cancels = events.filter((e) => e.type === "intent.cancel_requested");
+        if (cancels.length > 0) {
+          expect(decision.kind).toBe("cancel");
+        }
+
+        if (decision.kind === "proceed") {
+          // Invariant 3: shouldPause and shouldPauseAfterDispatch are mutually exclusive.
+          expect(decision.shouldPause && decision.shouldPauseAfterDispatch).toBe(false);
+
+          // Invariant 4: pause only fires on a dispatching status.
+          if (decision.shouldPause || decision.shouldPauseAfterDispatch) {
+            expect(["queued", "running"]).toContain(status);
+          }
+
+          // Invariant 5: steer / hitl on a dispatching run plus a pause →
+          // shouldPauseAfterDispatch (R3). On non-dispatching status the
+          // pause itself is dropped.
+          const hasPauseInBatch = events.some((e) => e.type === "intent.pause_requested");
+          const hasSteerOrHitlOnDispatching =
+            (status === "running" || status === "queued") &&
+            events.some(
+              (e) =>
+                (e.type === "intent.steering_requested" &&
+                  typeof (e.payload as { text?: string }).text === "string" &&
+                  (e.payload as { text: string }).text.length > 0) ||
+                e.type === "intent.hitl_input",
+            );
+          if (hasPauseInBatch && hasSteerOrHitlOnDispatching) {
+            expect(decision.shouldPauseAfterDispatch).toBe(true);
+            expect(decision.shouldPause).toBe(false);
+          }
+
+          // Invariant 6: multiple hitl_input → only the last seq's input
+          // is in decision.hitlInput; others are dropped with later_input_won.
+          const hitlEvents = events.filter((e) => e.type === "intent.hitl_input");
+          if (hitlEvents.length > 1 && (status === "queued" || status === "running" || status === "paused_hitl")) {
+            const droppedHitl = decision.dropped.filter((d) => d.type === "intent.hitl_input");
+            expect(droppedHitl.length).toBe(hitlEvents.length - 1);
+            expect(droppedHitl.every((d) => d.reason === "later_input_won")).toBe(true);
+          }
+
+          // Invariant 7: multiple priority_adjusted → last-wins, earlier dropped.
+          const prioEvents = events.filter((e) => e.type === "intent.priority_adjusted");
+          if (prioEvents.length > 1) {
+            const droppedPrio = decision.dropped.filter((d) => d.type === "intent.priority_adjusted");
+            expect(droppedPrio.length).toBe(prioEvents.length - 1);
+          }
+
+          // Invariant 8: pause on paused_hitl is always dropped with already_paused.
+          if (status === "paused_hitl") {
+            const pauseEvents = events.filter((e) => e.type === "intent.pause_requested");
+            for (const p of pauseEvents) {
+              expect(decision.dropped.some((d) => d.seq === p.seq && d.reason === "already_paused")).toBe(true);
+            }
+            expect(decision.shouldPause).toBe(false);
+            expect(decision.shouldPauseAfterDispatch).toBe(false);
+          }
+
+          // Invariant 9: hitl_input on quarantined is always dropped wrong_state.
+          if (status === "quarantined") {
+            const hitlInQuar = events.filter((e) => e.type === "intent.hitl_input");
+            for (const h of hitlInQuar) {
+              expect(decision.dropped.some((d) => d.seq === h.seq && d.reason === "wrong_state")).toBe(true);
+            }
+            expect(decision.hitlInput).toBeUndefined();
+          }
+        }
+      }),
+      { numRuns: 200 },
+    );
   });
 });
 
