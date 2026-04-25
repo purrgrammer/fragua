@@ -18,7 +18,7 @@ import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { DaemonAlreadyRunningError, startDaemon } from "../src/entrypoint.ts";
 import { runOne } from "../src/executor.ts";
-import { wakePendingHitl } from "../src/wake-hitl.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 const closers: Array<() => void> = [];
@@ -231,7 +231,7 @@ describe("P11 — HITL durability across simulated crash", () => {
     // Phase 2: reopen, resume, finish.
     const s2 = new SqliteStore({ path: dbPath });
     expect(s2.getState("rp11")!.status).toBe("paused_hitl");
-    wakePendingHitl(s2);
+    wakePending(s2);
     expect(s2.getState("rp11")!.status).toBe("queued");
     s2.claimNextRun(1);
     const ac2 = new AbortController();
@@ -284,10 +284,10 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
         payload: { input: id },
       });
     }
-    wakePendingHitl(r.store);
+    wakePending(r.store);
 
     // Claim order should respect ready_at ASC within the priority-10 tier.
-    // wakePendingHitl iterates rows in SQLite scan order; within a single
+    // wakePending iterates rows in SQLite scan order; within a single
     // transaction each run_resumed advances its own ready_at one microsecond
     // after the previous (the store increments its clock for each now()).
     const order: string[] = [];

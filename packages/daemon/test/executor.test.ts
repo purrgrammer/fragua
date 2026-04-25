@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
-import { wakePendingHitl } from "../src/wake-hitl.ts";
+import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("buildSubstitutionArgs", () => {
@@ -487,12 +487,12 @@ describe("executor — HITL yield and resume", () => {
     let state = r.store.getState("run3")!;
     expect(state.status).toBe("paused_hitl");
 
-    // Web writes the HITL input intent; wake-hitl sweep resurrects the run.
+    // Web writes the HITL input intent; wakePending sweep resurrects the run.
     r.store.appendIntent("run3", {
       type: "intent.hitl_input",
       payload: { input: "approved" },
     });
-    expect(wakePendingHitl(r.store)).toContain("run3");
+    expect(wakePending(r.store).hitlWoken).toContain("run3");
     expect(r.store.getState("run3")!.status).toBe("queued");
 
     r.store.claimNextRun(1);

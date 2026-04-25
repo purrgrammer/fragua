@@ -36,7 +36,7 @@
 | 20 | 🟢 | Fan-in heuristic version not pinned per run — replay determinism risk | open |
 | 21 | 🟢 | First-class simulation (`swarm simulate`) not delivered | open |
 | 22 | 🟢 | Provider credentials live in process env — should move to DB (per existing memory note) | open |
-| 23 | 🟡 | Pending-intent driver missing — `intent.unquarantine` and `intent.cancel_requested` on non-running states (paused_hitl / quarantined) are persisted by the server but never consumed by the daemon (uncovered while resolving #3) | open |
+| 23 | 🟡 | ~~Pending-intent driver missing — `intent.unquarantine` and `intent.cancel_requested` on non-running states~~ | ✅ resolved |
 
 ---
 
@@ -285,23 +285,21 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 
 ---
 
-### 23. 🟡 Pending-intent driver missing
+### 23. ✅ ~~Pending-intent driver missing~~
 
-**Evidence**
-- `packages/server/src/store/routes.ts:271-281` — `POST /runs/:id/unquarantine` persists `intent.unquarantine`
-- `packages/daemon/src/wake-hitl.ts` — only checks for `intent.hitl_input`; doesn't process unquarantine or cancel
-- `packages/daemon/src/executor.ts:182-189` — paused/quarantined runs are skipped before the fold runs
-- Surfaced while writing `docs/intent-fold.md` (issue #3)
+**Resolution.** Renamed `wake-hitl.ts` → `wake-pending.ts` with a single `wakePending(store)` entry point that drives three sweeps in load-bearing order: cancel → hitl → unquarantine. Cancel runs first so a non-dispatching run with both a cancel and another intent always ends up cancelled (matches fold rule R1). All three operator paths now reach the daemon:
 
-**Gap**
-- `intent.unquarantine` on a `quarantined` run: never consumed; run sits forever
-- `intent.cancel_requested` on a `paused_hitl` run: never consumed; the operator's cancel is silently ignored
+- `intent.cancel_requested` on paused_hitl / quarantined → `fact.run_cancelled`
+- `intent.hitl_input` on paused_hitl → `fact.run_resumed` (intent stays unapplied so the next dispatch consumes it)
+- `intent.unquarantine` on quarantined:
+  - `cancel` → `fact.run_cancelled`
+  - `retry` → `fact.run_resumed` (handler re-dispatches; provider dedups on stable idempotency key)
+  - `treat_as_done` → synthesise `fact.side_effect_done` for each orphan + `fact.run_resumed`. The synth dones match by idempotencyKey so subsequent startup sweeps no longer flag the orphans.
+- Malformed / unknown unquarantine resolutions are dropped (no fact emitted) so the operator can re-issue with a valid one.
 
-**Proposed approach** New `wakePendingIntents` (or extend `wakePendingHitl`) at the top of the executor loop. Walks runs in non-dispatching states (`paused_hitl`, `quarantined`) and consumes:
-- `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel" }` on quarantined runs → emit `fact.run_resumed` (or `fact.run_cancelled`)
-- `intent.cancel_requested` on paused/quarantined runs → emit `fact.run_cancelled`
+**Tests.** 9 new in `packages/daemon/test/wake-pending.test.ts`: cancel on both states, idempotence, all three unquarantine resolutions, malformed resolution rejection, cancel-vs-unquarantine and cancel-vs-hitl precedence.
 
-The fold itself stays as-is. This is purely about delivering state-changing intents that don't go through dispatch.
+**Files touched:** new `packages/daemon/src/wake-pending.ts`; deleted `packages/daemon/src/wake-hitl.ts`; updated `packages/daemon/src/executor.ts` (import + call site + comments); updated 3 existing test files for the rename; new `packages/daemon/test/wake-pending.test.ts`; `docs/intent-fold.md` "Known gaps" section retired and replaced with "Pending-intent driver".
 
 ---
 
@@ -311,3 +309,4 @@ The fold itself stays as-is. This is purely about delivering state-changing inte
 - **2026-04-25 — #2** Replay semantics. Artifacts gained collision-detection (no-op on same content, throws on diff content unless `replace: true`); messages gained opt-in dedup via a new `content_hash` column (additive migration, no version bump). Default behaviour matches the natural pattern: artifacts are typically deterministic (replay-safe by default), messages carry timestamps (caller opts into dedup explicitly). Tool node passes `replace: true` for stdout/stderr. P26 added; existing P15 reframed; new store-unit and store-property tests cover the edges. All 1087 tests green.
 - **2026-04-25 — #3** Intent fold truth table. Rewrote `foldIntents` with seven precedence rules, per-state preconditions, and a new `intent.dropped` observability event. New `shouldPauseAfterDispatch` decision flag captures pause-defers-to-after-handler semantics when steer/hitl arrive in the same batch as pause (per user feedback: specific intents must not be dropped implicitly). Documented in new `docs/intent-fold.md`. P27 (200 fast-check runs) asserts the table; 10 unit cases cover the headline rules. Surfaced item #23 (pending-intent driver missing for unquarantine + cancel-on-paused). All 1094 tests green.
 - **2026-04-25 — #4** Budget ledger wired. New pure `evaluateBudget` policy module enforces run + node ceilings at the turn boundary; executor rewrites `result` to a budget halt on breach, queues `budget.stop` observability before the terminal `fact.run_halted`. Warn-at-80 % fires once per scope+metric per run. `budget_policy = "warn"` makes stops non-blocking. New `RunMetrics.nodeCosts` accumulates per-node cost (additive JSON change, no schema bump). Parser ENUM_KEYS rejects typos in `budget_policy` at registration. Agent backend's `BudgetSnapshot` now populated from real cumulative numbers. 15 new tests (12 unit + 3 e2e + parser enum). All 1110 tests green.
+- **2026-04-25 — #23** Pending-intent driver. Renamed `wake-hitl.ts` → `wake-pending.ts` with one `wakePending(store)` entry point that runs three sweeps in cancel → hitl → unquarantine order. Cancel-on-paused / cancel-on-quarantined and all three unquarantine resolutions (cancel / retry / treat_as_done) now actually transition state. `treat_as_done` synthesises `fact.side_effect_done` for each orphan so subsequent startup sweeps are coherent. 9 new tests cover the precedence rules, the resolution branches, and idempotence. All 1119 tests green.

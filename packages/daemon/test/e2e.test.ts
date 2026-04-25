@@ -14,7 +14,7 @@ import { SqliteStore } from "@swarm/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 import { runOne } from "../src/executor.ts";
-import { wakePendingHitl } from "../src/wake-hitl.ts";
+import { wakePending } from "../src/wake-pending.ts";
 
 describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
   test("enqueue via POST /runs → daemon runs → GET /runs/:id shows success", async () => {
@@ -164,7 +164,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const dispatcher2 = new Dispatcher();
     dispatcher2.register("wf-sha", "ask", handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }));
 
-    wakePendingHitl(s2);
+    wakePending(s2);
     s2.claimNextRun(1);
     const ac2 = new AbortController();
     await runOne(runId, {

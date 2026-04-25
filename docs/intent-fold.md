@@ -63,15 +63,20 @@ The executor batches these via `appendObservabilityEvents` so they ride alongsid
 
 ---
 
-## Known gaps
+## Pending-intent driver
 
-### `intent.unquarantine` is currently unwired
-The HTTP endpoint persists the intent (`packages/server/src/store/routes.ts`) but no daemon code consumes it. Quarantined runs sit forever. The fold drops `intent.unquarantine` with `wrong_state` on non-quarantined runs (correct), but for actually-quarantined runs the dispatch loop never enters the fold (the executor skips quarantined status before reading intents).
+The fold runs only while the executor is dispatching a queued / running run. State-changing intents on `paused_hitl` and `quarantined` runs (cancel, unquarantine, hitl_input) reach the daemon via `wakePending` (`packages/daemon/src/wake-pending.ts`), called at the top of every executor loop tick.
 
-### `intent.cancel_requested` on `paused_hitl`
-Same root cause as the above. `wakePendingHitl` only checks for `intent.hitl_input`; cancel intents on a paused run don't transition the run to `cancelled`.
+`wakePending` runs three sweeps in order:
 
-Both gaps will be addressed by a "pending-intent driver" that handles state-changing intents on non-running runs.
+1. **cancel** — any `paused_hitl` / `quarantined` run with an unapplied `intent.cancel_requested` → `fact.run_cancelled`. First, so cancel always wins (matches fold rule R1).
+2. **hitl** — any `paused_hitl` run with an unapplied `intent.hitl_input` → `fact.run_resumed`. Intent stays unapplied so the next dispatch's fold consumes it as `decision.hitlInput`.
+3. **unquarantine** — quarantined runs with `intent.unquarantine`:
+   - `cancel` → `fact.run_cancelled`
+   - `retry` → `fact.run_resumed` (handler re-dispatches at the same iteration; provider dedups on the stable `idempotencyKey`)
+   - `treat_as_done` → synthesise `fact.side_effect_done` for each orphan + `fact.run_resumed`. The synthetic dones match the orphans by `idempotencyKey`, so subsequent startup sweeps no longer flag them. This is the operator's safe escape hatch for providers without idempotency support.
+
+Tests live at `packages/daemon/test/wake-pending.test.ts`.
 
 ---
 

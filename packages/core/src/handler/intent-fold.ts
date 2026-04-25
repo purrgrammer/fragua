@@ -141,7 +141,7 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
         const p = ev.payload as { input: unknown };
         // hitl_input only makes sense for a run that's been (or is being)
         // woken from paused_hitl. By the time the executor enters the
-        // fold the wake-hitl path has already moved the run to queued/
+        // fold the wakePending path has already moved the run to queued/
         // running, so we accept here on the dispatching path. Other
         // states: dropped.
         if (isDispatching || isPaused) {

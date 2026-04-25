@@ -23,7 +23,7 @@ import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { CommittingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
-import { wakePendingHitl } from "./wake-hitl.ts";
+import { wakePending } from "./wake-pending.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
 
 type HandlerResult = core.HandlerResult;
@@ -90,7 +90,7 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   const inflight = new Set<Promise<void>>();
 
   while (!opts.shutdownSignal.aborted) {
-    wakePendingHitl(opts.store);
+    wakePending(opts.store);
     const claimed = opts.store.claimNextRun(opts.maxConcurrentRuns);
     if (claimed == null) {
       await sleep(pollMs, opts.shutdownSignal);
@@ -242,7 +242,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
           ],
           // Advance lastAppliedSeq so the pause intent (and any hitched-along
           // intents that were folded into appliedSeqs) doesn't refire on
-          // the next dispatch after wake-hitl moves the run back to queued.
+          // the next dispatch after wakePending moves the run back to queued.
           decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
         );
         return;
@@ -624,7 +624,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
 
       // R3 — pause defers when paired with steer/hitl: keep the
       // node_completed accounting, then pause instead of advancing to
-      // the next node. wake-hitl will rouse the run on the next
+      // the next node. wakePending will rouse the run on the next
       // intent.hitl_input. Terminal halts (run_halted) beat pause; we
       // only swap the success continuations (node_started / run_completed).
       if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
