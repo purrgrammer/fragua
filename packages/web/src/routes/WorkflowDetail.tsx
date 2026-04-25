@@ -105,9 +105,19 @@ export function WorkflowDetail(): JSX.Element {
   return (
     <section data-testid="workflow-detail" className="flex h-full w-full min-w-0 flex-col gap-4">
       <header className="min-w-0">
-        <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-          ← all workflows
-        </Link>
+        <div className="flex min-w-0 items-baseline gap-2">
+          <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            ← all workflows
+          </Link>
+          <span className="text-xs text-muted-foreground/40">·</span>
+          <span
+            data-testid="workflow-detail-breadcrumb-name"
+            className="truncate text-xs text-muted-foreground"
+            title={detail.label ?? detail.name}
+          >
+            {detail.label ?? detail.name ?? shortSha(detail.sha)}
+          </span>
+        </div>
         <h2
           data-testid="workflow-detail-title"
           className="mt-1 truncate text-sw-lg font-semibold text-sw-text"
