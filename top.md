@@ -28,7 +28,7 @@
 | 12 | 🟡 | ~~`onCommit` API is effectively dead code (only tests subscribe)~~ | ✅ resolved |
 | 13 | 🟡 | ~~Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use~~ | ✅ resolved |
 | 14 | 🟡 | ~~Abort-loop ceiling K=5 — "progress" not defined, magic number~~ | ✅ resolved |
-| 15 | 🟡 | Parallel + quarantine: sibling branch semantics on retry undocumented | open |
+| 15 | 🟡 | ~~Parallel + quarantine: sibling branch semantics on retry undocumented~~ | ✅ resolved |
 | 16 | 🟢 | No instrumentation around `BEGIN IMMEDIATE` lock wait | open |
 | 17 | 🟢 | `gcBlobs` exists but never auto-invoked | open |
 | 18 | 🟢 | No chaos test matrix (disk-full, clock skew, torn-write, OOM, fsync-fail) | open |
@@ -322,3 +322,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #12** Deleted `onCommit` dead code. Zero callers (tests, daemon, server, agent, web — all clean). The in-process listener pattern can't cross the web → daemon process boundary anyway, so it would never have helped the supervisor it claimed to. ARCHITECTURE.md §4 updated with the rationale. Same 1145 tests green.
 - **2026-04-25 — #10/#14** Queue-depth backpressure + configurable abort-loop ceiling. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns` (config key `max_queued_runs`). `ABORT_LOOP_CEILING` is no longer hardcoded — `abort_loop_ceiling` config key + `ExecutorOpts.abortLoopCeiling`. New `abort_loop_warning` observability event fires at K-1. Per user feedback ("all magic numbers should be configurable, config-file driven"), exposed `max_queued_runs` / `abort_loop_ceiling` / `max_leaked_handlers` in `.swarm/config.yaml`. 5 new tests. All 1150 tests green.
 - **2026-04-25 — #13** Oversized intent payload → typed 413, not 500. New `appendIntentOr413` wrapper translates `PayloadTooLargeError` to `413 { code: "payload_too_large", sizeBytes, maxBytes }` on every intent-write route. Plus a documented author-time rule on the FactEvent union: bulky free-form strings belong in `messages` / `artifacts`, never in fact payloads. 1 new test. All 1151 tests green.
+- **2026-04-25 — #15** Documented parallel + quarantine semantics. New "Quarantine inside a parallel branch" subsection in `docs/handler-contract.md`: a branch orphan quarantines the whole run; siblings abandon; unquarantine operates at the parent parallel node; per-branch quarantine is out of scope for v1. Pure docs — code already behaves this way.

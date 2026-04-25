@@ -176,6 +176,44 @@ with a documented reason; nested HITL in a parallel fan-out is not
 supported. A branch's `externalCall` intent/done facts attribute to
 the parent parallel node's id for idempotency purposes.
 
+### Quarantine inside a parallel branch
+
+If any branch's `externalCall` orphans (handler crashed mid-`fn`,
+sweep on next startup finds an `intent` with no matching `done`), the
+**entire parent run** quarantines. There is no "quarantine just one
+branch" model — quarantine is a run-level state machine transition
+(`status='quarantined'`) and parallel branches don't have their own
+status row. Concretely:
+
+- All sibling branches in the same fan-out are abandoned. Their
+  in-memory work is lost; any artifacts they wrote stay in the
+  `artifacts` table (the run isn't deleted, just paused).
+- The fan_in node never fires for that quarantine cycle.
+- Operator triages via `intent.unquarantine`. The three resolutions
+  behave as on a non-parallel run, but the unit of work is the
+  whole parallel node, not the orphan branch:
+  - `cancel` → `fact.run_cancelled`. Whole run dies.
+  - `retry` → `fact.run_resumed`. Run goes back to queued. Executor
+    re-dispatches the parent parallel node, which re-spawns ALL
+    branches from scratch (including the ones that succeeded
+    on the prior attempt). The orphan branch's external call uses
+    the same `idempotencyKey`, so the provider dedups; siblings
+    that succeeded before run again — they're idempotent by
+    construction (no filesystem mutations) so this is acceptable
+    but burns extra tokens.
+  - `treat_as_done` → synthesised `fact.side_effect_done` for each
+    orphan + `fact.run_resumed`. Same re-dispatch story as `retry`.
+
+If branch-level isolation matters for your workflow (e.g. one
+branch made a real-world side effect that's expensive to redo),
+either:
+- model branches as `sideEffect: "external"` with provider
+  idempotency and trust the dedup;
+- or split the parallel into a sequence of single-node steps so
+  the failure granularity matches the recovery granularity.
+
+Per-branch quarantine is intentionally out of scope for v1.
+
 ## Agent tools (LLM-callable, inside a codergen turn)
 
 The agent-callable tool surface is deliberately minimal:
