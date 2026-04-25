@@ -80,7 +80,17 @@ export interface MessagesApi {
 }
 
 export interface ArtifactsApi {
-  put(key: string, content: string | Uint8Array, mime?: string): ArtifactRef;
+  /**
+   * Write an artifact under the current `(run, node, iteration)` scope.
+   * Replay-safe by default:
+   *  - Identical content at the same key → returns the existing ref (no-op).
+   *  - Different content + default options → throws `ArtifactCollisionError`.
+   *  - Different content + `{ replace: true }` → overwrites.
+   * Pass `replace: true` when the handler legitimately produces different
+   * output on each attempt within the same iteration (e.g. shell tool
+   * stdout containing timestamps).
+   */
+  put(key: string, content: string | Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
   get(key: string): Uint8Array;
   ref(key: string): ArtifactRef | null;
   getFrom(scope: ArtifactScope): Uint8Array;

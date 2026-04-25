@@ -257,10 +257,7 @@ describe("P15 — artifact loop scoping across iterations", () => {
         }
         const db = getDb(store);
         const row = db
-          .query<
-            { count: number; max_iter: number; keys: number },
-            [string]
-          >(
+          .query<{ count: number; max_iter: number; keys: number }, [string]>(
             `SELECT COUNT(*) AS count,
                     MAX(iteration) AS max_iter,
                     COUNT(DISTINCT key) AS keys
@@ -283,20 +280,35 @@ describe("P15 — artifact loop scoping across iterations", () => {
     );
   });
 
-  test("PK violation when the same (run, node, iteration, key) is reinserted in-place", async () => {
+  test("identical-content rewrite at the same scope is a no-op (one row, latest content)", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const scope = { runId, nodeId: "n", iteration: 0, key: "k" };
-    // Two writes to the exact same scope should update in place (ON CONFLICT
-    // DO UPDATE), not throw. This is the flip side of P15: the PK exists.
-    store.putArtifact(scope, new TextEncoder().encode("v1"));
-    store.putArtifact(scope, new TextEncoder().encode("v2"));
+    // Replay-safe by default: same content at the same scope returns the
+    // existing ref. No new artifact row, no version churn.
+    const ref1 = store.putArtifact(scope, new TextEncoder().encode("v1"));
+    const ref2 = store.putArtifact(scope, new TextEncoder().encode("v1"));
+    expect(ref2.sha256).toBe(ref1.sha256);
     const db = getDb(store);
-    const n = db
-      .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?")
-      .get(runId)!.n;
+    const n = db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?").get(runId)!.n;
     expect(n).toBe(1);
+    expect(new TextDecoder().decode(store.getArtifact(scope))).toBe("v1");
+    store.close();
+  });
+
+  test("different content at the same scope throws ArtifactCollisionError unless replace:true", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const scope = { runId, nodeId: "n", iteration: 0, key: "k" };
+    store.putArtifact(scope, new TextEncoder().encode("v1"));
+    expect(() => store.putArtifact(scope, new TextEncoder().encode("v2"))).toThrow(/artifact collision/i);
+    expect(new TextDecoder().decode(store.getArtifact(scope))).toBe("v1");
+    // Explicit replace overwrites in place.
+    store.putArtifact(scope, new TextEncoder().encode("v2"), undefined, { replace: true });
     expect(new TextDecoder().decode(store.getArtifact(scope))).toBe("v2");
+    const db = getDb(store);
+    const n = db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM artifacts WHERE run_id = ?").get(runId)!.n;
+    expect(n).toBe(1);
     store.close();
   });
 });

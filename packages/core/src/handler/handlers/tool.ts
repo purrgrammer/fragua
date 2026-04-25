@@ -108,10 +108,14 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     }
 
     // Persist stdout/stderr as artifacts so downstream nodes can read
-    // them via $nodeId.output.stdout / .stderr substitution.
-    ctx.artifacts.put(`${ctx.nodeId}:stdout`, ranResult.stdout, "text/plain");
+    // them via $nodeId.output.stdout / .stderr substitution. Shell output
+    // is non-deterministic by nature (timestamps, pids, paths), so retries
+    // within the same iteration legitimately produce different content —
+    // pass `replace: true` so a quarantine-retry doesn't trip
+    // ArtifactCollisionError.
+    ctx.artifacts.put(`${ctx.nodeId}:stdout`, ranResult.stdout, "text/plain", { replace: true });
     if (ranResult.stderr.length > 0) {
-      ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain");
+      ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
     }
 
     ctx.emit("tool.completed", {

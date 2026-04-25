@@ -328,6 +328,29 @@ export class ArtifactTooLargeError extends Error {
   }
 }
 
+/**
+ * Thrown by `putArtifact` when an artifact already exists at the given
+ * scope and the new content has a different sha. Replay-safe by default:
+ * a handler that re-dispatches at the same `(run, node, iteration)` and
+ * writes byte-identical content sees a no-op; writing different content
+ * to the same key is a programming error unless the caller explicitly
+ * passes `{ replace: true }`.
+ */
+export class ArtifactCollisionError extends Error {
+  constructor(
+    public readonly scope: ArtifactScope,
+    public readonly existingSha: string,
+    public readonly attemptedSha: string,
+  ) {
+    super(
+      `artifact collision at ${scope.runId}/${scope.nodeId}#${scope.iteration}:${scope.key} ` +
+        `(existing=${existingSha.slice(0, 8)}…, new=${attemptedSha.slice(0, 8)}…) — ` +
+        `pass { replace: true } to overwrite`,
+    );
+    this.name = "ArtifactCollisionError";
+  }
+}
+
 export class SchemaDriftError extends Error {
   constructor(
     public readonly runVersion: number,
@@ -433,9 +456,18 @@ export interface IEventStore {
   getUnappliedIntents(runId: string): StoredEvent[];
 
   // ─── Messages
+  /**
+   * Append a message under `(run, node, iteration)`. Returns the assigned
+   * ordinal. Pass `opts.dedup: true` to enable replay-safe dedup: a
+   * subsequent call with byte-identical content at the same scope returns
+   * the existing ordinal instead of minting a duplicate row. Default OFF
+   * because agent transcripts carry per-call timestamps that differ even
+   * when the semantic message is the same; opting in is the caller's job.
+   */
   appendMessage(
     runId: string,
     row: Omit<Message, "runId" | "ordinal">,
+    opts?: { dedup?: boolean },
   ): {
     ordinal: number;
   };
@@ -456,7 +488,13 @@ export interface IEventStore {
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 
   // ─── Artifacts
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef;
+  /**
+   * Write an artifact at the given scope. Replay-safe by default:
+   *  - Identical content at the same scope → returns the existing ref (no-op).
+   *  - Different content + `replace: false` (default) → throws `ArtifactCollisionError`.
+   *  - Different content + `replace: true` → overwrites.
+   */
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;

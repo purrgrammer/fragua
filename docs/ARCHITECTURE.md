@@ -31,7 +31,7 @@
 | **I5** | External side effects carry a provider idempotency key; orphan `INTENT` quarantines the run on crash-replay | `SideEffectEnvelope.idempotencyKey`; startup sweep emits `fact.run_quarantined` |
 | **I6** | `run_state.routing` ≤ 8KB; payload lives in messages/artifacts | `CHECK (length(routing) < 8192)` column constraint |
 | **I7** | Event payloads ≤ 4KB | `CHECK (length(payload) < 4096)` column constraint |
-| **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)` | Store API writes file→row in that order so orphans are always files, never dangling rows |
+| **I8** | Raw tool output addressed by sha256 on the filesystem under `blobsDir`; `blobs` row holds metadata only; artifacts are named refs scoped by `(run, node, iteration, key)`; replay-safe by default — same-content rewrite is a no-op, different-content rewrite at the same scope throws `ArtifactCollisionError` unless the caller passes `{ replace: true }` | Store API writes file→row in that order so orphans are always files, never dangling rows; `putArtifact` checks existing ref and either matches sha (no-op), throws collision, or overwrites with explicit replace |
 | **I9** | LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`); individual messages ≤ 1 MiB | Handler API exposes `messages.append()` and `artifacts.put()` separately; `CHECK (length(content) < 1048576)` + pre-check throws `MessageTooLargeError` |
 | **I10** | Seq assignment is O(1) via per-run counter on `run_state.next_seq`; never scanned | Store module; `UPDATE run_state SET next_seq = next_seq + 1 RETURNING ...` inside append txn |
 
@@ -629,6 +629,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P23 | STRICT enforcement | Insert string into integer column | Throws; no row inserted |
 | P24 | Claim atomicity | K fibers racing `claimNextRun` | Each popped run claimed by exactly one fiber |
 | P25 | Pre-commit recorder durability | `recordIntent` then no `recordDone` (simulated hard crash) | Intent fact in `events` before recorder returns; sweep quarantines without a matching done having ever existed |
+| P26 | Artifact replay safety | Same-scope `putArtifact` calls with identical / differing content | Identical → no-op (existing ref); differing → `ArtifactCollisionError` unless `{ replace: true }`; only one row per scope |
 
 ---
 

@@ -286,12 +286,16 @@ The executor re-runs a handler whenever:
 
 - The handler was aborted mid-flight (steer, timeout, shutdown)
 - A transient failure left the run `queued`
+- The operator chose `intent.unquarantine: { resolution: "retry" }` after a hard-crash quarantine
 
 Under replay, a handler must:
 
 - Produce the same idempotency key for the same logical work (use `ctx.externalCall` with a stable `argsHash`)
-- Be safe to invoke twice — if it wrote an artifact on the first run, it'll overwrite on the second (per `(run, node, iteration, key)`)
-- Not assume `ctx.messages` is empty on entry — previous partial runs may have appended
+- Be replay-safe with respect to artifacts. By default `ctx.artifacts.put(key, content)` is **collision-detecting**:
+  - Identical content at the same `(run, node, iteration, key)` → no-op, returns the existing ref
+  - Different content at the same scope → throws `ArtifactCollisionError`
+  - Pass `{ replace: true }` to opt into overwrite when retries can legitimately produce different content (shell stdout containing timestamps, build outputs, etc.)
+- Not assume `ctx.messages` is empty on entry — prior partial runs may have appended. If your handler produces deterministic message content for a given scope, the store layer offers opt-in dedup via `appendMessage(runId, row, { dedup: true })`. Default is OFF: agent transcripts carry per-call timestamps that legitimately differ between attempts even when the semantic message is the same, so dedup must be the caller's explicit assertion.
 
 If your handler can't be made replay-safe (rare), declare `sideEffect: "external"` and rely on `ctx.externalCall`'s quarantine behavior.
 

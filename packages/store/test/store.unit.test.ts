@@ -435,6 +435,25 @@ describe("SqliteStore — messages", () => {
     expect(rows[1]?.content).toMatchObject({ role: "assistant", content: [{ type: "text", text: "hello" }] });
     store.close();
   });
+
+  test("opt-in dedup: identical content at same scope returns the same ordinal", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const msg = { role: "user" as const, content: [{ type: "text" as const, text: "deterministic" }], timestamp: 1 };
+    const a = store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 0 }, { dedup: true });
+    const b = store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 0 }, { dedup: true });
+    expect(b.ordinal).toBe(a.ordinal);
+    expect(store.getMessages(runId)).toHaveLength(1);
+    // Different iteration → different scope → fresh ordinal even with dedup.
+    const c = store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 1 }, { dedup: true });
+    expect(c.ordinal).not.toBe(a.ordinal);
+    expect(store.getMessages(runId)).toHaveLength(2);
+    // Default (no opts) keeps appending fresh ordinals — agent-message timestamps
+    // make automatic dedup unsafe; the caller asserts replay-safety explicitly.
+    const d = store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 0 });
+    expect(d.ordinal).not.toBe(a.ordinal);
+    store.close();
+  });
 });
 
 describe("SqliteStore — message size bound", () => {

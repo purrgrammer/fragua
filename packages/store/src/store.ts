@@ -11,6 +11,7 @@ import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
   type AppendFactOpts,
+  ArtifactCollisionError,
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
@@ -411,7 +412,11 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Messages ───────────────
 
-  appendMessage(runId: string, row: Omit<Message, "runId" | "ordinal">): { ordinal: number } {
+  appendMessage(
+    runId: string,
+    row: Omit<Message, "runId" | "ordinal">,
+    opts?: { dedup?: boolean },
+  ): { ordinal: number } {
     // Pre-check before entering the transaction so the caller sees a typed
     // error rather than a CHECK constraint failure from SQLite. The schema
     // CHECK is defence-in-depth for any path that bypasses this method.
@@ -419,18 +424,46 @@ export class SqliteStore implements IEventStore {
     if (serialized.length >= MAX_MESSAGE_CONTENT_BYTES) {
       throw new MessageTooLargeError(serialized.length, MAX_MESSAGE_CONTENT_BYTES);
     }
+    const contentHash = sha256Hex(serialized);
+    const iteration = row.iteration ?? 0;
+    const dedup = opts?.dedup === true && row.nodeId !== null;
     let ordinal = 0;
     this.writeTxn(() => {
+      // Opt-in dedup. When the caller asserts the message is replay-safe
+      // (deterministic content given the same scope), passing `dedup: true`
+      // causes a re-dispatch at the same `(run, node, iteration)` with
+      // byte-identical content to return the existing ordinal instead of
+      // minting a duplicate row.
+      //
+      // Default OFF because agent transcripts carry per-call timestamps
+      // (and other mutable accounting fields) that legitimately differ
+      // across attempts even when the semantic message is the same;
+      // hashing the raw JSON would falsely refuse those dedups *or*
+      // falsely allow them depending on timing. Handler-level
+      // idempotency is the correct contract for those messages.
+      if (dedup) {
+        const existing = this.db
+          .query<{ ordinal: number }, [string, string, number, string]>(
+            `SELECT ordinal FROM messages
+              WHERE run_id = ? AND node_id = ? AND iteration = ? AND content_hash = ?
+              LIMIT 1`,
+          )
+          .get(runId, row.nodeId as string, iteration, contentHash);
+        if (existing != null) {
+          ordinal = existing.ordinal;
+          return;
+        }
+      }
       const max = this.db
         .query<{ m: number | null }, [string]>("SELECT MAX(ordinal) AS m FROM messages WHERE run_id = ?")
         .get(runId);
       ordinal = (max?.m ?? 0) + 1;
       this.db
         .query(
-          `INSERT INTO messages (run_id, ordinal, content, node_id, iteration)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO messages (run_id, ordinal, content, node_id, iteration, content_hash)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(runId, ordinal, serialized, row.nodeId, row.iteration ?? 0);
+        .run(runId, ordinal, serialized, row.nodeId, iteration, contentHash);
     });
     return { ordinal };
   }
@@ -505,13 +538,33 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Artifacts ───────────────
 
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef {
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef {
     if (content.byteLength > MAX_BLOB_BYTES) {
       throw new ArtifactTooLargeError(content.byteLength, MAX_BLOB_BYTES);
     }
     const sha = sha256Hex(content);
     const now = this.now();
     const bytes = content.byteLength;
+    const replace = opts?.replace ?? false;
+
+    // Replay-safe by default. If an artifact already exists at this scope:
+    //  - same content → no-op, return the existing ref (replay produces
+    //    the same logical state).
+    //  - different content + !replace → ArtifactCollisionError. The handler
+    //    is asking to overwrite something durable; force the call site to
+    //    declare intent.
+    //  - different content + replace → overwrite (the legacy behaviour,
+    //    now opt-in).
+    // See `docs/handler-contract.md` "replay semantics."
+    const existing = this.getArtifactRef(scope);
+    if (existing != null) {
+      if (existing.sha256 === sha) {
+        return existing;
+      }
+      if (!replace) {
+        throw new ArtifactCollisionError(scope, existing.sha256, sha);
+      }
+    }
 
     // File-then-row: write the content-addressed file before the DB row
     // points at it. A crash between rename and INSERT leaves an orphan
@@ -787,9 +840,7 @@ export class SqliteStore implements IEventStore {
       const shas = this.blobs.listAllShas();
       for (const sha of shas) {
         if (extraDeleted >= budget) break;
-        const row = this.db
-          .query<{ sha256: string }, [string]>("SELECT sha256 FROM blobs WHERE sha256 = ?")
-          .get(sha);
+        const row = this.db.query<{ sha256: string }, [string]>("SELECT sha256 FROM blobs WHERE sha256 = ?").get(sha);
         if (row == null) {
           this.blobs.delete(sha);
           extraDeleted++;

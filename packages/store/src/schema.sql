@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS messages (
   role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
+  -- sha256 of the serialised content. Set on every new write by
+  -- `appendMessage`; NULL on rows written before the column was added
+  -- (additive migration). Backs the opt-in replay dedup path —
+  -- `appendMessage(runId, row, { dedup: true })` looks up an existing
+  -- row by `(run, node, iteration, content_hash)` and returns its
+  -- ordinal instead of minting a new row. Default is OFF: agent
+  -- transcripts carry per-call timestamps that legitimately differ
+  -- across attempts, so caller-asserted dedup is the right contract.
+  content_hash TEXT,
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 

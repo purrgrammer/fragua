@@ -83,9 +83,9 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   };
 
   const artifacts: ArtifactsApi = {
-    put(key, content, mime): ArtifactRef {
+    put(key, content, mime, opts): ArtifactRef {
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
-      return store.putArtifact({ runId, nodeId, iteration, key }, bytes, mime);
+      return store.putArtifact({ runId, nodeId, iteration, key }, bytes, mime, opts);
     },
     get(key) {
       return store.getArtifact({ runId, nodeId, iteration, key });
@@ -114,9 +114,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   if (opts.allowedTools !== undefined) narrowOpts.allow = opts.allowedTools;
   if (opts.deniedTools !== undefined) narrowOpts.deny = opts.deniedTools;
   const scopedTools =
-    opts.allowedTools !== undefined || opts.deniedTools !== undefined
-      ? opts.tools.select(narrowOpts)
-      : opts.tools;
+    opts.allowedTools !== undefined || opts.deniedTools !== undefined ? opts.tools.select(narrowOpts) : opts.tools;
 
   // Align the ExecutionEnvironment with the narrowed toolset. If no
   // mutating tool (bash / write / edit) is visible, the env is wrapped
@@ -124,8 +122,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   // also loses the raw env path that would otherwise bypass them. Parallel
   // branches rely on this to guarantee read-only filesystem access.
   const envCanMutate = ENV_MUTATOR_TOOLS.some((t) => scopedTools.has(t));
-  const effectiveEnv =
-    opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
+  const effectiveEnv = opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
 
   const ctx: HandlerContext = {
     runId,

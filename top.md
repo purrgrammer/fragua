@@ -15,7 +15,7 @@
 | # | Sev | Title | Status |
 |---|---|---|---|
 | 1 | 🔴 | ~~`externalCall` buffers intent in memory — hard-crash defeats orphan quarantine~~ | ✅ resolved |
-| 2 | 🔴 | Replay semantics for non-external work undefined (artifacts silently overwrite, messages duplicate) | open |
+| 2 | 🔴 | ~~Replay semantics for non-external work undefined (artifacts silently overwrite, messages duplicate)~~ | ✅ resolved |
 | 3 | 🔴 | Intent fold lacks formal truth table for simultaneous combinations | open |
 | 4 | 🔴 | Budget ledger declared-but-not-wired | open |
 | 5 | 🔴 | `canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented) | open |
@@ -51,22 +51,19 @@ Files touched: `packages/daemon/src/{recorder,executor,result-to-facts,index}.ts
 
 ---
 
-### 2. 🔴 Replay semantics for non-external work undefined
+### 2. ✅ ~~Replay semantics for non-external work undefined~~
 
-**Evidence**
-- `packages/store/src/store.ts:530-537` — `putArtifact` uses `INSERT … ON CONFLICT … DO UPDATE` → silent overwrite on `(run_id, node_id, iteration, key)` collision
-- `appendMessage` uses `MAX(ordinal) + 1` → duplicates accumulate across replays
-- No framework-level dedup; handlers are silently expected to be idempotent
+**Resolution.**
 
-**Gap**
-On retry-via-unquarantine or backward-edge re-entry without iteration bump, a handler that calls `artifacts.put("result", ...)` overwrites prior content and `messages.append(...)` duplicates rows. P8 ("next turn converges") doesn't actually guarantee message dedup.
+- **Artifacts: replay-safe by default.** `putArtifact` now checks for an existing ref at `(run, node, iteration, key)`. Identical content → no-op (returns existing ref); different content → throws `ArtifactCollisionError` unless the caller passes `{ replace: true }`. Tool nodes (`tool.ts`) opt into `replace: true` because shell stdout is non-deterministic by nature.
+- **Messages: opt-in dedup.** Schema gains a `content_hash TEXT` column (additive migration, no version bump). `appendMessage` accepts `opts?: { dedup?: boolean }`; default OFF because agent transcripts carry per-call timestamps that legitimately differ across attempts. With `dedup: true`, an identical-content rewrite at the same scope returns the existing ordinal instead of minting a duplicate row.
 
-**Proposed approach**
-Pick one model and document it:
-- **(a) Framework dedup:** `messages.append` keyed by `(node, iteration, content_hash)` returns existing ordinal on collision. `artifacts.put` rejects on collision unless `replace: true`.
-- **(b) Pre-dispatch wipe:** Executor deletes iteration-N artifacts/messages before re-dispatching iteration N. Simpler; loses partial progress on the second attempt.
+**Property tests added.**
+- P26 (matrix): `ctx.artifacts.put` no-ops on identical content, throws on diff, accepts `replace`
+- store.property: same as P26 at the store layer
+- store.unit: opt-in message dedup behaviour
 
-Recommend (a). Add P25 + P26 properties: replay produces identical message ordinals; artifact dedup observable.
+**Files touched:** `packages/store/src/{store,types,migrations,schema.sql}`, `packages/core/src/handler/{types,context}.ts`, `packages/core/src/handler/handlers/tool.ts`, `packages/store/test/{store.property,store.unit}.test.ts`, `packages/daemon/test/matrix.property.test.ts`, `docs/{ARCHITECTURE,handler-contract}.md`.
 
 ---
 
@@ -295,3 +292,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 ## Loop log
 
 - **2026-04-25 — #1** Pre-commit recorder. Replaced buffered `CollectingRecorder` with `CommittingRecorder`; each side-effect fact now lands in its own short txn before `fn` runs. Closes the hard-crash quarantine gap described in §1.1. Added P25 property test. All 1084 tests green.
+- **2026-04-25 — #2** Replay semantics. Artifacts gained collision-detection (no-op on same content, throws on diff content unless `replace: true`); messages gained opt-in dedup via a new `content_hash` column (additive migration, no version bump). Default behaviour matches the natural pattern: artifacts are typically deterministic (replay-safe by default), messages carry timestamps (caller opts into dedup explicitly). Tool node passes `replace: true` for stdout/stderr. P26 added; existing P15 reframed; new store-unit and store-property tests cover the edges. All 1087 tests green.

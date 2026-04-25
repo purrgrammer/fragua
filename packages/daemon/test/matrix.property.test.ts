@@ -261,6 +261,49 @@ describe("P25 — pre-commit recorder durability across hard crash", () => {
   });
 });
 
+// ─────────────── P26 ───────────────
+// Replay-safe artifacts through the handler context. Same-scope writes
+// of identical content are no-ops; different content throws unless the
+// caller passes `replace: true`. ARCHITECTURE.md §I8 / handler-contract.md
+// "replay semantics."
+describe("P26 — handler artifact replay safety", () => {
+  test("ctx.artifacts.put is no-op on identical content; throws on diff content unless replace", async () => {
+    const r = rig();
+    enqueue(r, "rp26", "start");
+
+    // Build a HandlerContext as the executor would.
+    const ac = new AbortController();
+    const ctx = handler.buildHandlerContext({
+      runId: "rp26",
+      nodeId: "n",
+      iteration: 0,
+      signal: ac.signal,
+      routing: {},
+      store: r.store,
+      llm: handler.makeLlmClient({
+        signal: ac.signal,
+        call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+      }),
+      http: handler.makeHttpClient({ signal: ac.signal }),
+      tools: r.tools,
+      args: {},
+      recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+    });
+
+    const refA = ctx.artifacts.put("k", "v1", "text/plain");
+    const refB = ctx.artifacts.put("k", "v1", "text/plain"); // replay no-op
+    expect(refB.sha256).toBe(refA.sha256);
+
+    expect(() => ctx.artifacts.put("k", "v2", "text/plain")).toThrow(/artifact collision/i);
+
+    const refC = ctx.artifacts.put("k", "v2", "text/plain", { replace: true });
+    expect(refC.sha256).not.toBe(refA.sha256);
+    expect(new TextDecoder().decode(ctx.artifacts.get("k"))).toBe("v2");
+
+    r.store.close();
+  });
+});
+
 // ─────────────── P16 ───────────────
 describe("P16 — blob GC preserves shared blobs, removes orphans", () => {
   test("deleting one artifact doesn't GC a blob referenced by another", async () => {
