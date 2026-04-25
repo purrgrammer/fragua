@@ -139,16 +139,19 @@ describe("api — /workflows", () => {
 });
 
 describe("api — URL helpers are relative and /api-prefixed", () => {
-  it("getRunEventsUrl returns a relative /api/runs/:id/events", () => {
+  it("getRunEventsUrl returns a relative /api/runs/:id/stream (SSE endpoint)", () => {
+    // Must point at /stream (text/event-stream) not /events (application/json).
+    // Hitting /events with EventSource gives a MIME mismatch and the browser
+    // aborts the connection without surfacing useful errors in useRunLive.
     const u = api.getRunEventsUrl("abc");
-    expect(u).toBe("/api/runs/abc/events");
+    expect(u).toBe("/api/runs/abc/stream");
     expect(u.startsWith("/api/")).toBe(true);
     expect(u).not.toMatch(/^https?:/);
     expect(u).not.toContain("localhost");
   });
 
   it("URL helpers encode unsafe id chars", () => {
-    expect(api.getRunEventsUrl("a/b c")).toBe("/api/runs/a%2Fb%20c/events");
+    expect(api.getRunEventsUrl("a/b c")).toBe("/api/runs/a%2Fb%20c/stream");
   });
 });
 

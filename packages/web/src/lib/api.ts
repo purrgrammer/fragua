@@ -273,7 +273,10 @@ const isAcceptedId = (v: unknown): v is { id: string } =>
 // ── URL helpers ─────────────────────────────────────────────────────
 
 export function getRunEventsUrl(id: string): string {
-  return url(`/runs/${encodeURIComponent(id)}/events`);
+  // SSE endpoint (text/event-stream). The sibling `/events` route is the
+  // since/limit-paginated JSON variant — EventSource pointed at that one
+  // got `application/json` back and aborted with a MIME-type mismatch.
+  return url(`/runs/${encodeURIComponent(id)}/stream`);
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────
