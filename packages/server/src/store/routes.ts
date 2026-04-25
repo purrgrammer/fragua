@@ -373,9 +373,16 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.get("/runs/:id/stream", (c) =>
     streamSSE(c, async (stream) => {
       const runId = c.req.param("id");
+      // Resume point precedence: ?sinceSeq=<n> (initial connect — client
+      // already has the snapshot up to N) > Last-Event-ID header (browser
+      // auto-reconnect) > 0 (replay everything).
+      // Without `sinceSeq`, opening the page on a 14k-event run fired 14k
+      // SSE frames at the browser before any "live" frame ever arrived.
+      const querySinceSeq = Number(c.req.query("sinceSeq") ?? Number.NaN);
       const lastEventId = c.req.header("Last-Event-ID");
-      let lastSeq = lastEventId != null ? Number(lastEventId) : 0;
-      if (!Number.isFinite(lastSeq) || lastSeq < 0) lastSeq = 0;
+      const headerLastSeq = lastEventId != null ? Number(lastEventId) : Number.NaN;
+      let lastSeq = Number.isFinite(querySinceSeq) ? querySinceSeq : Number.isFinite(headerLastSeq) ? headerLastSeq : 0;
+      if (lastSeq < 0) lastSeq = 0;
 
       while (!stream.aborted) {
         const batch = deps.store.getEvents(runId, {

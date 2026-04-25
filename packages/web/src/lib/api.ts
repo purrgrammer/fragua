@@ -272,11 +272,16 @@ const isAcceptedId = (v: unknown): v is { id: string } =>
 
 // ── URL helpers ─────────────────────────────────────────────────────
 
-export function getRunEventsUrl(id: string): string {
+export function getRunEventsUrl(id: string, sinceSeq?: number): string {
   // SSE endpoint (text/event-stream). The sibling `/events` route is the
   // since/limit-paginated JSON variant — EventSource pointed at that one
   // got `application/json` back and aborted with a MIME-type mismatch.
-  return url(`/runs/${encodeURIComponent(id)}/stream`);
+  // Pass `sinceSeq` to skip the historical backlog: the server replays
+  // every event after that seq, so callers that already have the
+  // snapshot data (RunDetail) don't re-process thousands of historical
+  // frames on initial connect.
+  const base = `/runs/${encodeURIComponent(id)}/stream`;
+  return url(typeof sinceSeq === "number" && sinceSeq > 0 ? `${base}?sinceSeq=${sinceSeq}` : base);
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────

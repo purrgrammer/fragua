@@ -40,6 +40,11 @@ type TabId = (typeof VIEWS)[number];
 /** Statuses where the run is still progressing and the clock should tick. */
 const LIVE_STATUSES = new Set<string>(["queued", "running", "paused"]);
 
+/** Statuses where no further events will ever arrive. The SSE socket is
+ * skipped entirely so we don't waste a server connection per historical
+ * run view. */
+const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
+
 /**
  * Returns a `Date.now()`-style timestamp that re-renders every `intervalMs`.
  * When `enabled` is false the interval is never created (zero re-render cost).
@@ -66,7 +71,23 @@ export function RunDetail(): JSX.Element {
   const shouldCanonicalize = !!id && rawView !== view;
 
   // All hooks before any conditional return — Rules of Hooks.
-  const { messages, streaming, status: liveStatus, totalEvents, controlEvents, liveCost } = useRunLive(id || null);
+  // Snapshot is fetched first; useRunLive reads two fields off it
+  // (lastEventSeq → sinceSeq for backlog skip; status → terminal so
+  // SSE doesn't open at all on completed runs).
+  const qc = useQueryClient();
+  const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
+  const isTerminal = detail != null && TERMINAL_STATUSES.has(detail.status);
+  const {
+    messages,
+    streaming,
+    status: liveStatus,
+    totalEvents,
+    controlEvents,
+    liveCost,
+  } = useRunLive(id || null, {
+    sinceSeq: detail?.lastEventSeq,
+    terminal: isTerminal,
+  });
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -75,9 +96,6 @@ export function RunDetail(): JSX.Element {
     setSelectedNodeId(nodeId);
     document.getElementById(`node-${nodeId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-
-  const qc = useQueryClient();
-  const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
   useEffect(() => {

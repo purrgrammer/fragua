@@ -61,11 +61,26 @@ export interface UseRunLiveResult {
 export interface UseRunLiveOptions {
   /** Test injection; defaults to global EventSource. */
   eventSourceImpl?: typeof EventSource;
+  /** Skip the historical backlog by telling the server to start
+   * replaying after this seq. Pass the snapshot's `lastEventSeq` so the
+   * initial connect doesn't flood the browser with thousands of frames
+   * the snapshot already accounts for. */
+  sinceSeq?: number;
+  /** When true, the run has already reached a terminal status — no new
+   * SSE frames will ever arrive. The hook skips opening EventSource
+   * entirely, saving a server round-trip + listener overhead per
+   * historical run the user opens. */
+  terminal?: boolean;
 }
 
 /** Event types that imply new rows have landed in the messages table.
  * On any of these we re-fetch `?sinceOrdinal=<last>`. */
 const MESSAGE_SIGNAL_TYPES = new Set<string>(["agent.message_end", "fact.message_appended", "fact.run_started"]);
+
+/** Bound on `controlEvents` slice — `usePendingSteers` only ever cares
+ * about the most recent reconcile events; an unbounded slice on a
+ * long-lived page leaks memory for no UI benefit. */
+const MAX_CONTROL_EVENTS = 100;
 
 /** Narrow reconcile predicate — only events `usePendingSteers`
  * matches on. Keeping it tight bounds `controlEvents` to O(steer
@@ -90,7 +105,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   // Coalesce refetches — a burst of message_end events under 30ms triggers a single fetch.
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: eventSourceImpl is a stable test injection; effect keys on runId.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: eventSourceImpl is a stable test injection; effect keys on runId + terminal + sinceSeq.
   useEffect(() => {
     setMessages([]);
     setStreaming(null);
@@ -131,16 +146,41 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       }, 30);
     };
 
-    // ── Bootstrap: fetch messages once, open SSE ───────────────
+    // ── Bootstrap: always fetch messages ────────────────────────
     refetchMessages();
+
+    // Skip SSE entirely on terminal runs — no new frames will ever
+    // arrive, and the snapshot+messages fetch already loaded everything.
+    // Saves ~30 listeners + a server connection per historical run view.
+    if (opts.terminal === true) {
+      setStatus("closed");
+      return () => {
+        cancelled = true;
+        if (refetchTimerRef.current) {
+          clearTimeout(refetchTimerRef.current);
+          refetchTimerRef.current = null;
+        }
+      };
+    }
 
     const Ctor = opts.eventSourceImpl ?? (globalThis as { EventSource?: typeof EventSource }).EventSource;
     if (!Ctor) {
       setStatus("closed");
-      return;
+      return () => {
+        cancelled = true;
+        if (refetchTimerRef.current) {
+          clearTimeout(refetchTimerRef.current);
+          refetchTimerRef.current = null;
+        }
+      };
     }
 
-    const es = new Ctor(getRunEventsUrl(runId));
+    // `sinceSeq` short-circuits the historical replay: the server
+    // resumes from sinceSeq+1 instead of seq 0. Without this, opening
+    // a 14k-event run lit up the browser with every prior event before
+    // any new one could arrive — the `setStreaming` accumulator alone
+    // ran tens of thousands of state updates.
+    const es = new Ctor(getRunEventsUrl(runId, opts.sinceSeq));
     setStatus("live");
 
     const onFrame = (ev: MessageEvent): void => {
@@ -165,7 +205,12 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       }
 
       if (isControlReconcileEvent(type, payload)) {
-        setControlEvents((prev) => [...prev, { type, data: payload }]);
+        setControlEvents((prev) => {
+          const next = [...prev, { type, data: payload }];
+          // Cap the slice so a long-lived page doesn't grow this array
+          // forever. usePendingSteers only matches recent events.
+          return next.length > MAX_CONTROL_EVENTS ? next.slice(-MAX_CONTROL_EVENTS) : next;
+        });
       }
       if (MESSAGE_SIGNAL_TYPES.has(type)) {
         scheduleRefetch();
@@ -213,9 +258,20 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         clearTimeout(refetchTimerRef.current);
         refetchTimerRef.current = null;
       }
+      // Explicit listener cleanup, then close. `es.close()` alone is
+      // technically sufficient (the spec says no further events fire),
+      // but explicit removeEventListener helps GC reclaim the closure
+      // chain immediately and matches the addEventListener pairs we
+      // registered above.
+      es.removeEventListener("open", onOpen);
+      es.removeEventListener("error", onError);
+      es.removeEventListener("message", onFrame as EventListener);
+      for (const t of ALL_EVENT_TYPES) {
+        es.removeEventListener(t, onFrame as EventListener);
+      }
       es.close();
     };
-  }, [runId]);
+  }, [runId, opts.terminal, opts.sinceSeq]);
 
   return { messages, streaming, status, lastSeq, totalEvents, controlEvents, liveCost };
 }
