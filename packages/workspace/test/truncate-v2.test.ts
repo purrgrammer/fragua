@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateLine, truncateTail } from "../src/truncate-v2.ts";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+  truncateLine,
+  truncateTail,
+} from "../src/truncate-v2.ts";
 
 describe("truncateHead", () => {
   test("short content passes through", () => {

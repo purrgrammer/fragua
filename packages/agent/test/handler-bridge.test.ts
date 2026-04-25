@@ -396,8 +396,7 @@ describe("makeCodergenHandler — oversized messages spill to artifact", () => {
     // marker text, not the filler.
     const messages = store.getMessages("r-big-msg");
     expect(messages.length).toBeGreaterThanOrEqual(1);
-    const lastBlocks = (messages[messages.length - 1]!.content as { content: Array<{ text?: string }> })
-      .content;
+    const lastBlocks = (messages[messages.length - 1]!.content as { content: Array<{ text?: string }> }).content;
     const placeholderText = lastBlocks.map((b) => b.text ?? "").join("");
     expect(placeholderText).toMatch(/message too large/);
     expect(placeholderText).toMatch(/spilled to artifact/);

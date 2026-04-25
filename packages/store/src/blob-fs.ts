@@ -97,7 +97,7 @@ export class BlobFS {
       if (shard.startsWith(".")) continue;
       if (shard.length !== 2) continue;
       const shardPath = join(this.root, shard);
-      let st;
+      let st: ReturnType<typeof statSync>;
       try {
         st = statSync(shardPath);
       } catch {

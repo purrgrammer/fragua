@@ -115,8 +115,7 @@ describe("externalCall", () => {
   test("args with different key insertion order produce the same idempotency key", async () => {
     const { rec: r1, log: l1 } = recorder();
     const { rec: r2, log: l2 } = recorder();
-    const mk = (rec: SideEffectRecorder) =>
-      makeExternalCall({ runId: "r", nodeId: "n", iteration: 0, recorder: rec });
+    const mk = (rec: SideEffectRecorder) => makeExternalCall({ runId: "r", nodeId: "n", iteration: 0, recorder: rec });
     await mk(r1)({ toolName: "t", args: { a: 1, b: [2, 3], c: { x: true, y: null } } }, async () => 0);
     await mk(r2)({ toolName: "t", args: { c: { y: null, x: true }, b: [2, 3], a: 1 } }, async () => 0);
     expect(l1.intents[0]!.idempotencyKey).toBe(l2.intents[0]!.idempotencyKey);
@@ -126,9 +125,7 @@ describe("externalCall", () => {
   test("non-serialisable args throw CanonicalStringifyError", async () => {
     const { rec } = recorder();
     const call = makeExternalCall({ runId: "r", nodeId: "n", iteration: 0, recorder: rec });
-    await expect(call({ toolName: "t", args: { fn: () => 1 } }, async () => 0)).rejects.toThrow(
-      /canonicalStringify/,
-    );
+    await expect(call({ toolName: "t", args: { fn: () => 1 } }, async () => 0)).rejects.toThrow(/canonicalStringify/);
   });
 
   test("TimeoutError also skips DONE/FAILED", async () => {

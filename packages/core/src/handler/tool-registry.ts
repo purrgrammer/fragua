@@ -45,7 +45,7 @@ export class InMemoryToolRegistry implements ToolRegistry {
     const picked: string[] = [];
     for (const name of base) {
       if (allow != null && !allow.has(name)) continue;
-      if (deny != null && deny.has(name)) continue;
+      if (deny?.has(name)) continue;
       picked.push(name);
     }
     const narrowed = new InMemoryToolRegistry(picked);

@@ -50,7 +50,13 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
   if (exactIdx !== -1) {
     const secondIdx = content.indexOf(oldText, exactIdx + 1);
     if (secondIdx === -1) {
-      return { found: true, index: exactIdx, matchLength: oldText.length, usedFuzzyMatch: false, contentForReplacement: content };
+      return {
+        found: true,
+        index: exactIdx,
+        matchLength: oldText.length,
+        usedFuzzyMatch: false,
+        contentForReplacement: content,
+      };
     }
     return { found: false, index: -1, matchLength: 0, usedFuzzyMatch: false, contentForReplacement: content };
   }
@@ -62,7 +68,13 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
   if (fuzzyIdx !== -1) {
     const secondFuzzy = normalizedContent.indexOf(normalizedOld, fuzzyIdx + 1);
     if (secondFuzzy === -1) {
-      return { found: true, index: fuzzyIdx, matchLength: normalizedOld.length, usedFuzzyMatch: true, contentForReplacement: normalizedContent };
+      return {
+        found: true,
+        index: fuzzyIdx,
+        matchLength: normalizedOld.length,
+        usedFuzzyMatch: true,
+        contentForReplacement: normalizedContent,
+      };
     }
   }
 
@@ -79,7 +91,11 @@ export interface AppliedEditsResult {
   newContent: string;
 }
 
-export function applyEditsToNormalizedContent(normalizedContent: string, edits: Edit[], path: string): AppliedEditsResult {
+export function applyEditsToNormalizedContent(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): AppliedEditsResult {
   let anyFuzzy = false;
   const matches: Array<{ index: number; matchLength: number; newText: string }> = [];
 
@@ -88,9 +104,7 @@ export function applyEditsToNormalizedContent(normalizedContent: string, edits: 
     const match = fuzzyFindText(normalizedContent, normalizedOld);
 
     if (!match.found) {
-      throw new Error(
-        `old_string not found in ${path}. Double-check whitespace + surrounding context.`,
-      );
+      throw new Error(`old_string not found in ${path}. Double-check whitespace + surrounding context.`);
     }
     if (match.usedFuzzyMatch) anyFuzzy = true;
 
@@ -177,9 +191,10 @@ export function generateDiffString(
     const hunkOldStart = contextStart + 1;
     const hunkOldLen = contextEnd - contextStart;
     const hunkNewStart = contextStart + 1 + (j - i);
-    const hunkNewLen = newContextEnd - contextStart - (contextEnd - contextStart) + hunkOldLen + (jEnd - j) - (iEnd - i);
 
-    hunks.push(`@@ -${hunkOldStart},${hunkOldLen} +${hunkNewStart},${Math.max(0, newContextEnd - (contextStart + (j - i)))} @@`);
+    hunks.push(
+      `@@ -${hunkOldStart},${hunkOldLen} +${hunkNewStart},${Math.max(0, newContextEnd - (contextStart + (j - i)))} @@`,
+    );
 
     for (let c = contextStart; c < i; c++) {
       hunks.push(` ${oldLines[c]}`);

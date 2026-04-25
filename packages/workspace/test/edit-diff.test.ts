@@ -84,10 +84,14 @@ describe("applyEditsToNormalizedContent", () => {
   });
 
   test("multiple non-overlapping edits", () => {
-    const { newContent } = applyEditsToNormalizedContent("aaa\nbbb\nccc", [
-      { oldText: "aaa", newText: "AAA" },
-      { oldText: "ccc", newText: "CCC" },
-    ], "f.ts");
+    const { newContent } = applyEditsToNormalizedContent(
+      "aaa\nbbb\nccc",
+      [
+        { oldText: "aaa", newText: "AAA" },
+        { oldText: "ccc", newText: "CCC" },
+      ],
+      "f.ts",
+    );
     expect(newContent).toBe("AAA\nbbb\nCCC");
   });
 
@@ -96,10 +100,16 @@ describe("applyEditsToNormalizedContent", () => {
   });
 
   test("throws on overlapping edits", () => {
-    expect(() => applyEditsToNormalizedContent("abcdef", [
-      { oldText: "abcd", newText: "X" },
-      { oldText: "cdef", newText: "Y" },
-    ], "f.ts")).toThrow("Overlapping");
+    expect(() =>
+      applyEditsToNormalizedContent(
+        "abcdef",
+        [
+          { oldText: "abcd", newText: "X" },
+          { oldText: "cdef", newText: "Y" },
+        ],
+        "f.ts",
+      ),
+    ).toThrow("Overlapping");
   });
 });
 

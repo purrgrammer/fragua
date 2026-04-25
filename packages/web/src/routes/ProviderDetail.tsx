@@ -7,12 +7,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import { Badge } from "../components/ui/badge.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 

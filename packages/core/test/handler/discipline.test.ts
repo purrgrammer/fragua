@@ -93,7 +93,7 @@ describe("handler discipline", () => {
   // §1.1, §5). If a handler declares itself external but never calls
   // ctx.externalCall, the intent/done facts never get written, the sweep
   // finds nothing to quarantine, and replay silently double-executes.
-  test("every sideEffect:\"external\" handler in handlers/ uses ctx.externalCall", () => {
+  test('every sideEffect:"external" handler in handlers/ uses ctx.externalCall', () => {
     const externalRe = /sideEffect\s*:\s*["']external["']/;
     const usesRe = /\bctx\.externalCall\s*\(/;
     const offenders: string[] = [];

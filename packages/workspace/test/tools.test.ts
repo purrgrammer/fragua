@@ -94,10 +94,7 @@ describe("core tools", () => {
     const bom = "\uFEFF";
     const content = `${bom}line1\r\nline2\r\n`;
     await writeFileTool.execute({ path: "bom.txt", content }, env);
-    const e = await editFileTool.execute(
-      { path: "bom.txt", edits: [{ oldText: "line1", newText: "LINE1" }] },
-      env,
-    );
+    const e = await editFileTool.execute({ path: "bom.txt", edits: [{ oldText: "line1", newText: "LINE1" }] }, env);
     expect(e.is_error).toBeUndefined();
     const r = await readFileTool.execute({ path: "bom.txt" }, env);
     expect(r.text).toContain("LINE1");
@@ -105,10 +102,7 @@ describe("core tools", () => {
 
   test("edit fails on not-found oldText", async () => {
     await writeFileTool.execute({ path: "nf.txt", content: "hello" }, env);
-    const e = await editFileTool.execute(
-      { path: "nf.txt", edits: [{ oldText: "goodbye", newText: "x" }] },
-      env,
-    );
+    const e = await editFileTool.execute({ path: "nf.txt", edits: [{ oldText: "goodbye", newText: "x" }] }, env);
     expect(e.is_error).toBe(true);
     expect(e.text).toContain("not found");
   });

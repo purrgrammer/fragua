@@ -40,7 +40,7 @@ function registry(): InMemoryToolRegistry {
 }
 
 describe("buildHandlerContext — env scoping follows allowed_tools", () => {
-  test("allowed_tools:[\"read\"] → ctx.env rejects writeFile and exec", async () => {
+  test('allowed_tools:["read"] → ctx.env rejects writeFile and exec', async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = buildHandlerContext({
       runId: "r",
@@ -65,7 +65,7 @@ describe("buildHandlerContext — env scoping follows allowed_tools", () => {
     store.close();
   });
 
-  test("allowed_tools:[\"read\",\"bash\"] → ctx.env keeps full access", async () => {
+  test('allowed_tools:["read","bash"] → ctx.env keeps full access', async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = buildHandlerContext({
       runId: "r",
@@ -88,7 +88,7 @@ describe("buildHandlerContext — env scoping follows allowed_tools", () => {
     store.close();
   });
 
-  test("denied_tools:[\"bash\",\"write\",\"edit\"] on a registry that has those → env is read-only", async () => {
+  test('denied_tools:["bash","write","edit"] on a registry that has those → env is read-only', async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = buildHandlerContext({
       runId: "r",

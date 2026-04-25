@@ -130,7 +130,7 @@ export function truncateTail(content: string, options?: TruncationOptions): Trun
   let outputLines = 0;
   let outputBytes = 0;
   let truncatedBy: "lines" | "bytes" = "lines";
-  let lastLinePartial = false;
+  const lastLinePartial = false;
 
   for (let i = allLines.length - 1; i >= 0; i--) {
     const lineBytes = Buffer.byteLength(allLines[i]!, "utf-8");

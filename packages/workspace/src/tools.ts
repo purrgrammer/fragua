@@ -21,14 +21,7 @@ import {
   restoreLineEndings,
   stripBom,
 } from "./edit-diff.ts";
-import { resolveReadPath, resolveToCwd, withFileMutationQueue } from "./path-utils.ts";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  truncateHead,
-  truncateTail,
-} from "./truncate-v2.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateTail } from "./truncate-v2.ts";
 import type { Tool } from "./types.ts";
 
 export const readFileTool: Tool<{ path: string; offset?: number; limit?: number }, { path: string; size: number }> = {
@@ -100,7 +93,8 @@ export const readFileTool: Tool<{ path: string; offset?: number; limit?: number 
 
 export const writeFileTool: Tool<{ path: string; content: string }, { path: string; bytes: number }> = {
   name: "write",
-  description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+  description:
+    "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
   parameters: Type.Object({
     path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
     content: Type.String({ description: "Content to write to the file" }),
@@ -155,11 +149,7 @@ export const editFileTool: Tool<
       const originalEnding = detectLineEnding(content);
       const normalizedContent = normalizeToLF(content);
 
-      const { baseContent, newContent } = applyEditsToNormalizedContent(
-        normalizedContent,
-        args.edits,
-        args.path,
-      );
+      const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, args.edits, args.path);
 
       const finalContent = bom + restoreLineEndings(newContent, originalEnding);
       await env.writeFile(args.path, finalContent);
@@ -178,8 +168,7 @@ export const editFileTool: Tool<
 
 export const bashTool: Tool<{ command: string; timeout?: number }, { exit_code: number; duration_ms: number }> = {
   name: "bash",
-  description:
-    `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
   parameters: Type.Object({
     command: Type.String({ description: "Bash command to execute" }),
     timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),

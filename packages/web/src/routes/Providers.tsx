@@ -12,12 +12,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cpu, KeyRound, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import { Badge } from "../components/ui/badge.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import * as api from "../lib/api.ts";
-import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
 import { queries } from "../lib/queries.ts";
 
 export function Providers(): JSX.Element {

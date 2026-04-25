@@ -141,22 +141,26 @@ describe("externalCall — idempotency-key properties", () => {
         idArb,
         async (runId, nodeId, iteration, toolName, markerA, markerB) => {
           if (markerA === markerB) return;
-          const ka = (await invoke({
-            runId,
-            nodeId,
-            iteration,
-            toolName,
-            args: { marker: markerA },
-            attempt: 1,
-          })).intentKey;
-          const kb = (await invoke({
-            runId,
-            nodeId,
-            iteration,
-            toolName,
-            args: { marker: markerB },
-            attempt: 1,
-          })).intentKey;
+          const ka = (
+            await invoke({
+              runId,
+              nodeId,
+              iteration,
+              toolName,
+              args: { marker: markerA },
+              attempt: 1,
+            })
+          ).intentKey;
+          const kb = (
+            await invoke({
+              runId,
+              nodeId,
+              iteration,
+              toolName,
+              args: { marker: markerB },
+              attempt: 1,
+            })
+          ).intentKey;
           expect(ka).not.toBe(kb);
         },
       ),
