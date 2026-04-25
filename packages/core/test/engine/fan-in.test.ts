@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { type FanInCandidate, foldFanIn } from "../../src/engine/fan-in.ts";
+import { FAN_IN_VERSION, type FanInCandidate, FanInVersionMismatchError, foldFanIn } from "../../src/engine/fan-in.ts";
 import type { OutcomeStatus } from "../../src/types/outcome.ts";
 
 const STATUSES: OutcomeStatus[] = ["success", "partial_success", "retry", "skipped", "fail"];
@@ -192,6 +192,40 @@ describe("foldFanIn — fixed examples anchoring the rank order", () => {
     const r = foldFanIn(cs);
     expect(r.allFailed).toBe(true);
     expect(r.winner?.branchId).toBe("a");
+  });
+});
+
+describe("foldFanIn — algorithm version pinning", () => {
+  test("FAN_IN_VERSION is a positive integer that survives import-time", () => {
+    expect(FAN_IN_VERSION).toBeGreaterThanOrEqual(1);
+    expect(Number.isInteger(FAN_IN_VERSION)).toBe(true);
+  });
+
+  test("explicit v1 matches the default (current implementation)", () => {
+    const cs: FanInCandidate[] = [
+      { branchId: "a", status: "fail" },
+      { branchId: "b", status: "success", score: 0.5 },
+    ];
+    expect(foldFanIn(cs)).toEqual(foldFanIn(cs, 1));
+    expect(foldFanIn(cs, 1).winner?.branchId).toBe("b");
+  });
+
+  test("undefined / 0 version coerces to v1 (pre-pinning replays)", () => {
+    const cs: FanInCandidate[] = [{ branchId: "x", status: "success" }];
+    expect(foldFanIn(cs, undefined).winner?.branchId).toBe("x");
+    expect(foldFanIn(cs, 0).winner?.branchId).toBe("x");
+  });
+
+  test("unknown version throws FanInVersionMismatchError with the known list", () => {
+    const cs: FanInCandidate[] = [{ branchId: "x", status: "success" }];
+    expect(() => foldFanIn(cs, 999)).toThrow(FanInVersionMismatchError);
+    try {
+      foldFanIn(cs, 999);
+    } catch (err) {
+      expect(err).toBeInstanceOf(FanInVersionMismatchError);
+      expect((err as FanInVersionMismatchError).requested).toBe(999);
+      expect((err as FanInVersionMismatchError).known).toContain(1);
+    }
   });
 });
 

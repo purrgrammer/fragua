@@ -25,7 +25,7 @@
 //     by triggering the shared AbortController. Branches that don't
 //     respect the signal keep running until completion.
 
-import type { FanInCandidate } from "../../engine/fan-in.ts";
+import { FAN_IN_VERSION, type FanInCandidate } from "../../engine/fan-in.ts";
 import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
 
 export type JoinPolicy = "wait_all" | "first_success";
@@ -122,6 +122,11 @@ export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
       costUsd: 0,
       routingDelta: {
         [`parallel.${parentCtx.nodeId}.results`]: results,
+        // Pin the fan-in algorithm version at the moment the parallel
+        // node settles. The fan_in handler reads it back so a replay of
+        // this parallel after a future ranker bump still sees the
+        // ordering this run was designed under. See engine/fan-in.ts.
+        [`parallel.${parentCtx.nodeId}.fan_in_version`]: FAN_IN_VERSION,
       },
     } satisfies HandlerResult;
   };

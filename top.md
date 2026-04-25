@@ -33,7 +33,7 @@
 | 17 | 🟢 | ~~`gcBlobs` exists but never auto-invoked~~ | ✅ resolved |
 | 18 | 🟢 | No chaos test matrix (disk-full, clock skew, torn-write, OOM, fsync-fail) | open |
 | 19 | 🟢 | Time/clock injection inconsistent across tests | open |
-| 20 | 🟢 | Fan-in heuristic version not pinned per run — replay determinism risk | open |
+| 20 | 🟢 | ~~Fan-in heuristic version not pinned per run — replay determinism risk~~ | ✅ resolved |
 | 21 | 🟢 | First-class simulation (`swarm simulate`) not delivered | open |
 | 22 | 🟢 | Provider credentials live in process env — should move to DB (per existing memory note) | open |
 | 23 | 🟡 | ~~Pending-intent driver missing — `intent.unquarantine` and `intent.cancel_requested` on non-running states~~ | ✅ resolved |
@@ -260,11 +260,17 @@ Config: `.swarm/config.yaml` `blob_gc.interval` (duration string or ms; `0` disa
 
 ---
 
-### 20. 🟢 Fan-in heuristic determinism
+### 20. ✅ ~~Fan-in heuristic determinism~~
 
-**Evidence** `packages/core/src/engine/fan-in.ts` — heuristic ranker; if logic changes, replay diverges
+**Resolution.** Established a versioning contract in `engine/fan-in.ts`. New `FAN_IN_VERSION = 1` constant + `FanInVersionMismatchError`. `foldFanIn(candidates, version?: number)` now dispatches on version (current implementation is `compareCandidatesV1`); pre-pinning replays (undefined / 0) coerce to v1, the only version that existed before pinning. Unknown versions throw with the known list.
 
-**Proposed approach** Pin a `fan_in_version` per run in `run_state`; reducer dispatches on version. Replay uses the run's pinned version, not current.
+The parallel handler stamps `parallel.<nodeId>.fan_in_version` into routing alongside `.results`. The fan_in handler reads it back and feeds the pinned version into `foldFanIn`, so replay of an old run survives a future bump byte-identically. Observability event `fan_in.completed` carries both `version` (pinned) and `currentVersion` so the UI / replay tools see when they diverge.
+
+This wires the contract — the actual second-version branch (compareCandidatesV2 etc.) lands the day someone bumps the algorithm. The KNOWN_VERSIONS array gates which numbers `foldFanIn` accepts; removing an old version is a breaking change and should bump `MIN_COMPATIBLE_SCHEMA_VERSION` to fence out runs pinned to it.
+
+**Tests:** 4 new in `fan-in.test.ts` — version constant sanity, explicit-v1-equals-default, undefined-coerces-to-v1, unknown-version-throws.
+
+**Files touched:** `packages/core/src/engine/fan-in.ts`, `packages/core/src/handler/handlers/{parallel,fan-in}.ts`, `packages/core/test/engine/fan-in.test.ts`.
 
 ---
 
@@ -317,3 +323,4 @@ Config: `.swarm/config.yaml` `blob_gc.interval` (duration string or ms; `0` disa
 - **2026-04-25 — #13** Oversized intent payload → typed 413, not 500. New `appendIntentOr413` wrapper translates `PayloadTooLargeError` to `413 { code: "payload_too_large", sizeBytes, maxBytes }` on every intent-write route. Plus a documented author-time rule on the FactEvent union: bulky free-form strings belong in `messages` / `artifacts`, never in fact payloads. 1 new test. All 1151 tests green.
 - **2026-04-25 — #15** Documented parallel + quarantine semantics. New "Quarantine inside a parallel branch" subsection in `docs/handler-contract.md`: a branch orphan quarantines the whole run; siblings abandon; unquarantine operates at the parent parallel node; per-branch quarantine is out of scope for v1. Pure docs — code already behaves this way.
 - **2026-04-25 — #16/#17** Lock-wait instrumentation + auto blob GC. `MetricsSnapshot` gains lock-wait histograms (`p50/p99LockWaitMs`); `writeTxn` times `BEGIN IMMEDIATE` separately so contention is visible before write tail latency does. New `startBlobGc` driver in `daemon/blob-gc.ts` sweeps orphan blob files every 6h by default; configurable via `.swarm/config.yaml` `blob_gc.{interval,max_rows}`. 4 new tests. All 1155 tests green.
+- **2026-04-25 — #20** Fan-in version pinning. `foldFanIn` now takes an optional `version` and dispatches on it; `FAN_IN_VERSION = 1` is the current. The parallel handler stamps `parallel.<id>.fan_in_version` into routing; the fan_in handler reads it back. Replay of old runs survives a future ranker bump byte-identically. Pre-pinning replays default to v1; unknown versions throw `FanInVersionMismatchError`. 4 new tests. All 1159 tests green.

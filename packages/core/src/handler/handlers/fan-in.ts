@@ -11,7 +11,7 @@
 // lands, the emit side belongs in a separate handler kind or a
 // `prompt`-branching switch inside this one.
 
-import { type FanInCandidate, foldFanIn } from "../../engine/fan-in.ts";
+import { FAN_IN_VERSION, type FanInCandidate, foldFanIn } from "../../engine/fan-in.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
 export interface FanInHandlerConfig {
@@ -53,7 +53,26 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
       candidates.push(cand);
     }
 
-    const { winner, ranked, allFailed } = foldFanIn(candidates);
+    // Read the version the parallel handler pinned. Pre-pinning runs
+    // (no key written) default to v1 — the only version that existed
+    // before pinning. Replay of an old run thus stays byte-identical
+    // even if FAN_IN_VERSION has been bumped since.
+    const versionKey = `parallel.${cfg.parallelNodeId}.fan_in_version`;
+    const pinnedRaw = ctx.routing[versionKey];
+    const pinnedVersion = typeof pinnedRaw === "number" && pinnedRaw > 0 ? pinnedRaw : 1;
+
+    let winner: FanInCandidate | null;
+    let ranked: FanInCandidate[];
+    let allFailed: boolean;
+    try {
+      ({ winner, ranked, allFailed } = foldFanIn(candidates, pinnedVersion));
+    } catch (err) {
+      return {
+        kind: "halt",
+        reason: "error",
+        detail: `fan_in "${ctx.nodeId}": ${err instanceof Error ? err.message : String(err)}`,
+      } satisfies HandlerResult;
+    }
     const outcomeStatus: "success" | "fail" = allFailed ? "fail" : "success";
 
     ctx.emit("fan_in.completed", {
@@ -62,6 +81,8 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
       winner: winner?.branchId ?? null,
       allFailed,
       rankedOrder: ranked.map((r) => r.branchId),
+      version: pinnedVersion,
+      currentVersion: FAN_IN_VERSION,
     });
 
     const winnerKey = `fan_in.${ctx.nodeId}.winner`;
