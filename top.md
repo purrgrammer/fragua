@@ -18,7 +18,7 @@
 | 2 | 🔴 | ~~Replay semantics for non-external work undefined (artifacts silently overwrite, messages duplicate)~~ | ✅ resolved |
 | 3 | 🔴 | ~~Intent fold lacks formal truth table for simultaneous combinations~~ | ✅ resolved |
 | 4 | 🔴 | ~~Budget ledger declared-but-not-wired~~ | ✅ resolved |
-| 5 | 🔴 | `canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented) | open |
+| 5 | 🔴 | ~~`canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented)~~ | ✅ resolved |
 | 6 | 🟡 | Schema drift halts paused runs on any version bump (no additive vs breaking distinction) | open |
 | 7 | 🟡 | Daemon health: server route exists, UI staleness banner does not | open |
 | 8 | 🟡 | Quarantine triage UI missing — operator must hand-craft `intent.unquarantine` | open |
@@ -88,17 +88,18 @@ The reducer accumulates per-node cost in a new `RunMetrics.nodeCosts` map (addit
 
 ---
 
-### 5. 🔴 `canonicalStringify` — Unicode + undocumented Date/Buffer reject
+### 5. ✅ ~~`canonicalStringify` — Unicode + undocumented Date/Buffer reject~~
 
-**Evidence**
-- `packages/core/src/handler/canonical-stringify.ts` — strict on bigint/symbol/function/cyclic/non-finite; otherwise leans on `JSON.stringify`
-- Two args with structurally-equal strings but different Unicode normalization (NFC vs NFD) produce different `argsHash` → different idempotency keys → provider may not dedup
+**Resolution.** Every string — keys and values — is now normalised to Unicode NFC via the built-in `String.prototype.normalize("NFC")` (no dependency added). Two args that differ only in normalisation (e.g. `café` typed on macOS vs Linux) hash identically. `Date`, `TypedArray`, `Buffer`, `DataView`, and `ArrayBuffer` are rejected with typed `CanonicalStringifyError`s — they previously fell through `typeof === "object"` and silently serialised as `{}`. Duplicate keys post-normalisation throw rather than silently last-write-wins.
 
-**Proposed approach**
-- Unicode-normalize all strings to NFC before serialization
-- Reject `Date` and `Buffer`/`Uint8Array` explicitly with a typed error so handlers learn to convert
-- Document the canonical form fully in `docs/handler-contract.md` (BNF-level)
-- Cross-version stability test using a fixed corpus
+The canonical form is now fully documented in `docs/handler-contract.md`. New `canonical-stringify.test.ts` (18 tests) pins:
+- key reorder + nested key reorder produce identical hashes
+- NFC vs NFD strings hash identically (in values, in array entries, in object keys)
+- duplicate-after-NFC keys throw
+- all rejected built-ins throw with specific error messages
+- a small stability corpus where each row's representations all hash identically and rows differ from each other
+
+**Files touched:** `packages/core/src/handler/canonical-stringify.ts`, `packages/core/test/handler/canonical-stringify.test.ts` (new), `docs/handler-contract.md`.
 
 ---
 
@@ -310,3 +311,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #3** Intent fold truth table. Rewrote `foldIntents` with seven precedence rules, per-state preconditions, and a new `intent.dropped` observability event. New `shouldPauseAfterDispatch` decision flag captures pause-defers-to-after-handler semantics when steer/hitl arrive in the same batch as pause (per user feedback: specific intents must not be dropped implicitly). Documented in new `docs/intent-fold.md`. P27 (200 fast-check runs) asserts the table; 10 unit cases cover the headline rules. Surfaced item #23 (pending-intent driver missing for unquarantine + cancel-on-paused). All 1094 tests green.
 - **2026-04-25 — #4** Budget ledger wired. New pure `evaluateBudget` policy module enforces run + node ceilings at the turn boundary; executor rewrites `result` to a budget halt on breach, queues `budget.stop` observability before the terminal `fact.run_halted`. Warn-at-80 % fires once per scope+metric per run. `budget_policy = "warn"` makes stops non-blocking. New `RunMetrics.nodeCosts` accumulates per-node cost (additive JSON change, no schema bump). Parser ENUM_KEYS rejects typos in `budget_policy` at registration. Agent backend's `BudgetSnapshot` now populated from real cumulative numbers. 15 new tests (12 unit + 3 e2e + parser enum). All 1110 tests green.
 - **2026-04-25 — #23** Pending-intent driver. Renamed `wake-hitl.ts` → `wake-pending.ts` with one `wakePending(store)` entry point that runs three sweeps in cancel → hitl → unquarantine order. Cancel-on-paused / cancel-on-quarantined and all three unquarantine resolutions (cancel / retry / treat_as_done) now actually transition state. `treat_as_done` synthesises `fact.side_effect_done` for each orphan so subsequent startup sweeps are coherent. 9 new tests cover the precedence rules, the resolution branches, and idempotence. All 1119 tests green.
+- **2026-04-25 — #5** canonicalStringify Unicode + explicit reject of silently-broken built-ins. NFC normalisation via the built-in `String.prototype.normalize` — no dep. `Date`, `TypedArray`, `Buffer`, `DataView`, `ArrayBuffer` now throw rather than serialising as `{}`. Duplicate keys after NFC normalisation throw. Canonical form fully documented in `docs/handler-contract.md`. 18 new tests pin a stability corpus. All 1137 tests green.

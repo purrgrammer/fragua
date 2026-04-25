@@ -113,7 +113,15 @@ const result = await ctx.externalCall(
 );
 ```
 
-`args` must be JSON-serialisable (plain objects, arrays, strings, finite numbers, booleans, `null`). Functions, `undefined`, `bigint`, `Symbol`, cyclic references, and non-finite numbers throw `CanonicalStringifyError`. Two objects with the same content but different key insertion order produce the same `argsHash` — the whole point of moving canonicalisation into the framework is that a handler that reconstructs args across a replay can't accidentally drift its hash.
+`args` must be JSON-serialisable (plain objects, arrays, strings, finite numbers, booleans, `null`). The canonical form is exact:
+
+- **Object keys are sorted lexicographically** after Unicode normalisation. Two objects with the same content but different key insertion order produce the same `argsHash`.
+- **All strings — keys and values — are normalised to Unicode NFC** before hashing. The same word typed once on macOS (NFD by default) and once on Linux (NFC by default) hashes identically. Callers don't have to think about it.
+- **Numbers** use `JSON.stringify`'s canonical form: `1`, `1.0`, and `1e0` are all the same `number` at runtime, so all hash to `"1"`. Finite-only — `NaN` and `±Infinity` throw.
+- **Rejected loudly** (no silent corruption): `undefined`, `bigint`, `Symbol`, function, cyclic references, `Date`, `Buffer`, any `TypedArray`, `ArrayBuffer`. Convert to plain JSON values before passing as `args`.
+- **Duplicate keys after NFC normalisation** throw — an object with both `{"café": 1}` (NFC) and `{"café": 2}` (NFD) is ambiguous; the canonical form refuses to silently last-write-wins.
+
+Tests pinning the corpus live at `packages/core/test/handler/canonical-stringify.test.ts`. The whole point of moving canonicalisation into the framework is that a handler that reconstructs args across a replay can't accidentally drift its hash.
 
 Declare your handler's risk level on the spec:
 
