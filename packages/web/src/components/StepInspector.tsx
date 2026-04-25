@@ -158,83 +158,55 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
     <details data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card">
       <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-3">
         <span className="font-mono text-xs text-muted-foreground flex-shrink-0">{headLabel}</span>
-        <span className="ml-auto flex gap-3 text-xs text-muted-foreground tabular-nums">
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           {metrics.map((m) => (
             <span key={m.key}>{m.node}</span>
           ))}
+          {hasCost && hasContextWindow && (
+            // biome-ignore lint/a11y/noStaticElementInteractions: stop <details> toggle when interacting with the hover-card trigger
+            <span onClick={(e) => e.preventDefault()} onKeyDown={(e) => e.preventDefault()}>
+              <Context
+                maxTokens={maxTokens}
+                usedTokens={usedTokens}
+                usage={{
+                  inputTokens,
+                  outputTokens,
+                  cachedInputTokens: cacheReadTokens,
+                  reasoningTokens: 0,
+                  totalTokens,
+                  inputTokenDetails: {
+                    noCacheTokens: inputTokens,
+                    cacheReadTokens,
+                    cacheWriteTokens: step.cost?.cache_write_tokens ?? 0,
+                  },
+                  outputTokenDetails: {
+                    textTokens: outputTokens,
+                    reasoningTokens: 0,
+                  },
+                }}
+                modelId={tokenlensModelId}
+              >
+                <ContextTrigger />
+                <ContextContent>
+                  <ContextContentHeader />
+                  <ContextContentBody>
+                    <ContextInputUsage />
+                    <ContextOutputUsage />
+                    <ContextCacheUsage />
+                  </ContextContentBody>
+                  <ContextContentFooter>
+                    <span className="text-muted-foreground">Total cost</span>
+                    <span>
+                      <AnimatedNumber value={step.cost!.cost_usd} format={usdFormatOptions(step.cost!.cost_usd)} />
+                    </span>
+                  </ContextContentFooter>
+                </ContextContent>
+              </Context>
+            </span>
+          )}
         </span>
       </summary>
       <div className="flex flex-col gap-3 p-3 text-xs border-t">
-        {hasCost && (
-          <Context
-            maxTokens={maxTokens}
-            usedTokens={usedTokens}
-            usage={{
-              inputTokens,
-              outputTokens,
-              cachedInputTokens: cacheReadTokens,
-              reasoningTokens: 0,
-              totalTokens,
-              inputTokenDetails: {
-                noCacheTokens: inputTokens,
-                cacheReadTokens,
-                cacheWriteTokens: step.cost?.cache_write_tokens ?? 0,
-              },
-              outputTokenDetails: {
-                textTokens: outputTokens,
-                reasoningTokens: 0,
-              },
-            }}
-            modelId={tokenlensModelId}
-          >
-            <ContextTrigger>
-              {/* Compact inline trigger showing context usage */}
-              <button
-                type="button"
-                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {hasContextWindow ? (
-                  <span className="tabular-nums">
-                    <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
-                    {" / "}
-                    <AnimatedNumber value={maxTokens} format={tokensCompactFormatOptions(maxTokens)} />
-                    {" ctx"}
-                  </span>
-                ) : (
-                  <span className="tabular-nums">
-                    <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
-                    {" tokens"}
-                  </span>
-                )}
-              </button>
-            </ContextTrigger>
-            <ContextContent>
-              {hasContextWindow ? (
-                <ContextContentHeader />
-              ) : (
-                <ContextContentHeader>
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-mono">
-                      <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
-                      {" tokens used"}
-                    </span>
-                  </div>
-                </ContextContentHeader>
-              )}
-              <ContextContentBody>
-                <ContextInputUsage />
-                <ContextOutputUsage />
-                <ContextCacheUsage />
-              </ContextContentBody>
-              <ContextContentFooter>
-                <span className="text-muted-foreground">Total cost</span>
-                <span>
-                  <AnimatedNumber value={step.cost!.cost_usd} format={usdFormatOptions(step.cost!.cost_usd)} />
-                </span>
-              </ContextContentFooter>
-            </ContextContent>
-          </Context>
-        )}
         <Section title="Prompt">
           <pre className="whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded text-xs">{step.prompt}</pre>
         </Section>
