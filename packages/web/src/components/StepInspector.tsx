@@ -16,9 +16,20 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect } from "react";
-import { getRunSteps, type StepSnapshot } from "../lib/api.ts";
+import { getProvider, getRunSteps, type ProviderModel, type StepSnapshot } from "../lib/api.ts";
 import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
+import {
+  Context,
+  ContextCacheUsage,
+  ContextContent,
+  ContextContentBody,
+  ContextContentFooter,
+  ContextContentHeader,
+  ContextInputUsage,
+  ContextOutputUsage,
+  ContextTrigger,
+} from "./ai-elements/context.tsx";
 import { AnimatedNumber } from "./ui/animated-number.tsx";
 
 export interface StepInspectorProps {
@@ -77,7 +88,26 @@ export function StepInspector({ runId, totalEvents }: StepInspectorProps): JSX.E
   );
 }
 
+/**
+ * Look up the context-window size for a given provider+model pair.
+ * Returns `undefined` while loading or when the provider is unknown.
+ */
+function useContextWindow(provider: string | undefined, modelId: string | undefined): number | undefined {
+  const { data: providerDetail } = useQuery({
+    queryKey: ["providers", provider] as const,
+    queryFn: () => getProvider(provider!),
+    enabled: !!provider,
+    // Provider metadata rarely changes; stale for 10 min.
+    staleTime: 10 * 60 * 1000,
+  });
+  if (!providerDetail || !modelId) return undefined;
+  const found: ProviderModel | undefined = providerDetail.models.find((m) => m.id === modelId);
+  return found?.contextWindow;
+}
+
 function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
+  const contextWindow = useContextWindow(step.provider, step.model);
+
   const headLabel = [
     `#${step.stepIdx}`,
     step.nodeId,
@@ -87,13 +117,9 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
   ]
     .filter(Boolean)
     .join(" · ");
-  const cacheRead = step.cost?.cache_read_tokens ?? 0;
-  const cacheWrite = step.cost?.cache_write_tokens ?? 0;
-  const totalCostTokens =
-    step.cost !== undefined ? (step.cost.total_tokens ?? step.cost.input_tokens + step.cost.output_tokens) : undefined;
-  // Show cache stats only when the step actually reported any. Tooltip via
-  // the title attr on the containing span would be noise here — operators
-  // filter steps by eye, so short labels win.
+
+  // Summary row still shows duration — cost/token details move into the
+  // Context card inside the expanded body.
   const metrics: { key: string; node: ReactNode }[] = [];
   if (step.durationMs !== undefined) {
     metrics.push({ key: "duration", node: <>⏱ {formatDuration(step.durationMs)}</> });
@@ -108,32 +134,25 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
       ),
     });
   }
-  if (totalCostTokens !== undefined) {
-    metrics.push({
-      key: "tokens",
-      node: (
-        <>
-          ◎ <AnimatedNumber value={totalCostTokens} format={tokensCompactFormatOptions(totalCostTokens)} />
-        </>
-      ),
-    });
-  }
-  if (cacheRead > 0 || cacheWrite > 0) {
-    metrics.push({
-      key: "cache",
-      node: (
-        <>
-          ⚡ <AnimatedNumber value={cacheRead} format={tokensCompactFormatOptions(cacheRead)} />
-          {cacheWrite > 0 ? (
-            <>
-              /+
-              <AnimatedNumber value={cacheWrite} format={tokensCompactFormatOptions(cacheWrite)} />
-            </>
-          ) : null}
-        </>
-      ),
-    });
-  }
+
+  // Build LanguageModelUsage for the Context component.
+  const inputTokens = step.cost?.input_tokens ?? 0;
+  const outputTokens = step.cost?.output_tokens ?? 0;
+  const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
+  const totalTokens = step.cost !== undefined ? (step.cost.total_tokens ?? inputTokens + outputTokens) : 0;
+
+  // usedTokens for the context ring: input (which occupies the context window).
+  // Fall back to totalTokens when we have no context window denominator.
+  const usedTokens = inputTokens || totalTokens;
+  // If we have a known context window, use it; otherwise use usedTokens so the
+  // ring shows 100% (informational, not misleading about capacity).
+  const maxTokens = contextWindow && contextWindow > 0 ? contextWindow : usedTokens || 1;
+  const hasContextWindow = !!(contextWindow && contextWindow > 0);
+
+  // modelId for tokenlens cost calculation (format: "provider:modelId").
+  const tokenlensModelId = step.provider && step.model ? `${step.provider}:${step.model}` : undefined;
+
+  const hasCost = step.cost !== undefined;
 
   return (
     <details data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card">
@@ -146,6 +165,76 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
         </span>
       </summary>
       <div className="flex flex-col gap-3 p-3 text-xs border-t">
+        {hasCost && (
+          <Context
+            maxTokens={maxTokens}
+            usedTokens={usedTokens}
+            usage={{
+              inputTokens,
+              outputTokens,
+              cachedInputTokens: cacheReadTokens,
+              reasoningTokens: 0,
+              totalTokens,
+              inputTokenDetails: {
+                noCacheTokens: inputTokens,
+                cacheReadTokens,
+                cacheWriteTokens: step.cost?.cache_write_tokens ?? 0,
+              },
+              outputTokenDetails: {
+                textTokens: outputTokens,
+                reasoningTokens: 0,
+              },
+            }}
+            modelId={tokenlensModelId}
+          >
+            <ContextTrigger>
+              {/* Compact inline trigger showing context usage */}
+              <button
+                type="button"
+                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {hasContextWindow ? (
+                  <span className="tabular-nums">
+                    <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
+                    {" / "}
+                    <AnimatedNumber value={maxTokens} format={tokensCompactFormatOptions(maxTokens)} />
+                    {" ctx"}
+                  </span>
+                ) : (
+                  <span className="tabular-nums">
+                    <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
+                    {" tokens"}
+                  </span>
+                )}
+              </button>
+            </ContextTrigger>
+            <ContextContent>
+              {hasContextWindow ? (
+                <ContextContentHeader />
+              ) : (
+                <ContextContentHeader>
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-mono">
+                      <AnimatedNumber value={usedTokens} format={tokensCompactFormatOptions(usedTokens)} />
+                      {" tokens used"}
+                    </span>
+                  </div>
+                </ContextContentHeader>
+              )}
+              <ContextContentBody>
+                <ContextInputUsage />
+                <ContextOutputUsage />
+                <ContextCacheUsage />
+              </ContextContentBody>
+              <ContextContentFooter>
+                <span className="text-muted-foreground">Total cost</span>
+                <span>
+                  <AnimatedNumber value={step.cost!.cost_usd} format={usdFormatOptions(step.cost!.cost_usd)} />
+                </span>
+              </ContextContentFooter>
+            </ContextContent>
+          </Context>
+        )}
         <Section title="Prompt">
           <pre className="whitespace-pre-wrap break-words font-mono bg-muted/50 p-2 rounded text-xs">{step.prompt}</pre>
         </Section>
