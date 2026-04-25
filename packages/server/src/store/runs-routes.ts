@@ -50,7 +50,13 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (state == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
-    const events = store.getEvents(runId, { limit: 10_000 });
+    // Uncapped — `runStateToDetail` derives `nodes` + `selectedEdges`
+    // from the event log; capping the input dropped later nodes on big
+    // runs (the Graph view stuck on `implement` because its halt /
+    // completion events were past the previous 10k cap). The
+    // derivations themselves filter to a handful of event types per
+    // walk, so total work stays bounded.
+    const events = store.getEvents(runId, { limit: Number.MAX_SAFE_INTEGER });
     const wf = store.getWorkflow(state.workflowSha);
     const name = wf?.name;
     const source = wf?.dotSource;
@@ -72,7 +78,10 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (store.getState(runId) == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
-    const events = store.getEvents(runId, { limit: 10_000 });
+    // Steps are a sparse projection (one per llm.start) — capping the
+    // input event window dropped later nodes when implement alone
+    // produced >10k events. Walk the full log; the output stays small.
+    const events = store.getEvents(runId, { limit: Number.MAX_SAFE_INTEGER });
     return c.json(eventsToSteps(events));
   });
 

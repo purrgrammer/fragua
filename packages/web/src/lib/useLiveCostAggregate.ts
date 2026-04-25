@@ -1,16 +1,18 @@
-// Pure reducer + React hook for folding SSE event frames into a live
-// cost / token / cache-hit aggregate for the run-detail header.
+// Incremental + bulk reducers for folding `cost.recorded` SSE frames
+// into a live cost / token / cache-hit aggregate.
 //
-// `reduceCostEvents` is a pure function so it can be tested without a DOM.
-// `useLiveCostAggregate` is a thin `useMemo` wrapper consumed by RunDetail.
+// `foldCostFrame` runs in O(1) per frame and is what `useRunLive` calls
+// on each SSE event — the running aggregate is what the UI consumes.
+// `reduceCostEvents` is a thin bulk wrapper kept for tests + ad-hoc
+// recomputation from a known event list.
 //
-// Only `cost.recorded` events are folded — all other event types are
-// ignored. Payload field extraction is defensive (non-number → 0) so
-// the reducer never NaNs on partial or future-shaped payloads.
+// Only `cost.recorded` events are folded. Payload field extraction is
+// defensive (non-number → 0) so the reducer never NaNs on partial or
+// future-shaped payloads.
 
-import { useMemo } from "react";
-
-/** Parsed SSE frame shape — the minimal slice `useRunLive` accumulates. */
+/** Parsed SSE frame shape — the minimal slice `useRunLive` once
+ * accumulated. Kept for the bulk `reduceCostEvents` helper that takes
+ * a ready-made event list. */
 export interface LiveEvent {
   type: string;
   payload: Record<string, unknown> | null;
@@ -30,49 +32,42 @@ export interface CostAggregate {
   cacheHitRate: number | undefined;
 }
 
+export const EMPTY_COST_AGGREGATE: CostAggregate = {
+  totalCostUsd: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalCacheReadTokens: 0,
+  totalCacheWriteTokens: 0,
+  cacheHitRate: undefined,
+};
+
 function asNum(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/**
- * Pure reducer: fold an array of SSE frames into a `CostAggregate`.
- * Non-`cost.recorded` events are skipped; missing payload fields default
- * to 0 so the result is always a valid number (never NaN).
- */
-export function reduceCostEvents(events: ReadonlyArray<LiveEvent>): CostAggregate {
-  let totalCostUsd = 0;
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCacheReadTokens = 0;
-  let totalCacheWriteTokens = 0;
-
-  for (const ev of events) {
-    if (ev.type !== "cost.recorded") continue;
-    const p = ev.payload ?? {};
-    totalCostUsd += asNum(p["cost_usd"]);
-    totalInputTokens += asNum(p["input_tokens"]);
-    totalOutputTokens += asNum(p["output_tokens"]);
-    totalCacheReadTokens += asNum(p["cache_read_tokens"]);
-    totalCacheWriteTokens += asNum(p["cache_write_tokens"]);
-  }
-
+/** Add a single `cost.recorded` payload onto an existing aggregate.
+ * Returns a new object — safe to use as a `setState` updater. */
+export function foldCostFrame(prev: CostAggregate, payload: Record<string, unknown>): CostAggregate {
+  const totalInputTokens = prev.totalInputTokens + asNum(payload["input_tokens"]);
+  const totalCacheReadTokens = prev.totalCacheReadTokens + asNum(payload["cache_read_tokens"]);
   const readDenom = totalInputTokens + totalCacheReadTokens;
-  const cacheHitRate = readDenom > 0 ? totalCacheReadTokens / readDenom : undefined;
-
   return {
-    totalCostUsd,
+    totalCostUsd: prev.totalCostUsd + asNum(payload["cost_usd"]),
     totalInputTokens,
-    totalOutputTokens,
+    totalOutputTokens: prev.totalOutputTokens + asNum(payload["output_tokens"]),
     totalCacheReadTokens,
-    totalCacheWriteTokens,
-    cacheHitRate,
+    totalCacheWriteTokens: prev.totalCacheWriteTokens + asNum(payload["cache_write_tokens"]),
+    cacheHitRate: readDenom > 0 ? totalCacheReadTokens / readDenom : undefined,
   };
 }
 
-/**
- * Memoised hook: re-folds `events` only when the array reference
- * changes. Pass the `liveEvents` slice from `useRunLive`.
- */
-export function useLiveCostAggregate(events: ReadonlyArray<LiveEvent>): CostAggregate {
-  return useMemo(() => reduceCostEvents(events), [events]);
+/** Bulk fold — kept for tests and ad-hoc recomputation. Equivalent to
+ * threading `foldCostFrame` over every `cost.recorded` event. */
+export function reduceCostEvents(events: ReadonlyArray<LiveEvent>): CostAggregate {
+  let agg: CostAggregate = EMPTY_COST_AGGREGATE;
+  for (const ev of events) {
+    if (ev.type !== "cost.recorded") continue;
+    agg = foldCostFrame(agg, ev.payload ?? {});
+  }
+  return agg;
 }

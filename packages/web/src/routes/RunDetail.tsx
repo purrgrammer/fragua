@@ -2,9 +2,12 @@
 //
 // Tabs (`:view` param driven, default `conversation`):
 //   Conversation — messages-table-driven transcript (AgentMessage per row)
-//   Events       — raw store event log (fact.* / intent.* / observability.*)
 //   Graph        — live DAG with node inspector
 //   Steps        — per-step LLM context dump
+//
+// (The raw event log was intentionally removed: a long run's event
+// stream is multi-megabyte and the table view scaled badly. Use
+// `curl /api/runs/:id/events.json` for ad-hoc debugging.)
 //
 // Header shows a bento stats strip using the shared `StatTile` — same
 // design language as Home's dashboard. The mix of stats is picked for
@@ -15,7 +18,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Coins, DollarSign, Timer } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import { EventLog } from "../components/EventLog.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
@@ -29,10 +31,10 @@ import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
-import { type CostAggregate, useLiveCostAggregate } from "../lib/useLiveCostAggregate.ts";
+import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
-const VIEWS = ["conversation", "events", "graph", "steps"] as const;
+const VIEWS = ["conversation", "graph", "steps"] as const;
 type TabId = (typeof VIEWS)[number];
 
 /** Statuses where the run is still progressing and the clock should tick. */
@@ -64,10 +66,9 @@ export function RunDetail(): JSX.Element {
   const shouldCanonicalize = !!id && rawView !== view;
 
   // All hooks before any conditional return — Rules of Hooks.
-  const { messages, streaming, status: liveStatus, totalEvents, controlEvents, liveEvents } = useRunLive(id || null);
+  const { messages, streaming, status: liveStatus, totalEvents, controlEvents, liveCost } = useRunLive(id || null);
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
-  const liveAggregate = useLiveCostAggregate(liveEvents);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const handleNodeClick = useCallback((nodeId: string) => {
@@ -104,7 +105,7 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveAggregate={liveAggregate} />
+      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} />
 
       {isError && !detail ? (
         <EmptyState
@@ -127,9 +128,6 @@ export function RunDetail(): JSX.Element {
             <TabsTrigger value="conversation" data-testid="view-tab-conversation">
               Conversation
             </TabsTrigger>
-            <TabsTrigger value="events" data-testid="view-tab-events">
-              Events
-            </TabsTrigger>
             <TabsTrigger value="graph" data-testid="view-tab-graph">
               Graph
             </TabsTrigger>
@@ -151,9 +149,6 @@ export function RunDetail(): JSX.Element {
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
               />
-            </TabsContent>
-            <TabsContent value="events" className="h-full">
-              <EventLog runId={id} refetchKey={totalEvents} />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
               <RunGraphTab
@@ -181,12 +176,12 @@ function DetailHeader({
   detail,
   id,
   isLive,
-  liveAggregate,
+  liveCost,
 }: {
   detail: RunDetailT | null;
   id: string;
   isLive: boolean;
-  liveAggregate: CostAggregate;
+  liveCost: CostAggregate;
 }): JSX.Element {
   const showLive = isLive && detail?.status === "running";
   return (
@@ -224,18 +219,12 @@ function DetailHeader({
           {shortenRunId(id)}
         </p>
       </div>
-      <StatsStrip detail={detail} liveAggregate={liveAggregate} />
+      <StatsStrip detail={detail} liveCost={liveCost} />
     </header>
   );
 }
 
-export function StatsStrip({
-  detail,
-  liveAggregate,
-}: {
-  detail: RunDetailT | null;
-  liveAggregate?: CostAggregate;
-}): JSX.Element {
+export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; liveCost?: CostAggregate }): JSX.Element {
   const loading = detail == null;
   const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
   const now = useNow(1_000, isLiveRun);
@@ -246,15 +235,14 @@ export function StatsStrip({
   // still show data. The live values converge with the snapshot once the
   // run reaches a terminal fact.
   const hasLive =
-    liveAggregate != null &&
-    liveAggregate.totalCostUsd + liveAggregate.totalInputTokens + liveAggregate.totalOutputTokens > 0;
-  const costUsd = hasLive ? liveAggregate.totalCostUsd : (detail?.costUsd ?? 0);
-  const inputTokens = hasLive ? liveAggregate.totalInputTokens : (detail?.inputTokens ?? 0);
-  const outputTokens = hasLive ? liveAggregate.totalOutputTokens : (detail?.outputTokens ?? 0);
+    liveCost != null && liveCost.totalCostUsd + liveCost.totalInputTokens + liveCost.totalOutputTokens > 0;
+  const costUsd = hasLive ? liveCost.totalCostUsd : (detail?.costUsd ?? 0);
+  const inputTokens = hasLive ? liveCost.totalInputTokens : (detail?.inputTokens ?? 0);
+  const outputTokens = hasLive ? liveCost.totalOutputTokens : (detail?.outputTokens ?? 0);
   // Preserve undefined when the snapshot omits cacheReadTokens and no live
   // events have arrived — formatCacheHitRate returns '—' for undefined,
   // which is the right fallback for pre-split runs.
-  const cacheReadTokens: number | undefined = hasLive ? liveAggregate.totalCacheReadTokens : detail?.cacheReadTokens;
+  const cacheReadTokens: number | undefined = hasLive ? liveCost.totalCacheReadTokens : detail?.cacheReadTokens;
   const totalTokens = inputTokens + outputTokens;
 
   const nodes = detail?.nodes ?? [];

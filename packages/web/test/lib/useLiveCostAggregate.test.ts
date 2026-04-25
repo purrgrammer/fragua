@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LiveEvent } from "../../src/lib/useLiveCostAggregate.ts";
-import { reduceCostEvents } from "../../src/lib/useLiveCostAggregate.ts";
+import { EMPTY_COST_AGGREGATE, foldCostFrame, reduceCostEvents } from "../../src/lib/useLiveCostAggregate.ts";
 
 function costEvent(
   cost_usd: number,
@@ -65,6 +65,35 @@ describe("reduceCostEvents", () => {
     ];
     const agg = reduceCostEvents(events);
     expect(agg.cacheHitRate).toBeUndefined();
+  });
+
+  test("incremental foldCostFrame matches bulk reduceCostEvents", () => {
+    // useRunLive folds frame-by-frame; the test stream + bulk fold MUST
+    // converge on the same aggregate so the live header tiles and the
+    // server snapshot agree at terminal.
+    const frames = [
+      { cost_usd: 0.1, input_tokens: 1000, output_tokens: 200, cache_read_tokens: 300, cache_write_tokens: 50 },
+      { cost_usd: 0.05, input_tokens: 500, output_tokens: 100, cache_read_tokens: 150, cache_write_tokens: 25 },
+      { cost_usd: 0.02, input_tokens: 200, output_tokens: 50, cache_read_tokens: 50, cache_write_tokens: 10 },
+    ];
+    const incremental = frames.reduce(foldCostFrame, EMPTY_COST_AGGREGATE);
+    const bulk = reduceCostEvents(frames.map((p) => ({ type: "cost.recorded", payload: p })));
+    expect(incremental).toEqual(bulk);
+  });
+
+  test("foldCostFrame ignores non-numeric payload fields without NaN-ing", () => {
+    const out = foldCostFrame(EMPTY_COST_AGGREGATE, {
+      cost_usd: "nope" as unknown as number,
+      input_tokens: null as unknown as number,
+      output_tokens: undefined as unknown as number,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    });
+    expect(out).toEqual(EMPTY_COST_AGGREGATE);
+  });
+
+  test("EMPTY_COST_AGGREGATE matches reduceCostEvents([])", () => {
+    expect(EMPTY_COST_AGGREGATE).toEqual(reduceCostEvents([]));
   });
 
   test("live aggregate from SSE events agrees with snapshot values at terminal fact", () => {
