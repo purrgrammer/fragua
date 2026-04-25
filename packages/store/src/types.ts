@@ -517,9 +517,6 @@ export interface IEventStore {
   saveWorkflow(sha: string, name: string, dotSource: string): void;
   getWorkflow(sha: string): WorkflowRow | null;
 
-  // ─── Subscriptions (post-commit, in-process; no IPC)
-  onCommit(listener: (runId: string, seq: number) => void): () => void;
-
   // ─── Maintenance
   vacuum(): void;
   gcBlobs(maxRows?: number): { deleted: number };

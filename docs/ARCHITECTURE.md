@@ -330,9 +330,6 @@ export interface IEventStore {
   saveWorkflow(sha: string, name: string, dotSource: string): void;
   getWorkflow(sha: string): WorkflowRow | null;
 
-  // Subscriptions (in-process post-commit callback; no IPC)
-  onCommit(listener: (runId: string, seq: number) => void): () => void;
-
   // Maintenance
   vacuum(): void;
   gcBlobs(maxRows?: number): { deleted: number };
@@ -351,7 +348,7 @@ export class QuarantineError extends Error {}
 **Implementation notes:**
 - All methods synchronous; `bun:sqlite` is sync.
 - Every write wraps in `WriteQueue.enqueue(() => db.transaction(() => ...)())`. `BEGIN IMMEDIATE` for all txns.
-- `onCommit` listeners fire after commit, inside `queueMicrotask`. Used by daemon supervisor for optional early-wake (belt-and-suspenders alongside 50ms polling).
+- No in-process commit-listener API. Same-process daemons could subscribe but the only consumer that would benefit (the supervisor) lives in the same process as the writer for `appendFact` and a different process for `appendIntent` (web → daemon), so an in-process listener can't cross the boundary that matters. The 50ms supervisor poll covers both directions uniformly. SSE consumers poll `events WHERE seq > ?` directly.
 
 ---
 

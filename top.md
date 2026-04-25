@@ -25,7 +25,7 @@
 | 9 | 🟡 | ~~Timeout-leaked handlers keep running and burning tokens~~ | ✅ resolved |
 | 10 | 🟡 | No load-shed / `max_queued_runs` / backpressure at enqueue | open |
 | 11 | 🟡 | No authN/Z on server endpoints | open |
-| 12 | 🟡 | `onCommit` API is effectively dead code (only tests subscribe) | open |
+| 12 | 🟡 | ~~`onCommit` API is effectively dead code (only tests subscribe)~~ | ✅ resolved |
 | 13 | 🟡 | Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use | open |
 | 14 | 🟡 | Abort-loop ceiling K=5 — "progress" not defined, magic number | open |
 | 15 | 🟡 | Parallel + quarantine: sibling branch semantics on retry undocumented | open |
@@ -178,15 +178,13 @@ Minimum: shared-secret bearer token (`SWARM_API_TOKEN`), reject unauth on writes
 
 ---
 
-### 12. 🟡 `onCommit` is effectively dead code
+### 12. ✅ ~~`onCommit` is effectively dead code~~
 
-**Evidence**
-- `packages/store/src/store.ts:184` — `emitCommit` called from append paths
-- No daemon or server subscriber; only tests register listeners
-- API suggests cross-process wake-ups but cannot deliver them (two processes, no IPC)
+**Resolution.** Deleted. `IEventStore.onCommit`, the `CommitListener` type, the `listeners` Set, the `emitCommit` private method, and all four `this.emitCommit(...)` call sites are gone. ARCHITECTURE.md §4 IEventStore listing updated; the implementation notes now explain why an in-process listener wouldn't help — the meaningful coordination boundary (web → daemon for intents) crosses processes, which an in-process listener can't cross.
 
-**Proposed approach**
-Either delete the API or wire it to the supervisor's intent-detection fast path (in-process daemon optimization — saves a few polling round-trips for same-process commits). Document scope explicitly: "in-process only."
+Recheck verified: zero callers across the workspace before deletion (tests, daemon, server, agent, web — all clean). 1145 tests still pass.
+
+**Files touched:** `packages/store/src/{store,types}.ts`, `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -319,3 +317,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #5** canonicalStringify Unicode + explicit reject of silently-broken built-ins. NFC normalisation via the built-in `String.prototype.normalize` — no dep. `Date`, `TypedArray`, `Buffer`, `DataView`, `ArrayBuffer` now throw rather than serialising as `{}`. Duplicate keys after NFC normalisation throw. Canonical form fully documented in `docs/handler-contract.md`. 18 new tests pin a stability corpus. All 1137 tests green.
 - **2026-04-25 — #6** Schema-version compat range. New `MIN_COMPATIBLE_SCHEMA_VERSION` paired with `CURRENT_SCHEMA_VERSION` defines an inclusive resume range; additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only and keep paused runs alive across deploys. Migration accepts the range, runs additive ALTER TABLEs, and updates the version row to CURRENT. Out-of-range still halts (drift below MIN, downgrade-refused above CURRENT). 6 new tests + extended P17. All 1143 tests green.
 - **2026-04-25 — #9** Timeout-leak budget + bug fix. Discovered while wiring the budget that the original leak detection was dead code: `timeoutReject(...).then(_ => leakedTimeout = true)` never fired because `.then` on the fulfillment branch of a rejecting promise is a no-op. Replaced with a sentinel-resolve so leaks are unambiguously detected. Added per-process LeakBudget with configurable cap (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires callback to `ctrl.abort()`. 2 new tests pin the under-limit and exactly-N-fires behavior. All 1145 tests green.
+- **2026-04-25 — #12** Deleted `onCommit` dead code. Zero callers (tests, daemon, server, agent, web — all clean). The in-process listener pattern can't cross the web → daemon process boundary anyway, so it would never have helped the supervisor it claimed to. ARCHITECTURE.md §4 updated with the rationale. Same 1145 tests green.

@@ -62,8 +62,6 @@ interface RunStateRow {
   title: string | null;
 }
 
-type CommitListener = (runId: string, seq: number) => void;
-
 export interface SqliteStoreOpts {
   path?: string;
   /** Directory for content-addressed blob files. Defaults to
@@ -79,7 +77,6 @@ export class SqliteStore implements IEventStore {
   private readonly blobsDirOwned: boolean;
   private readonly blobsDir: string;
   private readonly now: () => number;
-  private readonly listeners = new Set<CommitListener>();
   private readonly metrics = new Metrics();
 
   metricsSnapshot(): MetricsSnapshot {
@@ -161,8 +158,6 @@ export class SqliteStore implements IEventStore {
       throw err;
     }
 
-    const lastSeq = seqs[seqs.length - 1]!;
-    this.emitCommit(runId, lastSeq);
     return { committed: true, newVersion, seqs };
   }
 
@@ -182,7 +177,6 @@ export class SqliteStore implements IEventStore {
     });
     this.metrics.recordWrite(performance.now() - startAt, "intent");
 
-    this.emitCommit(runId, seq);
     return { seq, ts };
   }
 
@@ -229,7 +223,6 @@ export class SqliteStore implements IEventStore {
     }
     this.metrics.recordWrite(performance.now() - startAt, "fact");
 
-    if (seqs.length > 0) this.emitCommit(runId, seqs[seqs.length - 1]!);
     return { seqs };
   }
 
@@ -286,8 +279,6 @@ export class SqliteStore implements IEventStore {
           now,
         );
     });
-
-    this.emitCommit(params.runId, 1);
   }
 
   claimNextRun(maxInFlight: number): { runId: string } | null {
@@ -797,13 +788,6 @@ export class SqliteStore implements IEventStore {
     };
   }
 
-  // ─────────────── Subscriptions ───────────────
-
-  onCommit(listener: CommitListener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
   // ─────────────── Maintenance ───────────────
 
   vacuum(): void {
@@ -852,7 +836,6 @@ export class SqliteStore implements IEventStore {
   }
 
   close(): void {
-    this.listeners.clear();
     this.db.close();
     if (this.blobsDirOwned) this.blobs.destroy();
   }
@@ -997,19 +980,6 @@ export class SqliteStore implements IEventStore {
       throw new PayloadTooLargeError(s.length, MAX_EVENT_PAYLOAD_BYTES);
     }
     return s;
-  }
-
-  private emitCommit(runId: string, seq: number): void {
-    if (this.listeners.size === 0) return;
-    queueMicrotask(() => {
-      for (const l of this.listeners) {
-        try {
-          l(runId, seq);
-        } catch {
-          // Listeners must not throw into the store.
-        }
-      }
-    });
   }
 }
 
