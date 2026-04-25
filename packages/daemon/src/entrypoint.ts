@@ -59,6 +59,10 @@ export interface DaemonMainOpts {
    * shuts itself down — the singleton + sweep recovers stuck runs on
    * restart. Defaults to the executor's built-in (3). */
   maxLeakedHandlers?: number;
+  /** Maximum consecutive handler aborts on the same node before the
+   * run halts with `reason: "abort_loop"`. Defaults to the executor's
+   * built-in (5). */
+  abortLoopCeiling?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -134,6 +138,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;
       if (opts.maxLoops !== undefined) executorOpts.maxLoops = opts.maxLoops;
       if (opts.maxLeakedHandlers !== undefined) executorOpts.maxLeakedHandlers = opts.maxLeakedHandlers;
+      if (opts.abortLoopCeiling !== undefined) executorOpts.abortLoopCeiling = opts.abortLoopCeiling;
       // When too many handlers leak, trip the shutdown controller so the
       // outer drain takes over. The daemon singleton + startup sweep
       // recovers stuck runs when a fresh daemon takes over.

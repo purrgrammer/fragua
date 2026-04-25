@@ -336,6 +336,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     if (timeouts.shutdown_drain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdown_drain;
     if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;
     if (config.max_loops !== undefined) daemonOpts.maxLoops = config.max_loops;
+    if (config.abort_loop_ceiling !== undefined) daemonOpts.abortLoopCeiling = config.abort_loop_ceiling;
+    if (config.max_leaked_handlers !== undefined) daemonOpts.maxLeakedHandlers = config.max_leaked_handlers;
     const handleRef = startDaemon(daemonOpts);
     await handleRef.done;
   } catch (err) {

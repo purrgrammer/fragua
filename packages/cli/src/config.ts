@@ -46,6 +46,22 @@ export interface SwarmConfig {
    * default (1000). Raise it for long-running HITL workflows that
    * legitimately iterate through many nodes across many human turns. */
   max_loops?: number;
+  /** Backpressure cap on `status='queued'` runs. When the queue depth
+   * reaches this number, `POST /runs` returns 429 with
+   * `Retry-After: 30` instead of accepting the enqueue. `running` runs
+   * are NOT counted (those are bounded by `concurrency`). Absent =
+   * uncapped — operators set this to bound the blast radius of a
+   * misconfigured client that would otherwise fill `run_state`. */
+  max_queued_runs?: number;
+  /** Maximum consecutive handler aborts on the same node before the run
+   * halts with `reason: "abort_loop"`. The counter resets on any
+   * non-abort handler return. Absent = executor default (5). */
+  abort_loop_ceiling?: number;
+  /** Cap on per-process leaked handlers (handler ignored AbortSignal
+   * past `maxMs + leakGrace`). When the count crosses this, the daemon
+   * shuts itself down — singleton + sweep recovers stuck runs on the
+   * next start. Absent = executor default (3). */
+  max_leaked_handlers?: number;
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the
    * well-known paths (`.agents/skills`, `.claude/skills`
    * under both project and user scopes). See `packages/workspace/src/skills`

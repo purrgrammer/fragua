@@ -27,7 +27,7 @@
 | 11 | 🟡 | No authN/Z on server endpoints | open |
 | 12 | 🟡 | ~~`onCommit` API is effectively dead code (only tests subscribe)~~ | ✅ resolved |
 | 13 | 🟡 | Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use | open |
-| 14 | 🟡 | Abort-loop ceiling K=5 — "progress" not defined, magic number | open |
+| 14 | 🟡 | ~~Abort-loop ceiling K=5 — "progress" not defined, magic number~~ | ✅ resolved |
 | 15 | 🟡 | Parallel + quarantine: sibling branch semantics on retry undocumented | open |
 | 16 | 🟢 | No instrumentation around `BEGIN IMMEDIATE` lock wait | open |
 | 17 | 🟢 | `gcBlobs` exists but never auto-invoked | open |
@@ -157,13 +157,13 @@ The handler's signal was already aborted at `maxMs` via `AbortSignal.timeout(spe
 
 ### 10. ✅ ~~No load-shed / backpressure~~
 
-**Resolution.** Added `ServerDeps.maxQueuedRuns` (and the matching `ServerOptions.maxQueuedRuns` on `createServer`). When set, `POST /runs` checks `runStateCounts().queued` and returns `429 { code: "queue_full" }` with `Retry-After: 30` once the cap is met. Default is uncapped (current behaviour preserved). The `serve` CLI reads `SWARM_MAX_QUEUED_RUNS` and passes it through, so operators flip a knob without flag plumbing. Queue depth was already on `/health.daemon.queued`.
+**Resolution.** Added `ServerDeps.maxQueuedRuns` (and the matching `ServerOptions.maxQueuedRuns` on `createServer`). When set, `POST /runs` checks `runStateCounts().queued` and returns `429 { code: "queue_full" }` with `Retry-After: 30` once the cap is met. Default is uncapped (current behaviour preserved). The `serve` CLI reads `max_queued_runs` from `.swarm/config.yaml` (config-driven, not env). Queue depth was already on `/health.daemon.queued`.
 
 Only `queued` runs count against the cap — `running` is bounded separately by `MAX_CONCURRENT_RUNS=8`.
 
-**Tests:** 2 new in `packages/server/test/store/routes.test.ts` — capped server returns 429 with the right body + header on overflow; uncapped server accepts past any threshold.
+**Tests:** 2 new in `packages/server/test/store/routes.test.ts` — capped server returns 429 with the right body + header on overflow; uncapped server accepts past any threshold. Plus a config-roundtrip test for the new `max_queued_runs` key.
 
-**Files touched:** `packages/server/src/store/routes.ts`, `packages/server/src/index.ts`, `packages/cli/src/commands/serve.ts`, `packages/server/test/store/routes.test.ts`.
+**Files touched:** `packages/server/src/store/routes.ts`, `packages/server/src/index.ts`, `packages/cli/src/{config.ts,commands/serve.ts}`, `packages/server/test/store/routes.test.ts`, `packages/cli/test/config.test.ts`.
 
 ---
 
@@ -203,16 +203,17 @@ Recommend (a) — already aligns with §I9 "preview vs raw" pattern.
 
 ---
 
-### 14. 🟡 Abort-loop ceiling
+### 14. ✅ ~~Abort-loop ceiling~~
 
-**Evidence**
-- `packages/daemon/src/executor.ts:67,452-470` — K=5 magic constant; counter resets on any non-abort outcome including `yield_hitl` and `halt`
-- "Without progress" undefined — the doc claims K consecutive aborts *without progress*
+**Resolution.** `ABORT_LOOP_CEILING` is no longer hardcoded. Added `ExecutorOpts.abortLoopCeiling` (default `DEFAULT_ABORT_LOOP_CEILING = 5`), threaded through `DaemonMainOpts.abortLoopCeiling`, sourced from `.swarm/config.yaml` `abort_loop_ceiling`. `max_leaked_handlers` (which became a named knob in #9) and `max_queued_runs` (#10) are also config-driven now — the user directive "all magic numbers we add should be configurable" is honoured for everything we've added.
 
-**Proposed approach**
-- Make K configurable per workflow with sane default
-- Define progress explicitly (e.g., "node_completed succeeded since last abort")
-- Add observability: emit a `fact.abort_loop_warned` at K-1 so users see it coming
+"Progress" defined explicitly via the existing flow: aborts always happen on the run's `current_node` because `fact.node_aborted` doesn't transition. The counter resets on any non-abort handler return — which can only happen if the handler ran to completion at least once (transition / yield_hitl / halt). So consecutive aborts are by construction same-node, no-progress.
+
+A new `abort_loop_warning` observability event fires one abort before the limit (K-1) so the trend is visible before the halt lands. Carries `{ nodeId, consecutiveAborts, ceiling }` for the UI.
+
+**Tests:** 2 new in P20 — warning fires at K-1 with the right payload, in causal order before `fact.run_halted`; configurable ceiling honoured (`abortLoopCeiling=2` halts after 2 aborts).
+
+**Files touched:** `packages/daemon/src/executor.ts`, `packages/daemon/src/entrypoint.ts`, `packages/cli/src/{config.ts,commands/daemon.ts}`, `packages/daemon/test/matrix.property.test.ts`, `packages/cli/test/config.test.ts`.
 
 ---
 
@@ -318,4 +319,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #6** Schema-version compat range. New `MIN_COMPATIBLE_SCHEMA_VERSION` paired with `CURRENT_SCHEMA_VERSION` defines an inclusive resume range; additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only and keep paused runs alive across deploys. Migration accepts the range, runs additive ALTER TABLEs, and updates the version row to CURRENT. Out-of-range still halts (drift below MIN, downgrade-refused above CURRENT). 6 new tests + extended P17. All 1143 tests green.
 - **2026-04-25 — #9** Timeout-leak budget + bug fix. Discovered while wiring the budget that the original leak detection was dead code: `timeoutReject(...).then(_ => leakedTimeout = true)` never fired because `.then` on the fulfillment branch of a rejecting promise is a no-op. Replaced with a sentinel-resolve so leaks are unambiguously detected. Added per-process LeakBudget with configurable cap (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires callback to `ctrl.abort()`. 2 new tests pin the under-limit and exactly-N-fires behavior. All 1145 tests green.
 - **2026-04-25 — #12** Deleted `onCommit` dead code. Zero callers (tests, daemon, server, agent, web — all clean). The in-process listener pattern can't cross the web → daemon process boundary anyway, so it would never have helped the supervisor it claimed to. ARCHITECTURE.md §4 updated with the rationale. Same 1145 tests green.
-- **2026-04-25 — #10** Queue-depth backpressure. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns`. Opt-in (default uncapped) via `ServerDeps.maxQueuedRuns` or the `SWARM_MAX_QUEUED_RUNS` env var read by `serve`. 2 new tests. All 1147 tests green.
+- **2026-04-25 — #10/#14** Queue-depth backpressure + configurable abort-loop ceiling. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns` (config key `max_queued_runs`). `ABORT_LOOP_CEILING` is no longer hardcoded — `abort_loop_ceiling` config key + `ExecutorOpts.abortLoopCeiling`. New `abort_loop_warning` observability event fires at K-1. Per user feedback ("all magic numbers should be configurable, config-file driven"), exposed `max_queued_runs` / `abort_loop_ceiling` / `max_leaked_handlers` in `.swarm/config.yaml`. 5 new tests. All 1150 tests green.

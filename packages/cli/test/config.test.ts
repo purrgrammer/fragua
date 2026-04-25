@@ -58,6 +58,19 @@ describe("loadConfig", () => {
     expect(cfg).toEqual({});
   });
 
+  test("parses runtime ceilings: max_queued_runs, abort_loop_ceiling, max_leaked_handlers", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(
+      join(scratch, ".swarm/config.yaml"),
+      `max_queued_runs: 500\nabort_loop_ceiling: 8\nmax_leaked_handlers: 2\n`,
+      "utf8",
+    );
+    const cfg = await loadConfig(scratch);
+    expect(cfg.max_queued_runs).toBe(500);
+    expect(cfg.abort_loop_ceiling).toBe(8);
+    expect(cfg.max_leaked_handlers).toBe(2);
+  });
+
   test("parses the timeouts section", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
     await writeFile(

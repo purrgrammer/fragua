@@ -622,6 +622,77 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
     expect((halt.payload as { reason: string }).reason).toBe("abort_loop");
     r.store.close();
   });
+
+  test("abort_loop_warning observability event fires one abort before the halt", async () => {
+    const r = rig();
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => {
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      },
+    });
+    enqueue(r, "rp20w", "start");
+    r.store.claimNextRun(1);
+
+    await runOne("rp20w", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      // Smaller ceiling so the test runs fewer aborts.
+      abortLoopCeiling: 3,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const events = r.store.getEvents("rp20w");
+    const warns = events.filter((e) => e.type === "abort_loop_warning");
+    expect(warns).toHaveLength(1);
+    const warn = warns[0]!;
+    expect((warn.payload as { consecutiveAborts: number }).consecutiveAborts).toBe(2);
+    expect((warn.payload as { ceiling: number }).ceiling).toBe(3);
+    // Warning lands BEFORE the halt in causal order.
+    const warnIdx = events.findIndex((e) => e.type === "abort_loop_warning");
+    const haltIdx = events.findIndex((e) => e.type === "fact.run_halted");
+    expect(warnIdx).toBeLessThan(haltIdx);
+    expect(r.store.getState("rp20w")!.status).toBe("halted");
+    r.store.close();
+  });
+
+  test("abortLoopCeiling=2 halts after 2 aborts (knob honoured)", async () => {
+    const r = rig();
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => {
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      },
+    });
+    enqueue(r, "rp20c", "start");
+    r.store.claimNextRun(1);
+
+    await runOne("rp20c", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      abortLoopCeiling: 2,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const aborts = r.store.getEvents("rp20c").filter((e) => e.type === "fact.node_aborted");
+    expect(aborts).toHaveLength(2);
+    expect(r.store.getState("rp20c")!.status).toBe("halted");
+    r.store.close();
+  });
 });
 
 // ─────────────── max_loops ───────────────

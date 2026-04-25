@@ -19,6 +19,7 @@ import { AuthStorage, ModelRegistry, validateWorkflowModels } from "@swarm/agent
 import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts } from "@swarm/server";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
 
 /**
  * Locate the built web bundle by walking up from this file.
@@ -97,13 +98,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // providers are credentialed.
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
-  // Backpressure cap on `status='queued'` runs. Opt-in via env so a
-  // misconfigured client can't fill `run_state` indefinitely; default
-  // is uncapped (current behaviour). Non-positive / unparseable values
-  // are silently ignored — operators get an explicit knob without us
-  // having to validate it.
-  const maxQueuedRunsEnv = Number.parseInt(process.env["SWARM_MAX_QUEUED_RUNS"] ?? "", 10);
-  const maxQueuedRuns = Number.isFinite(maxQueuedRunsEnv) && maxQueuedRunsEnv > 0 ? maxQueuedRunsEnv : undefined;
+  // Backpressure cap on `status='queued'` runs from `.swarm/config.yaml`.
+  // Opt-in (default uncapped); non-positive / unparseable values are
+  // silently ignored.
+  const cfg = await loadConfig(cwd);
+  const maxQueuedRuns =
+    typeof cfg.max_queued_runs === "number" && Number.isFinite(cfg.max_queued_runs) && cfg.max_queued_runs > 0
+      ? cfg.max_queued_runs
+      : undefined;
   const app = createServer({
     cwd,
     store,

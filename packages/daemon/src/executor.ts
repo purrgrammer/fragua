@@ -77,6 +77,17 @@ export interface ExecutorOpts {
    * the per-process counter crosses this, `onLeakLimitExceeded` fires.
    * Defaults to `DEFAULT_MAX_LEAKED_HANDLERS`. */
   maxLeakedHandlers?: number;
+  /** Maximum consecutive handler aborts on the same node before the
+   * executor halts the run with `reason: "abort_loop"`. The counter
+   * resets on any non-abort handler return (transition / yield_hitl /
+   * halt), which implicitly defines "progress" as "the handler ran
+   * to completion at least once." Aborts always happen on the run's
+   * current_node (fact.node_aborted doesn't transition), so consecutive
+   * aborts are by construction same-node. Defaults to
+   * `DEFAULT_ABORT_LOOP_CEILING`. An `abort_loop_warning` observability
+   * event fires one abort before the limit so the trend is visible
+   * before the halt lands. */
+  abortLoopCeiling?: number;
   /** Called when the per-process leaked-handler counter crosses
    * `maxLeakedHandlers`. Default: log to stderr (tests use this). The
    * production daemon entrypoint wires this to `ctrl.abort()` so the
@@ -88,7 +99,7 @@ export interface ExecutorOpts {
 const DEFAULT_POLL_MS = 50;
 const DEFAULT_LEAK_GRACE_MS = 10_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
-const ABORT_LOOP_CEILING = 5;
+const DEFAULT_ABORT_LOOP_CEILING = 5;
 const DEFAULT_MAX_LOOPS = 1_000;
 const DEFAULT_MAX_LEAKED_HANDLERS = 3;
 
@@ -179,6 +190,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const leakGrace = opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
+  const abortLoopCeiling = opts.abortLoopCeiling ?? DEFAULT_ABORT_LOOP_CEILING;
   let consecutiveAborts = 0;
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
@@ -538,7 +550,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
         await tryAppendFact(opts.store, runId, recorder.version(), facts);
         consecutiveAborts++;
-        if (consecutiveAborts >= ABORT_LOOP_CEILING) {
+        // One-shot warning the abort before the halt lands so a watcher
+        // sees the trend before the run dies. Observability (no version
+        // bump, no OCC) so it can ride alongside the just-committed
+        // fact.node_aborted in causal order.
+        if (consecutiveAborts === abortLoopCeiling - 1) {
+          opts.store.appendObservabilityEvents(runId, [
+            {
+              type: "abort_loop_warning",
+              payload: {
+                nodeId: currentNode,
+                consecutiveAborts,
+                ceiling: abortLoopCeiling,
+              },
+            },
+          ]);
+        }
+        if (consecutiveAborts >= abortLoopCeiling) {
           await tryAppendFact(
             opts.store,
             runId,
