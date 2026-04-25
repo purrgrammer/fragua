@@ -44,9 +44,10 @@
 
 **Resolution.**
 1. **Provider-level idempotency keys.** External tool envelope carries `idempotencyKey = sha256(runId + nodeId + iteration + argsHash + attempt)`. Handler passes this as `Idempotency-Key` header (or provider-equivalent). Provider dedupes server-side; jointly we achieve at-most-once.
-2. **Startup quarantine.** On daemon start, scan for `fact.side_effect_intent` events without a matching `fact.side_effect_done`/`fact.side_effect_failed` (joined by `idempotencyKey`). Any run with such an orphan enters `quarantined` status. Run does not resume until a human writes `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel", note }`.
-3. **Retry uses the same key.** If operator chooses `retry`, the handler re-executes with the same `idempotencyKey`. If the provider already processed the prior attempt, it returns the cached response. Safe under operator error.
-4. **Tools without provider dedup** get a warning label at registration; operator is the only safety net. Documented as handler-author responsibility.
+2. **Pre-commit recorder.** `fact.side_effect_intent` is committed in its own short SQLite transaction *before* the handler invokes `fn(idempotencyKey)`. The recorder (`packages/daemon/src/recorder.ts` — `CommittingRecorder`) advances `run_state.version` synchronously on each commit; the executor's terminal `node_completed` / `node_aborted` append uses the recorder's evolved version. This makes the intent durable even if a hard crash (SIGKILL / OOM / panic) destroys the process before `fn` returns — an in-memory buffer would be lost; a committed row is not. `fact.side_effect_done` / `fact.side_effect_failed` are committed the same way, on completion.
+3. **Startup quarantine.** On daemon start, scan for `fact.side_effect_intent` events without a matching `fact.side_effect_done`/`fact.side_effect_failed` (joined by `idempotencyKey`). Any run with such an orphan enters `quarantined` status. Run does not resume until a human writes `intent.unquarantine { resolution: "treat_as_done" | "retry" | "cancel", note }`.
+4. **Retry uses the same key.** If operator chooses `retry`, the handler re-executes with the same `idempotencyKey`. If the provider already processed the prior attempt, it returns the cached response. Safe under operator error.
+5. **Tools without provider dedup** get a warning label at registration; operator is the only safety net. Documented as handler-author responsibility.
 
 ### 1.2 Artifact key collision under loops
 **Attack.** Node `A` runs in iteration 1 of a graph cycle, calls `artifacts.put("result", ...)`. On iteration 2, same node, same user key → `UNIQUE` constraint violation.
@@ -627,6 +628,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P22 | Cascade delete | Delete run_state row | events/messages/artifacts for that run all gone; blobs unchanged |
 | P23 | STRICT enforcement | Insert string into integer column | Throws; no row inserted |
 | P24 | Claim atomicity | K fibers racing `claimNextRun` | Each popped run claimed by exactly one fiber |
+| P25 | Pre-commit recorder durability | `recordIntent` then no `recordDone` (simulated hard crash) | Intent fact in `events` before recorder returns; sweep quarantines without a matching done having ever existed |
 
 ---
 

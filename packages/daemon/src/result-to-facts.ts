@@ -1,5 +1,7 @@
 // Translate a HandlerResult + intent decision into the FactEvent batch that
-// the executor will commit in one appendFact.
+// the executor will commit in one appendFact. Side-effect facts
+// (intent / done / failed) are NOT included — they're already durable via
+// the pre-commit recorder before this function runs.
 
 import type * as handler from "@swarm/core/handler";
 import type { FactEvent, RunState } from "@swarm/store";
@@ -10,8 +12,6 @@ export interface ResultContext {
   state: RunState;
   /** Intents folded before the handler ran; we cite them in intents_folded. */
   appliedIntentSeqs: number[];
-  /** Side-effect facts recorded during the handler (from SideEffectRecorder). */
-  sideEffectFacts: FactEvent[];
   /** For cancel: the seq of the cancel intent. */
   cancelIntentSeq?: number;
   /** For resume from HITL: the seq of the hitl_input intent. */
@@ -47,9 +47,6 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       },
     });
   }
-
-  // Record side effects that happened during the handler.
-  facts.push(...ctx.sideEffectFacts);
 
   // Result-specific facts.
   switch (result.kind) {
@@ -137,7 +134,6 @@ export function abortResultToFacts(
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   },
-  sideEffectFacts: FactEvent[],
 ): FactEvent[] {
   const payload: Extract<FactEvent, { type: "fact.node_aborted" }>["payload"] = {
     nodeId,
@@ -154,7 +150,7 @@ export function abortResultToFacts(
   if (partial.cacheWriteTokens != null && partial.cacheWriteTokens > 0) {
     payload.partialCacheWriteTokens = partial.cacheWriteTokens;
   }
-  return [...sideEffectFacts, { type: "fact.node_aborted", payload }];
+  return [{ type: "fact.node_aborted", payload }];
 }
 
 export function cancelToFacts(intentSeq: number): FactEvent[] {

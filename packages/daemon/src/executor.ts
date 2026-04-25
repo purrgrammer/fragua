@@ -14,7 +14,7 @@ import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventSt
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
-import { CollectingRecorder } from "./recorder.ts";
+import { CommittingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
 import { wakePendingHitl } from "./wake-hitl.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
@@ -306,7 +306,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       opts.registry.register(runId, steerCtrl);
 
       const iteration = nodeRetryCount(state.routing);
-      const recorder = new CollectingRecorder(currentNode, iteration);
+      // Pre-commit recorder: each recordIntent/recordDone/recordFailed
+      // commits its own short transaction so a hard crash mid-`fn` leaves
+      // the intent durable in the event log. ARCHITECTURE.md §1.1.
+      const recorder = new CommittingRecorder({
+        store: opts.store,
+        runId,
+        nodeId: currentNode,
+        iteration,
+        initialVersion: state.version,
+      });
       const observability: { type: string; payload: Record<string, unknown> }[] = [];
 
       let totalTokens = 0;
@@ -418,7 +427,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
 
       if (leakedTimeout) {
         flushObservability();
-        await tryAppendFact(opts.store, runId, state.version, [
+        await tryAppendFact(opts.store, runId, recorder.version(), [
           {
             type: "fact.handler_timeout_leaked",
             payload: { nodeId: currentNode, leakedAt: Date.now() },
@@ -434,21 +443,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       if (wasAborted) {
         flushObservability();
         // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
-        const facts = abortResultToFacts(
-          currentNode,
-          iteration,
-          abortCause,
-          {
-            tokens: totalTokens,
-            costUsd: totalCostUsd,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            cacheReadTokens: totalCacheReadTokens,
-            cacheWriteTokens: totalCacheWriteTokens,
-          },
-          recorder.drain(),
-        );
-        await tryAppendFact(opts.store, runId, state.version, facts);
+        // Side-effect facts are already durable via the pre-commit recorder.
+        const facts = abortResultToFacts(currentNode, iteration, abortCause, {
+          tokens: totalTokens,
+          costUsd: totalCostUsd,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cacheReadTokens: totalCacheReadTokens,
+          cacheWriteTokens: totalCacheWriteTokens,
+        });
+        await tryAppendFact(opts.store, runId, recorder.version(), facts);
         consecutiveAborts++;
         if (consecutiveAborts >= ABORT_LOOP_CEILING) {
           await tryAppendFact(
@@ -530,10 +534,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       // followed by node_completed in causal order.
       flushObservability();
 
+      // Side-effect facts are already durable via the pre-commit recorder;
+      // resultToFacts only emits the terminal node_* / run_* facts.
       const factsCtx = {
         state,
         appliedIntentSeqs: decision.appliedSeqs,
-        sideEffectFacts: recorder.drain(),
         ...(decision.hitlInput !== undefined && unapplied.length > 0 ? { hitlInputSeq: lastHitlSeq(unapplied) } : {}),
       };
       const facts = resultToFacts(result, factsCtx);
@@ -545,7 +550,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       } = {};
       if (routingPatch !== undefined) appendOpts.routingPatch = routingPatch;
       if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
-      const ok = await tryAppendFact(opts.store, runId, state.version, facts, appendOpts);
+      const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, appendOpts);
       if (!ok) continue; // OCC retry — rebuild from fresh state
     }
   } finally {

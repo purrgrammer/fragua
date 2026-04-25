@@ -159,6 +159,108 @@ describe("P8 — mid-flight abort replay: external call ≤ 1 per key", () => {
   });
 });
 
+// ─────────────── P25 ───────────────
+// The orphan-quarantine guarantee in §1.1 only holds if the side_effect_intent
+// is durable BEFORE the external call runs. P6 tests the sweep against
+// hand-crafted SQL; P25 closes the loop by exercising the production recorder
+// to prove the durability is achieved by the recorder itself, not by the
+// terminal appendFact at handler return. A buffered (non-pre-commit) recorder
+// would lose the intent on hard crash mid-`fn` and the sweep would find
+// nothing to quarantine.
+describe("P25 — pre-commit recorder durability across hard crash", () => {
+  test("recordIntent is durable before fn runs; sweep finds the orphan", async () => {
+    const { CommittingRecorder } = await import("../src/recorder.ts");
+    const r = rig();
+    enqueue(r, "rp25", "start");
+    const s0 = r.store.getState("rp25")!;
+    r.store.appendFact(
+      "rp25",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rp25")!;
+
+    const recorder = new CommittingRecorder({
+      store: r.store,
+      runId: "rp25",
+      nodeId: "start",
+      iteration: 0,
+      initialVersion: s1.version,
+    });
+
+    // Simulate the recorder being invoked from inside externalCall just
+    // before fn() is called. With pre-commit semantics, the intent is now
+    // durable on disk — equivalent to a SIGKILL/OOM/panic mid-fn losing
+    // the in-process buffer would NOT lose this fact.
+    recorder.recordIntent({
+      toolName: "charge",
+      argsHash: "h",
+      attempt: 1,
+      idempotencyKey: "ik-p25",
+    });
+
+    // The intent must be visible in the events table without the recorder
+    // having returned to its caller (no drain step exists).
+    const events = r.store.getEvents("rp25").map((e) => e.type);
+    expect(events).toContain("fact.side_effect_intent");
+
+    // run_state.version advanced because the intent was a real fact append,
+    // not a buffer push. Equivalent to "recorder.version() reflects the
+    // post-commit OCC token."
+    expect(recorder.version()).toBeGreaterThan(s1.version);
+
+    // Now simulate a hard crash: no recordDone/recordFailed will ever be
+    // called. The startup sweep should detect the orphan and quarantine
+    // the run — the entire raison d'être of pre-commit.
+    r.store.startupSweep();
+    expect(r.store.getState("rp25")!.status).toBe("quarantined");
+    const finalEvents = r.store.getEvents("rp25").map((e) => e.type);
+    expect(finalEvents).toContain("fact.run_quarantined");
+    r.store.close();
+  });
+
+  test("recordDone after recordIntent leaves no orphan; sweep is a no-op", async () => {
+    const { CommittingRecorder } = await import("../src/recorder.ts");
+    const r = rig();
+    enqueue(r, "rp25b", "start");
+    const s0 = r.store.getState("rp25b")!;
+    r.store.appendFact(
+      "rp25b",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = r.store.getState("rp25b")!;
+
+    const recorder = new CommittingRecorder({
+      store: r.store,
+      runId: "rp25b",
+      nodeId: "start",
+      iteration: 0,
+      initialVersion: s1.version,
+    });
+
+    recorder.recordIntent({ toolName: "t", argsHash: "h", attempt: 1, idempotencyKey: "ik-ok" });
+    recorder.recordDone({ idempotencyKey: "ik-ok", artifactKey: "start:t" });
+
+    r.store.startupSweep();
+    // The run is still 'running' (sweep requeues, doesn't quarantine, when
+    // intent has a matching done). Whether requeued or not is irrelevant
+    // — the assertion is that no quarantine fires.
+    expect(r.store.getState("rp25b")!.status).not.toBe("quarantined");
+    r.store.close();
+  });
+});
+
 // ─────────────── P16 ───────────────
 describe("P16 — blob GC preserves shared blobs, removes orphans", () => {
   test("deleting one artifact doesn't GC a blob referenced by another", async () => {

@@ -21,14 +21,22 @@ export interface MakeExternalCallOpts {
  * they pass `args: unknown` and trust the framework.
  *
  * The sequence is:
- *   1. Record fact.side_effect_intent (executor commits before fn runs).
+ *   1. recorder.recordIntent commits fact.side_effect_intent in its own
+ *      short transaction BEFORE fn runs. A SIGKILL/OOM/panic during fn
+ *      therefore leaves the intent durably on disk; the next daemon
+ *      startup-sweep finds the orphan and quarantines the run. (The
+ *      recorder's pre-commit semantics are what backs ARCHITECTURE.md
+ *      §1.1's at-most-once guarantee for non-idempotent providers — a
+ *      buffered recorder would lose the intent on hard crash and the
+ *      sweep would have nothing to find.)
  *   2. Invoke fn(idempotencyKey); the handler is expected to pass the key
  *      to the provider via Idempotency-Key (or equivalent).
- *   3. On success: record fact.side_effect_done and return the result.
- *   4. On clean failure: record fact.side_effect_failed and rethrow.
- *   5. On AbortError: do NOT record done/failed — the executor emits
- *      fact.node_aborted; startup sweep will quarantine on replay if the
- *      crash-window orphaned the intent.
+ *   3. On success: recorder.recordDone commits fact.side_effect_done and
+ *      we return the result.
+ *   4. On clean failure: recorder.recordFailed commits
+ *      fact.side_effect_failed and we rethrow.
+ *   5. On AbortError: do NOT record done/failed — the intent stays on
+ *      disk without a matching terminator, so the next sweep quarantines.
  */
 export function makeExternalCall(opts: MakeExternalCallOpts): ExternalCall {
   return async function externalCall<T>(

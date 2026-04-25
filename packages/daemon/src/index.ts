@@ -9,7 +9,7 @@ export type { DaemonHandle, DaemonMainOpts } from "./entrypoint.ts";
 export { DaemonAlreadyRunningError, startDaemon } from "./entrypoint.ts";
 export type { ExecutorOpts } from "./executor.ts";
 export { runExecutor, runOne } from "./executor.ts";
-export { CollectingRecorder } from "./recorder.ts";
+export { CommittingRecorder } from "./recorder.ts";
 export type { ResultContext } from "./result-to-facts.ts";
 export {
   abortResultToFacts,
