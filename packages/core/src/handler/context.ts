@@ -120,12 +120,24 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const scopedTools =
     opts.allowedTools !== undefined || opts.deniedTools !== undefined ? opts.tools.select(narrowOpts) : opts.tools;
 
-  // Align the ExecutionEnvironment with the narrowed toolset. If no
-  // mutating tool (bash / write / edit) is visible, the env is wrapped
-  // so writeFile / exec throw — a handler that loses its write *tools*
-  // also loses the raw env path that would otherwise bypass them. Parallel
-  // branches rely on this to guarantee read-only filesystem access.
-  const envCanMutate = ENV_MUTATOR_TOOLS.some((t) => scopedTools.has(t));
+  // Align the ExecutionEnvironment with the operator-declared toolset. If
+  // the node's allowed_tools / denied_tools rules out every mutator
+  // (bash / write / edit), wrap env so writeFile / exec throw — a handler
+  // that loses its write *tools* also loses the raw env path that would
+  // otherwise bypass them. Parallel branches rely on this to guarantee
+  // read-only filesystem access. We read the rules directly from
+  // allowed_tools / denied_tools rather than `scopedTools.has(...)`: the
+  // executor's registry is sometimes intentionally empty (e.g. swarm's
+  // daemon hands codergen its own registry; the executor's `tools` is a
+  // sentinel) and querying an empty registry would falsely wrap every
+  // node's env.
+  const isMutatorAllowed = (name: string): boolean => {
+    if (opts.allowedTools !== undefined && !opts.allowedTools.includes(name)) return false;
+    if (opts.deniedTools?.includes(name)) return false;
+    return true;
+  };
+  const hasNarrowing = opts.allowedTools !== undefined || opts.deniedTools !== undefined;
+  const envCanMutate = !hasNarrowing || ENV_MUTATOR_TOOLS.some(isMutatorAllowed);
   const effectiveEnv = opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
 
   const ctx: HandlerContext = {

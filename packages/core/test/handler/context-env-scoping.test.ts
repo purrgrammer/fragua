@@ -108,6 +108,52 @@ describe("buildHandlerContext — env scoping follows allowed_tools", () => {
     store.close();
   });
 
+  test("empty registry + allowed_tools lists mutators → env stays writable", async () => {
+    // Regression for the daemon path: swarm's executor receives an empty
+    // sentinel registry while codergen uses its own. The env-wrap decision
+    // must be based on the declared allowed_tools, not the runtime registry.
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = buildHandlerContext({
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      signal: new AbortController().signal,
+      routing: {},
+      store,
+      llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
+      http: { fetch: async () => new Response("") },
+      tools: new InMemoryToolRegistry(),
+      allowedTools: ["read", "write", "edit", "bash"],
+      env: fullEnv(),
+      recorder: recorder(),
+    });
+    expect(await ctx.env!.readFile("x")).toBe("ok");
+    const res = await ctx.env!.exec("echo hi");
+    expect(res.exitCode).toBe(0);
+    await ctx.env!.writeFile("x", "y");
+    store.close();
+  });
+
+  test("no narrowing at all → env stays writable regardless of registry contents", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = buildHandlerContext({
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      signal: new AbortController().signal,
+      routing: {},
+      store,
+      llm: { call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }) },
+      http: { fetch: async () => new Response("") },
+      tools: new InMemoryToolRegistry(),
+      env: fullEnv(),
+      recorder: recorder(),
+    });
+    const res = await ctx.env!.exec("echo hi");
+    expect(res.exitCode).toBe(0);
+    store.close();
+  });
+
   test("no env supplied → ctx.env stays undefined", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = buildHandlerContext({
