@@ -31,7 +31,9 @@
 // today; deriving from the URL is two lines of code and keeps the
 // route definitions free of breadcrumb-specific config.
 
+import { useQuery } from "@tanstack/react-query";
 import { Outlet, useLocation, useParams } from "react-router-dom";
+import { queries } from "../lib/queries.ts";
 import { useHealth } from "../types/health.ts";
 import { AppSidebar } from "./AppSidebar.tsx";
 import { DaemonBanner } from "./DaemonBanner.tsx";
@@ -91,7 +93,13 @@ interface Crumb {
 function RouteBreadcrumb(): JSX.Element {
   const { pathname } = useLocation();
   const params = useParams();
-  const crumbs = crumbsFor(pathname, params);
+  const isWorkflowDetail = pathname.startsWith("/workflows/") && !!params["name"];
+  const { data: workflowDetail } = useQuery({
+    ...queries.workflows.detail(params["name"] ?? ""),
+    enabled: isWorkflowDetail,
+  });
+  const workflowName = workflowDetail?.label ?? workflowDetail?.name ?? undefined;
+  const crumbs = crumbsFor(pathname, params, workflowName);
   return (
     <Breadcrumb>
       <BreadcrumbList className="flex-nowrap">
@@ -121,13 +129,22 @@ function RouteBreadcrumb(): JSX.Element {
  * Map a URL pathname to a breadcrumb trail. Exported for tests so we
  * don't need to mount the whole router to verify the labels.
  */
-export function crumbsFor(pathname: string, params: Record<string, string | undefined>): Crumb[] {
+export function crumbsFor(
+  pathname: string,
+  params: Record<string, string | undefined>,
+  workflowName?: string,
+): Crumb[] {
   if (pathname === "/" || pathname === "") return [{ label: "Home" }];
   const segments = pathname.split("/").filter(Boolean);
   const crumbs: Crumb[] = [{ label: "Home", href: "/" }];
   if (segments[0] === "workflows") {
-    // List page — Home crumb is redundant with the nav/logo.
-    return [{ label: "Workflows" }];
+    if (segments.length === 1) {
+      // List page — Home crumb is redundant with the nav/logo.
+      return [{ label: "Workflows" }];
+    }
+    // Detail page: Workflows / <workflow-name>
+    const label = workflowName ?? params["name"] ?? segments[1] ?? "";
+    return [{ label: "Workflows", href: "/workflows" }, { label }];
   }
   if (segments[0] === "providers") {
     if (segments.length === 1) {
