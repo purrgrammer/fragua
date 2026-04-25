@@ -72,6 +72,17 @@ export interface ExecutorOpts {
    * handler context. Absent = no default; per-request `init.signal`
    * or `AbortSignal.timeout()` still apply. */
   defaultHttpTimeoutMs?: number;
+  /** Cap on leaked handlers (Promise.race lost to timeoutReject because
+   * the handler ignored its AbortSignal past `maxMs + leakGrace`). When
+   * the per-process counter crosses this, `onLeakLimitExceeded` fires.
+   * Defaults to `DEFAULT_MAX_LEAKED_HANDLERS`. */
+  maxLeakedHandlers?: number;
+  /** Called when the per-process leaked-handler counter crosses
+   * `maxLeakedHandlers`. Default: log to stderr (tests use this). The
+   * production daemon entrypoint wires this to `ctrl.abort()` so the
+   * outer shutdown drain takes over and the singleton + sweep recover
+   * stuck runs on restart. The callback fires at most once per process. */
+  onLeakLimitExceeded?: (count: number) => void;
 }
 
 const DEFAULT_POLL_MS = 50;
@@ -79,6 +90,7 @@ const DEFAULT_LEAK_GRACE_MS = 10_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const ABORT_LOOP_CEILING = 5;
 const DEFAULT_MAX_LOOPS = 1_000;
+const DEFAULT_MAX_LEAKED_HANDLERS = 3;
 
 /**
  * Executor loop. Claims queued runs and dispatches each on its own
@@ -94,6 +106,9 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
   const pollMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
   const drainMs = opts.shutdownDrainMs ?? DEFAULT_SHUTDOWN_DRAIN_MS;
   const inflight = new Set<Promise<void>>();
+  // One leak budget per executor process — counts handler leaks across
+  // every run; fires opts.onLeakLimitExceeded once when the limit trips.
+  const leakBudget = makeLeakBudget(opts);
 
   while (!opts.shutdownSignal.aborted) {
     wakePending(opts.store);
@@ -102,7 +117,7 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
       await sleep(pollMs, opts.shutdownSignal);
       continue;
     }
-    const p = runOneSafe(claimed.runId, opts);
+    const p = runOneSafe(claimed.runId, opts, leakBudget);
     inflight.add(p);
     p.finally(() => inflight.delete(p));
   }
@@ -123,9 +138,9 @@ export async function runExecutor(opts: ExecutorOpts): Promise<void> {
 
 /** runOne that never rejects — logs unhandled errors and ensures a
  * terminal fact was already appended by runOne's own crash path. */
-async function runOneSafe(runId: string, opts: ExecutorOpts): Promise<void> {
+async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBudget): Promise<void> {
   try {
-    await runOne(runId, opts);
+    await runOne(runId, opts, leakBudget);
   } catch (err) {
     // runOne appends `fact.run_halted` before rethrowing on crash; this
     // catch just prevents an unhandled promise rejection from crashing
@@ -135,9 +150,10 @@ async function runOneSafe(runId: string, opts: ExecutorOpts): Promise<void> {
   }
 }
 
-export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
+export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: LeakBudget): Promise<void> {
+  const budget = leakBudget ?? makeLeakBudget(opts);
   try {
-    await runOneInner(runId, opts);
+    await runOneInner(runId, opts, budget);
   } catch (err) {
     // Outer safety net: if the main body escaped without terminalising
     // the run, append `fact.run_halted` so the `running` capacity slot
@@ -159,7 +175,7 @@ export async function runOne(runId: string, opts: ExecutorOpts): Promise<void> {
   }
 }
 
-async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
+async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBudget): Promise<void> {
   const leakGrace = opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
@@ -442,13 +458,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       let abortCause: "timeout" | "aborted" = "aborted";
       let leakedTimeout = false;
       try {
-        result = await Promise.race([
+        // Promise.race against a marker rather than a rejecting timer: a
+        // rejection from the timer would mask an ignored-AbortSignal as
+        // "handler error" in the catch block (the original code's
+        // `.then(_ => …)` callback never fired because `timeoutReject`
+        // never fulfilled). Resolving with a sentinel lets us detect the
+        // leak unambiguously.
+        const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
           spec.handler(ctx),
-          timeoutReject(spec.maxMs + leakGrace).then((_) => {
-            leakedTimeout = true;
-            return { kind: "halt", reason: "error", detail: "timeout_leaked" } as HandlerResult;
-          }),
+          new Promise<typeof TIMEOUT_SENTINEL>((res) =>
+            setTimeout(() => res(TIMEOUT_SENTINEL), spec.maxMs + leakGrace),
+          ),
         ]);
+        if (raced === TIMEOUT_SENTINEL) {
+          leakedTimeout = true;
+          result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
+        } else {
+          result = raced;
+        }
       } catch (err) {
         wasAborted = isAbortError(err);
         if (wasAborted) abortCause = classifyAbortCause(signal, err);
@@ -488,6 +515,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
             payload: { reason: "error", detail: "handler_leaked" },
           },
         ]);
+        // Bound the blast radius of misbehaving handlers across the
+        // process lifetime. Per-process counter; once we cross the limit
+        // the daemon entrypoint trips its shutdown controller via the
+        // `onLeakLimitExceeded` callback, the singleton + sweep pick up
+        // the slack on restart.
+        leakBudget.recordLeak(runId, currentNode);
         return;
       }
 
@@ -729,11 +762,12 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function timeoutReject(ms: number): Promise<never> {
-  return new Promise((_resolve, reject) => {
-    setTimeout(() => reject(new Error(`leaked after ${ms}ms`)), ms);
-  });
-}
+/** Sentinel returned by the leak-detection timer in `Promise.race` so
+ * the executor can tell "the handler ignored its AbortSignal past
+ * `maxMs + leakGrace`" from "the handler rejected normally" (which goes
+ * through the catch branch). Symbol equality is the only check needed —
+ * no risk of a handler returning the same value. */
+const TIMEOUT_SENTINEL: unique symbol = Symbol("timeout-sentinel");
 
 function isAbortError(err: unknown): boolean {
   if (err instanceof Error) {
@@ -830,6 +864,45 @@ function recordEdgeSelected(
     else payload["matched"] = selection.matched;
   }
   buffer.push({ type: "edge.selected", payload });
+}
+
+/** Per-process accounting for handler leaks (ignored AbortSignal past
+ * `maxMs + leakGrace`). The executor instantiates one and shares it
+ * across runs; each leak increments and the limit-exceeded callback
+ * fires at most once per process. */
+export interface LeakBudget {
+  recordLeak(runId: string, nodeId: string): void;
+  /** Read-only — for tests and observability. */
+  count(): number;
+}
+
+export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
+  const limit = opts.maxLeakedHandlers ?? DEFAULT_MAX_LEAKED_HANDLERS;
+  const onExceeded =
+    opts.onLeakLimitExceeded ??
+    ((n) => {
+      // eslint-disable-next-line no-console
+      console.error(`[executor] leak limit exceeded (${n} leaked handlers); daemon will keep running but is degraded`);
+    });
+  let n = 0;
+  let fired = false;
+  return {
+    recordLeak: (runId, nodeId) => {
+      n += 1;
+      // eslint-disable-next-line no-console
+      console.warn(`[executor] handler leak #${n} on ${runId}/${nodeId} (limit=${limit})`);
+      if (!fired && n >= limit) {
+        fired = true;
+        try {
+          onExceeded(n);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[executor] onLeakLimitExceeded threw:", err);
+        }
+      }
+    },
+    count: () => n,
+  };
 }
 
 export function buildSubstitutionArgs(

@@ -22,7 +22,7 @@
 | 6 | 🟡 | ~~Schema drift halts paused runs on any version bump (no additive vs breaking distinction)~~ | ✅ resolved |
 | 7 | 🟡 | Daemon health: server route exists, UI staleness banner does not | open |
 | 8 | 🟡 | Quarantine triage UI missing — operator must hand-craft `intent.unquarantine` | open |
-| 9 | 🟡 | Timeout-leaked handlers keep running and burning tokens (no `signal.abort()` on loser) | open |
+| 9 | 🟡 | ~~Timeout-leaked handlers keep running and burning tokens~~ | ✅ resolved |
 | 10 | 🟡 | No load-shed / `max_queued_runs` / backpressure at enqueue | open |
 | 11 | 🟡 | No authN/Z on server endpoints | open |
 | 12 | 🟡 | `onCommit` API is effectively dead code (only tests subscribe) | open |
@@ -140,15 +140,18 @@ A `/runs/:id/quarantine` view: orphan envelope, last 20 events, three buttons (`
 
 ---
 
-### 9. 🟡 Timeout-leaked handlers
+### 9. ✅ ~~Timeout-leaked handlers~~
 
-**Evidence**
-- `packages/daemon/src/executor.ts:385-391` — `Promise.race` rejects with synthetic timeout; handler promise is not aborted
-- Leaked handler keeps streaming LLM tokens, completing in background, no further accounting
-- `fact.handler_timeout_leaked` records the moment but not subsequent damage
+**Resolution.** Two fixes:
 
-**Proposed approach**
-On timeout: explicitly call `signal.abort()` on the handler's signal; log a follow-up `fact.handler_timeout_unwound` if it does unwind within an additional grace; if N (=3?) leaks accumulate without process-cycle, exit the daemon (singleton + sweep re-takes).
+1. **The leak detection itself was dead code.** The original `Promise.race([handler, timeoutReject(...).then((_) => leakedTimeout = true)])` never fired the `.then` callback because `timeoutReject` only ever rejected — `.then(_)` on a rejecting promise's fulfillment branch is a no-op. The race's rejection went into the catch block and was misclassified as a regular handler error. Replaced with a sentinel-resolve (`TIMEOUT_SENTINEL: unique symbol`) so leaks are unambiguously detected: if the race resolves to the sentinel, the handler ignored its `AbortSignal` past `maxMs + leakGrace`.
+2. **Per-process leak budget** with a configurable `maxLeakedHandlers` (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires the callback to `ctrl.abort()` so the next leak past the limit triggers a graceful drain — the singleton + startup sweep recovers stuck runs on the new daemon.
+
+The handler's signal was already aborted at `maxMs` via `AbortSignal.timeout(spec.maxMs)` inside the composed signal, so explicit `.abort()` adds nothing. Cooperative handlers unwind via the catch path (unchanged); non-cooperative handlers are bounded by the leak budget rather than running forever.
+
+**Tests:** `packages/daemon/test/executor.leak-budget.test.ts` (2 cases — first leak under limit doesn't fire, Nth leak fires exactly once).
+
+**Files touched:** `packages/daemon/src/executor.ts` (sentinel-based detection + LeakBudget), `packages/daemon/src/entrypoint.ts` (wires callback to `ctrl.abort()`), new `packages/daemon/test/executor.leak-budget.test.ts`.
 
 ---
 
@@ -315,3 +318,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #23** Pending-intent driver. Renamed `wake-hitl.ts` → `wake-pending.ts` with one `wakePending(store)` entry point that runs three sweeps in cancel → hitl → unquarantine order. Cancel-on-paused / cancel-on-quarantined and all three unquarantine resolutions (cancel / retry / treat_as_done) now actually transition state. `treat_as_done` synthesises `fact.side_effect_done` for each orphan so subsequent startup sweeps are coherent. 9 new tests cover the precedence rules, the resolution branches, and idempotence. All 1119 tests green.
 - **2026-04-25 — #5** canonicalStringify Unicode + explicit reject of silently-broken built-ins. NFC normalisation via the built-in `String.prototype.normalize` — no dep. `Date`, `TypedArray`, `Buffer`, `DataView`, `ArrayBuffer` now throw rather than serialising as `{}`. Duplicate keys after NFC normalisation throw. Canonical form fully documented in `docs/handler-contract.md`. 18 new tests pin a stability corpus. All 1137 tests green.
 - **2026-04-25 — #6** Schema-version compat range. New `MIN_COMPATIBLE_SCHEMA_VERSION` paired with `CURRENT_SCHEMA_VERSION` defines an inclusive resume range; additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only and keep paused runs alive across deploys. Migration accepts the range, runs additive ALTER TABLEs, and updates the version row to CURRENT. Out-of-range still halts (drift below MIN, downgrade-refused above CURRENT). 6 new tests + extended P17. All 1143 tests green.
+- **2026-04-25 — #9** Timeout-leak budget + bug fix. Discovered while wiring the budget that the original leak detection was dead code: `timeoutReject(...).then(_ => leakedTimeout = true)` never fired because `.then` on the fulfillment branch of a rejecting promise is a no-op. Replaced with a sentinel-resolve so leaks are unambiguously detected. Added per-process LeakBudget with configurable cap (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires callback to `ctrl.abort()`. 2 new tests pin the under-limit and exactly-N-fires behavior. All 1145 tests green.

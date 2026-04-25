@@ -54,6 +54,11 @@ export interface DaemonMainOpts {
    * this many handlers have run for the same run_id. Defaults to the
    * executor's built-in (1000). */
   maxLoops?: number;
+  /** Cap on per-process leaked handlers (handler ignored AbortSignal
+   * past `maxMs + leakGrace`). When the count crosses this, the daemon
+   * shuts itself down — the singleton + sweep recovers stuck runs on
+   * restart. Defaults to the executor's built-in (3). */
+  maxLeakedHandlers?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -128,6 +133,15 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;
       if (opts.defaultHttpTimeoutMs !== undefined) executorOpts.defaultHttpTimeoutMs = opts.defaultHttpTimeoutMs;
       if (opts.maxLoops !== undefined) executorOpts.maxLoops = opts.maxLoops;
+      if (opts.maxLeakedHandlers !== undefined) executorOpts.maxLeakedHandlers = opts.maxLeakedHandlers;
+      // When too many handlers leak, trip the shutdown controller so the
+      // outer drain takes over. The daemon singleton + startup sweep
+      // recovers stuck runs when a fresh daemon takes over.
+      executorOpts.onLeakLimitExceeded = (count) => {
+        // eslint-disable-next-line no-console
+        console.error(`[daemon] ${count} handler leaks — initiating shutdown so a fresh daemon can recover`);
+        ctrl.abort();
+      };
       await runExecutor(executorOpts);
 
       registry.tripAll(new Error("shutdown"));
