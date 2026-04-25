@@ -10,6 +10,7 @@ export function emptyMetrics(): RunMetrics {
     totalCacheWriteTokens: 0,
     loopCounts: {},
     models: {},
+    nodeCosts: {},
   };
 }
 
@@ -65,6 +66,11 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
         };
       }
       next.metrics.loopCounts[p.nodeId] = (next.metrics.loopCounts[p.nodeId] ?? 0) + 1;
+      const nodeBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
+      next.metrics.nodeCosts[p.nodeId] = {
+        tokens: nodeBucket.tokens + p.tokens,
+        costUsd: nodeBucket.costUsd + p.costUsd,
+      };
       next.currentNode = p.nextNode;
       next.nodeStartedAt = now;
       return next;
@@ -77,6 +83,11 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
       next.metrics.totalCacheReadTokens += p.partialCacheReadTokens ?? 0;
       next.metrics.totalCacheWriteTokens += p.partialCacheWriteTokens ?? 0;
+      const abortBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
+      next.metrics.nodeCosts[p.nodeId] = {
+        tokens: abortBucket.tokens + p.partialTokens,
+        costUsd: abortBucket.costUsd + p.partialCostUsd,
+      };
       return next;
     }
     case "fact.run_paused_hitl": {
@@ -145,6 +156,11 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
   for (const [k, v] of Object.entries(m.models)) {
     models[k] = { tokens: v.tokens, costUsd: v.costUsd };
   }
+  const nodeCosts: Record<string, { tokens: number; costUsd: number }> = {};
+  // Existing rows pre-dating the field have nodeCosts undefined; treat as {}.
+  for (const [k, v] of Object.entries(m.nodeCosts ?? {})) {
+    nodeCosts[k] = { tokens: v.tokens, costUsd: v.costUsd };
+  }
   return {
     totalTokens: m.totalTokens,
     totalCostUsd: m.totalCostUsd,
@@ -154,5 +170,6 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
     totalCacheWriteTokens: m.totalCacheWriteTokens,
     loopCounts: { ...m.loopCounts },
     models,
+    nodeCosts,
   };
 }

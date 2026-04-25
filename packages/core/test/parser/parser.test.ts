@@ -195,4 +195,14 @@ describe("parseDotSource", () => {
       expect((err as ParseError).line).toBeGreaterThan(0);
     }
   });
+
+  test("budget_policy accepts 'warn' and 'stop' but rejects unknown values", () => {
+    const okWarn = parseDotSource(`digraph { graph [budget_policy="warn"]; a [shape=box]; }`);
+    expect(okWarn.attrs.budget_policy).toBe("warn");
+    const okStop = parseDotSource(`digraph { graph [budget_policy="stop"]; a [shape=box]; }`);
+    expect(okStop.attrs.budget_policy).toBe("stop");
+    expect(() => parseDotSource(`digraph { graph [budget_policy="halt"]; a [shape=box]; }`)).toThrow(
+      /invalid value for budget_policy/i,
+    );
+  });
 });

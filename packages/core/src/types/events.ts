@@ -113,12 +113,13 @@ export interface MessageSnapshot {
   timestamp?: number;
 }
 
-/** Read-only cumulative cost + token counters at the moment the LLM call is
- * issued. Currently emitted as a placeholder ({0, 0}) — a real BudgetLedger
- * that tracks spend and enforces per-node / per-run ceilings is not yet
- * wired. When populated, this is the single source of truth for "how much
- * has the run spent by step N" that UIs can render without summing every
- * `cost.recorded` themselves. */
+/** Read-only cumulative cost + token counters at the moment the LLM call
+ * is issued. Populated by the executor from `run_state.metrics` plus the
+ * ceilings configured on the graph / node attrs. Single source of truth
+ * for "how much has the run spent by step N" — UIs render this without
+ * summing every `cost.recorded` themselves. The `engine/budget-policy`
+ * module enforces the ceilings at each turn boundary; this snapshot is
+ * the read side of that machinery. */
 export interface BudgetSnapshot {
   cumulative_cost_usd: number;
   cumulative_tokens: number;

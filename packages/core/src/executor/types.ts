@@ -3,12 +3,15 @@
 // a HandlerContext.
 
 import type { AgentMessage } from "@swarm/types";
+import type { BudgetSnapshotInput } from "../handler/types.ts";
 import type { ContextMap } from "../types/context.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
 import type { Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
+
+export type { BudgetSnapshotInput };
 
 export interface CodergenBackend {
   run(input: CodergenInput): Promise<Outcome>;
@@ -50,4 +53,10 @@ export interface CodergenInput {
    * file loads instead of falling back to its construction-time env.
    * This is how per-run worktree isolation reaches the agent. */
   env?: ExecutionEnvironment;
+  /** Snapshot of the budget state as of the start of this dispatch.
+   * The executor computes this from `run_state.metrics` + the graph /
+   * node ceilings; the backend embeds it verbatim into `llm.start.budget`
+   * so the UI can render "X of Y used" without cross-referencing the
+   * graph attrs. Optional: omitted when no ceiling is configured. */
+  budgetSnapshot?: BudgetSnapshotInput;
 }

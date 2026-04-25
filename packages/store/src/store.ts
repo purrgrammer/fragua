@@ -904,6 +904,8 @@ export class SqliteStore implements IEventStore {
       totalCacheWriteTokens: parsedMetrics.totalCacheWriteTokens ?? 0,
       loopCounts: parsedMetrics.loopCounts ?? {},
       models: parsedMetrics.models ?? {},
+      // Pre-budget rows have no per-node accumulation; treat as empty.
+      nodeCosts: parsedMetrics.nodeCosts ?? {},
     };
     const routing = JSON.parse(row.routing) as Record<string, unknown>;
     return {

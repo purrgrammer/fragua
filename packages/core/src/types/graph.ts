@@ -77,13 +77,15 @@ export interface NodeAttrs {
    * the tool handler. Substitution is applied: $ARGUMENTS, $RUN_ID,
    * $nodeId.output, ${context.*}. */
   tool_command?: string;
-  /** Per-node cost ceiling in USD. When the run's cumulative cost crosses
-   * this before the next call to this node's backend, `budget.stop` fires
-   * and the node's next attempt returns a non-retryable failure. Soft
-   * `budget.warn` at 80% of the ceiling. Enforcement not yet wired. */
+  /** Per-node cumulative cost ceiling in USD. Cumulative across all
+   * iterations of this node within the run. When crossed at a turn
+   * boundary, `budget.stop` fires and the run halts with
+   * `reason: "budget"` (unless `graph.attrs.budget_policy = "warn"`).
+   * Soft `budget.warn` fires once per run when cumulative reaches 80 %
+   * of the ceiling. */
   max_cost_usd?: number;
-  /** Per-node total-token ceiling (input + output). Same enforcement
-   * shape as `max_cost_usd`. Enforcement not yet wired. */
+  /** Per-node cumulative token ceiling (across input + output + cache).
+   * Same enforcement shape as `max_cost_usd`. */
   max_tokens?: number;
   /** Scope the skills catalog visible to this node. Unset = all discovered
    * skills. Set = only these names appear in the `<available_skills>`
@@ -121,15 +123,16 @@ export interface GraphAttrs {
   "tool_hooks.pre"?: string;
   "tool_hooks.post"?: string;
   /** Per-run cost ceiling in USD. Once the run's cumulative cost crosses
-   * this, `budget.stop` fires and every subsequent codergen call fails
-   * non-retryably. Enforcement not yet wired. */
+   * this, `budget.stop` fires and the run halts with `reason: "budget"`
+   * (unless `budget_policy = "warn"`). Soft `budget.warn` at 80 % of the
+   * ceiling, once per run. */
   budget_usd?: number;
-  /** Per-run total-token ceiling. Enforcement not yet wired. */
+  /** Per-run total-token ceiling (input + output + cache). Same
+   * enforcement shape as `budget_usd`. */
   budget_tokens?: number;
   /** Policy when a budget threshold is crossed. `"stop"` (default when
    * any budget is set) hard-fails the run on first breach; `"warn"`
-   * keeps firing `budget.warn` events but never blocks. Enforcement not
-   * yet wired. */
+   * keeps firing `budget.warn` / `budget.stop` events but never halts. */
   budget_policy?: "warn" | "stop";
   [extra: string]: AttrScalar | undefined;
 }

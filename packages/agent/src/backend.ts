@@ -368,7 +368,12 @@ export class PiCodergenBackend implements CodergenBackend {
       if (settings) llmStart["settings"] = settings;
       if (contextFileRecords.length > 0) llmStart["context_files"] = contextFileRecords;
       if (effectiveSkills.length > 0) llmStart["skills"] = effectiveSkills.map(toCatalogRecord);
-      const budget = captureBudget(input.node.attrs);
+      // Budget snapshot: prefer the executor-supplied value (real cumulative
+      // from `run_state.metrics`); fall back to the zeroed shape derived from
+      // node attrs alone for callers that haven't been threaded yet (legacy
+      // tests). Zero-snapshot is harmless — the UI just renders 0/N until
+      // the first node_completed lands.
+      const budget = input.budgetSnapshot ?? captureBudget(input.node.attrs);
       if (budget) llmStart["budget"] = budget;
       await input.emit("llm.start", llmStart);
     }

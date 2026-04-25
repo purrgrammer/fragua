@@ -118,6 +118,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       emit,
       ...(priorMessages !== undefined ? { priorMessages } : {}),
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
+      ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
       persistMessage: (message) => {
         try {
           ctx.messages.append(message);

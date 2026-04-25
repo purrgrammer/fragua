@@ -8,7 +8,14 @@
 //
 // No files, no sockets, no IPC. Just the store.
 
-import { type EdgeSelection, type ExecutionEnvironment, type Graph, parseDotSource, selectEdge } from "@swarm/core";
+import {
+  type EdgeSelection,
+  type ExecutionEnvironment,
+  evaluateBudget,
+  type Graph,
+  parseDotSource,
+  selectEdge,
+} from "@swarm/core";
 import * as core from "@swarm/core/handler";
 import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore } from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
@@ -403,6 +410,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
       if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
       if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
       if (runEnv !== undefined) ctxOpts.env = runEnv;
+      // Budget snapshot at dispatch time. The backend embeds this verbatim
+      // into `llm.start.budget` so the UI can render "X of Y used" without
+      // cross-referencing the graph attrs. Only populated when at least one
+      // ceiling (run-level or node-level cost) is configured.
+      const runMaxCostUsd = graph?.attrs.budget_usd;
+      const nodeMaxCostUsd = nodeAttrs?.max_cost_usd;
+      if (typeof runMaxCostUsd === "number" || typeof nodeMaxCostUsd === "number") {
+        const snap: core.BudgetSnapshotInput = {
+          cumulative_cost_usd: state.metrics.totalCostUsd,
+          cumulative_tokens: state.metrics.totalTokens,
+        };
+        if (typeof runMaxCostUsd === "number") snap.run_max_cost_usd = runMaxCostUsd;
+        if (typeof nodeMaxCostUsd === "number") snap.max_cost_usd = nodeMaxCostUsd;
+        ctxOpts.budgetSnapshot = snap;
+      }
       const ctx = core.buildHandlerContext(ctxOpts);
 
       let result: HandlerResult;
@@ -547,6 +569,44 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         }
       }
 
+      // Budget enforcement at the post-handler boundary. The check sees
+      // cumulative spend INCLUDING this turn (state.metrics doesn't have
+      // the new fact applied yet, so we add result.{tokens,costUsd} in).
+      // On halt, rewrite `result` to a budget halt before resultToFacts
+      // runs so the resulting fact chain is `[budget.stop, fact.run_halted]`.
+      // On warn-only, prepend the warn event(s) to observability and let
+      // the transition continue.
+      let budgetWarnedTags: readonly string[] = [];
+      if (result.kind === "transition") {
+        const graph = graphFor(state.workflowSha);
+        const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
+        const turnTokens = result.tokens ?? 0;
+        const turnCost = result.costUsd ?? 0;
+        const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+        const alreadyWarned = readBudgetWarned(state.routing);
+        const decisionBudget = evaluateBudget({
+          graphAttrs: graph?.attrs ?? {},
+          ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
+          completedNodeId: currentNode,
+          cumulativeCostUsd: state.metrics.totalCostUsd + turnCost,
+          cumulativeTokens: state.metrics.totalTokens + turnTokens,
+          nodeCumulativeCostUsd: priorNodeBucket.costUsd + turnCost,
+          nodeCumulativeTokens: priorNodeBucket.tokens + turnTokens,
+          alreadyWarned,
+        });
+        for (const ev of decisionBudget.events) {
+          observability.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
+        }
+        budgetWarnedTags = decisionBudget.newlyWarned;
+        if (decisionBudget.shouldHalt) {
+          result = {
+            kind: "halt",
+            reason: "budget",
+            ...(decisionBudget.haltReason !== undefined ? { detail: decisionBudget.haltReason } : {}),
+          };
+        }
+      }
+
       // All observability for this turn is now buffered (handler emissions
       // + any edge.selected from the selector above). Flush before the
       // terminal fact lands so consumers tailing /events see the trail
@@ -582,7 +642,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         }
       }
 
-      const routingPatch = mergeRoutingPatches(decision.routingDelta, result);
+      let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
+      if (budgetWarnedTags.length > 0) {
+        const prior = readBudgetWarned(state.routing);
+        const merged = new Set(prior);
+        for (const tag of budgetWarnedTags) merged.add(tag);
+        routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
+      }
       const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
       const appendOpts: {
         routingPatch?: Record<string, unknown>;
@@ -706,6 +772,20 @@ function lastHitlSeq(unapplied: ReadonlyArray<{ type: string; seq: number }>): n
     if (e.type === "intent.hitl_input") return e.seq;
   }
   return 0;
+}
+
+/** Reserved routing key for budget-warn dedup. Holds the set of
+ * `(scope:metric)` tags that have already fired their once-per-run
+ * `budget.warn` event. The budget policy reads + extends it; the
+ * executor merges new tags into the routing patch on commit. */
+const BUDGET_WARNED_KEY = "__budget_warned";
+
+function readBudgetWarned(routing: Record<string, unknown>): ReadonlySet<string> {
+  const v = routing[BUDGET_WARNED_KEY];
+  if (!Array.isArray(v)) return new Set();
+  const out = new Set<string>();
+  for (const item of v) if (typeof item === "string") out.add(item);
+  return out;
 }
 
 /**

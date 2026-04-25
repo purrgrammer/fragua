@@ -17,7 +17,7 @@
 | 1 | 🔴 | ~~`externalCall` buffers intent in memory — hard-crash defeats orphan quarantine~~ | ✅ resolved |
 | 2 | 🔴 | ~~Replay semantics for non-external work undefined (artifacts silently overwrite, messages duplicate)~~ | ✅ resolved |
 | 3 | 🔴 | ~~Intent fold lacks formal truth table for simultaneous combinations~~ | ✅ resolved |
-| 4 | 🔴 | Budget ledger declared-but-not-wired | open |
+| 4 | 🔴 | ~~Budget ledger declared-but-not-wired~~ | ✅ resolved |
 | 5 | 🔴 | `canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented) | open |
 | 6 | 🟡 | Schema drift halts paused runs on any version bump (no additive vs breaking distinction) | open |
 | 7 | 🟡 | Daemon health: server route exists, UI staleness banner does not | open |
@@ -76,16 +76,15 @@ Files touched: `packages/daemon/src/{recorder,executor,result-to-facts,index}.ts
 
 ---
 
-### 4. 🔴 Budget ledger declared-but-not-wired
+### 4. ✅ ~~Budget ledger declared-but-not-wired~~
 
-**Evidence**
-- `packages/core/src/types/graph.ts:84,126` — `budget_usd`, `max_cost_usd`, `budget_policy` parse correctly
-- `packages/core/src/types/events.ts:122-128,162` — `BudgetSnapshot`, `budget.warn`, `budget.stop` declared
-- No daemon code reads cumulative spend or fires the events
-- `docs/ARCHITECTURE.md:727` — own admission
+**Resolution.** Pure `evaluateBudget` policy module in `packages/core/src/engine/budget-policy.ts` evaluates run-level (`graph.attrs.budget_usd` / `budget_tokens`) and per-node (`node.attrs.max_cost_usd` / `max_tokens`) ceilings at every turn boundary. Executor calls it after accounting attach and edge selection, before the terminal commit; on breach it rewrites `result` to a budget halt and queues `budget.stop` into observability. Warns fire once per `(scope, metric)` per run, deduped via `routing.__budget_warned`. `graph.attrs.budget_policy = "warn"` keeps the run going through stops.
 
-**Proposed approach**
-Fold `costUsd` from `fact.node_completed` / `fact.side_effect_done` into `run_state.cumulative_cost_usd` (new column or routing.cumulative_cost). Pre-dispatch gate compares against `max_cost_usd` (per-node) and `budget_usd` (per-run); halts with `fact.run_halted { reason: "budget" }` at the boundary, not inside the handler. Emit `budget.warn` at 80% threshold. Property test P25-budget.
+The reducer accumulates per-node cost in a new `RunMetrics.nodeCosts` map (additive JSON change, no schema bump). Parser validates `budget_policy` against the `"warn" | "stop"` enum at registration time so typos fail at `POST /workflows`. The agent backend's `BudgetSnapshot` is now populated from real cumulative numbers via `ctx.budgetSnapshot` threaded through the handler context (Option A from the budget.md plan).
+
+**Tests.** `packages/core/test/engine/budget-policy.test.ts` (12 unit cases — empty config, warn-once, ceiling crossed default + warn-only policy, per-node breaches, run-vs-node precedence, ratio in warns, ordering). `packages/daemon/test/executor.budget.test.ts` (3 end-to-end — halt on overspend, warn-only mode, warn-once-per-run). Parser ENUM test in `parser.test.ts`.
+
+**Files touched:** `packages/core/src/engine/{budget-policy,index}.ts`, `packages/core/src/parser/parser.ts`, `packages/core/src/types/{graph,events}.ts`, `packages/core/src/handler/{types,context}.ts`, `packages/core/src/executor/types.ts`, `packages/store/src/{reducers,types,store}.ts`, `packages/daemon/src/executor.ts`, `packages/agent/src/{handler-bridge,backend}.ts`, four test files, `docs/ARCHITECTURE.md` (§13.1 retired).
 
 ---
 
@@ -311,3 +310,4 @@ The fold itself stays as-is. This is purely about delivering state-changing inte
 - **2026-04-25 — #1** Pre-commit recorder. Replaced buffered `CollectingRecorder` with `CommittingRecorder`; each side-effect fact now lands in its own short txn before `fn` runs. Closes the hard-crash quarantine gap described in §1.1. Added P25 property test. All 1084 tests green.
 - **2026-04-25 — #2** Replay semantics. Artifacts gained collision-detection (no-op on same content, throws on diff content unless `replace: true`); messages gained opt-in dedup via a new `content_hash` column (additive migration, no version bump). Default behaviour matches the natural pattern: artifacts are typically deterministic (replay-safe by default), messages carry timestamps (caller opts into dedup explicitly). Tool node passes `replace: true` for stdout/stderr. P26 added; existing P15 reframed; new store-unit and store-property tests cover the edges. All 1087 tests green.
 - **2026-04-25 — #3** Intent fold truth table. Rewrote `foldIntents` with seven precedence rules, per-state preconditions, and a new `intent.dropped` observability event. New `shouldPauseAfterDispatch` decision flag captures pause-defers-to-after-handler semantics when steer/hitl arrive in the same batch as pause (per user feedback: specific intents must not be dropped implicitly). Documented in new `docs/intent-fold.md`. P27 (200 fast-check runs) asserts the table; 10 unit cases cover the headline rules. Surfaced item #23 (pending-intent driver missing for unquarantine + cancel-on-paused). All 1094 tests green.
+- **2026-04-25 — #4** Budget ledger wired. New pure `evaluateBudget` policy module enforces run + node ceilings at the turn boundary; executor rewrites `result` to a budget halt on breach, queues `budget.stop` observability before the terminal `fact.run_halted`. Warn-at-80 % fires once per scope+metric per run. `budget_policy = "warn"` makes stops non-blocking. New `RunMetrics.nodeCosts` accumulates per-node cost (additive JSON change, no schema bump). Parser ENUM_KEYS rejects typos in `budget_policy` at registration. Agent backend's `BudgetSnapshot` now populated from real cumulative numbers. 15 new tests (12 unit + 3 e2e + parser enum). All 1110 tests green.

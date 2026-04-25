@@ -393,6 +393,12 @@ const NUMBER_KEYS: ReadonlySet<string> = new Set([
 
 const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files", "skills"]);
 
+/**
+ * Keys whose value must be one of a closed set of strings. Anything else
+ * fails parsing — workflows fail at `POST /workflows` rather than mid-run.
+ */
+const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([["budget_policy", new Set(["warn", "stop"])]]);
+
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {
   if (BOOLEAN_KEYS.has(key)) {
     if (typeof raw === "boolean") return raw;
@@ -415,6 +421,18 @@ function coerceScalar(key: string, raw: string | number | boolean): string | num
         .map((s) => s.trim())
         .filter(Boolean);
     return undefined;
+  }
+  const allowed = ENUM_KEYS.get(key);
+  if (allowed !== undefined) {
+    const s = typeof raw === "string" ? raw : String(raw);
+    if (!allowed.has(s)) {
+      throw new ParseError(
+        `invalid value for ${key}: ${JSON.stringify(s)} (expected one of ${[...allowed].map((v) => JSON.stringify(v)).join(", ")})`,
+        0,
+        0,
+      );
+    }
+    return s;
   }
   return typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? raw : String(raw);
 }

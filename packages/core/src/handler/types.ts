@@ -166,6 +166,21 @@ export interface HandlerContext {
    * spawn subprocesses or read files MUST prefer this over
    * `process.cwd()` so concurrent runs don't step on each other. */
   readonly env?: ExecutionEnvironment;
+  /** Snapshot of cumulative cost / tokens against configured ceilings,
+   * computed by the executor from `run_state.metrics` + the active
+   * graph + node attrs at dispatch time. Pass-through to backends that
+   * surface "X of Y used" on `llm.start.budget`. Undefined when no
+   * ceiling is configured for this run. */
+  readonly budgetSnapshot?: BudgetSnapshotInput;
+}
+
+/** Subset of `BudgetSnapshot` populated by the executor and threaded
+ * through the handler context to the agent backend. */
+export interface BudgetSnapshotInput {
+  cumulative_cost_usd: number;
+  cumulative_tokens: number;
+  max_cost_usd?: number;
+  run_max_cost_usd?: number;
 }
 
 export type HandlerResult =

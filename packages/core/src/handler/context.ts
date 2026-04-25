@@ -5,6 +5,7 @@ import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {
   ArtifactsApi,
+  BudgetSnapshotInput,
   ExternalCall,
   HandlerContext,
   HttpClient,
@@ -46,6 +47,9 @@ export interface BuildContextOpts {
    * inside this env's cwd rather than the daemon's process cwd. Wired
    * by the executor when a `WorktreeProvisioner` is in play. */
   env?: ExecutionEnvironment;
+  /** Budget snapshot for `llm.start.budget`. Optional; the executor only
+   * sets this when a graph or node ceiling is configured. */
+  budgetSnapshot?: BudgetSnapshotInput;
 }
 
 /**
@@ -141,6 +145,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
     ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
+    ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
   };
   return ctx;
 }

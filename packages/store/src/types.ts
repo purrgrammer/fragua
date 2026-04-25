@@ -28,6 +28,11 @@ export interface RunMetrics {
   loopCounts: Record<string, number>;
   /** Per-model breakdown. Populated when a node reports modelName. */
   models: Record<string, { tokens: number; costUsd: number }>;
+  /** Per-node cost + token accumulation across iterations. Drives the
+   * per-node `max_cost_usd` / `max_tokens` ceilings checked by the
+   * budget policy. Empty on runs that predate the field — reducers
+   * accept missing maps defensively. */
+  nodeCosts: Record<string, { tokens: number; costUsd: number }>;
 }
 
 export interface RunState {

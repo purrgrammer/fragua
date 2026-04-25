@@ -25,6 +25,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
       totalCacheWriteTokens: 0,
       loopCounts: {},
       models: {},
+      nodeCosts: {},
     },
     nextSeq: 10,
     lastAppliedSeq: 1,

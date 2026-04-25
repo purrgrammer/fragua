@@ -11,10 +11,11 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
-import { ConcurrencyError, type StoredEvent, sha256Hex as sha256 } from "@swarm/store";
+import { ConcurrencyError, type RunStatus, type StoredEvent, sha256Hex as sha256 } from "@swarm/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
+import { CommittingRecorder } from "../src/recorder.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 // ─────────────── P6 ───────────────
@@ -170,7 +171,6 @@ describe("P8 — mid-flight abort replay: external call ≤ 1 per key", () => {
 // nothing to quarantine.
 describe("P25 — pre-commit recorder durability across hard crash", () => {
   test("recordIntent is durable before fn runs; sweep finds the orphan", async () => {
-    const { CommittingRecorder } = await import("../src/recorder.ts");
     const r = rig();
     enqueue(r, "rp25", "start");
     const s0 = r.store.getState("rp25")!;
@@ -226,7 +226,6 @@ describe("P25 — pre-commit recorder durability across hard crash", () => {
   });
 
   test("recordDone after recordIntent leaves no orphan; sweep is a no-op", async () => {
-    const { CommittingRecorder } = await import("../src/recorder.ts");
     const r = rig();
     enqueue(r, "rp25b", "start");
     const s0 = r.store.getState("rp25b")!;
@@ -289,7 +288,7 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
         payload: fc.record({ newPriority: fc.integer(), note: fc.string({ maxLength: 8 }) }),
       }),
     );
-    const statusArb = fc.constantFrom("queued", "running", "paused_hitl", "quarantined");
+    const statusArb = fc.constantFrom<RunStatus>("queued", "running", "paused_hitl", "quarantined");
 
     fc.assert(
       fc.property(fc.array(intentArb, { minLength: 0, maxLength: 6 }), statusArb, (intents, status) => {
