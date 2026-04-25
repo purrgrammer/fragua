@@ -384,7 +384,7 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
     } else if (chunk.type === "toolCall") {
       const result = toolResultsById.get(chunk.id);
       blocks.push(
-        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`}>
+        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
           <ToolHeader
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
@@ -444,7 +444,7 @@ function renderStreamingBlock(block: StreamingBlock, i: number): ReactNode {
   }
   if (block.type === "toolCall") {
     return (
-      <Tool key={`stream-c${i}`}>
+      <Tool key={`stream-c${i}`} className="mb-0">
         <ToolHeader type="tool-pending" state="input-streaming" title="…" />
         <ToolContent>
           <pre className="whitespace-pre-wrap font-mono text-[11px] text-muted-foreground">{block.argsText}</pre>
