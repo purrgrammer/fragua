@@ -15,7 +15,7 @@
 //   - Pure display; no mutation, no state beyond the fetch.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { getProvider, getRunSteps, type ProviderModel, type StepSnapshot } from "../lib/api.ts";
 import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
@@ -152,7 +152,19 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
   // modelId for tokenlens cost calculation (format: "provider:modelId").
   const tokenlensModelId = step.provider && step.model ? `${step.provider}:${step.model}` : undefined;
 
-  const hasCost = step.cost !== undefined;
+  // Fix #2: controlled open state so clicking the trigger opens the card.
+  const [contextOpen, setContextOpen] = useState(false);
+  const handleContextClick = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
+    e.preventDefault(); // stop <details> toggle
+    setContextOpen((v) => !v);
+  }, []);
+  const handleContextKeyDown = useCallback((e: React.KeyboardEvent) => {
+    e.preventDefault();
+  }, []);
+
+  // Fix #3: show circle when contextWindow is known and we have token data,
+  // regardless of whether cost_usd has been recorded yet.
+  const showContextCircle = hasContextWindow && (inputTokens > 0 || outputTokens > 0);
 
   return (
     <details data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card">
@@ -162,12 +174,14 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
           {metrics.map((m) => (
             <span key={m.key}>{m.node}</span>
           ))}
-          {hasCost && hasContextWindow && (
+          {showContextCircle && (
             // biome-ignore lint/a11y/noStaticElementInteractions: stop <details> toggle when interacting with the hover-card trigger
-            <span onClick={(e) => e.preventDefault()} onKeyDown={(e) => e.preventDefault()}>
+            <span onClick={handleContextClick} onKeyDown={handleContextKeyDown}>
               <Context
                 maxTokens={maxTokens}
                 usedTokens={usedTokens}
+                open={contextOpen}
+                onOpenChange={setContextOpen}
                 usage={{
                   inputTokens,
                   outputTokens,
@@ -186,7 +200,8 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
                 }}
                 modelId={tokenlensModelId}
               >
-                <ContextTrigger />
+                {/* Fix #1: match surrounding text-xs metrics — strip Button padding/size */}
+                <ContextTrigger className="h-auto p-0 text-xs" />
                 <ContextContent>
                   <ContextContentHeader />
                   <ContextContentBody>
@@ -197,7 +212,11 @@ function StepCard({ step }: { step: StepSnapshot }): JSX.Element {
                   <ContextContentFooter>
                     <span className="text-muted-foreground">Total cost</span>
                     <span>
-                      <AnimatedNumber value={step.cost!.cost_usd} format={usdFormatOptions(step.cost!.cost_usd)} />
+                      {step.cost !== undefined ? (
+                        <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
+                      ) : (
+                        "—"
+                      )}
                     </span>
                   </ContextContentFooter>
                 </ContextContent>
