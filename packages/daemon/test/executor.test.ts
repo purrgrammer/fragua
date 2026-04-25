@@ -213,6 +213,148 @@ describe("executor — edge selection", () => {
     r.store.close();
   });
 
+  test("codergen fail routes through condition=outcome=fail to a recovery node (build-feature: review→fix)", async () => {
+    // Regression for the handler-bridge bug that collapsed every codergen
+    // fail outcome to a terminal halt — blocking review → fix recovery in
+    // build-feature.dot. With the fix, fail flows through as a transition
+    // and the edge selector picks the explicit fail-edge.
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      review [shape=box];
+      fix [shape=box];
+      verify [shape=box];
+      done [shape=Msquare];
+      start -> review;
+      review -> fix [condition="outcome=fail", label="rejected"];
+      review -> verify;
+      fix -> verify;
+      verify -> done;
+    }`;
+    const r = rig({ dot });
+    let fixHandlerCalls = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "review", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "review", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "fail",
+        tokens: 1,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "fix", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        fixHandlerCalls++;
+        return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "verify", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rec-1", "start");
+    r.store.claimNextRun(1);
+    await runOne("rec-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    expect(fixHandlerCalls).toBe(1);
+    const events = r.store.getEvents("rec-1");
+    const reviewToFix = events.find(
+      (e) =>
+        e.type === "edge.selected" &&
+        (e.payload as { from: string; to: string }).from === "review" &&
+        (e.payload as { from: string; to: string }).to === "fix",
+    );
+    expect(reviewToFix).not.toBeUndefined();
+    // Run finished cleanly (fix → verify → done success), not halted.
+    expect(r.store.getState("rec-1")?.status).toBe("completed");
+    r.store.close();
+  });
+
+  test("codergen fail with no condition=outcome=fail edge halts (no silent fallthrough)", async () => {
+    // Mirrors quick-change.dot's commit/merge nodes — no fail-edge means
+    // a fail outcome should halt rather than route into the unconditional
+    // success edge.
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      commit [shape=box];
+      merge [shape=box];
+      done [shape=Msquare];
+      start -> commit;
+      commit -> merge;
+      merge -> done;
+    }`;
+    const r = rig({ dot });
+    let mergeHandlerCalls = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "commit", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "commit", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 1, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "merge", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        mergeHandlerCalls++;
+        return { kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "no-fail-edge", "start");
+    r.store.claimNextRun(1);
+    await runOne("no-fail-edge", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    expect(mergeHandlerCalls).toBe(0);
+    expect(r.store.getState("no-fail-edge")?.status).toBe("halted");
+    r.store.close();
+  });
+
   test("diamond-shape `conditional` node routes via edge conditions (no registered handler)", async () => {
     // The auto-dispatcher's conditional case leaves nextNode unset so
     // the executor's selector picks based on state.routing. Here we seed

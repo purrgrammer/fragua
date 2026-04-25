@@ -45,6 +45,58 @@ describe("normalizeLabel", () => {
   });
 });
 
+describe("selectEdge — outcome=fail no-fallthrough guard", () => {
+  test("fail with matching condition edge → routes to recovery", () => {
+    // Mirrors build-feature.dot: review -> fix [condition="outcome=fail"]
+    const graph = g(
+      ["review", "fix", "verify"],
+      [edge("review", "fix", { condition: "outcome=fail", label: "rejected" }), edge("review", "verify")],
+    );
+    const reviewNode: Node = { id: "review", shape: "box", attrs: {}, classes: [] };
+    const res = selectEdge({ graph, source: reviewNode, outcome: outcome({ status: "fail" }), context: {} });
+    expect(res?.edge.to).toBe("fix");
+    expect(res?.rule).toBe("condition");
+  });
+
+  test("fail with no fail-edge → undefined (executor halts)", () => {
+    // Mirrors quick-change.dot: commit/merge nodes have no `outcome=fail`
+    // edge — a fail outcome there must NOT silently route into the
+    // unconditional next-node.
+    const graph = g(["commit", "merge"], [edge("commit", "merge")]);
+    const commitNode: Node = { id: "commit", shape: "box", attrs: {}, classes: [] };
+    const res = selectEdge({ graph, source: commitNode, outcome: outcome({ status: "fail" }), context: {} });
+    expect(res).toBeUndefined();
+  });
+
+  test("fail does not match preferred_label fallback", () => {
+    const graph = g(["A", "B"], [edge("A", "B", { label: "Continue" })]);
+    const res = selectEdge({
+      graph,
+      source: nodeA,
+      outcome: outcome({ status: "fail", preferred_label: "Continue" }),
+      context: {},
+    });
+    expect(res).toBeUndefined();
+  });
+
+  test("fail does not match suggested_next_ids fallback", () => {
+    const graph = g(["A", "B"], [edge("A", "B")]);
+    const res = selectEdge({
+      graph,
+      source: nodeA,
+      outcome: outcome({ status: "fail", suggested_next_ids: ["B"] }),
+      context: {},
+    });
+    expect(res).toBeUndefined();
+  });
+
+  test("success with no condition match still falls through (regression — non-fail behaviour preserved)", () => {
+    const graph = g(["A", "B"], [edge("A", "B")]);
+    const res = selectEdge({ graph, source: nodeA, outcome: outcome({ status: "success" }), context: {} });
+    expect(res?.edge.to).toBe("B");
+  });
+});
+
 describe("selectEdge — basic behaviour", () => {
   test("no outgoing edges → undefined", () => {
     const graph = g(["A"], []);
@@ -626,6 +678,11 @@ describe("selectEdge — additional coverage to meet 100+ cases", () => {
       if (c.shouldMatch) {
         expect(res?.edge.to).toBe("B");
         expect(res?.rule).toBe("condition");
+      } else if (c.status === "fail") {
+        // `outcome=fail` no longer falls through to unconditional edges —
+        // a node that wants to recover from failure declares an explicit
+        // `condition="outcome=fail"` edge; otherwise the run halts.
+        expect(res).toBeUndefined();
       } else {
         expect(res?.edge.to).toBe("F");
       }

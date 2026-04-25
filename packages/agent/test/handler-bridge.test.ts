@@ -157,14 +157,18 @@ describe("makeCodergenHandler", () => {
     store.close();
   });
 
-  test("backend fail → halt with failure_reason", async () => {
+  test("backend fail → transition with outcomeStatus=fail and __failure_reason in routing", async () => {
+    // Was: `fail` short-circuited to halt, blocking workflows with a
+    // `condition="outcome=fail"` recovery edge (build-feature: review→fix).
+    // Now: bridge returns transition; executor's edge selector routes the
+    // fail outcome (or halts if no fail-edge exists).
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
     const failing: CodergenBackend = {
       async run() {
         return {
           status: "fail",
-          context_updates: {},
+          context_updates: { thing: "value" },
           preferred_label: "",
           suggested_next_ids: [],
           notes: "",
@@ -178,10 +182,69 @@ describe("makeCodergenHandler", () => {
       backend: failing,
     });
     const result = await spec.handler(ctx);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") {
-      expect(result.detail).toBe("provider unreachable");
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.routingDelta).toMatchObject({
+        thing: "value",
+        __failure_reason: "provider unreachable",
+      });
     }
+    store.close();
+  });
+
+  test("backend fail with empty failure_reason → no __failure_reason key", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r3-empty", store, "n1");
+    const failing: CodergenBackend = {
+      async run() {
+        return {
+          status: "fail",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+          failure_reason: "",
+        };
+      },
+    };
+    const spec = makeCodergenHandler({
+      node: node({ id: "n1" }),
+      nextNode: "__end__",
+      backend: failing,
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.routingDelta?.__failure_reason).toBeUndefined();
+    }
+    store.close();
+  });
+
+  test("backend retry → halt (still short-circuits; no edge routing for retry)", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r3-retry", store, "n1");
+    const retrying: CodergenBackend = {
+      async run() {
+        return {
+          status: "retry",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+          failure_reason: "transient",
+        };
+      },
+    };
+    const spec = makeCodergenHandler({
+      node: node({ id: "n1" }),
+      nextNode: "__end__",
+      backend: retrying,
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") expect(result.detail).toBe("transient");
     store.close();
   });
 

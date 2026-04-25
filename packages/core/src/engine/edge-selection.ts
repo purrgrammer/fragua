@@ -79,6 +79,14 @@ export function selectEdge(input: EdgeSelectionInput): EdgeSelection | undefined
     return { edge: best, rule: "condition", matched };
   }
 
+  // `outcome=fail` must NOT silently fall through to unconditional success
+  // edges. If no condition-matched edge claimed the fail outcome, return
+  // undefined so the executor halts (fact.run_halted via the
+  // outcomeStatus="fail" + terminal-nextNode branch in result-to-facts).
+  // Authors recovering from failure declare an explicit
+  // `condition="outcome=fail"` edge; absence of one is the halt signal.
+  if (input.outcome.status === "fail") return undefined;
+
   // Candidate pool for remaining steps: unconditional edges only
   const unconditional = edges.filter((e) => isEmptyCondition(e.attrs.condition));
 

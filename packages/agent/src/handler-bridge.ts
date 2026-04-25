@@ -156,13 +156,6 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       },
     });
 
-    if (outcome.status === "fail") {
-      return {
-        kind: "halt",
-        reason: "error",
-        detail: outcome.failure_reason ?? "codergen failed",
-      } satisfies HandlerResult;
-    }
     if (outcome.status === "retry" || outcome.status === "partial_success") {
       // Treat retries as halt for now — a richer retry strategy can fold
       // outcome.context_updates back into routing and re-enter the node.
@@ -173,7 +166,17 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       } satisfies HandlerResult;
     }
 
+    // `fail` outcomes flow through as transitions so the executor's edge
+    // selector can route to a `condition="outcome=fail"` recovery edge
+    // (e.g. build-feature.dot: `review -> fix`). When no fail-edge exists,
+    // selectEdge returns undefined and the executor halts via
+    // result-to-facts' `outcomeStatus === "fail" → fact.run_halted` branch
+    // — same observable end state as before, just authored through the
+    // workflow graph instead of short-circuited here.
     const routingDelta = contextUpdatesToRouting(outcome.context_updates);
+    if (outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0) {
+      routingDelta.__failure_reason = outcome.failure_reason;
+    }
     // Only set `nextNode` for explicit overrides — otherwise the executor's
     // edge selector picks based on the outcome fields below. `opts.nextNode`
     // stays as a legacy-compat fallback for auto-dispatcher code paths that
