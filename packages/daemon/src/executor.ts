@@ -88,6 +88,14 @@ export interface ExecutorOpts {
    * event fires one abort before the limit so the trend is visible
    * before the halt lands. */
   abortLoopCeiling?: number;
+  /** Wall-clock provider for timestamps that land in persistent state
+   * (e.g. `fact.handler_timeout_leaked.payload.leakedAt`). Defaults to
+   * `Date.now`. Tests pin a fake clock here when they want hermetic
+   * fact payloads — the store's own `now` covers the events row's
+   * `ts` column, but payload fields go through this. Local-timing
+   * measurements (`start = Date.now()` for duration accounting) bypass
+   * this on purpose; they don't affect projection state. */
+  clock?: () => number;
   /** Called when the per-process leaked-handler counter crosses
    * `maxLeakedHandlers`. Default: log to stderr (tests use this). The
    * production daemon entrypoint wires this to `ctrl.abort()` so the
@@ -191,6 +199,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
   const abortLoopCeiling = opts.abortLoopCeiling ?? DEFAULT_ABORT_LOOP_CEILING;
+  const clock = opts.clock ?? Date.now;
   let consecutiveAborts = 0;
   let turns = 0;
   // Dispatches counted for the max_loops ceiling. Incremented just before
@@ -520,7 +529,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         await tryAppendFact(opts.store, runId, recorder.version(), [
           {
             type: "fact.handler_timeout_leaked",
-            payload: { nodeId: currentNode, leakedAt: Date.now() },
+            payload: { nodeId: currentNode, leakedAt: clock() },
           },
           {
             type: "fact.run_halted",

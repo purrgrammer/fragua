@@ -160,4 +160,51 @@ describe("executor — leak budget", () => {
     release();
     r.store.close();
   });
+
+  test("ExecutorOpts.clock pins the fact.handler_timeout_leaked payload's leakedAt", async () => {
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      hang [shape=box];
+      done [shape=Msquare];
+      start -> hang -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "hang", tokens: 0, costUsd: 0 }),
+    });
+    const { spec, release } = leakingHandler();
+    r.dispatcher.register(r.workflowSha, "hang", spec);
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "rl-clock", "start");
+    r.store.claimNextRun(1);
+    const FROZEN = 1_700_000_000_000;
+    await runOne("rl-clock", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 5,
+      leakGraceMs: 30,
+      shutdownSignal: new AbortController().signal,
+      clock: () => FROZEN,
+    });
+
+    const leak = r.store.getEvents("rl-clock").find((e) => e.type === "fact.handler_timeout_leaked");
+    expect(leak).toBeDefined();
+    expect((leak!.payload as { leakedAt: number }).leakedAt).toBe(FROZEN);
+
+    release();
+    r.store.close();
+  });
 });
