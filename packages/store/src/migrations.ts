@@ -2,21 +2,17 @@ import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
+import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
 
 /**
- * Apply the schema to `db` and pin the `schema_version` row. Pre-
- * release: no cross-version migrations across the schema_version
- * boundary — a version mismatch is schema drift and the daemon refuses
- * to start. Delete the DB to start clean.
- *
- * Additive changes that don't change the on-disk semantics for existing
- * rows are applied without bumping the version (see `applyAdditiveMigrations`).
- * This keeps long-paused HITL runs alive across deployments that only add
- * columns.
+ * Apply the schema to `db` and pin the `schema_version` row. Versions in
+ * `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` are accepted —
+ * additive migrations run idempotently and the row is bumped to CURRENT.
+ * Versions below MIN throw schema-drift; versions above CURRENT throw
+ * downgrade-refused. See `pragmas.ts` for the bumping policy.
  */
 export function migrate(db: Database): void {
   db.transaction(() => {
@@ -27,11 +23,23 @@ export function migrate(db: Database): void {
       db.query("INSERT INTO schema_version (id, version) VALUES (1, ?)").run(CURRENT_SCHEMA_VERSION);
       return;
     }
-    if (row.version !== CURRENT_SCHEMA_VERSION) {
+    if (row.version > CURRENT_SCHEMA_VERSION) {
       throw new Error(
-        `schema drift: db has version ${row.version}, code expects ${CURRENT_SCHEMA_VERSION}. ` +
+        `schema downgrade refused: db has version ${row.version}, code expects ≤ ${CURRENT_SCHEMA_VERSION}. ` +
+          "Re-deploy a newer daemon or restore an older DB snapshot.",
+      );
+    }
+    if (row.version < MIN_COMPATIBLE_SCHEMA_VERSION) {
+      throw new Error(
+        `schema drift: db has version ${row.version}, code requires ≥ ${MIN_COMPATIBLE_SCHEMA_VERSION}. ` +
           "Pre-release: delete .swarm/swarm.db and restart.",
       );
+    }
+    if (row.version !== CURRENT_SCHEMA_VERSION) {
+      // Additive bump: row was at v=N, code is at v=M (N < M, both within
+      // compat range). The additive migrations above already brought the
+      // schema forward; record the new version.
+      db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(CURRENT_SCHEMA_VERSION);
     }
   })();
 }

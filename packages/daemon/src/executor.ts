@@ -17,7 +17,13 @@ import {
   selectEdge,
 } from "@swarm/core";
 import * as core from "@swarm/core/handler";
-import { ConcurrencyError, CURRENT_SCHEMA_VERSION, type FactEvent, type IEventStore } from "@swarm/store";
+import {
+  ConcurrencyError,
+  CURRENT_SCHEMA_VERSION,
+  type FactEvent,
+  type IEventStore,
+  MIN_COMPATIBLE_SCHEMA_VERSION,
+} from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
@@ -196,8 +202,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts): Promise<void> {
         return;
       }
 
-      // Schema drift refusal.
-      if (state.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+      // Schema drift refusal. Versions in the compatibility range
+      // [MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION] resume
+      // cleanly; only out-of-range pins (older than MIN, or newer than
+      // CURRENT — i.e. the daemon was downgraded) halt. See
+      // packages/store/src/pragmas.ts for the bumping policy.
+      if (state.schemaVersion < MIN_COMPATIBLE_SCHEMA_VERSION || state.schemaVersion > CURRENT_SCHEMA_VERSION) {
         await tryAppendFact(opts.store, runId, state.version, [
           {
             type: "fact.run_halted",

@@ -19,7 +19,7 @@
 | 3 | 🔴 | ~~Intent fold lacks formal truth table for simultaneous combinations~~ | ✅ resolved |
 | 4 | 🔴 | ~~Budget ledger declared-but-not-wired~~ | ✅ resolved |
 | 5 | 🔴 | ~~`canonicalStringify` lacks Unicode normalization (and Date/Buffer reject is undocumented)~~ | ✅ resolved |
-| 6 | 🟡 | Schema drift halts paused runs on any version bump (no additive vs breaking distinction) | open |
+| 6 | 🟡 | ~~Schema drift halts paused runs on any version bump (no additive vs breaking distinction)~~ | ✅ resolved |
 | 7 | 🟡 | Daemon health: server route exists, UI staleness banner does not | open |
 | 8 | 🟡 | Quarantine triage UI missing — operator must hand-craft `intent.unquarantine` | open |
 | 9 | 🟡 | Timeout-leaked handlers keep running and burning tokens (no `signal.abort()` on loser) | open |
@@ -103,15 +103,17 @@ The canonical form is now fully documented in `docs/handler-contract.md`. New `c
 
 ---
 
-### 6. 🟡 Schema drift = strict equality halts paused runs
+### 6. ✅ ~~Schema drift = strict equality halts paused runs~~
 
-**Evidence**
-- `packages/daemon/src/executor.ts:193` — `if (state.schemaVersion !== CURRENT_SCHEMA_VERSION) halt`
-- `packages/store/src/migrations.ts:23` — same strict check
-- Long-paused HITL runs die on every release that bumps the version, even for additive changes
+**Resolution.** Two-constant compatibility range. `MIN_COMPATIBLE_SCHEMA_VERSION` and `CURRENT_SCHEMA_VERSION` (both initially 3) define an inclusive range; runs pinned anywhere inside it resume cleanly. Out-of-range pins still halt with `fact.run_halted { reason: "schema_drift" }`. The migration step accepts the same range, runs additive `ALTER TABLE` migrations idempotently, and bumps the row to CURRENT. Versions above CURRENT throw `downgrade refused` (a daemon downgrade is unsafe).
 
-**Proposed approach**
-Distinguish `schema_version` (breaking) from `feature_version` (additive). Or use a min/max compatible range. Document the bumping policy. For an interactive tool, the operationally-friendly default matters.
+Bumping policy documented in `packages/store/src/pragmas.ts`:
+- Additive (new column with default, new event type, new optional payload field) → bump CURRENT only; old runs keep resuming.
+- Breaking (column removed, semantics flipped, event type retired) → bump BOTH; old runs halt visibly.
+
+Tests: 5 in `packages/store/test/migrations.test.ts` (fresh DB, idempotent re-run, additive bump, below-MIN drift, above-CURRENT downgrade) plus a new branch on P17 (in-range version resumes without halting).
+
+**Files touched:** `packages/store/src/{pragmas,migrations,index}.ts`, `packages/daemon/src/executor.ts`, new `packages/store/test/migrations.test.ts`, extended `packages/daemon/test/matrix.property.test.ts` (P17), `docs/ARCHITECTURE.md` §1.10 + §13.
 
 ---
 
@@ -312,3 +314,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #4** Budget ledger wired. New pure `evaluateBudget` policy module enforces run + node ceilings at the turn boundary; executor rewrites `result` to a budget halt on breach, queues `budget.stop` observability before the terminal `fact.run_halted`. Warn-at-80 % fires once per scope+metric per run. `budget_policy = "warn"` makes stops non-blocking. New `RunMetrics.nodeCosts` accumulates per-node cost (additive JSON change, no schema bump). Parser ENUM_KEYS rejects typos in `budget_policy` at registration. Agent backend's `BudgetSnapshot` now populated from real cumulative numbers. 15 new tests (12 unit + 3 e2e + parser enum). All 1110 tests green.
 - **2026-04-25 — #23** Pending-intent driver. Renamed `wake-hitl.ts` → `wake-pending.ts` with one `wakePending(store)` entry point that runs three sweeps in cancel → hitl → unquarantine order. Cancel-on-paused / cancel-on-quarantined and all three unquarantine resolutions (cancel / retry / treat_as_done) now actually transition state. `treat_as_done` synthesises `fact.side_effect_done` for each orphan so subsequent startup sweeps are coherent. 9 new tests cover the precedence rules, the resolution branches, and idempotence. All 1119 tests green.
 - **2026-04-25 — #5** canonicalStringify Unicode + explicit reject of silently-broken built-ins. NFC normalisation via the built-in `String.prototype.normalize` — no dep. `Date`, `TypedArray`, `Buffer`, `DataView`, `ArrayBuffer` now throw rather than serialising as `{}`. Duplicate keys after NFC normalisation throw. Canonical form fully documented in `docs/handler-contract.md`. 18 new tests pin a stability corpus. All 1137 tests green.
+- **2026-04-25 — #6** Schema-version compat range. New `MIN_COMPATIBLE_SCHEMA_VERSION` paired with `CURRENT_SCHEMA_VERSION` defines an inclusive resume range; additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only and keep paused runs alive across deploys. Migration accepts the range, runs additive ALTER TABLEs, and updates the version row to CURRENT. Out-of-range still halts (drift below MIN, downgrade-refused above CURRENT). 6 new tests + extended P17. All 1143 tests green.

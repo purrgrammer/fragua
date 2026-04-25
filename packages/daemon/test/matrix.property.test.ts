@@ -11,7 +11,13 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
-import { ConcurrencyError, type RunStatus, type StoredEvent, sha256Hex as sha256 } from "@swarm/store";
+import {
+  ConcurrencyError,
+  MIN_COMPATIBLE_SCHEMA_VERSION,
+  type RunStatus,
+  type StoredEvent,
+  sha256Hex as sha256,
+} from "@swarm/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
@@ -541,6 +547,43 @@ describe("P17 — schema drift refusal on resume", () => {
     const halt = r.store.getEvents("rp17").find((e) => e.type === "fact.run_halted")!;
     expect((halt.payload as { reason: string }).reason).toBe("schema_drift");
     expect(after.version).toBeGreaterThan(before.version);
+    r.store.close();
+  });
+
+  test("a run pinned to a version inside [MIN, CURRENT] resumes without halting", async () => {
+    // Same setup as P17, but with a schema_version that, while not equal
+    // to CURRENT, still falls inside the compat range. Picking
+    // MIN_COMPATIBLE_SCHEMA_VERSION directly is the most defensive fixture
+    // — it'll keep working as MIN floats forward.
+    const r = rig();
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "noop",
+      sideEffect: "none",
+      maxMs: 1_000,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rp17b", "start");
+
+    const db = (r.store as unknown as { db: Database }).db;
+    db.query("UPDATE run_state SET schema_version = ? WHERE run_id = ?").run(MIN_COMPATIBLE_SCHEMA_VERSION, "rp17b");
+
+    r.store.claimNextRun(1);
+    await runOne("rp17b", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 5,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const after = r.store.getState("rp17b")!;
+    // No schema_drift halt: run progressed normally to the terminal node.
+    expect(after.status).toBe("completed");
+    const types = r.store.getEvents("rp17b").map((e) => e.type);
+    expect(types).not.toContain("fact.run_halted");
     r.store.close();
   });
 });

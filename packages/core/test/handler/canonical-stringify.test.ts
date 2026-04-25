@@ -46,10 +46,10 @@ describe("canonicalStringify — Unicode normalisation", () => {
   test("object keys are normalised and then sorted", () => {
     const a: Record<string, number> = {};
     a[NFC] = 1;
-    a.x = 2;
+    a["x"] = 2;
     const b: Record<string, number> = {};
     b[NFD] = 1;
-    b.x = 2;
+    b["x"] = 2;
     expect(canonicalStringify(a)).toBe(canonicalStringify(b));
   });
 
@@ -103,7 +103,7 @@ describe("canonicalStringify — rejected inputs", () => {
 
   test("cyclic references", () => {
     const a: Record<string, unknown> = {};
-    a.self = a;
+    a["self"] = a;
     expect(() => canonicalStringify(a)).toThrow(/cyclic/);
   });
 });

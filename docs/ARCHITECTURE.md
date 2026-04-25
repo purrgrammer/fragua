@@ -127,7 +127,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; daemon refuses to resume mismatches, emits `fact.run_halted { reason: "schema_drift" }`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` and halts only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only — long-paused HITL runs survive the deploy. Breaking bumps move both constants together. See `packages/store/src/pragmas.ts` for the policy.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -717,7 +717,7 @@ packages/
 - **Cross-machine deployment** — single-machine by design; swap SQLite → Postgres behind `IEventStore` if ever needed.
 - **Retention policies** per workflow — manual `swarm prune` until demand.
 - **Blob streaming** for >16MB — handler must chunk; revisit on real use case.
-- **Auto-migration of schema drift** — refuse + manual for v1.
+- **Auto-migration across breaking schema bumps** — refuse + manual for v1. Additive bumps are handled in-place by `applyAdditiveMigrations` (`packages/store/src/migrations.ts`) without touching the version row's compat range.
 - **Workflow hot-reload for in-flight runs** — not planned; `workflow_sha` pinned.
 - **Per-workflow concurrency caps** — add when needed; easy via partial-index counts.
 
