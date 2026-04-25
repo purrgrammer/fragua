@@ -62,6 +62,15 @@ export interface SwarmConfig {
    * shuts itself down — singleton + sweep recovers stuck runs on the
    * next start. Absent = executor default (3). */
   max_leaked_handlers?: number;
+  /** Background blob garbage collection. Sweeps orphan files left by
+   * `putArtifact` crashes between file write and row insert (§I8). */
+  blob_gc?: {
+    /** Interval as a duration string ("6h", "30m", …) or raw ms.
+     * Set to 0 / "0s" to disable; operators run `swarm db gc` by hand. */
+    interval?: string | number;
+    /** Max rows visited per sweep. Bounds latency. Default 1000. */
+    max_rows?: number;
+  };
   /** Skill discovery knobs. Absent / empty enables auto-discovery of the
    * well-known paths (`.agents/skills`, `.claude/skills`
    * under both project and user scopes). See `packages/workspace/src/skills`

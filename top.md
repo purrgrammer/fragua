@@ -29,8 +29,8 @@
 | 13 | 🟡 | ~~Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use~~ | ✅ resolved |
 | 14 | 🟡 | ~~Abort-loop ceiling K=5 — "progress" not defined, magic number~~ | ✅ resolved |
 | 15 | 🟡 | ~~Parallel + quarantine: sibling branch semantics on retry undocumented~~ | ✅ resolved |
-| 16 | 🟢 | No instrumentation around `BEGIN IMMEDIATE` lock wait | open |
-| 17 | 🟢 | `gcBlobs` exists but never auto-invoked | open |
+| 16 | 🟢 | ~~No instrumentation around `BEGIN IMMEDIATE` lock wait~~ | ✅ resolved |
+| 17 | 🟢 | ~~`gcBlobs` exists but never auto-invoked~~ | ✅ resolved |
 | 18 | 🟢 | No chaos test matrix (disk-full, clock skew, torn-write, OOM, fsync-fail) | open |
 | 19 | 🟢 | Time/clock injection inconsistent across tests | open |
 | 20 | 🟢 | Fan-in heuristic version not pinned per run — replay determinism risk | open |
@@ -224,19 +224,17 @@ A new `abort_loop_warning` observability event fires one abort before the limit 
 
 ---
 
-### 16. 🟢 No `BEGIN IMMEDIATE` lock-wait instrumentation
+### 16. ✅ ~~No `BEGIN IMMEDIATE` lock-wait instrumentation~~
 
-**Evidence** `busy_timeout=5000` masks contention silently
-
-**Proposed approach** Wrap `db.exec("BEGIN IMMEDIATE")` calls; record wait time histogram; expose via `/health`.
+**Resolution.** `Metrics` gains a reservoir-sampled lock-wait histogram. `writeTxn` now times `BEGIN IMMEDIATE` separately from the txn body and feeds `recordLockWait(ms)`. `MetricsSnapshot` exposes `lockWaitDurationsMs`, `p50LockWaitMs`, `p99LockWaitMs`, `totalLockWaitMs`. An operator watching metrics now sees `p99LockWaitMs` climb before tail latency on writes blows up — `busy_timeout` previously absorbed contention silently. 1 new test.
 
 ---
 
-### 17. 🟢 `gcBlobs` not auto-invoked
+### 17. ✅ ~~`gcBlobs` not auto-invoked~~
 
-**Evidence** Method exists; only tests call it
+**Resolution.** New `startBlobGc` driver in `packages/daemon/src/blob-gc.ts`. Sweeps on a configurable interval (default 6 hours, capped at `maxRows=1000` per sweep to bound latency). Wired into `startDaemon` alongside the supervisor; lifetimes track the shutdown controller so the loop wakes from sleep on signal and exits before `done` resolves. Errors during a sweep are logged but never crash the loop — operator visibility, not propagation.
 
-**Proposed approach** Daemon supervisor: GC on schedule (every N hours, only when idle) or on-demand via `swarm db gc`. Bound work per call to keep latency predictable.
+Config: `.swarm/config.yaml` `blob_gc.interval` (duration string or ms; `0` disables) and `blob_gc.max_rows`. Defaults preserve current behaviour for operators who don't touch config. 3 new tests cover normal sweep, prompt shutdown response, and error-resilience.
 
 ---
 
@@ -318,3 +316,4 @@ A new `abort_loop_warning` observability event fires one abort before the limit 
 - **2026-04-25 — #10/#14** Queue-depth backpressure + configurable abort-loop ceiling. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns` (config key `max_queued_runs`). `ABORT_LOOP_CEILING` is no longer hardcoded — `abort_loop_ceiling` config key + `ExecutorOpts.abortLoopCeiling`. New `abort_loop_warning` observability event fires at K-1. Per user feedback ("all magic numbers should be configurable, config-file driven"), exposed `max_queued_runs` / `abort_loop_ceiling` / `max_leaked_handlers` in `.swarm/config.yaml`. 5 new tests. All 1150 tests green.
 - **2026-04-25 — #13** Oversized intent payload → typed 413, not 500. New `appendIntentOr413` wrapper translates `PayloadTooLargeError` to `413 { code: "payload_too_large", sizeBytes, maxBytes }` on every intent-write route. Plus a documented author-time rule on the FactEvent union: bulky free-form strings belong in `messages` / `artifacts`, never in fact payloads. 1 new test. All 1151 tests green.
 - **2026-04-25 — #15** Documented parallel + quarantine semantics. New "Quarantine inside a parallel branch" subsection in `docs/handler-contract.md`: a branch orphan quarantines the whole run; siblings abandon; unquarantine operates at the parent parallel node; per-branch quarantine is out of scope for v1. Pure docs — code already behaves this way.
+- **2026-04-25 — #16/#17** Lock-wait instrumentation + auto blob GC. `MetricsSnapshot` gains lock-wait histograms (`p50/p99LockWaitMs`); `writeTxn` times `BEGIN IMMEDIATE` separately so contention is visible before write tail latency does. New `startBlobGc` driver in `daemon/blob-gc.ts` sweeps orphan blob files every 6h by default; configurable via `.swarm/config.yaml` `blob_gc.{interval,max_rows}`. 4 new tests. All 1155 tests green.

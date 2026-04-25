@@ -20,6 +20,7 @@ import {
   PiCodergenBackend,
   PiSummariserBackend,
 } from "@swarm/agent";
+import { parseDurationMs } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import {
   AutoTitler,
@@ -338,6 +339,15 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     if (config.max_loops !== undefined) daemonOpts.maxLoops = config.max_loops;
     if (config.abort_loop_ceiling !== undefined) daemonOpts.abortLoopCeiling = config.abort_loop_ceiling;
     if (config.max_leaked_handlers !== undefined) daemonOpts.maxLeakedHandlers = config.max_leaked_handlers;
+    if (config.blob_gc?.interval !== undefined) {
+      try {
+        daemonOpts.blobGcIntervalMs = parseDurationMs(config.blob_gc.interval);
+      } catch (err) {
+        console.error(chalk.red(`config: blob_gc.interval: ${(err as Error).message}`));
+        return 1;
+      }
+    }
+    if (config.blob_gc?.max_rows !== undefined) daemonOpts.blobGcMaxRows = config.blob_gc.max_rows;
     const handleRef = startDaemon(daemonOpts);
     await handleRef.done;
   } catch (err) {

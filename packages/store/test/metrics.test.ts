@@ -76,4 +76,20 @@ describe("store metrics", () => {
     expect(m.p99WriteMs).toBeGreaterThanOrEqual(m.p50WriteMs);
     s.close();
   });
+
+  test("lock-wait timings are recorded on every write txn", () => {
+    const s = rig();
+    s.enqueueRun({ runId: "r5", workflowSha: "sha" });
+    for (let i = 0; i < 5; i++) {
+      s.appendIntent("r5", { type: "intent.pause_requested", payload: {} });
+    }
+    const m = s.metricsSnapshot();
+    // One sample per write — enqueueRun is also a write, so ≥ 6 samples.
+    expect(m.lockWaitDurationsMs.length).toBeGreaterThanOrEqual(6);
+    expect(Number.isFinite(m.p50LockWaitMs)).toBe(true);
+    expect(Number.isFinite(m.p99LockWaitMs)).toBe(true);
+    expect(m.p99LockWaitMs).toBeGreaterThanOrEqual(m.p50LockWaitMs);
+    expect(m.totalLockWaitMs).toBeGreaterThanOrEqual(0);
+    s.close();
+  });
 });

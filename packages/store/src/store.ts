@@ -843,8 +843,13 @@ export class SqliteStore implements IEventStore {
   // ─────────────── Internals ───────────────
 
   private writeTxn(fn: () => void): void {
-    // BEGIN IMMEDIATE grabs the write lock up front; busy_timeout handles contention.
+    // BEGIN IMMEDIATE grabs the write lock up front; busy_timeout handles
+    // contention. Time the lock acquisition separately from the txn body
+    // so an operator watching metrics can see contention (high p99
+    // lockWait, low p99 write) before tail latency is visible end-to-end.
+    const lockStart = performance.now();
     this.db.exec("BEGIN IMMEDIATE");
+    this.metrics.recordLockWait(performance.now() - lockStart);
     try {
       fn();
       this.db.exec("COMMIT");

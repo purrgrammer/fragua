@@ -10,6 +10,7 @@ import type * as coreHandler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler } from "./auto-titler.ts";
+import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
 import { startSupervisor } from "./supervisor.ts";
@@ -63,6 +64,13 @@ export interface DaemonMainOpts {
    * run halts with `reason: "abort_loop"`. Defaults to the executor's
    * built-in (5). */
   abortLoopCeiling?: number;
+  /** Interval (ms) between background `gcBlobs` sweeps. Defaults to 6h.
+   * Set to 0 to disable the background sweep entirely (operator runs
+   * `swarm db gc` manually). */
+  blobGcIntervalMs?: number;
+  /** Max rows visited per `gcBlobs` sweep. Bounds latency on huge
+   * stores. Defaults to 1000. */
+  blobGcMaxRows?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -122,6 +130,22 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       if (opts.leakGraceMs !== undefined) supervisorOpts.nodeLeakGraceMs = opts.leakGraceMs;
       const supervisor = startSupervisor(supervisorOpts);
 
+      // Background blob GC. Only starts when interval > 0 (operators can
+      // disable by setting `blob_gc.interval: 0` and run `swarm db gc`
+      // manually). Lifetimes track the executor: on shutdown signal the
+      // sweep wakes from sleep and exits before `done` resolves.
+      const gcInterval = opts.blobGcIntervalMs ?? DEFAULT_BLOB_GC_INTERVAL_MS;
+      let blobGc: { promise: Promise<void> } | undefined;
+      if (gcInterval > 0) {
+        const gcOpts: BlobGcOpts = {
+          store: opts.store,
+          shutdownSignal: ctrl.signal,
+          intervalMs: gcInterval,
+          maxRows: opts.blobGcMaxRows ?? DEFAULT_BLOB_GC_MAX_ROWS,
+        };
+        blobGc = startBlobGc(gcOpts);
+      }
+
       const executorOpts: Parameters<typeof runExecutor>[0] = {
         store: opts.store,
         dispatcher: opts.dispatcher,
@@ -151,6 +175,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
 
       registry.tripAll(new Error("shutdown"));
       await supervisor.promise;
+      if (blobGc) await blobGc.promise;
       if (opts.autoTitler) await opts.autoTitler.drain();
     } finally {
       try {

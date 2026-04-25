@@ -15,6 +15,15 @@ export interface MetricsSnapshot {
   p50WriteMs: number;
   p99WriteMs: number;
   totalWriteMs: number;
+  /** Time spent waiting for `BEGIN IMMEDIATE` to acquire the write lock,
+   * per write. Reservoir-sampled. Under load, this is the leading
+   * indicator of contention — if `p99LockWaitMs` climbs while
+   * `p99WriteMs` doesn't, two writers are racing for the same lock and
+   * `busy_timeout` is absorbing the cost silently. */
+  lockWaitDurationsMs: number[];
+  p50LockWaitMs: number;
+  p99LockWaitMs: number;
+  totalLockWaitMs: number;
   uptimeMs: number;
 }
 
@@ -26,7 +35,9 @@ export class Metrics {
   private facts = 0;
   private occConflicts = 0;
   private durations: number[] = [];
+  private lockWaits: number[] = [];
   private totalMs = 0;
+  private totalLockWaitMs = 0;
   private readonly startedAt = Date.now();
 
   recordWrite(durationMs: number, kind: "fact" | "intent"): void {
@@ -42,19 +53,32 @@ export class Metrics {
     this.occConflicts++;
   }
 
+  /** Record the time `BEGIN IMMEDIATE` spent acquiring the write lock.
+   * Called by every store write path; surfaces in MetricsSnapshot as
+   * `p99LockWaitMs` so an operator can see contention before tail
+   * latency on writes blows up. */
+  recordLockWait(durationMs: number): void {
+    this.totalLockWaitMs += durationMs;
+    this.lockWaits.push(durationMs);
+    if (this.lockWaits.length > RESERVOIR_CAP) this.lockWaits.shift();
+  }
+
   snapshot(): MetricsSnapshot {
-    const sorted = [...this.durations].sort((a, b) => a - b);
-    const p50 = percentile(sorted, 0.5);
-    const p99 = percentile(sorted, 0.99);
+    const sortedW = [...this.durations].sort((a, b) => a - b);
+    const sortedL = [...this.lockWaits].sort((a, b) => a - b);
     return {
       writes: this.writes,
       intents: this.intents,
       facts: this.facts,
       occConflicts: this.occConflicts,
       writeDurationsMs: [...this.durations],
-      p50WriteMs: p50,
-      p99WriteMs: p99,
+      p50WriteMs: percentile(sortedW, 0.5),
+      p99WriteMs: percentile(sortedW, 0.99),
       totalWriteMs: this.totalMs,
+      lockWaitDurationsMs: [...this.lockWaits],
+      p50LockWaitMs: percentile(sortedL, 0.5),
+      p99LockWaitMs: percentile(sortedL, 0.99),
+      totalLockWaitMs: this.totalLockWaitMs,
       uptimeMs: Date.now() - this.startedAt,
     };
   }
@@ -65,7 +89,9 @@ export class Metrics {
     this.facts = 0;
     this.occConflicts = 0;
     this.durations = [];
+    this.lockWaits = [];
     this.totalMs = 0;
+    this.totalLockWaitMs = 0;
   }
 }
 
