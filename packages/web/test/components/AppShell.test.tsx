@@ -87,11 +87,11 @@ describe("crumbsFor (route → breadcrumb derivation)", () => {
   });
 
   it("workflows", () => {
-    expect(crumbsFor("/workflows", {})).toEqual([{ label: "Home", href: "/" }, { label: "Workflows" }]);
+    expect(crumbsFor("/workflows", {})).toEqual([{ label: "Workflows" }]);
   });
 
   it("runs list", () => {
-    expect(crumbsFor("/runs", {})).toEqual([{ label: "Home", href: "/" }, { label: "Runs" }]);
+    expect(crumbsFor("/runs", {})).toEqual([{ label: "Runs" }]);
   });
 
   it("run detail truncates the id to 8 chars", () => {

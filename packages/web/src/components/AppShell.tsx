@@ -126,13 +126,13 @@ export function crumbsFor(pathname: string, params: Record<string, string | unde
   const segments = pathname.split("/").filter(Boolean);
   const crumbs: Crumb[] = [{ label: "Home", href: "/" }];
   if (segments[0] === "workflows") {
-    crumbs.push({ label: "Workflows" });
-    return crumbs;
+    // List page — Home crumb is redundant with the nav/logo.
+    return [{ label: "Workflows" }];
   }
   if (segments[0] === "providers") {
     if (segments.length === 1) {
-      crumbs.push({ label: "Providers" });
-      return crumbs;
+      // List page — Home crumb is redundant with the nav/logo.
+      return [{ label: "Providers" }];
     }
     crumbs.push({ label: "Providers", href: "/providers" });
     const provider = params["name"] ?? segments[1] ?? "";
@@ -141,8 +141,8 @@ export function crumbsFor(pathname: string, params: Record<string, string | unde
   }
   if (segments[0] === "runs") {
     if (segments.length === 1) {
-      crumbs.push({ label: "Runs" });
-      return crumbs;
+      // List page — Home crumb is redundant with the nav/logo.
+      return [{ label: "Runs" }];
     }
     crumbs.push({ label: "Runs", href: "/runs" });
     const id = params["id"] ?? segments[1] ?? "";
