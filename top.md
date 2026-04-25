@@ -218,14 +218,9 @@ A new `abort_loop_warning` observability event fires one abort before the limit 
 
 ---
 
-### 15. 🟡 Parallel + quarantine sibling semantics
+### 15. ✅ ~~Parallel + quarantine sibling semantics~~
 
-**Evidence**
-- Handler-contract attributes branch external calls to the parent parallel node
-- On retry-via-unquarantine, what happens to siblings already in flight is undocumented
-
-**Proposed approach**
-Document. Likely: quarantine waits for all siblings to settle (success/abort), then retry restarts the parallel node from the parent (all branches re-run). Property test P25-parallel-quarantine.
+**Resolution.** Pure docs change in `docs/handler-contract.md` — new "Quarantine inside a parallel branch" subsection. A branch orphan quarantines the WHOLE run; siblings abandon; unquarantine operates on the parent parallel node; `retry` re-spawns ALL branches relying on idempotency-key dedup. Per-branch quarantine is intentionally out of scope for v1; the doc points to two patterns (provider-level idempotency, or splitting into a sequence) for callers who need branch-level isolation. No code change — implementation already behaves this way (verified during #23).
 
 ---
 
