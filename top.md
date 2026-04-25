@@ -26,7 +26,7 @@
 | 10 | 🟡 | ~~No load-shed / `max_queued_runs` / backpressure at enqueue~~ | ✅ resolved |
 | 11 | 🟡 | No authN/Z on server endpoints | open |
 | 12 | 🟡 | ~~`onCommit` API is effectively dead code (only tests subscribe)~~ | ✅ resolved |
-| 13 | 🟡 | Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use | open |
+| 13 | 🟡 | ~~Event payload 4KB cap is runtime-only; `fact.steering_applied` etc. will explode in real use~~ | ✅ resolved |
 | 14 | 🟡 | ~~Abort-loop ceiling K=5 — "progress" not defined, magic number~~ | ✅ resolved |
 | 15 | 🟡 | Parallel + quarantine: sibling branch semantics on retry undocumented | open |
 | 16 | 🟢 | No instrumentation around `BEGIN IMMEDIATE` lock wait | open |
@@ -188,18 +188,19 @@ Recheck verified: zero callers across the workspace before deletion (tests, daem
 
 ---
 
-### 13. 🟡 Event payload 4KB cap is runtime-only
+### 13. ✅ ~~Event payload 4KB cap is runtime-only~~
 
-**Evidence**
-- `events.payload TEXT … CHECK (length(payload) < 4096)` in schema
-- `fact.steering_applied { folded: <user-text> }` will easily exceed
-- No author-time enforcement; surprise at runtime
+**Resolution.** Verified the actual exposure: the FactEvent union doesn't currently carry any unbounded text — `fact.steering_applied` was a hypothetical name from the original review and doesn't exist. The real risk is on the INTENT side: an operator pasting a 5 KB steer or HITL response into the web UI used to get a 500 with a stack trace because `PayloadTooLargeError` propagated unhandled.
 
-**Proposed approach**
-Either:
-- (a) Move `folded` (and similar bulky fields) to artifact/message refs; payload carries only the ref
-- (b) Type each fact payload as a sum with compile-time size budgets and a lint
-Recommend (a) — already aligns with §I9 "preview vs raw" pattern.
+Two fixes:
+1. **HTTP boundary translation.** New `appendIntentOr413` helper wraps every intent-write route. `PayloadTooLargeError` becomes `413 { code: "payload_too_large", sizeBytes, maxBytes }` instead of 500. Applies to /steer, /pause, /cancel, /hitl, /unquarantine, /priority.
+2. **Documented author-time rule.** A new comment block above `FactEvent` in `packages/store/src/types.ts` makes it explicit: bulky free-form strings (LLM output, prompts, snapshots) belong in `messages` or `artifacts`, never in fact payloads. The 4 KB cap is enforced at insert via CHECK, so a payload that grows past on real input is a bug.
+
+The "spill to artifact" architectural change (option a from the original proposal) is deferred — there are no current callers that need it, and the documented rule + typed 413 covers the realistic surface.
+
+**Tests:** 1 new in `packages/server/test/store/routes.test.ts` — oversized steer returns 413 with the right body shape (not 500).
+
+**Files touched:** `packages/server/src/store/routes.ts`, `packages/store/src/types.ts`, `packages/server/test/store/routes.test.ts`.
 
 ---
 
@@ -320,3 +321,4 @@ Document. Likely: quarantine waits for all siblings to settle (success/abort), t
 - **2026-04-25 — #9** Timeout-leak budget + bug fix. Discovered while wiring the budget that the original leak detection was dead code: `timeoutReject(...).then(_ => leakedTimeout = true)` never fired because `.then` on the fulfillment branch of a rejecting promise is a no-op. Replaced with a sentinel-resolve so leaks are unambiguously detected. Added per-process LeakBudget with configurable cap (default 3) and `onLeakLimitExceeded` callback. Daemon entrypoint wires callback to `ctrl.abort()`. 2 new tests pin the under-limit and exactly-N-fires behavior. All 1145 tests green.
 - **2026-04-25 — #12** Deleted `onCommit` dead code. Zero callers (tests, daemon, server, agent, web — all clean). The in-process listener pattern can't cross the web → daemon process boundary anyway, so it would never have helped the supervisor it claimed to. ARCHITECTURE.md §4 updated with the rationale. Same 1145 tests green.
 - **2026-04-25 — #10/#14** Queue-depth backpressure + configurable abort-loop ceiling. `POST /runs` returns 429 with `Retry-After: 30` when `runStateCounts().queued >= maxQueuedRuns` (config key `max_queued_runs`). `ABORT_LOOP_CEILING` is no longer hardcoded — `abort_loop_ceiling` config key + `ExecutorOpts.abortLoopCeiling`. New `abort_loop_warning` observability event fires at K-1. Per user feedback ("all magic numbers should be configurable, config-file driven"), exposed `max_queued_runs` / `abort_loop_ceiling` / `max_leaked_handlers` in `.swarm/config.yaml`. 5 new tests. All 1150 tests green.
+- **2026-04-25 — #13** Oversized intent payload → typed 413, not 500. New `appendIntentOr413` wrapper translates `PayloadTooLargeError` to `413 { code: "payload_too_large", sizeBytes, maxBytes }` on every intent-write route. Plus a documented author-time rule on the FactEvent union: bulky free-form strings belong in `messages` / `artifacts`, never in fact payloads. 1 new test. All 1151 tests green.

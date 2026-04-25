@@ -84,6 +84,21 @@ export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" 
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
+/**
+ * Payload-shape contract for fact events: every payload must serialise
+ * comfortably below `MAX_EVENT_PAYLOAD_BYTES` (4 KB, §I7) under realistic
+ * loads. Bulky free-form strings (LLM output, prompts, large artefact
+ * snapshots) DO NOT belong in fact payloads — push them to the
+ * `messages` table or to an `artifacts` row and reference by sha or
+ * `(node, iteration, key)`. The 4 KB cap is enforced at insert time
+ * via a CHECK constraint, so a payload that grows past the limit on
+ * real input is a bug, not a runtime question.
+ *
+ * Operator-supplied intents (`intent.steering_requested.text`,
+ * `intent.hitl_input.input`, etc.) flow through the cap too; the
+ * server translates `PayloadTooLargeError` to a 413 so callers see a
+ * typed `code: "payload_too_large"` instead of a 500.
+ */
 export type FactEvent =
   | {
       type: "fact.run_started";

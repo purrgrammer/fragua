@@ -241,6 +241,18 @@ describe("POST /runs — enqueue", () => {
     expect((await req("POST", "/runs", { workflowSha: "wf" })).status).toBe(200);
   });
 
+  test("oversized intent payload → 413 with code=payload_too_large (not 500)", async () => {
+    // Steer with text that, once JSON-wrapped, exceeds MAX_EVENT_PAYLOAD_BYTES (4 KB).
+    // 5000 bytes of "x" plus the wrapper comfortably blows past the cap.
+    store.enqueueRun({ runId: "rbig", workflowSha: "wf" });
+    const res = await req("POST", "/runs/rbig/steer", { text: "x".repeat(5000) });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { code: string; sizeBytes: number; maxBytes: number };
+    expect(body.code).toBe("payload_too_large");
+    expect(body.sizeBytes).toBeGreaterThan(body.maxBytes);
+    expect(body.maxBytes).toBe(4096);
+  });
+
   test("preflightProviders returning ok:false rejects with code=provider_unavailable", async () => {
     const { createRoutes: fresh } = await import("../../src/store/routes.ts");
     const s = new SqliteStore({ path: ":memory:" });

@@ -6,7 +6,8 @@
 
 import type { Database } from "bun:sqlite";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
-import { type IEventStore, type StoredEvent, sha256Hex } from "@swarm/store";
+import { type IEventStore, type IntentEvent, PayloadTooLargeError, type StoredEvent, sha256Hex } from "@swarm/store";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
@@ -248,35 +249,61 @@ export function createRoutes(deps: ServerDeps): Hono {
     return c.json({ runId });
   });
 
+  /**
+   * Append an intent and translate the store-level `PayloadTooLargeError`
+   * into a typed 413. Operator-supplied text fields (`steer.text`,
+   * `cancel.reason`, `hitl.input`, `unquarantine.note`) can plausibly
+   * exceed the 4 KB event-payload cap (§I7); without this wrapper the
+   * caller gets a 500 with a stack trace and no actionable signal. With
+   * it, they get `code: "payload_too_large"` plus the byte count and
+   * limit so the client can trim or split.
+   */
+  function appendIntentOr413(c: Context, runId: string, intent: IntentEvent): Response {
+    try {
+      const { seq } = deps.store.appendIntent(runId, intent);
+      return c.json({ seq });
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        return c.json(
+          {
+            error: `payload too large: ${err.sizeBytes} bytes (cap ${err.max}). Trim or split the request.`,
+            code: "payload_too_large",
+            sizeBytes: err.sizeBytes,
+            maxBytes: err.max,
+          },
+          413,
+        );
+      }
+      throw err;
+    }
+  }
+
   app.post("/runs/:id/steer", async (c) => {
     const body = await readJson<{ text?: string }>(c);
     if (!body || typeof body.text !== "string" || body.text.length === 0) {
       return c.json({ error: "text required" }, 400);
     }
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+    return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.steering_requested",
       payload: { text: body.text },
     });
-    return c.json({ seq });
   });
 
-  app.post("/runs/:id/pause", (c) => {
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+  app.post("/runs/:id/pause", (c) =>
+    appendIntentOr413(c, c.req.param("id"), {
       type: "intent.pause_requested",
       payload: {},
-    });
-    return c.json({ seq });
-  });
+    }),
+  );
 
   app.post("/runs/:id/cancel", async (c) => {
     const body = (await readJson<{ reason?: string }>(c)) ?? {};
     const payload: { reason?: string } = {};
     if (typeof body.reason === "string") payload.reason = body.reason;
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+    return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.cancel_requested",
       payload,
     });
-    return c.json({ seq });
   });
 
   app.post("/runs/:id/hitl", async (c) => {
@@ -284,11 +311,10 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!body || !("input" in body)) {
       return c.json({ error: "input required" }, 400);
     }
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+    return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.hitl_input",
       payload: { input: body.input },
     });
-    return c.json({ seq });
   });
 
   app.post("/runs/:id/unquarantine", async (c) => {
@@ -299,11 +325,10 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!body || (body.resolution !== "treat_as_done" && body.resolution !== "retry" && body.resolution !== "cancel")) {
       return c.json({ error: "resolution required" }, 400);
     }
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+    return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.unquarantine",
       payload: { resolution: body.resolution, note: body.note ?? "" },
     });
-    return c.json({ seq });
   });
 
   app.post("/runs/:id/priority", async (c) => {
@@ -311,11 +336,10 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!body || typeof body.newPriority !== "number") {
       return c.json({ error: "newPriority required" }, 400);
     }
-    const { seq } = deps.store.appendIntent(c.req.param("id"), {
+    return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.priority_adjusted",
       payload: { newPriority: body.newPriority, note: body.note ?? "" },
     });
-    return c.json({ seq });
   });
 
   // ─── Reads ──────────────────────────────────────────────────
