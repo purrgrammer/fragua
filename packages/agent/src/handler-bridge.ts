@@ -175,7 +175,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // workflow graph instead of short-circuited here.
     const routingDelta = contextUpdatesToRouting(outcome.context_updates);
     if (outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0) {
-      routingDelta.__failure_reason = outcome.failure_reason;
+      routingDelta["__failure_reason"] = outcome.failure_reason;
     }
     // Only set `nextNode` for explicit overrides — otherwise the executor's
     // edge selector picks based on the outcome fields below. `opts.nextNode`

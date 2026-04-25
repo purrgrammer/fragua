@@ -1,13 +1,86 @@
 // Route-level tests for RunDetail.
 
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
-import { cleanup, waitFor, within } from "@testing-library/react";
+import { act, cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
+
+// ─── FakeEventSource ─────────────────────────────────────────────
+// Minimal EventSource stand-in for injecting SSE frames into useRunLive.
+// Overrides globalThis.EventSource so RunDetail picks it up without prop changes.
+
+let _currentFakeEs: FakeEventSource | null = null;
+
+class FakeEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSED = 2;
+  readyState = 1; // OPEN
+  private listeners: Map<string, Array<(ev: MessageEvent) => void>> = new Map();
+
+  constructor(public readonly url: string) {
+    _currentFakeEs = this;
+  }
+
+  addEventListener(type: string, listener: (ev: MessageEvent) => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type)!.push(listener);
+  }
+
+  removeEventListener(type: string, listener: (ev: MessageEvent) => void): void {
+    const arr = this.listeners.get(type);
+    if (!arr) return;
+    const idx = arr.indexOf(listener);
+    if (idx !== -1) arr.splice(idx, 1);
+  }
+
+  close(): void {
+    this.readyState = 2;
+    _currentFakeEs = null;
+  }
+
+  /** Dispatch a JSON-serialised frame.
+   * When the event type is one of the named SSE event types registered
+   * by useRunLive (ALL_EVENT_TYPES), fire only the type-specific
+   * listeners. The generic "message" listener is only for frames that
+   * lack an `event:` field — firing both would double-count. */
+  dispatch(eventType: string, payload: unknown): void {
+    const data = JSON.stringify({ type: eventType, payload });
+    const ev = new MessageEvent(eventType, { data, lastEventId: "" });
+    // If there are type-specific listeners registered (useRunLive does
+    // this for all ALL_EVENT_TYPES), prefer those only.
+    const typeListeners = this.listeners.get(eventType) ?? [];
+    if (typeListeners.length > 0) {
+      for (const l of typeListeners) l(ev);
+    } else {
+      // Fall back to generic "message" listeners for un-typed frames.
+      for (const l of this.listeners.get("message") ?? []) l(ev);
+    }
+  }
+}
+
+/** Install FakeEventSource as globalThis.EventSource for the duration of the test. */
+function installFakeEventSource(): { restore: () => void; getEs: () => FakeEventSource | null } {
+  const g = globalThis as { [key: string]: unknown };
+  const original = g["EventSource"];
+  g["EventSource"] = FakeEventSource;
+  return {
+    restore() {
+      g["EventSource"] = original;
+      _currentFakeEs = null;
+    },
+    getEs() {
+      return _currentFakeEs;
+    },
+  };
+}
 
 function mount(client: ReturnType<typeof createTestQueryClient>, path: string) {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
@@ -269,6 +342,78 @@ describe("RunDetail", () => {
     } finally {
       mock.restore();
       setSystemTime(new Date());
+    }
+  });
+
+  it("stats strip live-updates cost and tokens from SSE cost.recorded events", async () => {
+    const detail: RunDetailT = {
+      runId: "run-live-cost",
+      startedAt: "2024-01-01T00:00:00Z",
+      status: "running",
+      lastEventSeq: 1,
+      nodes: [],
+      selectedEdges: [],
+      // snapshot starts at zero — live events should update the tiles
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+    };
+    const { client, mock } = prepare("run-live-cost", detail);
+    const fakeEs = installFakeEventSource();
+    try {
+      const { container } = mount(client, "/runs/run-live-cost");
+      const q = within(container);
+
+      // Wait for the stats strip to render with initial snapshot values.
+      await waitFor(() => {
+        expect(q.getByTestId("detail-cost-tile")).toBeTruthy();
+      });
+
+      // Dispatch two cost.recorded SSE frames.
+      await act(async () => {
+        const es = fakeEs.getEs();
+        if (es) {
+          es.dispatch("cost.recorded", {
+            cost_usd: 0.05,
+            input_tokens: 500,
+            output_tokens: 100,
+            cache_read_tokens: 50,
+            cache_write_tokens: 0,
+          });
+          es.dispatch("cost.recorded", {
+            cost_usd: 0.05,
+            input_tokens: 500,
+            output_tokens: 100,
+            cache_read_tokens: 50,
+            cache_write_tokens: 0,
+          });
+        }
+      });
+
+      // Cost tile should reflect the summed live values: $0.10.
+      await waitFor(() => {
+        const costText = q.getByTestId("detail-cost-tile").textContent ?? "";
+        expect(costText).toContain("$0.10");
+      });
+
+      // Tokens tile should reflect 1200 total (1000 input + 200 output).
+      await waitFor(() => {
+        const tokenText = q.getByTestId("detail-tokens-tile").textContent ?? "";
+        // 1200 renders as "1.2K" in compact format
+        expect(tokenText).toMatch(/1\.2K|1,200/);
+      });
+
+      // Cache tile should show a non-dash percentage (50+50=100 cache read,
+      // 500+500=1000 input → 100/(1000+100) ≈ 9.1%).
+      await waitFor(() => {
+        const cacheText = q.getByTestId("detail-cache-tile").textContent ?? "";
+        expect(cacheText).not.toBe("—");
+        expect(cacheText).toContain("%");
+      });
+    } finally {
+      mock.restore();
+      fakeEs.restore();
     }
   });
 

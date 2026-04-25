@@ -117,6 +117,12 @@ export function runStateToDetail(
  *   - (nothing)                                         → pending (not
  *     emitted; graph layer renders pending for nodes absent from the list,
  *     which the UI then fades to mark "never executed").
+ *
+ * Terminal-halt patch: if the run ended via `fact.run_halted`,
+ * `fact.run_cancelled`, or `fact.run_quarantined` and a node is still
+ * marked `running` (no node_completed / node_aborted of its own), we
+ * downgrade it to `failed` so the UI doesn't show a stale "in progress"
+ * spinner on a halted run.
  */
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
   const byNode = new Map<string, { state: NodeState["state"]; lastEventSeq: number }>();
@@ -141,6 +147,24 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
         break;
       default:
         break;
+    }
+  }
+
+  // Terminal-halt patch: find the first run-terminal event (there should
+  // be exactly one) and use its seq as the lastEventSeq for any node
+  // that never received its own completion/abort.
+  let haltSeq: number | undefined;
+  for (const ev of events) {
+    if (ev.type === "fact.run_halted" || ev.type === "fact.run_cancelled" || ev.type === "fact.run_quarantined") {
+      haltSeq = ev.seq;
+      break;
+    }
+  }
+  if (haltSeq !== undefined) {
+    for (const [nodeId, v] of byNode) {
+      if (v.state === "running") {
+        byNode.set(nodeId, { state: "failed", lastEventSeq: haltSeq });
+      }
     }
   }
 

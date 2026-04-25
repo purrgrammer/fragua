@@ -17,6 +17,7 @@
 import { ALL_EVENT_TYPES } from "@swarm/types";
 import { useEffect, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
+import type { LiveEvent } from "./useLiveCostAggregate.ts";
 
 export type RunLiveStatus = "idle" | "loading" | "live" | "closed" | "error";
 
@@ -50,6 +51,10 @@ export interface UseRunLiveResult {
   /** Filtered slice of control-channel events (steering, control) for
    * `usePendingSteers` reconciliation. */
   controlEvents: ReadonlyArray<{ type: string; data?: Record<string, unknown> | null }>;
+  /** All parsed SSE frames accumulated since the hook mounted for this
+   * run. Fed to `useLiveCostAggregate` to compute live cost/token stats
+   * without a server round-trip. */
+  liveEvents: ReadonlyArray<LiveEvent>;
 }
 
 export interface UseRunLiveOptions {
@@ -77,6 +82,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   const [lastSeq, setLastSeq] = useState(0);
   const [totalEvents, setTotalEvents] = useState(0);
   const [controlEvents, setControlEvents] = useState<UseRunLiveResult["controlEvents"]>([]);
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
 
   // Latest ordinal persisted so incremental fetches don't re-load the world.
   const lastOrdinalRef = useRef(0);
@@ -90,6 +96,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     setLastSeq(0);
     setTotalEvents(0);
     setControlEvents([]);
+    setLiveEvents([]);
     lastOrdinalRef.current = 0;
 
     if (!runId) {
@@ -152,6 +159,8 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       const payload = (parsed["payload"] ?? null) as Record<string, unknown> | null;
       const nodeId = typeof payload?.["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
 
+      setLiveEvents((prev) => [...prev, { type, payload }]);
+
       if (isControlReconcileEvent(type, payload)) {
         setControlEvents((prev) => [...prev, { type, data: payload }]);
       }
@@ -205,7 +214,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     };
   }, [runId]);
 
-  return { messages, streaming, status, lastSeq, totalEvents, controlEvents };
+  return { messages, streaming, status, lastSeq, totalEvents, controlEvents, liveEvents };
 }
 
 /** Pure delta-fold: place `delta` at `index` within the streaming

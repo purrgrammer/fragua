@@ -217,7 +217,7 @@ describe("makeCodergenHandler", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
-      expect(result.routingDelta?.__failure_reason).toBeUndefined();
+      expect(result.routingDelta?.["__failure_reason"]).toBeUndefined();
     }
     store.close();
   });

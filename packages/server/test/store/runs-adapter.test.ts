@@ -175,3 +175,65 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     expect(deriveSelectedEdges(events)).toHaveLength(2);
   });
 });
+
+describe("deriveNodeStates — run-halt terminal patching", () => {
+  test("a node left in 'running' state when a fact.run_halted follows is marked 'failed'", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "implement", iteration: 0 }), seq: 1 },
+      { ...ev("fact.run_halted", { reason: "error" }), seq: 2 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]?.nodeId).toBe("implement");
+    expect(nodes[0]?.state).toBe("failed");
+    expect(nodes[0]?.lastEventSeq).toBe(2);
+  });
+
+  test("a node left in 'running' state when fact.run_cancelled follows is marked 'failed'", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 3 },
+      { ...ev("fact.run_cancelled", { intentSeq: 7 }), seq: 4 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes[0]?.state).toBe("failed");
+    expect(nodes[0]?.lastEventSeq).toBe(4);
+  });
+
+  test("a node left in 'running' state when fact.run_quarantined follows is marked 'failed'", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "plan", iteration: 0 }), seq: 5 },
+      { ...ev("fact.run_quarantined", { reason: "orphan_side_effect" }), seq: 6 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes[0]?.state).toBe("failed");
+    expect(nodes[0]?.lastEventSeq).toBe(6);
+  });
+
+  test("a node that already reached 'completed' before run-halt is not downgraded", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "lint", iteration: 0 }), seq: 1 },
+      {
+        ...ev("fact.node_completed", { nodeId: "lint", iteration: 0, outcomeStatus: "success", nextNode: "done" }),
+        seq: 2,
+      },
+      { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes[0]?.nodeId).toBe("lint");
+    expect(nodes[0]?.state).toBe("completed");
+    // lastEventSeq should still be the node_completed seq, not the halt seq
+    expect(nodes[0]?.lastEventSeq).toBe(2);
+  });
+
+  test("a node that already reached 'failed' before run-halt is not changed", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
+      { ...ev("fact.node_aborted", { nodeId: "x", iteration: 0, cause: "timeout" }), seq: 2 },
+      { ...ev("fact.run_halted", { reason: "aborted_exit" }), seq: 3 },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes[0]?.state).toBe("failed");
+    // lastEventSeq should be the node_aborted seq, not the halt seq
+    expect(nodes[0]?.lastEventSeq).toBe(2);
+  });
+});

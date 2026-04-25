@@ -29,6 +29,7 @@ import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
+import { type CostAggregate, useLiveCostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
 const VIEWS = ["conversation", "events", "graph", "steps"] as const;
@@ -63,9 +64,10 @@ export function RunDetail(): JSX.Element {
   const shouldCanonicalize = !!id && rawView !== view;
 
   // All hooks before any conditional return — Rules of Hooks.
-  const { messages, streaming, status: liveStatus, totalEvents, controlEvents } = useRunLive(id || null);
+  const { messages, streaming, status: liveStatus, totalEvents, controlEvents, liveEvents } = useRunLive(id || null);
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
+  const liveAggregate = useLiveCostAggregate(liveEvents);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const handleNodeClick = useCallback((nodeId: string) => {
@@ -102,7 +104,7 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} />
+      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveAggregate={liveAggregate} />
 
       {isError && !detail ? (
         <EmptyState
@@ -175,7 +177,17 @@ export function RunDetail(): JSX.Element {
 
 // ─── Header: run-level title + stats strip ────────────────────────
 
-function DetailHeader({ detail, id, isLive }: { detail: RunDetailT | null; id: string; isLive: boolean }): JSX.Element {
+function DetailHeader({
+  detail,
+  id,
+  isLive,
+  liveAggregate,
+}: {
+  detail: RunDetailT | null;
+  id: string;
+  isLive: boolean;
+  liveAggregate: CostAggregate;
+}): JSX.Element {
   const showLive = isLive && detail?.status === "running";
   return (
     <header className="flex min-w-0 flex-col gap-3">
@@ -212,17 +224,39 @@ function DetailHeader({ detail, id, isLive }: { detail: RunDetailT | null; id: s
           {shortenRunId(id)}
         </p>
       </div>
-      <StatsStrip detail={detail} />
+      <StatsStrip detail={detail} liveAggregate={liveAggregate} />
     </header>
   );
 }
 
-export function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Element {
+export function StatsStrip({
+  detail,
+  liveAggregate,
+}: {
+  detail: RunDetailT | null;
+  liveAggregate?: CostAggregate;
+}): JSX.Element {
   const loading = detail == null;
   const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
   const now = useNow(1_000, isLiveRun);
   const durationMs = isLiveRun ? Math.max(0, now - Date.parse(detail.startedAt)) : detail?.durationMs;
-  const totalTokens = detail ? detail.inputTokens + detail.outputTokens : 0;
+
+  // Prefer the live aggregate when at least one cost.recorded event has
+  // arrived; fall back to the server snapshot so terminal/initial renders
+  // still show data. The live values converge with the snapshot once the
+  // run reaches a terminal fact.
+  const hasLive =
+    liveAggregate != null &&
+    liveAggregate.totalCostUsd + liveAggregate.totalInputTokens + liveAggregate.totalOutputTokens > 0;
+  const costUsd = hasLive ? liveAggregate.totalCostUsd : (detail?.costUsd ?? 0);
+  const inputTokens = hasLive ? liveAggregate.totalInputTokens : (detail?.inputTokens ?? 0);
+  const outputTokens = hasLive ? liveAggregate.totalOutputTokens : (detail?.outputTokens ?? 0);
+  // Preserve undefined when the snapshot omits cacheReadTokens and no live
+  // events have arrived — formatCacheHitRate returns '—' for undefined,
+  // which is the right fallback for pre-split runs.
+  const cacheReadTokens: number | undefined = hasLive ? liveAggregate.totalCacheReadTokens : detail?.cacheReadTokens;
+  const totalTokens = inputTokens + outputTokens;
+
   const nodes = detail?.nodes ?? [];
   const runningNode = nodes.find((n) => n.state === "running");
   const completedNodes = nodes.filter((n) => n.state === "completed").length;
@@ -260,8 +294,8 @@ export function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Eleme
       <StatTile
         label="Cost"
         loading={loading}
-        numericValue={detail?.costUsd ?? 0}
-        format={usdFormatOptions(detail?.costUsd ?? 0)}
+        numericValue={costUsd}
+        format={usdFormatOptions(costUsd)}
         testId="detail-cost-tile"
         icon={<DollarSign className="size-4" />}
       />
@@ -272,20 +306,16 @@ export function StatsStrip({ detail }: { detail: RunDetailT | null }): JSX.Eleme
         format={tokensCompactFormatOptions(totalTokens)}
         testId="detail-tokens-tile"
         icon={<Coins className="size-4" />}
-        hint={
-          detail
-            ? `input ${detail.inputTokens.toLocaleString()} · output ${detail.outputTokens.toLocaleString()}`
-            : undefined
-        }
+        hint={detail ? `input ${inputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}` : undefined}
       />
       <StatTile
         label="Cache hit rate"
         loading={loading}
-        value={formatCacheHitRate(detail?.cacheReadTokens, detail?.inputTokens)}
+        value={formatCacheHitRate(cacheReadTokens, inputTokens)}
         testId="detail-cache-tile"
         hint={
           detail
-            ? `cache read ${(detail.cacheReadTokens ?? 0).toLocaleString()} · input ${detail.inputTokens.toLocaleString()}`
+            ? `cache read ${(cacheReadTokens ?? 0).toLocaleString()} · input ${inputTokens.toLocaleString()}`
             : undefined
         }
       />
