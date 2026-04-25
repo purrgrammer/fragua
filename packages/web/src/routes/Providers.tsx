@@ -106,80 +106,85 @@ export function Providers(): JSX.Element {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.providers.map((p) => {
-                const feedback = testFeedback[p.name];
-                return (
-                  <TableRow key={p.name} data-testid={`provider-row-${p.name}`}>
-                    <TableCell className="max-w-0 truncate font-medium">
-                      <Link
-                        to={`/providers/${encodeURIComponent(p.name)}`}
-                        className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
-                        data-testid={`provider-link-${p.name}`}
-                      >
-                        <div className="flex flex-row gap-1 items-center">
-                          <ModelSelectorLogo provider={p.name} className="size-4" />
-                          {p.name}
-                        </div>
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{p.model_count}</TableCell>
-                    <TableCell>
-                      {p.credentialed ? (
-                        <Badge
-                          variant="default"
-                          className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
-                        >
-                          {p.auth_kind === "oauth" ? "oauth" : "ready"}
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">not configured</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <code
-                        className="block truncate font-mono text-xs text-muted-foreground"
-                        title={p.auth_source ?? ""}
-                      >
-                        {p.auth_source ?? "—"}
-                      </code>
-                    </TableCell>
-                    <TableCell className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!p.credentialed || (feedback && "pending" in feedback)}
-                        onClick={() => testMutation.mutate({ name: p.name })}
-                        data-testid={`provider-test-${p.name}`}
-                      >
-                        {feedback && "pending" in feedback ? "Testing…" : "Test"}
-                      </Button>
-                      {p.auth_kind !== null && (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => {
-                            if (window.confirm(`Remove stored credentials for "${p.name}"?`)) {
-                              rmMutation.mutate({ name: p.name });
-                            }
-                          }}
-                          data-testid={`provider-rm-${p.name}`}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      )}
-                      {!p.credentialed && (
+              {[...data.providers]
+                .sort((a, b) => {
+                  if (a.credentialed !== b.credentialed) return a.credentialed ? -1 : 1;
+                  return a.name.localeCompare(b.name);
+                })
+                .map((p) => {
+                  const feedback = testFeedback[p.name];
+                  return (
+                    <TableRow key={p.name} data-testid={`provider-row-${p.name}`}>
+                      <TableCell className="max-w-0 truncate font-medium">
                         <Link
                           to={`/providers/${encodeURIComponent(p.name)}`}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent"
-                          data-testid={`provider-configure-${p.name}`}
+                          className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
+                          data-testid={`provider-link-${p.name}`}
                         >
-                          <KeyRound className="size-3.5" /> Configure
+                          <div className="flex flex-row gap-1 items-center">
+                            <ModelSelectorLogo provider={p.name} className="size-4" />
+                            {p.name}
+                          </div>
                         </Link>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{p.model_count}</TableCell>
+                      <TableCell>
+                        {p.credentialed ? (
+                          <Badge
+                            variant="default"
+                            className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+                          >
+                            {p.auth_kind === "oauth" ? "oauth" : "ready"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">not configured</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-0">
+                        <code
+                          className="block truncate font-mono text-xs text-muted-foreground"
+                          title={p.auth_source ?? ""}
+                        >
+                          {p.auth_source ?? "—"}
+                        </code>
+                      </TableCell>
+                      <TableCell className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!p.credentialed || (feedback && "pending" in feedback)}
+                          onClick={() => testMutation.mutate({ name: p.name })}
+                          data-testid={`provider-test-${p.name}`}
+                        >
+                          {feedback && "pending" in feedback ? "Testing…" : "Test"}
+                        </Button>
+                        {p.auth_kind !== null && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => {
+                              if (window.confirm(`Remove stored credentials for "${p.name}"?`)) {
+                                rmMutation.mutate({ name: p.name });
+                              }
+                            }}
+                            data-testid={`provider-rm-${p.name}`}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
+                        {!p.credentialed && (
+                          <Link
+                            to={`/providers/${encodeURIComponent(p.name)}`}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent"
+                            data-testid={`provider-configure-${p.name}`}
+                          >
+                            <KeyRound className="size-3.5" /> Configure
+                          </Link>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
             </TableBody>
           </Table>
         </div>
