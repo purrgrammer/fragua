@@ -94,10 +94,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // while still rendering each row as its own bordered card.
   // grid-template-columns: [step | duration | cost | context]
   return (
-    <div
-      data-testid="cost-inspector"
-      className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3"
-    >
+    <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
       {steps.map((step, i) => (
         <StepCostRow key={step.startSeq} step={step} nextStartedAt={steps[i + 1]?.startedAt} isLive={isLive} />
       ))}
@@ -188,8 +185,7 @@ function StepCostRow({
   // `justify-self-end` on each metric cell right-aligns its chip;
   // empty cells (e.g. a step missing cost data) still hold column
   // space so neighbouring rows' chips don't shift.
-  const rowGridClass =
-    "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-card px-3 py-2";
+  const rowGridClass = "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-card px-3 py-2";
 
   return (
     <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>

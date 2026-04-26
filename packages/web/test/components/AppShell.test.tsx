@@ -96,7 +96,6 @@ describe("crumbsFor (route → breadcrumb derivation)", () => {
 
   it("run detail truncates the id to 8 chars", () => {
     expect(crumbsFor("/runs/abcdef1234567890", { id: "abcdef1234567890" })).toEqual([
-      { label: "Home", href: "/" },
       { label: "Runs", href: "/runs" },
       { label: "abcdef12" },
     ]);

@@ -379,7 +379,7 @@ describe("GET /runs/:id/steps", () => {
     store.appendFact("steps-one", [{ type: "fact.node_started", payload: { nodeId: "n1", iteration: 0 } }], s1.version);
     store.appendObservabilityEvents("steps-one", [{ type: "llm.start", payload: { nodeId: "n1", model: "stub" } }]);
     const s2 = store.getState("steps-one")!;
-    store.appendFact("steps-one", [{ type: "fact.run_completed", payload: { reason: "ok" } }], s2.version);
+    store.appendFact("steps-one", [{ type: "fact.run_completed", payload: { finalNode: "n1" } }], s2.version);
 
     const res = await app.request("/runs/steps-one/steps");
     expect(res.status).toBe(200);
@@ -617,7 +617,7 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
       s0.version,
     );
     const s1 = store.getState("term")!;
-    store.appendFact("term", [{ type: "fact.run_completed", payload: { reason: "ok" } }], s1.version);
+    store.appendFact("term", [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
 
     const routes = createRoutes({ store, ssePollMs: 10 });
     const res = await routes.fetch(new Request("http://test/runs/term/stream"));

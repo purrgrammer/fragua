@@ -136,10 +136,8 @@ export function crumbsFor(
 ): Crumb[] {
   if (pathname === "/" || pathname === "") return [{ label: "Home" }];
   const segments = pathname.split("/").filter(Boolean);
-  const crumbs: Crumb[] = [{ label: "Home", href: "/" }];
   if (segments[0] === "workflows") {
     if (segments.length === 1) {
-      // List page — Home crumb is redundant with the nav/logo.
       return [{ label: "Workflows" }];
     }
     // Detail page: Workflows / <workflow-name>
@@ -148,25 +146,18 @@ export function crumbsFor(
   }
   if (segments[0] === "providers") {
     if (segments.length === 1) {
-      // List page — Home crumb is redundant with the nav/logo.
       return [{ label: "Providers" }];
     }
-    crumbs.push({ label: "Providers", href: "/providers" });
     const provider = params["name"] ?? segments[1] ?? "";
-    crumbs.push({ label: provider });
-    return crumbs;
+    return [{ label: "Providers", href: "/providers" }, { label: provider }];
   }
   if (segments[0] === "runs") {
     if (segments.length === 1) {
-      // List page — Home crumb is redundant with the nav/logo.
       return [{ label: "Runs" }];
     }
-    crumbs.push({ label: "Runs", href: "/runs" });
     const id = params["id"] ?? segments[1] ?? "";
-    crumbs.push({ label: id.length > 8 ? id.slice(0, 8) : id });
-    return crumbs;
+    return [{ label: "Runs", href: "/runs" }, { label: id.length > 8 ? id.slice(0, 8) : id }];
   }
   // Unknown route — just label it from the first segment.
-  crumbs.push({ label: segments[0] ?? "Unknown" });
-  return crumbs;
+  return [{ label: segments[0] ?? "Unknown" }];
 }
