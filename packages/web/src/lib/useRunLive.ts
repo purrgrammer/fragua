@@ -157,9 +157,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       }, 30);
     };
 
-    // ── Bootstrap: always fetch messages ────────────────────────
-    refetchMessages();
-
     // Skip SSE entirely on terminal runs — no new frames will ever
     // arrive, and the snapshot+messages fetch already loaded everything.
     // Also skip while the snapshot is still loading (`terminal === undefined`):
@@ -167,8 +164,23 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     // is wasted work and shows up in the network log as transient
     // connections. The effect re-runs once `terminal` settles to a
     // boolean, opening SSE only if the run is genuinely live.
-    if (opts.terminal === true || opts.terminal === undefined) {
-      setStatus(opts.terminal === true ? "closed" : "loading");
+    //
+    // Bootstrap fetch is also gated on `terminal !== undefined` — the
+    // effect is re-keyed on `terminal` and `sinceSeq`, so issuing a
+    // first fetch before either resolves just to re-issue it 50ms later
+    // (and again under React 18 strict-mode double-invoke) burned three
+    // /messages requests on every conversation page mount.
+    if (opts.terminal === undefined) {
+      setStatus("loading");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    refetchMessages();
+
+    if (opts.terminal === true) {
+      setStatus("closed");
       return () => {
         cancelled = true;
         if (refetchTimerRef.current) {
