@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyDefaultContextFiles,
   buildSystemPrompt,
   CONTEXT_FILES_MAX_BYTES,
   loadContextFiles,
@@ -89,6 +90,35 @@ describe("loadContextFiles", () => {
 
   test("default cap is 32 KiB", () => {
     expect(CONTEXT_FILES_MAX_BYTES).toBe(32 * 1024);
+  });
+});
+
+describe("applyDefaultContextFiles", () => {
+  test("empty declared list → AGENTS.md only", () => {
+    expect(applyDefaultContextFiles([])).toEqual(["AGENTS.md"]);
+  });
+
+  test("AGENTS.md prepended ahead of other files", () => {
+    expect(applyDefaultContextFiles(["docs/SPEC.md", "docs/handler-contract.md"])).toEqual([
+      "AGENTS.md",
+      "docs/SPEC.md",
+      "docs/handler-contract.md",
+    ]);
+  });
+
+  test("explicit AGENTS.md is preserved without duplication", () => {
+    expect(applyDefaultContextFiles(["AGENTS.md"])).toEqual(["AGENTS.md"]);
+  });
+
+  test("explicit AGENTS.md anywhere in the list keeps the author's order", () => {
+    expect(applyDefaultContextFiles(["docs/SPEC.md", "AGENTS.md"])).toEqual(["docs/SPEC.md", "AGENTS.md"]);
+  });
+
+  test("returns a fresh array — does not alias the input", () => {
+    const declared = ["AGENTS.md"];
+    const out = applyDefaultContextFiles(declared);
+    expect(out).not.toBe(declared);
+    expect(out).toEqual(declared);
   });
 });
 

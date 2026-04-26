@@ -7,7 +7,8 @@
 // update_docs → commit → merge. `thread_id="dev"` shares context between
 // implement, fix, and verify so downstream turns remember edits; every other
 // stage runs on a fresh thread and reads state via git. AGENTS.md is
-// attached to plan via context_files; downstream nodes cite any rule inline.
+// auto-prepended to every codergen system prompt by the agent backend —
+// no per-node `context_files` needed.
 //
 // Hardening notes (2026-04-21):
 //   - plan enforces a scope guard — no cross-package / shared-contract creep
@@ -32,7 +33,6 @@ digraph build_feature {
   plan [
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT conditions — emit the marker and stop:\n  - empty, names nothing specific, or the target is blocked → `<abort>missing or blocked target: <reason></abort>`\n  - SCOPE GUARD: the plan would touch >3 packages OR modify shared contracts (HandlerContext, BuildContextOpts, executor internals, core engine reducers, store schema, event envelope) → `<abort>scope too large: <what contracts/packages></abort>`. If the user wants such a change they'll say so explicitly (e.g. in a tasks/ spec); otherwise propose a narrower cut in the abort reason.\n  - SCOPE GUARD: estimated implementation >500 lines of non-test code → `<abort>too large, split: <suggested split></abort>`\n\nIf $ARGUMENTS references `tasks/<phase>/NN-*.md`, its Scope section is authoritative and overrides the scope guards above.\n\nYou have read-only tools. Read docs/SPEC.md, docs/PLAN.md, any file named in $ARGUMENTS, and (if relevant) a skill's SKILL.md.\n\nProduce a numbered plan:\n  1. Files to create/modify (full paths — not directories).\n  2. Tests to add. Each test item MUST specify: (a) full test file path, (b) the exact `describe`/`test` block name, (c) what the test asserts (one concrete sentence per test, not `covers X`). Vague test items are a review trigger — make them concrete here.\n  3. Public exports to add/change (symbol name + package).\n  4. Implementation notes per file — specific enough that a cheaper model can execute without further discovery. Cite existing symbols + line numbers.\n  5. Conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd with `<promise>PLAN_READY</promise>`."
     allowed_tools = "read"
-    context_files = "AGENTS.md"
   ]
 
   implement [

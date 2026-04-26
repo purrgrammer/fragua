@@ -42,6 +42,16 @@ export interface ContextBlock {
   files: ContextFileRecord[];
 }
 
+/** Auto-prepend `AGENTS.md` to a node's declared `context_files` list.
+ * AGENTS.md is the project primer (repo layout, codebase map, ground
+ * rules) and is applied to every codergen call so workflow authors
+ * don't have to thread `context_files = "AGENTS.md"` through every
+ * node. An explicit declaration already containing `AGENTS.md` is
+ * preserved verbatim — no duplication, no order changes. */
+export function applyDefaultContextFiles(declared: readonly string[]): string[] {
+  return declared.includes("AGENTS.md") ? [...declared] : ["AGENTS.md", ...declared];
+}
+
 /** Read each path from the environment and wrap it in a single
  * `<project-conventions>` block. Missing files produce a warning and are
  * skipped. Truncates the final text to `CONTEXT_FILES_MAX_BYTES`. */

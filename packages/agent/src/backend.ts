@@ -11,7 +11,7 @@ import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
-import { buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
+import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {
@@ -203,7 +203,8 @@ export class PiCodergenBackend implements CodergenBackend {
     }
     const tools = selectedTools.map((t) => toAgentTool(t, effectiveEnv));
 
-    const contextFiles = (input.node.attrs.context_files as string[] | undefined) ?? [];
+    const declared = (input.node.attrs.context_files as string[] | undefined) ?? [];
+    const contextFiles = applyDefaultContextFiles(declared);
     const {
       text: contextBlock,
       warnings,
