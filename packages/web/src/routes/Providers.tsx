@@ -101,7 +101,6 @@ export function Providers(): JSX.Element {
                 <TableHead className="w-56">Name</TableHead>
                 <TableHead className="w-24">Models</TableHead>
                 <TableHead className="w-24">Status</TableHead>
-                <TableHead>Source</TableHead>
                 <TableHead className="w-64 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -139,14 +138,6 @@ export function Providers(): JSX.Element {
                         ) : (
                           <Badge variant="secondary">not configured</Badge>
                         )}
-                      </TableCell>
-                      <TableCell className="max-w-0">
-                        <code
-                          className="block truncate font-mono text-xs text-muted-foreground"
-                          title={p.auth_source ?? ""}
-                        >
-                          {p.auth_source ?? "—"}
-                        </code>
                       </TableCell>
                       <TableCell className="flex justify-end gap-2">
                         <Button
