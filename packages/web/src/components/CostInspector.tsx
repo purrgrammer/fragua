@@ -229,18 +229,26 @@ function StepCostRow({
             <ContextContent>
               <ContextContentHeader />
               <ContextContentBody>
-                <ContextInputUsage>
-                  <UsageRow label="Input" tokens={inputTokens} costUsd={inputCostUsd} />
-                </ContextInputUsage>
-                {cacheReadTokens > 0 && (
-                  <ContextCacheUsage>
-                    <UsageRow label="Cache read" tokens={cacheReadTokens} subtle />
-                  </ContextCacheUsage>
-                )}
-                <ContextOutputUsage>
-                  <UsageRow label="Output" tokens={outputTokens} costUsd={outputCostUsd} />
-                </ContextOutputUsage>
-                {cacheWriteTokens > 0 && <UsageRow label="Cache write" tokens={cacheWriteTokens} subtle />}
+                {/* CSS-grid table so token + cost columns line up
+                 * across all rows regardless of label width. The rows
+                 * are flat (not nested) — semantic grouping (cache read
+                 * under Input, cache write under Output) is preserved
+                 * via row order and the indented label class, which is
+                 * easier to read than visually nested elements. */}
+                <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 gap-y-1 text-xs">
+                  <ContextInputUsage>
+                    <UsageGridRow label="Input" tokens={inputTokens} costUsd={inputCostUsd} />
+                  </ContextInputUsage>
+                  {cacheReadTokens > 0 && (
+                    <ContextCacheUsage>
+                      <UsageGridRow label="Cache read" tokens={cacheReadTokens} subtle />
+                    </ContextCacheUsage>
+                  )}
+                  <ContextOutputUsage>
+                    <UsageGridRow label="Output" tokens={outputTokens} costUsd={outputCostUsd} />
+                  </ContextOutputUsage>
+                  {cacheWriteTokens > 0 && <UsageGridRow label="Cache write" tokens={cacheWriteTokens} subtle />}
+                </div>
               </ContextContentBody>
               <ContextContentFooter>
                 <span className="text-muted-foreground">Total cost</span>
@@ -261,14 +269,14 @@ function StepCostRow({
 }
 
 /**
- * One `<label> <tokens · cost>` line in the cost breakdown popover.
- *
- * `subtle` renders the row in muted text — used for the cache read /
- * write breakdown lines, so the primary Input / Output rows stay
- * visually dominant and the cache rows read as derived detail rather
- * than parallel buckets.
+ * One `(label, tokens, cost)` row in the cost breakdown popover.
+ * Renders three sibling cells into the parent's CSS grid so labels,
+ * token counts, and dollar figures line up across rows regardless of
+ * width. `subtle` mutes cache-read / cache-write rows so the primary
+ * Input / Output rows visually dominate and cache reads as derived
+ * detail rather than parallel buckets.
  */
-function UsageRow({
+function UsageGridRow({
   label,
   tokens,
   costUsd,
@@ -279,14 +287,14 @@ function UsageRow({
   costUsd?: number;
   subtle?: boolean;
 }): JSX.Element {
-  const valueClass = subtle ? "tabular-nums text-muted-foreground" : "tabular-nums";
+  const labelClass = subtle ? "text-muted-foreground/80 pl-3" : "text-muted-foreground";
+  const numericClass = subtle ? "tabular-nums text-right text-muted-foreground" : "tabular-nums text-right";
+  const costClass = "tabular-nums text-right text-muted-foreground";
   return (
-    <div className="flex items-center justify-between text-xs">
-      <span className={subtle ? "text-muted-foreground/80 pl-3" : "text-muted-foreground"}>{label}</span>
-      <span className={valueClass}>
-        {formatTokensCompact(tokens)}
-        {costUsd !== undefined && <span className="ml-2 text-muted-foreground">• {formatUsd(costUsd)}</span>}
-      </span>
-    </div>
+    <>
+      <span className={labelClass}>{label}</span>
+      <span className={numericClass}>{formatTokensCompact(tokens)}</span>
+      <span className={costClass}>{costUsd !== undefined ? formatUsd(costUsd) : ""}</span>
+    </>
   );
 }

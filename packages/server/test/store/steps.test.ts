@@ -16,6 +16,7 @@ describe("eventsToSteps", () => {
 
   test("one llm.start → one step with the wire-shape envelope", () => {
     const events = [
+      ev("fact.node_started", 900_000, { nodeId: "n1" }),
       ev("llm.start", 1_000_000, {
         nodeId: "n1",
         iteration: { n: 1, max: 3 },
@@ -42,7 +43,9 @@ describe("eventsToSteps", () => {
     expect(s.provider).toBe("openrouter");
     expect(s.model).toBe("anthropic/claude-haiku-4.5");
     expect(s.fidelity).toBe("compact");
-    expect(s.startedAt).toBe(new Date(1_000_000).toISOString());
+    // `startedAt` anchors to fact.node_started.ts (truthful), not
+    // llm.start.ts (pi-agent-core-buffered).
+    expect(s.startedAt).toBe(new Date(900_000).toISOString());
     // Body fields should not appear on the snapshot at all.
     expect(s).not.toHaveProperty("prompt");
     expect(s).not.toHaveProperty("systemPrompt");
@@ -52,28 +55,65 @@ describe("eventsToSteps", () => {
     expect(s).not.toHaveProperty("finalText");
   });
 
-  test("llm.done sets durationMs from the LAST llm.done in the window", () => {
-    // Tool-using turns emit one llm.done per assistant message under one
-    // llm.start. The reducer keeps the step open through all of them and
-    // the last done's timestamp wins for durationMs.
+  test("startedAt anchors to fact.node_started.ts when present (pi-agent-core buffers llm.start)", () => {
+    // pi-agent-core flushes llm.start at the end of the call, so its
+    // ts trails the actual node start by tens of seconds. The reducer
+    // must use fact.node_started.ts (daemon-written sync) instead.
     const events = [
-      ev("llm.start", 1_000_000, { nodeId: "n1" }),
-      ev("llm.done", 1_001_000, { nodeId: "n1", stop_reason: "tool_use" }),
-      ev("llm.done", 1_003_200, { nodeId: "n1", stop_reason: "end_turn" }),
+      ev("fact.node_started", 1_000, { nodeId: "n1" }),
+      ev("llm.start", 25_000, { nodeId: "n1" }), // 24s later — buffered
     ];
     const [s] = eventsToSteps(events);
-    expect(s!.durationMs).toBe(3200);
+    expect(s!.startedAt).toBe(new Date(1_000).toISOString());
   });
 
-  test("step without an llm.done has no durationMs (in-flight)", () => {
-    // The UI ticks `now - startedAt` for these.
-    const events = [ev("llm.start", 1000, { nodeId: "n1" })];
+  test("startedAt falls back to llm.start.ts when no fact.node_started precedes it", () => {
+    // Defensive: older runs / weird event orderings shouldn't crash.
+    const events = [ev("llm.start", 5_000, { nodeId: "n1" })];
     const [s] = eventsToSteps(events);
-    expect(s!.durationMs).toBeUndefined();
+    expect(s!.startedAt).toBe(new Date(5_000).toISOString());
+  });
+
+  test("loop iterations: first step uses fact.node_started, subsequent use llm.start.ts", () => {
+    // We don't have a per-iteration fact event, so loop iterations 2+
+    // fall back to the (buffered) llm.start.ts. Better than nothing —
+    // and the simple non-loop case (the common one) is fully truthful.
+    const events = [
+      ev("fact.node_started", 900, { nodeId: "body" }),
+      ev("llm.start", 1_000, { nodeId: "body", iteration: { n: 1, max: 3 } }),
+      ev("llm.start", 2_000, { nodeId: "body", iteration: { n: 2, max: 3 } }),
+      ev("llm.start", 3_000, { nodeId: "body", iteration: { n: 3, max: 3 } }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]!.startedAt).toBe(new Date(900).toISOString()); // fact.node_started
+    expect(steps[1]!.startedAt).toBe(new Date(2_000).toISOString()); // llm.start
+    expect(steps[2]!.startedAt).toBe(new Date(3_000).toISOString()); // llm.start
+    expect(steps[0]!.iteration).toEqual({ n: 1, max: 3 });
+    expect(steps[2]!.iteration).toEqual({ n: 3, max: 3 });
+  });
+
+  test("a fresh fact.node_started reopens the window — next llm.start anchors to its ts", () => {
+    // After the first node window closes (next fact.node_started for
+    // the same node), the loop-iteration fallback resets and the next
+    // first-step in that window anchors to the new fact.node_started.
+    const events = [
+      ev("fact.node_started", 100, { nodeId: "n1" }),
+      ev("llm.start", 200, { nodeId: "n1" }),
+      ev("fact.node_completed", 300, { nodeId: "n1" }),
+      // ... time passes, node re-runs (e.g. in a parent loop) ...
+      ev("fact.node_started", 1_000, { nodeId: "n1" }),
+      ev("llm.start", 1_500, { nodeId: "n1" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.startedAt).toBe(new Date(100).toISOString());
+    expect(steps[1]!.startedAt).toBe(new Date(1_000).toISOString());
   });
 
   test("cost.recorded is NOT folded into the step (cost comes from SQL aggregates)", () => {
     const events = [
+      ev("fact.node_started", 950, { nodeId: "n1" }),
       ev("llm.start", 1000, { nodeId: "n1" }),
       ev("cost.recorded", 1100, {
         nodeId: "n1",
@@ -86,30 +126,11 @@ describe("eventsToSteps", () => {
     expect(s!.cost).toBeUndefined();
   });
 
-  test("loop iterations produce one step per llm.start, each with its own iteration metadata", () => {
-    const events = [
-      ev("llm.start", 1000, { nodeId: "body", iteration: { n: 1, max: 3 } }),
-      ev("llm.done", 1020, { nodeId: "body" }),
-      ev("llm.start", 2000, { nodeId: "body", iteration: { n: 2, max: 3 } }),
-      ev("llm.done", 2020, { nodeId: "body" }),
-    ];
-    const steps = eventsToSteps(events);
-    expect(steps).toHaveLength(2);
-    expect(steps[0]!.iteration).toEqual({ n: 1, max: 3 });
-    expect(steps[1]!.iteration).toEqual({ n: 2, max: 3 });
-    expect(steps[0]!.stepIdx).toBe(0);
-    expect(steps[1]!.stepIdx).toBe(1);
-  });
-
-  test("llm.done for an unknown nodeId (no open step) is dropped", () => {
-    const events = [ev("llm.start", 1000, { nodeId: "n1" }), ev("llm.done", 1100, { nodeId: "different-node" })];
-    const [s] = eventsToSteps(events);
-    expect(s!.durationMs).toBeUndefined();
-  });
-
   test("attachStepAggregates merges SQL-aggregated cost rows by startSeq", () => {
     const events = [
+      { type: "fact.node_started", ts: 900, seq: 5, payload: { nodeId: "n1" } },
       { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1" } },
+      { type: "fact.node_started", ts: 1900, seq: 15, payload: { nodeId: "n2" } },
       { type: "llm.start", ts: 2000, seq: 20, payload: { nodeId: "n2" } },
     ];
     const baseSteps = eventsToSteps(events);
@@ -160,77 +181,47 @@ describe("eventsToSteps", () => {
 });
 
 describe("fillOrphanDurations", () => {
-  test("orphan step with a next step → duration = next.startedAt − this.startedAt", () => {
+  test("each step's duration = next step's startedAt − this step's startedAt", () => {
+    // The full picture: step starts anchor to fact.node_started (truthful),
+    // and end at the next step's start. That gives wall-clock node duration.
     const steps = eventsToSteps([
-      ev("llm.start", 1_000, { nodeId: "a" }), // no llm.done — orphan
-      ev("llm.start", 4_500, { nodeId: "b" }),
-      ev("llm.done", 5_000, { nodeId: "b" }),
+      ev("fact.node_started", 1_000, { nodeId: "a" }),
+      ev("llm.start", 1_500, { nodeId: "a" }), // buffered ts — ignored for startedAt
+      ev("fact.node_started", 4_500, { nodeId: "b" }),
+      ev("llm.start", 5_000, { nodeId: "b" }),
     ]);
-    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
-    expect(filled[0]!.durationMs).toBe(3_500);
-    // step "b" had its own llm.done — durationMs untouched.
-    expect(filled[1]!.durationMs).toBe(500);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 6_000, runIsTerminal: true });
+    expect(filled[0]!.durationMs).toBe(3_500); // 4500 − 1000
+    expect(filled[1]!.durationMs).toBe(1_500); // 6000 − 4500 (last step on terminal)
   });
 
-  test("last orphan step on a terminal run → duration = lastEventTs − startedAt", () => {
-    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+  test("last step on a terminal run → duration = lastEventTs − startedAt", () => {
+    const steps = eventsToSteps([
+      ev("fact.node_started", 1_000, { nodeId: "a" }),
+      ev("llm.start", 1_500, { nodeId: "a" }),
+    ]);
     const filled = fillOrphanDurations(steps, { lastEventTs: 9_000, runIsTerminal: true });
-    expect(filled[0]!.durationMs).toBe(8_000);
+    expect(filled[0]!.durationMs).toBe(8_000); // 9000 − 1000
   });
 
-  test("last orphan step on a LIVE run keeps durationMs undefined (client ticks)", () => {
-    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+  test("last step on a LIVE run keeps durationMs undefined (client ticks)", () => {
+    const steps = eventsToSteps([
+      ev("fact.node_started", 1_000, { nodeId: "a" }),
+      ev("llm.start", 1_500, { nodeId: "a" }),
+    ]);
     const filled = fillOrphanDurations(steps, { lastEventTs: 9_000, runIsTerminal: false });
     expect(filled[0]!.durationMs).toBeUndefined();
   });
 
-  test("instant-completing last step (durationMs=0) is upgraded to wall-clock on terminal runs", () => {
-    // `merge`-style finalization steps fire llm.done in the same ms as
-    // llm.start, so eventsToSteps records durationMs=0. The "stop step"
-    // anchor promotes that to lastEventTs − startedAt — the wall-clock
-    // time the step was active.
-    const steps = eventsToSteps([
-      ev("llm.start", 1_000, { nodeId: "merge" }),
-      ev("llm.done", 1_000, { nodeId: "merge" }),
-    ]);
-    expect(steps[0]!.durationMs).toBe(0);
-    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
-    expect(filled[0]!.durationMs).toBe(4_000);
-  });
-
-  test("instant-completing last step on a LIVE run keeps its durationMs (no anchor override)", () => {
-    // Same shape as above but the run hasn't terminated — we must NOT
-    // override, otherwise live runs would constantly pull in growing
-    // wall-clock values from new events.
-    const steps = eventsToSteps([
-      ev("llm.start", 1_000, { nodeId: "merge" }),
-      ev("llm.done", 1_000, { nodeId: "merge" }),
-    ]);
-    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: false });
-    expect(filled[0]!.durationMs).toBe(0);
-  });
-
-  test("non-last step with its own durationMs is never overridden", () => {
-    // Only the LAST step gets the stop-step anchor. Mid-list steps with
-    // a real llm.done duration keep that duration regardless of the
-    // following step's startedAt or the run's terminal status.
-    const steps = eventsToSteps([
-      ev("llm.start", 1_000, { nodeId: "a" }),
-      ev("llm.done", 1_500, { nodeId: "a" }),
-      ev("llm.start", 9_000, { nodeId: "b" }), // big gap after a's done
-      ev("llm.done", 9_100, { nodeId: "b" }),
-    ]);
-    const filled = fillOrphanDurations(steps, { lastEventTs: 9_100, runIsTerminal: true });
-    expect(filled[0]!.durationMs).toBe(500); // a's own llm.done — not 8_000
-    expect(filled[1]!.durationMs).toBe(100); // b is last but lastEventTs == its done ts
-  });
-
   test("returns new objects — does not mutate the input array", () => {
-    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+    const steps = eventsToSteps([
+      ev("fact.node_started", 1_000, { nodeId: "a" }),
+      ev("llm.start", 1_500, { nodeId: "a" }),
+    ]);
     const before = steps[0]!;
     const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
     expect(before.durationMs).toBeUndefined();
     expect(filled[0]).not.toBe(before);
-    expect(filled[0]!.durationMs).toBe(4_000);
+    expect(filled[0]!.durationMs).toBe(4_000); // 5000 − 1000
   });
 });

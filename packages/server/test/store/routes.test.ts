@@ -360,25 +360,37 @@ describe("GET /runs/:id/steps", () => {
     expect(await res.json()).toEqual([]);
   });
 
-  test("observability llm.start / done → 1 step with model + durationMs", async () => {
-    // The trimmed wire shape carries no body fields — prompts, system
-    // prompts, message lists, and finalText all live in the messages
-    // table / Conversation tab now. The Cost endpoint only ships
-    // identity + cost-related fields.
+  test("step duration anchors to fact.node_* timestamps, not buffered llm.start", async () => {
+    // pi-agent-core flushes llm.start at the end of the call, so its
+    // ts is unreliable for wall-clock duration. The reducer anchors
+    // each step's `startedAt` to `fact.node_started.ts` (truthful) and
+    // its `durationMs` to the next step's startedAt OR — for the last
+    // step on a terminal run — the run's last event ts.
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
     store.enqueueRun({ runId: "steps-one", workflowSha: "wf" });
-    store.appendObservabilityEvents("steps-one", [
-      { type: "llm.start", payload: { nodeId: "n1", model: "stub" } },
-      { type: "llm.done", payload: { nodeId: "n1", stop_reason: "end_turn" } },
-    ]);
+    const s0 = store.getState("steps-one")!;
+    store.appendFact(
+      "steps-one",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "n1" } }],
+      s0.version,
+    );
+    const s1 = store.getState("steps-one")!;
+    store.appendFact("steps-one", [{ type: "fact.node_started", payload: { nodeId: "n1", iteration: 0 } }], s1.version);
+    store.appendObservabilityEvents("steps-one", [{ type: "llm.start", payload: { nodeId: "n1", model: "stub" } }]);
+    const s2 = store.getState("steps-one")!;
+    store.appendFact("steps-one", [{ type: "fact.run_completed", payload: { reason: "ok" } }], s2.version);
+
     const res = await app.request("/runs/steps-one/steps");
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{ nodeId: string; model?: string; durationMs?: number }>;
     expect(body).toHaveLength(1);
     expect(body[0]!.nodeId).toBe("n1");
     expect(body[0]!.model).toBe("stub");
+    // Last step on a terminal run gets a durationMs from the run's
+    // last event ts.
     expect(typeof body[0]!.durationMs).toBe("number");
+    expect(body[0]!.durationMs).toBeGreaterThanOrEqual(0);
   });
 });
 

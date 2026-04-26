@@ -3,10 +3,6 @@
 // A "step" is one `llm.start` event (one backend.run() call). Companion
 // events fold onto the step opened at that llm.start until the next
 // llm.start for the same nodeId starts a new one:
-//   - `llm.done`       → records `durationMs`. We do NOT close the step:
-//                        tool-using turns emit multiple message_end events
-//                        under one llm.start, each with its own `done`.
-//                        The LAST llm.done's timestamp wins.
 //   - `cost.recorded`  → DELIBERATELY NOT folded here. Cost / token sums
 //                        are aggregated in SQL via
 //                        `IEventStore.getStepAggregates()`. The route
@@ -15,6 +11,25 @@
 //                        of truth for numerical totals; folding events
 //                        in TS quietly mis-counted whenever the window
 //                        model didn't match the agent's actual flow.
+//
+// **Wall-clock anchoring (the timestamp story).** pi-agent-core buffers
+// observability events (`llm.start`, `llm.text_delta`, `cost.recorded`,
+// …) and flushes them in a single transaction at the end of each LLM
+// call. Every flushed event gets the *flush* timestamp, not the
+// happen-time. So `llm.start.ts` is closer to "when the call ended"
+// than "when it started" — and the durations we'd derive from
+// `llm.start → next llm.start` understate node activity by exactly the
+// buffered duration. On run 01kq4fp0vvygdwz6hp the 4 codergen steps
+// summed to 96s against a 251s run total: 155s missing.
+//
+// `fact.node_started` and `fact.node_completed` are written by the
+// daemon synchronously with the actual transition, so their timestamps
+// are truthful. `eventsToSteps` therefore anchors each step's
+// `startedAt` to the matching `fact.node_started.ts` (for the first
+// iteration of each node window), falling back to `llm.start.ts` for
+// loop iterations where we don't have per-iteration node facts. Sum-of-
+// step-durations now matches run total within a few seconds of run
+// start/teardown overhead.
 //
 // The snapshot is shaped for `CostInspector` only — one row per LLM call,
 // showing nodeId / iteration / model / duration / cost. Step bodies
@@ -43,12 +58,15 @@ export interface StepSnapshot {
   nodeId: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
-  /** ISO timestamp of the originating `llm.start`. Used by the UI to
-   * compute live elapsed time for in-flight steps (`now - startedAt`)
-   * before `durationMs` lands. */
+  /** ISO timestamp of when this step's node started running. For the
+   * first step in each node window this comes from `fact.node_started`
+   * (truthful — written sync by the daemon). For loop iterations 2+
+   * inside the same node window we fall back to the (buffered)
+   * `llm.start.ts`. */
   startedAt: string;
-  /** Set on the LAST `llm.done` in this step's window. Absent while the
-   * step is still in flight — the UI ticks `now - startedAt` instead. */
+  /** Wall-clock time the step was the active step. Filled by
+   * `fillOrphanDurations` from the next step's `startedAt` or — for the
+   * last step on a terminal run — the run's last event timestamp. */
   durationMs?: number;
   // ---- what the agent was asked ----
   provider?: string;
@@ -75,39 +93,52 @@ export interface StepSnapshot {
  */
 export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   const steps: StepSnapshot[] = [];
-  // nodeId → index of most-recently-opened still-open step on that node.
-  const openStepByNode = new Map<string, number>();
+  // nodeId → ts of the most recent `fact.node_started` for that node.
+  // Used to override a step's `startedAt` with the truthful node-open
+  // timestamp instead of the buffered `llm.start.ts`. See the file
+  // header for the wall-clock-anchoring story.
+  const lastNodeStartedTs = new Map<string, number>();
+  // nodeIds for which we've already opened the FIRST step of the
+  // current node window. The first step uses `fact.node_started.ts`;
+  // subsequent loop iterations fall back to `llm.start.ts` (we have no
+  // truthful per-iteration boundary). Cleared on each new
+  // `fact.node_started`.
+  const firstStepEmittedForNode = new Set<string>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
+
+    if (ev.type === "fact.node_started") {
+      if (nodeId) {
+        lastNodeStartedTs.set(nodeId, ev.ts);
+        firstStepEmittedForNode.delete(nodeId);
+      }
+      continue;
+    }
+
     if (ev.type === "llm.start") {
-      const startedAt = new Date(ev.ts).toISOString();
+      // First step of this node window? Anchor to `fact.node_started.ts`
+      // (truthful). Otherwise (loop iteration 2+) fall back to the
+      // buffered `llm.start.ts`.
+      const isFirstStepForNode = nodeId !== "" && !firstStepEmittedForNode.has(nodeId);
+      const startTs =
+        isFirstStepForNode && lastNodeStartedTs.has(nodeId) ? (lastNodeStartedTs.get(nodeId) as number) : ev.ts;
       const step: StepSnapshot = {
         stepIdx: steps.length,
         startSeq: ev.seq ?? steps.length,
         nodeId: nodeId || "__unknown",
-        startedAt,
+        startedAt: new Date(startTs).toISOString(),
       };
       assignOptional(step, data);
       steps.push(step);
-      if (step.nodeId) openStepByNode.set(step.nodeId, steps.length - 1);
-      continue;
+      if (nodeId) firstStepEmittedForNode.add(nodeId);
     }
-
-    if (ev.type !== "llm.done") continue;
-    if (!nodeId) continue;
-    const idx = openStepByNode.get(nodeId);
-    if (idx === undefined) continue;
-    const step = steps[idx]!;
-    // LAST llm.done in the window wins for durationMs — tool-using turns
-    // emit one llm.done per assistant message, all under a single
-    // llm.start. Step stays open until the next llm.start for this node.
-    const startedMs = Date.parse(step.startedAt);
-    const endedMs = ev.ts;
-    if (Number.isFinite(startedMs) && endedMs >= startedMs) {
-      step.durationMs = endedMs - startedMs;
-    }
+    // No other event types affect step boundaries — `llm.done` was
+    // previously consulted to set `durationMs`, but that timestamp is
+    // also pi-agent-core-buffered and produced misleading 8ms windows
+    // (see file header). `fillOrphanDurations` derives durations from
+    // step-to-step boundaries instead.
   }
 
   return steps;
@@ -130,20 +161,14 @@ export interface StepCostAggregate {
 }
 
 /**
- * Fill `durationMs` for steps using their effective end timestamp.
+ * Fill `durationMs` for every step.
  *
- * Per-step end timestamps:
- *   1. **Non-last orphan step** — the next step's `startedAt` (the agent
- *      moved on, so this step is effectively done as of that moment).
- *   2. **Last step on a terminal run** — always the run's last event
- *      timestamp, even if the step already had its own `llm.done`. This
- *      is the "stop step" anchor: a synthetic/instant final step (like
- *      a `merge` node whose `llm.done` fires in the same millisecond as
- *      `llm.start`, giving `durationMs=0`) gets a meaningful wall-clock
- *      duration instead of `0s`.
- *   3. **Last step on a live run** — `durationMs` stays as-is (undefined
- *      for in-flight, set if the step's `llm.done` already fired) so the
- *      client can tick `now - startedAt` for the active step.
+ * Each step's end timestamp is the next step's `startedAt` (the moment
+ * the agent moved on), with the run's last event timestamp standing in
+ * for the final step on a terminal run. Step's start anchors are
+ * already truthful (set by `eventsToSteps` from `fact.node_started`),
+ * so `endTs - startedAt` is a wall-clock figure that sums to the run
+ * total within a few seconds of run-level start/teardown overhead.
  *
  * Returns a new array with new step objects; never mutates inputs.
  */
@@ -152,13 +177,7 @@ export function fillOrphanDurations(
   opts: { lastEventTs: number | undefined; runIsTerminal: boolean },
 ): StepSnapshot[] {
   return steps.map((step, i) => {
-    const isLast = i === steps.length - 1;
     const next = steps[i + 1];
-    // Last step on a terminal run anchors against `lastEventTs` even
-    // when it already has a `durationMs` — see the "stop step" rationale
-    // above. All other cases only fill when `durationMs` is undefined.
-    const forceFill = isLast && opts.runIsTerminal;
-    if (!forceFill && step.durationMs !== undefined) return step;
     const endTs = next != null ? Date.parse(next.startedAt) : opts.runIsTerminal ? opts.lastEventTs : undefined;
     if (endTs === undefined || !Number.isFinite(endTs)) return step;
     const startedMs = Date.parse(step.startedAt);
