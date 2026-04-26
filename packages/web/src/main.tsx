@@ -6,7 +6,6 @@
 // reload. The theme module is framework-free on the write side, which
 // makes this safe to call here.
 
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { applyTheme, readStoredTheme } from "./lib/theme.ts";
@@ -17,8 +16,9 @@ applyTheme(readStoredTheme());
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element missing from index.html");
 
-createRoot(rootEl).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// StrictMode intentionally omitted: its dev-only double-invocation of
+// effects masked the useRunLive bootstrap-fetch bug (one mount became
+// three /messages requests) and inflated memory on long runs by
+// re-running every delta-folding effect twice. Production parity in
+// dev is more useful here than the extra strict-mode lint.
+createRoot(rootEl).render(<App />);
