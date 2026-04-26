@@ -88,8 +88,16 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
     );
   }
 
+  // Outer grid defines the column tracks once; each row uses
+  // `grid-cols-subgrid` to inherit them. Result: every row's cells
+  // (nodeId, duration, cost, context) line up across the whole list,
+  // while still rendering each row as its own bordered card.
+  // grid-template-columns: [step | duration | cost | context]
   return (
-    <div data-testid="cost-inspector" className="flex flex-col gap-2 p-3">
+    <div
+      data-testid="cost-inspector"
+      className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3"
+    >
       {steps.map((step, i) => (
         <StepCostRow key={step.startSeq} step={step} nextStartedAt={steps[i + 1]?.startedAt} isLive={isLive} />
       ))}
@@ -173,15 +181,27 @@ function StepCostRow({
   // read as ambiguous (cost share? token share? context fill?).
   const metricChipClass = "text-xs text-muted-foreground tabular-nums inline-flex items-center gap-1";
 
+  // The row inherits its column tracks from `CostInspector`'s outer
+  // grid via `grid-cols-subgrid`. Spanning all 4 columns keeps the row
+  // visually a single card while letting its 4 cells fall into the
+  // parent's tracks — so cells line up across every row in the list.
+  // `justify-self-end` on each metric cell right-aligns its chip;
+  // empty cells (e.g. a step missing cost data) still hold column
+  // space so neighbouring rows' chips don't shift.
+  const rowGridClass =
+    "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-card px-3 py-2";
+
   return (
-    <div data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card px-3 py-2 flex items-center gap-3">
-      <span className="text-sm font-semibold text-foreground flex-shrink-0">{step.nodeId}</span>
-      {step.iteration && (
-        <span className={`font-mono ${metricChipClass}`}>
-          iter {step.iteration.n}/{step.iteration.max}
-        </span>
-      )}
-      <span className="ml-auto flex items-center gap-3">
+    <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>
+      <span className="text-sm font-semibold text-foreground truncate flex items-center gap-2">
+        <span className="truncate">{step.nodeId}</span>
+        {step.iteration && (
+          <span className={`font-mono ${metricChipClass}`}>
+            iter {step.iteration.n}/{step.iteration.max}
+          </span>
+        )}
+      </span>
+      <span className={`${metricChipClass} justify-self-end`}>
         {liveElapsedMs !== undefined && (
           <span
             className={metricChipClass}
@@ -193,12 +213,16 @@ function StepCostRow({
             {formatDuration(liveElapsedMs)}
           </span>
         )}
+      </span>
+      <span className={`${metricChipClass} justify-self-end`}>
         {step.cost !== undefined && (
           <span className={metricChipClass} title="cost">
             <DollarSign className="size-3" aria-hidden />
             <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
           </span>
         )}
+      </span>
+      <span className={`${metricChipClass} justify-self-end`}>
         {showContextCircle && (
           <Context
             maxTokens={model.contextWindow}
