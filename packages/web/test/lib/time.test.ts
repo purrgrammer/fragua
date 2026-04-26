@@ -96,6 +96,16 @@ describe("toIsoTitle", () => {
 });
 
 describe("formatDuration", () => {
+  it("milliseconds for sub-second durations", () => {
+    // Instant finalisation steps (e.g. a `merge` whose events flush in
+    // 8ms) need to render as "8ms" rather than rounding to a misleading
+    // "0s". The cutoff is strictly < 1000 — exactly 1000ms is "1s".
+    expect(formatDuration(0)).toBe("0ms");
+    expect(formatDuration(8)).toBe("8ms");
+    expect(formatDuration(999)).toBe("999ms");
+    expect(formatDuration(1000)).toBe("1s");
+  });
+
   it("seconds-only for <60s", () => {
     expect(formatDuration(5000)).toBe("5s");
     expect(formatDuration(59_900)).toBe("1m"); // rounds to 60s → 1m

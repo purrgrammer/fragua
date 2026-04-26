@@ -119,6 +119,11 @@ export function formatDuration(ms: number | null | undefined, opts: FormatOption
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) {
     return opts.fallback ?? "—";
   }
+  // Sub-second values get rendered with the ms suffix instead of
+  // rounding down to "0s" — keeps fast/instant steps legible (e.g. a
+  // synthetic finalisation step whose events are flushed in 8ms shows
+  // as "8ms" rather than disappearing into a misleading zero).
+  if (ms < 1000) return `${Math.round(ms)}ms`;
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);

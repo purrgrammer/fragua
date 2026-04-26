@@ -23,6 +23,7 @@
 //     popover communicates exactly where the run's spend went.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Coins, DollarSign, Timer } from "lucide-react";
 import { useEffect } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd, usdFormatOptions } from "../lib/format.ts";
@@ -165,9 +166,12 @@ function StepCostRow({
   const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && usedTokens > 0;
 
   // All trailing chips share the same `text-xs text-muted-foreground
-  // tabular-nums` so the row reads as one strip of metrics rather than
-  // three differently-sized elements.
-  const metricChipClass = "text-xs text-muted-foreground tabular-nums";
+  // tabular-nums` and a small leading icon so each metric is identifiable
+  // at a glance — Timer for elapsed, DollarSign for cost, Coins for the
+  // context-window utilisation. Without icons the bare numbers (`23s`,
+  // `US$0.165`, `49.2%`) blurred together and the percentage especially
+  // read as ambiguous (cost share? token share? context fill?).
+  const metricChipClass = "text-xs text-muted-foreground tabular-nums inline-flex items-center gap-1";
 
   return (
     <div data-testid={`step-${step.stepIdx}`} className="border rounded-md bg-card px-3 py-2 flex items-center gap-3">
@@ -185,11 +189,13 @@ function StepCostRow({
             data-live={elapsedIsLive ? "true" : undefined}
             title={elapsedIsLive ? "step in progress" : "elapsed time"}
           >
-            ⏱ {formatDuration(liveElapsedMs)}
+            <Timer className="size-3" aria-hidden />
+            {formatDuration(liveElapsedMs)}
           </span>
         )}
         {step.cost !== undefined && (
-          <span className={metricChipClass}>
+          <span className={metricChipClass} title="cost">
+            <DollarSign className="size-3" aria-hidden />
             <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
           </span>
         )}
@@ -214,9 +220,12 @@ function StepCostRow({
               },
             }}
           >
-            <ContextTrigger
-              className={`h-auto gap-2 p-0 font-normal hover:bg-transparent hover:text-foreground ${metricChipClass} [&>span]:font-normal [&>span]:text-muted-foreground`}
-            />
+            <span className="inline-flex items-center gap-1" title="context window utilisation">
+              <Coins className="size-3 text-muted-foreground" aria-hidden />
+              <ContextTrigger
+                className={`h-auto gap-2 p-0 font-normal hover:bg-transparent hover:text-foreground ${metricChipClass} [&>span]:font-normal [&>span]:text-muted-foreground`}
+              />
+            </span>
             <ContextContent>
               <ContextContentHeader />
               <ContextContentBody>
