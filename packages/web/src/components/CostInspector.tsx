@@ -105,12 +105,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
  * rate.
  */
 function useStepModel(provider: string | undefined, modelId: string | undefined): ProviderModel | undefined {
-  const { data } = useQuery({
-    queryKey: ["providers", provider] as const,
-    queryFn: () => getProvider(provider!),
-    enabled: !!provider,
-    staleTime: 10 * 60 * 1000,
-  });
+  const { data } = useQuery(queries.providers.detail(provider ?? ""));
   if (!data || !modelId) return undefined;
   return data.models.find((m) => m.id === modelId);
 }

@@ -444,7 +444,6 @@ export function toFlowGraph(
   for (const e of detail?.selectedEdges ?? []) reached.add(e.to);
   const incoming = new Set(graph.edges.map((e) => e.to));
   const outgoing = new Set(graph.edges.map((e) => e.from));
-  const isRunning = detail?.status === "running";
   // "dim" applies only when a run exists — in workflow-detail mode
   // (no `detail`) every node/edge should render at full opacity because
   // the whole thing is a static topology inspection.
@@ -521,7 +520,7 @@ export function toFlowGraph(
           ? MARKER_FAIL
           : isBackEdge
             ? MARKER_LOOP
-            : isRunning
+            : taken && !isSkipEdge
               ? MARKER_ANIMATED
               : MARKER_DEFAULT;
     return {
@@ -529,7 +528,9 @@ export function toFlowGraph(
       source: e.from,
       target: e.to,
       type: EDGE_TYPE,
-      data: { animated: Boolean(isRunning) && !isBackEdge && taken, isBackEdge, isSkipEdge, label, outcome, dim },
+      // `animated` drives the SwarmEdge variant: Animated (solid, accent)
+      // for any taken forward edge — whether or not the run is still live.
+      data: { animated: !isBackEdge && !isSkipEdge && taken, isBackEdge, isSkipEdge, label, outcome, dim },
       sourceHandle: useSideHandles ? LOOP_HANDLE_SOURCE : undefined,
       targetHandle: useSideHandles ? LOOP_HANDLE_TARGET : undefined,
       markerEnd: marker,
