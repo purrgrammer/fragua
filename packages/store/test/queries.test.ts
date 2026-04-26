@@ -179,6 +179,29 @@ describe("getStepAggregates", () => {
     store.close();
   });
 
+  test("peakPromptTokens = MAX(input + cache_read) per call, not the cumulative sum", async () => {
+    // Three LLM calls in one step. Cumulative input + cache_read is huge,
+    // but each call's prompt sat well below the model's context window.
+    // The right "context window pressure" reading is the largest single
+    // call's prompt — sum-across-calls overstates it (e.g. 109% > 100%
+    // when no individual call ever crossed the limit).
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [
+      startEv("n1"),
+      costEv("n1", { input_tokens: 1_000, cache_read_tokens: 50_000, output_tokens: 100, cost_usd: 0.01 }),
+      costEv("n1", { input_tokens: 2_000, cache_read_tokens: 200_000, output_tokens: 100, cost_usd: 0.02 }),
+      costEv("n1", { input_tokens: 1_500, cache_read_tokens: 80_000, output_tokens: 100, cost_usd: 0.015 }),
+    ]);
+    const [a] = store.getStepAggregates(runId);
+    // Sums (cumulative spend) — these are useful for cost, not for limit pressure.
+    expect(a!.inputTokens).toBe(4_500);
+    expect(a!.cacheReadTokens).toBe(330_000);
+    // Peak — the second call's 2_000 + 200_000.
+    expect(a!.peakPromptTokens).toBe(202_000);
+    store.close();
+  });
+
   test("missing token sub-fields default to 0 (sums coalesce nulls)", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
@@ -191,6 +214,8 @@ describe("getStepAggregates", () => {
     expect(a!.cacheReadTokens).toBe(0);
     expect(a!.cacheWriteTokens).toBe(0);
     expect(a!.totalTokens).toBe(0);
+    // Missing cache_read_tokens still leaves a sensible peak: just input.
+    expect(a!.peakPromptTokens).toBe(5);
     store.close();
   });
 });

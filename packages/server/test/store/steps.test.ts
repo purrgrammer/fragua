@@ -147,6 +147,7 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         totalTokens: 750,
         costEventCount: 2,
+        peakPromptTokens: 320,
       },
       {
         startSeq: 20,
@@ -157,6 +158,7 @@ describe("eventsToSteps", () => {
         cacheWriteTokens: 0,
         totalTokens: 0,
         costEventCount: 0,
+        peakPromptTokens: 0,
       },
     ]);
     expect(merged[0]!.cost).toEqual({
@@ -166,6 +168,7 @@ describe("eventsToSteps", () => {
       cost_usd: 0.006,
       cache_read_tokens: 500,
       cache_write_tokens: 0,
+      peak_prompt_tokens: 320,
     });
     // No cost events → no cost attached, even with a row present.
     expect(merged[1]!.cost).toBeUndefined();

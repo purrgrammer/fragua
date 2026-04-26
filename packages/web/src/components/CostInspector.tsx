@@ -158,7 +158,11 @@ function StepCostRow({
   const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
   const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
   const totalTokens = step.cost !== undefined ? (step.cost.total_tokens ?? inputTokens + outputTokens) : 0;
-  const usedTokens = totalTokens || inputTokens + cacheReadTokens;
+  // Context-window utilisation reads the peak single-call prompt size,
+  // not the cumulative sum across calls — each LLM call has its own
+  // context window. Fall back to the (cumulative) input + cache_read for
+  // older snapshots that pre-date the peak field.
+  const usedTokens = step.cost?.peak_prompt_tokens ?? inputTokens + cacheReadTokens;
 
   // Only Input / Output carry a $ figure in the breakdown — cache rows
   // intentionally don't, even though cache reads/writes are technically
