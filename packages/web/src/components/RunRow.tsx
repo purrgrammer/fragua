@@ -61,9 +61,11 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
       </td>
       <td className="py-2 pr-4 max-w-0">
         {wf ? (
-          <Badge variant="muted" className="max-w-full truncate">
-            {wf}
-          </Badge>
+          <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-full">
+            <Badge variant="muted" className="max-w-full truncate hover:underline">
+              {wf}
+            </Badge>
+          </Link>
         ) : null}
       </td>
       <td className="py-2 pr-4 text-right">
