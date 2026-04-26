@@ -24,8 +24,9 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { getProvider, getRunSteps, type ProviderModel, type StepSnapshot } from "../lib/api.ts";
+import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd, usdFormatOptions } from "../lib/format.ts";
+import { queries } from "../lib/queries.ts";
 import { formatDuration } from "../lib/time.ts";
 import { useNow } from "../lib/useNow.ts";
 import {
@@ -56,19 +57,12 @@ export interface CostInspectorProps {
 
 export function CostInspector({ runId, totalEvents, isLive = false }: CostInspectorProps): JSX.Element {
   const qc = useQueryClient();
-  const queryKey = ["runs", "steps", runId] as const;
-  const {
-    data: steps,
-    isPending,
-    isError,
-  } = useQuery({
-    queryKey,
-    queryFn: () => getRunSteps(runId),
-  });
+  const stepsQuery = queries.runs.steps(runId);
+  const { data: steps, isPending, isError } = useQuery(stepsQuery);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc and queryKey are stable.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc + stepsQuery.queryKey are stable.
   useEffect(() => {
-    if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey });
+    if (totalEvents !== undefined) void qc.invalidateQueries({ queryKey: stepsQuery.queryKey });
   }, [totalEvents]);
 
   if (isPending) {

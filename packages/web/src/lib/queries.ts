@@ -27,6 +27,11 @@ export const queries = {
         queryKey: [...queries.runs.all(), "detail", id] as const,
         queryFn: () => api.getRun(id),
       }),
+    steps: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), "steps", id] as const,
+        queryFn: () => api.getRunSteps(id),
+      }),
   },
 
   skills: {

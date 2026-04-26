@@ -14,9 +14,9 @@
 // a run's essentials: status, duration, cost, tokens, current node.
 
 import { parseDotSource } from "@swarm/core";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -31,6 +31,7 @@ import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
+import { mergeDetail } from "../lib/useDetailOverlay.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useNow } from "../lib/useNow.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
@@ -58,12 +59,13 @@ export function RunDetail(): JSX.Element {
   const shouldCanonicalize = !!id && rawView !== view;
 
   // All hooks before any conditional return — Rules of Hooks.
-  // Snapshot is fetched first; useRunLive reads two fields off it
-  // (lastEventSeq → sinceSeq for backlog skip; status → terminal so
-  // SSE doesn't open at all on completed runs).
-  const qc = useQueryClient();
-  const { data: detail, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
-  const isTerminal = detail != null && TERMINAL_STATUSES.has(detail.status);
+  // Snapshot is fetched ONCE at mount and never refetched: SSE events
+  // are folded into `detailOverlay` and merged in-memory via
+  // `mergeDetail` for display. Previously this effect re-fired
+  // `qc.refetchQueries(detail)` on every SSE frame — on a 1k-events/sec
+  // run that was a thousand full-payload refetches per second.
+  const { data: snapshot, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
+  const isTerminal = snapshot != null && TERMINAL_STATUSES.has(snapshot.status);
   const {
     messages,
     streaming,
@@ -71,23 +73,27 @@ export function RunDetail(): JSX.Element {
     totalEvents,
     controlEvents,
     liveCost,
+    detailOverlay,
   } = useRunLive(id || null, {
-    sinceSeq: detail?.lastEventSeq,
+    sinceSeq: snapshot?.lastEventSeq,
     terminal: isTerminal,
   });
   const isLoading = liveStatus === "loading";
   const isLive = liveStatus === "live" || liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Single source of truth for downstream consumers. `mergeDetail`
+  // returns the snapshot reference unchanged when the overlay is empty,
+  // so `useMemo` only allocates when state actually moves.
+  const detail = useMemo<RunDetailT | undefined>(
+    () => (snapshot != null ? mergeDetail(snapshot, detailOverlay) : undefined),
+    [snapshot, detailOverlay],
+  );
+
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
     document.getElementById(`node-${nodeId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger.
-  useEffect(() => {
-    if (id) void qc.refetchQueries({ queryKey: queries.runs.detail(id).queryKey });
-  }, [totalEvents]);
 
   // Canonicalize the URL: bare /runs/:id → /runs/:id/conversation,
   // invalid view → same. Runs AFTER all hooks to stay rules-compliant.
@@ -156,12 +162,7 @@ export function RunDetail(): JSX.Element {
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
-              <RunGraphTab
-                detail={detail ?? null}
-                refetchKey={totalEvents}
-                selectedNodeId={selectedNodeId}
-                onSelect={handleNodeClick}
-              />
+              <RunGraphTab detail={detail ?? null} selectedNodeId={selectedNodeId} onSelect={handleNodeClick} />
             </TabsContent>
             <TabsContent value="cost" className="h-full">
               <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
@@ -327,12 +328,10 @@ export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; li
 
 function RunGraphTab({
   detail,
-  refetchKey,
   selectedNodeId,
   onSelect,
 }: {
   detail: RunDetailT | null;
-  refetchKey: number;
   selectedNodeId: string | null;
   onSelect: (id: string) => void;
 }): JSX.Element {
@@ -356,7 +355,6 @@ function RunGraphTab({
           <GraphView
             detail={detail}
             orientation="TB"
-            refetchKey={refetchKey}
             activeNodeId={activeNodeId}
             selectedNodeId={selectedNodeId}
             onNodeClick={onSelect}

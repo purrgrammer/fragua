@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
+import { type DetailOverlay, EMPTY_DETAIL_OVERLAY, foldDetailFrame, isDetailEvent } from "./useDetailOverlay.ts";
 import { type CostAggregate, EMPTY_COST_AGGREGATE, foldCostFrame } from "./useLiveCostAggregate.ts";
 
 export type RunLiveStatus = "idle" | "loading" | "live" | "closed" | "error";
@@ -42,10 +43,10 @@ export interface UseRunLiveResult {
   streaming: StreamingMessage | null;
   /** Connection status across bootstrap + stream. */
   status: RunLiveStatus;
-  /** Last SSE sequence id seen. Used by sibling queries to dedupe. */
-  lastSeq: number;
   /** Monotonic counter bumped on every SSE frame. Cheap invalidation
-   * trigger for queries keyed on it. */
+   * trigger for queries keyed on it (e.g. CostInspector's `/steps`
+   * refresh). Detail-level state is folded into `detailOverlay` and
+   * doesn't need this. */
   totalEvents: number;
   /** Filtered slice of control-channel events (steering, control) for
    * `usePendingSteers` reconciliation. */
@@ -55,6 +56,12 @@ export interface UseRunLiveResult {
    * events. Reset on `runId` change. Use this for live header tiles;
    * the server snapshot remains the source of truth post-terminal. */
   liveCost: CostAggregate;
+  /** Event-driven overlay for the run-detail snapshot — node states,
+   * selectedEdges appended since `sinceSeq`, and run-level status.
+   * Pairs with `mergeDetail(snapshot, overlay)` to render live state
+   * without refetching `/runs/:id` on every SSE frame. Reset on
+   * `runId` change. */
+  detailOverlay: DetailOverlay;
 }
 
 export interface UseRunLiveOptions {
@@ -94,10 +101,10 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
   const [status, setStatus] = useState<RunLiveStatus>(runId ? "loading" : "idle");
-  const [lastSeq, setLastSeq] = useState(0);
   const [totalEvents, setTotalEvents] = useState(0);
   const [controlEvents, setControlEvents] = useState<UseRunLiveResult["controlEvents"]>([]);
   const [liveCost, setLiveCost] = useState<CostAggregate>(EMPTY_COST_AGGREGATE);
+  const [detailOverlay, setDetailOverlay] = useState<DetailOverlay>(EMPTY_DETAIL_OVERLAY);
 
   // Latest ordinal persisted so incremental fetches don't re-load the world.
   const lastOrdinalRef = useRef(0);
@@ -108,10 +115,10 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   useEffect(() => {
     setMessages([]);
     setStreaming(null);
-    setLastSeq(0);
     setTotalEvents(0);
     setControlEvents([]);
     setLiveCost(EMPTY_COST_AGGREGATE);
+    setDetailOverlay(EMPTY_DETAIL_OVERLAY);
     lastOrdinalRef.current = 0;
 
     if (!runId) {
@@ -184,9 +191,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
 
     const onFrame = (ev: MessageEvent): void => {
       const idNum = ev.lastEventId ? Number.parseInt(ev.lastEventId, 10) : Number.NaN;
-      if (Number.isFinite(idNum)) {
-        setLastSeq(idNum);
-      }
       setTotalEvents((n) => n + 1);
 
       let parsed: Record<string, unknown> | null = null;
@@ -201,6 +205,14 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
 
       if (type === "cost.recorded" && payload != null) {
         setLiveCost((prev) => foldCostFrame(prev, payload));
+      }
+
+      // Fold structural events (node/edge/run-status) into the detail
+      // overlay so the UI can render live state without refetching the
+      // /runs/:id snapshot on every SSE frame. `isDetailEvent` keeps
+      // the hot text-delta path out of this code entirely.
+      if (isDetailEvent(type) && Number.isFinite(idNum)) {
+        setDetailOverlay((prev) => foldDetailFrame(prev, type, payload, idNum));
       }
 
       if (isControlReconcileEvent(type, payload)) {
@@ -266,7 +278,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     };
   }, [runId, opts.terminal, opts.sinceSeq]);
 
-  return { messages, streaming, status, lastSeq, totalEvents, controlEvents, liveCost };
+  return { messages, streaming, status, totalEvents, controlEvents, liveCost, detailOverlay };
 }
 
 /** Delta-fold: place `delta` at `index` within the streaming buffer's

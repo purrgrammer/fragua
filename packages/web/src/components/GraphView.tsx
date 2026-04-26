@@ -26,10 +26,10 @@
 // so existing tests (and any future Playwright) can target them.
 
 import { type Graph, type Edge as GraphEdge, type Node as GraphNode, handlerOf, parseDotSource } from "@swarm/core";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { Handle, MarkerType, Position } from "@xyflow/react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
@@ -66,12 +66,6 @@ export interface GraphViewProps {
   selectedNodeId?: string | null;
   /** Flow direction. Default `"TB"`. */
   orientation?: LayoutOrientation;
-  /**
-   * When this value changes, invalidate the detail query so the graph
-   * refetches. Parents pass e.g. `events.length` from SSE so the graph
-   * stays in sync with live updates. Unused in workflow-detail mode.
-   */
-  refetchKey?: number | string;
 }
 
 const NODE_TYPE = "swarmNode";
@@ -102,22 +96,16 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     activeNodeId,
     selectedNodeId,
     orientation = "TB",
-    refetchKey,
   } = props;
 
-  const qc = useQueryClient();
+  // Backstop fetch for the `runId`-only call shape. RunDetail passes
+  // `detail` directly (a snapshot+overlay merge that updates live), so
+  // this query stays disabled in the hot path. No invalidation effect —
+  // live updates come through the parent's merged `detail` prop.
   const query = useQuery({
     ...queries.runs.detail(runId ?? ""),
     enabled: !!runId && !detailProp && !graphProp,
   });
-
-  // `refetchKey` is a deliberate invalidation trigger for the live view.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refetchKey is the trigger.
-  useEffect(() => {
-    if (runId && !detailProp && !graphProp) {
-      void qc.invalidateQueries({ queryKey: queries.runs.detail(runId).queryKey });
-    }
-  }, [refetchKey]);
 
   const readyDetail = detailProp ?? query.data ?? null;
   const isLoading = !detailProp && !graphProp && !!runId && query.isPending;
