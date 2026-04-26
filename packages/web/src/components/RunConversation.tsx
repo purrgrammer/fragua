@@ -33,7 +33,6 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { NodeState, RunMessageRow } from "@/lib/api";
@@ -420,10 +419,7 @@ function StreamingMessageRow({ streaming }: { streaming: StreamingMessage }): JS
 
   return (
     <AIMessage from="assistant" data-testid="streaming-message">
-      <MessageContent>
-        {blocks}
-        <Shimmer className="mt-1 text-[10px]">streaming…</Shimmer>
-      </MessageContent>
+      <MessageContent>{blocks}</MessageContent>
     </AIMessage>
   );
 }
