@@ -32,6 +32,8 @@ export interface ServerDeps {
   store: IEventStore;
   /** Poll interval for SSE streams in ms. */
   ssePollMs?: number;
+  /** Per-iteration batch size for SSE replay. Defaults to 500. */
+  sseBatchSize?: number;
   /** Used by tests to deterministically cap stream lifetimes. */
   now?: () => number;
   /**
@@ -65,6 +67,7 @@ export interface ServerDeps {
 }
 
 const DEFAULT_SSE_POLL_MS = 100;
+const DEFAULT_SSE_BATCH_SIZE = 500;
 
 /** Known provider env vars. Order matches `swarm providers` display. */
 const PROVIDER_ENV_KEYS: ReadonlyArray<{ provider: string; envKey: string }> = [
@@ -161,6 +164,7 @@ export function registryPreflight(args: {
 export function createRoutes(deps: ServerDeps): Hono {
   const app = new Hono();
   const pollMs = deps.ssePollMs ?? DEFAULT_SSE_POLL_MS;
+  const batchSize = deps.sseBatchSize ?? DEFAULT_SSE_BATCH_SIZE;
 
   // ─── Workflow upload ────────────────────────────────────────
 
@@ -394,7 +398,7 @@ export function createRoutes(deps: ServerDeps): Hono {
       while (!stream.aborted) {
         const batch = deps.store.getEvents(runId, {
           sinceSeq: lastSeq,
-          limit: 500,
+          limit: batchSize,
         });
         for (const event of batch) {
           // Emit without an `event:` field so a single `addEventListener
@@ -408,14 +412,17 @@ export function createRoutes(deps: ServerDeps): Hono {
           });
           lastSeq = event.seq;
         }
-        // Close the stream once the run reaches a terminal status. The
-        // last batch ships any terminal facts; the run will never emit
-        // again, so polling forever just keeps a connection alive that
-        // the browser's EventSource will then auto-reconnect on every
-        // proxy/idle drop. Returning here stops the reconnect storm.
-        const state = deps.store.getState(runId);
-        if (state != null && isTerminalStatus(state.status)) return;
-        if (batch.length === 0) await stream.sleep(pollMs);
+        // Only check terminal *after* the buffer is drained. Checking
+        // after a full batch caused replays of long terminal runs to
+        // exit after the first batchSize events: send 500 → status is
+        // already 'completed' → return, leaving the rest undelivered.
+        // Now: keep draining while batches are full; once empty, decide
+        // between closing (terminal) and sleeping (still live).
+        if (batch.length < batchSize) {
+          const state = deps.store.getState(runId);
+          if (state != null && isTerminalStatus(state.status)) return;
+          await stream.sleep(pollMs);
+        }
       }
     }),
   );

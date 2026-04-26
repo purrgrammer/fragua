@@ -604,6 +604,57 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     expect(chunks).not.toContain("id: 2\n");
   });
 
+  test("/runs/:id/stream drains all events before closing on a terminal run", async () => {
+    // Regression: the loop used to check terminal *after every batch*,
+    // so a completed run with > batchSize events sent only the first
+    // batch and returned, dropping everything past it. Browser opening
+    // the conversation page on a terminal run would then see liveCost
+    // / message buffers with chunks missing.
+    store.enqueueRun({ runId: "long", workflowSha: "wf" });
+    const s0 = store.getState("long")!;
+    store.appendFact(
+      "long",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "a" } }],
+      s0.version,
+    );
+    // Emit 12 cost.recorded events, well past a tiny batchSize of 3.
+    // We use a non-fact event type so we don't perturb projection state.
+    const obs = Array.from({ length: 12 }, () => ({
+      type: "cost.recorded" as const,
+      payload: { cost_usd: 0.001, total_tokens: 10, nodeId: "a" } as Record<string, unknown>,
+    }));
+    store.appendObservabilityEvents("long", obs);
+    const s1 = store.getState("long")!;
+    store.appendFact("long", [{ type: "fact.run_completed", payload: { finalNode: "a" } }], s1.version);
+
+    const routes = createRoutes({ store, ssePollMs: 10, sseBatchSize: 3 });
+    const res = await routes.fetch(new Request("http://test/runs/long/stream"));
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let chunks = "";
+    let closed = false;
+    const deadline = Date.now() + 1_500;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) {
+        closed = true;
+        break;
+      }
+      chunks += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel().catch(() => {});
+
+    // Stream closed cleanly (terminal exit path fired).
+    expect(closed).toBe(true);
+    // All 12 cost.recorded events delivered, not just the first batchSize=3.
+    const costMatches = chunks.match(/"type":"cost\.recorded"/g) ?? [];
+    expect(costMatches.length).toBe(12);
+    // Terminal fact made it through too.
+    expect(chunks).toContain("fact.run_completed");
+  });
+
   test("/runs/:id/stream closes on its own once the run reaches a terminal status", async () => {
     // Without this close, the loop would poll forever after the run
     // ended, and the browser's EventSource would auto-reconnect on every
