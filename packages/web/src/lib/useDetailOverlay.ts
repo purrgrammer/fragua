@@ -141,17 +141,29 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     return snapshot;
   }
 
+  // Build the merged node list lazily: on overlays that only carry a
+  // status flip (e.g. fact.run_completed with no node fact in the same
+  // batch) every node in `snapshot.nodes` re-emerges unchanged, but the
+  // old code still produced a fresh array via `.map`. Downstream
+  // consumers (RunConversation, GraphView) keyed memoisation off
+  // `detail.nodes` referentially, so the destabilised array forced
+  // every message row to re-render on every overlay tick. Now: track
+  // whether any node row actually moved; if not, reuse `snapshot.nodes`.
   const seen = new Set<string>();
+  let nodesChanged = false;
   const nodes: NodeState[] = snapshot.nodes.map((n) => {
     seen.add(n.nodeId);
     const ov = overlay.nodeStates.get(n.nodeId);
-    return ov && ov.lastEventSeq >= n.lastEventSeq
-      ? { nodeId: n.nodeId, state: ov.state, lastEventSeq: ov.lastEventSeq }
-      : n;
+    if (ov && ov.lastEventSeq >= n.lastEventSeq) {
+      nodesChanged = true;
+      return { nodeId: n.nodeId, state: ov.state, lastEventSeq: ov.lastEventSeq };
+    }
+    return n;
   });
   for (const [nodeId, ov] of overlay.nodeStates) {
     if (!seen.has(nodeId)) {
       nodes.push({ nodeId, state: ov.state, lastEventSeq: ov.lastEventSeq });
+      nodesChanged = true;
     }
   }
 
@@ -162,13 +174,14 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
       const n = nodes[i]!;
       if (n.state === "running") {
         nodes[i] = { nodeId: n.nodeId, state: "failed", lastEventSeq: overlay.haltSeq };
+        nodesChanged = true;
       }
     }
   }
 
   return {
     ...snapshot,
-    nodes,
+    nodes: nodesChanged ? nodes : snapshot.nodes,
     selectedEdges:
       overlay.selectedEdges.length > 0 ? [...snapshot.selectedEdges, ...overlay.selectedEdges] : snapshot.selectedEdges,
     status: overlay.status ?? snapshot.status,

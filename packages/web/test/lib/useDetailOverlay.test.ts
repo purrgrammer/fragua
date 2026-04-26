@@ -168,4 +168,40 @@ describe("mergeDetail", () => {
     const merged = mergeDetail(snap, overlay);
     expect(merged.status).toBe("success");
   });
+
+  test("preserves snapshot.nodes ref when the overlay carries no node-touching changes", () => {
+    // The overlay has a status flip but no node fact has touched the
+    // snapshot's rows. Earlier, mergeDetail still rebuilt the array via
+    // .map; that destabilised `detail.nodes` on every overlay tick and
+    // thrashed downstream memoisation. The merged top-level object is
+    // allowed to change (status moved); `nodes` must not.
+    const snap = snapshot({
+      status: "running",
+      nodes: [
+        { nodeId: "n1", state: "completed", lastEventSeq: 10 },
+        { nodeId: "n2", state: "completed", lastEventSeq: 20 },
+      ],
+    });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 50);
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.nodes).toBe(snap.nodes);
+    expect(merged.status).toBe("success");
+  });
+
+  test("preserves snapshot.nodes ref when an overlay node entry is older than the snapshot's", () => {
+    // Defensive path: a stale overlay row (lastEventSeq < snapshot's)
+    // is dropped, so no node row actually moves. The output array must
+    // still be the snapshot's reference.
+    const snap = snapshot({
+      nodes: [{ nodeId: "n1", state: "completed", lastEventSeq: 30 }],
+    });
+    const overlay: DetailOverlay = {
+      ...EMPTY_DETAIL_OVERLAY,
+      // Forge a stale entry with older seq than the snapshot's.
+      nodeStates: new Map([["n1", { state: "running", lastEventSeq: 5 }]]),
+      status: "running",
+    };
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.nodes).toBe(snap.nodes);
+  });
 });
