@@ -1,96 +1,72 @@
 # swarm — conventions for AI agents
 
-> Read this first. If anything here conflicts with the docs, the docs win — update this file.
+> Read this first. If anything here conflicts with `docs/`, the docs win — update this file.
 
 ## What this is
 
 **swarm** is a universal AI agent orchestrator. Text-first DOT workflows → deterministic state machine → LLM-based agents across any provider → replayable event log on top of a single SQLite store.
 
-Authoritative docs (start here before editing a subsystem):
+Authoritative docs:
 
-- `docs/SPEC.md` — what swarm is, at a glance
-- `docs/ARCHITECTURE.md` — design, schema, invariants, property matrix
-- `docs/handler-contract.md` — how to write a handler
+- `docs/SPEC.md` — what swarm is, invariants
+- `docs/ARCHITECTURE.md` — schema, design, property matrix
+- `docs/handler-contract.md` — handler API
+- `docs/PENDING.md` — known gaps and deferred work
 
 ## Stack
 
-- **Runtime:** Bun ≥ 1.2 (primary), Node ≥ 20 (compat)
-- **Language:** TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
-- **Schemas:** `@sinclair/typebox`
-- **Store:** `bun:sqlite` via `@swarm/store` (WAL, STRICT tables, generated columns)
-- **HTTP:** `hono`
-- **Test runner:** `bun test`
-- **Lint / format:** `biome`
-- **Agent runtime:** `@mariozechner/pi-agent-core`
-- **LLM client:** `@mariozechner/pi-ai`
-- **Property tests:** `fast-check`
-- **Web:** React 18 + Vite 5 + Tailwind 3 + react-router v7
+Bun ≥ 1.2 (Node ≥ 20 compat) · TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · `@sinclair/typebox` · `bun:sqlite` (WAL, STRICT, generated columns) · `hono` · `bun test` · `biome` · `@mariozechner/pi-agent-core` + `pi-ai` · `fast-check` · React 18 + Vite 5 + Tailwind 3 + react-router v7
 
 ## Commands
 
 ```sh
-bun install                          # install deps
-bun run typecheck                    # tsc --noEmit across workspace
-bun test                             # all package test suites
-bun run lint                         # biome check
-bun run format                       # biome format --write
-bun run ci                           # typecheck + lint + test (what CI runs)
+bun install
+bun run typecheck                        # tsc --noEmit across workspace
+bun test                                 # all package suites
+bun run lint                             # biome check
+bun run format                           # biome format --write
+bun run ci                               # lint + typecheck + tests, pass-noise filtered
 
-bun run swarm daemon                 # run the executor against .swarm/swarm.db
-bun run swarm serve                  # HTTP + SSE server
-bun run swarm run <workflow.dot>     # upload + enqueue + stream events
-bun run swarm validate <workflow.dot># parse + lint, no execution
-bun run swarm db vacuum              # reclaim free pages
-bun run swarm db gc-blobs            # drop orphan artifact blobs
-bun run swarm db backup --to path.db # snapshot via SQLite serialize()
+bun run swarm daemon                     # executor against .swarm/swarm.db
+bun run swarm serve                      # HTTP + SSE
+bun run swarm run <workflow.dot>         # upload + enqueue + stream events
+bun run swarm validate <workflow.dot>    # parse + lint, no execution
+bun run swarm db {vacuum,gc-blobs,backup --to <path>}
 ```
 
-## Repository layout
+## Codebase map
 
-```
-/Users/bandarra/swarm/
-├── docs/                  # SPEC, ARCHITECTURE, handler-contract, providers
-├── packages/
-│   ├── store/             # SQLite event store (the coordination surface)
-│   ├── core/              # parser + pure types + handler contract
-│   ├── daemon/            # executor fiber, supervisor, auto-dispatcher
-│   ├── agent/             # pi-* wrapper + makeCodergenHandler bridge
-│   ├── workspace/         # ExecutionEnvironment adapters
-│   ├── server/            # Hono HTTP + SSE
-│   ├── cli/               # swarm daemon / serve / run / validate / db
-│   └── web/               # React + Vite dashboard
-├── examples/              # demo workflows
-└── workflows/             # swarm's own workflows
-```
+Dependency direction: `web → server → store ← daemon → core ← agent`. `core` is pure (no `node:fs` / `node:child_process`); `store` is the only coordination surface.
 
-The dependency graph flows one way:
+| Package | Entry points | What lives here |
+|---|---|---|
+| `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
+| `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,fan-in,retry-policy}.ts`, `src/parser/` | Pure types; DOT parser; handler contract; engine reducers |
+| `@swarm/daemon` | `src/{executor,supervisor,auto-dispatcher,result-to-facts,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner |
+| `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,fidelity,event-bridge,tool-adapter}.ts` | `PiCodergenBackend`; pi-ai → handler bridge; per-run system-prompt builder |
+| `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
+| `@swarm/server` | `src/store/{routes,runs-routes,runs-adapter,steps}.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
+| `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard |
+| `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `daemon` / `serve` / `run` / `validate` / `db` |
 
-```
-web → server → store ← daemon → core → handler
-                                  ↑
-                               agent (PiCodergenBackend → makeCodergenHandler)
-```
-
-`core` is pure (no `node:fs`, `node:child_process`, etc.). `store` is the coordination point. Everything else talks to one of those.
+Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 
 ## Commit conventions
 
-- Imperative mood ("add X", not "added X").
-- Tag the subsystem: `[store] fix OCC race`, `[daemon] trim supervisor tick`.
+- Imperative mood. Tag the subsystem: `[store] fix OCC race`, `[daemon] trim supervisor tick`.
 - Every non-trivial change updates a test. If infeasible, say so in the commit body.
-- `git commit --no-verify` is banned. Fix the hook, don't skip it.
+- `git commit --no-verify` is banned. Fix the hook.
 
 ## Ground rules
 
-1. **Spec-first.** If you're about to write code that isn't covered by `docs/SPEC.md`, `docs/ARCHITECTURE.md`, or `docs/handler-contract.md`, stop. Either update the docs first or check in with the user.
-2. **Tests before declaring done.** `bun test` green + monorepo typecheck clean are table stakes.
-3. **No dependencies added silently.** Every new runtime dep goes through `package.json` with an exact version pin and a one-line rationale in the commit message.
-4. **One coordination surface.** The SQLite store (`@swarm/store`) is the only place state transitions are recorded. Do not introduce filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
-5. **Events are the source of truth.** Every state transition is either an `intent.*` (writer: web) or `fact.*` (writer: daemon). Projections (`run_state` row) are updated in the same transaction.
-6. **NO INLINE IMPORTS.** All `import` statements live at the top of the file — no `await import(…)` inside functions, no `require(…)` inside conditionals. Dynamic imports hide dependency graphs and break static analysis. Hoist the import and guard the call instead. Rare exception: genuinely-circular module graphs — document the cycle in a comment.
-7. **NO SKILL CITATIONS IN CODE.** Skills are loaded on demand; their prose lives in `SKILL.md`, not in code comments. Don't write `// SKILL.md § Motion — ...`, `/* Skill citations: ... */`, `// Per the design skill: ...`, or any comment that quotes or attributes rules to a skill file. Citations drift the moment the skill is edited and duplicate content the agent re-reads from source.
-8. **NO USELESS COMMENTS.** Default to writing none. A comment earns its place only when it explains a non-obvious WHY. Don't describe WHAT the code does (names do that), don't annotate sections with headers, don't leave breadcrumbs referencing tasks/PRs ("added for X", "used by Y"). If removing the comment wouldn't confuse a future reader, delete it.
-9. **Handlers route I/O through `ctx`.** No bare `fetch`, no `node:fs` / `node:child_process` inside `packages/core/src/handler/handlers/`. Enforced by `packages/core/test/handler/discipline.test.ts`.
-10. **Write transactions are pure SQL.** No `await` or `JSON.stringify` inside a `db.transaction(...)` or a `BEGIN IMMEDIATE`/`COMMIT` pair. Enforced by `packages/store/test/lint.test.ts` (invariant I1).
-11. **No references to prior code or prior shapes.** Swarm is pre-release; there is no backwards-compat contract. Don't write comments like "replaces the old reducer", "previously lived in X", "the old hook…", "the N-line file that was here before". Git is the history. Explain what the code does today, not what it supersedes. Same applies to JSDoc, commit-adjacent `// TODO: keep for compat with…` markers, and "legacy" hedges. If it's gone, it's gone — don't leave tombstones.
-
+1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in.
+2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
+3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
+4. **One coordination surface.** `@swarm/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
+5. **Events are truth.** Every state transition is `intent.*` (writer: web) or `fact.*` (writer: daemon). The `run_state` projection is updated in the same transaction.
+6. **NO INLINE IMPORTS.** All `import`s at file top — no `await import(…)` inside functions. Hoist + guard the call. Rare exception for genuinely-circular module graphs; document the cycle.
+7. **NO SKILL CITATIONS IN CODE.** Don't write `// SKILL.md § Motion — ...` or attribute rules to skill files. Skills load on demand; citations drift the moment the skill is edited.
+8. **NO USELESS COMMENTS.** Default to none. A comment earns its place by explaining a non-obvious WHY. Don't describe WHAT (names do that), don't annotate sections, don't reference tasks/PRs.
+9. **Handlers route I/O through `ctx`.** No bare `fetch` / `node:fs` / `node:child_process` inside `packages/core/src/handler/handlers/`. Enforced by `packages/core/test/handler/discipline.test.ts`.
+10. **Write transactions are pure SQL.** No `await` / `JSON.stringify` inside `db.transaction(...)`. Enforced by `packages/store/test/lint.test.ts` (I1).
+11. **No prior-state references.** Pre-release; no backwards-compat. Don't write "replaces the old reducer", "previously…", "legacy". Git is the history.
