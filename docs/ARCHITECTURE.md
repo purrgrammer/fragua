@@ -288,6 +288,12 @@ CREATE TABLE daemon_lock (
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
+### Observability events (writer: `daemon`, no OCC)
+
+Anything emitted via `ctx.emitObservability` from a handler — `agent.message_start/end`, `llm.text_delta`, `llm.thinking_delta`, `llm.toolcall_delta`, `cost.recorded`, `tool.execution_start/end`, `intent.dropped`, `budget.warn` / `budget.stop`, etc. Best-effort streaming telemetry, not transactional bundle: no version bump, no decision logic reads them, consumers are SSE tails and projections. Events land in the same `seq` space as facts.
+
+The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
+
 ---
 
 ## 4. IEventStore interface

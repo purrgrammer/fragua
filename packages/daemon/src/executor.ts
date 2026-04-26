@@ -111,6 +111,17 @@ const DEFAULT_ABORT_LOOP_CEILING = 5;
 const DEFAULT_MAX_LOOPS = 1_000;
 const DEFAULT_MAX_LEAKED_HANDLERS = 3;
 
+// Observability is best-effort streaming telemetry, not a transactional
+// bundle: SSE consumers tail the events table to render live state, and
+// holding an LLM round's deltas until end-of-turn made the conversation
+// view land all at once instead of streaming. Flush on a 50ms timer so
+// the SSE poll (~100ms) can deliver mid-call deltas; cap the buffer at
+// 64 events so a bursty provider can't pin memory or produce a
+// pathologically large render-side batch. The end-of-turn drain still
+// runs so the trail lands before the terminal fact in causal order.
+const OBSERVABILITY_FLUSH_INTERVAL_MS = 50;
+const OBSERVABILITY_FLUSH_SIZE_THRESHOLD = 64;
+
 /**
  * Executor loop. Claims queued runs and dispatches each on its own
  * async fiber (fire-and-forget) so many runs can progress concurrently —
@@ -390,6 +401,29 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         initialVersion: state.version,
       });
       const observability: { type: string; payload: Record<string, unknown> }[] = [];
+      // Mid-handler micro-batch timer. See OBSERVABILITY_FLUSH_*_MS notes.
+      // Owned by `emitObservability` (schedules) and `flushObservability`
+      // (clears). Always null-checked before clearTimeout / setTimeout so
+      // the leak-budget / abort / normal completion paths can call
+      // `flushObservability` unconditionally.
+      let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
+      const flushObservability = (): void => {
+        if (observabilityFlushTimer != null) {
+          clearTimeout(observabilityFlushTimer);
+          observabilityFlushTimer = null;
+        }
+        if (observability.length === 0) return;
+        // Drain into a fresh array before the (sync) write so the buffer
+        // is empty if the write throws — best-effort telemetry; we swallow
+        // and log on failure rather than retry.
+        const drained = observability.splice(0, observability.length);
+        try {
+          opts.store.appendObservabilityEvents(runId, drained);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[executor] observability flush failed for run ${runId}:`, err);
+        }
+      };
 
       let totalTokens = 0;
       let totalCostUsd = 0;
@@ -450,6 +484,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type,
             payload: { nodeId: currentNode, iteration, ...payload },
           });
+          // Hard ceiling — bound peak memory and per-batch render cost
+          // when a provider streams a burst of deltas faster than the
+          // soft timer can drain.
+          if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
+            flushObservability();
+            return;
+          }
+          // Soft ceiling — coalesce small bursts so we don't hammer the
+          // writer lock with one txn per text delta.
+          if (observabilityFlushTimer == null) {
+            observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
+          }
         },
       };
       if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
@@ -509,21 +555,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         opts.registry.unregister(runId);
       }
 
-      // Flush on abort/leak BEFORE those branches append their terminal
-      // fact. The main transition path flushes later, after edge selection
-      // has pushed its `edge.selected` event, so all observability for the
-      // turn lands in one ordered batch.
-      const flushObservability = (): void => {
-        if (observability.length === 0) return;
-        try {
-          opts.store.appendObservabilityEvents(runId, observability);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn(`[executor] observability flush failed for run ${runId}:`, err);
-        }
-        observability.length = 0;
-      };
-
+      // Drain anything left in the soft-batch buffer before the terminal
+      // fact lands so consumers tailing /events still see the trail
+      // followed by node_completed in causal order — the timer-driven
+      // flush handles mid-handler streaming, this drain handles the tail.
       if (leakedTimeout) {
         flushObservability();
         await tryAppendFact(opts.store, runId, recorder.version(), [
@@ -687,10 +722,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
-      // All observability for this turn is now buffered (handler emissions
-      // + any edge.selected from the selector above). Flush before the
-      // terminal fact lands so consumers tailing /events see the trail
-      // followed by node_completed in causal order.
+      // Tail-drain: the handler may have streamed most of its deltas
+      // mid-flight via the timer, but `edge.selected` and any post-handler
+      // observability (e.g. budget warnings above) still need to flush
+      // before the terminal fact for causal ordering.
       flushObservability();
 
       // Side-effect facts are already durable via the pre-commit recorder;
