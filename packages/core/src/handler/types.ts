@@ -141,9 +141,10 @@ export interface HandlerContext {
   readonly externalCall: ExternalCall;
   /**
    * Substitution args for prompt templating. Passed to `substitute()` before
-   * the prompt hits the LLM. Keys are the literal tokens ($ARGUMENTS,
-   * $RUN_ID, $WORKTREE_PATH, $LOG_DIR, $1..$9, etc.). The executor populates
-   * this from `run_state.routing` + ambient run info (runId, worktree path).
+   * the prompt hits the LLM. Today the only key is `$ARGUMENTS` (sourced
+   * from `run_state.routing.input` — CLI positional or POST /runs body).
+   * Other tokens (`${context.*}`, `$<nodeId>.output[.path]`) read from the
+   * substitution context, not from this map.
    */
   readonly args: Readonly<Record<string, string>>;
   /**

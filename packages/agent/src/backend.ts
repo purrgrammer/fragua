@@ -44,11 +44,11 @@ export interface PiCodergenBackendOptions {
    * the backend renders a tier-1 catalog into the system prompt and
    * adds a scoped `local:load_skill` tool to the run. */
   skills?: Skill[];
-  /** Per-run isolation facts — worktree path, run id, log dir, bootstrap
-   * command. When provided, the backend prepends a `<run-environment>`
-   * block to every node's system prompt so agents know where they are
-   * and which dependencies are installed. Omit for bare LocalEnvironment
-   * runs that don't need the preamble. */
+  /** Per-run isolation facts — worktree path, run id, bootstrap command.
+   * When provided, the backend prepends an `<environment>` block to
+   * every node's system prompt so agents know where they are and which
+   * dependencies are installed. Omit for bare LocalEnvironment runs
+   * that don't need the preamble. */
   runEnv?: RunEnvironment;
   /** Shared "threads we've written to" registry, keyed by `runId::threadId`.
    * Each codergen node builds its own `PiCodergenBackend` (see
@@ -545,15 +545,13 @@ function sessionKey(runId: string, threadId: string): string {
 }
 
 /** Structurally derive a `RunEnvironment` from the execution env when
- * it looks like a `WorktreeEnvironment` (has `worktreePath` / `runId`
- * / optional `logDir`). Returns `undefined` for a bare
- * `LocalEnvironment` so the system-prompt block is omitted — there's
- * no worktree to describe. */
+ * it looks like a `WorktreeEnvironment` (has `worktreePath` / `runId`).
+ * Returns `undefined` for a bare `LocalEnvironment` so the system-prompt
+ * block is omitted — there's no worktree to describe. */
 function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment | undefined {
   const wt = env as unknown as {
     worktreePath?: unknown;
     runId?: unknown;
-    logDir?: unknown;
     bootstrapCommand?: unknown;
   };
   if (typeof wt.worktreePath !== "string" || wt.worktreePath.length === 0) return undefined;
@@ -561,7 +559,6 @@ function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvironment 
     worktreePath: wt.worktreePath,
     runId: typeof wt.runId === "string" ? wt.runId : runId,
   };
-  if (typeof wt.logDir === "string" && wt.logDir.length > 0) out.logDir = wt.logDir;
   if (typeof wt.bootstrapCommand === "string") out.bootstrapCommand = wt.bootstrapCommand;
   return out;
 }

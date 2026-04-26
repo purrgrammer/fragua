@@ -36,14 +36,6 @@ describe("loadConfig", () => {
     expect(cfg.defaults?.model).toBe("anthropic/claude-opus-4.7");
   });
 
-  test("parses project.runs_dir", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), `project:\n  name: demo\n  runs_dir: custom/runs\n`, "utf8");
-    const cfg = await loadConfig(scratch);
-    expect(cfg.project?.name).toBe("demo");
-    expect(cfg.project?.runs_dir).toBe("custom/runs");
-  });
-
   test("returns {} on malformed YAML (never throws)", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
     await writeFile(join(scratch, ".swarm/config.yaml"), ": : not yaml : :", "utf8");

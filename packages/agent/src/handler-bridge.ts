@@ -67,9 +67,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     const node = opts.node;
     const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt : "";
     const context = mergeContext(opts.defaultContext, ctx.routing);
-    // Substitute $ARGUMENTS / $RUN_ID / etc. before the prompt hits the
-    // LLM. Without this the agent sees the literal placeholder and every
-    // workflow with an abort-on-empty guard halts on its first node.
+    // Substitute $ARGUMENTS, ${context.*}, and $<nodeId>.output[.path]
+    // before the prompt hits the LLM. Without this the agent sees the
+    // literal placeholder and every workflow with an abort-on-empty
+    // guard halts on its first node.
     const prompt = substitute(rawPrompt, { args: ctx.args, context });
 
     let tokens = 0;

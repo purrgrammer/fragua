@@ -98,16 +98,17 @@ export function mergeSystemPrompt(base: string, extension: string): string {
 }
 
 /** Per-run environment facts surfaced to every node's system prompt so
- * agents know their isolation context — worktree path, run id, log dir,
- * and whether the project's bootstrap command ran. `undefined` omits the
- * block entirely (e.g. single-process runs that don't use a worktree). */
+ * agents know their isolation context — cwd and whether the project's
+ * bootstrap command ran. `undefined` omits the block entirely (e.g.
+ * single-process runs that don't use a worktree). */
 export interface RunEnvironment {
-  /** Absolute path the agent is working inside. */
+  /** Absolute path the agent is working inside. Surfaced to the model
+   * as `cwd:` (model-agnostic; works whether or not the path is a git
+   * worktree). */
   worktreePath: string;
-  /** Opaque session id, stable across the whole run. */
+  /** Opaque session id, stable across the whole run. Used for
+   * event-log correlation; not surfaced to the agent. */
   runId: string;
-  /** Per-run dir for service logs / port files / sidecar state. */
-  logDir?: string | undefined;
   /** The bootstrap command that ran (string form only). Omitted when the
    * project didn't configure one. Presence of this field signals "deps
    * are installed". */
@@ -130,9 +131,9 @@ export interface BuildSystemPromptInput {
    * before `contextBlock` so skill advertisements frame the whole call —
    * order: skills → project-conventions → base. */
   skillsCatalog?: string;
-  /** Per-run isolation facts (worktree path, run id, log dir, bootstrap
-   * status). Rendered as a `<run-environment>` block at the very top so
-   * agents know where they are before reading anything else. */
+  /** Per-run isolation facts (cwd, bootstrap status). Rendered as an
+   * `<environment>` block at the top so agents know where they are
+   * before reading anything else. */
   runEnv?: RunEnvironment | undefined;
 }
 
@@ -162,26 +163,30 @@ export function buildSystemPrompt({
   return out;
 }
 
-/** Render the `<run-environment>` block. Kept pure + tiny so it can be
- * unit-tested independently. */
+/** Render the `<environment>` block. Kept pure + tiny so it can be
+ * unit-tested independently.
+ *
+ * The ❌ examples interpolate the actual cwd: by reflecting the value
+ * the model is tempted to echo back, the negative example breaks the
+ * cargo-culted `cd <cwd> && cmd` habit on the very token that anchors
+ * it. Positive instruction comes first; the ❌ is illustration, not a
+ * standalone rule. */
 export function renderRunEnvironment(env: RunEnvironment): string {
-  const lines: string[] = ["<run-environment>", `worktree: ${env.worktreePath}`, `run_id: ${env.runId}`];
-  if (env.logDir) lines.push(`log_dir: ${env.logDir}`);
+  const cwd = env.worktreePath;
+  const lines: string[] = [
+    "<environment>",
+    `cwd: ${cwd}`,
+    "- Bash starts in cwd; run commands directly.",
+    "  ✅ pwd",
+    `  ❌ cd ${cwd} && pwd`,
+    "- File tools resolve paths relative to cwd.",
+    "  ✅ README.md",
+    `  ❌ ${cwd}/README.md`,
+  ];
   if (env.bootstrapCommand) {
-    lines.push(`bootstrap: ran \`${env.bootstrapCommand}\` successfully in this worktree`);
-  } else {
-    lines.push("bootstrap: none configured (worktree is a plain checkout)");
+    lines.push(`- \`${env.bootstrapCommand}\` ran here. If you edit dep manifests, re-run before tests.`);
   }
-  lines.push("conventions:");
-  lines.push(" - Do all work inside the worktree at the path above; never `cd` out.");
-  if (env.bootstrapCommand) {
-    lines.push(" - If you change dependency manifests (package.json, requirements.txt, etc.),");
-    lines.push("   re-run the project's bootstrap command before running CI/tests.");
-  }
-  if (env.logDir) {
-    lines.push(" - Write any service logs under $LOG_DIR.");
-  }
-  lines.push("</run-environment>");
+  lines.push("</environment>");
   return lines.join("\n");
 }
 

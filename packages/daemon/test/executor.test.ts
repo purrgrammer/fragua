@@ -6,11 +6,6 @@ import { wakePending } from "../src/wake-pending.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("buildSubstitutionArgs", () => {
-  test("always sets $RUN_ID from the runId", () => {
-    const args = buildSubstitutionArgs("run-xyz", {});
-    expect(args["$RUN_ID"]).toBe("run-xyz");
-  });
-
   test("sets $ARGUMENTS from routing.input when it is a string", () => {
     const args = buildSubstitutionArgs("r", { input: "rename foo to bar" });
     expect(args["$ARGUMENTS"]).toBe("rename foo to bar");

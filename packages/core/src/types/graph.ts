@@ -74,8 +74,8 @@ export interface NodeAttrs {
   fan_in?: string;
   join_policy?: "wait_all" | "first_success";
   /** Tool-node config (parallelogram shape). Shell command executed by
-   * the tool handler. Substitution is applied: $ARGUMENTS, $RUN_ID,
-   * $nodeId.output, ${context.*}. */
+   * the tool handler. Substitution is applied: $ARGUMENTS,
+   * $nodeId.output[.path], ${context.*}. */
   tool_command?: string;
   /** Per-node cumulative cost ceiling in USD. Cumulative across all
    * iterations of this node within the run. When crossed at a turn

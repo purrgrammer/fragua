@@ -50,37 +50,12 @@ describe("substitute", () => {
     expect(substitute("$plan.output")).toBe("");
   });
 
-  test("positional args", () => {
-    const out = substitute("$1 and $2 and $3", { args: { $1: "a", $2: "b", $3: "c" } });
-    expect(out).toBe("a and b and c");
-  });
-
-  test("positional args don't match longer tokens", () => {
-    // $10 is not a supported token, so no unexpected eating.
-    const out = substitute("say $1 times or say $10", { args: { $1: "ONE" } });
-    expect(out).toBe("say ONE times or say $10");
-  });
-
   test("$ARGUMENTS substituted", () => {
     expect(substitute("Run with $ARGUMENTS", { args: { $ARGUMENTS: "--force" } })).toBe("Run with --force");
   });
 
-  test("$ARTIFACTS_DIR, $LOOP_USER_INPUT, $REJECTION_REASON", () => {
-    const out = substitute("art=$ARTIFACTS_DIR in=$LOOP_USER_INPUT why=$REJECTION_REASON", {
-      args: { $ARTIFACTS_DIR: "/tmp/r", $LOOP_USER_INPUT: "again", $REJECTION_REASON: "fuzzy" },
-    });
-    expect(out).toBe("art=/tmp/r in=again why=fuzzy");
-  });
-
-  test("$WORKTREE_PATH, $RUN_ID, $LOG_DIR substituted", () => {
-    const out = substitute("cd $WORKTREE_PATH; run=$RUN_ID logs=$LOG_DIR", {
-      args: { $WORKTREE_PATH: "/wt/abc", $RUN_ID: "abc", $LOG_DIR: "/wt/abc/logs" },
-    });
-    expect(out).toBe("cd /wt/abc; run=abc logs=/wt/abc/logs");
-  });
-
-  test("builtin tokens default to empty when arg missing", () => {
-    expect(substitute("[$ARTIFACTS_DIR]")).toBe("[]");
+  test("$ARGUMENTS defaults to empty when arg missing", () => {
+    expect(substitute("[$ARGUMENTS]")).toBe("[]");
   });
 
   test("shell-safe escaping wraps values in single quotes", () => {
@@ -97,12 +72,12 @@ describe("substitute", () => {
 
   test("multiple token types in one template", () => {
     const outputs = new Map<string, NodeOutput>([["plan", { success: true, output: "v1", timestamp: 0 }]]);
-    const out = substitute("goal=${context.goal} plan=$plan.output arg=$1", {
+    const out = substitute("goal=${context.goal} plan=$plan.output args=$ARGUMENTS", {
       context: { goal: "ship" },
       nodeOutputs: outputs,
-      args: { $1: "fast" },
+      args: { $ARGUMENTS: "--fast" },
     });
-    expect(out).toBe("goal=ship plan=v1 arg=fast");
+    expect(out).toBe("goal=ship plan=v1 args=--fast");
   });
 });
 
@@ -118,8 +93,8 @@ describe("collectReferences", () => {
   });
 
   test("finds builtin tokens", () => {
-    const refs = collectReferences("$ARTIFACTS_DIR and $ARGUMENTS");
-    expect(refs.builtins.sort()).toEqual(["$ARGUMENTS", "$ARTIFACTS_DIR"]);
+    const refs = collectReferences("hello $ARGUMENTS world");
+    expect(refs.builtins).toEqual(["$ARGUMENTS"]);
   });
 
   test("empty for plain text", () => {
@@ -169,23 +144,12 @@ describe("substitute — properties", () => {
     );
   });
 
-  test("missing builtin token collapses to empty string", () => {
-    const builtins = ["$ARGUMENTS", "$WORKTREE_PATH", "$RUN_ID", "$LOG_DIR", "$ARTIFACTS_DIR"] as const;
+  test("missing $ARGUMENTS collapses to empty string", () => {
     fc.assert(
-      fc.property(plainText, plainText, fc.constantFrom(...builtins), (before, after, tok) => {
-        const tpl = `${before}${tok}${after}`;
+      fc.property(plainText, plainText, (before, after) => {
+        const tpl = `${before}$ARGUMENTS${after}`;
         const out = substitute(tpl);
         expect(out).toBe(`${before}${after}`);
-      }),
-    );
-  });
-
-  test("positional $N doesn't eat longer numeric runs", () => {
-    // $1 + '0' reads as literal "$10" (unsupported token), not "<$1>0"
-    fc.assert(
-      fc.property(fc.string({ minLength: 1, maxLength: 10 }), (v) => {
-        const out = substitute("x$10y", { args: { $1: v } });
-        expect(out).toBe("x$10y");
       }),
     );
   });
@@ -196,12 +160,7 @@ describe("substitute — properties", () => {
     // every context/builtin reference as "".
     fc.assert(
       fc.property(
-        fc.constantFrom(
-          "${context.a} $plan.output $ARGUMENTS",
-          "no tokens here",
-          "$1 $2 $3 $ARTIFACTS_DIR",
-          "${context.x.y.z}",
-        ),
+        fc.constantFrom("${context.a} $plan.output $ARGUMENTS", "no tokens here", "${context.x.y.z}"),
         (tpl) => {
           const refs = collectReferences(tpl);
           for (const tok of refs.builtins) expect(tpl.includes(tok)).toBe(true);

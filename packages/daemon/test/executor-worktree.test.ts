@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import type { ExecutionEnvironment } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { AbortRegistry } from "../src/abort-registry.ts";
-import { buildSubstitutionArgs, runOne } from "../src/executor.ts";
+import { runOne } from "../src/executor.ts";
 import type { Provisioner } from "../src/worktree-provisioner.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
@@ -153,26 +153,3 @@ describe("executor + worktree provisioner", () => {
   });
 });
 
-describe("buildSubstitutionArgs", () => {
-  test("populates $WORKTREE_PATH from env.cwd() and $LOG_DIR from env.logDir", () => {
-    const env = stubEnv("/tmp/worktrees/run-x", { logDir: "/tmp/runs/run-x/logs" });
-    const args = buildSubstitutionArgs("run-x", { input: "hello" }, env);
-    expect(args["$RUN_ID"]).toBe("run-x");
-    expect(args["$ARGUMENTS"]).toBe("hello");
-    expect(args["$WORKTREE_PATH"]).toBe("/tmp/worktrees/run-x");
-    expect(args["$LOG_DIR"]).toBe("/tmp/runs/run-x/logs");
-  });
-
-  test("omits $LOG_DIR when env has no logDir property", () => {
-    const env = stubEnv("/tmp/worktrees/run-y");
-    const args = buildSubstitutionArgs("run-y", {}, env);
-    expect(args["$WORKTREE_PATH"]).toBe("/tmp/worktrees/run-y");
-    expect(args["$LOG_DIR"]).toBeUndefined();
-  });
-
-  test("omits worktree args when env is undefined", () => {
-    const args = buildSubstitutionArgs("run-z", {});
-    expect(args["$WORKTREE_PATH"]).toBeUndefined();
-    expect(args["$LOG_DIR"]).toBeUndefined();
-  });
-});

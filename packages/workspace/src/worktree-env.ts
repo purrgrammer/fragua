@@ -39,10 +39,6 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
    * project needs (`bun install --frozen-lockfile`, `pnpm install`, a
    * custom script, or a callback). Missing = no-op. */
   bootstrap?: BootstrapSpec;
-  /** Per-run directory for service logs, port files, and other run-local
-   * sidecar state. Created in init(). Default undefined = no log dir is
-   * prepared (callers that don't need it can skip). */
-  logDir?: string;
   /** Timeout for the bootstrap command. Default 10 minutes. */
   bootstrapTimeoutMs?: number;
 }
@@ -52,7 +48,6 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   readonly runId: string;
   readonly branch: string;
   readonly worktreePath: string;
-  readonly logDir: string | undefined;
   readonly bootstrapRan: boolean = false;
   readonly bootstrapCommand: string | undefined;
   private readonly baseRef: string | undefined;
@@ -74,7 +69,6 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs ?? 10 * 60 * 1000;
     if (typeof opts.bootstrap === "string") this.bootstrapCommand = opts.bootstrap;
-    if (opts.logDir !== undefined) this.logDir = resolve(opts.logDir);
     this.local = new LocalEnvironment({
       cwd: this.worktreePath,
       ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
@@ -82,8 +76,8 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     });
   }
 
-  /** Create the worktree + branch, prepare the log dir, and run the
-   * project's bootstrap command if configured. Idempotent across
+  /** Create the worktree + branch and run the project's bootstrap
+   * command if configured. Idempotent across
    * process restarts: if the target worktree directory already exists
    * and `git worktree list` confirms it's a registered worktree for
    * this repo, the existing one is reused (no `git worktree add`, no
@@ -104,9 +98,6 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
       await runGit(this.repoRoot, args);
     }
 
-    if (this.logDir !== undefined) {
-      await mkdir(this.logDir, { recursive: true });
-    }
     // Only bootstrap on FRESH provisioning — a resumed run's worktree
     // already has dependencies installed from the pre-crash life, and
     // re-running `bun install` etc. wastes a few minutes every resume

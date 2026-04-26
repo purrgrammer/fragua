@@ -252,7 +252,6 @@ describe("makeCodergenHandler", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r-sub", store, "n1", {
       $ARGUMENTS: "rename foo() to bar()",
-      $RUN_ID: "r-sub",
     });
     let seenPrompt: string | undefined;
     const capture: CodergenBackend = {
@@ -262,12 +261,12 @@ describe("makeCodergenHandler", () => {
       },
     };
     const spec = makeCodergenHandler({
-      node: node({ attrs: { shape: "box", prompt: "Task: $ARGUMENTS (run=$RUN_ID)" } }),
+      node: node({ attrs: { shape: "box", prompt: "Task: $ARGUMENTS" } }),
       nextNode: "__end__",
       backend: capture,
     });
     await spec.handler(ctx);
-    expect(seenPrompt).toBe("Task: rename foo() to bar() (run=r-sub)");
+    expect(seenPrompt).toBe("Task: rename foo() to bar()");
     store.close();
   });
 

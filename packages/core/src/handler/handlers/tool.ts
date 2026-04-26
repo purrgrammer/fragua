@@ -13,7 +13,7 @@
 // Design choices:
 //
 //   - `tool_command` is substituted through the same prompt substitution
-//     machinery codergen uses ($ARGUMENTS, $RUN_ID, $nodeId.output,
+//     machinery codergen uses ($ARGUMENTS, $nodeId.output[.path],
 //     ${context.x}). This is the only place the substitution fires
 //     outside prompts.
 //

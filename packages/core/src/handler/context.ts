@@ -32,9 +32,9 @@ export interface BuildContextOpts {
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
   recorder: SideEffectRecorder;
-  /** Prompt-substitution args ($ARGUMENTS, $RUN_ID, etc.). Empty record
-   * when the caller has no positional input. Passed through to
-   * HandlerContext unchanged. */
+  /** Prompt-substitution args. Today carries only `$ARGUMENTS` (sourced
+   * from `routing.input`); empty when the run has no input string.
+   * Passed through to HandlerContext unchanged. */
   args?: Readonly<Record<string, string>>;
   /** Observability sink. Every ctx.emit(type, payload) call routes here.
    * The executor wires this to a collector it drains into

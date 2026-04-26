@@ -111,52 +111,74 @@ describe("renderRunEnvironment", () => {
     const block = renderRunEnvironment({
       worktreePath: "/wt/abc",
       runId: "abc",
-      logDir: "/wt/abc/logs",
       bootstrapCommand: "bun install --frozen-lockfile",
     });
-    expect(block).toContain("<run-environment>");
-    expect(block).toContain("worktree: /wt/abc");
-    expect(block).toContain("run_id: abc");
-    expect(block).toContain("log_dir: /wt/abc/logs");
-    expect(block).toContain("ran `bun install --frozen-lockfile`");
-    expect(block).toContain("re-run the project's bootstrap command");
-    expect(block).toContain("</run-environment>");
+    expect(block).toContain("<environment>");
+    expect(block).toContain("cwd: /wt/abc");
+    expect(block).toContain("Bash starts in cwd");
+    // ❌ antipattern interpolates the actual cwd — by reflecting the value
+    // the model is tempted to echo, the example breaks the cargo-culted
+    // `cd <cwd> && cmd` habit.
+    expect(block).toContain("❌ cd /wt/abc && pwd");
+    expect(block).toContain("✅ pwd");
+    expect(block).toContain("File tools resolve paths relative to cwd");
+    expect(block).toContain("✅ README.md");
+    expect(block).toContain("❌ /wt/abc/README.md");
+    expect(block).toContain("`bun install --frozen-lockfile` ran here");
+    expect(block).toContain("</environment>");
   });
 
-  test("without bootstrap, states plain checkout", () => {
+  test("without bootstrap, omits the bootstrap line", () => {
     const block = renderRunEnvironment({
       worktreePath: "/wt/x",
       runId: "x",
     });
-    expect(block).toContain("bootstrap: none configured");
-    expect(block).not.toContain("re-run the project's bootstrap command");
-    expect(block).not.toContain("log_dir:");
+    expect(block).toContain("cwd: /wt/x");
+    expect(block).toContain("Bash starts in cwd");
+    expect(block).not.toContain("ran here");
+  });
+
+  test("does not surface run_id (unused by agent, costs tokens)", () => {
+    const block = renderRunEnvironment({
+      worktreePath: "/wt/x",
+      runId: "01jx-this-id-should-not-leak",
+    });
+    expect(block).not.toContain("01jx-this-id-should-not-leak");
+    expect(block).not.toContain("run_id");
+  });
+
+  test("no `worktree:` label — terminology stays env-agnostic", () => {
+    const block = renderRunEnvironment({
+      worktreePath: "/some/path",
+      runId: "x",
+    });
+    expect(block).not.toContain("worktree:");
   });
 });
 
 describe("buildSystemPrompt with runEnv", () => {
-  test("prepends <run-environment> before every other block", () => {
+  test("prepends <environment> before every other block", () => {
     const out = buildSystemPrompt({
       global: "you are the agent",
       perNode: undefined,
       contextBlock: "<project-conventions>rules</project-conventions>",
       runEnv: { worktreePath: "/wt/abc", runId: "abc" },
     });
-    const runEnvIdx = out.indexOf("<run-environment>");
+    const envIdx = out.indexOf("<environment>");
     const conventionsIdx = out.indexOf("<project-conventions>");
     const baseIdx = out.indexOf("you are the agent");
-    expect(runEnvIdx).toBeGreaterThanOrEqual(0);
-    expect(runEnvIdx).toBeLessThan(conventionsIdx);
+    expect(envIdx).toBeGreaterThanOrEqual(0);
+    expect(envIdx).toBeLessThan(conventionsIdx);
     expect(conventionsIdx).toBeLessThan(baseIdx);
   });
 
-  test("omits <run-environment> entirely when runEnv is undefined", () => {
+  test("omits <environment> entirely when runEnv is undefined", () => {
     const out = buildSystemPrompt({
       global: "base",
       perNode: undefined,
       contextBlock: "",
     });
-    expect(out).not.toContain("<run-environment>");
+    expect(out).not.toContain("<environment>");
     expect(out).toBe("base");
   });
 });

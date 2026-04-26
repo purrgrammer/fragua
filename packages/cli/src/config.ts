@@ -10,7 +10,6 @@ import YAML from "yaml";
 export interface SwarmConfig {
   project?: {
     name?: string;
-    runs_dir?: string;
     /** Shell command run inside each fresh worktree before the first node
      * fires. Use whatever the project's stack needs — `bun install
      * --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,

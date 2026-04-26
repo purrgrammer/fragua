@@ -37,10 +37,6 @@ export interface WorktreeProvisionerOptions {
   /** Directory under `repoRoot` where worktrees live. Default
    * `.swarm/worktrees`. Each run gets a `<worktreesDir>/<run-id>` dir. */
   worktreesDir?: string;
-  /** Directory under `repoRoot` where per-run log dirs live. Default
-   * `.swarm/runs`. Each run gets `<runsDir>/<run-id>/logs`. Set to
-   * `null` to disable log-dir creation entirely. */
-  runsDir?: string | null;
   /** Keep worktrees around after dispose — useful for post-mortems.
    * Default false. */
   keepAfterDispose?: boolean;
@@ -65,7 +61,6 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly repoRoot: string;
   private readonly bootstrap: BootstrapSpec | undefined;
   private readonly worktreesDir: string;
-  private readonly runsDir: string | null;
   private readonly keepAfterDispose: boolean;
   private readonly factory: ((runId: string) => Promise<ExecutionEnvironment>) | undefined;
   private readonly bootstrapTimeoutMs: number | undefined;
@@ -77,7 +72,6 @@ export class WorktreeProvisioner implements Provisioner {
     this.repoRoot = opts.repoRoot ?? process.cwd();
     if (opts.bootstrap !== undefined) this.bootstrap = opts.bootstrap;
     this.worktreesDir = opts.worktreesDir ?? ".swarm/worktrees";
-    this.runsDir = opts.runsDir === undefined ? ".swarm/runs" : opts.runsDir;
     this.keepAfterDispose = opts.keepAfterDispose ?? false;
     if (opts.factory !== undefined) this.factory = opts.factory;
     if (opts.bootstrapTimeoutMs !== undefined) this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs;
@@ -125,9 +119,6 @@ export class WorktreeProvisioner implements Provisioner {
     if (this.bootstrap !== undefined) opts.bootstrap = this.bootstrap;
     if (this.bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = this.bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
-    if (this.runsDir !== null) {
-      opts.logDir = `${this.repoRoot}/${this.runsDir}/${runId}/logs`;
-    }
     const env = new WorktreeEnvironment(opts);
     await env.init();
     return env;

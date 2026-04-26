@@ -477,7 +477,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         ),
         tools: opts.tools,
         recorder,
-        args: buildSubstitutionArgs(runId, state.routing, runEnv),
+        args: buildSubstitutionArgs(runId, state.routing),
         emitObservability: (type, payload) => {
           // Stamp nodeId + iteration so the UI can scope without the
           // handler having to thread it through every payload.
@@ -906,16 +906,6 @@ function readBudgetWarned(routing: Record<string, unknown>): ReadonlySet<string>
 }
 
 /**
- * Assemble the prompt-substitution args the handler bridge feeds into
- * `substitute()`. `$ARGUMENTS` comes from `routing.input` (set by the
- * enqueue surface — POST /runs body or CLI positional). `$RUN_ID` is the
- * stable per-run id. `$WORKTREE_PATH` / `$LOG_DIR` are left for a
- * follow-up commit when the daemon gains worktree provisioning;
- * referencing them in prompts today collapses to "" per substitute()'s
- * missing-token rule, which is still an improvement over the literal
- * placeholder leaking to the LLM.
- */
-/**
  * Stamp the selected edge into the observability buffer so the UI and
  * replay tools see exactly which rule picked the traversal. `edge.selected`
  * is in the core EventType union; emitted alongside `fact.node_completed`
@@ -978,21 +968,9 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
   };
 }
 
-export function buildSubstitutionArgs(
-  runId: string,
-  routing: Record<string, unknown>,
-  env?: ExecutionEnvironment,
-): Record<string, string> {
-  const args: Record<string, string> = { $RUN_ID: runId };
+export function buildSubstitutionArgs(_runId: string, routing: Record<string, unknown>): Record<string, string> {
+  const args: Record<string, string> = {};
   const input = routing["input"];
   if (typeof input === "string") args["$ARGUMENTS"] = input;
-  if (env !== undefined) {
-    args["$WORKTREE_PATH"] = env.cwd();
-    // `$LOG_DIR` only surfaces when the env is a `WorktreeEnvironment`
-    // (structural check on the public `logDir` property to avoid a
-    // hard dep on @swarm/workspace from @swarm/daemon's exec path).
-    const logDir = (env as { logDir?: unknown }).logDir;
-    if (typeof logDir === "string" && logDir.length > 0) args["$LOG_DIR"] = logDir;
-  }
   return args;
 }

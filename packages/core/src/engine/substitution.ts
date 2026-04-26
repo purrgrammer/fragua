@@ -4,14 +4,7 @@
 //   ${context.<key>}          — read context KV (dots in key preserved)
 //   $<nodeId>.output.<path>   — traverse structured node output (JSON path)
 //   $<nodeId>.output          — raw node stdout/response
-//   $ARTIFACTS_DIR            — per-run scratchpad directory
-//   $LOOP_USER_INPUT          — latest user input in a loop iteration
-//   $REJECTION_REASON         — reason for the most recent rejection
-//   $ARGUMENTS                — all positional args joined with space
-//   $WORKTREE_PATH            — absolute path to this run's worktree
-//   $RUN_ID                   — the run id (stable across the whole pipeline)
-//   $LOG_DIR                  — per-run dir for service logs / sidecars
-//   $1 … $9                   — individual positional args
+//   $ARGUMENTS                — the run's input string (CLI positional / API body)
 //
 // Shell-safe mode wraps every substituted value in single quotes, escaping
 // embedded quotes per POSIX (close quote, escaped quote, reopen).
@@ -27,22 +20,7 @@ export interface NodeOutput {
 }
 
 export interface SubstitutionArgs {
-  $1?: string;
-  $2?: string;
-  $3?: string;
-  $4?: string;
-  $5?: string;
-  $6?: string;
-  $7?: string;
-  $8?: string;
-  $9?: string;
   $ARGUMENTS?: string;
-  $ARTIFACTS_DIR?: string;
-  $LOOP_USER_INPUT?: string;
-  $REJECTION_REASON?: string;
-  $WORKTREE_PATH?: string;
-  $RUN_ID?: string;
-  $LOG_DIR?: string;
 }
 
 export interface SubstitutionOptions {
@@ -55,16 +33,7 @@ export interface SubstitutionOptions {
 
 const CONTEXT_RE = /\$\{context\.([^}]+)\}/g;
 const NODE_OUTPUT_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.([A-Za-z0-9_.[\]-]+))?/g;
-// POSITIONAL_VARS handled explicitly to avoid greedy conflicts.
-const BUILTIN_VARS = [
-  "$ARTIFACTS_DIR",
-  "$LOOP_USER_INPUT",
-  "$REJECTION_REASON",
-  "$ARGUMENTS",
-  "$WORKTREE_PATH",
-  "$RUN_ID",
-  "$LOG_DIR",
-];
+const BUILTIN_VARS = ["$ARGUMENTS"] as const;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
   const { context = {}, nodeOutputs, args = {}, escapeForShell = false } = opts;
@@ -96,25 +65,11 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
     return fmt(toStr(value as ContextValue | undefined));
   });
 
-  // Positional $1..$9 (replace before $ARGUMENTS to avoid clobber)
-  for (let i = 1; i <= 9; i++) {
-    const key = `$${i}` as keyof SubstitutionArgs;
-    const v = args[key];
-    if (v === undefined) continue;
-    // Replace only \bN boundary — DOT attribute names don't contain $ so we use
-    // a simple textual replace with a negative lookahead for digits.
-    out = replaceBoundary(out, `$${i}`, fmt(v));
-  }
-
   // Builtin tokens
   for (const tok of BUILTIN_VARS) {
     const key = tok as keyof SubstitutionArgs;
     const v = args[key];
-    if (v === undefined) {
-      out = replaceBoundary(out, tok, fmt(""));
-    } else {
-      out = replaceBoundary(out, tok, fmt(v));
-    }
+    out = replaceBoundary(out, tok, fmt(v ?? ""));
   }
 
   return out;
@@ -165,9 +120,6 @@ function traverse(data: ContextValue | undefined, path: string): ContextValue | 
 }
 
 function replaceBoundary(haystack: string, needle: string, replacement: string): string {
-  // Use a regex with lookahead to avoid matching $1 inside $10 etc. Since our
-  // token set is fixed and tokens are always followed by non-ident/non-digit
-  // characters or end-of-string, we replace textually with a boundary check.
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`${escaped}(?![A-Za-z0-9_])`, "g");
   return haystack.replace(re, replacement);

@@ -298,8 +298,8 @@ scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
 ```
 
 `tool_command` goes through the same substitution as codergen prompts:
-`$ARGUMENTS`, `$RUN_ID`, `$WORKTREE_PATH`, `$nodeId.output`,
-`${context.x}`. Stdout + stderr become artifacts keyed by
+`$ARGUMENTS`, `$nodeId.output[.path]`, `${context.x}`. Stdout + stderr
+become artifacts keyed by
 `${nodeId}:stdout` / `${nodeId}:stderr`, so downstream codergen nodes
 can reference them via `$toolNodeId.output`.
 

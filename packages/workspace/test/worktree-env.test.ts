@@ -122,18 +122,6 @@ describe("WorktreeEnvironment", () => {
     await env.dispose();
   });
 
-  test("logDir is created under init()", async () => {
-    const logDir = join(repo, "custom-logs", "run-1");
-    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "logs", logDir });
-    await env.init();
-    try {
-      expect(existsSync(logDir)).toBe(true);
-      expect(env.logDir).toBe(logDir);
-    } finally {
-      await env.dispose();
-    }
-  });
-
   test("keepAfterDispose preserves the worktree for inspection", async () => {
     const env = new WorktreeEnvironment({
       repoRoot: repo,
