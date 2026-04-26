@@ -16,7 +16,7 @@
 import { parseDotSource } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
@@ -181,8 +181,15 @@ export function RunDetail(): JSX.Element {
 }
 
 // ─── Header: run-level title + stats strip ────────────────────────
+//
+// Memoised: useRunLive's `setStreaming` fires once per llm.*_delta,
+// so on a typical run RunDetail re-renders ~1700 times. Without memo
+// the header subtree (badges, NumberFlow tiles in StatsStrip) would
+// recompute on every one despite none of its props moving. Shallow
+// comparison is correct here — `detail` is from useMemo, `liveCost`
+// is from useState, `id`/`isLive` are primitives.
 
-function DetailHeader({
+const DetailHeader = memo(function DetailHeader({
   detail,
   id,
   isLive,
@@ -263,9 +270,19 @@ function DetailHeader({
       <StatsStrip detail={detail} liveCost={liveCost} />
     </header>
   );
-}
+});
 
-export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; liveCost?: CostAggregate }): JSX.Element {
+// `useNow` inside StatsStrip ticks 1Hz on live runs and re-renders
+// internally regardless of memo, but cutting off streaming-delta-
+// driven parent re-renders here saves the NumberFlow render pass
+// when only `streaming` moved in the parent.
+export const StatsStrip = memo(function StatsStrip({
+  detail,
+  liveCost,
+}: {
+  detail: RunDetailT | null;
+  liveCost?: CostAggregate;
+}): JSX.Element {
   const loading = detail == null;
   const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
   const now = useNow(1_000, isLiveRun);
@@ -326,11 +343,17 @@ export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; li
       />
     </div>
   );
-}
+});
 
 // ─── Graph tab ────────────────────────────────────────────────────
+//
+// Radix `TabsContent` already lazy-mounts non-active tabs, so this
+// only renders when the user is on the graph view. Memoising still
+// pays off there: streaming-delta-driven parent re-renders skip the
+// graph subtree entirely (its props don't depend on `streaming` /
+// `messages`).
 
-function RunGraphTab({
+const RunGraphTab = memo(function RunGraphTab({
   detail,
   selectedNodeId,
   onSelect,
@@ -368,7 +391,7 @@ function RunGraphTab({
       <NodeInspector node={selected} state={selectedState} />
     </div>
   );
-}
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
