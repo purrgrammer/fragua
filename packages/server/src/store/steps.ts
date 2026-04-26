@@ -3,14 +3,12 @@
 // A "step" is one `llm.start` event (one backend.run() call). Companion
 // events fold onto the step opened at that llm.start until the next
 // llm.start for the same nodeId starts a new one:
-//   - `llm.text_delta` → appended to `finalText`.
-//   - `llm.done`       → records endedAt / durationMs / stopReason. We do
-//                        NOT close the step here: tool-using turns emit
-//                        multiple message_end events under one llm.start,
-//                        each with its own `done`, and a premature close
-//                        would drop their `cost.recorded`s on the floor.
-//   - `cost.recorded`  → DELIBERATELY NOT folded here. Cost / token
-//                        SUMS are aggregated in SQL via
+//   - `llm.done`       → records `durationMs`. We do NOT close the step:
+//                        tool-using turns emit multiple message_end events
+//                        under one llm.start, each with its own `done`.
+//                        The LAST llm.done's timestamp wins.
+//   - `cost.recorded`  → DELIBERATELY NOT folded here. Cost / token sums
+//                        are aggregated in SQL via
 //                        `IEventStore.getStepAggregates()`. The route
 //                        merges those aggregates onto these snapshots
 //                        keyed by `startSeq`. SQL is the single source
@@ -18,12 +16,13 @@
 //                        in TS quietly mis-counted whenever the window
 //                        model didn't match the agent's actual flow.
 //
-// Reads from the store's `StoredEvent` shape: `payload` is the event
-// body (stamped with `nodeId` + `iteration` by the daemon's executor),
-// `ts` is an epoch-ms number we render as ISO. Typed loosely as
-// `StepEvent` so observability events (llm.start, llm.text_delta — not
-// in the fact/intent union) are statically-valid input without casts at
-// every call site.
+// The snapshot is shaped for `CostInspector` only — one row per LLM call,
+// showing nodeId / iteration / model / duration / cost. Step bodies
+// (prompt, system prompt, messages, tools, context files, skills,
+// settings, budget, final text) are NOT included: that content lives
+// in the Conversation tab + the messages table, and shipping it doubled
+// (or, with prior-message accumulation, O(N²)-ed) the wire payload for
+// no UI benefit.
 
 export interface StepEvent {
   type: string;
@@ -44,53 +43,18 @@ export interface StepSnapshot {
   nodeId: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
-  /** ISO timestamp of the originating `llm.start`. */
+  /** ISO timestamp of the originating `llm.start`. Used by the UI to
+   * compute live elapsed time for in-flight steps (`now - startedAt`)
+   * before `durationMs` lands. */
   startedAt: string;
-  /** ISO of the LAST `llm.done` in this step's window. */
-  endedAt?: string;
+  /** Set on the LAST `llm.done` in this step's window. Absent while the
+   * step is still in flight — the UI ticks `now - startedAt` instead. */
   durationMs?: number;
   // ---- what the agent was asked ----
   provider?: string;
   model?: string;
-  threadId?: string;
   fidelity?: string;
-  /** Fully-substituted user prompt (the message the LLM saw). */
-  prompt: string;
-  /** System prompt assembled for this call. */
-  systemPrompt: string;
-  allowedTools: string[];
-  deniedTools: string[];
-  settings?: {
-    temperature?: number;
-    max_tokens?: number;
-    top_p?: number;
-    reasoning_effort?: string;
-    stop?: string[];
-  };
-  messages: Array<{ role: string; content?: unknown; timestamp?: number }>;
-  contextFiles: Array<{
-    path: string;
-    sha256: string;
-    bytes: number;
-    truncated: boolean;
-    status: string;
-    error?: string;
-  }>;
-  skills: Array<{
-    name: string;
-    location: string;
-    sha256: string;
-    bytes: number;
-    scope: "project" | "user";
-    source_dir: string;
-  }>;
-  budget?: {
-    cumulative_cost_usd: number;
-    cumulative_tokens: number;
-    max_cost_usd?: number;
-    run_max_cost_usd?: number;
-  };
-  // ---- what came back ----
+  // ---- what came back (populated by `attachStepAggregates`) ----
   cost?: {
     input_tokens: number;
     output_tokens: number;
@@ -99,10 +63,6 @@ export interface StepSnapshot {
     cache_write_tokens?: number;
     cost_usd: number;
   };
-  /** Final assistant text stitched from `llm.text_delta` events. */
-  finalText: string;
-  /** Stop reason reported on `llm.done`. */
-  stopReason?: string;
 }
 
 /**
@@ -116,8 +76,6 @@ export interface StepSnapshot {
 export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   const steps: StepSnapshot[] = [];
   // nodeId → index of most-recently-opened still-open step on that node.
-  // `llm.done` closes the entry so subsequent events on the same node
-  // open a fresh step (retry / loop iteration).
   const openStepByNode = new Map<string, number>();
 
   for (const ev of events) {
@@ -130,14 +88,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         startSeq: ev.seq ?? steps.length,
         nodeId: nodeId || "__unknown",
         startedAt,
-        prompt: stringField(data, "prompt"),
-        systemPrompt: stringField(data, "system_prompt"),
-        allowedTools: stringArrayField(data, "allowed_tools"),
-        deniedTools: stringArrayField(data, "denied_tools"),
-        messages: messageArrayField(data, "messages"),
-        contextFiles: contextFilesField(data, "context_files"),
-        skills: skillsField(data, "skills"),
-        finalText: "",
       };
       assignOptional(step, data);
       steps.push(step);
@@ -145,32 +95,19 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
+    if (ev.type !== "llm.done") continue;
     if (!nodeId) continue;
     const idx = openStepByNode.get(nodeId);
     if (idx === undefined) continue;
     const step = steps[idx]!;
-
-    if (ev.type === "llm.text_delta") {
-      const delta = stringField(data, "delta");
-      if (delta) step.finalText += delta;
-      continue;
+    // LAST llm.done in the window wins for durationMs — tool-using turns
+    // emit one llm.done per assistant message, all under a single
+    // llm.start. Step stays open until the next llm.start for this node.
+    const startedMs = Date.parse(step.startedAt);
+    const endedMs = ev.ts;
+    if (Number.isFinite(startedMs) && endedMs >= startedMs) {
+      step.durationMs = endedMs - startedMs;
     }
-
-    if (ev.type === "llm.done") {
-      // Record the LAST llm.done in the window — tool-using turns emit
-      // one llm.done per assistant message, all under a single llm.start.
-      // Don't close the step here; it stays open until the next llm.start
-      // for the same nodeId replaces it.
-      step.endedAt = new Date(ev.ts).toISOString();
-      const stopReason = stringField(data, "stop_reason");
-      if (stopReason) step.stopReason = stopReason;
-      const startedMs = Date.parse(step.startedAt);
-      const endedMs = ev.ts;
-      if (Number.isFinite(startedMs) && endedMs >= startedMs) {
-        step.durationMs = endedMs - startedMs;
-      }
-    }
-    // cost.recorded intentionally not handled here — see file header.
   }
 
   return steps;
@@ -190,6 +127,44 @@ export interface StepCostAggregate {
   cacheWriteTokens: number;
   totalTokens: number;
   costEventCount: number;
+}
+
+/**
+ * Fill `durationMs` for steps using their effective end timestamp.
+ *
+ * Per-step end timestamps:
+ *   1. **Non-last orphan step** — the next step's `startedAt` (the agent
+ *      moved on, so this step is effectively done as of that moment).
+ *   2. **Last step on a terminal run** — always the run's last event
+ *      timestamp, even if the step already had its own `llm.done`. This
+ *      is the "stop step" anchor: a synthetic/instant final step (like
+ *      a `merge` node whose `llm.done` fires in the same millisecond as
+ *      `llm.start`, giving `durationMs=0`) gets a meaningful wall-clock
+ *      duration instead of `0s`.
+ *   3. **Last step on a live run** — `durationMs` stays as-is (undefined
+ *      for in-flight, set if the step's `llm.done` already fired) so the
+ *      client can tick `now - startedAt` for the active step.
+ *
+ * Returns a new array with new step objects; never mutates inputs.
+ */
+export function fillOrphanDurations(
+  steps: readonly StepSnapshot[],
+  opts: { lastEventTs: number | undefined; runIsTerminal: boolean },
+): StepSnapshot[] {
+  return steps.map((step, i) => {
+    const isLast = i === steps.length - 1;
+    const next = steps[i + 1];
+    // Last step on a terminal run anchors against `lastEventTs` even
+    // when it already has a `durationMs` — see the "stop step" rationale
+    // above. All other cases only fill when `durationMs` is undefined.
+    const forceFill = isLast && opts.runIsTerminal;
+    if (!forceFill && step.durationMs !== undefined) return step;
+    const endTs = next != null ? Date.parse(next.startedAt) : opts.runIsTerminal ? opts.lastEventTs : undefined;
+    if (endTs === undefined || !Number.isFinite(endTs)) return step;
+    const startedMs = Date.parse(step.startedAt);
+    if (!Number.isFinite(startedMs) || endTs < startedMs) return step;
+    return { ...step, durationMs: endTs - startedMs };
+  });
 }
 
 /**
@@ -219,91 +194,23 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
 }
 
 // ── field plucking helpers ──────────────────────────────────────────────
-// All tolerate missing / wrong-typed fields — the UI renders partial data
-// rather than blowing up on an older event envelope.
+// Tolerant of missing / wrong-typed fields — older event envelopes
+// shouldn't break replay.
 
 function assignOptional(step: StepSnapshot, data: Record<string, unknown>): void {
   const provider = stringField(data, "provider");
   if (provider) step.provider = provider;
   const model = stringField(data, "model");
   if (model) step.model = model;
-  const threadId = stringField(data, "thread_id");
-  if (threadId) step.threadId = threadId;
   const fidelity = stringField(data, "fidelity");
   if (fidelity) step.fidelity = fidelity;
   const iteration = iterationField(data, "iteration");
   if (iteration) step.iteration = iteration;
-  const settings = settingsField(data, "settings");
-  if (settings) step.settings = settings;
-  const budget = budgetField(data, "budget");
-  if (budget) step.budget = budget;
 }
 
 function stringField(data: Record<string, unknown>, key: string): string {
   const v = data[key];
   return typeof v === "string" ? v : "";
-}
-
-function stringArrayField(data: Record<string, unknown>, key: string): string[] {
-  const v = data[key];
-  if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === "string");
-}
-
-function messageArrayField(data: Record<string, unknown>, key: string): StepSnapshot["messages"] {
-  const v = data[key];
-  if (!Array.isArray(v)) return [];
-  const out: StepSnapshot["messages"] = [];
-  for (const m of v) {
-    if (!m || typeof m !== "object") continue;
-    const mm = m as Record<string, unknown>;
-    const role = typeof mm["role"] === "string" ? (mm["role"] as string) : "unknown";
-    const entry: { role: string; content?: unknown; timestamp?: number } = { role };
-    if (mm["content"] !== undefined) entry.content = mm["content"];
-    if (typeof mm["timestamp"] === "number") entry.timestamp = mm["timestamp"] as number;
-    out.push(entry);
-  }
-  return out;
-}
-
-function contextFilesField(data: Record<string, unknown>, key: string): StepSnapshot["contextFiles"] {
-  const v = data[key];
-  if (!Array.isArray(v)) return [];
-  const out: StepSnapshot["contextFiles"] = [];
-  for (const r of v) {
-    if (!r || typeof r !== "object") continue;
-    const rr = r as Record<string, unknown>;
-    out.push({
-      path: typeof rr["path"] === "string" ? (rr["path"] as string) : "",
-      sha256: typeof rr["sha256"] === "string" ? (rr["sha256"] as string) : "",
-      bytes: typeof rr["bytes"] === "number" ? (rr["bytes"] as number) : 0,
-      truncated: rr["truncated"] === true,
-      status: typeof rr["status"] === "string" ? (rr["status"] as string) : "unknown",
-      ...(typeof rr["error"] === "string" ? { error: rr["error"] as string } : {}),
-    });
-  }
-  return out;
-}
-
-function skillsField(data: Record<string, unknown>, key: string): StepSnapshot["skills"] {
-  const v = data[key];
-  if (!Array.isArray(v)) return [];
-  const out: StepSnapshot["skills"] = [];
-  for (const r of v) {
-    if (!r || typeof r !== "object") continue;
-    const rr = r as Record<string, unknown>;
-    const scopeStr = rr["scope"];
-    const scope: "project" | "user" = scopeStr === "user" ? "user" : "project";
-    out.push({
-      name: typeof rr["name"] === "string" ? (rr["name"] as string) : "",
-      location: typeof rr["location"] === "string" ? (rr["location"] as string) : "",
-      sha256: typeof rr["sha256"] === "string" ? (rr["sha256"] as string) : "",
-      bytes: typeof rr["bytes"] === "number" ? (rr["bytes"] as number) : 0,
-      scope,
-      source_dir: typeof rr["source_dir"] === "string" ? (rr["source_dir"] as string) : "",
-    });
-  }
-  return out;
 }
 
 function iterationField(data: Record<string, unknown>, key: string): { n: number; max: number } | undefined {
@@ -312,32 +219,4 @@ function iterationField(data: Record<string, unknown>, key: string): { n: number
   const vv = v as Record<string, unknown>;
   if (typeof vv["n"] !== "number" || typeof vv["max"] !== "number") return undefined;
   return { n: vv["n"] as number, max: vv["max"] as number };
-}
-
-function settingsField(data: Record<string, unknown>, key: string): StepSnapshot["settings"] | undefined {
-  const v = data[key];
-  if (!v || typeof v !== "object") return undefined;
-  const vv = v as Record<string, unknown>;
-  const out: NonNullable<StepSnapshot["settings"]> = {};
-  if (typeof vv["temperature"] === "number") out.temperature = vv["temperature"] as number;
-  if (typeof vv["max_tokens"] === "number") out.max_tokens = vv["max_tokens"] as number;
-  if (typeof vv["top_p"] === "number") out.top_p = vv["top_p"] as number;
-  if (typeof vv["reasoning_effort"] === "string") out.reasoning_effort = vv["reasoning_effort"] as string;
-  const stop = vv["stop"];
-  if (Array.isArray(stop)) out.stop = stop.filter((s): s is string => typeof s === "string");
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function budgetField(data: Record<string, unknown>, key: string): StepSnapshot["budget"] | undefined {
-  const v = data[key];
-  if (!v || typeof v !== "object") return undefined;
-  const vv = v as Record<string, unknown>;
-  if (typeof vv["cumulative_cost_usd"] !== "number" || typeof vv["cumulative_tokens"] !== "number") return undefined;
-  const out: NonNullable<StepSnapshot["budget"]> = {
-    cumulative_cost_usd: vv["cumulative_cost_usd"] as number,
-    cumulative_tokens: vv["cumulative_tokens"] as number,
-  };
-  if (typeof vv["max_cost_usd"] === "number") out.max_cost_usd = vv["max_cost_usd"] as number;
-  if (typeof vv["run_max_cost_usd"] === "number") out.run_max_cost_usd = vv["run_max_cost_usd"] as number;
-  return out;
 }

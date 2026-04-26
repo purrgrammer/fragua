@@ -14,22 +14,14 @@ function makeStep(overrides: Partial<StepSnapshot> = {}): StepSnapshot {
     startSeq: 0,
     nodeId: "plan",
     startedAt: "2024-01-01T00:00:00.000Z",
-    prompt: "make a plan",
-    systemPrompt: "you are helpful",
-    allowedTools: [],
-    deniedTools: [],
-    messages: [],
-    contextFiles: [],
-    skills: [],
-    finalText: "",
     ...overrides,
   };
 }
 
-function mount(runId: string, steps: StepSnapshot[]) {
+function mount(runId: string, steps: StepSnapshot[], opts: { isLive?: boolean } = {}) {
   const client = createTestQueryClient();
   client.setQueryData(["runs", "steps", runId], steps);
-  return renderWithClient(<CostInspector runId={runId} />, { client });
+  return renderWithClient(<CostInspector runId={runId} isLive={opts.isLive} />, { client });
 }
 
 describe("CostInspector", () => {
@@ -71,7 +63,9 @@ describe("CostInspector", () => {
     });
   });
 
-  it("renders nodeId, provider/model, and total cost on each row", async () => {
+  it("renders nodeId and total cost on each row (no provider/model chip)", async () => {
+    // The row is intentionally cost-only — provider/model identification
+    // belongs in the per-step popover via the context ring + breakdown.
     const steps = [
       makeStep({
         stepIdx: 0,
@@ -89,8 +83,74 @@ describe("CostInspector", () => {
       expect(q.getByTestId("step-0")).toBeTruthy();
     });
     expect(q.getByText("verify")).toBeTruthy();
-    expect(q.getByText("anthropic / claude-sonnet-4.6")).toBeTruthy();
+    // Provider/model chip removed — should not appear on the row strip.
+    expect(q.queryByText("anthropic / claude-sonnet-4.6")).toBeNull();
     // Total cost lives in the metrics row; AnimatedNumber renders the formatted text.
     expect(q.getByText(/US\$0\.050|0\.050/)).toBeTruthy();
+  });
+
+  it("completed step renders durationMs as final, with no live marker", async () => {
+    const steps = [makeStep({ stepIdx: 0, startSeq: 1, durationMs: 4_500 })];
+    const { container } = mount("r1", steps);
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("step-0")).toBeTruthy();
+    });
+    const elapsed = q.getByTestId("step-0-elapsed");
+    expect(elapsed).toBeTruthy();
+    expect(elapsed.getAttribute("data-live")).toBeNull();
+  });
+
+  it("in-flight step on a live run renders a live elapsed chip", async () => {
+    // No durationMs + isLive → CostInspector ticks `now - startedAt`
+    // and marks the chip as live so styling/QA can target in-flight rows.
+    const startedAt = new Date(Date.now() - 3000).toISOString();
+    const steps = [makeStep({ stepIdx: 0, startSeq: 1, startedAt })];
+    const { container } = mount("r1", steps, { isLive: true });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("step-0")).toBeTruthy();
+    });
+    const elapsed = q.getByTestId("step-0-elapsed");
+    expect(elapsed.getAttribute("data-live")).toBe("true");
+    expect(elapsed.textContent).toMatch(/\d/);
+  });
+
+  it("orphan mid-list step falls back to next.startedAt − this.startedAt client-side", async () => {
+    // Defensive: the server fills durationMs for orphan steps via
+    // fillOrphanDurations, but if a stale backend doesn't, the client
+    // still derives a duration from the next step's startedAt.
+    const t0 = "2024-01-01T00:00:00.000Z";
+    const t1 = "2024-01-01T00:00:07.000Z"; // next step starts 7s later
+    const steps = [
+      makeStep({ stepIdx: 0, startSeq: 1, nodeId: "implement", startedAt: t0 }), // no durationMs
+      makeStep({ stepIdx: 1, startSeq: 2, nodeId: "verify", startedAt: t1, durationMs: 3_000 }),
+    ];
+    const { container } = mount("r1", steps, { isLive: false });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("step-0")).toBeTruthy();
+    });
+    const elapsed = q.getByTestId("step-0-elapsed");
+    expect(elapsed).toBeTruthy();
+    // Client computed elapsed from next.startedAt − this.startedAt = 7s.
+    expect(elapsed.textContent).toMatch(/7\s*s/);
+    // Not marked live — it's a derived value, not a ticking one.
+    expect(elapsed.getAttribute("data-live")).toBeNull();
+  });
+
+  it("in-flight step on a non-live run hides the elapsed chip (no stale tick)", async () => {
+    // The server fills durationMs for orphan steps on terminal runs.
+    // If it didn't (older snapshot, edge case), the client must NOT show
+    // a `now - startedAt` value — that would grow forever for runs
+    // viewed days after they ended.
+    const startedAt = new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString(); // 9 hours ago
+    const steps = [makeStep({ stepIdx: 0, startSeq: 1, startedAt })];
+    const { container } = mount("r1", steps, { isLive: false });
+    const q = within(container);
+    await waitFor(() => {
+      expect(q.getByTestId("step-0")).toBeTruthy();
+    });
+    expect(q.queryByTestId("step-0-elapsed")).toBeNull();
   });
 });

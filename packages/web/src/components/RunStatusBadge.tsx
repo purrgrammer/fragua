@@ -14,11 +14,9 @@ export interface RunStatusBadgeProps {
   /** Optional override for the `data-testid` attribute.
    *  Defaults to `status-<status>` (e.g. `status-running`). */
   "data-testid"?: string;
-  /** Additional CSS classes to merge onto the badge element. */
-  className?: string;
 }
 
-export function RunStatusBadge({ status, "data-testid": testId, className }: RunStatusBadgeProps): JSX.Element {
+export function RunStatusBadge({ status, "data-testid": testId }: RunStatusBadgeProps): JSX.Element {
   const tone =
     status === "success"
       ? "bg-emerald-100 text-emerald-800 border-emerald-300"
@@ -41,7 +39,7 @@ export function RunStatusBadge({ status, "data-testid": testId, className }: Run
     <span
       data-testid={testId ?? `status-${status}`}
       data-status={status}
-      className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tone} ${pulse}${className ? ` ${className}` : ""}`.trim()}
+      className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tone} ${pulse}`.trim()}
     >
       {statusLabel(status)}
     </span>

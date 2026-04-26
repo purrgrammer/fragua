@@ -15,7 +15,7 @@
 
 import { parseDotSource } from "@swarm/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Coins, DollarSign, Timer } from "lucide-react";
+import { Activity, CheckCircle2, Coins, DollarSign, Timer } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
@@ -32,6 +32,7 @@ import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
+import { useNow } from "../lib/useNow.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
 const VIEWS = ["conversation", "graph", "cost"] as const;
@@ -44,20 +45,6 @@ const LIVE_STATUSES = new Set<string>(["queued", "running", "paused"]);
  * skipped entirely so we don't waste a server connection per historical
  * run view. */
 const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
-
-/**
- * Returns a `Date.now()`-style timestamp that re-renders every `intervalMs`.
- * When `enabled` is false the interval is never created (zero re-render cost).
- */
-function useNow(intervalMs: number, enabled: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!enabled) return;
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs, enabled]);
-  return now;
-}
 
 function isTabId(x: string | undefined): x is TabId {
   return !!x && (VIEWS as readonly string[]).includes(x);
@@ -177,7 +164,7 @@ export function RunDetail(): JSX.Element {
               />
             </TabsContent>
             <TabsContent value="cost" className="h-full">
-              <CostInspector runId={id} totalEvents={totalEvents} />
+              <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
             </TabsContent>
           </div>
 
@@ -202,22 +189,6 @@ function DetailHeader({
   liveCost: CostAggregate;
 }): JSX.Element {
   const showLive = isLive && detail?.status === "running";
-
-  // Derive current-node label for the inline indicator
-  const nodes = detail?.nodes ?? [];
-  const runningNode = nodes.find((n) => n.state === "running");
-  const currentLabel = runningNode
-    ? runningNode.nodeId
-    : detail?.status === "queued"
-      ? "queued"
-      : detail?.status === "success"
-        ? "done"
-        : detail?.status === "fail"
-          ? "halted"
-          : detail?.status === "canceled"
-            ? "canceled"
-            : null;
-
   return (
     <header className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 items-baseline gap-2">
@@ -246,27 +217,9 @@ function DetailHeader({
         )}
       </div>
       <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 className="truncate text-lg font-semibold" title={detail ? headingTitle(detail) : id}>
-            {detail ? headingText(detail) : shortenRunId(id)}
-          </h2>
-          {detail && (
-            <RunStatusBadge
-              status={detail.status}
-              data-testid="detail-status"
-              className="shrink-0 text-[0.65rem] px-1.5 py-0.5"
-            />
-          )}
-          {detail && currentLabel && (
-            <span
-              data-testid="detail-current-node-inline"
-              className="shrink-0 truncate max-w-[16rem] rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] text-muted-foreground"
-              title={currentLabel}
-            >
-              {currentLabel}
-            </span>
-          )}
-        </div>
+        <h2 className="truncate text-lg font-semibold" title={detail ? headingTitle(detail) : id}>
+          {detail ? headingText(detail) : shortenRunId(id)}
+        </h2>
         <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" title={id}>
           {shortenRunId(id)}
         </p>
@@ -297,8 +250,32 @@ export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; li
   const cacheReadTokens: number | undefined = hasLive ? liveCost.totalCacheReadTokens : detail?.cacheReadTokens;
   const totalTokens = inputTokens + outputTokens;
 
+  const nodes = detail?.nodes ?? [];
+  const runningNode = nodes.find((n) => n.state === "running");
+  const completedNodes = nodes.filter((n) => n.state === "completed").length;
+  const currentLabel = runningNode
+    ? runningNode.nodeId
+    : detail?.status === "queued"
+      ? "queued"
+      : detail?.status === "success"
+        ? "done"
+        : detail?.status === "fail"
+          ? "halted"
+          : detail?.status === "canceled"
+            ? "canceled"
+            : "—";
+
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="detail-stats">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6" data-testid="detail-stats">
+      <StatTile
+        label="Status"
+        loading={loading}
+        testId="detail-status-tile"
+        icon={<Activity className="size-4" />}
+        hint={detail ? `Status: ${detail.status}` : undefined}
+      >
+        {detail ? <RunStatusBadge status={detail.status} data-testid="detail-status" /> : null}
+      </StatTile>
       <StatTile
         label="Duration"
         loading={loading}
@@ -333,6 +310,20 @@ export function StatsStrip({ detail, liveCost }: { detail: RunDetailT | null; li
           detail
             ? `cache read ${(cacheReadTokens ?? 0).toLocaleString()} · input ${inputTokens.toLocaleString()}`
             : undefined
+        }
+      />
+      <StatTile
+        label="Current node"
+        loading={loading}
+        value={currentLabel}
+        testId="detail-current-tile"
+        icon={<CheckCircle2 className="size-4" />}
+        hint={
+          nodes.length > 0
+            ? `${completedNodes}/${nodes.length} nodes completed`
+            : detail?.status
+              ? `run is ${detail.status}`
+              : undefined
         }
       />
     </div>

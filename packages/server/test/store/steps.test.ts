@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StoredEvent } from "@swarm/store";
-import { attachStepAggregates, eventsToSteps } from "../../src/store/steps.ts";
+import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "../../src/store/steps.ts";
 
 function ev(type: string, ts: number, payload: Record<string, unknown>): StoredEvent {
   return { runId: "r", seq: ts, type, writer: "daemon", payload, ts };
@@ -14,20 +14,22 @@ describe("eventsToSteps", () => {
     expect(eventsToSteps(events)).toEqual([]);
   });
 
-  test("one llm.start → one step with envelope fields", () => {
+  test("one llm.start → one step with the wire-shape envelope", () => {
     const events = [
       ev("llm.start", 1_000_000, {
         nodeId: "n1",
-        iteration: 0,
-        prompt: "Do the thing",
-        system_prompt: "You are a helpful assistant",
+        iteration: { n: 1, max: 3 },
         provider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
-        thread_id: "dev",
         fidelity: "compact",
-        allowed_tools: ["local:bash", "local:read_file"],
+        // Body fields below are intentionally ignored by the trimmed
+        // reducer — the snapshot is for CostInspector only.
+        prompt: "Do the thing",
+        system_prompt: "You are a helpful assistant",
+        thread_id: "dev",
+        allowed_tools: ["local:bash"],
         denied_tools: [],
-        messages: [{ role: "user", content: "hi", timestamp: 0 }],
+        messages: [{ role: "user", content: "hi" }],
         context_files: [],
       }),
     ];
@@ -36,136 +38,79 @@ describe("eventsToSteps", () => {
     const s = steps[0]!;
     expect(s.stepIdx).toBe(0);
     expect(s.nodeId).toBe("n1");
-    expect(s.prompt).toBe("Do the thing");
-    expect(s.systemPrompt).toBe("You are a helpful assistant");
+    expect(s.iteration).toEqual({ n: 1, max: 3 });
     expect(s.provider).toBe("openrouter");
     expect(s.model).toBe("anthropic/claude-haiku-4.5");
-    expect(s.threadId).toBe("dev");
     expect(s.fidelity).toBe("compact");
-    expect(s.allowedTools).toEqual(["local:bash", "local:read_file"]);
-    expect(s.deniedTools).toEqual([]);
-    expect(s.messages).toEqual([{ role: "user", content: "hi", timestamp: 0 }]);
     expect(s.startedAt).toBe(new Date(1_000_000).toISOString());
+    // Body fields should not appear on the snapshot at all.
+    expect(s).not.toHaveProperty("prompt");
+    expect(s).not.toHaveProperty("systemPrompt");
+    expect(s).not.toHaveProperty("messages");
+    expect(s).not.toHaveProperty("allowedTools");
+    expect(s).not.toHaveProperty("threadId");
+    expect(s).not.toHaveProperty("finalText");
   });
 
-  test("llm.text_delta accumulates into finalText on the current step", () => {
+  test("llm.done sets durationMs from the LAST llm.done in the window", () => {
+    // Tool-using turns emit one llm.done per assistant message under one
+    // llm.start. The reducer keeps the step open through all of them and
+    // the last done's timestamp wins for durationMs.
     const events = [
-      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
-      ev("llm.text_delta", 1100, { nodeId: "n1", delta: "hel" }),
-      ev("llm.text_delta", 1200, { nodeId: "n1", delta: "lo, " }),
-      ev("llm.text_delta", 1300, { nodeId: "n1", delta: "world" }),
-    ];
-    const [s] = eventsToSteps(events);
-    expect(s!.finalText).toBe("hello, world");
-  });
-
-  test("llm.done updates endedAt / durationMs / stopReason but does NOT close the step", () => {
-    // Tool-using turns emit multiple message_end events under one
-    // llm.start, each producing its own llm.done. The reducer must keep
-    // the step open so subsequent events still attribute to it; the LAST
-    // llm.done's timestamp wins.
-    const events = [
-      ev("llm.start", 1_000_000, { nodeId: "n1", prompt: "q" }),
-      ev("llm.text_delta", 1_000_500, { nodeId: "n1", delta: "first" }),
+      ev("llm.start", 1_000_000, { nodeId: "n1" }),
       ev("llm.done", 1_001_000, { nodeId: "n1", stop_reason: "tool_use" }),
-      // Second message in the same backend.run — must still attach.
-      ev("llm.text_delta", 1_002_000, { nodeId: "n1", delta: "-second" }),
       ev("llm.done", 1_003_200, { nodeId: "n1", stop_reason: "end_turn" }),
     ];
     const [s] = eventsToSteps(events);
-    expect(s!.finalText).toBe("first-second");
-    expect(s!.stopReason).toBe("end_turn");
     expect(s!.durationMs).toBe(3200);
-    expect(s!.endedAt).toBe(new Date(1_003_200).toISOString());
+  });
+
+  test("step without an llm.done has no durationMs (in-flight)", () => {
+    // The UI ticks `now - startedAt` for these.
+    const events = [ev("llm.start", 1000, { nodeId: "n1" })];
+    const [s] = eventsToSteps(events);
+    expect(s!.durationMs).toBeUndefined();
   });
 
   test("cost.recorded is NOT folded into the step (cost comes from SQL aggregates)", () => {
-    // Cost / token sums are produced by `IEventStore.getStepAggregates()`
-    // and merged via `attachStepAggregates`. eventsToSteps deliberately
-    // ignores cost.recorded so there's a single source of truth.
     const events = [
-      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
+      ev("llm.start", 1000, { nodeId: "n1" }),
       ev("cost.recorded", 1100, {
         nodeId: "n1",
         input_tokens: 100,
         output_tokens: 42,
-        total_tokens: 142,
         cost_usd: 0.003,
-        cache_read_tokens: 10,
       }),
     ];
     const [s] = eventsToSteps(events);
     expect(s!.cost).toBeUndefined();
   });
 
-  test("loop iterations produce one step per llm.start, each keeping its own finalText", () => {
+  test("loop iterations produce one step per llm.start, each with its own iteration metadata", () => {
     const events = [
-      ev("llm.start", 1000, { nodeId: "body", iteration: { n: 1, max: 3 }, prompt: "iter 1" }),
-      ev("llm.text_delta", 1010, { nodeId: "body", delta: "A" }),
+      ev("llm.start", 1000, { nodeId: "body", iteration: { n: 1, max: 3 } }),
       ev("llm.done", 1020, { nodeId: "body" }),
-      ev("llm.start", 2000, { nodeId: "body", iteration: { n: 2, max: 3 }, prompt: "iter 2" }),
-      ev("llm.text_delta", 2010, { nodeId: "body", delta: "B" }),
+      ev("llm.start", 2000, { nodeId: "body", iteration: { n: 2, max: 3 } }),
       ev("llm.done", 2020, { nodeId: "body" }),
     ];
     const steps = eventsToSteps(events);
     expect(steps).toHaveLength(2);
-    expect(steps[0]!.finalText).toBe("A");
     expect(steps[0]!.iteration).toEqual({ n: 1, max: 3 });
-    expect(steps[1]!.finalText).toBe("B");
     expect(steps[1]!.iteration).toEqual({ n: 2, max: 3 });
-    // Ordering by stream order: stepIdx matches position.
     expect(steps[0]!.stepIdx).toBe(0);
     expect(steps[1]!.stepIdx).toBe(1);
   });
 
-  test("events without nodeId (other than llm.start) are ignored", () => {
-    const events = [
-      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
-      ev("llm.text_delta", 1100, { delta: "ghost" }),
-      ev("llm.done", 1200, { nodeId: "n1" }),
-    ];
+  test("llm.done for an unknown nodeId (no open step) is dropped", () => {
+    const events = [ev("llm.start", 1000, { nodeId: "n1" }), ev("llm.done", 1100, { nodeId: "different-node" })];
     const [s] = eventsToSteps(events);
-    expect(s!.finalText).toBe("");
-  });
-
-  test("events for an unknown nodeId (no open step) are dropped", () => {
-    const events = [
-      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
-      ev("llm.text_delta", 1100, { nodeId: "different-node", delta: "nope" }),
-    ];
-    const [s] = eventsToSteps(events);
-    expect(s!.finalText).toBe("");
-  });
-
-  test("partial / malformed settings / budget fields are tolerated", () => {
-    const events = [
-      ev("llm.start", 1000, {
-        nodeId: "n1",
-        prompt: "q",
-        settings: { temperature: 0.7 },
-        budget: { cumulative_cost_usd: 0.5, cumulative_tokens: 1234 },
-      }),
-    ];
-    const [s] = eventsToSteps(events);
-    expect(s!.settings).toEqual({ temperature: 0.7 });
-    expect(s!.budget).toEqual({ cumulative_cost_usd: 0.5, cumulative_tokens: 1234 });
-  });
-
-  test("missing prompt / systemPrompt default to empty strings, not undefined", () => {
-    const events = [ev("llm.start", 1000, { nodeId: "n1" })];
-    const [s] = eventsToSteps(events);
-    expect(s!.prompt).toBe("");
-    expect(s!.systemPrompt).toBe("");
-    expect(s!.finalText).toBe("");
+    expect(s!.durationMs).toBeUndefined();
   });
 
   test("attachStepAggregates merges SQL-aggregated cost rows by startSeq", () => {
-    // The route handler runs eventsToSteps + getStepAggregates and
-    // merges with `attachStepAggregates`. Verify the merge function
-    // here; the SQL itself is exercised by the store-level tests.
     const events = [
-      { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1", prompt: "q" } },
-      { type: "llm.start", ts: 2000, seq: 20, payload: { nodeId: "n2", prompt: "q2" } },
+      { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1" } },
+      { type: "llm.start", ts: 2000, seq: 20, payload: { nodeId: "n2" } },
     ];
     const baseSteps = eventsToSteps(events);
     expect(baseSteps[0]!.startSeq).toBe(10);
@@ -206,41 +151,86 @@ describe("eventsToSteps", () => {
   });
 
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
-    const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1", prompt: "q" } }];
+    const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);
     const merged = attachStepAggregates(baseSteps, []);
     expect(merged[0]!.cost).toBeUndefined();
     expect(merged[0]!.startSeq).toBe(99);
   });
+});
 
-  test("skills array is coerced safely, scope defaults to 'project' on unknown values", () => {
-    const events = [
-      ev("llm.start", 1000, {
-        nodeId: "n1",
-        prompt: "q",
-        skills: [
-          {
-            name: "design",
-            location: "~/.agents/skills/design",
-            sha256: "abc",
-            bytes: 10,
-            scope: "user",
-            source_dir: "~/.agents",
-          },
-          {
-            name: "frontend",
-            location: "./.agents/skills/frontend",
-            sha256: "def",
-            bytes: 20,
-            scope: "bogus",
-            source_dir: ".",
-          },
-        ],
-      }),
-    ];
-    const [s] = eventsToSteps(events);
-    expect(s!.skills).toHaveLength(2);
-    expect(s!.skills[0]!.scope).toBe("user");
-    expect(s!.skills[1]!.scope).toBe("project");
+describe("fillOrphanDurations", () => {
+  test("orphan step with a next step → duration = next.startedAt − this.startedAt", () => {
+    const steps = eventsToSteps([
+      ev("llm.start", 1_000, { nodeId: "a" }), // no llm.done — orphan
+      ev("llm.start", 4_500, { nodeId: "b" }),
+      ev("llm.done", 5_000, { nodeId: "b" }),
+    ]);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
+    expect(filled[0]!.durationMs).toBe(3_500);
+    // step "b" had its own llm.done — durationMs untouched.
+    expect(filled[1]!.durationMs).toBe(500);
+  });
+
+  test("last orphan step on a terminal run → duration = lastEventTs − startedAt", () => {
+    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 9_000, runIsTerminal: true });
+    expect(filled[0]!.durationMs).toBe(8_000);
+  });
+
+  test("last orphan step on a LIVE run keeps durationMs undefined (client ticks)", () => {
+    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 9_000, runIsTerminal: false });
+    expect(filled[0]!.durationMs).toBeUndefined();
+  });
+
+  test("instant-completing last step (durationMs=0) is upgraded to wall-clock on terminal runs", () => {
+    // `merge`-style finalization steps fire llm.done in the same ms as
+    // llm.start, so eventsToSteps records durationMs=0. The "stop step"
+    // anchor promotes that to lastEventTs − startedAt — the wall-clock
+    // time the step was active.
+    const steps = eventsToSteps([
+      ev("llm.start", 1_000, { nodeId: "merge" }),
+      ev("llm.done", 1_000, { nodeId: "merge" }),
+    ]);
+    expect(steps[0]!.durationMs).toBe(0);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
+    expect(filled[0]!.durationMs).toBe(4_000);
+  });
+
+  test("instant-completing last step on a LIVE run keeps its durationMs (no anchor override)", () => {
+    // Same shape as above but the run hasn't terminated — we must NOT
+    // override, otherwise live runs would constantly pull in growing
+    // wall-clock values from new events.
+    const steps = eventsToSteps([
+      ev("llm.start", 1_000, { nodeId: "merge" }),
+      ev("llm.done", 1_000, { nodeId: "merge" }),
+    ]);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: false });
+    expect(filled[0]!.durationMs).toBe(0);
+  });
+
+  test("non-last step with its own durationMs is never overridden", () => {
+    // Only the LAST step gets the stop-step anchor. Mid-list steps with
+    // a real llm.done duration keep that duration regardless of the
+    // following step's startedAt or the run's terminal status.
+    const steps = eventsToSteps([
+      ev("llm.start", 1_000, { nodeId: "a" }),
+      ev("llm.done", 1_500, { nodeId: "a" }),
+      ev("llm.start", 9_000, { nodeId: "b" }), // big gap after a's done
+      ev("llm.done", 9_100, { nodeId: "b" }),
+    ]);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 9_100, runIsTerminal: true });
+    expect(filled[0]!.durationMs).toBe(500); // a's own llm.done — not 8_000
+    expect(filled[1]!.durationMs).toBe(100); // b is last but lastEventTs == its done ts
+  });
+
+  test("returns new objects — does not mutate the input array", () => {
+    const steps = eventsToSteps([ev("llm.start", 1_000, { nodeId: "a" })]);
+    const before = steps[0]!;
+    const filled = fillOrphanDurations(steps, { lastEventTs: 5_000, runIsTerminal: true });
+    expect(before.durationMs).toBeUndefined();
+    expect(filled[0]).not.toBe(before);
+    expect(filled[0]!.durationMs).toBe(4_000);
   });
 });

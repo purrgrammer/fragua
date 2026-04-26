@@ -133,54 +133,32 @@ export interface SkillDetail extends SkillSummary {
   usage?: { runs: string[]; count: number };
 }
 
+/**
+ * Per-LLM-call snapshot, shaped for `CostInspector`.
+ *
+ * Bodies (prompt, system prompt, prior messages, final text, tools,
+ * context files, skills, settings, budget) are intentionally NOT here —
+ * that content lives in the Conversation tab and the messages table.
+ * Shipping it again on this endpoint doubled the wire payload, and
+ * `messages` (the prior conversation per step) accumulated O(N²)
+ * tool-result content for nothing the UI ever read.
+ */
 export interface StepSnapshot {
   stepIdx: number;
   /** Stream seq of the originating `llm.start`. Joins this snapshot to
-   * the SQL cost-aggregate row produced by the server. */
+   * the SQL cost-aggregate row produced by the server. Stable React key. */
   startSeq: number;
   nodeId: string;
   iteration?: { n: number; max: number };
+  /** ISO timestamp of the originating `llm.start`. The UI ticks
+   * `now - startedAt` for in-flight steps before `durationMs` lands. */
   startedAt: string;
-  endedAt?: string;
+  /** Set when the step's last `llm.done` has fired. Absent while the
+   * step is still in flight; the UI computes elapsed live. */
   durationMs?: number;
   provider?: string;
   model?: string;
-  threadId?: string;
   fidelity?: string;
-  prompt: string;
-  systemPrompt: string;
-  allowedTools: string[];
-  deniedTools: string[];
-  settings?: {
-    temperature?: number;
-    max_tokens?: number;
-    top_p?: number;
-    reasoning_effort?: string;
-    stop?: string[];
-  };
-  messages: Array<{ role: string; content?: unknown; timestamp?: number }>;
-  contextFiles: Array<{
-    path: string;
-    sha256: string;
-    bytes: number;
-    truncated: boolean;
-    status: string;
-    error?: string;
-  }>;
-  skills: Array<{
-    name: string;
-    location: string;
-    sha256: string;
-    bytes: number;
-    scope: "project" | "user";
-    source_dir: string;
-  }>;
-  budget?: {
-    cumulative_cost_usd: number;
-    cumulative_tokens: number;
-    max_cost_usd?: number;
-    run_max_cost_usd?: number;
-  };
   cost?: {
     input_tokens: number;
     output_tokens: number;
@@ -189,8 +167,6 @@ export interface StepSnapshot {
     cache_write_tokens?: number;
     cost_usd: number;
   };
-  finalText: string;
-  stopReason?: string;
 }
 
 /** Thrown for any non-2xx HTTP response. Callers can branch on `.status`
@@ -661,16 +637,14 @@ function isStepSnapshot(v: unknown): v is StepSnapshot {
   if (typeof v !== "object" || v === null) return false;
   const o = v as {
     stepIdx?: unknown;
+    startSeq?: unknown;
     nodeId?: unknown;
     startedAt?: unknown;
-    prompt?: unknown;
-    systemPrompt?: unknown;
   };
   return (
     typeof o.stepIdx === "number" &&
+    typeof o.startSeq === "number" &&
     typeof o.nodeId === "string" &&
-    typeof o.startedAt === "string" &&
-    typeof o.prompt === "string" &&
-    typeof o.systemPrompt === "string"
+    typeof o.startedAt === "string"
   );
 }

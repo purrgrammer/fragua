@@ -1,7 +1,7 @@
 // Per-LLM-call cost + context inspector. Fetches `StepSnapshot[]` from
-// `GET /runs/:id/steps` and renders one row per call: node id, model,
-// duration, total $, and a click-to-open ring with the input / output /
-// cache token + cost breakdown.
+// `GET /runs/:id/steps` and renders one row per call: node id, elapsed,
+// total $, and a click-to-open ring with the input / output / cache token
+// + cost breakdown.
 //
 // The "Steps" tab used to dump the full step context (prompt, system
 // prompt, prior messages, tools, context files, settings, budget,
@@ -10,20 +10,24 @@
 // made the page noisy. The remaining purpose is auditing spend per call.
 //
 // Design:
-//   - Server merges `eventsToSteps` + SQL cost aggregates; the UI does
-//     no replay or numerical folding.
+//   - Server merges `eventsToSteps` + SQL cost aggregates and fills
+//     `durationMs` for orphan steps (no `llm.done`) using the next
+//     step's startedAt or the run's last-event ts on terminal runs.
+//     The UI does no replay or numerical folding.
 //   - Per-row cost breakdown is computed from the `ProviderModel` rate
 //     card (USD per million tokens). `tokenlens` doesn't recognise
 //     custom providers (e.g. `ppq:`) and would render every line as
 //     `$0.00`.
-//   - Cache reads carry no `$` line — cached pricing is a discount on
-//     fresh input, not a separate cost bucket.
+//   - Cache reads are charged at a discounted rate; cache writes at a
+//     premium. Both are shown as their own breakdown lines so the
+//     popover communicates exactly where the run's spend went.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { getProvider, getRunSteps, type ProviderModel, type StepSnapshot } from "../lib/api.ts";
 import { formatTokensCompact, formatUsd, usdFormatOptions } from "../lib/format.ts";
 import { formatDuration } from "../lib/time.ts";
+import { useNow } from "../lib/useNow.ts";
 import {
   Context,
   ContextCacheUsage,
@@ -43,9 +47,14 @@ export interface CostInspectorProps {
    * decisions. Re-fetching on totalEvents changes keeps the panel
    * live as the run grows. */
   totalEvents?: number;
+  /** True while the run is still progressing. Drives the elapsed-time
+   * ticker — when false, in-flight steps freeze on the server-supplied
+   * `durationMs` instead of computing `now - startedAt` (which would
+   * grow forever on a finished-but-orphan-step run). */
+  isLive?: boolean;
 }
 
-export function CostInspector({ runId, totalEvents }: CostInspectorProps): JSX.Element {
+export function CostInspector({ runId, totalEvents, isLive = false }: CostInspectorProps): JSX.Element {
   const qc = useQueryClient();
   const queryKey = ["runs", "steps", runId] as const;
   const {
@@ -86,8 +95,8 @@ export function CostInspector({ runId, totalEvents }: CostInspectorProps): JSX.E
 
   return (
     <div data-testid="cost-inspector" className="flex flex-col gap-2 p-3">
-      {steps.map((step) => (
-        <StepCostRow key={step.startSeq} step={step} />
+      {steps.map((step, i) => (
+        <StepCostRow key={step.startSeq} step={step} nextStartedAt={steps[i + 1]?.startedAt} isLive={isLive} />
       ))}
     </div>
   );
@@ -114,23 +123,61 @@ function useStepModel(provider: string | undefined, modelId: string | undefined)
 
 const COST_RATE_DIVISOR = 1_000_000;
 
-function StepCostRow({ step }: { step: StepSnapshot }): JSX.Element {
+function StepCostRow({
+  step,
+  nextStartedAt,
+  isLive,
+}: {
+  step: StepSnapshot;
+  nextStartedAt: string | undefined;
+  isLive: boolean;
+}): JSX.Element {
   const model = useStepModel(step.provider, step.model);
+
+  // Resolve elapsed time, in priority order:
+  //   1. `step.durationMs` from the server (preferred — set on `llm.done`
+  //      or filled in by `fillOrphanDurations` for terminal runs).
+  //   2. Client-side fallback: any orphan step that has a *next* step in
+  //      the list ended when that next step started. This keeps the chip
+  //      useful even against a backend that didn't fill the field
+  //      (e.g. older daemon, mid-deploy).
+  //   3. Live tick `now - startedAt` for the truly-active last step on a
+  //      live run.
+  //   4. Otherwise — hide the chip rather than show a stale value.
+  const fallbackFromNext = (() => {
+    if (step.durationMs !== undefined || nextStartedAt === undefined) return undefined;
+    const endTs = Date.parse(nextStartedAt);
+    const startTs = Date.parse(step.startedAt);
+    if (!Number.isFinite(endTs) || !Number.isFinite(startTs) || endTs < startTs) return undefined;
+    return endTs - startTs;
+  })();
+  const resolvedDurationMs = step.durationMs ?? fallbackFromNext;
+  const stepIsTicking = resolvedDurationMs === undefined && isLive;
+  const now = useNow(1_000, stepIsTicking);
+  const liveElapsedMs =
+    resolvedDurationMs ?? (stepIsTicking ? Math.max(0, now - Date.parse(step.startedAt)) : undefined);
+  const elapsedIsLive = stepIsTicking;
 
   const inputTokens = step.cost?.input_tokens ?? 0;
   const outputTokens = step.cost?.output_tokens ?? 0;
   const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
+  const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
   const totalTokens = step.cost !== undefined ? (step.cost.total_tokens ?? inputTokens + outputTokens) : 0;
   const usedTokens = totalTokens || inputTokens + cacheReadTokens;
 
+  // Only Input / Output carry a $ figure in the breakdown — cache rows
+  // intentionally don't, even though cache reads/writes are technically
+  // billable. Their per-token rate often rounds to $0.00 against tiny
+  // cache windows, which reads as "free" and is more confusing than
+  // useful. The footer's `Total cost` already accounts for everything.
   const inputCostUsd = model ? (model.cost.input * inputTokens) / COST_RATE_DIVISOR : undefined;
   const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
 
   const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && usedTokens > 0;
 
-  // All trailing chips (duration, cost, context ring) share the same
-  // `text-xs text-muted-foreground tabular-nums` so the row reads as one
-  // strip of metrics rather than three differently-sized elements.
+  // All trailing chips share the same `text-xs text-muted-foreground
+  // tabular-nums` so the row reads as one strip of metrics rather than
+  // three differently-sized elements.
   const metricChipClass = "text-xs text-muted-foreground tabular-nums";
 
   return (
@@ -141,14 +188,17 @@ function StepCostRow({ step }: { step: StepSnapshot }): JSX.Element {
           iter {step.iteration.n}/{step.iteration.max}
         </span>
       )}
-      {step.model && (
-        <span className={`font-mono ${metricChipClass}`}>
-          {step.provider ?? "?"} / {step.model}
-        </span>
-      )}
-      {step.fidelity && <span className={`font-mono ${metricChipClass}`}>{step.fidelity}</span>}
       <span className="ml-auto flex items-center gap-3">
-        {step.durationMs !== undefined && <span className={metricChipClass}>⏱ {formatDuration(step.durationMs)}</span>}
+        {liveElapsedMs !== undefined && (
+          <span
+            className={metricChipClass}
+            data-testid={`step-${step.stepIdx}-elapsed`}
+            data-live={elapsedIsLive ? "true" : undefined}
+            title={elapsedIsLive ? "step in progress" : "elapsed time"}
+          >
+            ⏱ {formatDuration(liveElapsedMs)}
+          </span>
+        )}
         {step.cost !== undefined && (
           <span className={metricChipClass}>
             <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
@@ -167,7 +217,7 @@ function StepCostRow({ step }: { step: StepSnapshot }): JSX.Element {
               inputTokenDetails: {
                 noCacheTokens: inputTokens,
                 cacheReadTokens,
-                cacheWriteTokens: step.cost?.cache_write_tokens ?? 0,
+                cacheWriteTokens,
               },
               outputTokenDetails: {
                 textTokens: outputTokens,
@@ -184,12 +234,15 @@ function StepCostRow({ step }: { step: StepSnapshot }): JSX.Element {
                 <ContextInputUsage>
                   <UsageRow label="Input" tokens={inputTokens} costUsd={inputCostUsd} />
                 </ContextInputUsage>
+                {cacheReadTokens > 0 && (
+                  <ContextCacheUsage>
+                    <UsageRow label="Cache read" tokens={cacheReadTokens} subtle />
+                  </ContextCacheUsage>
+                )}
                 <ContextOutputUsage>
                   <UsageRow label="Output" tokens={outputTokens} costUsd={outputCostUsd} />
                 </ContextOutputUsage>
-                <ContextCacheUsage>
-                  <UsageRow label="Cache" tokens={cacheReadTokens} />
-                </ContextCacheUsage>
+                {cacheWriteTokens > 0 && <UsageRow label="Cache write" tokens={cacheWriteTokens} subtle />}
               </ContextContentBody>
               <ContextContentFooter>
                 <span className="text-muted-foreground">Total cost</span>
@@ -209,11 +262,30 @@ function StepCostRow({ step }: { step: StepSnapshot }): JSX.Element {
   );
 }
 
-function UsageRow({ label, tokens, costUsd }: { label: string; tokens: number; costUsd?: number }): JSX.Element {
+/**
+ * One `<label> <tokens · cost>` line in the cost breakdown popover.
+ *
+ * `subtle` renders the row in muted text — used for the cache read /
+ * write breakdown lines, so the primary Input / Output rows stay
+ * visually dominant and the cache rows read as derived detail rather
+ * than parallel buckets.
+ */
+function UsageRow({
+  label,
+  tokens,
+  costUsd,
+  subtle,
+}: {
+  label: string;
+  tokens: number;
+  costUsd?: number;
+  subtle?: boolean;
+}): JSX.Element {
+  const valueClass = subtle ? "tabular-nums text-muted-foreground" : "tabular-nums";
   return (
     <div className="flex items-center justify-between text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="tabular-nums">
+      <span className={subtle ? "text-muted-foreground/80 pl-3" : "text-muted-foreground"}>{label}</span>
+      <span className={valueClass}>
         {formatTokensCompact(tokens)}
         {costUsd !== undefined && <span className="ml-2 text-muted-foreground">• {formatUsd(costUsd)}</span>}
       </span>

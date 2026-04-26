@@ -360,22 +360,25 @@ describe("GET /runs/:id/steps", () => {
     expect(await res.json()).toEqual([]);
   });
 
-  test("observability llm.start / text_delta / done → 1 step with finalText + duration", async () => {
+  test("observability llm.start / done → 1 step with model + durationMs", async () => {
+    // The trimmed wire shape carries no body fields — prompts, system
+    // prompts, message lists, and finalText all live in the messages
+    // table / Conversation tab now. The Cost endpoint only ships
+    // identity + cost-related fields.
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
     store.enqueueRun({ runId: "steps-one", workflowSha: "wf" });
     store.appendObservabilityEvents("steps-one", [
-      { type: "llm.start", payload: { nodeId: "n1", prompt: "hi", model: "stub" } },
-      { type: "llm.text_delta", payload: { nodeId: "n1", delta: "pong" } },
+      { type: "llm.start", payload: { nodeId: "n1", model: "stub" } },
       { type: "llm.done", payload: { nodeId: "n1", stop_reason: "end_turn" } },
     ]);
     const res = await app.request("/runs/steps-one/steps");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ nodeId: string; finalText: string; stopReason?: string }>;
+    const body = (await res.json()) as Array<{ nodeId: string; model?: string; durationMs?: number }>;
     expect(body).toHaveLength(1);
     expect(body[0]!.nodeId).toBe("n1");
-    expect(body[0]!.finalText).toBe("pong");
-    expect(body[0]!.stopReason).toBe("end_turn");
+    expect(body[0]!.model).toBe("stub");
+    expect(typeof body[0]!.durationMs).toBe("number");
   });
 });
 

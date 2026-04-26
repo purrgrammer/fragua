@@ -4,11 +4,11 @@
 // run_state + the event log. Workflow name/source comes from the
 // workflows table (saveWorkflow writes DOT on enqueue).
 
-import type { IEventStore } from "@swarm/store";
+import { type IEventStore, isTerminal as isTerminalStatus } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
-import { attachStepAggregates, eventsToSteps } from "./steps.ts";
+import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "./steps.ts";
 
 export interface RunsRoutesOpts {
   store: IEventStore;
@@ -75,7 +75,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
 
   app.get("/runs/:id/steps", (c) => {
     const runId = c.req.param("id");
-    if (store.getState(runId) == null) {
+    const state = store.getState(runId);
+    if (state == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
     // Two-pass projection:
@@ -92,7 +93,18 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const events = store.getEvents(runId, { limit: Number.MAX_SAFE_INTEGER });
     const baseSteps = eventsToSteps(events);
     const aggregates = store.getStepAggregates(runId);
-    return c.json(attachStepAggregates(baseSteps, aggregates));
+    const merged = attachStepAggregates(baseSteps, aggregates);
+    // Fill `durationMs` for orphan steps (no `llm.done` in the window).
+    // Each step's effective end is the next step's `startedAt`, falling
+    // back to the run's last event timestamp when the run is terminal.
+    // The truly-still-running last step on a live run keeps `durationMs`
+    // undefined so the client ticks `now - startedAt`.
+    const lastEventTs = events.length > 0 ? events[events.length - 1]!.ts : undefined;
+    const filled = fillOrphanDurations(merged, {
+      lastEventTs,
+      runIsTerminal: isTerminalStatus(state.status),
+    });
+    return c.json(filled);
   });
 
   // LLM-visible message transcript (§I9). Sourced from the messages
