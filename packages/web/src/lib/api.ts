@@ -166,11 +166,6 @@ export interface StepSnapshot {
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd: number;
-    /** Peak prompt size — `MAX(input + cache_read)` over the cost.recorded
-     * events in this step. The right denominator-numerator pair for
-     * "context window utilisation"; the other token fields are cumulative
-     * across calls and overstate pressure on the limit. */
-    peak_prompt_tokens?: number;
   };
 }
 

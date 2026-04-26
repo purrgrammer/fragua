@@ -38,15 +38,6 @@ export interface StepAggregateRow {
   cacheWriteTokens: number;
   totalTokens: number;
   costEventCount: number;
-  /**
-   * MAX(input_tokens + cache_read_tokens) across the cost.recorded events
-   * in this step's window — i.e. the largest single prompt the model saw
-   * during the step. The right "context window utilisation" reading: a
-   * step that did N LLM calls has N independent context windows, not one
-   * stacked window of size SUM(prompt_i). The cumulative sum is meaningful
-   * for spend, not for pressure on the limit.
-   */
-  peakPromptTokens: number;
   endedAtMs: number | null;
   stopReason: string | null;
 }
@@ -75,17 +66,6 @@ const STEP_AGGREGATES_SQL = `
     COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER)), 0) AS cacheWriteTokens,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS totalTokens,
     COUNT(c.seq)                                                                  AS costEventCount,
-    -- Per-call prompt size = input_tokens + cache_read_tokens for that
-    -- one cost.recorded event. MAX() picks the biggest single prompt
-    -- (the one nearest the context window limit) regardless of how many
-    -- calls the step made or how the cache split moved between them.
-    -- Inner COALESCE so a row missing either sub-field doesn't poison
-    -- its sum to NULL — MAX would then treat it as "no contribution"
-    -- and a single-event step with no cache_read_tokens would read 0.
-    COALESCE(MAX(
-      COALESCE(CAST(json_extract(c.payload, '$.input_tokens')      AS INTEGER), 0) +
-      COALESCE(CAST(json_extract(c.payload, '$.cache_read_tokens') AS INTEGER), 0)
-    ), 0)                                                                         AS peakPromptTokens,
     (
       SELECT MAX(d.ts) FROM events d
       WHERE d.run_id = ?1
@@ -129,7 +109,6 @@ export function getStepAggregates(db: Database, runId: string): StepAggregateRow
         cacheWriteTokens: number;
         totalTokens: number;
         costEventCount: number;
-        peakPromptTokens: number;
         endedAtMs: number | null;
         stopReason: string | null;
       },

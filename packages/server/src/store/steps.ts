@@ -80,14 +80,6 @@ export interface StepSnapshot {
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd: number;
-    /**
-     * Largest `input_tokens + cache_read_tokens` of any single LLM call
-     * inside this step. This is what "context window utilisation" should
-     * be measured against — each LLM call has its own context window, so
-     * summing prompts across calls (the other fields here) overstates
-     * pressure on the limit.
-     */
-    peak_prompt_tokens?: number;
   };
 }
 
@@ -166,8 +158,6 @@ export interface StepCostAggregate {
   cacheWriteTokens: number;
   totalTokens: number;
   costEventCount: number;
-  /** See `StepSnapshot.cost.peak_prompt_tokens` for the why. */
-  peakPromptTokens: number;
 }
 
 /**
@@ -217,7 +207,6 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
         cache_read_tokens: agg.cacheReadTokens,
         cache_write_tokens: agg.cacheWriteTokens,
         cost_usd: agg.costUsd,
-        peak_prompt_tokens: agg.peakPromptTokens,
       },
     };
   });
