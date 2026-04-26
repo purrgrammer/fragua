@@ -387,7 +387,7 @@ export async function enqueueJob(input: {
 }
 
 export async function steerRun(id: string, message: string): Promise<{ id: string }> {
-  return postJson(`/runs/${encodeURIComponent(id)}/steer`, { message }, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedId);
 }
 
 export async function pauseRun(id: string, reason?: string): Promise<{ id: string }> {

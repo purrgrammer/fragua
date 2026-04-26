@@ -167,7 +167,7 @@ describe("api — control channel", () => {
     const res = await api.steerRun("run-7", "focus on tests");
     expect(res).toEqual({ id: "abc-123" });
     expect(mock.calls[0]?.method).toBe("POST");
-    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ message: "focus on tests" });
+    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ text: "focus on tests" });
   });
 
   it("pauseRun omits body when reason is undefined", async () => {
