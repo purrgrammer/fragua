@@ -12,7 +12,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "bun test ./packages",
-    "ci": "bun run lint && bun run typecheck && bun test ./packages",
+    "ci": "bun run --silent lint && bun run --silent typecheck && bash -c 'set -o pipefail; bun test ./packages 2>&1 | grep -v \"^(pass) \"'",
     "swarm": "bun run packages/cli/bin/swarm.ts",
     "serve": "bun --hot packages/cli/bin/swarm.ts serve",
     "dev:web": "bun run --filter=@swarm/web dev"
