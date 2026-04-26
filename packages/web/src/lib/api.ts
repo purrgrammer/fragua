@@ -135,6 +135,9 @@ export interface SkillDetail extends SkillSummary {
 
 export interface StepSnapshot {
   stepIdx: number;
+  /** Stream seq of the originating `llm.start`. Joins this snapshot to
+   * the SQL cost-aggregate row produced by the server. */
+  startSeq: number;
   nodeId: string;
   iteration?: { n: number; max: number };
   startedAt: string;

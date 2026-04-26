@@ -3,7 +3,7 @@
 // Tabs (`:view` param driven, default `conversation`):
 //   Conversation — messages-table-driven transcript (AgentMessage per row)
 //   Graph        — live DAG with node inspector
-//   Steps        — per-step LLM context dump
+//   Cost         — per-LLM-call cost + context-window breakdown
 //
 // (The raw event log was intentionally removed: a long run's event
 // stream is multi-megabyte and the table view scaled badly. Use
@@ -18,12 +18,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, Coins, DollarSign, Timer } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
-import { StepInspector } from "../components/StepInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
@@ -34,7 +34,7 @@ import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
-const VIEWS = ["conversation", "graph", "steps"] as const;
+const VIEWS = ["conversation", "graph", "cost"] as const;
 type TabId = (typeof VIEWS)[number];
 
 /** Statuses where the run is still progressing and the clock should tick. */
@@ -149,8 +149,8 @@ export function RunDetail(): JSX.Element {
             <TabsTrigger value="graph" data-testid="view-tab-graph">
               Graph
             </TabsTrigger>
-            <TabsTrigger value="steps" data-testid="view-tab-steps">
-              Steps
+            <TabsTrigger value="cost" data-testid="view-tab-cost">
+              Cost
             </TabsTrigger>
           </TabsList>
 
@@ -176,8 +176,8 @@ export function RunDetail(): JSX.Element {
                 onSelect={handleNodeClick}
               />
             </TabsContent>
-            <TabsContent value="steps" className="h-full">
-              <StepInspector runId={id} totalEvents={totalEvents} />
+            <TabsContent value="cost" className="h-full">
+              <CostInspector runId={id} totalEvents={totalEvents} />
             </TabsContent>
           </div>
 

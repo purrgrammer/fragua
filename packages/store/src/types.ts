@@ -1,6 +1,9 @@
 // swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
 
 import type { AgentMessage } from "@swarm/types";
+import type { RunCostTotalsRow, StepAggregateRow } from "./queries.ts";
+
+export type { RunCostTotalsRow, StepAggregateRow };
 
 export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
 
@@ -506,6 +509,26 @@ export interface IEventStore {
    * — their threads will never be dispatched again.
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
+
+  // ─── Aggregations
+  /**
+   * Per-`llm.start` window summed cost / token totals plus the matching
+   * last `llm.done` (endedAt + stopReason). The window is
+   * `[this llm.start, next llm.start for the same nodeId)` so
+   * `cost.recorded` events that fire after `llm.done` (one llm.start
+   * opens the step; the agent emits multiple message_end → cost.recorded
+   * inside it on tool-using turns) still attribute to the right step.
+   * Sums happen in SQL — never re-fold the event stream in the caller.
+   */
+  getStepAggregates(runId: string): StepAggregateRow[];
+  /**
+   * Sum of every `cost.recorded` in a run, regardless of `llm.start`
+   * containment. Diagnostic / cross-check companion to
+   * `getStepAggregates` — the difference between this and the sum of
+   * step aggregates is the cost of synthetic-node events (summariser,
+   * title generator) that don't have an `llm.start` to anchor to.
+   */
+  getRunCostTotals(runId: string): RunCostTotalsRow;
 
   // ─── Artifacts
   /**

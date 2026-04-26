@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StoredEvent } from "@swarm/store";
-import { eventsToSteps } from "../../src/store/steps.ts";
+import { attachStepAggregates, eventsToSteps } from "../../src/store/steps.ts";
 
 function ev(type: string, ts: number, payload: Record<string, unknown>): StoredEvent {
   return { runId: "r", seq: ts, type, writer: "daemon", payload, ts };
@@ -59,22 +59,30 @@ describe("eventsToSteps", () => {
     expect(s!.finalText).toBe("hello, world");
   });
 
-  test("llm.done sets endedAt, durationMs, stopReason and closes the step", () => {
+  test("llm.done updates endedAt / durationMs / stopReason but does NOT close the step", () => {
+    // Tool-using turns emit multiple message_end events under one
+    // llm.start, each producing its own llm.done. The reducer must keep
+    // the step open so subsequent events still attribute to it; the LAST
+    // llm.done's timestamp wins.
     const events = [
       ev("llm.start", 1_000_000, { nodeId: "n1", prompt: "q" }),
-      ev("llm.text_delta", 1_000_500, { nodeId: "n1", delta: "ok" }),
+      ev("llm.text_delta", 1_000_500, { nodeId: "n1", delta: "first" }),
+      ev("llm.done", 1_001_000, { nodeId: "n1", stop_reason: "tool_use" }),
+      // Second message in the same backend.run — must still attach.
+      ev("llm.text_delta", 1_002_000, { nodeId: "n1", delta: "-second" }),
       ev("llm.done", 1_003_200, { nodeId: "n1", stop_reason: "end_turn" }),
-      // Next text_delta has no open step: should be ignored, not re-attach.
-      ev("llm.text_delta", 1_003_300, { nodeId: "n1", delta: "should-not-appear" }),
     ];
     const [s] = eventsToSteps(events);
-    expect(s!.finalText).toBe("ok");
+    expect(s!.finalText).toBe("first-second");
     expect(s!.stopReason).toBe("end_turn");
     expect(s!.durationMs).toBe(3200);
     expect(s!.endedAt).toBe(new Date(1_003_200).toISOString());
   });
 
-  test("cost.recorded folds into the open step's cost", () => {
+  test("cost.recorded is NOT folded into the step (cost comes from SQL aggregates)", () => {
+    // Cost / token sums are produced by `IEventStore.getStepAggregates()`
+    // and merged via `attachStepAggregates`. eventsToSteps deliberately
+    // ignores cost.recorded so there's a single source of truth.
     const events = [
       ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
       ev("cost.recorded", 1100, {
@@ -87,13 +95,7 @@ describe("eventsToSteps", () => {
       }),
     ];
     const [s] = eventsToSteps(events);
-    expect(s!.cost).toEqual({
-      input_tokens: 100,
-      output_tokens: 42,
-      total_tokens: 142,
-      cost_usd: 0.003,
-      cache_read_tokens: 10,
-    });
+    expect(s!.cost).toBeUndefined();
   });
 
   test("loop iterations produce one step per llm.start, each keeping its own finalText", () => {
@@ -157,34 +159,58 @@ describe("eventsToSteps", () => {
     expect(s!.finalText).toBe("");
   });
 
-  test("multiple cost.recorded events under one llm.start accumulate (not overwrite)", () => {
+  test("attachStepAggregates merges SQL-aggregated cost rows by startSeq", () => {
+    // The route handler runs eventsToSteps + getStepAggregates and
+    // merges with `attachStepAggregates`. Verify the merge function
+    // here; the SQL itself is exercised by the store-level tests.
     const events = [
-      ev("llm.start", 1000, { nodeId: "n1", prompt: "q" }),
-      ev("cost.recorded", 1100, {
-        nodeId: "n1",
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 500,
-        cost_usd: 0.001,
-        cache_read_tokens: 500,
-      }),
-      ev("cost.recorded", 1200, {
-        nodeId: "n1",
-        input_tokens: 50,
-        output_tokens: 200,
-        total_tokens: 250,
-        cost_usd: 0.005,
-        cache_read_tokens: 0,
-      }),
+      { type: "llm.start", ts: 1000, seq: 10, payload: { nodeId: "n1", prompt: "q" } },
+      { type: "llm.start", ts: 2000, seq: 20, payload: { nodeId: "n2", prompt: "q2" } },
     ];
-    const [s] = eventsToSteps(events);
-    expect(s!.cost).toEqual({
+    const baseSteps = eventsToSteps(events);
+    expect(baseSteps[0]!.startSeq).toBe(10);
+    expect(baseSteps[1]!.startSeq).toBe(20);
+
+    const merged = attachStepAggregates(baseSteps, [
+      {
+        startSeq: 10,
+        costUsd: 0.006,
+        inputTokens: 50,
+        outputTokens: 200,
+        cacheReadTokens: 500,
+        cacheWriteTokens: 0,
+        totalTokens: 750,
+        costEventCount: 2,
+      },
+      {
+        startSeq: 20,
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 0,
+        costEventCount: 0,
+      },
+    ]);
+    expect(merged[0]!.cost).toEqual({
       input_tokens: 50,
       output_tokens: 200,
       total_tokens: 750,
       cost_usd: 0.006,
       cache_read_tokens: 500,
+      cache_write_tokens: 0,
     });
+    // No cost events → no cost attached, even with a row present.
+    expect(merged[1]!.cost).toBeUndefined();
+  });
+
+  test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
+    const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1", prompt: "q" } }];
+    const baseSteps = eventsToSteps(events);
+    const merged = attachStepAggregates(baseSteps, []);
+    expect(merged[0]!.cost).toBeUndefined();
+    expect(merged[0]!.startSeq).toBe(99);
   });
 
   test("skills array is coerced safely, scope defaults to 'project' on unknown values", () => {

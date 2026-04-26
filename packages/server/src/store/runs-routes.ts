@@ -8,7 +8,7 @@ import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
-import { eventsToSteps } from "./steps.ts";
+import { attachStepAggregates, eventsToSteps } from "./steps.ts";
 
 export interface RunsRoutesOpts {
   store: IEventStore;
@@ -78,11 +78,21 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (store.getState(runId) == null) {
       return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
     }
-    // Steps are a sparse projection (one per llm.start) — capping the
-    // input event window dropped later nodes when implement alone
-    // produced >10k events. Walk the full log; the output stays small.
+    // Two-pass projection:
+    //   1. eventsToSteps walks the full event log to extract per-step
+    //      static fields (prompt, system_prompt, messages, tools,
+    //      context_files, finalText built from text_deltas, …).
+    //   2. getStepAggregates runs a SQL window aggregation that sums
+    //      cost / token totals per step, keyed by `startSeq`. This is
+    //      the single source of truth for numerical totals — folding
+    //      cost.recorded events in TypeScript was systematically
+    //      under-counting because the agent fires multiple cost events
+    //      per step (one per assistant message) and the previous
+    //      reducer dropped everything after the first llm.done.
     const events = store.getEvents(runId, { limit: Number.MAX_SAFE_INTEGER });
-    return c.json(eventsToSteps(events));
+    const baseSteps = eventsToSteps(events);
+    const aggregates = store.getStepAggregates(runId);
+    return c.json(attachStepAggregates(baseSteps, aggregates));
   });
 
   // LLM-visible message transcript (§I9). Sourced from the messages

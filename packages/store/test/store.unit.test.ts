@@ -304,6 +304,46 @@ describe("SqliteStore — appendObservabilityEvents", () => {
     expect(payload["system_prompt"]).toBeUndefined();
     store.close();
   });
+
+  test("truncation preserves provider / model / thread_id / fidelity on llm.start", async () => {
+    // Without these fields the step inspector can't render the model
+    // name, look up the context window, or join back to the right
+    // thread — and the screenshot bug was: long-prompt steps showed up
+    // with model=null because truncation silently dropped them.
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const huge = "x".repeat(8000);
+    store.appendObservabilityEvents(runId, [
+      {
+        type: "llm.start",
+        payload: {
+          nodeId: "implement",
+          iteration: { n: 1, max: 3 },
+          provider: "ppq",
+          model: "claude-sonnet-4.6",
+          thread_id: "dev",
+          fidelity: "compact",
+          prompt: huge,
+          system_prompt: huge,
+        },
+      },
+    ]);
+    const events = store.getEvents(runId);
+    const llmStart = events.find((e) => e.type === "llm.start")!;
+    const payload = llmStart.payload as Record<string, unknown>;
+    expect(payload["_truncated"]).toBe(true);
+    expect(payload["nodeId"]).toBe("implement");
+    expect(payload["provider"]).toBe("ppq");
+    expect(payload["model"]).toBe("claude-sonnet-4.6");
+    expect(payload["thread_id"]).toBe("dev");
+    expect(payload["fidelity"]).toBe("compact");
+    // Loop iteration object survives in its `{ n, max }` shape.
+    expect(payload["iteration"]).toEqual({ n: 1, max: 3 });
+    // Bulky fields are still dropped.
+    expect(payload["prompt"]).toBeUndefined();
+    expect(payload["system_prompt"]).toBeUndefined();
+    store.close();
+  });
 });
 
 describe("SqliteStore — artifacts & blobs", () => {

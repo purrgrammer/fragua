@@ -1,34 +1,52 @@
 // Pure reducer: StoredEvent[] → StepSnapshot[].
 //
 // A "step" is one `llm.start` event (one backend.run() call). Companion
-// events (`llm.text_delta`, `llm.done`, `cost.recorded`) fold onto the
-// most recently opened step for that nodeId until `llm.done` closes it.
-// That way the UI's StepInspector receives one fat object per LLM call
-// instead of re-walking the event stream itself.
+// events fold onto the step opened at that llm.start until the next
+// llm.start for the same nodeId starts a new one:
+//   - `llm.text_delta` → appended to `finalText`.
+//   - `llm.done`       → records endedAt / durationMs / stopReason. We do
+//                        NOT close the step here: tool-using turns emit
+//                        multiple message_end events under one llm.start,
+//                        each with its own `done`, and a premature close
+//                        would drop their `cost.recorded`s on the floor.
+//   - `cost.recorded`  → DELIBERATELY NOT folded here. Cost / token
+//                        SUMS are aggregated in SQL via
+//                        `IEventStore.getStepAggregates()`. The route
+//                        merges those aggregates onto these snapshots
+//                        keyed by `startSeq`. SQL is the single source
+//                        of truth for numerical totals; folding events
+//                        in TS quietly mis-counted whenever the window
+//                        model didn't match the agent's actual flow.
 //
-// Reads from the rearchitected store's `StoredEvent` shape: `payload`
-// is the event body (stamped with `nodeId` + `iteration` by the
-// daemon's executor), `ts` is an epoch-ms number we render as ISO.
-// Typed loosely as `StepEvent` so observability events (llm.start,
-// llm.text_delta, cost.recorded — not in the fact/intent union) are
-// statically-valid input without casts at every call site.
+// Reads from the store's `StoredEvent` shape: `payload` is the event
+// body (stamped with `nodeId` + `iteration` by the daemon's executor),
+// `ts` is an epoch-ms number we render as ISO. Typed loosely as
+// `StepEvent` so observability events (llm.start, llm.text_delta — not
+// in the fact/intent union) are statically-valid input without casts at
+// every call site.
 
 export interface StepEvent {
   type: string;
   payload: unknown;
   ts: number;
+  /** Stream sequence number of the event. Used to key SQL aggregates back
+   * onto these snapshots; required on `llm.start` events. */
+  seq?: number;
 }
 
 export interface StepSnapshot {
   /** 0-based index within the run, by stream order. Stable across refetches. */
   stepIdx: number;
+  /** Stream seq of the originating `llm.start`. Joins with the SQL
+   * aggregate row for this step (`getStepAggregates(runId)`). */
+  startSeq: number;
   /** Real DOT node id (or a synthetic id for summariser steps). */
   nodeId: string;
   /** Iteration metadata when the caller is a loop. */
   iteration?: { n: number; max: number };
   /** ISO timestamp of the originating `llm.start`. */
   startedAt: string;
-  /** ISO of the matching `llm.done` when present. */
+  /** ISO of the LAST `llm.done` in this step's window. */
   endedAt?: string;
   durationMs?: number;
   // ---- what the agent was asked ----
@@ -109,6 +127,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       const startedAt = new Date(ev.ts).toISOString();
       const step: StepSnapshot = {
         stepIdx: steps.length,
+        startSeq: ev.seq ?? steps.length,
         nodeId: nodeId || "__unknown",
         startedAt,
         prompt: stringField(data, "prompt"),
@@ -138,6 +157,10 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     }
 
     if (ev.type === "llm.done") {
+      // Record the LAST llm.done in the window — tool-using turns emit
+      // one llm.done per assistant message, all under a single llm.start.
+      // Don't close the step here; it stays open until the next llm.start
+      // for the same nodeId replaces it.
       step.endedAt = new Date(ev.ts).toISOString();
       const stopReason = stringField(data, "stop_reason");
       if (stopReason) step.stopReason = stopReason;
@@ -146,35 +169,53 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (Number.isFinite(startedMs) && endedMs >= startedMs) {
         step.durationMs = endedMs - startedMs;
       }
-      openStepByNode.delete(nodeId);
-      continue;
     }
-
-    if (ev.type === "cost.recorded") {
-      const cost = costField(data);
-      if (cost) {
-        if (!step.cost) {
-          step.cost = cost;
-        } else {
-          // Accumulate across multiple cost.recorded events under the same llm.start.
-          step.cost.input_tokens += cost.input_tokens;
-          step.cost.output_tokens += cost.output_tokens;
-          step.cost.cost_usd += cost.cost_usd;
-          if (cost.cache_read_tokens !== undefined) {
-            step.cost.cache_read_tokens = (step.cost.cache_read_tokens ?? 0) + cost.cache_read_tokens;
-          }
-          if (cost.cache_write_tokens !== undefined) {
-            step.cost.cache_write_tokens = (step.cost.cache_write_tokens ?? 0) + cost.cache_write_tokens;
-          }
-          if (cost.total_tokens !== undefined) {
-            step.cost.total_tokens = (step.cost.total_tokens ?? 0) + cost.total_tokens;
-          }
-        }
-      }
-    }
+    // cost.recorded intentionally not handled here — see file header.
   }
 
   return steps;
+}
+
+/**
+ * Cost / token aggregate row produced by `IEventStore.getStepAggregates()`,
+ * shaped here to avoid a hard dependency on `@swarm/store` types in the
+ * UI bundle. Wire-compatible with `StepAggregateRow`.
+ */
+export interface StepCostAggregate {
+  startSeq: number;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costEventCount: number;
+}
+
+/**
+ * Merge SQL-aggregated cost / token totals onto the step snapshots
+ * produced by `eventsToSteps`. Steps with zero cost events get no
+ * `cost` field — the UI uses that to decide whether to render the
+ * cost-related badges and the context ring.
+ */
+export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly StepCostAggregate[]): StepSnapshot[] {
+  const byStartSeq = new Map<number, StepCostAggregate>();
+  for (const a of aggregates) byStartSeq.set(a.startSeq, a);
+  return steps.map((s) => {
+    const agg = byStartSeq.get(s.startSeq);
+    if (!agg || agg.costEventCount === 0) return s;
+    return {
+      ...s,
+      cost: {
+        input_tokens: agg.inputTokens,
+        output_tokens: agg.outputTokens,
+        total_tokens: agg.totalTokens,
+        cache_read_tokens: agg.cacheReadTokens,
+        cache_write_tokens: agg.cacheWriteTokens,
+        cost_usd: agg.costUsd,
+      },
+    };
+  });
 }
 
 // ── field plucking helpers ──────────────────────────────────────────────
@@ -298,18 +339,5 @@ function budgetField(data: Record<string, unknown>, key: string): StepSnapshot["
   };
   if (typeof vv["max_cost_usd"] === "number") out.max_cost_usd = vv["max_cost_usd"] as number;
   if (typeof vv["run_max_cost_usd"] === "number") out.run_max_cost_usd = vv["run_max_cost_usd"] as number;
-  return out;
-}
-
-function costField(data: Record<string, unknown>): StepSnapshot["cost"] | undefined {
-  if (typeof data["cost_usd"] !== "number") return undefined;
-  const out: NonNullable<StepSnapshot["cost"]> = {
-    input_tokens: typeof data["input_tokens"] === "number" ? (data["input_tokens"] as number) : 0,
-    output_tokens: typeof data["output_tokens"] === "number" ? (data["output_tokens"] as number) : 0,
-    cost_usd: data["cost_usd"] as number,
-  };
-  if (typeof data["total_tokens"] === "number") out.total_tokens = data["total_tokens"] as number;
-  if (typeof data["cache_read_tokens"] === "number") out.cache_read_tokens = data["cache_read_tokens"] as number;
-  if (typeof data["cache_write_tokens"] === "number") out.cache_write_tokens = data["cache_write_tokens"] as number;
   return out;
 }
