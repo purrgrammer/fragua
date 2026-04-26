@@ -32,6 +32,8 @@ digraph quick_change {
     thread_id = "dev"
     model = "claude-sonnet-4.6"
     max_retries = 0
+    max_cost_usd = 0.30
+    max_tokens = 800000
   ]
 
   commit [

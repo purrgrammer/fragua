@@ -27,6 +27,8 @@ digraph fix_bug {
     prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
+    max_cost_usd = 0.30
+    max_tokens = 800000
   ]
 
   summarize [

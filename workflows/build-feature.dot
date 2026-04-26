@@ -61,6 +61,8 @@ digraph build_feature {
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
+    max_cost_usd = 0.30
+    max_tokens = 800000
   ]
 
   update_docs [
