@@ -60,7 +60,7 @@ function buildApiApp(opts: ServerOptions): Hono {
 
   const api = new Hono();
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
-  api.route("/", workflowsRoutes({ workflowReader }));
+  api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
   api.route(
     "/",
