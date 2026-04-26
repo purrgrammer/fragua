@@ -49,6 +49,11 @@ export interface RunConversationProps {
    * the section header status dot + label. */
   nodeStates?: readonly NodeState[];
   isLive?: boolean;
+  /** Run is in a paused state (provider error or HITL). Suppresses the
+   * "streaming" label and the running-node pulse — the in-flight node's
+   * state is still `"running"` from the projection (no completion fact
+   * landed) but no work is happening. */
+  isPaused?: boolean;
   isLoading?: boolean;
   /** Free-form text the run was launched with. Rendered as the first
    * user message at the top. The agent's event stream carries only
@@ -62,6 +67,7 @@ export function RunConversation({
   streaming = null,
   nodeStates,
   isLive = false,
+  isPaused = false,
   isLoading = false,
   userInput,
   className,
@@ -121,7 +127,13 @@ export function RunConversation({
               const isTail = i === visibleSections.length - 1;
               const showStreamHere = appendStreamingToTail && isTail;
               return (
-                <NodeSection key={section.key} nodeId={section.nodeId} state={nodeState} isLive={isLive}>
+                <NodeSection
+                  key={section.key}
+                  nodeId={section.nodeId}
+                  state={nodeState}
+                  isLive={isLive}
+                  isPaused={isPaused}
+                >
                   {section.rows.map((row) => (
                     <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
                   ))}
@@ -134,6 +146,7 @@ export function RunConversation({
                 nodeId={streamingNodeId}
                 state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
                 isLive={isLive}
+                isPaused={isPaused}
               >
                 <StreamingMessageRow streaming={streaming!} />
               </NodeSection>
@@ -172,10 +185,11 @@ interface NodeSectionProps {
   nodeId: string | null;
   state?: NodeState;
   isLive: boolean;
+  isPaused: boolean;
   children: ReactNode;
 }
 
-function NodeSection({ nodeId, state, isLive, children }: NodeSectionProps): JSX.Element {
+function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionProps): JSX.Element {
   const label = nodeId ?? "unscoped";
   const status: NodeState["state"] | "idle" = state?.state ?? "idle";
   return (
@@ -185,11 +199,11 @@ function NodeSection({ nodeId, state, isLive, children }: NodeSectionProps): JSX
       className="relative flex flex-col gap-3"
     >
       <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-background/95 px-1 py-1 backdrop-blur-sm">
-        <StatusDot status={status} isLive={isLive} />
+        <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
         <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/80">
           {label}
         </span>
-        {state && <NodeStatusLabel state={state.state} isLive={isLive} />}
+        {state && <NodeStatusLabel state={state.state} isLive={isLive} isPaused={isPaused} />}
         <div className="ml-2 h-px flex-1 bg-border" aria-hidden />
       </header>
       <div className="flex flex-col gap-3 pl-4">{children}</div>
@@ -233,9 +247,20 @@ const STATUS_TONE: Record<NodeState["state"] | "idle", { dot: string; label: str
   },
 };
 
-function StatusDot({ status, isLive }: { status: NodeState["state"] | "idle"; isLive: boolean }): JSX.Element {
+function StatusDot({
+  status,
+  isLive,
+  isPaused,
+}: {
+  status: NodeState["state"] | "idle";
+  isLive: boolean;
+  isPaused: boolean;
+}): JSX.Element {
   const tone = STATUS_TONE[status];
-  const pulse = status === "running" && isLive ? "sw-pulse" : "";
+  // Pulse signals "actively producing tokens." Suppress when the run is
+  // paused — the node state is still `running` (no completion fact yet)
+  // but no work is happening.
+  const pulse = status === "running" && isLive && !isPaused ? "sw-pulse" : "";
   return (
     <span
       aria-hidden
@@ -245,13 +270,23 @@ function StatusDot({ status, isLive }: { status: NodeState["state"] | "idle"; is
   );
 }
 
-function NodeStatusLabel({ state, isLive }: { state: NodeState["state"]; isLive: boolean }): JSX.Element {
+function NodeStatusLabel({
+  state,
+  isLive,
+  isPaused,
+}: {
+  state: NodeState["state"];
+  isLive: boolean;
+  isPaused: boolean;
+}): JSX.Element {
   const tone = STATUS_TONE[state];
   const label =
     state === "running"
-      ? isLive
-        ? "streaming"
-        : "in progress"
+      ? isPaused
+        ? "paused"
+        : isLive
+          ? "streaming"
+          : "in progress"
       : state === "completed"
         ? "done"
         : state === "failed"

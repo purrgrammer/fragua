@@ -204,3 +204,72 @@ describe("wakePending — precedence", () => {
     r.store.close();
   });
 });
+
+describe("wakePending — resume on paused_provider_error", () => {
+  function pauseProvider(r: ReturnType<typeof rig>, runId: string): void {
+    const s = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused_provider_error",
+          payload: { nodeId: "start", httpStatus: 402, provider: "anthropic", errorMessage: "Insufficient balance" },
+        },
+      ],
+      s.version,
+    );
+  }
+
+  test("intent.resume → fact.run_resumed, status=queued", async () => {
+    const r = rig();
+    startRun(r, "rr1");
+    pauseProvider(r, "rr1");
+    expect(r.store.getState("rr1")!.status).toBe("paused_provider_error");
+    r.store.appendIntent("rr1", { type: "intent.resume", payload: {} });
+    const result = wakePending(r.store);
+    expect(result.resumed).toContain("rr1");
+    expect(r.store.getState("rr1")!.status).toBe("queued");
+    const lastFact = r.store
+      .getEvents("rr1")
+      .filter((e) => e.type === "fact.run_resumed")
+      .pop();
+    expect(lastFact).toBeDefined();
+    const p = lastFact!.payload as { fromStatus: string };
+    expect(p.fromStatus).toBe("paused_provider_error");
+    r.store.close();
+  });
+
+  test("intent.resume on a paused_hitl run also resumes (generic verb)", async () => {
+    const r = rig();
+    startRun(r, "rr2");
+    pause(r, "rr2");
+    r.store.appendIntent("rr2", { type: "intent.resume", payload: { note: "manual unstick" } });
+    const result = wakePending(r.store);
+    expect(result.resumed).toContain("rr2");
+    expect(r.store.getState("rr2")!.status).toBe("queued");
+    r.store.close();
+  });
+
+  test("intent.cancel_requested on paused_provider_error → cancelled (cancel beats resume)", async () => {
+    const r = rig();
+    startRun(r, "rr3");
+    pauseProvider(r, "rr3");
+    r.store.appendIntent("rr3", { type: "intent.resume", payload: {} });
+    r.store.appendIntent("rr3", { type: "intent.cancel_requested", payload: {} });
+    wakePending(r.store);
+    expect(r.store.getState("rr3")!.status).toBe("cancelled");
+    r.store.close();
+  });
+
+  test("idempotent: re-running wakePending without a new intent is a no-op", async () => {
+    const r = rig();
+    startRun(r, "rr4");
+    pauseProvider(r, "rr4");
+    r.store.appendIntent("rr4", { type: "intent.resume", payload: {} });
+    const first = wakePending(r.store);
+    expect(first.resumed).toContain("rr4");
+    const second = wakePending(r.store);
+    expect(second.resumed).not.toContain("rr4");
+    r.store.close();
+  });
+});

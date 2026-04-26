@@ -95,10 +95,16 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = null;
       return next;
     }
+    case "fact.run_paused_provider_error": {
+      next.status = "paused_provider_error";
+      next.nodeStartedAt = null;
+      return next;
+    }
     case "fact.run_resumed": {
-      // Resumed from paused_hitl (or quarantined). Go back to queued so the
-      // executor's claim loop picks the run up and re-dispatches the same
-      // node, this time with the newly-arrived intent folded into context.
+      // Resumed from paused_hitl, paused_provider_error, or quarantined.
+      // Go back to queued so the executor's claim loop picks the run up
+      // and re-dispatches the same node — paused_provider_error preserves
+      // the same iteration since the prior LLM call never produced output.
       next.status = "queued";
       next.nodeStartedAt = null;
       next.readyAt = now;

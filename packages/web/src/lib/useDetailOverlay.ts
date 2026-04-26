@@ -59,6 +59,7 @@ const DETAIL_TYPES = new Set<string>([
   "fact.run_cancelled",
   "fact.run_quarantined",
   "fact.run_paused_hitl",
+  "fact.run_paused_provider_error",
   "fact.run_resumed",
 ]);
 
@@ -96,6 +97,7 @@ export function foldDetailFrame(
     case "fact.run_quarantined":
       return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_paused_hitl":
+    case "fact.run_paused_provider_error":
       return { ...prev, status: "paused" };
     case "fact.run_resumed":
       return { ...prev, status: "running" };

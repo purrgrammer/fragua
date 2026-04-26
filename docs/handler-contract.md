@@ -70,6 +70,18 @@ Terminal failure. Emits `fact.run_halted`.
 return { kind: "halt", reason: "budget" | "max_loops" | "error", detail?: string };
 ```
 
+### `pause_provider`
+Recoverable provider transport failure (HTTP 402/429/5xx, network reset). The executor commits `fact.run_paused_provider_error`, transitions the run to `paused_provider_error`, and frees the process. An operator `intent.resume` wakes the run and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the codergen agent boundary detects provider transport errors and returns this kind on the handler's behalf.
+
+```typescript
+return {
+  kind: "pause_provider",
+  httpStatus: number | null,            // null on pre-response network failures
+  provider: "anthropic" | "openai" | ...,
+  errorMessage: string,                  // raw provider string, displayed verbatim
+};
+```
+
 ---
 
 ## The four hard rules

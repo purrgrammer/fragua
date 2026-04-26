@@ -22,6 +22,7 @@ import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
+import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -39,8 +40,11 @@ import { useRunLive } from "../lib/useRunLive.ts";
 const VIEWS = ["conversation", "graph", "cost"] as const;
 type TabId = (typeof VIEWS)[number];
 
-/** Statuses where the run is still progressing and the clock should tick. */
-const LIVE_STATUSES = new Set<string>(["queued", "running", "paused"]);
+/** Statuses where the run is still progressing and the clock should tick.
+ * `paused` is excluded — a paused run isn't doing work, so the duration
+ * tile should freeze at the moment of the pause fact (the snapshot's
+ * `durationMs` already reflects `lastEvent - firstEvent`). */
+const LIVE_STATUSES = new Set<string>(["queued", "running"]);
 
 /** Statuses where no further events will ever arrive. The SSE socket is
  * skipped entirely so we don't waste a server connection per historical
@@ -83,7 +87,6 @@ export function RunDetail(): JSX.Element {
     terminal: isTerminal,
   });
   const isLoading = liveStatus === "loading";
-  const isLive = liveStatus === "live" || liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // Single source of truth for downstream consumers. `mergeDetail`
@@ -93,6 +96,13 @@ export function RunDetail(): JSX.Element {
     () => (snapshot != null ? mergeDetail(snapshot, detailOverlay) : undefined),
     [snapshot, detailOverlay],
   );
+
+  // `isLive` here means "actively dispatching", not just "SSE connected".
+  // A paused run keeps the SSE socket open (so resume facts still arrive)
+  // but isn't producing tokens, so streaming labels / pulses must stop.
+  // Reads the overlay-merged status so the badge flips the moment a
+  // pause / resume / cancel fact lands, without waiting for a refetch.
+  const isLive = (liveStatus === "live" || liveStatus === "loading") && detail?.status === "running";
 
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
@@ -121,6 +131,8 @@ export function RunDetail(): JSX.Element {
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} />
+
+      {detail?.status === "paused" && <RunPausedNotice runId={id} />}
 
       {isError && !detail ? (
         <EmptyState
@@ -161,6 +173,7 @@ export function RunDetail(): JSX.Element {
                 streaming={streaming}
                 nodeStates={detail?.nodes}
                 isLive={isLive}
+                isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
               />

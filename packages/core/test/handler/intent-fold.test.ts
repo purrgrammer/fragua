@@ -166,4 +166,25 @@ describe("foldIntents", () => {
       expect(out.dropped).toEqual([{ seq: 1, type: "intent.hitl_input", reason: "wrong_state" }]);
     }
   });
+
+  test("intent.resume reaching the dispatch fold is a no-op (handled by wakePending)", () => {
+    const out = foldIntents([ev(1, "intent.resume", { note: "topped up" })], "running");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.appliedSeqs).toEqual([1]);
+      expect(out.dropped).toEqual([]);
+      expect(out.steering).toBeUndefined();
+      expect(out.hitlInput).toBeUndefined();
+      expect(out.shouldPause).toBe(false);
+    }
+  });
+
+  test("steer on paused_provider_error is buffered (treated like paused_hitl)", () => {
+    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_provider_error");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.steering).toBe("hint");
+      expect(out.dropped).toEqual([]);
+    }
+  });
 });

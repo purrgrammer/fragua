@@ -1,13 +1,17 @@
 // Wake non-dispatching runs that have actionable pending intents.
 //
-// `paused_hitl` and `quarantined` runs are skipped by the executor's
-// dispatch loop, so the normal fold never runs for them. Without this
-// sweep three operator intents would be silently lost:
+// `paused_hitl`, `paused_provider_error`, and `quarantined` runs are
+// skipped by the executor's dispatch loop, so the normal fold never
+// runs for them. Without this sweep four operator intents would be
+// silently lost:
 //
-//   - `intent.cancel_requested` on either paused or quarantined runs:
+//   - `intent.cancel_requested` on any paused or quarantined run:
 //     the run sits forever even though the operator asked to kill it.
 //   - `intent.hitl_input` on `paused_hitl` runs: the run never wakes
 //     to deliver the answer.
+//   - `intent.resume` on `paused_provider_error` (or `paused_hitl`)
+//     runs: the operator asked to retry the dispatch but no fact
+//     transitions the run back to `queued`.
 //   - `intent.unquarantine { resolution }` on quarantined runs:
 //     persisted by the server (`POST /runs/:id/unquarantine`) but no
 //     daemon code consumes it.
@@ -28,6 +32,7 @@ type DbRow = { run_id: string; version: number; last_applied_seq: number };
 export interface WakePendingResult {
   cancelled: string[];
   hitlWoken: string[];
+  resumed: string[];
   unquarantined: string[];
 }
 
@@ -39,12 +44,13 @@ export interface WakePendingResult {
 export function wakePending(store: IEventStore): WakePendingResult {
   const cancelled = wakeCancel(store);
   const hitlWoken = wakeHitl(store);
+  const resumed = wakeResume(store);
   const unquarantined = wakeUnquarantine(store);
-  return { cancelled, hitlWoken, unquarantined };
+  return { cancelled, hitlWoken, resumed, unquarantined };
 }
 
 /**
- * Cancel any paused_hitl / quarantined run with an unapplied
+ * Cancel any paused_* / quarantined run with an unapplied
  * `intent.cancel_requested`. Emits `fact.run_cancelled { intentSeq }`.
  */
 function wakeCancel(store: IEventStore): string[] {
@@ -56,7 +62,7 @@ function wakeCancel(store: IEventStore): string[] {
     .query<DbRow, []>(
       `SELECT run_id, version, last_applied_seq
          FROM run_state
-        WHERE status IN ('paused_hitl', 'quarantined')`,
+        WHERE status IN ('paused_hitl', 'paused_provider_error', 'quarantined')`,
     )
     .all();
 
@@ -121,6 +127,62 @@ function wakeHitl(store: IEventStore): string[] {
           },
         ],
         row.version,
+      );
+      out.push(row.run_id);
+    } catch (err) {
+      if (!(err instanceof ConcurrencyError)) throw err;
+    }
+  }
+  return out;
+}
+
+/**
+ * Wake any paused_* run that has an unapplied `intent.resume`. Emits
+ * `fact.run_resumed { fromStatus, inputIntentSeq }`. Generic counterpart
+ * to `intent.hitl_input` — operators use this when there's no payload to
+ * deliver (the canonical case is resuming after a provider transport
+ * error). Quarantined runs are NOT swept here; they require the typed
+ * `intent.unquarantine { resolution }` because the operator has to pick
+ * one of treat_as_done / retry / cancel.
+ */
+function wakeResume(store: IEventStore): string[] {
+  const out: string[] = [];
+  const db = dbOf(store);
+  if (db == null) return [];
+
+  const rows = db
+    .query<DbRow & { status: string }, []>(
+      `SELECT run_id, version, last_applied_seq, status
+         FROM run_state
+        WHERE status IN ('paused_hitl', 'paused_provider_error')`,
+    )
+    .all();
+
+  for (const row of rows) {
+    const intent = db
+      .query<{ seq: number }, [string, number]>(
+        `SELECT seq FROM events
+          WHERE run_id = ? AND seq > ? AND type = 'intent.resume'
+          ORDER BY seq ASC
+          LIMIT 1`,
+      )
+      .get(row.run_id, row.last_applied_seq);
+    if (intent == null) continue;
+
+    try {
+      store.appendFact(
+        row.run_id,
+        [
+          {
+            type: "fact.run_resumed",
+            payload: {
+              fromStatus: row.status as never,
+              inputIntentSeq: intent.seq,
+            },
+          },
+        ],
+        row.version,
+        { advanceAppliedTo: intent.seq },
       );
       out.push(row.run_id);
     } catch (err) {

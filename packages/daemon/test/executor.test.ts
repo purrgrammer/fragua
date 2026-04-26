@@ -792,3 +792,280 @@ describe("executor — schema drift", () => {
     r.store.close();
   });
 });
+
+describe("executor — provider pause and resume", () => {
+  /** Run the executor's claim → dispatch loop until the run leaves the
+   * `queued` state. Bounded so a runaway test fails loudly instead of
+   * hanging — every step either advances or pauses. */
+  async function drain(r: ReturnType<typeof rig>, runId: string, max = 12): Promise<void> {
+    for (let i = 0; i < max; i++) {
+      const claimed = r.store.claimNextRun(1);
+      if (!claimed || claimed.runId !== runId) break;
+      await runOne(runId, {
+        store: r.store,
+        dispatcher: r.dispatcher,
+        registry: new AbortRegistry(),
+        tools: r.tools,
+        llmCall: r.llmCall,
+        maxConcurrentRuns: 1,
+        maxTurnsForTesting: 10,
+        shutdownSignal: new AbortController().signal,
+      });
+      const status = r.store.getState(runId)?.status;
+      if (status !== "queued" && status !== "running") return;
+    }
+  }
+
+  test("multi-step workflow: pause on step 3 → resume re-dispatches step 3 only, run completes", async () => {
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      s1 [shape=box];
+      s2 [shape=box];
+      s3 [shape=box];
+      done [shape=Msquare];
+      start -> s1 -> s2 -> s3 -> done;
+    }`;
+    const r = rig({ dot });
+    const calls: Array<{ nodeId: string; iteration: number }> = [];
+
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "s1", tokens: 0, costUsd: 0 }),
+    });
+    for (const n of ["s1", "s2"] as const) {
+      r.dispatcher.register(r.workflowSha, n, {
+        kind: "codergen",
+        sideEffect: "external",
+        maxMs: 100,
+        handler: async (ctx) => {
+          calls.push({ nodeId: n, iteration: nodeIter(ctx) });
+          return { kind: "transition", tokens: 1, costUsd: 0.001 };
+        },
+      });
+    }
+    let s3Calls = 0;
+    r.dispatcher.register(r.workflowSha, "s3", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async (ctx) => {
+        s3Calls++;
+        calls.push({ nodeId: "s3", iteration: nodeIter(ctx) });
+        if (s3Calls === 1) {
+          return {
+            kind: "pause_provider",
+            httpStatus: 402,
+            provider: "anthropic",
+            errorMessage: "Insufficient balance",
+          };
+        }
+        return { kind: "transition", tokens: 1, costUsd: 0.001 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "ms-1", "start");
+    await drain(r, "ms-1");
+
+    // First drain: paused on s3.
+    const pausedState = r.store.getState("ms-1")!;
+    expect(pausedState.status).toBe("paused_provider_error");
+    expect(pausedState.currentNode).toBe("s3");
+
+    const events = r.store.getEvents("ms-1");
+    const pausedFact = events.find((e) => e.type === "fact.run_paused_provider_error");
+    expect(pausedFact).toBeDefined();
+    const p = pausedFact!.payload as { nodeId: string; httpStatus: number; provider: string; errorMessage: string };
+    expect(p.nodeId).toBe("s3");
+    expect(p.httpStatus).toBe(402);
+    expect(p.provider).toBe("anthropic");
+    expect(p.errorMessage).toBe("Insufficient balance");
+
+    // Each prior step ran exactly once before s3 paused.
+    const callCount = (n: string): number => calls.filter((c) => c.nodeId === n).length;
+    expect(callCount("s1")).toBe(1);
+    expect(callCount("s2")).toBe(1);
+    expect(callCount("s3")).toBe(1);
+
+    // Operator resume: write intent.resume; wakePending advances to queued.
+    r.store.appendIntent("ms-1", { type: "intent.resume", payload: { note: "topped up" } });
+    const wake = wakePending(r.store);
+    expect(wake.resumed).toContain("ms-1");
+    expect(r.store.getState("ms-1")!.status).toBe("queued");
+    const resumedFact = r.store.getEvents("ms-1").find((e) => e.type === "fact.run_resumed");
+    expect(resumedFact).toBeDefined();
+    const rf = resumedFact!.payload as { fromStatus: string };
+    expect(rf.fromStatus).toBe("paused_provider_error");
+
+    // Drain again: re-dispatches s3 (only), completes.
+    await drain(r, "ms-1");
+    expect(r.store.getState("ms-1")!.status).toBe("completed");
+    expect(callCount("s1")).toBe(1); // not re-run
+    expect(callCount("s2")).toBe(1); // not re-run
+    expect(callCount("s3")).toBe(2); // ran again on resume
+    // Iteration stays 0 for s3 across the two calls — provider pause is
+    // not a backward-edge re-entry, so retry_count never bumps.
+    const s3IterAfterResume = calls.filter((c) => c.nodeId === "s3").map((c) => c.iteration);
+    expect(s3IterAfterResume).toEqual([0, 0]);
+
+    r.store.close();
+  });
+
+  test("messages persisted on prior steps survive the pause and stay scoped to their node", async () => {
+    // Same shape as above, but s1 + s2 each persist a message via
+    // ctx.messages.append. After pause+resume, the stored transcript
+    // still contains s1's and s2's messages tagged with their node ids,
+    // and the executor never appends a duplicate s3 entry on the second
+    // dispatch (s3 doesn't write any messages here — the assertion is
+    // that the prior nodes' messages are preserved, scoped, and not
+    // mixed into s3's scope).
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      s1 [shape=box];
+      s2 [shape=box];
+      s3 [shape=box];
+      done [shape=Msquare];
+      start -> s1 -> s2 -> s3 -> done;
+    }`;
+    const r = rig({ dot });
+
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "s1", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "s1", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async (ctx) => {
+        ctx.messages.append({
+          role: "assistant",
+          content: [{ type: "text", text: "step1 output" }],
+          api: "anthropic" as never,
+          provider: "anthropic" as never,
+          model: "stub",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        });
+        return { kind: "transition", tokens: 1, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "s2", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async (ctx) => {
+        ctx.messages.append({
+          role: "assistant",
+          content: [{ type: "text", text: "step2 output" }],
+          api: "anthropic" as never,
+          provider: "anthropic" as never,
+          model: "stub",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 2,
+        });
+        return { kind: "transition", tokens: 1, costUsd: 0 };
+      },
+    });
+    let s3Calls = 0;
+    r.dispatcher.register(r.workflowSha, "s3", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => {
+        s3Calls++;
+        if (s3Calls === 1) {
+          return {
+            kind: "pause_provider",
+            httpStatus: 402,
+            provider: "anthropic",
+            errorMessage: "Insufficient balance",
+          };
+        }
+        return { kind: "transition", tokens: 1, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+
+    enqueue(r, "ms-2", "start");
+    await drain(r, "ms-2");
+    expect(r.store.getState("ms-2")!.status).toBe("paused_provider_error");
+
+    // Snapshot messages at pause time. Both s1 and s2 wrote one each;
+    // s3 wrote zero (it paused before producing anything).
+    const beforeResume = r.store.getMessages("ms-2");
+    const byNodeBefore = beforeResume.reduce<Record<string, number>>((acc, m) => {
+      const n = m.nodeId ?? "<none>";
+      acc[n] = (acc[n] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(byNodeBefore["s1"]).toBe(1);
+    expect(byNodeBefore["s2"]).toBe(1);
+    expect(byNodeBefore["s3"]).toBeUndefined();
+
+    // Resume.
+    r.store.appendIntent("ms-2", { type: "intent.resume", payload: {} });
+    wakePending(r.store);
+    await drain(r, "ms-2");
+    expect(r.store.getState("ms-2")!.status).toBe("completed");
+
+    // Post-resume: prior nodes' messages survive, still scoped to their
+    // node ids. No duplicates were minted on the resumed dispatch.
+    const afterResume = r.store.getMessages("ms-2");
+    const byNodeAfter = afterResume.reduce<Record<string, number>>((acc, m) => {
+      const n = m.nodeId ?? "<none>";
+      acc[n] = (acc[n] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(byNodeAfter["s1"]).toBe(1);
+    expect(byNodeAfter["s2"]).toBe(1);
+    // s3 still wrote zero on its second call — assertion is that no
+    // foreign-node messages got laundered onto its scope.
+    expect(byNodeAfter["s3"]).toBeUndefined();
+
+    // The s1 + s2 message contents are untouched.
+    const s1msg = afterResume.find((m) => m.nodeId === "s1")!;
+    expect(JSON.stringify(s1msg.content)).toContain("step1 output");
+    const s2msg = afterResume.find((m) => m.nodeId === "s2")!;
+    expect(JSON.stringify(s2msg.content)).toContain("step2 output");
+
+    r.store.close();
+  });
+});
+
+/** Read the per-node retry counter that result-to-facts uses for
+ * iteration tagging. Mirrors the live `routing.retry_count` lookup. */
+function nodeIter(ctx: handler.HandlerContext): number {
+  const v = (ctx as unknown as { routing: Record<string, unknown> }).routing?.["retry_count"];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}

@@ -93,7 +93,7 @@ UPDATE run_state
 -- For each returned run_id, append fact.run_requeued_after_crash
 
 -- (b) Quarantine orphans (see 1.1)
--- (c) paused_hitl and quarantined runs are NOT touched
+-- (c) paused_hitl, paused_provider_error, and quarantined runs are NOT touched
 ```
 
 Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
@@ -122,12 +122,21 @@ Unchanged. `Promise.race` with hard timeout bounds damage; leaked handlers emit 
 ### 1.9 Mid-flight abort replay
 Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
 
-### 1.10 Remaining concerns
+### 1.10 LLM provider transport error mid-stream
+**Attack.** The LLM provider returns 402 (insufficient balance), 429 (rate limit), 5xx, or the network drops mid-stream. pi-ai surfaces this as `AssistantMessageEvent { type: "error" }`; without intervention the codergen handler converts it into `outcome.status = "fail"`, indistinguishable from a deliberate `<abort>`. The run halts and all completed work in the transcript is abandoned even though it survives in the `messages` table.
+
+**Resolution.**
+1. **HTTP-status capture.** `PiCodergenBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
+2. **Handler-result kind `pause_provider`.** The handler-bridge translates the provider-error outcome to `HandlerResult.kind = "pause_provider"` carrying `{ httpStatus, provider, errorMessage }`. The executor commits `fact.run_paused_provider_error { nodeId, httpStatus, provider, errorMessage }` and transitions the run to `paused_provider_error`.
+3. **Generic resume intent.** Operator writes `intent.resume`. The daemon wakes the run back to `queued` and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript loaded as `priorMessages`. Worktree, branch, and message ordering all survive — same path as `paused_hitl` rehydration.
+4. **All transport errors are manual.** Even retryable codes (429, 503) pause; an automatic retry storm against a busted account is worse than waiting for a human. Auto-retry can be added later without changing the fact/intent shape.
+
+### 1.11 Remaining concerns
 - **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` and halts only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Additive bumps (new column with safe default, new event type, new optional payload field) move CURRENT only — long-paused HITL runs survive the deploy. Breaking bumps move both constants together. See `packages/store/src/pragmas.ts` for the policy.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` and halts only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Additive bumps (new column with safe default, new event type, new optional payload field, new status enum value) move CURRENT only — long-paused HITL runs survive the deploy. Breaking bumps move both constants together. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 3`, `CURRENT_SCHEMA_VERSION = 4` (v4 adds `paused_provider_error` status, `fact.run_paused_provider_error`, `intent.resume`). See `packages/store/src/pragmas.ts` for the policy.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -168,7 +177,8 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','completed','cancelled','halted','quarantined'
+    'queued','running','paused_hitl','paused_provider_error',
+    'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
@@ -259,7 +269,8 @@ CREATE TABLE daemon_lock (
 | `intent.steering_requested` | `payload: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
-| `intent.hitl_input` | `payload: unknown` | Wake a `paused_hitl` run |
+| `intent.hitl_input` | `payload: unknown` | Wake a `paused_hitl` run (specialised; carries human reply) |
+| `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
 | `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note: string` | Operator acknowledgement for a quarantined run |
 | `intent.priority_adjusted` | `newPriority: number`, `note: string` | Operator bump |
 
@@ -277,6 +288,7 @@ CREATE TABLE daemon_lock (
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
 | `fact.run_paused_hitl` | `nodeId`, `prompt` | Yielded for human input |
+| `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage` | LLM provider returned a transport error mid-stream; transcript intact |
 | `fact.run_resumed` | `fromStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
 | `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'`, `detail?` | Terminal failure |
@@ -466,7 +478,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
   while (!shutdownSignal.aborted) {
     const state = store.getState(runId);
-    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "quarantined") return;
+    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "paused_provider_error" || state.status === "quarantined") return;
 
     if (state.schema_version !== CURRENT_SCHEMA_VERSION) {
       store.appendFact(runId, [haltFact("schema_drift")], state.version);
@@ -732,7 +744,7 @@ names that don't do anything yet. Listed here so they're discoverable
 and tracked.
 
 - *(retired)* ~~Budget ledger.~~ Wired. `packages/core/src/engine/budget-policy.ts` evaluates run-level (`graph.attrs.budget_usd` / `budget_tokens`) and per-node (`node.attrs.max_cost_usd` / `max_tokens`) ceilings at every turn boundary, with `budget.warn` at 80 % (once per `(scope, metric)` per run, deduped via `routing.__budget_warned`) and `budget.stop` + `fact.run_halted { reason: "budget" }` on breach. `graph.attrs.budget_policy = "warn"` makes stops non-blocking — `budget.stop` still emits but the run continues. The reducer accumulates per-node cost in a new `RunMetrics.nodeCosts` map (additive JSON change, no schema bump). Parser validates `budget_policy` against the `"warn" | "stop"` enum at registration time so typos fail at `POST /workflows`. The agent backend's `BudgetSnapshot` is now populated from real cumulative numbers via `ctx.budgetSnapshot`. Tests: `packages/core/test/engine/budget-policy.test.ts` (12 unit cases) + `packages/daemon/test/executor.budget.test.ts` (3 end-to-end).
-- *(retired)* ~~Worktree provisioning.~~ Wired. `WorktreeProvisioner` (`@swarm/daemon`) maintains a per-runId `Map<runId, ExecutionEnvironment>`; the executor calls `ensure(runId)` before the first dispatch and `dispose(runId)` once the run reaches a terminal status (completed / cancelled / halted). `paused_hitl` + `quarantined` runs keep their worktree so a resume picks up exactly where it left off — including across daemon restarts, since `WorktreeEnvironment.init()` detects an existing registered worktree (via `git worktree list --porcelain`) and reuses it without re-running bootstrap. `$WORKTREE_PATH` / `$LOG_DIR` substitution args now resolve to real paths. Non-git cwds fall back to a shared `LocalEnvironmentProvisioner` (tests + demo paths).
+- *(retired)* ~~Worktree provisioning.~~ Wired. `WorktreeProvisioner` (`@swarm/daemon`) maintains a per-runId `Map<runId, ExecutionEnvironment>`; the executor calls `ensure(runId)` before the first dispatch and `dispose(runId)` once the run reaches a terminal status (completed / cancelled / halted). `paused_hitl` + `paused_provider_error` + `quarantined` runs keep their worktree so a resume picks up exactly where it left off — including across daemon restarts, since `WorktreeEnvironment.init()` detects an existing registered worktree (via `git worktree list --porcelain`) and reuses it without re-running bootstrap. `$WORKTREE_PATH` / `$LOG_DIR` substitution args now resolve to real paths. Non-git cwds fall back to a shared `LocalEnvironmentProvisioner` (tests + demo paths).
 - *(retired)* ~~Checkpoint / resume.~~ Wired through the `messages` table. `PiCodergenBackend` calls `CodergenInput.persistMessage` at each `message_end` to land plaintext content in `messages.content` (TEXT, unbounded — §I7 cap stays intact because message content never rides the event envelope). Handler-bridge loads the prior transcript from the store into `CodergenInput.priorMessages` as synthesised `AgentMessage`s before every `backend.run()`. **Fidelity is invariant across daemon restarts.** Rehydrated messages are byte-identical to pre-pause state, so content-addressed caches (Anthropic, OpenAI Completions, Google) hit on identical prefixes and the OpenAI-Responses family's `prompt_cache_key` is derived from the stable `thread_id`. `computeResumeDecision` still classifies each dispatch as `resumed=true|false` — purely observational; when true the backend emits `agent.info { event: "thread_rehydrated", thread_id, message_count }` so the signal is visible in `events.jsonl` without altering behaviour. The daemon seeds its shared `inProcessWrites` Set at boot from `store.listThreadsWithMessages()` so a resumed dispatch on a pre-existing thread stays on the "we wrote this" side of the classifier. A separate `GET /runs/:id/messages` endpoint serves the transcript to the frontend directly.
 - *(retired)* ~~Auto-title summariser (emit side).~~ Wired. `AutoTitler` (@swarm/daemon) fires once per run right after `fact.run_started`, emits `summary.*` + `cost.recorded` + `run.title_generated` under the synthetic `__summary.title` node id, and projects the result onto `run_state.title` via `setRunTitle`. The daemon `drain()`s pending title calls on shutdown so in-flight summariser streams cancel via the shared `shutdownSignal`. `auto_title: "off"` disables even when a summariser is configured; failures (missing keys, network errors) leave `title = null` and the UI falls back to `routing.input`.
 - **Handler coverage.** All 8 canonical kinds from attractor §2.8 are now wired end-to-end through `auto-dispatcher.ts`: `start`, `exit`, `conditional`, `codergen`, `wait.human`, `tool`, `parallel`, and `parallel.fan_in`. The pure reducers behind them — `fan-in.ts`, `retry-policy.ts`, `edge-selection.ts`, `external-call.ts` — are all property-tested. Parallel is v1 "deliberation-only" (regime C): branches deep-clone routing but share the run's worktree. Read-only enforcement is structural at three layers: (a) `ctx.tools` is narrowed via `ToolRegistry.select` before the HandlerContext is built; (b) the codergen backend re-applies `select(...)` on its workspace registry before handing tools to pi-ai; (c) `ctx.env` is wrapped in a read-only proxy when no mutating tool (`bash` / `write` / `edit`) is visible, so `env.writeFile` / `env.exec` throw `ReadOnlyEnvError` even for handlers that bypass the tool registry. HITL inside a parallel branch is coerced to `fail`; multi-worktree parallel and LLM-evaluated fan_in (attractor §4.9's `prompt`-set branch) are deferred.

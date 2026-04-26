@@ -227,4 +227,18 @@ export type HandlerResult =
       kind: "halt";
       reason: "budget" | "max_loops" | "error";
       detail?: string;
+    }
+  | {
+      /** Recoverable LLM-provider transport failure (HTTP 402 / 429 / 5xx /
+       * pre-response network reset). The executor commits
+       * `fact.run_paused_provider_error` and transitions the run to
+       * `paused_provider_error`. An operator `intent.resume` wakes the
+       * run and re-dispatches the same `(nodeId, iteration)` with the
+       * rehydrated transcript. Handlers never construct this themselves
+       * — the codergen agent boundary detects provider transport errors
+       * and returns this kind on the handler's behalf. */
+      kind: "pause_provider";
+      httpStatus: number | null;
+      provider: string;
+      errorMessage: string;
     };

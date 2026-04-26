@@ -170,6 +170,79 @@ describe("SqliteStore — appendFact", () => {
     store.close();
   });
 
+  test("fact.run_paused_provider_error transitions status; fact.run_resumed wakes back to queued", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused_provider_error",
+          payload: {
+            nodeId: "a",
+            httpStatus: 402,
+            provider: "anthropic",
+            errorMessage: "Insufficient balance",
+          },
+        },
+      ],
+      s1.version,
+    );
+    const paused = store.getState(runId)!;
+    expect(paused.status).toBe("paused_provider_error");
+    expect(paused.nodeStartedAt).toBeNull();
+
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } }],
+      paused.version,
+    );
+    const resumed = store.getState(runId)!;
+    expect(resumed.status).toBe("queued");
+    store.close();
+  });
+
+  test("fact.run_paused_provider_error accepts httpStatus=null for network errors", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused_provider_error",
+          payload: { nodeId: "a", httpStatus: null, provider: "anthropic", errorMessage: "ECONNRESET" },
+        },
+      ],
+      s1.version,
+    );
+    expect(store.getState(runId)!.status).toBe("paused_provider_error");
+    store.close();
+  });
+
   test("appendFact rejects oversized payloads", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
@@ -205,6 +278,18 @@ describe("SqliteStore — intents", () => {
     expect(store.getState(runId)!.version).toBe(s.version);
     const unapplied = store.getUnappliedIntents(runId);
     expect(unapplied.some((e) => e.type === "intent.pause_requested")).toBe(true);
+    store.close();
+  });
+
+  test("intent.resume round-trips through the event log", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const intent: IntentEvent = { type: "intent.resume", payload: { note: "topped up balance" } };
+    const { seq } = store.appendIntent(runId, intent);
+    expect(seq).toBeGreaterThan(0);
+    const unapplied = store.getUnappliedIntents(runId);
+    const resume = unapplied.find((e) => e.type === "intent.resume");
+    expect(resume?.payload).toEqual({ note: "topped up balance" });
     store.close();
   });
 });
@@ -615,6 +700,39 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     const s1 = store.getState(runId)!;
     store.appendFact(runId, [{ type: "fact.run_paused_hitl", payload: { nodeId: "a", prompt: "p" } }], s1.version);
     expect(store.getState(runId)!.status).toBe("paused_hitl");
+    const rows = store.listThreadsWithMessages();
+    expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);
+    store.close();
+  });
+
+  test("paused_provider_error runs are included (resumable thread)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
+    store.appendMessage(runId, { content: userMsg, nodeId: "t1", iteration: 0 });
+    const s = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s.workflowSha, schemaVersion: s.schemaVersion, startNode: "a" },
+        },
+      ],
+      s.version,
+    );
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused_provider_error",
+          payload: { nodeId: "a", httpStatus: 402, provider: "anthropic", errorMessage: "Insufficient balance" },
+        },
+      ],
+      s1.version,
+    );
+    expect(store.getState(runId)!.status).toBe("paused_provider_error");
     const rows = store.listThreadsWithMessages();
     expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);
     store.close();

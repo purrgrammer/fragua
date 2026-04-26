@@ -328,6 +328,16 @@ export function createRoutes(deps: ServerDeps): Hono {
     });
   });
 
+  app.post("/runs/:id/resume", async (c) => {
+    const body = (await readJson<{ note?: string }>(c)) ?? {};
+    const payload: { note?: string } = {};
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.resume",
+      payload,
+    });
+  });
+
   app.post("/runs/:id/unquarantine", async (c) => {
     const body = await readJson<{
       resolution?: "treat_as_done" | "retry" | "cancel";

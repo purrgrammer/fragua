@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CodergenBackend, Node, OutcomeStatus } from "@swarm/core";
-import { ok } from "@swarm/core";
+import { failProvider, ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { MAX_MESSAGE_CONTENT_BYTES, SqliteStore } from "@swarm/store";
 import fc from "fast-check";
@@ -476,6 +476,47 @@ describe("makeCodergenHandler — oversized messages spill to artifact", () => {
     });
     expect(artifactBytes.length).toBeGreaterThan(MAX_MESSAGE_CONTENT_BYTES);
 
+    store.close();
+  });
+});
+
+describe("makeCodergenHandler — provider error → pause_provider", () => {
+  test("outcome.provider_error translates to HandlerResult.kind=pause_provider", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-prov-1", store, "n1");
+    const backend: CodergenBackend = {
+      async run() {
+        return failProvider("Insufficient balance", { httpStatus: 402, provider: "anthropic" });
+      },
+    };
+
+    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("pause_provider");
+    if (result.kind === "pause_provider") {
+      expect(result.httpStatus).toBe(402);
+      expect(result.provider).toBe("anthropic");
+      expect(result.errorMessage).toBe("Insufficient balance");
+    }
+    store.close();
+  });
+
+  test("outcome.provider_error with httpStatus=null (network error) round-trips", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-prov-2", store, "n1");
+    const backend: CodergenBackend = {
+      async run() {
+        return failProvider("ECONNRESET", { httpStatus: null, provider: "anthropic" });
+      },
+    };
+
+    const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("pause_provider");
+    if (result.kind === "pause_provider") {
+      expect(result.httpStatus).toBeNull();
+      expect(result.errorMessage).toBe("ECONNRESET");
+    }
     store.close();
   });
 });

@@ -30,6 +30,21 @@ export const OutcomeSchema = Type.Object(
      * burn tokens re-running the run after an explicit stop.
      */
     non_retryable: Type.Optional(Type.Boolean()),
+    /**
+     * Set by the codergen agent boundary when an LLM provider returns a
+     * transport error mid-stream (HTTP 402/429/5xx, pre-response network
+     * reset). Routes the run to `paused_provider_error` instead of the
+     * normal fail → halt path, so the operator can `intent.resume` after
+     * fixing the underlying issue. `httpStatus` is `null` for failures
+     * that never reached the provider's response (DNS/TCP).
+     */
+    provider_error: Type.Optional(
+      Type.Object({
+        httpStatus: Type.Union([Type.Number(), Type.Null()]),
+        provider: Type.String(),
+        errorMessage: Type.String(),
+      }),
+    ),
   },
   { $id: "Outcome" },
 );
@@ -58,5 +73,29 @@ export function fail(failure_reason: string, partial: Partial<Outcome> = {}): Ou
     notes: "",
     failure_reason,
     ...partial,
+  };
+}
+
+/**
+ * Mark an outcome as a recoverable provider transport error. Handler-bridge
+ * sees `provider_error` and converts the outcome into
+ * `HandlerResult.kind = "pause_provider"` instead of routing fail through
+ * the normal halt path. Status stays "fail" so any downstream code that
+ * checks status alone still treats this as not-success.
+ */
+export function failProvider(errorMessage: string, detail: { httpStatus: number | null; provider: string }): Outcome {
+  return {
+    status: "fail",
+    context_updates: {},
+    preferred_label: "",
+    suggested_next_ids: [],
+    notes: errorMessage,
+    failure_reason: errorMessage,
+    non_retryable: true,
+    provider_error: {
+      httpStatus: detail.httpStatus,
+      provider: detail.provider,
+      errorMessage,
+    },
   };
 }

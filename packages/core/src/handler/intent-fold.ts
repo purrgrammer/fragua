@@ -104,11 +104,11 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
 
   // The fold only runs while the executor is dispatching, which means
   // the run is `queued` (just-claimed, about to transition to running)
-  // or `running`. `paused_hitl` and `quarantined` runs are skipped by
-  // the executor before this point — but we accept them here defensively
-  // so the fold is a total function over RunStatus.
+  // or `running`. `paused_*` and `quarantined` runs are skipped by the
+  // executor before this point — but we accept them here defensively so
+  // the fold is a total function over RunStatus.
   const isDispatching = runStatus === "queued" || runStatus === "running";
-  const isPaused = runStatus === "paused_hitl";
+  const isPaused = runStatus === "paused_hitl" || runStatus === "paused_provider_error";
 
   for (const ev of intents) {
     applied.push(ev.seq);
@@ -157,12 +157,15 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
         break;
       }
       case "intent.run_enqueued":
+      case "intent.resume":
       case "intent.unquarantine":
       case "intent.cancel_requested":
         // run_enqueued is projection-level (already applied at enqueue
-        // time). unquarantine has its own handler path outside the
-        // dispatch fold (currently a known gap — see top.md). Cancel was
-        // already short-circuited above.
+        // time). resume + unquarantine are handled in wakePending (their
+        // wake function emits a fact.run_resumed and advances applied
+        // seq, so they shouldn't normally reach this fold; we accept them
+        // defensively as no-ops). Cancel was already short-circuited
+        // above.
         break;
     }
   }

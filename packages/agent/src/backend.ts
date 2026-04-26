@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
-import { fail, ok } from "@swarm/core";
+import { fail, failProvider, ok } from "@swarm/core";
 import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
 import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -317,6 +317,17 @@ export class PiCodergenBackend implements CodergenBackend {
     // clobber each other's cache under the same thread.
     const sessionId = resolveSessionId({ fidelity: effectiveFidelity, threadId, isFresh });
 
+    // Capture the last HTTP response status pi-ai received per LLM call.
+    // Pi-agent-core wires `onResponse` through to its `streamFn`, which in
+    // turn forwards to pi-ai's `StreamOptions.onResponse`. The status lets
+    // us classify a `stopReason="error"` end as a transport failure (4xx
+    // / 5xx) versus a content/tool failure, and route the run to
+    // `paused_provider_error` instead of an unrecoverable halt.
+    let lastHttpStatus: number | null = null;
+    const captureResponse = (response: { status: number }) => {
+      lastHttpStatus = response.status;
+    };
+
     const agent = new Agent({
       initialState: {
         systemPrompt,
@@ -324,6 +335,7 @@ export class PiCodergenBackend implements CodergenBackend {
         tools,
         ...(hydrateMessages.length > 0 ? { messages: hydrateMessages } : {}),
       },
+      onResponse: captureResponse,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(this.getApiKey !== undefined ? { getApiKey: this.getApiKey } : {}),
     });
@@ -438,11 +450,44 @@ export class PiCodergenBackend implements CodergenBackend {
     }
 
     const last = agent.state.messages[agent.state.messages.length - 1];
-    if (!last) return fail("agent produced no messages");
+    if (!last) {
+      // No messages at all is the strongest signal that the very first
+      // call failed transport-level. Pause-not-halt so the run can
+      // resume after the operator fixes the upstream issue.
+      return failProvider("provider returned no response", {
+        httpStatus: lastHttpStatus,
+        provider,
+      });
+    }
 
     if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+      // Cancel/timeout (`aborted`) is an executor-side decision, not a
+      // provider problem — keep it routed as fail so cancel actually
+      // terminates the run.
+      if (last.stopReason === "error") {
+        const httpIs4xx5xx = lastHttpStatus !== null && lastHttpStatus >= 400 && lastHttpStatus < 600;
+        const noContent = !Array.isArray(last.content) || last.content.length === 0;
+        if (httpIs4xx5xx || noContent) {
+          return failProvider(last.errorMessage ?? `provider stream error (HTTP ${lastHttpStatus ?? "n/a"})`, {
+            httpStatus: lastHttpStatus,
+            provider,
+          });
+        }
+      }
       return fail(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
         notes: summarizeMessage(last),
+      });
+    }
+
+    // Empty assistant turn without an explicit error — the stream ended
+    // cleanly but produced nothing. Observed against real provider 402s
+    // where pi-ai's stream parsed an HTTP error body as a benign
+    // termination. Pause-not-halt; the operator's resume re-enters the
+    // same node with the rehydrated transcript intact.
+    if (last.role === "assistant" && (!Array.isArray(last.content) || last.content.length === 0)) {
+      return failProvider("provider returned an empty response", {
+        httpStatus: lastHttpStatus,
+        provider,
       });
     }
 

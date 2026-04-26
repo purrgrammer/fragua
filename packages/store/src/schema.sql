@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','completed','cancelled','halted','quarantined'
+    'queued','running','paused_hitl','paused_provider_error',
+    'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
   workflow_sha TEXT NOT NULL REFERENCES workflows(sha),

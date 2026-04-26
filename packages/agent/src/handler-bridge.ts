@@ -156,6 +156,20 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       },
     });
 
+    // Provider transport error: pause the run instead of halting so an
+    // operator can `intent.resume` after fixing the upstream issue (top
+    // up balance, rotate key, wait out a 5xx). The codergen agent
+    // boundary attaches `provider_error` when classifying a failed
+    // stream; handlers never construct it themselves.
+    if (outcome.provider_error != null) {
+      return {
+        kind: "pause_provider",
+        httpStatus: outcome.provider_error.httpStatus,
+        provider: outcome.provider_error.provider,
+        errorMessage: outcome.provider_error.errorMessage,
+      } satisfies HandlerResult;
+    }
+
     if (outcome.status === "retry" || outcome.status === "partial_success") {
       // Treat retries as halt for now — a richer retry strategy can fold
       // outcome.context_updates back into routing and re-enter the node.

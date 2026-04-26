@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 
 /** Schema version this code emits for new DBs and pins on new runs. */
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Lowest schema version this daemon can resume.

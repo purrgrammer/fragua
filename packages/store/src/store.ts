@@ -465,7 +465,7 @@ export class SqliteStore implements IEventStore {
            FROM messages m
            JOIN run_state r ON r.run_id = m.run_id
           WHERE m.node_id IS NOT NULL
-            AND r.status IN ('queued','running','paused_hitl')`,
+            AND r.status IN ('queued','running','paused_hitl','paused_provider_error')`,
       )
       .all();
     const fromEvents = this.db
@@ -476,7 +476,7 @@ export class SqliteStore implements IEventStore {
            JOIN run_state r ON r.run_id = e.run_id
           WHERE e.type = 'llm.start'
             AND json_extract(e.payload, '$.thread_id') IS NOT NULL
-            AND r.status IN ('queued','running','paused_hitl')`,
+            AND r.status IN ('queued','running','paused_hitl','paused_provider_error')`,
       )
       .all();
     const seen = new Set<string>();

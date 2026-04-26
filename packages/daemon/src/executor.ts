@@ -245,6 +245,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         state.status === "cancelled" ||
         state.status === "halted" ||
         state.status === "paused_hitl" ||
+        state.status === "paused_provider_error" ||
         state.status === "quarantined"
       ) {
         return;

@@ -119,6 +119,18 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       facts.push({ type: "fact.run_halted", payload });
       return facts;
     }
+    case "pause_provider": {
+      facts.push({
+        type: "fact.run_paused_provider_error",
+        payload: {
+          nodeId: ctx.state.currentNode ?? "",
+          httpStatus: result.httpStatus,
+          provider: result.provider,
+          errorMessage: result.errorMessage,
+        },
+      });
+      return facts;
+    }
   }
 }
 

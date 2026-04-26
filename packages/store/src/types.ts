@@ -5,7 +5,15 @@ import type { RunCostTotalsRow, StepAggregateRow } from "./queries.ts";
 
 export type { RunCostTotalsRow, StepAggregateRow };
 
-export type RunStatus = "queued" | "running" | "paused_hitl" | "completed" | "cancelled" | "halted" | "quarantined";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "paused_hitl"
+  | "paused_provider_error"
+  | "completed"
+  | "cancelled"
+  | "halted"
+  | "quarantined";
 
 export type EventWriter = "daemon" | "web";
 
@@ -70,6 +78,7 @@ export type IntentEvent =
   | { type: "intent.pause_requested"; payload: Record<string, never> }
   | { type: "intent.cancel_requested"; payload: { reason?: string } }
   | { type: "intent.hitl_input"; payload: { input: unknown } }
+  | { type: "intent.resume"; payload: { note?: string } }
   | {
       type: "intent.unquarantine";
       payload: { resolution: "treat_as_done" | "retry" | "cancel"; note: string };
@@ -196,6 +205,15 @@ export type FactEvent =
       };
     }
   | { type: "fact.run_paused_hitl"; payload: { nodeId: string; prompt: string } }
+  | {
+      type: "fact.run_paused_provider_error";
+      payload: {
+        nodeId: string;
+        httpStatus: number | null;
+        provider: string;
+        errorMessage: string;
+      };
+    }
   | {
       type: "fact.run_resumed";
       payload: {
@@ -524,7 +542,9 @@ export interface IEventStore {
    *    rows (covers graph-level / edge-level thread ids that don't match
    *    any node id).
    * Terminal runs (completed/cancelled/halted/quarantined) are excluded
-   * — their threads will never be dispatched again.
+   * — their threads will never be dispatched again. Non-terminal pause
+   * states (paused_hitl, paused_provider_error) are included since they
+   * resume to the same thread on `intent.resume`/`intent.hitl_input`.
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 

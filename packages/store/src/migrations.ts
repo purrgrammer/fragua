@@ -13,8 +13,17 @@ const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
  * additive migrations run idempotently and the row is bumped to CURRENT.
  * Versions below MIN throw schema-drift; versions above CURRENT throw
  * downgrade-refused. See `pragmas.ts` for the bumping policy.
+ *
+ * Migrations that *rebuild* a table (DROP + RENAME) MUST run with
+ * `foreign_keys=OFF` and OUTSIDE the main migration transaction —
+ * SQLite cascades child deletes on `DROP TABLE` of a parent when
+ * `foreign_keys=ON`, and `PRAGMA foreign_keys` inside an open
+ * transaction is a silent no-op. `applyRebuildMigrations` is the
+ * pre-txn step that handles those cases.
  */
 export function migrate(db: Database): void {
+  applyRebuildMigrations(db);
+
   db.transaction(() => {
     db.exec(SCHEMA_SQL);
     applyAdditiveMigrations(db);
@@ -53,4 +62,99 @@ function applyAdditiveMigrations(db: Database): void {
   if (!cols.some((c) => c.name === "content_hash")) {
     db.exec("ALTER TABLE messages ADD COLUMN content_hash TEXT");
   }
+}
+
+/**
+ * Rebuild migrations — DROP + RENAME on a parent table. MUST run before
+ * the main migration transaction, with `foreign_keys=OFF`. SQLite
+ * cascades child deletes on DROP TABLE when FKs are enabled (events,
+ * messages, artifacts all reference run_state with ON DELETE CASCADE);
+ * the foreign-key pragma can only be toggled outside an open
+ * transaction.
+ *
+ * Each block is idempotent — gated on whether the target schema literal
+ * already appears in the stored DDL — so a no-op on already-migrated
+ * DBs.
+ */
+function applyRebuildMigrations(db: Database): void {
+  const ddl = db
+    .query<{ sql: string | null }, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_state'")
+    .get();
+  if (ddl?.sql && !ddl.sql.includes("'paused_provider_error'")) {
+    db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      db.transaction(() => rebuildRunStateForV4(db))();
+      // Sanity check: nothing should now violate a FK. If the rebuild
+      // accidentally orphaned rows, surface that here instead of leaving
+      // a corrupt DB.
+      const violations = db.query<{ table: string; rowid: number }, []>("PRAGMA foreign_key_check").all();
+      if (violations.length > 0) {
+        throw new Error(`v4 rebuild left ${violations.length} foreign-key violation(s); aborting.`);
+      }
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+}
+
+/**
+ * v3 → v4 widens the run_state.status CHECK to include
+ * 'paused_provider_error'. SQLite STRICT can't ALTER a CHECK, so we
+ * follow the rename-rebuild-rename dance from
+ * https://sqlite.org/lang_altertable.html#otheralter (option 2).
+ *
+ * Caller MUST have set `PRAGMA foreign_keys=OFF` outside this txn:
+ * with FKs on, `DROP TABLE run_state` cascades through the
+ * `ON DELETE CASCADE` references on events/messages/artifacts and
+ * silently empties them. `applyRebuildMigrations` is the only sanctioned
+ * entry point.
+ */
+function rebuildRunStateForV4(db: Database): void {
+  db.exec(`
+    CREATE TABLE run_state_v4 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused_hitl','paused_provider_error',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      total_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v4 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, updated_at, title
+    )
+    SELECT
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, updated_at, title
+    FROM run_state;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v4 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC) WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated ON run_state(updated_at);
+  `);
 }

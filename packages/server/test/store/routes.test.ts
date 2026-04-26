@@ -460,6 +460,8 @@ describe("intent-write routes", () => {
     ["pause", "/pause", undefined, "intent.pause_requested"],
     ["cancel", "/cancel", { reason: "stop" }, "intent.cancel_requested"],
     ["hitl", "/hitl", { input: "approved" }, "intent.hitl_input"],
+    ["resume", "/resume", { note: "topped up" }, "intent.resume"],
+    ["resume-noargs", "/resume", undefined, "intent.resume"],
     ["unquarantine", "/unquarantine", { resolution: "retry", note: "try again" }, "intent.unquarantine"],
     ["priority", "/priority", { newPriority: 5 }, "intent.priority_adjusted"],
   ] as const)("POST /runs/:id/%s writes an %s intent", async (_label, path, body, type) => {
