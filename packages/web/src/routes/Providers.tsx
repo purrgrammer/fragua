@@ -59,8 +59,7 @@ export function Providers(): JSX.Element {
       <header className="flex items-baseline justify-between">
         <h2 className="font-heading text-base font-semibold">Providers</h2>
         <p className="text-muted-foreground text-xs">
-          Configured via <code className="font-mono">~/.swarm/auth.json</code> +{" "}
-          <code className="font-mono">models.json</code>
+          <code className="font-mono">~/.swarm/auth.json</code> + <code className="font-mono">models.json</code>
         </p>
       </header>
 
