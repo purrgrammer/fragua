@@ -72,10 +72,15 @@ export interface UseRunLiveOptions {
    * initial connect doesn't flood the browser with thousands of frames
    * the snapshot already accounts for. */
   sinceSeq?: number;
-  /** When true, the run has already reached a terminal status — no new
-   * SSE frames will ever arrive. The hook skips opening EventSource
-   * entirely, saving a server round-trip + listener overhead per
-   * historical run the user opens. */
+  /** Tri-state terminal flag, derived from the snapshot:
+   *   - `true`  — confirmed terminal; no SSE will ever be opened.
+   *   - `false` — confirmed live; SSE opens immediately.
+   *   - `undefined` — snapshot still loading; defer SSE until we know.
+   *
+   * The third state matters because without it we'd open an SSE for the
+   * 50ms snapshot fetch on every page load — including for terminal
+   * runs that never need a stream — and the connection has to close +
+   * reopen once the snapshot settles. */
   terminal?: boolean;
 }
 
@@ -157,9 +162,13 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
 
     // Skip SSE entirely on terminal runs — no new frames will ever
     // arrive, and the snapshot+messages fetch already loaded everything.
-    // Saves ~30 listeners + a server connection per historical run view.
-    if (opts.terminal === true) {
-      setStatus("closed");
+    // Also skip while the snapshot is still loading (`terminal === undefined`):
+    // opening an SSE we'd close 50ms later when the snapshot resolves
+    // is wasted work and shows up in the network log as transient
+    // connections. The effect re-runs once `terminal` settles to a
+    // boolean, opening SSE only if the run is genuinely live.
+    if (opts.terminal === true || opts.terminal === undefined) {
+      setStatus(opts.terminal === true ? "closed" : "loading");
       return () => {
         cancelled = true;
         if (refetchTimerRef.current) {

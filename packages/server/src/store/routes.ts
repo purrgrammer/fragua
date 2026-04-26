@@ -6,7 +6,14 @@
 
 import type { Database } from "bun:sqlite";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
-import { type IEventStore, type IntentEvent, PayloadTooLargeError, type StoredEvent, sha256Hex } from "@swarm/store";
+import {
+  type IEventStore,
+  type IntentEvent,
+  isTerminal as isTerminalStatus,
+  PayloadTooLargeError,
+  type StoredEvent,
+  sha256Hex,
+} from "@swarm/store";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -401,6 +408,13 @@ export function createRoutes(deps: ServerDeps): Hono {
           });
           lastSeq = event.seq;
         }
+        // Close the stream once the run reaches a terminal status. The
+        // last batch ships any terminal facts; the run will never emit
+        // again, so polling forever just keeps a connection alive that
+        // the browser's EventSource will then auto-reconnect on every
+        // proxy/idle drop. Returning here stops the reconnect storm.
+        const state = deps.store.getState(runId);
+        if (state != null && isTerminalStatus(state.status)) return;
         if (batch.length === 0) await stream.sleep(pollMs);
       }
     }),

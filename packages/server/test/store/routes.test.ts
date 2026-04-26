@@ -591,4 +591,45 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     expect(chunks).not.toContain("id: 1\n");
     expect(chunks).not.toContain("id: 2\n");
   });
+
+  test("/runs/:id/stream closes on its own once the run reaches a terminal status", async () => {
+    // Without this close, the loop would poll forever after the run
+    // ended, and the browser's EventSource would auto-reconnect on every
+    // proxy/idle drop. The handler must return after the last batch
+    // that includes a terminal fact.
+    store.enqueueRun({ runId: "term", workflowSha: "wf" });
+    const s0 = store.getState("term")!;
+    store.appendFact(
+      "term",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "a" } }],
+      s0.version,
+    );
+    const s1 = store.getState("term")!;
+    store.appendFact("term", [{ type: "fact.run_completed", payload: { reason: "ok" } }], s1.version);
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(new Request("http://test/runs/term/stream"));
+    expect(res.status).toBe(200);
+
+    // Drain the response — if the close fires correctly, `reader.read()`
+    // resolves with `done: true` quickly. If it doesn't, the test times
+    // out at the deadline (which would also fail the assertion below).
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let chunks = "";
+    let closed = false;
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) {
+        closed = true;
+        break;
+      }
+      chunks += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel().catch(() => {});
+
+    expect(closed).toBe(true);
+    expect(chunks).toContain("fact.run_completed");
+  });
 });

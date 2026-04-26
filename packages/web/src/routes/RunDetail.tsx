@@ -65,7 +65,11 @@ export function RunDetail(): JSX.Element {
   // `qc.refetchQueries(detail)` on every SSE frame — on a 1k-events/sec
   // run that was a thousand full-payload refetches per second.
   const { data: snapshot, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
-  const isTerminal = snapshot != null && TERMINAL_STATUSES.has(snapshot.status);
+  // Tri-state: `undefined` while the snapshot is loading; `true` only
+  // when we've confirmed a terminal status. `useRunLive` defers opening
+  // SSE until this lands as a boolean so we don't flash a transient
+  // connection during the snapshot's first ~50ms.
+  const isTerminal: boolean | undefined = snapshot == null ? undefined : TERMINAL_STATUSES.has(snapshot.status);
   const {
     messages,
     streaming,
