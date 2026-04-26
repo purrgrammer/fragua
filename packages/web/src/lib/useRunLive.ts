@@ -14,7 +14,6 @@
 //   - `totalEvents` — monotonic counter, cheap invalidation trigger.
 //   - `controlEvents` — filtered slice for `usePendingSteers`.
 
-import { ALL_EVENT_TYPES } from "@swarm/types";
 import { useEffect, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
 import { type CostAggregate, EMPTY_COST_AGGREGATE, foldCostFrame } from "./useLiveCostAggregate.ts";
@@ -245,12 +244,14 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       setStatus(es.readyState === 2 ? "closed" : "error");
     };
 
+    // Single listener — the server emits frames without an `event:`
+    // field so they all dispatch as `message`. The frame's actual type
+    // lives in the JSON payload (`parsed["type"]`), which `onFrame`
+    // reads directly. Previously we registered 45 typed listeners per
+    // mount; the closure chain alone added measurable retention.
     es.addEventListener("open", onOpen);
     es.addEventListener("error", onError);
     es.addEventListener("message", onFrame as EventListener);
-    for (const t of ALL_EVENT_TYPES) {
-      es.addEventListener(t, onFrame as EventListener);
-    }
 
     return () => {
       cancelled = true;
@@ -258,17 +259,9 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         clearTimeout(refetchTimerRef.current);
         refetchTimerRef.current = null;
       }
-      // Explicit listener cleanup, then close. `es.close()` alone is
-      // technically sufficient (the spec says no further events fire),
-      // but explicit removeEventListener helps GC reclaim the closure
-      // chain immediately and matches the addEventListener pairs we
-      // registered above.
       es.removeEventListener("open", onOpen);
       es.removeEventListener("error", onError);
       es.removeEventListener("message", onFrame as EventListener);
-      for (const t of ALL_EVENT_TYPES) {
-        es.removeEventListener(t, onFrame as EventListener);
-      }
       es.close();
     };
   }, [runId, opts.terminal, opts.sinceSeq]);
@@ -276,12 +269,22 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   return { messages, streaming, status, lastSeq, totalEvents, controlEvents, liveCost };
 }
 
-/** Pure delta-fold: place `delta` at `index` within the streaming
- * buffer's block array, creating a block of the right kind on first
- * hit and appending to its text otherwise. A mismatched kind at the
- * same index (e.g. a toolcall delta landing on an existing text
- * block) is treated as a new block — pi-agent-core shouldn't emit
- * that but we don't want to crash if a provider sends odd frames. */
+/** Delta-fold: place `delta` at `index` within the streaming buffer's
+ * block array, creating a block of the right kind on first hit and
+ * appending to its text otherwise. A mismatched kind at the same index
+ * (e.g. a toolcall delta landing on an existing text block) is treated
+ * as a new block — pi-agent-core shouldn't emit that but we don't want
+ * to crash if a provider sends odd frames.
+ *
+ * Hot-path in-place mutation: a long streaming response can fire
+ * thousands of `llm.text_delta` frames, all targeting the same content
+ * block. The previous fold rebuilt the blocks array on every delta
+ * (`map` + `filter` + spread + `sort`), producing O(deltas × blocks)
+ * GC pressure for nothing the UI ever observed. Now the matching block's
+ * text is appended in place; only a fresh top-level `StreamingMessage`
+ * wrapper is allocated, which is what React's `setState` reference-checks
+ * to schedule a render. The streaming buffer is short-lived and not
+ * shared with anyone — mutating it is safe. */
 function applyDelta(
   prev: StreamingMessage | null,
   nodeId: string | null,
@@ -290,23 +293,18 @@ function applyDelta(
   delta: string,
 ): StreamingMessage {
   const base: StreamingMessage = prev ?? { nodeId, blocks: [] };
-  const existing = base.blocks.find((b) => b.index === index);
-  if (existing && existing.type === kind) {
-    const next = base.blocks.map((b) =>
-      b === existing
-        ? b.type === "toolCall"
-          ? { ...b, argsText: b.argsText + delta }
-          : { ...b, text: b.text + delta }
-        : b,
-    );
-    return { nodeId: base.nodeId ?? nodeId, blocks: next };
+  const existing = base.blocks.find((b) => b.index === index && b.type === kind);
+  if (existing) {
+    if (existing.type === "toolCall") existing.argsText += delta;
+    else existing.text += delta;
+    return { nodeId: base.nodeId ?? nodeId, blocks: base.blocks };
   }
-  // New block: insert sorted by index so rendering preserves arrival order
-  // even if frames arrive out-of-order within a single message.
+  // Cold path: new (index, kind) pair. Allocate, append, keep sorted by
+  // index so blocks render in arrival order regardless of how the
+  // provider interleaves them. Bounded by content blocks per message
+  // (~5-20 typical), not by delta count.
   const fresh: StreamingBlock =
     kind === "toolCall" ? { type: "toolCall", index, argsText: delta } : { type: kind, index, text: delta };
-  const next = [...base.blocks.filter((b) => b.index !== index || b.type !== kind), fresh].sort(
-    (a, b) => a.index - b.index,
-  );
-  return { nodeId: base.nodeId ?? nodeId, blocks: next };
+  const blocks = [...base.blocks, fresh].sort((a, b) => a.index - b.index);
+  return { nodeId: base.nodeId ?? nodeId, blocks };
 }

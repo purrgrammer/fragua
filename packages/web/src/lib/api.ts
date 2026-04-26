@@ -319,14 +319,15 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
 }
 
 /** A messages-table row. `content` is a pi-agent-core `AgentMessage`
- * (lossless JSON round-trip). `nodeId` / `iteration` are swarm's
- * projection of which graph node emitted the turn. */
+ * (lossless JSON round-trip). `nodeId` is swarm's projection of which
+ * graph node emitted the turn.
+ *
+ * `runId` and `iteration` are intentionally absent from the wire shape:
+ * the URL already pins `runId`, and `iteration` is unused by the UI. */
 export interface RunMessageRow {
-  runId: string;
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
-  iteration: number;
 }
 
 export async function getRunMessages(id: string, sinceOrdinal?: number): Promise<RunMessageRow[]> {

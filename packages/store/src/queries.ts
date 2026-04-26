@@ -164,3 +164,131 @@ export function getRunCostTotals(db: Database, runId: string): RunCostTotalsRow 
     }
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Messages
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Full-shape row from the messages table — `run_id`, `ordinal`,
+ * `content` (serialized AgentMessage), `node_id`, `iteration`. Returned
+ * by `selectMessages` for the in-process consumers (write-queue
+ * deduplication, thread rehydration) that need every column.
+ */
+export interface MessageRow {
+  run_id: string;
+  ordinal: number;
+  content: string;
+  node_id: string | null;
+  iteration: number;
+}
+
+/**
+ * Wire-shape row for the `/runs/:id/messages` HTTP endpoint — only the
+ * columns the web transcript consumes. `run_id` is always equal to the
+ * URL/path scope (redundant) and `iteration` is unused by the UI;
+ * skipping both at the SQL layer keeps SQLite from materialising them
+ * into the row buffer at all.
+ */
+export interface NarrowMessageRow {
+  ordinal: number;
+  content: string;
+  node_id: string | null;
+}
+
+const SELECT_MESSAGES_BY_RUN_SQL = `
+  SELECT run_id, ordinal, content, node_id, iteration
+    FROM messages
+   WHERE run_id = ?1 AND ordinal > ?2
+   ORDER BY ordinal ASC
+   LIMIT ?3
+`;
+
+const SELECT_MESSAGES_BY_RUN_NODE_SQL = `
+  SELECT run_id, ordinal, content, node_id, iteration
+    FROM messages
+   WHERE run_id = ?1 AND ordinal > ?2 AND node_id = ?3
+   ORDER BY ordinal ASC
+   LIMIT ?4
+`;
+
+const SELECT_MESSAGES_NARROW_BY_RUN_SQL = `
+  SELECT ordinal, content, node_id
+    FROM messages
+   WHERE run_id = ?1 AND ordinal > ?2
+   ORDER BY ordinal ASC
+   LIMIT ?3
+`;
+
+const SELECT_MESSAGES_NARROW_BY_RUN_NODE_SQL = `
+  SELECT ordinal, content, node_id
+    FROM messages
+   WHERE run_id = ?1 AND ordinal > ?2 AND node_id = ?3
+   ORDER BY ordinal ASC
+   LIMIT ?4
+`;
+
+/** SQLite treats `LIMIT -1` as unbounded — used when the caller passes
+ * `limit: undefined`. The transcript view shows the full list. */
+const NO_LIMIT = -1;
+
+// ─────────────────────────────────────────────────────────────────────
+// Events
+// ─────────────────────────────────────────────────────────────────────
+
+/** Raw events row — unparsed `payload` JSON. The store maps this into
+ * `StoredEvent` after parsing. Defined here so the SQL projection lives
+ * next to the helper that runs it. */
+export interface EventRow {
+  run_id: string;
+  seq: number;
+  type: string;
+  writer: string;
+  payload: string;
+  ts: number;
+}
+
+const SELECT_EVENTS_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE run_id = ?1 AND seq > ?2
+   ORDER BY seq ASC
+   LIMIT ?3
+`;
+
+export function selectEvents(db: Database, runId: string, opts: { sinceSeq: number; limit?: number }): EventRow[] {
+  const limit = opts.limit ?? NO_LIMIT;
+  return db.query<EventRow, [string, number, number]>(SELECT_EVENTS_SQL).all(runId, opts.sinceSeq, limit);
+}
+
+export function selectMessages(
+  db: Database,
+  runId: string,
+  opts: { sinceOrdinal: number; limit?: number; nodeId?: string },
+): MessageRow[] {
+  const limit = opts.limit ?? NO_LIMIT;
+  if (opts.nodeId != null) {
+    return db
+      .query<MessageRow, [string, number, string, number]>(SELECT_MESSAGES_BY_RUN_NODE_SQL)
+      .all(runId, opts.sinceOrdinal, opts.nodeId, limit);
+  }
+  return db
+    .query<MessageRow, [string, number, number]>(SELECT_MESSAGES_BY_RUN_SQL)
+    .all(runId, opts.sinceOrdinal, limit);
+}
+
+export function selectMessagesNarrow(
+  db: Database,
+  runId: string,
+  opts: { sinceOrdinal: number; limit?: number; nodeId?: string },
+): NarrowMessageRow[] {
+  const limit = opts.limit ?? NO_LIMIT;
+  if (opts.nodeId != null) {
+    return db
+      .query<NarrowMessageRow, [string, number, string, number]>(SELECT_MESSAGES_NARROW_BY_RUN_NODE_SQL)
+      .all(runId, opts.sinceOrdinal, opts.nodeId, limit);
+  }
+  return db
+    .query<NarrowMessageRow, [string, number, number]>(SELECT_MESSAGES_NARROW_BY_RUN_SQL)
+    .all(runId, opts.sinceOrdinal, limit);
+}

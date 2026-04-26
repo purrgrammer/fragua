@@ -143,18 +143,24 @@ interface SSEEvent {
 function parseSSE(frame: string): SSEEvent | null {
   const lines = frame.split("\n");
   let id: string | undefined;
-  let type = "message";
+  // The server emits frames without an `event:` field — every frame
+  // dispatches as a generic "message" and the actual event type lives
+  // inside the JSON payload (`type` field). Prefer that; fall back to
+  // the SSE `event:` field for legacy/forward compatibility.
+  let sseType = "message";
   let data = "";
   for (const line of lines) {
     if (line.startsWith("id:")) id = line.slice(3).trim();
-    else if (line.startsWith("event:")) type = line.slice(6).trim();
+    else if (line.startsWith("event:")) sseType = line.slice(6).trim();
     else if (line.startsWith("data:")) data += line.slice(5).trimStart();
   }
   if (data.length === 0) return null;
   try {
-    return id !== undefined ? { id, type, data: JSON.parse(data) } : { type, data: JSON.parse(data) };
+    const parsed = JSON.parse(data) as { type?: unknown };
+    const type = typeof parsed.type === "string" ? parsed.type : sseType;
+    return id !== undefined ? { id, type, data: parsed } : { type, data: parsed };
   } catch {
-    return { type, data };
+    return { type: sseType, data };
   }
 }
 

@@ -390,9 +390,13 @@ export function createRoutes(deps: ServerDeps): Hono {
           limit: 500,
         });
         for (const event of batch) {
+          // Emit without an `event:` field so a single `addEventListener
+          // ("message", …)` on the client receives every frame. The event
+          // type lives inside the JSON payload (`type` field), which the
+          // client already reads. Registering 45 typed listeners per
+          // mount was 45× the closure retention for zero functional gain.
           await stream.writeSSE({
             id: String(event.seq),
-            event: event.type,
             data: serializeEvent(event),
           });
           lastSeq = event.seq;

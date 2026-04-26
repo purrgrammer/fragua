@@ -6,7 +6,13 @@ import { BlobFS } from "./blob-fs.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
-import { getRunCostTotals as queryRunCostTotals, getStepAggregates as queryStepAggregates } from "./queries.ts";
+import {
+  getRunCostTotals as queryRunCostTotals,
+  getStepAggregates as queryStepAggregates,
+  selectEvents,
+  selectMessages,
+  selectMessagesNarrow,
+} from "./queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
@@ -34,6 +40,7 @@ import {
   MAX_ROUTING_BYTES,
   type Message,
   MessageTooLargeError,
+  type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
   type RunCostTotalsRow,
@@ -342,32 +349,20 @@ export class SqliteStore implements IEventStore {
   }
 
   getEvents(runId: string, opts: GetEventsOpts = {}): StoredEvent[] {
-    const since = opts.sinceSeq ?? 0;
-    const limit = opts.limit ?? 1000;
-    const rows = this.db
-      .query<
-        {
-          run_id: string;
-          seq: number;
-          type: string;
-          writer: EventWriter;
-          payload: string;
-          ts: number;
-        },
-        [string, number, number]
-      >(
-        `SELECT run_id, seq, type, writer, payload, ts
-           FROM events
-          WHERE run_id = ? AND seq > ?
-          ORDER BY seq ASC
-          LIMIT ?`,
-      )
-      .all(runId, since, limit);
+    // No default limit — when the caller doesn't specify one, return the
+    // full event log. `selectEvents` translates `limit: undefined` into
+    // SQLite's unbounded `LIMIT -1`. Callers that need a cap (the SSE
+    // batch loop, the runs-list summariser) pass `limit` explicitly.
+    const queryOpts: Parameters<typeof selectEvents>[2] = {
+      sinceSeq: opts.sinceSeq ?? 0,
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    };
+    const rows = selectEvents(this.db, runId, queryOpts);
     return rows.map((r) => ({
       runId: r.run_id,
       seq: r.seq,
       type: r.type as StoredEvent["type"],
-      writer: r.writer,
+      writer: r.writer as EventWriter,
       payload: JSON.parse(r.payload),
       ts: r.ts,
     }));
@@ -497,37 +492,28 @@ export class SqliteStore implements IEventStore {
   }
 
   getMessages(runId: string, opts: GetMessagesOpts = {}): Message[] {
-    const since = opts.sinceOrdinal ?? 0;
-    const limit = opts.limit ?? 1000;
-    type Row = {
-      run_id: string;
-      ordinal: number;
-      content: string;
-      node_id: string | null;
-      iteration: number;
+    // No default limit — the transcript view shows the full list, and
+    // `selectMessages` translates `limit: undefined` into SQLite's
+    // unbounded `LIMIT -1`. Callers that need a cap pass `limit`.
+    const queryOpts: Parameters<typeof selectMessages>[2] = {
+      sinceOrdinal: opts.sinceOrdinal ?? 0,
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      ...(opts.nodeId != null ? { nodeId: opts.nodeId } : {}),
     };
-    if (opts.nodeId != null) {
-      return this.db
-        .query<Row, [string, number, string, number]>(
-          `SELECT run_id, ordinal, content, node_id, iteration
-             FROM messages
-            WHERE run_id = ? AND ordinal > ? AND node_id = ?
-            ORDER BY ordinal ASC
-            LIMIT ?`,
-        )
-        .all(runId, since, opts.nodeId, limit)
-        .map(this.rowToMessage);
-    }
-    return this.db
-      .query<Row, [string, number, number]>(
-        `SELECT run_id, ordinal, content, node_id, iteration
-           FROM messages
-          WHERE run_id = ? AND ordinal > ?
-          ORDER BY ordinal ASC
-          LIMIT ?`,
-      )
-      .all(runId, since, limit)
-      .map(this.rowToMessage);
+    return selectMessages(this.db, runId, queryOpts).map(this.rowToMessage);
+  }
+
+  getMessagesNarrow(runId: string, opts: GetMessagesOpts = {}): NarrowMessage[] {
+    const queryOpts: Parameters<typeof selectMessagesNarrow>[2] = {
+      sinceOrdinal: opts.sinceOrdinal ?? 0,
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+      ...(opts.nodeId != null ? { nodeId: opts.nodeId } : {}),
+    };
+    return selectMessagesNarrow(this.db, runId, queryOpts).map((r) => ({
+      ordinal: r.ordinal,
+      content: JSON.parse(r.content),
+      nodeId: r.node_id,
+    }));
   }
 
   // ─────────────── Aggregations ───────────────

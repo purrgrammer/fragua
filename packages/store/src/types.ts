@@ -273,6 +273,15 @@ export interface Message {
   iteration: number;
 }
 
+/** Wire-shape projection of `Message` for the web transcript endpoint.
+ * Excludes `runId` (already pinned by the URL) and `iteration` (unused
+ * by the UI). Returned directly by `IEventStore.getMessagesNarrow`. */
+export interface NarrowMessage {
+  ordinal: number;
+  content: AgentMessage;
+  nodeId: string | null;
+}
+
 export interface ArtifactScope {
   runId: string;
   nodeId: string;
@@ -495,6 +504,15 @@ export interface IEventStore {
     ordinal: number;
   };
   getMessages(runId: string, opts?: GetMessagesOpts): Message[];
+  /**
+   * Same as `getMessages` but with a narrower SQL projection — only
+   * `ordinal`, `content`, and `node_id` columns are selected. Skips
+   * `run_id` (always equal to the URL/path scope) and `iteration` (unused
+   * by the web transcript view) at the SQL layer, so neither column
+   * round-trips through SQLite's row buffer or the in-memory `.map`.
+   * Output is the wire shape the `/runs/:id/messages` HTTP route ships.
+   */
+  getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
   /**
    * Distinct `(runId, threadId)` pairs that have ≥1 persisted message or
    * `llm.start` event under a non-terminal run. Used at daemon boot to
