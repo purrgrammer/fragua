@@ -1,16 +1,22 @@
-// CSS-parsing tests for the phase-synchronised sw-pulse animation.
+// CSS-parsing tests for the sw-pulse animation.
 //
-// Asserts the structural invariants that make every `.sw-pulse` element
-// oscillate in phase:
+// Earlier this drove an inheritable CSS custom property animated on
+// `:root` ("one clock for the whole document"). Cute, but pinned a CPU
+// core at ~70% on `Recalculate style` because the animated, inheriting
+// property invalidated every descendant 60×/sec. The animation now runs
+// directly on `.sw-pulse` elements with plain `opacity`, which is a
+// compositor-only property — zero per-frame style-recalc cost.
 //
-//   1. `@property --sw-pulse-opacity` is declared with `syntax: "<number>"`,
-//      `inherits: true`, and `initial-value: 1`.
-//   2. `:root` carries an `animation` that drives `--sw-pulse-opacity`
-//      between 1 and 0.55 on the 1800ms ease-in-out cadence.
-//   3. `.sw-pulse` uses `opacity: var(--sw-pulse-opacity)` and has no
-//      per-element `animation` declaration of its own.
-//   4. The `prefers-reduced-motion: reduce` block cancels the root
-//      animation and pins `.sw-pulse` opacity to 0.7.
+// These tests assert the structural invariants of the new design:
+//
+//   1. There is NO `:root` animation declaration.
+//   2. There is NO `@property --sw-pulse-opacity` (the cascading
+//      mechanism it enabled is gone).
+//   3. `.sw-pulse` carries its own `animation` referencing
+//      `sw-pulse-tick` on the 1800ms ease-in-out infinite cadence.
+//   4. The keyframes animate `opacity` between 1 and 0.55.
+//   5. The `prefers-reduced-motion: reduce` block cancels the
+//      animation on `.sw-pulse` and pins opacity to 0.7.
 //
 // Implementation note: we parse globals.css with plain regex — no postcss
 // dependency required.
@@ -80,95 +86,76 @@ function extractRuleBody(src: string, selector: string): string {
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe("sw-pulse CSS animation — phase synchronisation invariants", () => {
-  // 1. @property declaration ------------------------------------------------
+describe("sw-pulse CSS animation — compositor-only opacity invariants", () => {
+  // 1. The old cascading-property design must be gone -----------------------
 
-  it("declares @property --sw-pulse-opacity", () => {
-    expect(stripped).toMatch(/@property\s+--sw-pulse-opacity/);
+  it("does NOT register @property --sw-pulse-opacity", () => {
+    // The old design relied on an inherited animated custom property; if
+    // it ever comes back it'd reintroduce the document-wide style-recalc
+    // storm.
+    expect(stripped).not.toMatch(/@property\s+--sw-pulse-opacity/);
   });
 
-  it('@property --sw-pulse-opacity has syntax: "<number>"', () => {
-    const block = extractRuleBody(stripped, "@property --sw-pulse-opacity");
-    expect(block).toMatch(/syntax\s*:\s*["']<number>["']/);
-  });
-
-  it("@property --sw-pulse-opacity has inherits: true", () => {
-    const block = extractRuleBody(stripped, "@property --sw-pulse-opacity");
-    expect(block).toMatch(/inherits\s*:\s*true/);
-  });
-
-  it("@property --sw-pulse-opacity has initial-value: 1", () => {
-    const block = extractRuleBody(stripped, "@property --sw-pulse-opacity");
-    expect(block).toMatch(/initial-value\s*:\s*1\b/);
-  });
-
-  // 2. :root animation -------------------------------------------------------
-
-  it(":root has an animation declaration referencing --sw-pulse-opacity keyframes", () => {
-    // The keyframe name that drives --sw-pulse-opacity should be present in
-    // a :root { animation: … } declaration.
+  it("does NOT animate :root", () => {
     const rootBlock = extractRuleBody(stripped, ":root");
-    expect(rootBlock).toMatch(/animation\s*:/);
+    // :root may still exist for tokens / CSS variables, but must not
+    // declare an `animation` of its own.
+    expect(rootBlock).not.toMatch(/animation\s*:/);
   });
 
-  it(":root animation uses 1800ms (or var(--sw-duration-pulse, 1800ms))", () => {
-    const rootBlock = extractRuleBody(stripped, ":root");
-    // Accept either the literal or the var() form.
-    expect(rootBlock).toMatch(/1800ms|--sw-duration-pulse/);
-  });
+  // 2. .sw-pulse runs its own opacity animation -----------------------------
 
-  it(":root animation uses ease-in-out", () => {
-    const rootBlock = extractRuleBody(stripped, ":root");
-    expect(rootBlock).toMatch(/ease-in-out/);
-  });
-
-  it(":root animation uses infinite", () => {
-    const rootBlock = extractRuleBody(stripped, ":root");
-    expect(rootBlock).toMatch(/infinite/);
-  });
-
-  it("the keyframes that animate --sw-pulse-opacity go from 1 to 0.55", () => {
-    // Find any @keyframes block that sets --sw-pulse-opacity.
-    expect(stripped).toMatch(/--sw-pulse-opacity\s*:\s*0\.55/);
-    expect(stripped).toMatch(/--sw-pulse-opacity\s*:\s*1\b/);
-  });
-
-  // 3. .sw-pulse reads the property — no per-element animation ---------------
-
-  it(".sw-pulse sets opacity via var(--sw-pulse-opacity)", () => {
-    // Grab the .sw-pulse block outside the reduced-motion query.
-    // We look for the rule in the main stylesheet (not inside @media).
-    const reducedMotionBlock = extractReducedMotionBlock(stripped);
-    // Remove the reduced-motion block so we only inspect the main rule.
-    const mainCss = stripped.replace(reducedMotionBlock, "");
-    // Pass the raw selector — extractRuleBody handles escaping internally.
-    const swPulseBlock = extractRuleBody(mainCss, ".sw-pulse");
-    expect(swPulseBlock).toMatch(/opacity\s*:\s*var\(\s*--sw-pulse-opacity\s*\)/);
-  });
-
-  it(".sw-pulse does NOT have its own animation declaration (outside reduced-motion)", () => {
+  it(".sw-pulse declares an animation referencing sw-pulse-tick", () => {
     const reducedMotionBlock = extractReducedMotionBlock(stripped);
     const mainCss = stripped.replace(reducedMotionBlock, "");
-    // Pass the raw selector — extractRuleBody handles escaping internally.
     const swPulseBlock = extractRuleBody(mainCss, ".sw-pulse");
-    // The block must not contain `animation:` or `animation-name:`.
-    expect(swPulseBlock).not.toMatch(/animation\s*:/);
-    expect(swPulseBlock).not.toMatch(/animation-name\s*:/);
+    expect(swPulseBlock).toMatch(/animation\s*:[^;]*sw-pulse-tick/);
   });
 
-  // 4. prefers-reduced-motion block ------------------------------------------
+  it(".sw-pulse animation uses 1800ms (literal or via var(--sw-duration-pulse, 1800ms))", () => {
+    const reducedMotionBlock = extractReducedMotionBlock(stripped);
+    const mainCss = stripped.replace(reducedMotionBlock, "");
+    const swPulseBlock = extractRuleBody(mainCss, ".sw-pulse");
+    expect(swPulseBlock).toMatch(/1800ms|--sw-duration-pulse/);
+  });
 
-  it("prefers-reduced-motion block cancels :root animation", () => {
+  it(".sw-pulse animation uses ease-in-out infinite", () => {
+    const reducedMotionBlock = extractReducedMotionBlock(stripped);
+    const mainCss = stripped.replace(reducedMotionBlock, "");
+    const swPulseBlock = extractRuleBody(mainCss, ".sw-pulse");
+    expect(swPulseBlock).toMatch(/ease-in-out/);
+    expect(swPulseBlock).toMatch(/infinite/);
+  });
+
+  // 3. Keyframes animate opacity, not a custom property ---------------------
+
+  it("the @keyframes sw-pulse-tick block animates opacity (compositor-only)", () => {
+    // The whole point of the rewrite: opacity is compositor-only, so the
+    // animation runs on the GPU with no style-recalc cost. If someone
+    // re-introduces a custom-property keyframe here the perf regression
+    // returns.
+    const keyframeBlock = extractRuleBody(stripped, "@keyframes sw-pulse-tick");
+    expect(keyframeBlock).toMatch(/opacity\s*:/);
+    expect(keyframeBlock).not.toMatch(/--sw-pulse-opacity/);
+  });
+
+  it("keyframes go from opacity 1 to opacity 0.55", () => {
+    const keyframeBlock = extractRuleBody(stripped, "@keyframes sw-pulse-tick");
+    expect(keyframeBlock).toMatch(/opacity\s*:\s*1\b/);
+    expect(keyframeBlock).toMatch(/opacity\s*:\s*0\.55/);
+  });
+
+  // 4. prefers-reduced-motion block -----------------------------------------
+
+  it("prefers-reduced-motion block cancels the .sw-pulse animation", () => {
     const rmBlock = extractReducedMotionBlock(stripped);
     expect(rmBlock).toBeTruthy();
-    // Must contain a rule that sets animation: none on :root (or html).
-    expect(rmBlock).toMatch(/:root|html/);
+    expect(rmBlock).toMatch(/\.sw-pulse/);
     expect(rmBlock).toMatch(/animation\s*:\s*none/);
   });
 
   it("prefers-reduced-motion block pins .sw-pulse opacity to 0.7", () => {
     const rmBlock = extractReducedMotionBlock(stripped);
-    expect(rmBlock).toMatch(/\.sw-pulse/);
     expect(rmBlock).toMatch(/opacity\s*:\s*0\.7/);
   });
 });

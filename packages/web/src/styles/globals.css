@@ -251,51 +251,47 @@ body {
  * so the cadence stays uniform across the app. Touches `opacity` only,
  * per the rule "Animations touch only `transform` and `opacity`".
  *
- * Synchronisation mechanism:
- *   A single CSS custom property `--sw-pulse-opacity` is animated on
- *   `:root`. Because `inherits: true` in the `@property` declaration
- *   makes the value cascade to every descendant, all `.sw-pulse` elements
- *   simply read `opacity: var(--sw-pulse-opacity)` — one animation
- *   instance on the root drives every element in phase, regardless of
- *   when each element mounts.
- *
- * `prefers-reduced-motion` cancels the root animation and pins every
+ * `prefers-reduced-motion` cancels the animation and pins every
  * `.sw-pulse` element to a static dimmed opacity (0.7), preserving the
  * "alive" signal without motion.
  */
 
-/* Register --sw-pulse-opacity as an animatable <number> that cascades. */
-@property --sw-pulse-opacity {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 1;
-}
-
-/* Drive the property on :root — one clock for the whole document. */
+/*
+ * Pulse animation. Earlier this drove an inheritable CSS custom
+ * property (`--sw-pulse-opacity`) animated on `:root` — clever in
+ * theory ("one clock for the whole document") but catastrophic in
+ * practice: an animated `inherits: true` custom property on `:root`
+ * makes the browser style-invalidate every descendant on every
+ * animation frame. With ~10k nodes on a long-run conversation page
+ * it pinned a CPU core at ~70% on `Recalculate style` even with
+ * nothing pulsing.
+ *
+ * Now: a plain `opacity` keyframe applied directly to `.sw-pulse`
+ * elements. `opacity` is a compositor-only property, so the
+ * animation runs entirely on the GPU with zero per-frame style
+ * recalc cost. The mild phase skew between sw-pulse elements that
+ * mount at different times is imperceptible.
+ */
 @keyframes sw-pulse-tick {
   0%,
   100% {
-    --sw-pulse-opacity: 1;
+    opacity: 1;
   }
   50% {
-    --sw-pulse-opacity: 0.55;
+    opacity: 0.55;
   }
 }
 
-:root {
-  animation: sw-pulse-tick var(--sw-duration-pulse, 1800ms) ease-in-out infinite;
-}
-
-/* Consumers just inherit the animated property — no per-element animation. */
 .sw-pulse {
-  opacity: var(--sw-pulse-opacity);
+  animation: sw-pulse-tick var(--sw-duration-pulse, 1800ms) ease-in-out infinite;
+  /* Promote to its own compositor layer so the animation never invalidates
+   * neighbouring layers. Cheap on a few-byte dot. */
+  will-change: opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    animation: none;
-  }
   .sw-pulse {
+    animation: none;
     opacity: 0.7;
   }
 }
