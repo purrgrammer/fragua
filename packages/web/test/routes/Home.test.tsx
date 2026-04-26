@@ -169,7 +169,7 @@ describe("Home route", () => {
     expect(q.getByTestId("recent-run-on-hold")).toBeTruthy();
   });
 
-  it("renders the six stats tiles populated from the reducer", async () => {
+  it("renders the four stats tiles populated from the reducer", async () => {
     const client = withRows([
       row({
         runId: "a",
@@ -195,17 +195,15 @@ describe("Home route", () => {
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("tile-total")).toBeTruthy();
+      expect(q.getByTestId("tile-running")).toBeTruthy();
     });
-    expect(q.getByTestId("tile-total").textContent).toContain("3");
-    expect(q.getByTestId("tile-success").textContent).toContain("50%");
+    expect(q.getByTestId("tile-running").textContent).toContain("1");
+    expect(q.getByTestId("tile-queued").textContent).toContain("0");
     expect(q.getByTestId("tile-spend").textContent).toMatch(/\$0\.16/);
     expect(q.getByTestId("tile-tokens").textContent).toContain("235");
-    expect(q.getByTestId("tile-cache").textContent).toContain("72%");
-    expect(q.getByTestId("tile-duration").textContent).toContain("15s");
   });
 
-  it("renders the Queue and Outcomes tiles with per-status counts", async () => {
+  it("renders the Running and Queued tiles with correct counts", async () => {
     const client = withRows([
       row({ runId: "r1", status: "running" }),
       row({ runId: "r2", status: "running" }),
@@ -224,17 +222,13 @@ describe("Home route", () => {
     });
     expect(q.getByTestId("tile-running").textContent).toContain("2");
     expect(q.getByTestId("tile-queued").textContent).toContain("3");
-    expect(q.getByTestId("tile-paused").textContent).toContain("1");
-    expect(q.getByTestId("tile-total").textContent).toContain("9");
 
-    expect(q.getByTestId("tile-succeeded").textContent).toContain("1");
-    expect(q.getByTestId("tile-failed").textContent).toContain("1");
-    expect(q.getByTestId("tile-canceled").textContent).toContain("1");
-
-    // The three groups are present as distinct sections.
-    expect(q.getByTestId("stats-queue")).toBeTruthy();
-    expect(q.getByTestId("stats-outcomes")).toBeTruthy();
-    expect(q.getByTestId("stats-resources")).toBeTruthy();
+    // Only the four tiles are rendered — removed tiles are absent.
+    expect(q.queryByTestId("tile-paused")).toBeNull();
+    expect(q.queryByTestId("tile-total")).toBeNull();
+    expect(q.queryByTestId("stats-queue")).toBeNull();
+    expect(q.queryByTestId("stats-outcomes")).toBeNull();
+    expect(q.queryByTestId("stats-resources")).toBeNull();
   });
 
   it("renders at most ten row entries under the Runs section", async () => {
@@ -275,20 +269,18 @@ describe("Home route", () => {
   // a Skeleton. Skeleton is reserved for the loading branch. `cacheHitRate`
   // and `avgDurationMs` are the two optional stats fields — an empty run
   // list yields both as `undefined` via `computeStats`.
-  it("renders '—' (not Skeleton) for absent cacheHitRate + avgDurationMs once loaded", async () => {
+  it("renders '—' (not Skeleton) for absent totalCostUsd + totalTokens once loaded", async () => {
     const client = withRows([]);
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("tile-cache")).toBeTruthy();
+      expect(q.getByTestId("tile-spend")).toBeTruthy();
     });
-    const cache = q.getByTestId("tile-cache");
-    expect(cache.textContent).toContain("—");
-    expect(cache.querySelector(".sw-pulse")).toBeNull();
+    const spend = q.getByTestId("tile-spend");
+    expect(spend.querySelector(".sw-pulse")).toBeNull();
 
-    const duration = q.getByTestId("tile-duration");
-    expect(duration.textContent).toContain("—");
-    expect(duration.querySelector(".sw-pulse")).toBeNull();
+    const tokens = q.getByTestId("tile-tokens");
+    expect(tokens.querySelector(".sw-pulse")).toBeNull();
   });
 });
 

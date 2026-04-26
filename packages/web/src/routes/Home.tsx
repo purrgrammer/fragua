@@ -6,20 +6,7 @@
 // (`queries.runs.list`'s `refetchInterval`). No local timer needed.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Ban,
-  CheckCircle2,
-  Coins,
-  DollarSign,
-  Hash,
-  Hourglass,
-  Pause,
-  Play,
-  Target,
-  Timer,
-  XCircle,
-  Zap,
-} from "lucide-react";
+import { Coins, DollarSign, Hourglass, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -41,10 +28,9 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
-import { formatTokensCompact, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
-import { formatDuration } from "../lib/time.ts";
 import { useHealth } from "../types/health.ts";
 
 const RECENT_LIMIT = 10;
@@ -263,10 +249,8 @@ interface StatsTilesProps {
 
 function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
   return (
-    <section data-testid="stats-tiles" className="flex flex-col gap-6">
-      <h2 className="font-heading text-base font-semibold">Stats</h2>
-
-      <StatsGroup label="Queue" testId="stats-queue">
+    <section data-testid="stats-tiles">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile
           label="Running"
           loading={loading}
@@ -282,61 +266,6 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           testId="tile-queued"
         />
         <StatTile
-          label="Paused"
-          loading={loading}
-          numericValue={stats.paused}
-          icon={<Pause className="size-4" />}
-          testId="tile-paused"
-        />
-        <StatTile
-          label="Total runs"
-          loading={loading}
-          numericValue={stats.totalRuns}
-          icon={<Hash className="size-4" />}
-          testId="tile-total"
-        />
-      </StatsGroup>
-
-      <StatsGroup label="Outcomes" testId="stats-outcomes">
-        <StatTile
-          label="Succeeded"
-          loading={loading}
-          numericValue={stats.succeeded}
-          icon={<CheckCircle2 className="size-4" />}
-          testId="tile-succeeded"
-        />
-        <StatTile
-          label="Failed"
-          loading={loading}
-          numericValue={stats.failed}
-          icon={<XCircle className="size-4" />}
-          testId="tile-failed"
-        />
-        <StatTile
-          label="Canceled"
-          loading={loading}
-          numericValue={stats.canceled}
-          icon={<Ban className="size-4" />}
-          testId="tile-canceled"
-        />
-        <StatTile
-          label="Success rate"
-          loading={loading}
-          value={formatPercent(stats.successRate)}
-          icon={<Target className="size-4" />}
-          testId="tile-success"
-        />
-      </StatsGroup>
-
-      <StatsGroup label="Resources" testId="stats-resources">
-        <StatTile
-          label="Avg duration"
-          loading={loading}
-          value={stats.avgDurationMs === undefined ? undefined : formatDuration(stats.avgDurationMs)}
-          icon={<Timer className="size-4" />}
-          testId="tile-duration"
-        />
-        <StatTile
           label="Total spend"
           loading={loading}
           numericValue={stats.totalCostUsd}
@@ -345,48 +274,14 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           testId="tile-spend"
         />
         <StatTile
-          label="Total tokens"
+          label="Tokens"
           loading={loading}
           numericValue={stats.totalTokens}
           format={tokensCompactFormatOptions(stats.totalTokens ?? 0)}
           icon={<Coins className="size-4" />}
           testId="tile-tokens"
         />
-        <StatTile
-          label="Cache hit rate"
-          loading={loading}
-          value={stats.cacheHitRate === undefined ? undefined : formatPercent(stats.cacheHitRate)}
-          hint={
-            loading
-              ? undefined
-              : `cached: ${formatTokensCompact(stats.totalCacheReadTokens)} read · ${formatTokensCompact(
-                  stats.totalCacheWriteTokens,
-                )} written`
-          }
-          icon={<Zap className="size-4" />}
-          testId="tile-cache"
-        />
-      </StatsGroup>
+      </div>
     </section>
   );
-}
-
-interface StatsGroupProps {
-  label: string;
-  testId: string;
-  children: React.ReactNode;
-}
-
-function StatsGroup({ label, testId, children }: StatsGroupProps): JSX.Element {
-  return (
-    <div data-testid={testId} className="flex flex-col gap-2">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</h3>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{children}</div>
-    </div>
-  );
-}
-
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 0 }).format(value);
 }
