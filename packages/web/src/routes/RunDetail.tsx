@@ -220,12 +220,16 @@ const DetailHeader = memo(function DetailHeader({
         <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
           ← all runs
         </Link>
-        {detail?.workflowName && (
+        {detail?.workflowName && detail?.workflow && (
           <>
             <span className="text-xs text-muted-foreground/40">·</span>
-            <span className="truncate text-xs text-muted-foreground" title={detail.workflow ?? ""}>
+            <Link
+              to={`/workflows/${encodeURIComponent(detail.workflow)}`}
+              className="truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+              title={detail.workflow}
+            >
               {detail.workflowName}
-            </span>
+            </Link>
           </>
         )}
         {showLive && (
