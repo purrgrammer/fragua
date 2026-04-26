@@ -10,11 +10,18 @@ import { cn } from "@/lib/utils";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
+// `initial="smooth"` + `resize="smooth"` ran a rAF-driven scroll
+// animation on every content resize — even on completed runs where
+// the transcript is static. That fed continuous LayoutShift /
+// PerformanceEventTiming entries (visible as monotonic growth in
+// long-lived heap snapshots). Both default to "instant" here; the
+// transcript jumps to bottom on mount and stays put. Callers that
+// want smooth scrolling can override per-instance via {...props}.
 export const Conversation = ({ className, ...props }: ConversationProps) => (
   <StickToBottom
     className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
-    resize="smooth"
+    initial="instant"
+    resize="instant"
     role="log"
     {...props}
   />
