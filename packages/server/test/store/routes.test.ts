@@ -566,18 +566,36 @@ describe("GET /metrics/global", () => {
 });
 
 describe("P19 — SSE replay via Last-Event-ID", () => {
-  test("reconnect with Last-Event-ID=N delivers only events with seq > N", async () => {
+  /** Seed `r` with four intents, producing events at seq 1..4 (the
+   * enqueue is seq 1; each appendIntent adds one more). Returned for
+   * tests that want to assert which subset crosses the wire. */
+  function seedFourIntents(): void {
     store.enqueueRun({ runId: "r", workflowSha: "wf" });
-    // Produce three intents so the stream has seq 1..4 (incl the enqueue intent).
     store.appendIntent("r", { type: "intent.pause_requested", payload: {} });
-    store.appendIntent("r", {
-      type: "intent.steering_requested",
-      payload: { text: "go" },
-    });
-    store.appendIntent("r", {
-      type: "intent.cancel_requested",
-      payload: { reason: "stop" },
-    });
+    store.appendIntent("r", { type: "intent.steering_requested", payload: { text: "go" } });
+    store.appendIntent("r", { type: "intent.cancel_requested", payload: { reason: "stop" } });
+  }
+
+  /** Drain the SSE response into a single string, capped at the deadline
+   * or once `marker` appears (whichever first). Marker keeps the loop
+   * tight when we know which final id: should land. */
+  async function drainSSE(res: Response, marker: string, timeoutMs = 500): Promise<string> {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let chunks = "";
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks += decoder.decode(value, { stream: true });
+      if (chunks.includes(marker)) break;
+    }
+    await reader.cancel();
+    return chunks;
+  }
+
+  test("reconnect with Last-Event-ID=N delivers only events with seq > N", async () => {
+    seedFourIntents();
 
     const routes = createRoutes({ store, ssePollMs: 10 });
     const res = await routes.fetch(
@@ -588,23 +606,80 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/event-stream/);
 
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let chunks = "";
-    const deadline = Date.now() + 500;
-    while (Date.now() < deadline) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks += decoder.decode(value, { stream: true });
-      if (chunks.includes("id: 4")) break;
-    }
-    await reader.cancel();
+    const chunks = await drainSSE(res, "id: 4");
 
     // Stream must contain seq 3 and 4, and NOT seq 1 or 2.
     expect(chunks).toContain("id: 3");
     expect(chunks).toContain("id: 4");
     expect(chunks).not.toContain("id: 1\n");
     expect(chunks).not.toContain("id: 2\n");
+  });
+
+  test("initial connect with ?sinceSeq=N delivers only events with seq > N", async () => {
+    // Pin the initial-connect path independently of Last-Event-ID. This
+    // is the cursor `useRunLive` actually puts on the URL when opening
+    // the EventSource for the first time (it knows from the snapshot
+    // it's caught up to lastEventSeq).
+    seedFourIntents();
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(new Request("http://test/runs/r/stream?sinceSeq=2"));
+    expect(res.status).toBe(200);
+
+    const chunks = await drainSSE(res, "id: 4");
+
+    expect(chunks).toContain("id: 3");
+    expect(chunks).toContain("id: 4");
+    expect(chunks).not.toContain("id: 1\n");
+    expect(chunks).not.toContain("id: 2\n");
+  });
+
+  test("reconnect with stale ?sinceSeq=N + Last-Event-ID=M (M > N) uses max() — no duplicate replay", async () => {
+    // The auto-reconnect path. The URL still carries ?sinceSeq=<snapshot>
+    // baked at initial connect, but the browser sets Last-Event-ID to the
+    // last id: it actually received — which is strictly ahead of the
+    // snapshot cursor by the time a reconnect fires. Server must take
+    // max() so the client doesn't re-fold events 3..M into liveCost.
+    seedFourIntents();
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(
+      new Request("http://test/runs/r/stream?sinceSeq=1", {
+        headers: { "Last-Event-ID": "3" },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const chunks = await drainSSE(res, "id: 4");
+
+    // max(1, 3) = 3 → only seq 4 should land. Seqs 2 and 3 (between the
+    // stale query cursor and the up-to-date header) MUST NOT replay.
+    expect(chunks).toContain("id: 4");
+    expect(chunks).not.toContain("id: 1\n");
+    expect(chunks).not.toContain("id: 2\n");
+    expect(chunks).not.toContain("id: 3\n");
+  });
+
+  test("?sinceSeq=N + Last-Event-ID=M (N > M) still uses max() — symmetric edge", async () => {
+    // The opposite ordering can't happen on real reconnects (Last-Event-ID
+    // monotonically grows) but a malformed / replayed request shouldn't
+    // be able to trick the server into re-streaming earlier events.
+    seedFourIntents();
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(
+      new Request("http://test/runs/r/stream?sinceSeq=3", {
+        headers: { "Last-Event-ID": "1" },
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const chunks = await drainSSE(res, "id: 4");
+
+    expect(chunks).toContain("id: 4");
+    expect(chunks).not.toContain("id: 1\n");
+    expect(chunks).not.toContain("id: 2\n");
+    expect(chunks).not.toContain("id: 3\n");
   });
 
   test("/runs/:id/stream drains all events before closing on a terminal run", async () => {

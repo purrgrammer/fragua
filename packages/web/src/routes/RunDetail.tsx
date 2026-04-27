@@ -305,18 +305,27 @@ export const StatsStrip = memo(function StatsStrip({
   const now = useNow(1_000, isLiveRun);
   const durationMs = isLiveRun ? Math.max(0, now - Date.parse(detail.startedAt)) : detail?.durationMs;
 
-  // Prefer the live aggregate when at least one cost.recorded event has
-  // arrived; fall back to the server snapshot so terminal/initial renders
-  // still show data. The live values converge with the snapshot once the
-  // run reaches a terminal fact.
-  const hasLive =
-    liveCost != null && liveCost.totalCostUsd + liveCost.totalInputTokens + liveCost.totalOutputTokens > 0;
-  const costUsd = hasLive ? liveCost.totalCostUsd : (detail?.costUsd ?? 0);
-  const inputTokens = hasLive ? liveCost.totalInputTokens : (detail?.inputTokens ?? 0);
-  const outputTokens = hasLive ? liveCost.totalOutputTokens : (detail?.outputTokens ?? 0);
-  // Preserve undefined when the snapshot omits cacheReadTokens and no live
-  // events have arrived — AnimatedNumber's fallback "—" handles that.
-  const cacheReadTokens: number | undefined = hasLive ? liveCost.totalCacheReadTokens : detail?.cacheReadTokens;
+  // The snapshot covers events ≤ snapshot.lastEventSeq; useRunLive opens
+  // SSE at sinceSeq=snapshot.lastEventSeq so liveCost only accumulates
+  // events strictly past that cursor. The two are disjoint by
+  // construction (the server unions ?sinceSeq= and Last-Event-ID via
+  // max()), so summing them gives the run's live total at all times.
+  // The earlier swap shape collapsed the displayed cost from "snapshot
+  // total" to "post-snapshot delta only" the moment any cost.recorded
+  // event landed — which made near-terminal runs read out the trailing
+  // batch alone after `fact.run_completed` flipped the status overlay.
+  const liveCostUsd = liveCost?.totalCostUsd ?? 0;
+  const liveInputTokens = liveCost?.totalInputTokens ?? 0;
+  const liveOutputTokens = liveCost?.totalOutputTokens ?? 0;
+  const liveCacheReadTokens = liveCost?.totalCacheReadTokens ?? 0;
+  const costUsd = (detail?.costUsd ?? 0) + liveCostUsd;
+  const inputTokens = (detail?.inputTokens ?? 0) + liveInputTokens;
+  const outputTokens = (detail?.outputTokens ?? 0) + liveOutputTokens;
+  // Preserve undefined while the snapshot itself hasn't loaded — the
+  // AnimatedNumber fallback ("—") is the right loading sentinel. A
+  // loaded snapshot post-rename always carries a number for cacheReadTokens.
+  const cacheReadTokens: number | undefined =
+    detail?.cacheReadTokens === undefined ? undefined : detail.cacheReadTokens + liveCacheReadTokens;
   const freshTokens = inputTokens + outputTokens;
   const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0);
   const cacheHitRate: number | undefined =

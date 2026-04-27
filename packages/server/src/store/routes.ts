@@ -394,15 +394,30 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.get("/runs/:id/stream", (c) =>
     streamSSE(c, async (stream) => {
       const runId = c.req.param("id");
-      // Resume point precedence: ?sinceSeq=<n> (initial connect — client
-      // already has the snapshot up to N) > Last-Event-ID header (browser
-      // auto-reconnect) > 0 (replay everything).
-      // Without `sinceSeq`, opening the page on a 14k-event run fired 14k
-      // SSE frames at the browser before any "live" frame ever arrived.
+      // Resume cursor: max(?sinceSeq=<n>, Last-Event-ID, 0).
+      //
+      // Both signals are valid resume cursors and they show up at different
+      // lifecycle stages:
+      //   - `?sinceSeq=` is set by the client on initial connect (the
+      //     snapshot already has events ≤ N, no need to replay).
+      //   - `Last-Event-ID` is set by the browser on EventSource auto-
+      //     reconnect (transport drop), to whatever id: the browser last
+      //     received. Vanilla EventSource doesn't let app code set the
+      //     header, hence the dual-signal hybrid.
+      //
+      // Picking max() is what makes the two safe to coexist: after a
+      // reconnect deep into a stream, `Last-Event-ID` is strictly ahead
+      // of the original `?sinceSeq=` baked into the URL, so taking the
+      // larger avoids redelivering events the client already received
+      // (and re-folded into liveCost). The earlier "sinceSeq wins" rule
+      // duplicated every event between the snapshot cursor and the
+      // disconnect point on every reconnect.
       const querySinceSeq = Number(c.req.query("sinceSeq") ?? Number.NaN);
       const lastEventId = c.req.header("Last-Event-ID");
       const headerLastSeq = lastEventId != null ? Number(lastEventId) : Number.NaN;
-      let lastSeq = Number.isFinite(querySinceSeq) ? querySinceSeq : Number.isFinite(headerLastSeq) ? headerLastSeq : 0;
+      const querySafe = Number.isFinite(querySinceSeq) ? querySinceSeq : 0;
+      const headerSafe = Number.isFinite(headerLastSeq) ? headerLastSeq : 0;
+      let lastSeq = Math.max(querySafe, headerSafe);
       if (lastSeq < 0) lastSeq = 0;
 
       while (!stream.aborted) {
