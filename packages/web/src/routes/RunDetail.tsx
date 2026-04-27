@@ -15,7 +15,7 @@
 
 import { parseDotSource } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
-import { Coins, DollarSign, Timer } from "lucide-react";
+import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
@@ -352,6 +352,7 @@ export const StatsStrip = memo(function StatsStrip({
         loading={loading}
         value={formatCacheHitRate(cacheReadTokens, inputTokens)}
         testId="detail-cache-tile"
+        icon={<Database className="size-4" />}
         hint={
           detail
             ? `cache read ${(cacheReadTokens ?? 0).toLocaleString()} · input ${inputTokens.toLocaleString()}`
