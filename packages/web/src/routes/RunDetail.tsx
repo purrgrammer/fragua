@@ -318,7 +318,7 @@ export const StatsStrip = memo(function StatsStrip({
   // events have arrived — formatCacheHitRate returns '—' for undefined,
   // which is the right fallback for pre-split runs.
   const cacheReadTokens: number | undefined = hasLive ? liveCost.totalCacheReadTokens : detail?.cacheReadTokens;
-  const totalTokens = inputTokens + outputTokens;
+  const freshTokens = inputTokens + outputTokens;
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="detail-stats">
@@ -341,8 +341,8 @@ export const StatsStrip = memo(function StatsStrip({
       <StatTile
         label="Tokens"
         loading={loading}
-        numericValue={totalTokens}
-        format={tokensCompactFormatOptions(totalTokens)}
+        numericValue={freshTokens}
+        format={tokensCompactFormatOptions(freshTokens)}
         testId="detail-tokens-tile"
         icon={<Coins className="size-4" />}
         hint={detail ? `input ${inputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}` : undefined}

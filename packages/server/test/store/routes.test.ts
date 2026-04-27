@@ -549,12 +549,13 @@ describe("GET /metrics/global", () => {
     const body = (await res.json()) as {
       total_runs: number;
       total_usd: number;
-      total_tokens: number;
+      fresh_tokens: number;
+      billed_tokens: number;
       successful: number;
       breakdownByModel: { model_name: string; tokens: number; cost_usd: number }[];
     };
     expect(body.total_runs).toBe(1);
-    expect(body.total_tokens).toBe(100);
+    expect(body.billed_tokens).toBe(100);
     expect(body.total_usd).toBeCloseTo(0.02, 6);
     expect(body.successful).toBe(1);
     const pro = body.breakdownByModel.find((r) => r.model_name === "gemini-1.5-pro");

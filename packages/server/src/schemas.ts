@@ -93,8 +93,13 @@ export type ErrorBody = Static<typeof ErrorBody>;
 /**
  * Aggregate dashboard payload returned by `GET /metrics/global`. Backed by
  * the store's generated columns (`run_state.total_cost_usd` /
- * `total_tokens`) so the UI can render a 30-day ticker without parsing any
- * metrics JSON.
+ * `billed_tokens`) plus a SUM over `metrics.totalInputTokens +
+ * metrics.totalOutputTokens` for `fresh_tokens`. UI renders a 30-day
+ * ticker without parsing any metrics JSON.
+ *
+ * `billed_tokens` = input + output + cacheRead + cacheWrite (invoice).
+ * `fresh_tokens`  = input + output (work done — what `budget_tokens`
+ * fences against).
  *
  * Per-model breakdown uses `json_each` over `run_state.metrics.models` —
  * executed server-side so only aggregated rows cross the wire.
@@ -109,7 +114,8 @@ export type ModelBreakdownRow = Static<typeof ModelBreakdownRow>;
 export const GlobalMetricsPayload = Type.Object({
   total_runs: Type.Integer({ minimum: 0 }),
   total_usd: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
-  total_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  fresh_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  billed_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   successful: Type.Integer({ minimum: 0 }),
   halted: Type.Integer({ minimum: 0 }),
   running: Type.Integer({ minimum: 0 }),

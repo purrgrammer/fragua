@@ -138,7 +138,7 @@ describe("P4 — projection equals fold of facts", () => {
             memory = applyFact(memory, fact, state.updatedAt);
           }
 
-          expect(state.metrics.totalTokens).toBe(memory.metrics.totalTokens);
+          expect(state.metrics.billedTokens).toBe(memory.metrics.billedTokens);
           expect(state.metrics.totalCostUsd).toBeCloseTo(memory.metrics.totalCostUsd, 6);
           expect(state.metrics.models).toEqual(memory.metrics.models);
 
@@ -154,7 +154,7 @@ describe("P4 — projection equals fold of facts", () => {
             currentNode: null,
           };
           const folded = foldFacts(from0, facts, state.updatedAt);
-          expect(folded.metrics.totalTokens).toBe(state.metrics.totalTokens);
+          expect(folded.metrics.billedTokens).toBe(state.metrics.billedTokens);
           expect(folded.metrics.totalCostUsd).toBeCloseTo(state.metrics.totalCostUsd, 6);
 
           store.close();

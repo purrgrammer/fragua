@@ -40,7 +40,7 @@ describe("getStepAggregates", () => {
     expect(a!.costUsd).toBeCloseTo(0.001);
     expect(a!.inputTokens).toBe(10);
     expect(a!.outputTokens).toBe(5);
-    expect(a!.totalTokens).toBe(15);
+    expect(a!.billedTokens).toBe(15);
     expect(a!.costEventCount).toBe(1);
     store.close();
   });
@@ -65,7 +65,7 @@ describe("getStepAggregates", () => {
     expect(a!.costUsd).toBeCloseTo(0.035);
     expect(a!.inputTokens).toBe(350);
     expect(a!.outputTokens).toBe(70);
-    expect(a!.totalTokens).toBe(420);
+    expect(a!.billedTokens).toBe(420);
     expect(a!.costEventCount).toBe(3);
     expect(a!.stopReason).toBe("end_turn"); // last one wins
     store.close();
@@ -84,7 +84,7 @@ describe("getStepAggregates", () => {
     expect(a!.costUsd).toBeCloseTo(0.006);
     expect(a!.inputTokens).toBe(6);
     expect(a!.outputTokens).toBe(6);
-    expect(a!.totalTokens).toBe(12);
+    expect(a!.billedTokens).toBe(12);
     expect(a!.costEventCount).toBe(3);
     store.close();
   });
@@ -190,7 +190,7 @@ describe("getStepAggregates", () => {
     const [a] = store.getStepAggregates(runId);
     expect(a!.cacheReadTokens).toBe(0);
     expect(a!.cacheWriteTokens).toBe(0);
-    expect(a!.totalTokens).toBe(0);
+    expect(a!.billedTokens).toBe(0);
     store.close();
   });
 });

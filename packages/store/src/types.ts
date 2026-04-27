@@ -18,10 +18,11 @@ export type RunStatus =
 export type EventWriter = "daemon" | "web";
 
 export interface RunMetrics {
-  /** Grand total across input + output + cacheRead + cacheWrite. Matches
-   * pi-ai's `usage.totalTokens` summed across calls. Kept for back-compat
-   * with existing aggregates; prefer the split fields below for new work. */
-  totalTokens: number;
+  /** Sum across input + output + cacheRead + cacheWrite. The "what hits
+   * the invoice" number — `/metrics/global` exposes it as `billed_tokens`.
+   * Distinct from fresh tokens (`totalInputTokens + totalOutputTokens`),
+   * which is what `budget_tokens` fences against. */
+  billedTokens: number;
   totalCostUsd: number;
   /** Fresh prompt tokens (excludes cache hits on providers that track
    * them separately, e.g. Anthropic). Zero on older runs that predate
@@ -39,10 +40,10 @@ export interface RunMetrics {
   loopCounts: Record<string, number>;
   /** Per-model breakdown. Populated when a node reports modelName. */
   models: Record<string, { tokens: number; costUsd: number }>;
-  /** Per-node cost + token accumulation across iterations. Drives the
-   * per-node `max_cost_usd` / `max_tokens` ceilings checked by the
-   * budget policy. Empty on runs that predate the field — reducers
-   * accept missing maps defensively. */
+  /** Per-node cost + token accumulation across iterations. `tokens` is
+   * fresh (input + output) — matches what `max_tokens` per-node ceilings
+   * fence against. `costUsd` is billed (provider invoice). Empty on runs
+   * that predate the field — reducers accept missing maps defensively. */
   nodeCosts: Record<string, { tokens: number; costUsd: number }>;
 }
 

@@ -31,6 +31,8 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
         kind: "transition",
         nextNode: "__end__",
         tokens: 42,
+        inputTokens: 30,
+        outputTokens: 12,
         costUsd: 0.003,
         modelName: "stub-model",
       }),
@@ -87,7 +89,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     expect(detail.runId).toBe(runId);
     expect(detail.status).toBe("success");
     expect(detail.costUsd).toBeCloseTo(0.003, 6);
-    expect(detail.inputTokens).toBe(42);
+    expect(detail.inputTokens).toBe(30);
     expect(detail.workflowName).toBe("echo-wf");
     expect(detail.workflowSource).toBe("digraph Echo { start -> __end__ }");
     expect(detail.nodes.some((n) => n.nodeId === "start" && n.state === "completed")).toBe(true);
@@ -96,11 +98,13 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const metricsRes = await app.request("/metrics/global");
     const metrics = (await metricsRes.json()) as {
       total_runs: number;
-      total_tokens: number;
+      fresh_tokens: number;
+      billed_tokens: number;
       breakdownByModel: { model_name: string; tokens: number }[];
     };
     expect(metrics.total_runs).toBe(1);
-    expect(metrics.total_tokens).toBe(42);
+    expect(metrics.fresh_tokens).toBe(42);
+    expect(metrics.billed_tokens).toBe(42);
     expect(metrics.breakdownByModel.find((m) => m.model_name === "stub-model")?.tokens).toBe(42);
 
     store.close();

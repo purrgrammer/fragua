@@ -44,8 +44,13 @@ export interface DashboardStats {
   successRate: number;
   /** Sum of `costUsd` across every input row. */
   totalCostUsd: number;
-  /** Sum of `inputTokens + outputTokens` across every input row. */
-  totalTokens: number;
+  /** Sum of `inputTokens` across every input row — fresh prompt tokens. */
+  totalInputTokens: number;
+  /** Sum of `outputTokens` across every input row — generated tokens. */
+  totalOutputTokens: number;
+  /** Fresh tokens — `totalInputTokens + totalOutputTokens`. The "work
+   * done" headline. What `budget_tokens` fences against. */
+  freshTokens: number;
   /** Sum of `cacheReadTokens` — prompt-cache hits across every run. */
   totalCacheReadTokens: number;
   /** Sum of `cacheWriteTokens` — cache priming across every run. */
@@ -122,7 +127,9 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
     canceled,
     successRate,
     totalCostUsd,
-    totalTokens: totalInputTokens + totalOutputTokens,
+    totalInputTokens,
+    totalOutputTokens,
+    freshTokens: totalInputTokens + totalOutputTokens,
     totalCacheReadTokens,
     totalCacheWriteTokens,
     ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),

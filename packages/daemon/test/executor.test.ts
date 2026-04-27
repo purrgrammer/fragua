@@ -591,7 +591,7 @@ describe("executor — multi-step graph", () => {
 
     const state = r.store.getState("run2")!;
     expect(state.status).toBe("completed");
-    expect(state.metrics.totalTokens).toBe(15);
+    expect(state.metrics.billedTokens).toBe(15);
     expect(state.metrics.totalCostUsd).toBeCloseTo(0.0015, 6);
     expect(state.metrics.models["stub-model"]).toEqual({
       tokens: 15,

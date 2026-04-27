@@ -2,7 +2,7 @@ import type { FactEvent, RunMetrics, RunState, RunStatus } from "./types.ts";
 
 export function emptyMetrics(): RunMetrics {
   return {
-    totalTokens: 0,
+    billedTokens: 0,
     totalCostUsd: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
@@ -49,7 +49,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.node_completed": {
       const p = fact.payload;
-      next.metrics.totalTokens += p.tokens;
+      next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.totalInputTokens += p.inputTokens ?? 0;
       next.metrics.totalOutputTokens += p.outputTokens ?? 0;
@@ -68,7 +68,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.metrics.loopCounts[p.nodeId] = (next.metrics.loopCounts[p.nodeId] ?? 0) + 1;
       const nodeBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
       next.metrics.nodeCosts[p.nodeId] = {
-        tokens: nodeBucket.tokens + p.tokens,
+        tokens: nodeBucket.tokens + (p.inputTokens ?? 0) + (p.outputTokens ?? 0),
         costUsd: nodeBucket.costUsd + p.costUsd,
       };
       next.currentNode = p.nextNode;
@@ -77,7 +77,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.node_aborted": {
       const p = fact.payload;
-      next.metrics.totalTokens += p.partialTokens;
+      next.metrics.billedTokens += p.partialTokens;
       next.metrics.totalCostUsd += p.partialCostUsd;
       next.metrics.totalInputTokens += p.partialInputTokens ?? 0;
       next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
@@ -85,7 +85,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.metrics.totalCacheWriteTokens += p.partialCacheWriteTokens ?? 0;
       const abortBucket = next.metrics.nodeCosts[p.nodeId] ?? { tokens: 0, costUsd: 0 };
       next.metrics.nodeCosts[p.nodeId] = {
-        tokens: abortBucket.tokens + p.partialTokens,
+        tokens: abortBucket.tokens + (p.partialInputTokens ?? 0) + (p.partialOutputTokens ?? 0),
         costUsd: abortBucket.costUsd + p.partialCostUsd,
       };
       return next;
@@ -168,7 +168,7 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
     nodeCosts[k] = { tokens: v.tokens, costUsd: v.costUsd };
   }
   return {
-    totalTokens: m.totalTokens,
+    billedTokens: m.billedTokens,
     totalCostUsd: m.totalCostUsd,
     totalInputTokens: m.totalInputTokens,
     totalOutputTokens: m.totalOutputTokens,

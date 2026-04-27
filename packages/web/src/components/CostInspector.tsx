@@ -159,12 +159,12 @@ function StepCostRow({
   const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
   // Tokens this step generated against the model's context window —
   // matches the run-header "Tokens" tile (input + output sum). The
-  // provider-reported `total_tokens` field is not used: Anthropic
-  // includes cache_read_tokens in it on cached calls and excludes it
-  // on uncached ones, so summing across calls produced an inflated,
-  // inconsistent number (the implement step on 01kq5962q5hee63nsk
-  // showed 1.09M / 1M = 109% from that mixed accounting).
-  const totalTokens = inputTokens + outputTokens;
+  // provider-reported billed total is not used: Anthropic includes
+  // cache_read_tokens in it on cached calls and excludes it on uncached
+  // ones, so summing across calls produced an inflated, inconsistent
+  // number (the implement step on 01kq5962q5hee63nsk showed 1.09M / 1M
+  // = 109% from that mixed accounting).
+  const freshTokens = inputTokens + outputTokens;
 
   // Only Input / Output carry a $ figure in the breakdown — cache rows
   // intentionally don't, even though cache reads/writes are technically
@@ -174,7 +174,7 @@ function StepCostRow({
   const inputCostUsd = model ? (model.cost.input * inputTokens) / COST_RATE_DIVISOR : undefined;
   const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
 
-  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && totalTokens > 0;
+  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
 
   // All trailing chips share the same `text-xs text-muted-foreground
   // tabular-nums` and a small leading icon so each metric is identifiable
@@ -228,13 +228,13 @@ function StepCostRow({
         {showContextCircle && (
           <Context
             maxTokens={model.contextWindow}
-            usedTokens={totalTokens}
+            usedTokens={freshTokens}
             usage={{
               inputTokens,
               outputTokens,
               cachedInputTokens: cacheReadTokens,
               reasoningTokens: 0,
-              totalTokens,
+              totalTokens: freshTokens,
               inputTokenDetails: {
                 noCacheTokens: inputTokens,
                 cacheReadTokens,

@@ -426,7 +426,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       };
 
-      let totalTokens = 0;
+      let turnBilled = 0;
       let totalCostUsd = 0;
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
@@ -435,7 +435,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       let lastModel: string | undefined;
       const accounting: core.LlmAccounting = {
         addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
-          totalTokens += tokens;
+          turnBilled += tokens;
           totalCostUsd += costUsd;
           totalInputTokens += inputTokens ?? 0;
           totalOutputTokens += outputTokens ?? 0;
@@ -513,7 +513,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (typeof runMaxCostUsd === "number" || typeof nodeMaxCostUsd === "number") {
         const snap: core.BudgetSnapshotInput = {
           cumulative_cost_usd: state.metrics.totalCostUsd,
-          cumulative_tokens: state.metrics.totalTokens,
+          cumulative_tokens: state.metrics.totalInputTokens + state.metrics.totalOutputTokens,
         };
         if (typeof runMaxCostUsd === "number") snap.run_max_cost_usd = runMaxCostUsd;
         if (typeof nodeMaxCostUsd === "number") snap.max_cost_usd = nodeMaxCostUsd;
@@ -586,7 +586,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
         // Side-effect facts are already durable via the pre-commit recorder.
         const facts = abortResultToFacts(currentNode, iteration, abortCause, {
-          tokens: totalTokens,
+          tokens: turnBilled,
           costUsd: totalCostUsd,
           inputTokens: totalInputTokens,
           outputTokens: totalOutputTokens,
@@ -634,7 +634,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Attach LLM accounting into the node_completed fact if the handler
       // didn't set these explicitly.
       if (result.kind === "transition") {
-        if (result.tokens === 0 && totalTokens > 0) result.tokens = totalTokens;
+        if (result.tokens === 0 && turnBilled > 0) result.tokens = turnBilled;
         if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
         // Split fields: only fill from executor accounting when the handler
         // didn't already report any. Handlers that already know their own
@@ -696,18 +696,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (result.kind === "transition") {
         const graph = graphFor(state.workflowSha);
         const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
-        const turnTokens = result.tokens ?? 0;
+        const turnFresh = (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
         const turnCost = result.costUsd ?? 0;
         const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+        const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
         const alreadyWarned = readBudgetWarned(state.routing);
         const decisionBudget = evaluateBudget({
           graphAttrs: graph?.attrs ?? {},
           ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
           completedNodeId: currentNode,
           cumulativeCostUsd: state.metrics.totalCostUsd + turnCost,
-          cumulativeTokens: state.metrics.totalTokens + turnTokens,
+          cumulativeTokens: priorRunFresh + turnFresh,
           nodeCumulativeCostUsd: priorNodeBucket.costUsd + turnCost,
-          nodeCumulativeTokens: priorNodeBucket.tokens + turnTokens,
+          nodeCumulativeTokens: priorNodeBucket.tokens + turnFresh,
           alreadyWarned,
         });
         for (const ev of decisionBudget.events) {

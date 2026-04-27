@@ -36,7 +36,7 @@ export interface StepAggregateRow {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  totalTokens: number;
+  billedTokens: number;
   costEventCount: number;
   endedAtMs: number | null;
   stopReason: string | null;
@@ -64,7 +64,7 @@ const STEP_AGGREGATES_SQL = `
     COALESCE(SUM(CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER)), 0) AS outputTokens,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER)), 0) AS cacheReadTokens,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER)), 0) AS cacheWriteTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS totalTokens,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS billedTokens,
     COUNT(c.seq)                                                                  AS costEventCount,
     (
       SELECT MAX(d.ts) FROM events d
@@ -107,7 +107,7 @@ export function getStepAggregates(db: Database, runId: string): StepAggregateRow
         outputTokens: number;
         cacheReadTokens: number;
         cacheWriteTokens: number;
-        totalTokens: number;
+        billedTokens: number;
         costEventCount: number;
         endedAtMs: number | null;
         stopReason: string | null;
@@ -133,7 +133,7 @@ export interface RunCostTotalsRow {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  totalTokens: number;
+  billedTokens: number;
   eventCount: number;
 }
 
@@ -144,7 +144,7 @@ const RUN_COST_TOTALS_SQL = `
     COALESCE(SUM(CAST(json_extract(payload, '$.output_tokens')      AS INTEGER)), 0) AS outputTokens,
     COALESCE(SUM(CAST(json_extract(payload, '$.cache_read_tokens')  AS INTEGER)), 0) AS cacheReadTokens,
     COALESCE(SUM(CAST(json_extract(payload, '$.cache_write_tokens') AS INTEGER)), 0) AS cacheWriteTokens,
-    COALESCE(SUM(CAST(json_extract(payload, '$.total_tokens')       AS INTEGER)), 0) AS totalTokens,
+    COALESCE(SUM(CAST(json_extract(payload, '$.total_tokens')       AS INTEGER)), 0) AS billedTokens,
     COUNT(*)                                                                         AS eventCount
   FROM events
   WHERE run_id = ?1 AND type = 'cost.recorded'
@@ -159,7 +159,7 @@ export function getRunCostTotals(db: Database, runId: string): RunCostTotalsRow 
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      totalTokens: 0,
+      billedTokens: 0,
       eventCount: 0,
     }
   );

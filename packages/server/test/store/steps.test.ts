@@ -145,7 +145,7 @@ describe("eventsToSteps", () => {
         outputTokens: 200,
         cacheReadTokens: 500,
         cacheWriteTokens: 0,
-        totalTokens: 750,
+        billedTokens: 750,
         costEventCount: 2,
       },
       {
@@ -155,14 +155,14 @@ describe("eventsToSteps", () => {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-        totalTokens: 0,
+        billedTokens: 0,
         costEventCount: 0,
       },
     ]);
     expect(merged[0]!.cost).toEqual({
       input_tokens: 50,
       output_tokens: 200,
-      total_tokens: 750,
+      billed_tokens: 750,
       cost_usd: 0.006,
       cache_read_tokens: 500,
       cache_write_tokens: 0,

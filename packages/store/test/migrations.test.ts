@@ -155,6 +155,7 @@ describe("migrate — v3 → v4 run_state CHECK widening", () => {
       .query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_state'")
       .get();
     expect(ddl?.sql).toContain("'paused_provider_error'");
+    expect(ddl?.sql).toContain("billed_tokens");
     const row = db
       .query<
         {
@@ -162,16 +163,19 @@ describe("migrate — v3 → v4 run_state CHECK widening", () => {
           status: string;
           schema_version: number;
           total_cost_usd: number;
-          total_tokens: number;
+          billed_tokens: number;
         },
         []
-      >("SELECT run_id, status, schema_version, total_cost_usd, total_tokens FROM run_state WHERE run_id = 'r1'")
+      >("SELECT run_id, status, schema_version, total_cost_usd, billed_tokens FROM run_state WHERE run_id = 'r1'")
       .get();
     expect(row?.run_id).toBe("r1");
     expect(row?.status).toBe("paused_hitl");
     expect(row?.schema_version).toBe(3);
     expect(row?.total_cost_usd).toBeCloseTo(0.5);
-    expect(row?.total_tokens).toBe(42);
+    // Original v3 fixture had `metrics.totalTokens=42`. v4→v5 rewrites
+    // that JSON field to `metrics.billedTokens=42` so the new generated
+    // column extracts the same value through the chain.
+    expect(row?.billed_tokens).toBe(42);
     db.close();
   });
 
@@ -243,6 +247,125 @@ describe("migrate — v3 → v4 run_state CHECK widening", () => {
       "idx_run_state_updated",
       "idx_run_state_workflow",
     ]);
+    db.close();
+  });
+});
+
+describe("migrate — v4 → v5 total_tokens → billed_tokens rename", () => {
+  /**
+   * Build a v4-shape DB by hand: `run_state.total_tokens` extracts
+   * `$.totalTokens`. Lets us prove the v5 rebuild renames the column,
+   * rewrites the JSON, and preserves the value through both layers.
+   */
+  function v4SchemaDb(): Database {
+    const db = freshDb();
+    db.exec("PRAGMA foreign_keys = ON");
+    db.exec(`
+      CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL) STRICT;
+      INSERT INTO schema_version (id, version) VALUES (1, 4);
+      CREATE TABLE workflows (sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE run_state (
+        run_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'queued','running','paused_hitl','paused_provider_error',
+          'completed','cancelled','halted','quarantined'
+        )),
+        current_node TEXT,
+        workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+        schema_version INTEGER NOT NULL,
+        routing TEXT NOT NULL CHECK (length(routing) < 8192),
+        metrics TEXT NOT NULL,
+        next_seq INTEGER NOT NULL DEFAULT 1,
+        last_applied_seq INTEGER NOT NULL DEFAULT 0,
+        priority INTEGER NOT NULL DEFAULT 0,
+        enqueued_at INTEGER NOT NULL,
+        ready_at INTEGER NOT NULL,
+        node_started_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        title TEXT,
+        total_cost_usd REAL GENERATED ALWAYS AS
+          (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+        total_tokens INTEGER GENERATED ALWAYS AS
+          (CAST(COALESCE(json_extract(metrics, '$.totalTokens'), 0) AS INTEGER)) STORED
+      ) STRICT;
+      CREATE INDEX idx_run_state_queue ON run_state(priority DESC, ready_at ASC) WHERE status = 'queued';
+      CREATE INDEX idx_run_state_status ON run_state(status);
+      CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+      CREATE INDEX idx_run_state_updated ON run_state(updated_at);
+
+      CREATE TABLE events (
+        run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+        payload TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      ) STRICT, WITHOUT ROWID;
+
+      INSERT INTO workflows (sha, name, dot_source, created_at) VALUES ('w1', 'demo', 'digraph G {}', 1);
+      INSERT INTO run_state (run_id, version, status, current_node, workflow_sha, schema_version, routing, metrics, enqueued_at, ready_at, updated_at)
+        VALUES
+          ('r1', 1, 'completed', 'n1', 'w1', 4, '{}', '{"totalTokens":1234,"totalCostUsd":1.5,"totalInputTokens":100,"totalOutputTokens":200,"totalCacheReadTokens":900,"totalCacheWriteTokens":34}', 1, 1, 1),
+          ('r2', 1, 'completed', 'n1', 'w1', 4, '{}', '{"totalTokens":0,"totalCostUsd":0}', 2, 2, 2);
+      INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES
+        ('r1', 1, 'fact.run_started',  'daemon', '{}', 100),
+        ('r1', 2, 'fact.run_completed','daemon', '{}', 200);
+    `);
+    return db;
+  }
+
+  test("renames the column and preserves the value through JSON rewrite", () => {
+    const db = v4SchemaDb();
+    migrate(db);
+    const ddl = db
+      .query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_state'")
+      .get();
+    expect(ddl?.sql).toContain("billed_tokens");
+    expect(ddl?.sql).not.toContain("total_tokens");
+    expect(ddl?.sql).toContain("$.billedTokens");
+    expect(ddl?.sql).not.toContain("$.totalTokens");
+
+    const r1 = db
+      .query<{ billed_tokens: number; metrics: string }, []>(
+        "SELECT billed_tokens, metrics FROM run_state WHERE run_id = 'r1'",
+      )
+      .get();
+    expect(r1?.billed_tokens).toBe(1234);
+    const m1 = JSON.parse(r1?.metrics ?? "{}") as Record<string, unknown>;
+    expect(m1["billedTokens"]).toBe(1234);
+    expect(m1["totalTokens"]).toBeUndefined();
+    // Other fields untouched.
+    expect(m1["totalInputTokens"]).toBe(100);
+    expect(m1["totalCacheReadTokens"]).toBe(900);
+    db.close();
+  });
+
+  test("rebuild is idempotent on re-run", () => {
+    const db = v4SchemaDb();
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+    const row = db.query<{ run_id: string }, []>("SELECT run_id FROM run_state WHERE run_id = 'r1'").get();
+    expect(row?.run_id).toBe("r1");
+    db.close();
+  });
+
+  test("events with ON DELETE CASCADE FK survive the v5 rebuild", () => {
+    const db = v4SchemaDb();
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events").get()?.n).toBe(2);
+    migrate(db);
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events").get()?.n).toBe(2);
+    const orphans = db.query<{ table: string }, []>("PRAGMA foreign_key_check").all();
+    expect(orphans).toEqual([]);
+    db.close();
+  });
+
+  test("schema_version row advances from 4 to CURRENT", () => {
+    const db = v4SchemaDb();
+    migrate(db);
+    const row = db.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get();
+    expect(row?.version).toBe(CURRENT_SCHEMA_VERSION);
     db.close();
   });
 });

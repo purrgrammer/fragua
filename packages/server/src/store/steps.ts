@@ -76,7 +76,7 @@ export interface StepSnapshot {
   cost?: {
     input_tokens: number;
     output_tokens: number;
-    total_tokens?: number;
+    billed_tokens?: number;
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd: number;
@@ -156,7 +156,7 @@ export interface StepCostAggregate {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  totalTokens: number;
+  billedTokens: number;
   costEventCount: number;
 }
 
@@ -203,7 +203,7 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
       cost: {
         input_tokens: agg.inputTokens,
         output_tokens: agg.outputTokens,
-        total_tokens: agg.totalTokens,
+        billed_tokens: agg.billedTokens,
         cache_read_tokens: agg.cacheReadTokens,
         cache_write_tokens: agg.cacheWriteTokens,
         cost_usd: agg.costUsd,

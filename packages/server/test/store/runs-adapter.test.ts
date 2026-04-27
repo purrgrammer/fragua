@@ -17,7 +17,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     schemaVersion: 1,
     routing: {},
     metrics: {
-      totalTokens: 0,
+      billedTokens: 0,
       totalCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,

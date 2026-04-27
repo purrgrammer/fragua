@@ -15,8 +15,12 @@ CREATE TABLE IF NOT EXISTS workflows (
 ) STRICT;
 
 -- run_state is projection + queue + per-run seq counter.
--- `total_cost_usd` and `total_tokens` are generated columns extracted from
+-- `total_cost_usd` and `billed_tokens` are generated columns extracted from
 -- the metrics JSON. They let the web UI aggregate without parsing blobs.
+-- `billed_tokens` is the all-buckets sum (input+output+cacheRead+cacheWrite),
+-- exposed as `billed_tokens` on `/metrics/global`. Fresh tokens
+-- (input+output) are computed on demand from `$.totalInputTokens` +
+-- `$.totalOutputTokens`; `budget_tokens` fences against fresh.
 CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -39,8 +43,8 @@ CREATE TABLE IF NOT EXISTS run_state (
   title TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
-  total_tokens INTEGER GENERATED ALWAYS AS
-    (CAST(COALESCE(json_extract(metrics, '$.totalTokens'), 0) AS INTEGER)) STORED
+  billed_tokens INTEGER GENERATED ALWAYS AS
+    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_run_state_queue

@@ -269,7 +269,7 @@ describe("Home route", () => {
   // a Skeleton. Skeleton is reserved for the loading branch. `cacheHitRate`
   // and `avgDurationMs` are the two optional stats fields — an empty run
   // list yields both as `undefined` via `computeStats`.
-  it("renders '—' (not Skeleton) for absent totalCostUsd + totalTokens once loaded", async () => {
+  it("renders '—' (not Skeleton) for absent totalCostUsd + freshTokens once loaded", async () => {
     const client = withRows([]);
     const { container } = mount(client);
     const q = within(container);

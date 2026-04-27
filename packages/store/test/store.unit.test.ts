@@ -147,7 +147,7 @@ describe("SqliteStore — appendFact", () => {
     );
 
     const s2 = store.getState(runId)!;
-    expect(s2.metrics.totalTokens).toBe(150);
+    expect(s2.metrics.billedTokens).toBe(150);
     expect(s2.metrics.totalCostUsd).toBeCloseTo(0.025, 6);
     expect(s2.metrics.models["gemini-1.5-pro"]).toEqual({
       tokens: 100,
@@ -160,11 +160,11 @@ describe("SqliteStore — appendFact", () => {
 
     // generated columns reflect the metrics JSON
     const row = (store as unknown as { db: import("bun:sqlite").Database }).db
-      .query<{ total_cost_usd: number; total_tokens: number }, [string]>(
-        "SELECT total_cost_usd, total_tokens FROM run_state WHERE run_id = ?",
+      .query<{ total_cost_usd: number; billed_tokens: number }, [string]>(
+        "SELECT total_cost_usd, billed_tokens FROM run_state WHERE run_id = ?",
       )
       .get(runId)!;
-    expect(row.total_tokens).toBe(150);
+    expect(row.billed_tokens).toBe(150);
     expect(row.total_cost_usd).toBeCloseTo(0.025, 6);
 
     store.close();

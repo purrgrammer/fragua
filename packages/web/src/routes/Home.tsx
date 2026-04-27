@@ -247,6 +247,19 @@ interface StatsTilesProps {
   loading: boolean;
 }
 
+function tokensTooltip(stats: ReturnType<typeof computeStats>): string {
+  const fmt = new Intl.NumberFormat();
+  const billed =
+    stats.totalInputTokens + stats.totalOutputTokens + stats.totalCacheReadTokens + stats.totalCacheWriteTokens;
+  return [
+    `input  ${fmt.format(stats.totalInputTokens)}`,
+    `output ${fmt.format(stats.totalOutputTokens)}`,
+    `cacheR ${fmt.format(stats.totalCacheReadTokens)}`,
+    `cacheW ${fmt.format(stats.totalCacheWriteTokens)}`,
+    `billed ${fmt.format(billed)}`,
+  ].join(" · ");
+}
+
 function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
   return (
     <section data-testid="stats-tiles">
@@ -276,9 +289,10 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
         <StatTile
           label="Tokens"
           loading={loading}
-          numericValue={stats.totalTokens}
-          format={tokensCompactFormatOptions(stats.totalTokens ?? 0)}
+          numericValue={stats.freshTokens}
+          format={tokensCompactFormatOptions(stats.freshTokens ?? 0)}
           icon={<Coins className="size-4" />}
+          hint={tokensTooltip(stats)}
           testId="tile-tokens"
         />
       </div>

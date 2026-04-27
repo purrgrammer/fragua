@@ -879,11 +879,8 @@ export class SqliteStore implements IEventStore {
 
   private rowToState(row: RunStateRow): RunState {
     const parsedMetrics = JSON.parse(row.metrics) as Partial<RunMetrics>;
-    // Pre-split rows (before the input/output/cache split landed) are
-    // missing the four new totals. Default to 0 so older runs render as
-    // "we didn't track this" (all zeros) instead of NaN-ing downstream.
     const metrics: RunMetrics = {
-      totalTokens: parsedMetrics.totalTokens ?? 0,
+      billedTokens: parsedMetrics.billedTokens ?? 0,
       totalCostUsd: parsedMetrics.totalCostUsd ?? 0,
       totalInputTokens: parsedMetrics.totalInputTokens ?? 0,
       totalOutputTokens: parsedMetrics.totalOutputTokens ?? 0,
