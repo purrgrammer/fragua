@@ -198,9 +198,9 @@ describe("Home route", () => {
       expect(q.getByTestId("tile-running")).toBeTruthy();
     });
     expect(q.getByTestId("tile-running").textContent).toContain("1");
-    expect(q.getByTestId("tile-queued").textContent).toContain("0");
     expect(q.getByTestId("tile-spend").textContent).toMatch(/\$0\.16/);
     expect(q.getByTestId("tile-tokens").textContent).toContain("235");
+    expect(q.getByTestId("tile-cache")).toBeTruthy();
   });
 
   it("renders the Running and Queued tiles with correct counts", async () => {
@@ -221,14 +221,16 @@ describe("Home route", () => {
       expect(q.getByTestId("tile-running")).toBeTruthy();
     });
     expect(q.getByTestId("tile-running").textContent).toContain("2");
-    expect(q.getByTestId("tile-queued").textContent).toContain("3");
 
-    // Only the four tiles are rendered — removed tiles are absent.
+    // Queued tile was removed; other removed tiles are also absent.
+    expect(q.queryByTestId("tile-queued")).toBeNull();
     expect(q.queryByTestId("tile-paused")).toBeNull();
     expect(q.queryByTestId("tile-total")).toBeNull();
     expect(q.queryByTestId("stats-queue")).toBeNull();
     expect(q.queryByTestId("stats-outcomes")).toBeNull();
     expect(q.queryByTestId("stats-resources")).toBeNull();
+    // Cache tile is present.
+    expect(q.getByTestId("tile-cache")).toBeTruthy();
   });
 
   it("renders at most ten row entries under the Runs section", async () => {

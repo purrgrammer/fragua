@@ -6,7 +6,7 @@
 // (`queries.runs.list`'s `refetchInterval`). No local timer needed.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Coins, DollarSign, Hourglass, Play } from "lucide-react";
+import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -28,7 +28,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
-import { tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { useHealth } from "../types/health.ts";
@@ -249,14 +249,14 @@ interface StatsTilesProps {
 
 function tokensTooltip(stats: ReturnType<typeof computeStats>): string {
   const fmt = new Intl.NumberFormat();
-  const billed =
-    stats.totalInputTokens + stats.totalOutputTokens + stats.totalCacheReadTokens + stats.totalCacheWriteTokens;
+  return [`input  ${fmt.format(stats.totalInputTokens)}`, `output ${fmt.format(stats.totalOutputTokens)}`].join(" · ");
+}
+
+function cacheTooltip(stats: ReturnType<typeof computeStats>): string {
+  const fmt = new Intl.NumberFormat();
   return [
-    `input  ${fmt.format(stats.totalInputTokens)}`,
-    `output ${fmt.format(stats.totalOutputTokens)}`,
-    `cacheR ${fmt.format(stats.totalCacheReadTokens)}`,
-    `cacheW ${fmt.format(stats.totalCacheWriteTokens)}`,
-    `billed ${fmt.format(billed)}`,
+    `cacheRead  ${fmt.format(stats.totalCacheReadTokens)}`,
+    `cacheWrite ${fmt.format(stats.totalCacheWriteTokens)}`,
   ].join(" · ");
 }
 
@@ -270,13 +270,6 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           numericValue={stats.running}
           icon={<Play className="size-4" />}
           testId="tile-running"
-        />
-        <StatTile
-          label="Queued"
-          loading={loading}
-          numericValue={stats.queued}
-          icon={<Hourglass className="size-4" />}
-          testId="tile-queued"
         />
         <StatTile
           label="Total spend"
@@ -294,6 +287,14 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           icon={<Coins className="size-4" />}
           hint={tokensTooltip(stats)}
           testId="tile-tokens"
+        />
+        <StatTile
+          label="Cache hit rate"
+          loading={loading}
+          value={formatCacheHitRate(stats.totalCacheReadTokens, stats.totalInputTokens)}
+          icon={<Database className="size-4" />}
+          hint={cacheTooltip(stats)}
+          testId="tile-cache"
         />
       </div>
     </section>
