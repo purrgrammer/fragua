@@ -28,7 +28,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
-import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { useHealth } from "../types/health.ts";
@@ -291,7 +291,8 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
         <StatTile
           label="Cache hit rate"
           loading={loading}
-          value={formatCacheHitRate(stats.totalCacheReadTokens, stats.totalInputTokens)}
+          numericValue={stats.cacheHitRate}
+          format={percentFormatOptions()}
           icon={<Database className="size-4" />}
           hint={cacheTooltip(stats)}
           testId="tile-cache"

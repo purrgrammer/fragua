@@ -29,7 +29,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
-import { formatCacheHitRate, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import { mergeDetail } from "../lib/useDetailOverlay.ts";
@@ -315,10 +315,12 @@ export const StatsStrip = memo(function StatsStrip({
   const inputTokens = hasLive ? liveCost.totalInputTokens : (detail?.inputTokens ?? 0);
   const outputTokens = hasLive ? liveCost.totalOutputTokens : (detail?.outputTokens ?? 0);
   // Preserve undefined when the snapshot omits cacheReadTokens and no live
-  // events have arrived — formatCacheHitRate returns '—' for undefined,
-  // which is the right fallback for pre-split runs.
+  // events have arrived — AnimatedNumber's fallback "—" handles that.
   const cacheReadTokens: number | undefined = hasLive ? liveCost.totalCacheReadTokens : detail?.cacheReadTokens;
   const freshTokens = inputTokens + outputTokens;
+  const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0);
+  const cacheHitRate: number | undefined =
+    cacheReadTokens !== undefined && cacheHitDenom > 0 ? cacheReadTokens / cacheHitDenom : undefined;
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="detail-stats">
@@ -350,7 +352,8 @@ export const StatsStrip = memo(function StatsStrip({
       <StatTile
         label="Cache hit rate"
         loading={loading}
-        value={formatCacheHitRate(cacheReadTokens, inputTokens)}
+        numericValue={cacheHitRate}
+        format={percentFormatOptions()}
         testId="detail-cache-tile"
         icon={<Database className="size-4" />}
         hint={

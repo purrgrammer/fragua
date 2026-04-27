@@ -65,7 +65,7 @@ export function StatTile({
         ) : numericValue !== undefined || format !== undefined ? (
           <AnimatedNumber value={numericValue} format={format} className="font-heading text-2xl tabular-nums" />
         ) : (
-          <span className="block font-heading text-2xl tabular-nums leading-none">{value ?? "—"}</span>
+          <p className="font-heading text-2xl tabular-nums">{value ?? "—"}</p>
         )}
       </CardContent>
     </Card>

@@ -47,6 +47,16 @@ export function tokensLongFormatOptions(): Intl.NumberFormatOptions {
 }
 
 /**
+ * `Intl.NumberFormatOptions` for a 0–1 ratio rendered as a one-decimal
+ * percentage (e.g. `0.829` → `"82.9%"`). Used by tiles that feed
+ * `AnimatedNumber` directly so the percentage animates and baselines
+ * with the other NumberFlow-driven tiles in the same row.
+ */
+export function percentFormatOptions(): Intl.NumberFormatOptions {
+  return { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 };
+}
+
+/**
  * USD cost. Fixed to USD currency — the whole product assumes LLM spend
  * is priced in USD, so we don't thread a currency option through every
  * call site. Fraction digits are picked to keep sub-cent costs legible
