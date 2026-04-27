@@ -10,6 +10,8 @@ import {
   getRunCostTotals as queryRunCostTotals,
   getStepAggregates as queryStepAggregates,
   selectEvents,
+  selectGlobalEventsAfter,
+  selectGlobalEventsLatest,
   selectMessages,
   selectMessagesNarrow,
 } from "./queries.ts";
@@ -30,6 +32,8 @@ import {
   type FactAppendResult,
   type FactEvent,
   type GetEventsOpts,
+  type GetGlobalEventsAfterOpts,
+  type GetGlobalEventsLatestOpts,
   type GetMessagesOpts,
   type IEventStore,
   type IntentAppendResult,
@@ -79,6 +83,27 @@ export interface SqliteStoreOpts {
    * tmpdir is created and torn down on `close()`. */
   blobsDir?: string;
   now?: () => number;
+}
+
+/** EventRow → StoredEvent. Shared across getEvents / getGlobalEvents*
+ * so the projection (column rename, payload parse, writer cast) lives
+ * in one place. */
+function rowToStoredEvent(r: {
+  run_id: string;
+  seq: number;
+  type: string;
+  writer: string;
+  payload: string;
+  ts: number;
+}): StoredEvent {
+  return {
+    runId: r.run_id,
+    seq: r.seq,
+    type: r.type as StoredEvent["type"],
+    writer: r.writer as EventWriter,
+    payload: JSON.parse(r.payload),
+    ts: r.ts,
+  };
 }
 
 export class SqliteStore implements IEventStore {
@@ -357,15 +382,15 @@ export class SqliteStore implements IEventStore {
       sinceSeq: opts.sinceSeq ?? 0,
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
     };
-    const rows = selectEvents(this.db, runId, queryOpts);
-    return rows.map((r) => ({
-      runId: r.run_id,
-      seq: r.seq,
-      type: r.type as StoredEvent["type"],
-      writer: r.writer as EventWriter,
-      payload: JSON.parse(r.payload),
-      ts: r.ts,
-    }));
+    return selectEvents(this.db, runId, queryOpts).map(rowToStoredEvent);
+  }
+
+  getGlobalEventsAfter(opts: GetGlobalEventsAfterOpts): StoredEvent[] {
+    return selectGlobalEventsAfter(this.db, opts).map(rowToStoredEvent);
+  }
+
+  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[] {
+    return selectGlobalEventsLatest(this.db, opts).map(rowToStoredEvent);
   }
 
   getUnappliedIntents(runId: string): StoredEvent[] {

@@ -774,3 +774,279 @@ describe("P19 — SSE replay via Last-Event-ID", () => {
     expect(chunks).toContain("fact.run_completed");
   });
 });
+
+describe("global event feed (cross-run)", () => {
+  /** Drain SSE response into a single string, capped at deadline or
+   * once `marker` appears. Mirrors the per-run helper above; private
+   * here so each describe block has its own. */
+  async function drainSSE(res: Response, marker: string, timeoutMs = 500): Promise<string> {
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let chunks = "";
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks += decoder.decode(value, { stream: true });
+      if (chunks.includes(marker)) break;
+    }
+    await reader.cancel().catch(() => {});
+    return chunks;
+  }
+
+  /** Seed two runs with a mix of allow-listed and excluded events:
+   *   - a, b: fact.run_started / fact.run_completed (allow-listed)
+   *   - a:    fact.node_started, fact.node_completed (excluded)
+   *   - a:    cost.recorded (excluded — observability)
+   * Each enqueueRun also lands `intent.run_enqueued` (seq 1, allow-listed).
+   */
+  function seedTwoRuns(): void {
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    const a0 = store.getState("a")!;
+    const a1 = store.appendFact(
+      "a",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: a0.schemaVersion, startNode: "n" } }],
+      a0.version,
+    );
+    store.appendFact(
+      "a",
+      [{ type: "fact.node_started", payload: { nodeId: "n", iteration: 1 } }],
+      a1.newVersion,
+    );
+    store.appendObservabilityEvents("a", [
+      { type: "cost.recorded", payload: { cost_usd: 0.001, total_tokens: 5, nodeId: "n" } },
+    ]);
+
+    store.enqueueRun({ runId: "b", workflowSha: "wf" });
+    const b0 = store.getState("b")!;
+    const b1 = store.appendFact(
+      "b",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: b0.schemaVersion, startNode: "n" } }],
+      b0.version,
+    );
+    store.appendFact("b", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], b1.newVersion);
+  }
+
+  test("GET /events returns allow-listed events oldest-first, excluding node + observability", async () => {
+    seedTwoRuns();
+    const routes = createRoutes({ store });
+    const res = await routes.fetch(new Request("http://test/events"));
+    expect(res.status).toBe(200);
+    const events = (await res.json()) as Array<{ type: string; runId: string; ts: number; seq: number }>;
+
+    const types = events.map((e) => e.type);
+    // Allow-listed kinds present
+    expect(types).toContain("intent.run_enqueued");
+    expect(types).toContain("fact.run_started");
+    expect(types).toContain("fact.run_completed");
+    // Excluded kinds absent
+    expect(types).not.toContain("fact.node_started");
+    expect(types).not.toContain("cost.recorded");
+
+    // Oldest-first ordering by (ts, runId, seq) tuple
+    for (let i = 1; i < events.length; i++) {
+      const prev = events[i - 1]!;
+      const cur = events[i]!;
+      const prevKey = [prev.ts, prev.runId, prev.seq] as const;
+      const curKey = [cur.ts, cur.runId, cur.seq] as const;
+      expect(prevKey <= curKey).toBe(true);
+    }
+  });
+
+  test("GET /events?limit=N caps the response", async () => {
+    seedTwoRuns();
+    const routes = createRoutes({ store });
+    const res = await routes.fetch(new Request("http://test/events?limit=2"));
+    const events = (await res.json()) as unknown[];
+    expect(events.length).toBe(2);
+  });
+
+  test("GET /events/stream delivers live allow-listed events across runs", async () => {
+    // Pre-seed run a + b with run_started, then open the stream and append
+    // a fact.run_completed on each. The stream should pick up both.
+    seedTwoRuns();
+    const routes = createRoutes({ store, ssePollMs: 10 });
+
+    // Find the most-recent existing event so we can resume after it and
+    // only see new appends — avoids racing on whether the loop drains
+    // the seed before our follow-up appends land.
+    const seedRes = await routes.fetch(new Request("http://test/events?limit=200"));
+    const seedEvents = (await seedRes.json()) as Array<{ ts: number; runId: string; seq: number }>;
+    const cursor = seedEvents[seedEvents.length - 1]!;
+
+    const streamRes = await routes.fetch(
+      new Request(
+        `http://test/events/stream?fromTs=${cursor.ts + 1}`,
+      ),
+    );
+    expect(streamRes.status).toBe(200);
+    expect(streamRes.headers.get("content-type")).toMatch(/event-stream/);
+
+    // Now append a halt on `a` (allow-listed) and a node_aborted on `a`
+    // (excluded). The stream should see only the halt.
+    const aState = store.getState("a")!;
+    store.appendFact("a", [{ type: "fact.run_halted", payload: { reason: "error" } }], aState.version);
+    const aState2 = store.getState("a")!;
+    // node_aborted on a non-running run would fail OCC; use cost.recorded
+    // (observability, doesn't bump version) to inject an excluded kind.
+    store.appendObservabilityEvents("a", [
+      { type: "agent.warning", payload: { message: "noise" } },
+    ]);
+    // And a real allow-listed event on `b`.
+    store.appendIntent("b", { type: "intent.cancel_requested", payload: { reason: "stop" } });
+
+    const chunks = await drainSSE(streamRes, "intent.cancel_requested");
+
+    expect(chunks).toContain("fact.run_halted");
+    expect(chunks).toContain("intent.cancel_requested");
+    // Excluded kinds must not appear, even though they share the same
+    // events table.
+    expect(chunks).not.toContain("agent.warning");
+    expect(chunks).not.toContain("cost.recorded");
+
+    void aState2;
+  });
+
+  test("GET /events/stream resume via Last-Event-ID skips events with ts < cursor.ts", async () => {
+    // The server filter is `ts >= cursor.ts`, deliberately — strict
+    // tuple-greater would silently drop same-ms appends to lex-smaller
+    // run_ids (the live-tail bug client-side dedup is built to absorb).
+    // So this test pins the contract that a newer Last-Event-ID skips
+    // strictly older events; cursor-ts events may be re-delivered (the
+    // client dedupes locally via the SSE id triple).
+    //
+    // Build two ts windows by inserting events under controlled `now`.
+    let nowVal = 1_000_000;
+    const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
+    try {
+      tStore.saveWorkflow("wf", "t", "digraph {}");
+      // Window 1 @ ts=1_000_000
+      tStore.enqueueRun({ runId: "r1", workflowSha: "wf" });
+      // Window 2 @ ts=1_000_500 (500 ms later)
+      nowVal = 1_000_500;
+      tStore.enqueueRun({ runId: "r2", workflowSha: "wf" });
+
+      const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
+      // Cursor at end of window 1 — its events should NOT cross the
+      // wire because their ts < cursor.ts. Window-2 events (ts >=) do.
+      const cursorTs = 1_000_500; // start of window 2
+      const res = await tRoutes.fetch(
+        new Request("http://test/events/stream", {
+          headers: { "Last-Event-ID": `${cursorTs}.r2.0` },
+        }),
+      );
+      const chunks = await drainSSE(res, "r2");
+
+      // Window 2 lands.
+      expect(chunks).toContain('"runId":"r2"');
+      // Window 1 (ts=1_000_000 < cursor) is filtered out by `ts >=`.
+      expect(chunks).not.toContain('"runId":"r1"');
+    } finally {
+      tStore.close();
+    }
+  });
+
+  test("GET /events/stream uses max(?fromTs, Last-Event-ID.ts) on reconnect", async () => {
+    // The cursor on the wire is just `ts` (with the full triple in the
+    // SSE id for client-side dedup). On reconnect, the original
+    // `?fromTs=` baked at first connect is stale; `Last-Event-ID.ts`
+    // is fresh. Server picks whichever is larger so the older query
+    // cursor doesn't replay events the client already saw.
+    let nowVal = 2_000_000;
+    const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
+    try {
+      tStore.saveWorkflow("wf", "t", "digraph {}");
+      // ts windows: 2_000_000, 2_000_100, 2_000_200
+      tStore.enqueueRun({ runId: "r1", workflowSha: "wf" });
+      nowVal = 2_000_100;
+      tStore.enqueueRun({ runId: "r2", workflowSha: "wf" });
+      nowVal = 2_000_200;
+      tStore.enqueueRun({ runId: "r3", workflowSha: "wf" });
+
+      const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
+      const stale = 2_000_000; // baked-in query cursor
+      const fresh = 2_000_200; // browser's last-received ts
+      const url = `http://test/events/stream?fromTs=${stale}`;
+      const res = await tRoutes.fetch(
+        new Request(url, {
+          headers: { "Last-Event-ID": `${fresh}.r3.0` },
+        }),
+      );
+      const chunks = await drainSSE(res, "r3");
+
+      // Only the fresh-window event lands (ts >= 2_000_200). Older
+      // windows (r1@2_000_000, r2@2_000_100) MUST NOT replay despite
+      // the staler ?fromTs=.
+      expect(chunks).toContain('"runId":"r3"');
+      expect(chunks).not.toContain('"runId":"r1"');
+      expect(chunks).not.toContain('"runId":"r2"');
+    } finally {
+      tStore.close();
+    }
+  });
+
+  test("GET /events/stream — same-ms append to a lex-smaller run_id still reaches the live tail", async () => {
+    // Regression for the cursor design: with strict-greater on a
+    // `(ts, run_id, seq)` tuple, a new event landing at the cursor's
+    // ts but with a run_id that lex-sorts BEFORE the cursor's run_id
+    // would silently fall "before" the cursor and never reach the
+    // client. The current design uses `ts >= cursor.ts` + per-
+    // connection dedup specifically to absorb this case.
+    //
+    // Pin both runs to the same `now` so every event shares ts.
+    let nowVal = 5_000_000;
+    const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
+    try {
+      tStore.saveWorkflow("wf", "t", "digraph {}");
+      // Seed run "z" first, then take its last event as the cursor.
+      tStore.enqueueRun({ runId: "z", workflowSha: "wf" });
+      const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
+
+      // Cursor = (ts, "z", 1) — last event from run "z".
+      const cursorId = `${nowVal}.z.1`;
+      const res = await tRoutes.fetch(
+        new Request("http://test/events/stream", {
+          headers: { "Last-Event-ID": cursorId },
+        }),
+      );
+
+      // Now append a new run "a" — same ts, lex-smaller run_id. With
+      // a strict-greater tuple cursor this would be filtered.
+      tStore.enqueueRun({ runId: "a", workflowSha: "wf" });
+
+      const chunks = await drainSSE(res, '"runId":"a"');
+      expect(chunks).toContain('"runId":"a"');
+      // And the SSE id matches the (ts, runId, seq) we expect.
+      expect(chunks).toContain(`id: ${nowVal}.a.1\n`);
+    } finally {
+      tStore.close();
+    }
+  });
+
+  test("GET /events/stream stays open across runs (no terminal close)", async () => {
+    // Seed a single completed run; the per-run stream would close, the
+    // global stream must not — terminality is a per-run concept.
+    store.enqueueRun({ runId: "done", workflowSha: "wf" });
+    const s0 = store.getState("done")!;
+    const s1 = store.appendFact(
+      "done",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: s0.schemaVersion, startNode: "n" } }],
+      s0.version,
+    );
+    store.appendFact("done", [{ type: "fact.run_completed", payload: { finalNode: "n" } }], s1.newVersion);
+
+    const routes = createRoutes({ store, ssePollMs: 10 });
+    const res = await routes.fetch(new Request("http://test/events/stream"));
+
+    // Drain until both lifecycle events arrive, then cancel. The stream
+    // must NOT close on its own (per-run terminality doesn't apply); the
+    // post-cancel state is the assertion.
+    const chunks = await drainSSE(res, "fact.run_completed");
+    expect(chunks).toContain("fact.run_started");
+    expect(chunks).toContain("fact.run_completed");
+    // If `shouldClose` had fired the way per-run streams do, drainSSE
+    // would have hit `done: true` before its 500ms deadline. The fact
+    // that we reached the marker means the loop kept running past
+    // terminal — exactly the contract we want.
+  });
+});

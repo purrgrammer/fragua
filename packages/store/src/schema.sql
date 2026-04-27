@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS events (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, run_id, seq);
+-- Cross-run, time-ordered scans for the global Home feed. Cursor is the
+-- (ts, run_id, seq) tuple — per-run `seq` can't carry a global ordering
+-- on its own. With this index, `WHERE (ts, run_id, seq) > (?, ?, ?)
+-- ORDER BY ts, run_id, seq` walks the index without a sort step.
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts, run_id, seq);
 
 -- messages.content stores a pi-agent-core `AgentMessage` as JSON — the
 -- same shape pi-ai hands us at message_end and hands back as

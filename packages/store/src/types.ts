@@ -260,6 +260,43 @@ export type AnyEvent = IntentEvent | FactEvent;
 export type EventType = AnyEvent["type"];
 
 /**
+ * Operator-relevant event kinds for the global Home feed. These are the
+ * events whose arrival warrants a row in the timeline — run lifecycle,
+ * operator-initiated intents, and system-health signals. Excludes
+ * node-level facts, side-effect facts, message_appended, and the entire
+ * observability family (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`)
+ * because at sustained run rates those would drown the feed.
+ *
+ * Both `GET /events` (backfill) and `GET /events/stream` (live SSE)
+ * filter through this list. Adding a new kind here is the only step
+ * needed to surface it on Home.
+ */
+export const FEED_EVENT_KINDS: readonly EventType[] = [
+  // Run lifecycle (intent that creates the run + every fact that flips status)
+  "intent.run_enqueued",
+  "fact.run_started",
+  "fact.run_completed",
+  "fact.run_paused_hitl",
+  "fact.run_paused_provider_error",
+  "fact.run_resumed",
+  "fact.run_cancelled",
+  "fact.run_halted",
+  "fact.run_quarantined",
+  "fact.run_requeued_after_crash",
+  // Operator actions (writer: "web")
+  "intent.pause_requested",
+  "intent.cancel_requested",
+  "intent.steering_requested",
+  "intent.unquarantine",
+  "intent.priority_adjusted",
+  "intent.hitl_input",
+  "intent.resume",
+  // System health
+  "fact.daemon_takeover",
+  "fact.handler_timeout_leaked",
+];
+
+/**
  * What the store actually gives you back from the `events` table. The
  * `type` column is a plain string in SQLite — the fact/intent unions are
  * the TYPED-WRITE contract only, not a read-side constraint. Observability
@@ -464,6 +501,23 @@ export interface GetEventsOpts {
   limit?: number;
 }
 
+export interface GetGlobalEventsAfterOpts {
+  /** Wall-clock ms; events with `ts >= fromTs` are returned. The
+   * `>=` semantics (vs strict greater on a tuple) avoid dropping
+   * same-ms appends to lex-smaller `run_id`s. The route layer
+   * dedupes the bounded redelivery at `cursor.ts` per-connection. */
+  fromTs: number;
+  /** Allow-listed event kinds. Required — the global feed always filters. */
+  kindIn: readonly string[];
+  limit: number;
+}
+
+export interface GetGlobalEventsLatestOpts {
+  /** Allow-listed event kinds. Required — the global feed always filters. */
+  kindIn: readonly string[];
+  limit: number;
+}
+
 export interface GetMessagesOpts {
   sinceOrdinal?: number;
   limit?: number;
@@ -504,6 +558,19 @@ export interface IEventStore {
   // ─── State reads
   getState(runId: string): RunState | null;
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
+  /**
+   * Cross-run, ascending scan of events strictly after `cursor`,
+   * filtered by `kindIn`. Powers the global SSE feed
+   * (`GET /events/stream`). `kindIn` is required and allow-listed at
+   * the route layer (see {@link FEED_EVENT_KINDS}). At most `limit`
+   * rows. Returns events in (ts, runId, seq) ASC order.
+   */
+  getGlobalEventsAfter(opts: GetGlobalEventsAfterOpts): StoredEvent[];
+  /**
+   * The most-recent `limit` events allow-listed by `kindIn`, returned
+   * oldest-first. Powers the backfill route (`GET /events`).
+   */
+  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
 
   // ─── Messages

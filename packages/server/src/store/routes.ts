@@ -7,17 +7,24 @@
 import type { Database } from "bun:sqlite";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import {
+  FEED_EVENT_KINDS,
   type IEventStore,
   type IntentEvent,
   isTerminal as isTerminalStatus,
   PayloadTooLargeError,
-  type StoredEvent,
   sha256Hex,
 } from "@swarm/store";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
+import {
+  encodeGlobalEventId,
+  parseGlobalFromTsMax,
+  parseSeqCursorMax,
+  runSseLoop,
+  serializeEvent,
+} from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared
@@ -394,58 +401,83 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.get("/runs/:id/stream", (c) =>
     streamSSE(c, async (stream) => {
       const runId = c.req.param("id");
-      // Resume cursor: max(?sinceSeq=<n>, Last-Event-ID, 0).
-      //
-      // Both signals are valid resume cursors and they show up at different
-      // lifecycle stages:
-      //   - `?sinceSeq=` is set by the client on initial connect (the
-      //     snapshot already has events ≤ N, no need to replay).
-      //   - `Last-Event-ID` is set by the browser on EventSource auto-
-      //     reconnect (transport drop), to whatever id: the browser last
-      //     received. Vanilla EventSource doesn't let app code set the
-      //     header, hence the dual-signal hybrid.
-      //
-      // Picking max() is what makes the two safe to coexist: after a
-      // reconnect deep into a stream, `Last-Event-ID` is strictly ahead
-      // of the original `?sinceSeq=` baked into the URL, so taking the
-      // larger avoids redelivering events the client already received
-      // (and re-folded into liveCost). The earlier "sinceSeq wins" rule
-      // duplicated every event between the snapshot cursor and the
-      // disconnect point on every reconnect.
-      const querySinceSeq = Number(c.req.query("sinceSeq") ?? Number.NaN);
-      const lastEventId = c.req.header("Last-Event-ID");
-      const headerLastSeq = lastEventId != null ? Number(lastEventId) : Number.NaN;
-      const querySafe = Number.isFinite(querySinceSeq) ? querySinceSeq : 0;
-      const headerSafe = Number.isFinite(headerLastSeq) ? headerLastSeq : 0;
-      let lastSeq = Math.max(querySafe, headerSafe);
-      if (lastSeq < 0) lastSeq = 0;
+      const initialSeq = parseSeqCursorMax(c.req.query("sinceSeq"), c.req.header("Last-Event-ID"));
+      // Emit without an `event:` field so a single `addEventListener
+      // ("message", …)` on the client receives every frame. The event
+      // type lives inside the JSON payload (`type` field), which the
+      // client already reads. Registering 45 typed listeners per mount
+      // was 45× the closure retention for zero functional gain.
+      await runSseLoop<number>(stream, initialSeq, {
+        fetchBatch: (sinceSeq, limit) => deps.store.getEvents(runId, { sinceSeq, limit }),
+        cursorOf: (event) => event.seq,
+        idOf: (event) => String(event.seq),
+        shouldClose: () => {
+          const state = deps.store.getState(runId);
+          return state != null && isTerminalStatus(state.status);
+        },
+        batchSize,
+        pollMs,
+      });
+    }),
+  );
 
+  // ─── Global event feed (cross-run, allow-listed kinds) ──────
+
+  app.get("/events", (c) => {
+    const limit = clampLimit(c.req.query("limit"), 30, 200);
+    // Backfill: most-recent N allow-listed events, oldest-first (the SQL
+    // does the DESC+LIMIT in a subquery and re-sorts ASC, so the order
+    // the route returns matches the order the client appends — no
+    // client-side reverse). The SSE stream picks up the live tail from
+    // the newest returned cursor.
+    const events = deps.store.getGlobalEventsLatest({ kindIn: FEED_EVENT_KINDS, limit });
+    return c.json(events);
+  });
+
+  app.get("/events/stream", (c) =>
+    streamSSE(c, async (stream) => {
+      // The query for the global feed uses `ts >= cursor` (not strict
+      // `>` on a tuple) — see the SQL constant in @swarm/store/queries.
+      // That means each batch can re-include events at the boundary
+      // millisecond. We dedupe in two layers:
+      //   1. Per-connection Set keyed on `runId.seq`, scoped to the
+      //      current cursor ts. As soon as ts advances, the Set clears
+      //      — bounded memory, eliminates in-loop redelivery.
+      //   2. Client-side identity check (the SSE `id:` carries the full
+      //      `<ts>.<runId>.<seq>` triple) — handles the cursor-ts
+      //      replay window on reconnect, when the server has no memory
+      //      of what was previously emitted.
+      let fromTs = parseGlobalFromTsMax({
+        fromTs: c.req.query("fromTs"),
+        lastEventId: c.req.header("Last-Event-ID"),
+      });
+      const seenAtBoundary = new Set<string>();
       while (!stream.aborted) {
-        const batch = deps.store.getEvents(runId, {
-          sinceSeq: lastSeq,
+        const batch = deps.store.getGlobalEventsAfter({
+          fromTs,
+          kindIn: FEED_EVENT_KINDS,
           limit: batchSize,
         });
+        let emittedThisBatch = 0;
         for (const event of batch) {
-          // Emit without an `event:` field so a single `addEventListener
-          // ("message", …)` on the client receives every frame. The event
-          // type lives inside the JSON payload (`type` field), which the
-          // client already reads. Registering 45 typed listeners per
-          // mount was 45× the closure retention for zero functional gain.
+          if (event.ts > fromTs) {
+            fromTs = event.ts;
+            seenAtBoundary.clear();
+          }
+          const key = `${event.runId}.${event.seq}`;
+          if (seenAtBoundary.has(key)) continue;
+          seenAtBoundary.add(key);
           await stream.writeSSE({
-            id: String(event.seq),
+            id: encodeGlobalEventId({ ts: event.ts, runId: event.runId, seq: event.seq }),
             data: serializeEvent(event),
           });
-          lastSeq = event.seq;
+          emittedThisBatch++;
         }
-        // Only check terminal *after* the buffer is drained. Checking
-        // after a full batch caused replays of long terminal runs to
-        // exit after the first batchSize events: send 500 → status is
-        // already 'completed' → return, leaving the rest undelivered.
-        // Now: keep draining while batches are full; once empty, decide
-        // between closing (terminal) and sleeping (still live).
-        if (batch.length < batchSize) {
-          const state = deps.store.getState(runId);
-          if (state != null && isTerminalStatus(state.status)) return;
+        // Sleep when we've reached the live tail. Detected as either an
+        // un-full batch OR a full batch whose rows were all dedupe-
+        // filtered (server is correctly at the head of the feed but
+        // would otherwise spin re-fetching the same `cursor.ts` rows).
+        if (batch.length < batchSize || emittedThisBatch === 0) {
           await stream.sleep(pollMs);
         }
       }
@@ -549,15 +581,11 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
   }
 }
 
-function serializeEvent(event: StoredEvent): string {
-  return JSON.stringify({
-    runId: event.runId,
-    seq: event.seq,
-    type: event.type,
-    writer: event.writer,
-    payload: event.payload,
-    ts: event.ts,
-  });
+function clampLimit(raw: string | undefined, fallback: number, max: number): number {
+  if (raw == null) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
 }
 
 function unsafeDb(store: IEventStore): Database | null {

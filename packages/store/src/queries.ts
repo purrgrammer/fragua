@@ -261,6 +261,95 @@ export function selectEvents(db: Database, runId: string, opts: { sinceSeq: numb
   return db.query<EventRow, [string, number, number]>(SELECT_EVENTS_SQL).all(runId, opts.sinceSeq, limit);
 }
 
+// `type IN (SELECT value FROM json_each(?))` lets a single bound
+// parameter carry an arbitrary-sized kind list — keeps the SQL static
+// (no dynamic placeholder building) and the parameter list fixed-arity.
+// Both global-events queries below use the same trick.
+
+// Why `ts >= ?` (not `ts > ?`) and `run_id ASC, seq ASC` tie-breakers:
+//
+// `seq` is per-run, so a single-int cursor doesn't carry a global
+// order. The natural triple `(ts, run_id, seq)` has a subtle bug
+// under strict-greater: a same-ms append to a `run_id` that
+// lexicographically sorts *before* the cursor's `run_id` is filtered
+// out — its tuple is "less than" the cursor even though it's a brand-
+// new row the client hasn't seen. Strictly-greater on a tuple where
+// `ts` ties on milliseconds drops events.
+//
+// `ts >= ?` keeps the new event in. The cost is bounded redelivery of
+// rows at exactly `cursor.ts`, which the route layer dedupes via a
+// per-connection Set keyed on `(runId, seq)`. The SSE `id:` carries the
+// full triple so the client can re-dedupe across reconnects.
+const SELECT_GLOBAL_EVENTS_AFTER_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE ts >= ?1
+     AND type IN (SELECT value FROM json_each(?2))
+   ORDER BY ts ASC, run_id ASC, seq ASC
+   LIMIT ?3
+`;
+
+// Backfill: take the most-recent N events DESC inside a subquery, then
+// re-sort ASC outside it so the caller gets oldest-first in a single
+// round-trip. Without the wrapping ORDER BY, the route layer would have
+// to .reverse() the array — at which point the "natural order" of the
+// query stops matching what the API contract returns. This keeps the
+// SQL the source of truth for ordering.
+const SELECT_GLOBAL_EVENTS_LATEST_SQL = `
+  SELECT * FROM (
+    SELECT run_id, seq, type, writer, payload, ts
+      FROM events
+     WHERE type IN (SELECT value FROM json_each(?1))
+     ORDER BY ts DESC, run_id DESC, seq DESC
+     LIMIT ?2
+  )
+  ORDER BY ts ASC, run_id ASC, seq ASC
+`;
+
+/**
+ * Cross-run, ascending scan of events with `ts >= fromTs`, filtered by
+ * `kindIn`. Used by the global SSE feed (`/events/stream`). Returns up
+ * to `limit` rows ordered by `(ts, run_id, seq)` for stable iteration.
+ *
+ * The `>=` semantics are deliberate — see the SQL constant above for
+ * why strict-greater on `(ts, run_id, seq)` would silently drop same-ms
+ * appends. The route layer dedupes the bounded redelivery at
+ * `cursor.ts` with a per-connection Set; the client re-dedupes across
+ * reconnects via `(runId, seq)` identity.
+ *
+ * `kindIn` is required: the global feed always allow-lists. To list every
+ * kind without filtering, pass `FEED_EVENT_KINDS` (the operator-relevant
+ * union exported from `@swarm/store`).
+ *
+ * The `idx_events_ts(ts, run_id, seq)` index lets SQLite walk this
+ * query without a sort step; the `type IN (json_each(?))` filter is
+ * applied as a predicate on the indexed walk.
+ */
+export function selectGlobalEventsAfter(
+  db: Database,
+  opts: { fromTs: number; kindIn: readonly string[]; limit: number },
+): EventRow[] {
+  const kindsJson = JSON.stringify(opts.kindIn);
+  return db
+    .query<EventRow, [number, string, number]>(SELECT_GLOBAL_EVENTS_AFTER_SQL)
+    .all(opts.fromTs, kindsJson, opts.limit);
+}
+
+/**
+ * The most-recent `limit` events allow-listed by `kindIn`, returned
+ * oldest-first. Used by the backfill route (`GET /events`) so Home shows
+ * the last N relevant events on first paint. The DESC+LIMIT happens in
+ * a subquery; the outer ORDER BY ASC reshapes the result so the API
+ * contract ("chronological") matches the SQL — no client-side reverse.
+ */
+export function selectGlobalEventsLatest(
+  db: Database,
+  opts: { kindIn: readonly string[]; limit: number },
+): EventRow[] {
+  const kindsJson = JSON.stringify(opts.kindIn);
+  return db.query<EventRow, [string, number]>(SELECT_GLOBAL_EVENTS_LATEST_SQL).all(kindsJson, opts.limit);
+}
+
 export function selectMessages(
   db: Database,
   runId: string,
