@@ -328,10 +328,15 @@ export async function health(): Promise<HealthResponse> {
   );
 }
 
-/** Filter passed to `GET /runs`. `status` is mapped to a comma-
- * separated `?status=` query param, server-side narrows via `IN (…)`. */
+/** Filter passed to `GET /runs`. Every field is enforced server-side
+ * (filter, order, limit). The web does no client-side sort or slice. */
 export interface ListRunsFilter {
   status?: ReadonlyArray<NonNullable<RunSummary["runStatus"]>>;
+  /** `"oldest"` surfaces longest-waiting runs first (Inbox metaphor).
+   * Default = newest-first by updated_at. */
+  order?: "newest" | "oldest";
+  /** SQL `LIMIT`. Server clamps to a sane max. */
+  limit?: number;
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -341,10 +346,17 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
 
 /** Exported for query-key stability tests. */
 export function buildRunsListPath(filter?: ListRunsFilter): string {
-  if (!filter || !filter.status || filter.status.length === 0) return "/runs";
-  // Sort so cache keys are stable regardless of caller order.
-  const statuses = [...filter.status].sort();
-  return `/runs?status=${statuses.map((s) => encodeURIComponent(s)).join(",")}`;
+  if (!filter) return "/runs";
+  const params = new URLSearchParams();
+  if (filter.status && filter.status.length > 0) {
+    // Sort so the same logical filter always produces the same URL.
+    const statuses = [...filter.status].sort();
+    params.set("status", statuses.join(","));
+  }
+  if (filter.order && filter.order !== "newest") params.set("order", filter.order);
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  const qs = params.toString();
+  return qs.length > 0 ? `/runs?${qs}` : "/runs";
 }
 
 export async function getRun(id: string): Promise<RunDetail> {

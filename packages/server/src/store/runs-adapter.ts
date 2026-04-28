@@ -193,34 +193,49 @@ function nodeIdOf(event: StoredEvent): string | null {
 
 export { deriveNodeStates, deriveSelectedEdges };
 
+export interface ListRunsOpts {
+  /** Narrow to specific lifecycle statuses (`WHERE status IN (…)`). An
+   * empty array yields zero rows; `undefined` returns every run. */
+  statuses?: RunStatus[];
+  /** "newest" → most-recently-updated first (default, matches the
+   * archive view on /runs). "oldest" → smallest `enqueued_at` first
+   * (the Inbox metaphor — neglect surfaces). */
+  order?: "newest" | "oldest";
+  /** SQL `LIMIT` cap. Omitted = unbounded. */
+  limit?: number;
+}
+
 /**
- * Enumerate run ids, optionally narrowed to the given lifecycle
- * statuses. Uses a raw SQL escape hatch — we don't want to add a list
- * method to IEventStore just for this adapter, since the real web UI
- * path will eventually paginate.
- *
- * `statuses`, when provided, is filtered server-side via `IN (?, ?, …)`
- * — Inbox and the Running strip pull a small slice of the run_state
- * table this way instead of loading every row to filter in JS. An
- * empty array yields zero rows (deliberate — caller asked for a
- * filtered list with no matches).
+ * Enumerate run ids with optional filtering, ordering, and limit. All
+ * three are pushed into SQL — there is intentionally no client-side
+ * sort/slice anywhere in the read path. Uses a raw SQL escape hatch
+ * since the web UI's needs (small filtered slices) aren't yet worth a
+ * dedicated method on `IEventStore`.
  */
-export function listRuns(store: IEventStore, opts: { statuses?: RunStatus[] } = {}): string[] {
+export function listRuns(store: IEventStore, opts: ListRunsOpts = {}): string[] {
   const db = (store as unknown as { db?: Database }).db;
   if (db == null) return [];
-  const statuses = opts.statuses;
+  const { statuses, order = "newest", limit } = opts;
+  // "newest" is by updated_at — matches the archive view on /runs and
+  // makes recently-touched runs appear first. "oldest" is by
+  // enqueued_at — Inbox semantics (longest-waiting first).
+  const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
+  const limitClause = limit !== undefined ? "LIMIT ?" : "";
+  const limitArgs: number[] = limit !== undefined ? [limit] : [];
+
   if (statuses === undefined) {
+    const sql = `SELECT run_id FROM run_state ORDER BY ${orderBy} ${limitClause}`.trim();
     return db
-      .query<{ run_id: string }, []>("SELECT run_id FROM run_state ORDER BY updated_at DESC")
-      .all()
+      .query<{ run_id: string }, number[]>(sql)
+      .all(...limitArgs)
       .map((r) => r.run_id);
   }
   if (statuses.length === 0) return [];
   const placeholders = statuses.map(() => "?").join(", ");
+  const sql =
+    `SELECT run_id FROM run_state WHERE status IN (${placeholders}) ORDER BY ${orderBy} ${limitClause}`.trim();
   return db
-    .query<{ run_id: string }, RunStatus[]>(
-      `SELECT run_id FROM run_state WHERE status IN (${placeholders}) ORDER BY updated_at DESC`,
-    )
-    .all(...statuses)
+    .query<{ run_id: string }, (RunStatus | number)[]>(sql)
+    .all(...statuses, ...limitArgs)
     .map((r) => r.run_id);
 }

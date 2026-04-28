@@ -20,7 +20,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Pause, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
@@ -68,22 +67,25 @@ export interface InboxProps {
 }
 
 export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
-  // Server-filtered list — only paused / quarantined runs cross the
-  // wire. The unfiltered list lives elsewhere (Stats); we no longer
-  // pull every run just to drop most on the floor.
-  const { data, isPending } = useQuery(queries.runs.list({ status: ATTENTION_STATUSES }));
+  // Server returns the slice we want directly: filtered by status,
+  // ordered oldest-first by enqueued_at, capped at `limit + 1` so we
+  // can detect overflow without a separate count query. No client-
+  // side sort or slice anywhere — the server is the single source of
+  // truth for the displayed window.
+  const { data, isPending } = useQuery(
+    queries.runs.list({
+      status: ATTENTION_STATUSES,
+      order: "oldest",
+      ...(limit !== undefined ? { limit: limit + 1 } : {}),
+    }),
+  );
   const rows = data ?? [];
 
-  const attention = useMemo(() => {
-    // Oldest first: a run that's been waiting longest deserves the
-    // most prominent slot.
-    const sorted = [...rows].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
-    return limit !== undefined ? sorted.slice(0, limit) : sorted;
-  }, [rows, limit]);
-
-  // The "view all" link only makes sense when (a) we're capping and
-  // (b) there's actually an overflow. Otherwise it's a dead link.
-  const showViewAll = viewAllHref !== undefined && limit !== undefined && rows.length > limit;
+  // The +1 row, when present, is the overflow indicator: trim it for
+  // display and use its presence to gate the "View all" link.
+  const hasOverflow = limit !== undefined && rows.length > limit;
+  const attention = hasOverflow ? rows.slice(0, limit) : rows;
+  const showViewAll = viewAllHref !== undefined && hasOverflow;
 
   return (
     <section data-testid="inbox" className="flex flex-col gap-4">

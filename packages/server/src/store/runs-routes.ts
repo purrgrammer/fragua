@@ -32,13 +32,22 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   }
 
   app.get("/runs", async (c) => {
-    // Optional `?status=a,b,c` narrows the result to specific lifecycle
-    // statuses (Inbox / Running queries care only about a small slice).
-    // Unknown statuses are dropped silently — old clients should never
-    // send them, and a typo shouldn't 400 a list endpoint.
+    // Query params (all optional, all enforced server-side):
+    //   ?status=a,b,c — narrow to specific lifecycle statuses.
+    //   ?order=oldest — surface longest-waiting first (Inbox semantics).
+    //                    Default is newest-first by updated_at.
+    //   ?limit=N      — cap the result. Clamped to [1, 200] so a
+    //                    malformed client can't ask for everything.
+    // Unknown statuses are dropped silently — a typo shouldn't 400 a
+    // list endpoint that older clients hit on every page load.
     const statusParam = c.req.query("status");
     const statuses = statusParam !== undefined ? parseStatusList(statusParam) : undefined;
-    const ids = listRuns(store, statuses !== undefined ? { statuses } : {});
+    const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
+    const limit = parseLimit(c.req.query("limit"));
+    const opts: Parameters<typeof listRuns>[1] = { order };
+    if (statuses !== undefined) opts.statuses = statuses;
+    if (limit !== undefined) opts.limit = limit;
+    const ids = listRuns(store, opts);
     const summaries = [];
     for (const runId of ids) {
       const state = store.getState(runId);
@@ -163,6 +172,18 @@ const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "halted",
   "quarantined",
 ]);
+
+const LIMIT_MAX = 200;
+
+/** Parse + clamp `?limit=N`. Non-numeric or `<= 0` returns undefined
+ * (no cap). The clamp guards against a malformed client asking the
+ * server for an unbounded scan. */
+function parseLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.floor(n), LIMIT_MAX);
+}
 
 /** Parse `?status=a,b,c` into a deduped list of valid `RunStatus`
  * literals. Empty + invalid tokens are dropped. */

@@ -91,21 +91,34 @@ function typeInto(el: HTMLTextAreaElement, value: string): void {
   Simulate.change(el);
 }
 
+/** Inbox cap kept in sync with `INBOX_HOME_LIMIT` in `Home.tsx`. The
+ * Home page asks for `limit + 1` rows so it can detect overflow; the
+ * test seed mirrors that. */
+const INBOX_HOME_LIMIT_FOR_TESTS = 5;
+
 function withRows(rows: RunSummary[]) {
   const client = createTestQueryClient();
   // Stats reads the unfiltered list — seed it with everything.
   client.setQueryData(queries.runs.list().queryKey, rows);
-  // Running + Inbox use server-filtered queries; mirror that filter
-  // in the test seed so each section sees its own slice. Fixtures
-  // currently only set the coarse `status` field; we project that
-  // into the implied `runStatus` for filtering purposes.
+  // Running + Inbox use server-filtered queries (server enforces
+  // status, order, and limit). The test seed mirrors what the server
+  // would return. Fixtures only set the coarse `status` field, so we
+  // approximate `runStatus` filtering through it where possible.
   client.setQueryData(
     queries.runs.list({ status: ["running"] }).queryKey,
     rows.filter((r) => r.status === "running"),
   );
+  const inboxRows = rows.filter(
+    (r) =>
+      r.runStatus === "paused_hitl" || r.runStatus === "paused_provider_error" || r.runStatus === "quarantined",
+  );
   client.setQueryData(
-    queries.runs.list({ status: ["paused_hitl", "paused_provider_error", "quarantined"] }).queryKey,
-    rows.filter((r) => r.runStatus === "paused_hitl" || r.runStatus === "paused_provider_error" || r.runStatus === "quarantined"),
+    queries.runs.list({
+      status: ["paused_hitl", "paused_provider_error", "quarantined"],
+      order: "oldest",
+      limit: INBOX_HOME_LIMIT_FOR_TESTS + 1,
+    }).queryKey,
+    inboxRows.slice(0, INBOX_HOME_LIMIT_FOR_TESTS + 1),
   );
   return client;
 }

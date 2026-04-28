@@ -8,8 +8,12 @@ import * as api from "./api.ts";
  * unfiltered list's queryKey shape backwards-compatible
  * (`["runs", "list", null]`). */
 function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null {
-  if (!filter || !filter.status || filter.status.length === 0) return null;
-  return { status: [...filter.status].sort() };
+  if (!filter) return null;
+  const out: ListRunsFilter = {};
+  if (filter.status && filter.status.length > 0) out.status = [...filter.status].sort();
+  if (filter.order && filter.order !== "newest") out.order = filter.order;
+  if (filter.limit !== undefined) out.limit = filter.limit;
+  return Object.keys(out).length === 0 ? null : out;
 }
 
 export const queries = {
