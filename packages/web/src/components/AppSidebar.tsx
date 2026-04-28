@@ -40,7 +40,8 @@ export function AppSidebar(): JSX.Element {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        <div
+        <NavLink
+          to="/"
           className="flex h-8 items-center gap-2 px-1 font-heading text-lg font-semibold tracking-tight"
           data-testid="sidebar-wordmark"
         >
@@ -50,7 +51,7 @@ export function AppSidebar(): JSX.Element {
             <Drone className="size-5" />
           </span>
           <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
-        </div>
+        </NavLink>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
