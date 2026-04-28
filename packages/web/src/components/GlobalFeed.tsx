@@ -69,6 +69,9 @@ function ActivityHeading(): JSX.Element {
 interface FeedKindMeta {
   Icon: typeof Play;
   verb: string;
+  /** Optional Tailwind class for the icon colour. Defaults to
+   * `text-sw-muted` when absent. */
+  iconClass?: string;
   /** Reserved for events an operator might want to act on (paused
    * runs, halts, quarantines, system-health warnings). Renders a
    * left amber accent. The Inbox section will own actual CTAs. */
@@ -81,11 +84,11 @@ interface FeedKindMeta {
 // gutter. Hover tooltip on the row link carries the longer context.
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "intent.run_enqueued": { Icon: Inbox, verb: "queued" },
-  "fact.run_started": { Icon: Play, verb: "started" },
+  "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed" },
   "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", attention: true },
   "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "provider error", attention: true },
-  "fact.run_resumed": { Icon: Play, verb: "resumed" },
+  "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
   "fact.run_quarantined": { Icon: ShieldAlert, verb: "quarantined", attention: true },
@@ -96,7 +99,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "intent.unquarantine": { Icon: ShieldCheck, verb: "unquarantined" },
   "intent.priority_adjusted": { Icon: ArrowUpDown, verb: "reprioritized" },
   "intent.hitl_input": { Icon: UserIcon, verb: "human input" },
-  "intent.resume": { Icon: Play, verb: "operator resume" },
+  "intent.resume": { Icon: Play, verb: "operator resume", iconClass: "text-sw-accent-thinking" },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
 };
@@ -192,7 +195,7 @@ interface FeedRowProps {
 }
 
 const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element {
-  const { Icon, verb, attention } = metaForEvent(event);
+  const { Icon, verb, iconClass, attention } = metaForEvent(event);
 
   // Dedicated detail query per runId. TanStack dedupes concurrent
   // reads of the same id, so 30 feed rows pointing at 12 distinct
@@ -234,7 +237,7 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
         attention ? "border-l-2" : "border-l-2 border-transparent",
       )}
     >
-      <Icon className="col-start-1 row-start-1 size-4 self-center text-sw-muted" aria-hidden />
+      <Icon className={`col-start-1 row-start-1 size-4 self-center ${iconClass ?? "text-sw-muted"}`} aria-hidden />
       <span className="col-start-2 row-start-1 truncate text-sw-muted">{verb}</span>
       {/* Time: top-right on mobile (col 3 row 1); col 5 row 1 on
           desktop. Explicit `sm:row-start-1` everywhere (instead of
