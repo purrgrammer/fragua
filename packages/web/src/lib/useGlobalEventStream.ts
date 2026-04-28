@@ -40,6 +40,9 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
 export interface UseGlobalEventStreamOptions {
   /** Test injection. */
   eventSourceImpl?: typeof EventSource;
+  /** Test override: shrinks the SSE reconnect backoff so reconnect
+   * paths don't add a real-world second to test runtime. */
+  reconnectBaseMs?: number;
 }
 
 /**
@@ -126,7 +129,9 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
   // re-key on every parent render. The hook's own ref handling absorbs
   // the closure update.
   const sseUrl = fromTs != null ? getFeedStreamUrl(fromTs) : null;
-  const sseOpts = opts.eventSourceImpl ? { eventSourceImpl: opts.eventSourceImpl } : {};
+  const sseOpts: Parameters<typeof useEventSource>[2] = {};
+  if (opts.eventSourceImpl) sseOpts.eventSourceImpl = opts.eventSourceImpl;
+  if (opts.reconnectBaseMs !== undefined) sseOpts.reconnectBaseMs = opts.reconnectBaseMs;
   useEventSource(sseUrl, onFrame, sseOpts);
 }
 
