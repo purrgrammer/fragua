@@ -85,9 +85,9 @@ interface FeedKindMeta {
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "intent.run_enqueued": { Icon: Inbox, verb: "queued" },
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
-  "fact.run_completed": { Icon: Check, verb: "completed" },
-  "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", attention: true },
-  "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "provider error", attention: true },
+  "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
+  "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
+  "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "provider error", iconClass: "text-sw-accent-error", attention: true },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
@@ -151,7 +151,7 @@ export function GlobalFeed(): JSX.Element {
       {isLoading && rows.length === 0 ? (
         <ul
           aria-busy="true"
-          className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
+          className="border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
         >
           {(["a", "b", "c", "d"] as const).map((k) => (
             <FeedRowSkeleton key={k} />
@@ -177,7 +177,7 @@ export function GlobalFeed(): JSX.Element {
         // - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
         //   uses `grid-cols-subgrid`, so the icon / verb columns size
         //   to the widest content across every row.
-        <ul className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
+        <ul className="border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
           <AnimatePresence initial={false}>
             {rows.map((event) => (
               <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
