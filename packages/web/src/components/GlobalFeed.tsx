@@ -105,7 +105,7 @@ export function GlobalFeed(): JSX.Element {
   if (isLoading && rows.length === 0) {
     return (
       <section data-testid="global-feed" aria-label="Recent activity">
-        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
+        <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
         <ul
           aria-busy="true"
           className="overflow-hidden rounded border border-border/60 bg-card sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
@@ -122,7 +122,7 @@ export function GlobalFeed(): JSX.Element {
   if (rows.length === 0) {
     return (
       <section data-testid="global-feed" aria-label="Recent activity">
-        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
+        <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
         <div className="rounded border border-dashed border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">
           No recent events.
         </div>
@@ -132,7 +132,7 @@ export function GlobalFeed(): JSX.Element {
 
   return (
     <section data-testid="global-feed" aria-label="Recent activity">
-      <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
+      <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
       {/* CSS grid on the list, subgrid on each row, so the icon and
           verb columns size to the widest content across all rows
           without a hand-tuned width.
