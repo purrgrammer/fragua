@@ -180,28 +180,30 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       )}
     >
       <Icon
-        className="col-start-1 row-start-1 size-4 self-center text-muted-foreground sm:row-auto"
+        className="col-start-1 row-start-1 size-4 self-center text-muted-foreground"
         aria-hidden
       />
-      <span className="col-start-2 row-start-1 truncate text-muted-foreground sm:col-start-2 sm:row-auto">{verb}</span>
-      {/* Time: top-right on mobile (col 3 row 1); pushed to last column
-          (col 5) on desktop via order, since DOM order would otherwise
-          place it before title. */}
+      <span className="col-start-2 row-start-1 truncate text-muted-foreground">{verb}</span>
+      {/* Time: top-right on mobile (col 3 row 1); col 5 row 1 on
+          desktop. Explicit `sm:row-start-1` everywhere (instead of
+          `row-auto`) keeps the desktop row truly single-line — the
+          row-auto shorthand was unreliable next to a longhand
+          `row-start-2` from the mobile variant. */}
       <FeedRowTime
         ts={event.ts}
-        className="col-start-3 row-start-1 ml-auto text-right sm:row-auto sm:ml-0 sm:order-last"
+        className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0"
       />
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
-        className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-foreground hover:underline sm:col-span-1 sm:col-start-3 sm:row-auto"
+        className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-foreground hover:underline sm:col-span-1 sm:col-start-3 sm:row-start-1"
       >
         {displayRunTitle(event.runId, run)}
       </Link>
       {wf ? (
         <Link
           to={`/workflows/${encodeURIComponent(wf)}`}
-          className="col-start-3 row-start-2 inline-flex max-w-[10rem] justify-self-end sm:col-start-4 sm:row-auto sm:justify-self-auto"
+          className="col-start-3 row-start-2 inline-flex max-w-[10rem] justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
         >
           <Badge variant="muted" className="max-w-full truncate hover:underline">
             {wf}
