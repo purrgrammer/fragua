@@ -28,7 +28,7 @@ export function Workflows(): JSX.Element {
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Workflows</h2>
       {isPending && (
-        <p className="text-muted-foreground text-sm" data-testid="workflows-loading">
+        <p className="text-sw-muted text-sm" data-testid="workflows-loading">
           Loading…
         </p>
       )}
@@ -74,7 +74,7 @@ export function Workflows(): JSX.Element {
                     </Link>
                   </TableCell>
                   <TableCell className="max-w-0">
-                    <code className="block truncate font-mono text-xs text-muted-foreground" title={row.path}>
+                    <code className="block truncate font-mono text-xs text-sw-muted" title={row.path}>
                       {row.path}
                     </code>
                   </TableCell>

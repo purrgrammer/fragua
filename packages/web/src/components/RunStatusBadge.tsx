@@ -21,18 +21,18 @@ export interface RunStatusBadgeProps {
 export function RunStatusBadge({ status, "data-testid": testId, className }: RunStatusBadgeProps): JSX.Element {
   const tone =
     status === "success"
-      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+      ? "bg-sw-accent-success/10 text-sw-accent-success border-sw-accent-success/30"
       : status === "fail"
-        ? "bg-rose-100 text-rose-800 border-rose-300"
+        ? "bg-sw-accent-error/10 text-sw-accent-error border-sw-accent-error/30"
         : status === "running"
-          ? "bg-violet-100 text-violet-800 border-violet-300"
+          ? "bg-sw-accent-thinking/10 text-sw-accent-thinking border-sw-accent-thinking/30"
           : status === "queued"
-            ? "bg-sky-100 text-sky-800 border-sky-300"
+            ? "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30"
             : status === "paused"
-              ? "bg-yellow-100 text-yellow-800 border-yellow-300"
+              ? "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30"
               : status === "canceled"
-                ? "bg-amber-100 text-amber-800 border-amber-300"
-                : "bg-slate-100 text-slate-700 border-slate-300";
+                ? "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30"
+                : "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30";
   // Running badges pulse to signal "alive" — same `.sw-pulse` treatment
   // the Shimmer component uses (opacity 1.0 → 0.55 → 1.0, with a
   // prefers-reduced-motion fallback in globals.css).

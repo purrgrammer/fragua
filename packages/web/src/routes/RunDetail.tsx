@@ -120,7 +120,7 @@ export function RunDetail(): JSX.Element {
         title="Missing run id"
         description="The URL didn't include a run identifier."
         action={
-          <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
             ← all runs
           </Link>
         }
@@ -140,7 +140,7 @@ export function RunDetail(): JSX.Element {
           title="Couldn't load this run"
           description="The server didn't return details for this run."
           action={
-            <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+            <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
               ← all runs
             </Link>
           }
@@ -165,7 +165,7 @@ export function RunDetail(): JSX.Element {
 
           <div
             data-testid={`${view}-region`}
-            className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-background"
+            className="min-h-0 min-w-0 flex-1 overflow-auto rounded-md border bg-sw-bg"
           >
             <TabsContent value="conversation" className="h-full">
               <RunConversation
@@ -230,15 +230,15 @@ const DetailHeader = memo(function DetailHeader({
   return (
     <header className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 items-baseline gap-2">
-        <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+        <Link to="/runs" className="text-xs text-sw-muted hover:text-sw-text hover:underline">
           ← all runs
         </Link>
         {detail?.workflowName && detail?.workflow && (
           <>
-            <span className="text-xs text-muted-foreground/40">·</span>
+            <span className="text-xs text-sw-muted/40">·</span>
             <Link
               to={`/workflows/${encodeURIComponent(detail.workflow)}`}
-              className="truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+              className="truncate text-xs text-sw-muted hover:text-sw-text hover:underline"
               title={detail.workflow}
             >
               {detail.workflowName}
@@ -247,12 +247,12 @@ const DetailHeader = memo(function DetailHeader({
         )}
         {showLive && (
           <>
-            <span className="text-xs text-muted-foreground/40">·</span>
+            <span className="text-xs text-sw-muted/40">·</span>
             <span
               data-testid="detail-live-pill"
-              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-violet-700 dark:text-violet-300"
+              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-accent-thinking"
             >
-              <span className="sw-pulse inline-block size-1.5 rounded-full bg-violet-500 ring-2 ring-violet-400/30" />
+              <span className="sw-pulse inline-block size-1.5 rounded-full bg-sw-accent-thinking ring-2 ring-sw-accent-thinking/30" />
               live
             </span>
           </>
@@ -263,7 +263,7 @@ const DetailHeader = memo(function DetailHeader({
           {detail ? headingText(detail) : shortenRunId(id)}
         </h2>
         <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
-          <span className="truncate font-mono text-xs text-muted-foreground" title={id}>
+          <span className="truncate font-mono text-xs text-sw-muted" title={id}>
             {shortenRunId(id)}
           </span>
           {detail && (
@@ -276,7 +276,7 @@ const DetailHeader = memo(function DetailHeader({
           {detail && currentLabel && (
             <span
               data-testid="detail-current-node-inline"
-              className="shrink-0 max-w-[16rem] truncate rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] text-muted-foreground"
+              className="shrink-0 max-w-[16rem] truncate rounded border border-sw-border bg-sw-surface px-1.5 py-0.5 font-mono text-[0.65rem] text-sw-muted"
               title={currentLabel}
             >
               {currentLabel}

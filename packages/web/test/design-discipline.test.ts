@@ -12,12 +12,8 @@
 //      (`text-amber-*`, `bg-rose-*`, `text-emerald-*`, etc.) must not
 //      appear on product surfaces. Use `text-sw-accent-*` instead.
 //
-// Allowlist has two tiers:
+// Allowlist:
 //   CLEAN_PATHS  — shadcn-generated primitives and ai-elements, correct by design.
-//   DEBT_PATHS   — product surfaces with known pre-existing violations. They must
-//                  never grow new violations; the gate prevents that by checking
-//                  only clean files. Migrate each entry to sw-* tokens and remove
-//                  it from DEBT_PATHS when the file is cleaned up.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -56,27 +52,9 @@ const CLEAN_PATHS_CONTAINING = [
   "components/DaemonBanner",
 ];
 
-// Pre-existing technical debt — known violations grandfathered in.
-// Each entry: migrate to sw-* tokens then delete it from this list.
-const DEBT_PATHS_CONTAINING = [
-  "components/CostInspector",
-  "components/RunConversation",
-  "components/RunStatusBadge",
-  "components/HealthBadge",
-  "components/AppSidebar",
-  "routes/Workflows",
-  "routes/RunsList",
-  "routes/RunDetail",
-  "routes/Providers",
-  "routes/ProviderDetail",
-];
-
 function isExempt(filePath: string): boolean {
   const norm = filePath.replace(/\\/g, "/");
-  return (
-    CLEAN_PATHS_CONTAINING.some((p) => norm.includes(p)) ||
-    DEBT_PATHS_CONTAINING.some((p) => norm.includes(p))
-  );
+  return CLEAN_PATHS_CONTAINING.some((p) => norm.includes(p));
 }
 
 function collectTsxFiles(dir: string): string[] {

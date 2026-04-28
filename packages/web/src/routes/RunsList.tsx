@@ -32,7 +32,7 @@ export function RunsList(): JSX.Element {
     <section className="flex w-full min-w-0 flex-col gap-3">
       <h2 className="font-heading text-base font-semibold">Runs</h2>
       {isPending && (
-        <p className="text-slate-500 text-sm" data-testid="runs-loading">
+        <p className="text-sw-muted text-sm" data-testid="runs-loading">
           Loading…
         </p>
       )}
@@ -63,13 +63,13 @@ export function RunsList(): JSX.Element {
           <table className="w-full table-fixed border-collapse" data-testid="runs-table">
             <thead>
               <tr className="border-b">
-                <th className="px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                <th className="px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
                   Title
                 </th>
-                <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
                   Workflow
                 </th>
-                <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
                   Status
                 </th>
               </tr>

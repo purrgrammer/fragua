@@ -24,20 +24,20 @@ export function HealthBadge({ status, error }: HealthBadgeProps): JSX.Element {
           : "error";
   const tone =
     status === "connected"
-      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+      ? "bg-sw-accent-success/10 text-sw-accent-success border-sw-accent-success/30"
       : status === "error"
-        ? "bg-rose-100 text-rose-800 border-rose-300"
+        ? "bg-sw-accent-error/10 text-sw-accent-error border-sw-accent-error/30"
         : status === "no-daemon"
-          ? "bg-amber-100 text-amber-800 border-amber-300"
-          : "bg-slate-100 text-slate-700 border-slate-300";
+          ? "bg-sw-accent-warn/10 text-sw-accent-warn border-sw-accent-warn/30"
+          : "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30";
   const dotTone =
     status === "connected"
-      ? "bg-emerald-500"
+      ? "bg-sw-accent-success"
       : status === "error"
-        ? "bg-rose-500"
+        ? "bg-sw-accent-error"
         : status === "no-daemon"
-          ? "bg-amber-500"
-          : "bg-slate-400";
+          ? "bg-sw-accent-warn"
+          : "bg-sw-accent-idle";
   const title =
     error ?? (status === "no-daemon" ? "server is up, but no daemon heartbeat — job queue is offline" : undefined);
 

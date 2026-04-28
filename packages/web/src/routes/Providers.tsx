@@ -58,13 +58,13 @@ export function Providers(): JSX.Element {
     <section className="flex w-full min-w-0 flex-col gap-3">
       <header className="flex items-baseline justify-between">
         <h2 className="font-heading text-base font-semibold">Providers</h2>
-        <p className="text-muted-foreground text-xs">
+        <p className="text-sw-muted text-xs">
           <code className="font-mono">~/.swarm/auth.json</code> + <code className="font-mono">models.json</code>
         </p>
       </header>
 
       {isPending && (
-        <p className="text-muted-foreground text-sm" data-testid="providers-loading">
+        <p className="text-sw-muted text-sm" data-testid="providers-loading">
           Loading…
         </p>
       )}
@@ -78,7 +78,7 @@ export function Providers(): JSX.Element {
       {data?.models_json_error && (
         <div
           data-testid="providers-models-json-error"
-          className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200"
+          className="rounded-md border border-sw-accent-warn/30 bg-sw-accent-warn/10 p-3 text-xs text-sw-accent-warn"
         >
           <div className="font-medium">models.json had errors — built-in providers are still shown.</div>
           <pre className="mt-1 whitespace-pre-wrap font-mono">{data.models_json_error}</pre>
@@ -125,12 +125,12 @@ export function Providers(): JSX.Element {
                           </div>
                         </Link>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{p.model_count}</TableCell>
+                      <TableCell className="text-xs text-sw-muted">{p.model_count}</TableCell>
                       <TableCell>
                         {p.credentialed ? (
                           <Badge
                             variant="default"
-                            className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+                            className="bg-sw-accent-success/10 text-sw-accent-success hover:bg-sw-accent-success/20 border-sw-accent-success/30"
                           >
                             {p.auth_kind === "oauth" ? "oauth" : "ready"}
                           </Badge>
@@ -165,7 +165,7 @@ export function Providers(): JSX.Element {
                         {!p.credentialed && (
                           <Link
                             to={`/providers/${encodeURIComponent(p.name)}`}
-                            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent"
+                            className="inline-flex items-center gap-1.5 rounded-md border border-sw-border px-2.5 py-1 text-xs hover:bg-sw-surface"
                             data-testid={`provider-configure-${p.name}`}
                           >
                             <KeyRound className="size-3.5" /> Configure
@@ -185,8 +185,8 @@ export function Providers(): JSX.Element {
           {Object.entries(testFeedback).map(([name, result]) => {
             if (!result || "pending" in result) return null;
             const tone = result.ok
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-900 dark:text-rose-200";
+              ? "border-sw-accent-success/30 bg-sw-accent-success/10 text-sw-accent-success"
+              : "border-sw-accent-error/30 bg-sw-accent-error/10 text-sw-accent-error";
             return (
               <div key={name} data-testid={`test-result-${name}`} className={`rounded-md border p-2 text-xs ${tone}`}>
                 <span className="font-medium">{name}</span>
@@ -205,7 +205,7 @@ export function Providers(): JSX.Element {
         </div>
       )}
 
-      <p className="text-muted-foreground text-xs">
+      <p className="text-sw-muted text-xs">
         Need the CLI instead? Try <code className="font-mono">swarm providers ls</code>,{" "}
         <code className="font-mono">add</code>, <code className="font-mono">test</code>.
       </p>

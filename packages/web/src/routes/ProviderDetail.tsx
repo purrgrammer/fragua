@@ -28,7 +28,7 @@ export function ProviderDetail(): JSX.Element {
       console.warn(`[ProviderDetail ${name}] load failed —`, error instanceof Error ? error.message : String(error));
   }, [error, name]);
 
-  if (isPending) return <p className="text-muted-foreground text-sm">Loading…</p>;
+  if (isPending) return <p className="text-sw-muted text-sm">Loading…</p>;
   if (isError || !data)
     return (
       <EmptyState
@@ -50,15 +50,15 @@ export function ProviderDetail(): JSX.Element {
             <h2 className="font-heading text-base font-semibold">{data.name}</h2>
           </div>
           {data.credentialed ? (
-            <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300">
+            <Badge className="bg-sw-accent-success/10 text-sw-accent-success hover:bg-sw-accent-success/20 border-sw-accent-success/30">
               {data.auth_kind === "oauth" ? "oauth" : "ready"}
             </Badge>
           ) : (
             <Badge variant="secondary">not configured</Badge>
           )}
-          {data.default_model && <span className="text-muted-foreground text-xs">default: {data.default_model}</span>}
+          {data.default_model && <span className="text-sw-muted text-xs">default: {data.default_model}</span>}
         </div>
-        <Link to="/providers" className="text-muted-foreground text-xs hover:underline">
+        <Link to="/providers" className="text-sw-muted text-xs hover:underline">
           ← all providers
         </Link>
       </header>
@@ -92,7 +92,7 @@ export function ProviderDetail(): JSX.Element {
                   <TableCell className="whitespace-nowrap font-mono text-xs" title={m.id}>
                     {m.id}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{m.api}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-sw-muted">{m.api}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {formatTokens(m.contextWindow)}
                   </TableCell>
@@ -160,10 +160,10 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
   const literalBlocked = kind === "literal" && !isLocalhost;
 
   return (
-    <section className="rounded-md border border-border p-4">
+    <section className="rounded-md border border-sw-border p-4">
       <div className="flex items-center justify-between">
         <h3 className="font-heading text-sm font-semibold">Credentials</h3>
-        {source && <span className="text-muted-foreground text-xs font-mono">current: {source}</span>}
+        {source && <span className="text-sw-muted text-xs font-mono">current: {source}</span>}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -190,7 +190,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
           </Button>
         )}
         {oauthAvailable && authKind !== "oauth" && (
-          <span className="text-muted-foreground text-xs self-center">
+          <span className="text-sw-muted text-xs self-center">
             OAuth login available via <code className="font-mono">swarm providers login {name}</code>
           </span>
         )}
@@ -201,8 +201,8 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
           data-testid="credential-test-result"
           className={`mt-3 rounded-md border p-2 text-xs ${
             testResult.ok
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-900 dark:text-rose-200"
+              ? "border-sw-accent-success/30 bg-sw-accent-success/10 text-sw-accent-success"
+              : "border-sw-accent-error/30 bg-sw-accent-error/10 text-sw-accent-error"
           }`}
         >
           {testResult.ok
@@ -230,7 +230,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
                 type="button"
                 onClick={() => setKind(k)}
                 className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
-                  kind === k ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
+                  kind === k ? "border-primary bg-primary/10" : "border-sw-border hover:bg-sw-surface"
                 }`}
                 data-testid={`credential-kind-${k}`}
               >
@@ -238,7 +238,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
               </button>
             ))}
           </div>
-          <p className="text-muted-foreground mt-1 text-xs">
+          <p className="text-sw-muted mt-1 text-xs">
             {kind === "literal" && "Stores the key verbatim in auth.json. Refused over non-localhost connections."}
             {kind === "env" && "auth.json stores the env var name; the value is read at each request."}
             {kind === "shell" && "auth.json stores `!cmd`; executed at each request (cached per process)."}
@@ -261,7 +261,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
             spellCheck={false}
           />
           {literalBlocked && (
-            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+            <p className="mt-1 text-xs text-sw-accent-warn">
               Literal writes are only accepted over localhost. Use <span className="font-mono">env</span> or{" "}
               <span className="font-mono">shell</span> from a remote browser.
             </p>
@@ -272,7 +272,7 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
             {saveMutation.isPending ? "Saving…" : "Save credentials"}
           </Button>
           {saveMutation.isError && (
-            <span className="text-xs text-rose-700 dark:text-rose-300">
+            <span className="text-xs text-sw-accent-error">
               {saveMutation.error instanceof Error ? saveMutation.error.message : String(saveMutation.error)}
             </span>
           )}

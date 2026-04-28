@@ -46,7 +46,7 @@ export function AppSidebar(): JSX.Element {
         >
           {/* Plain icon — no filled square — keeps the brand visible at
               the icon-only width without a heavy block in the rail. */}
-          <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center text-foreground">
+          <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center text-sw-text">
             <Drone className="size-5" />
           </span>
           <span className="truncate group-data-[collapsible=icon]/sidebar:hidden">swarm</span>
@@ -112,12 +112,12 @@ function SidebarStatusBadge(): JSX.Element {
   if (state === "collapsed") {
     const tone =
       status === "connected"
-        ? "bg-emerald-500"
+        ? "bg-sw-accent-success"
         : status === "error"
-          ? "bg-rose-500"
+          ? "bg-sw-accent-error"
           : status === "no-daemon"
-            ? "bg-amber-500"
-            : "bg-slate-400";
+            ? "bg-sw-accent-warn"
+            : "bg-sw-accent-idle";
     return (
       <div
         data-testid="sidebar-health-dot"

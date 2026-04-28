@@ -68,21 +68,21 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
 
   if (isPending) {
     return (
-      <div data-testid="cost-inspector-loading" className="text-xs text-slate-500 p-4">
+      <div data-testid="cost-inspector-loading" className="text-xs text-sw-muted p-4">
         Loading…
       </div>
     );
   }
   if (isError) {
     return (
-      <div data-testid="cost-inspector-error" className="text-xs text-rose-600 p-4">
+      <div data-testid="cost-inspector-error" className="text-xs text-sw-accent-error p-4">
         Failed to load LLM call cost data.
       </div>
     );
   }
   if (!steps || steps.length === 0) {
     return (
-      <div data-testid="cost-inspector-empty" className="text-xs text-slate-500 p-4">
+      <div data-testid="cost-inspector-empty" className="text-xs text-sw-muted p-4">
         No LLM calls recorded for this run yet.
       </div>
     );
@@ -176,13 +176,13 @@ function StepCostRow({
 
   const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
 
-  // All trailing chips share the same `text-xs text-muted-foreground
+  // All trailing chips share the same `text-xs text-sw-muted
   // tabular-nums` and a small leading icon so each metric is identifiable
   // at a glance — Timer for elapsed, DollarSign for cost, Coins for the
   // context-window utilisation. Without icons the bare numbers (`23s`,
   // `US$0.165`, `49.2%`) blurred together and the percentage especially
   // read as ambiguous (cost share? token share? context fill?).
-  const metricChipClass = "text-xs text-muted-foreground tabular-nums inline-flex items-center gap-1";
+  const metricChipClass = "text-xs text-sw-muted tabular-nums inline-flex items-center gap-1";
 
   // The row inherits its column tracks from `CostInspector`'s outer
   // grid via `grid-cols-subgrid`. Spanning all 4 columns keeps the row
@@ -191,11 +191,11 @@ function StepCostRow({
   // `justify-self-end` on each metric cell right-aligns its chip;
   // empty cells (e.g. a step missing cost data) still hold column
   // space so neighbouring rows' chips don't shift.
-  const rowGridClass = "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-card px-3 py-2";
+  const rowGridClass = "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-sw-surface px-3 py-2";
 
   return (
     <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>
-      <span className="text-sm font-semibold text-foreground truncate flex items-center gap-2">
+      <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
         <span className="truncate">{step.nodeId}</span>
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>
@@ -247,9 +247,9 @@ function StepCostRow({
             }}
           >
             <span className="inline-flex items-center gap-1" title="context window utilisation">
-              <Coins className="size-3 text-muted-foreground" aria-hidden />
+              <Coins className="size-3 text-sw-muted" aria-hidden />
               <ContextTrigger
-                className={`h-auto gap-2 p-0 font-normal hover:bg-transparent hover:text-foreground ${metricChipClass} [&>span]:font-normal [&>span]:text-muted-foreground`}
+                className={`h-auto gap-2 p-0 font-normal hover:bg-transparent hover:text-sw-text ${metricChipClass} [&>span]:font-normal [&>span]:text-sw-muted`}
               />
             </span>
             <ContextContent>
@@ -277,7 +277,7 @@ function StepCostRow({
                 </div>
               </ContextContentBody>
               <ContextContentFooter>
-                <span className="text-muted-foreground">Total cost</span>
+                <span className="text-sw-muted">Total cost</span>
                 <span className="tabular-nums">
                   {step.cost !== undefined ? (
                     <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
@@ -313,9 +313,9 @@ function UsageGridRow({
   costUsd?: number;
   subtle?: boolean;
 }): JSX.Element {
-  const labelClass = subtle ? "text-muted-foreground/80 pl-3" : "text-muted-foreground";
-  const numericClass = subtle ? "tabular-nums text-right text-muted-foreground" : "tabular-nums text-right";
-  const costClass = "tabular-nums text-right text-muted-foreground";
+  const labelClass = subtle ? "text-sw-muted/80 pl-3" : "text-sw-muted";
+  const numericClass = subtle ? "tabular-nums text-right text-sw-muted" : "tabular-nums text-right";
+  const costClass = "tabular-nums text-right text-sw-muted";
   return (
     <>
       <span className={labelClass}>{label}</span>

@@ -198,13 +198,13 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
       data-testid={nodeId ? `node-section-${nodeId}` : "node-section-unscoped"}
       className="relative flex flex-col gap-3"
     >
-      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-background/95 px-1 py-1 backdrop-blur-sm">
+      <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
-        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/80">
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">
           {label}
         </span>
         {state && <NodeStatusLabel state={state.state} isLive={isLive} isPaused={isPaused} />}
-        <div className="ml-2 h-px flex-1 bg-border" aria-hidden />
+        <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
       </header>
       <div className="flex flex-col gap-3 pl-4">{children}</div>
     </section>
@@ -215,35 +215,35 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
 
 const STATUS_TONE: Record<NodeState["state"] | "idle", { dot: string; label: string; ring: string }> = {
   running: {
-    dot: "bg-violet-500",
-    label: "text-violet-700 dark:text-violet-300",
-    ring: "ring-violet-400/30",
+    dot: "bg-sw-accent-thinking",
+    label: "text-sw-accent-thinking",
+    ring: "ring-sw-accent-thinking/30",
   },
   completed: {
-    dot: "bg-emerald-500",
-    label: "text-emerald-700 dark:text-emerald-300",
-    ring: "ring-emerald-400/30",
+    dot: "bg-sw-accent-success",
+    label: "text-sw-accent-success",
+    ring: "ring-sw-accent-success/30",
   },
-  failed: { dot: "bg-rose-500", label: "text-rose-700 dark:text-rose-300", ring: "ring-rose-400/30" },
+  failed: { dot: "bg-sw-accent-error", label: "text-sw-accent-error", ring: "ring-sw-accent-error/30" },
   retrying: {
-    dot: "bg-amber-500",
-    label: "text-amber-700 dark:text-amber-300",
-    ring: "ring-amber-400/30",
+    dot: "bg-sw-accent-warn",
+    label: "text-sw-accent-warn",
+    ring: "ring-sw-accent-warn/30",
   },
   pending: {
-    dot: "bg-slate-400",
-    label: "text-slate-600 dark:text-slate-400",
-    ring: "ring-slate-300/30",
+    dot: "bg-sw-accent-idle",
+    label: "text-sw-accent-idle",
+    ring: "ring-sw-accent-idle/30",
   },
   skipped: {
-    dot: "bg-slate-300",
-    label: "text-slate-500 dark:text-slate-400",
-    ring: "ring-slate-300/20",
+    dot: "bg-sw-accent-idle",
+    label: "text-sw-accent-idle",
+    ring: "ring-sw-accent-idle/20",
   },
   idle: {
-    dot: "bg-slate-300",
-    label: "text-slate-500 dark:text-slate-400",
-    ring: "ring-slate-300/20",
+    dot: "bg-sw-accent-idle",
+    label: "text-sw-accent-idle",
+    ring: "ring-sw-accent-idle/20",
   },
 };
 
@@ -352,16 +352,16 @@ function SystemPromptRow({ content, testid }: { content: string; testid: string 
   return (
     <Collapsible
       data-testid={testid}
-      className="group/sysprompt rounded-md border border-border bg-muted/40 px-3 py-2 text-xs"
+      className="group/sysprompt rounded-md border border-sw-border bg-sw-surface/40 px-3 py-2 text-xs"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 font-mono text-muted-foreground hover:text-foreground">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" aria-hidden />
+      <CollapsibleTrigger className="flex w-full items-center gap-2 font-mono text-sw-muted hover:text-sw-text">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-sw-muted/40" aria-hidden />
         <span>system prompt · {content.length.toLocaleString()} chars</span>
         <span className="ml-auto font-mono text-[10px] opacity-60 transition group-data-[state=open]/sysprompt:rotate-180">
           ▾
         </span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/80">
+      <CollapsibleContent className="mt-2 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-sw-text/80">
         {content}
       </CollapsibleContent>
     </Collapsible>
@@ -478,7 +478,7 @@ function renderStreamingBlock(block: StreamingBlock, i: number): ReactNode {
       <Tool key={`stream-c${i}`} className="mb-0">
         <ToolHeader type="tool-pending" state="input-streaming" title="…" />
         <ToolContent>
-          <pre className="whitespace-pre-wrap font-mono text-[11px] text-muted-foreground">{block.argsText}</pre>
+          <pre className="whitespace-pre-wrap font-mono text-[11px] text-sw-muted">{block.argsText}</pre>
         </ToolContent>
       </Tool>
     );
