@@ -39,6 +39,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { RunDetail } from "../lib/api.ts";
+import { cn } from "../lib/cn.ts";
 import { feedAtom, feedEventKey } from "../lib/globalFeed.ts";
 import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
@@ -113,9 +114,16 @@ export function GlobalFeed(): JSX.Element {
       <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
       {/* CSS grid on the list, subgrid on each row, so the icon and
           verb columns size to the widest content across all rows
-          without a hand-tuned width. Columns: icon · verb · title
-          (flex 1, can truncate) · workflow · time. */}
-      <ul className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] gap-x-3 overflow-hidden rounded border border-border/60 bg-card">
+          without a hand-tuned width.
+          - Mobile (< sm): each row is its own 3-column grid laid out
+            in two rows: `[icon][verb][ts] / [title spans 2][workflow]`.
+            We can't use subgrid for the mobile layout because the
+            cross-row alignment we want there is intra-row, not
+            inter-row.
+          - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
+            uses `grid-cols-subgrid`, so the icon / verb columns size
+            to the widest content across every row. */}
+      <ul className="overflow-hidden rounded border border-border/60 bg-card sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
         <AnimatePresence initial={false}>
           {rows.map((event) => (
             <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
@@ -158,34 +166,50 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       exit={exit}
       transition={transition}
       style={{ willChange: reduce ? undefined : "transform" }}
-      className={[
-        // `col-span-full` makes the row span all columns of the parent
-        // grid; `grid-cols-subgrid` aligns each child to that grid so
-        // the icon / verb columns size to the widest content across
-        // every row without a hand-tuned width.
-        "group col-span-full grid grid-cols-subgrid items-center px-3 py-2 text-sm",
+      className={cn(
+        "group grid items-center px-3 py-2 text-sm",
+        // Mobile: 3-col, 2-row grid. Children placed via col-start /
+        // row-start below. `gap-y-0.5` (2px) gives a tight visual
+        // separation between the verb line and the title line.
+        "grid-cols-[auto_minmax(0,1fr)_auto] gap-x-2 gap-y-0.5",
+        // Desktop: collapse to a single subgrid row of the parent's
+        // 5-column grid. The mobile col/row placements below get
+        // overridden with `sm:` modifiers.
+        "sm:col-span-full sm:grid-cols-subgrid sm:gap-x-3 sm:gap-y-0",
         attention ? "border-l-2 border-amber-500/70 bg-amber-500/5" : "border-l-2 border-transparent",
-      ].join(" ")}
+      )}
     >
-      <Icon className="size-4 text-muted-foreground" aria-hidden />
-      <span className="text-muted-foreground">{verb}</span>
+      <Icon
+        className="col-start-1 row-start-1 size-4 self-center text-muted-foreground sm:row-auto"
+        aria-hidden
+      />
+      <span className="col-start-2 row-start-1 truncate text-muted-foreground sm:col-start-2 sm:row-auto">{verb}</span>
+      {/* Time: top-right on mobile (col 3 row 1); pushed to last column
+          (col 5) on desktop via order, since DOM order would otherwise
+          place it before title. */}
+      <FeedRowTime
+        ts={event.ts}
+        className="col-start-3 row-start-1 ml-auto text-right sm:row-auto sm:ml-0 sm:order-last"
+      />
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
-        className="min-w-0 truncate font-medium text-foreground hover:underline"
+        className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-foreground hover:underline sm:col-span-1 sm:col-start-3 sm:row-auto"
       >
         {displayRunTitle(event.runId, run)}
       </Link>
       {wf ? (
-        <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-[10rem]">
+        <Link
+          to={`/workflows/${encodeURIComponent(wf)}`}
+          className="col-start-3 row-start-2 inline-flex max-w-[10rem] justify-self-end sm:col-start-4 sm:row-auto sm:justify-self-auto"
+        >
           <Badge variant="muted" className="max-w-full truncate hover:underline">
             {wf}
           </Badge>
         </Link>
       ) : (
-        <span aria-hidden />
+        <span aria-hidden className="hidden sm:inline" />
       )}
-      <FeedRowTime ts={event.ts} />
     </motion.li>
   );
 });
@@ -194,10 +218,13 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
  * tick. Subscribes to the external `useNowSeconds` store directly so
  * neither the parent `GlobalFeed` nor the memo'd `FeedRow` re-renders
  * when wall-clock advances. */
-function FeedRowTime({ ts }: { ts: number }): JSX.Element {
+function FeedRowTime({ ts, className }: { ts: number; className?: string }): JSX.Element {
   const now = useNowSeconds();
   return (
-    <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={new Date(ts).toISOString()}>
+    <span
+      className={cn("shrink-0 text-xs text-muted-foreground tabular-nums", className)}
+      title={new Date(ts).toISOString()}
+    >
       {formatRelative(ts, { now: new Date(now) })}
     </span>
   );
