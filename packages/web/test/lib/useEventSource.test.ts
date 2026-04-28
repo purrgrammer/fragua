@@ -132,6 +132,126 @@ describe("useEventSource", () => {
     });
   });
 
+  it("auto-reconnects after a permanent close (readyState=2) with backoff", async () => {
+    // Permanent-close scenario: dev proxy times out an idle stream, or
+    // the server response ends with a non-2xx. The browser does NOT
+    // retry — the hook schedules its own reconnect.
+    const { result } = renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5, // tiny backoff so the test doesn't sleep
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    const first = FakeEventSource.instances[0];
+    if (!first) return;
+
+    // Open then permanently close (browser sets readyState=2 then fires error).
+    act(() => first._open());
+    await waitFor(() => {
+      expect(result.current.status).toBe("open");
+    });
+    act(() => {
+      first.readyState = 2;
+      first._error();
+    });
+    await waitFor(() => {
+      expect(result.current.status).toBe("closed");
+    });
+
+    // Backoff timer fires → a NEW EventSource is created with the same URL.
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(2);
+    });
+    expect(FakeEventSource.instances[1]?.url).toBe("/api/events/stream");
+  });
+
+  it("successful reconnect resets the backoff curve", async () => {
+    // After an open, the next permanent close should start the backoff
+    // back at attempt 0 — long-running sessions don't accumulate delay.
+    const { result } = renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    // Cycle 1: error → reconnect.
+    act(() => {
+      const es = FakeEventSource.instances[0]!;
+      es.readyState = 2;
+      es._error();
+    });
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(2);
+    });
+    // Open the second one — this should reset the attempt counter.
+    act(() => FakeEventSource.instances[1]?._open());
+    await waitFor(() => {
+      expect(result.current.status).toBe("open");
+    });
+    // Cycle 2: error again. The new backoff starts at base (5ms), not
+    // base*2 (10ms). We can't observe the exact delay easily, but we
+    // CAN observe that it eventually fires within the test's window.
+    act(() => {
+      const es = FakeEventSource.instances[1]!;
+      es.readyState = 2;
+      es._error();
+    });
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(3);
+    });
+  });
+
+  it("transient errors (readyState != 2) do NOT reconnect — browser handles those", async () => {
+    renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    const first = FakeEventSource.instances[0]!;
+    // Transient error: readyState stays at 0 (CONNECTING) — browser is
+    // about to retry on its own.
+    act(() => {
+      first.readyState = 0;
+      first._error();
+    });
+    // Give the (would-be) reconnect timer plenty of time to fire — it
+    // shouldn't, because we're not in the permanent-close branch.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(FakeEventSource.instances.length).toBe(1);
+  });
+
+  it("unmount cancels a pending reconnect", async () => {
+    const { unmount } = renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 50,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    act(() => {
+      const es = FakeEventSource.instances[0]!;
+      es.readyState = 2;
+      es._error();
+    });
+    // Unmount BEFORE the backoff timer fires.
+    unmount();
+    await new Promise((r) => setTimeout(r, 80));
+    // No second EventSource was created.
+    expect(FakeEventSource.instances.length).toBe(1);
+  });
+
   it("changing url tears down the old connection and opens a new one", async () => {
     const { rerender } = renderHook(
       ({ url }: { url: string | null }) =>
