@@ -16,7 +16,7 @@ import type { FeedEvent } from "@swarm/types";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
-import { appendFeedEventsAtom } from "./globalFeed.ts";
+import { appendFeedEventsAtom, feedLoadingAtom } from "./globalFeed.ts";
 import { queries } from "./queries.ts";
 import { useEventSource } from "./useEventSource.ts";
 
@@ -53,6 +53,7 @@ export interface UseGlobalEventStreamOptions {
 export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): void {
   const qc = useQueryClient();
   const appendFeed = useSetAtom(appendFeedEventsAtom);
+  const setLoading = useSetAtom(feedLoadingAtom);
 
   // Cursor for the live SSE: undefined until backfill resolves. The
   // SSE URL is gated on this so we don't open a stream that immediately
@@ -64,6 +65,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
   // capture the max ts as the SSE cursor.
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     getFeedEvents()
       .then((events) => {
         if (cancelled) return;
@@ -74,6 +76,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // the wall clock so we don't accidentally land before any
         // event the server stamped at this exact ms.
         setFromTs(last ? last.ts : Date.now());
+        setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -81,11 +84,12 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // Still open the stream from now — the feed will just be
         // empty until live events arrive.
         setFromTs(Date.now());
+        setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-    // appendFeed is stable (jotai); we only want bootstrap once per mount.
+    // appendFeed/setLoading are stable (jotai); only bootstrap once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

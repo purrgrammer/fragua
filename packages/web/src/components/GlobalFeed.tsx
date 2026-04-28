@@ -40,11 +40,12 @@ import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { feedAtom, feedEventKey } from "../lib/globalFeed.ts";
+import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
 import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNowSeconds } from "../lib/useNowExternal.ts";
 import { Badge } from "./ui/badge.tsx";
+import { Skeleton } from "./ui/skeleton.tsx";
 
 interface FeedKindMeta {
   Icon: typeof Play;
@@ -93,10 +94,30 @@ const ENTER_DURATION_S = 0.18;
 
 export function GlobalFeed(): JSX.Element {
   const events = useAtomValue(feedAtom);
+  const isLoading = useAtomValue(feedLoadingAtom);
   const reduce = useReducedMotion() ?? false;
 
   // Render newest-first — operators glance at the top of the list.
   const rows = useMemo(() => events.slice().reverse(), [events]);
+
+  // Initial-load skeleton: occupies the same vertical real estate as a
+  // populated feed, so the page doesn't reflow when the backfill lands.
+  if (isLoading && rows.length === 0) {
+    return (
+      <section data-testid="global-feed" aria-label="Recent activity">
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
+        <ul
+          aria-busy="true"
+          className="overflow-hidden rounded border border-border/60 bg-card sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
+        >
+          {Array.from({ length: 4 }).map((_, i) => (
+            // eslint-disable-next-line react/no-array-index-key
+            <FeedRowSkeleton key={i} />
+          ))}
+        </ul>
+      </section>
+    );
+  }
 
   if (rows.length === 0) {
     return (
@@ -254,5 +275,27 @@ function runTitleTooltip(runId: string, run: RunDetail | undefined): string {
 function clampInline(s: string, cap: number): string {
   const singleLine = s.replace(/\s+/g, " ").trim();
   return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
+}
+
+/** Placeholder row used during the initial feed backfill. Mirrors the
+ * real `FeedRow`'s grid layout (mobile 2-row → desktop subgrid) so the
+ * skeleton-to-real swap doesn't reflow the page. */
+function FeedRowSkeleton(): JSX.Element {
+  return (
+    <li
+      className={cn(
+        "grid items-center px-3 py-2 text-sm",
+        "grid-cols-[auto_minmax(0,1fr)_auto] gap-x-2 gap-y-0.5",
+        "sm:col-span-full sm:grid-cols-subgrid sm:gap-x-3 sm:gap-y-0",
+        "border-l-2 border-transparent",
+      )}
+    >
+      <Skeleton className="col-start-1 row-start-1 size-4" />
+      <Skeleton className="col-start-2 row-start-1 h-3 w-20" />
+      <Skeleton className="col-start-3 row-start-1 ml-auto h-3 w-12 sm:col-start-5 sm:ml-0" />
+      <Skeleton className="col-span-2 col-start-1 row-start-2 h-3 w-48 max-w-full sm:col-span-1 sm:col-start-3 sm:row-start-1" />
+      <Skeleton className="col-start-3 row-start-2 h-4 w-20 justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto" />
+    </li>
+  );
 }
 

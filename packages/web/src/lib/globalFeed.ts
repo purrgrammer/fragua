@@ -20,6 +20,12 @@ export const FEED_MAX_EVENTS = 50;
  * `appendFeedEventsAtom` below to keep the dedup logic in one place. */
 export const feedAtom = atom<FeedEvent[]>([]);
 
+/** True until the initial `GET /events` backfill resolves. Lets the
+ * UI render a skeleton instead of jumping from "No recent events" to a
+ * full list when the response lands a few hundred ms after mount. Set
+ * by `useGlobalEventStream`. */
+export const feedLoadingAtom = atom<boolean>(true);
+
 /**
  * Identity for a feed event, used for client-side dedup. The triple
  * `(runId, seq)` is globally unique (`(run_id, seq)` is the events

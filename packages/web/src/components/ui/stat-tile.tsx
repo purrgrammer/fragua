@@ -58,15 +58,27 @@ export function StatTile({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {loading ? (
-          <Skeleton className="h-7 w-20" />
-        ) : children !== undefined ? (
-          <div className="font-heading text-2xl tabular-nums">{children}</div>
-        ) : numericValue !== undefined || format !== undefined ? (
-          <AnimatedNumber value={numericValue} format={format} className="font-heading text-2xl tabular-nums" />
-        ) : (
-          <p className="font-heading text-2xl tabular-nums">{value ?? "—"}</p>
-        )}
+        {/* Reserve a fixed line-height block whether the value is a
+            skeleton, a number, or a fallback dash. The `text-2xl
+            tabular-nums` line-height is ~2rem (32px); pinning the
+            content row to `h-8` keeps the tile from changing height
+            when the skeleton swaps for the real number, which used
+            to be the visible "no number → number" reflow. */}
+        <div className="flex h-8 items-center">
+          {loading ? (
+            <Skeleton className="h-7 w-20" />
+          ) : children !== undefined ? (
+            <div className="font-heading text-2xl leading-none tabular-nums">{children}</div>
+          ) : numericValue !== undefined || format !== undefined ? (
+            <AnimatedNumber
+              value={numericValue}
+              format={format}
+              className="font-heading text-2xl leading-none tabular-nums"
+            />
+          ) : (
+            <p className="font-heading text-2xl leading-none tabular-nums">{value ?? "—"}</p>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
