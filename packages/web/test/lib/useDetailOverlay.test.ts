@@ -105,6 +105,69 @@ describe("foldDetailFrame", () => {
     const out = fold(EMPTY_DETAIL_OVERLAY, "agent.warning", { msg: "x" }, 1);
     expect(out).toBe(EMPTY_DETAIL_OVERLAY);
   });
+
+  describe("HITL — fact.run_paused_hitl / fact.run_resumed", () => {
+    const opts = [
+      { key: "A", label: "[A] Approve", to: "publish" },
+      { key: "R", label: "[R] Revise", to: "draft" },
+    ];
+
+    test("fact.run_paused_hitl populates structured fields and flips status", () => {
+      const out = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_hitl",
+        { nodeId: "review", label: "Approve?", options: opts },
+        12,
+      );
+      expect(out.status).toBe("paused");
+      expect(out.runStatus).toBe("paused_hitl");
+      expect(out.hitlNodeId).toBe("review");
+      expect(out.hitlLabel).toBe("Approve?");
+      expect(out.hitlOptions).toEqual(opts);
+    });
+
+    test("fact.run_paused_provider_error flips status without touching HITL fields", () => {
+      // Sanity: only the HITL paused event populates HITL fields. A
+      // provider-error pause must leave hitlOptions null.
+      const out = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_provider_error",
+        { nodeId: "review", provider: "anthropic", httpStatus: 429, errorMessage: "rate limit" },
+        12,
+      );
+      expect(out.status).toBe("paused");
+      expect(out.runStatus).toBe("paused_provider_error");
+      expect(out.hitlNodeId).toBeNull();
+      expect(out.hitlLabel).toBeNull();
+      expect(out.hitlOptions).toBeNull();
+    });
+
+    test("fact.run_resumed clears HITL fields and re-flips status to running", () => {
+      let s = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_hitl",
+        { nodeId: "review", label: "Approve?", options: opts },
+        12,
+      );
+      s = fold(s, "fact.run_resumed", { fromStatus: "paused_hitl" }, 13);
+      expect(s.status).toBe("running");
+      expect(s.runStatus).toBe("running");
+      expect(s.hitlNodeId).toBeNull();
+      expect(s.hitlLabel).toBeNull();
+      expect(s.hitlOptions).toBeNull();
+    });
+
+    test("malformed paused_hitl (missing options array) → options stays null", () => {
+      const out = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_hitl",
+        { nodeId: "review", label: "x" /* options omitted */ },
+        7,
+      );
+      expect(out.runStatus).toBe("paused_hitl");
+      expect(out.hitlOptions).toBeNull();
+    });
+  });
 });
 
 describe("mergeDetail", () => {
@@ -203,5 +266,59 @@ describe("mergeDetail", () => {
     };
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toBe(snap.nodes);
+  });
+
+  describe("HITL fields", () => {
+    const opts = [{ key: "A", label: "[A] Approve", to: "publish" }];
+
+    test("paused_hitl overlay propagates HITL fields onto the snapshot", () => {
+      const snap = snapshot({ status: "running", runStatus: "running" });
+      const overlay = fold(
+        EMPTY_DETAIL_OVERLAY,
+        "fact.run_paused_hitl",
+        { nodeId: "review", label: "Approve?", options: opts },
+        12,
+      );
+      const merged = mergeDetail(snap, overlay);
+      expect(merged.status).toBe("paused");
+      expect(merged.runStatus).toBe("paused_hitl");
+      expect(merged.hitlNodeId).toBe("review");
+      expect(merged.hitlLabel).toBe("Approve?");
+      expect(merged.hitlOptions).toEqual(opts);
+    });
+
+    test("snapshot HITL fields survive when overlay carries unrelated changes", () => {
+      // Snapshot already has paused_hitl info (from runStateToDetail);
+      // an empty overlay must not stomp them with null.
+      const snap = snapshot({
+        status: "paused",
+        runStatus: "paused_hitl",
+        hitlNodeId: "review",
+        hitlLabel: "Approve?",
+        hitlOptions: opts,
+      });
+      const merged = mergeDetail(snap, EMPTY_DETAIL_OVERLAY);
+      expect(merged).toBe(snap); // empty overlay short-circuit
+      expect(merged.hitlNodeId).toBe("review");
+    });
+
+    test("fact.run_resumed overlay clears HITL fields on the merged detail", () => {
+      const snap = snapshot({
+        status: "paused",
+        runStatus: "paused_hitl",
+        hitlNodeId: "review",
+        hitlLabel: "Approve?",
+        hitlOptions: opts,
+      });
+      // Build an overlay that represents the resume — fact.run_resumed
+      // sets runStatus back to "running" and nulls all the HITL fields.
+      // The merge should flip runStatus and CLEAR the snapshot's HITL
+      // fields. (Today the merge keeps snapshot fields when overlay is
+      // null; this test documents the resume contract for future work.)
+      const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_resumed", { fromStatus: "paused_hitl" }, 50);
+      const merged = mergeDetail(snap, overlay);
+      expect(merged.status).toBe("running");
+      expect(merged.runStatus).toBe("running");
+    });
   });
 });

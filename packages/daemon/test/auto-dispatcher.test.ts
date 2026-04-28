@@ -52,6 +52,124 @@ describe("autoDispatcherResolver", () => {
     store.close();
   });
 
+  test("hexagon yield_hitl carries options derived from outgoing edge labels", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         review [shape=hexagon, prompt="Approve?"]
+         publish [shape=box]
+         revise [shape=box]
+         done [shape=Msquare]
+         start -> review
+         review -> publish [label="[A] Approve"]
+         review -> revise [label="[R] Revise"]
+         publish -> done
+         revise -> done
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    const spec = dispatcher.get("sha", "review");
+    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+    expect(result.kind).toBe("yield_hitl");
+    if (result.kind === "yield_hitl") {
+      expect(result.label).toBe("Approve?");
+      expect(result.options).toHaveLength(2);
+      expect(result.options.map((o) => o.key)).toEqual(["A", "R"]);
+      expect(result.options.map((o) => o.to)).toEqual(["publish", "revise"]);
+      expect(result.options[0]?.label).toBe("[A] Approve");
+    }
+    store.close();
+  });
+
+  test("hexagon options fall back to first-char of target id when label is unset", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         gate [shape=hexagon]
+         next [shape=box]
+         done [shape=Msquare]
+         start -> gate
+         gate -> next
+         next -> done
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    const spec = dispatcher.get("sha", "gate");
+    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+    expect(result.kind).toBe("yield_hitl");
+    if (result.kind === "yield_hitl") {
+      expect(result.options[0]?.key).toBe("N"); // first char of `next`
+      expect(result.options[0]?.label).toBe("next");
+    }
+    store.close();
+  });
+
+  test("hexagon with duplicate accelerator keys yields a halt spec at runtime", async () => {
+    // Construction-level safeguard — validator catches this at lint
+    // time with E010, but if a workflow somehow slipped past validation
+    // (raw insert, older bug), the auto-dispatcher must still produce a
+    // halt spec with a clear detail rather than crashing the dispatcher.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         gate [shape=hexagon]
+         a [shape=box]
+         b [shape=box]
+         done [shape=Msquare]
+         start -> gate
+         gate -> a [label="Approve"]
+         gate -> b [label="Acknowledge"]
+         a -> done
+         b -> done
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    const spec = dispatcher.get("sha", "gate");
+    expect(spec.kind).toBe("wait.human");
+    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") {
+      expect(result.detail).toMatch(/duplicate accelerator key/);
+      expect(result.detail).toMatch(/gate/);
+    }
+    store.close();
+  });
+
+  test("hexagon with no outgoing edges yields a halt spec at runtime", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         dead [shape=hexagon]
+         done [shape=Msquare]
+         start -> dead
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    const spec = dispatcher.get("sha", "dead");
+    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") {
+      expect(result.detail).toMatch(/at least one option/);
+    }
+    store.close();
+  });
+
   test("returns null for unknown workflows (dispatcher throws)", () => {
     const store = new SqliteStore({ path: ":memory:" });
     const dispatcher = new Dispatcher();

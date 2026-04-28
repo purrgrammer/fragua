@@ -47,7 +47,7 @@ export type IntentDecision =
       kind: "proceed";
       routingDelta: Record<string, unknown>;
       steering?: string;
-      hitlInput?: unknown;
+      hitlInput?: { selected: string; note?: string } | string;
       /** Pause this turn (no specific intent in the batch). Executor
        * commits `fact.run_paused_hitl` immediately and skips dispatch. */
       shouldPause: boolean;
@@ -96,7 +96,7 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
 
   const routingDelta: Record<string, unknown> = {};
   const steerEvents: { seq: number; text: string }[] = [];
-  const hitlEvents: { seq: number; input: unknown }[] = [];
+  const hitlEvents: { seq: number; input: { selected: string; note?: string } }[] = [];
   const priorityEvents: { seq: number; newPriority: number }[] = [];
   const pauseSeqs: number[] = [];
   const dropped: DroppedIntent[] = [];
@@ -138,14 +138,14 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
         break;
       }
       case "intent.hitl_input": {
-        const p = ev.payload as { input: unknown };
+        const p = ev.payload as { selected: string; note?: string };
         // hitl_input only makes sense for a run that's been (or is being)
         // woken from paused_hitl. By the time the executor enters the
         // fold the wakePending path has already moved the run to queued/
         // running, so we accept here on the dispatching path. Other
         // states: dropped.
         if (isDispatching || isPaused) {
-          hitlEvents.push({ seq: ev.seq, input: p.input });
+          hitlEvents.push({ seq: ev.seq, input: p });
         } else {
           dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
         }
@@ -171,7 +171,7 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
   }
 
   // R6 — multiple hitl_input: last-wins, earlier dropped.
-  let hitlInput: unknown | undefined;
+  let hitlInput: { selected: string; note?: string } | undefined;
   if (hitlEvents.length > 0) {
     const lastIdx = hitlEvents.length - 1;
     hitlInput = hitlEvents[lastIdx]!.input;

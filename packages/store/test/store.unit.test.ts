@@ -698,7 +698,11 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       s.version,
     );
     const s1 = store.getState(runId)!;
-    store.appendFact(runId, [{ type: "fact.run_paused_hitl", payload: { nodeId: "a", prompt: "p" } }], s1.version);
+    store.appendFact(
+      runId,
+      [{ type: "fact.run_paused_hitl", payload: { nodeId: "a", label: "p", options: [] } }],
+      s1.version,
+    );
     expect(store.getState(runId)!.status).toBe("paused_hitl");
     const rows = store.listThreadsWithMessages();
     expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);

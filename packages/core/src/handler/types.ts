@@ -157,7 +157,7 @@ export interface HandlerContext {
    */
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
   /** Optional: HITL input delivered to a resumed wait.human node. */
-  readonly hitlInput?: unknown;
+  readonly hitlInput?: { selected: string; note?: string } | string;
   /** Optional: steering text folded in before this node run. */
   readonly steering?: string;
   /** Per-run shell + filesystem environment. Set by the executor when a
@@ -221,7 +221,8 @@ export type HandlerResult =
     }
   | {
       kind: "yield_hitl";
-      prompt: string;
+      label: string;
+      options: Array<{ key: string; label: string; to: string }>;
       routingDelta?: Record<string, unknown>;
     }
   | {

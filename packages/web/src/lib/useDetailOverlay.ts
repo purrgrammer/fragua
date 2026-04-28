@@ -28,6 +28,14 @@ export interface DetailOverlay {
   /** Latest run-level status from `fact.run_*` events; null when no
    * status-changing event has arrived since mount. */
   status: UiStatus | null;
+  /** Raw run status, for distinguishing paused_hitl vs paused_provider_error. */
+  runStatus: RunDetail["runStatus"] | null;
+  /** Node id of the active HITL gate (from fact.run_paused_hitl). */
+  hitlNodeId: string | null;
+  /** Question label for the active HITL gate. */
+  hitlLabel: string | null;
+  /** Structured choices for the active HITL gate. */
+  hitlOptions: Array<{ key: string; label: string; to: string }> | null;
   /** Seq of the first run-terminal fact (halted/cancelled/quarantined).
    * Used to downgrade still-"running" nodes to "failed" on merge,
    * matching the server's terminal-halt patch. */
@@ -38,6 +46,10 @@ export const EMPTY_DETAIL_OVERLAY: DetailOverlay = {
   nodeStates: new Map(),
   selectedEdges: [],
   status: null,
+  runStatus: null,
+  hitlNodeId: null,
+  hitlLabel: null,
+  hitlOptions: null,
   haltSeq: undefined,
 };
 
@@ -96,11 +108,26 @@ export function foldDetailFrame(
       return { ...prev, status: "canceled", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_quarantined":
       return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
-    case "fact.run_paused_hitl":
+    case "fact.run_paused_hitl": {
+      const nodeId = stringField(payload, "nodeId");
+      const label = stringField(payload, "label");
+      const rawOptions = payload?.["options"];
+      const options = Array.isArray(rawOptions)
+        ? (rawOptions as Array<{ key: string; label: string; to: string }>)
+        : null;
+      return {
+        ...prev,
+        status: "paused",
+        runStatus: "paused_hitl",
+        hitlNodeId: nodeId ?? null,
+        hitlLabel: label ?? null,
+        hitlOptions: options,
+      };
+    }
     case "fact.run_paused_provider_error":
-      return { ...prev, status: "paused" };
+      return { ...prev, status: "paused", runStatus: "paused_provider_error" };
     case "fact.run_resumed":
-      return { ...prev, status: "running" };
+      return { ...prev, status: "running", runStatus: "running", hitlNodeId: null, hitlLabel: null, hitlOptions: null };
     default:
       return prev;
   }
@@ -138,6 +165,10 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     overlay.nodeStates.size === 0 &&
     overlay.selectedEdges.length === 0 &&
     overlay.status === null &&
+    overlay.runStatus === null &&
+    overlay.hitlNodeId === null &&
+    overlay.hitlLabel === null &&
+    overlay.hitlOptions === null &&
     overlay.haltSeq === undefined
   ) {
     return snapshot;
@@ -187,5 +218,9 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     selectedEdges:
       overlay.selectedEdges.length > 0 ? [...snapshot.selectedEdges, ...overlay.selectedEdges] : snapshot.selectedEdges,
     status: overlay.status ?? snapshot.status,
+    runStatus: overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
+    hitlNodeId: overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
+    hitlLabel: overlay.hitlLabel !== null ? overlay.hitlLabel : snapshot.hitlLabel,
+    hitlOptions: overlay.hitlOptions !== null ? overlay.hitlOptions : snapshot.hitlOptions,
   };
 }

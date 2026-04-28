@@ -75,7 +75,7 @@ function specThrowing(message: string): HandlerSpec {
 }
 
 function specHitl(): HandlerSpec {
-  return handlerSpec(async () => ({ kind: "yield_hitl", prompt: "..." }));
+  return handlerSpec(async () => ({ kind: "yield_hitl", label: "...", options: [] }));
 }
 
 describe("makeParallelHandler — wait_all", () => {

@@ -295,7 +295,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               type: "fact.run_paused_hitl",
               payload: {
                 nodeId: state.currentNode ?? "",
-                prompt: "paused by operator",
+                label: "Paused by operator",
+                options: [],
               },
             },
           ],
@@ -753,7 +754,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type: "fact.run_paused_hitl",
             payload: {
               nodeId: state.currentNode ?? "",
-              prompt: "paused by operator (after-dispatch)",
+              label: "Paused by operator",
+              options: [],
             },
           });
         }

@@ -41,7 +41,7 @@ export type IntentEvent =
   | { type: "intent.steering_requested"; payload: { text: string } }
   | { type: "intent.pause_requested"; payload: Record<string, never> }
   | { type: "intent.cancel_requested"; payload: { reason?: string } }
-  | { type: "intent.hitl_input"; payload: { input: unknown } }
+  | { type: "intent.hitl_input"; payload: { selected: string; note?: string } }
   | { type: "intent.resume"; payload: { note?: string } }
   | {
       type: "intent.unquarantine";
@@ -162,7 +162,14 @@ export type FactEvent =
         iteration: number;
       };
     }
-  | { type: "fact.run_paused_hitl"; payload: { nodeId: string; prompt: string } }
+  | {
+      type: "fact.run_paused_hitl";
+      payload: {
+        nodeId: string;
+        label: string;
+        options: Array<{ key: string; label: string; to: string }>;
+      };
+    }
   | {
       type: "fact.run_paused_provider_error";
       payload: {

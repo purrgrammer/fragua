@@ -109,7 +109,11 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     case "yield_hitl": {
       facts.push({
         type: "fact.run_paused_hitl",
-        payload: { nodeId: ctx.state.currentNode ?? "", prompt: result.prompt },
+        payload: {
+          nodeId: ctx.state.currentNode ?? "",
+          label: result.label,
+          options: result.options,
+        },
       });
       return facts;
     }

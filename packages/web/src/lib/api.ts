@@ -127,6 +127,9 @@ export interface RunDetail {
   durationMs?: number;
   title?: string;
   input?: string;
+  hitlNodeId?: string;
+  hitlLabel?: string;
+  hitlOptions?: Array<{ key: string; label: string; to: string }>;
 }
 
 export interface WorkflowSummary {
@@ -464,6 +467,17 @@ export async function enqueueJob(input: {
 
 export async function steerRun(id: string, message: string): Promise<{ id: string }> {
   return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedId);
+}
+
+export async function submitHitlChoice(runId: string, selected: string, note?: string): Promise<{ seq: number }> {
+  const body: { selected: string; note?: string } = { selected };
+  if (note) body.note = note;
+  return postJson(
+    `/runs/${encodeURIComponent(runId)}/hitl`,
+    body,
+    (v): v is { seq: number } =>
+      typeof v === "object" && v !== null && typeof (v as Record<string, unknown>)["seq"] === "number",
+  );
 }
 
 export async function pauseRun(id: string, reason?: string): Promise<{ id: string }> {

@@ -5,7 +5,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RunState, StoredEvent } from "@swarm/store";
-import { deriveNodeStates, deriveSelectedEdges, runStateToSummary } from "../../src/store/runs-adapter.ts";
+import {
+  deriveNodeStates,
+  deriveSelectedEdges,
+  runStateToDetail,
+  runStateToSummary,
+} from "../../src/store/runs-adapter.ts";
 
 function makeState(overrides: Partial<RunState> = {}): RunState {
   return {
@@ -235,5 +240,75 @@ describe("deriveNodeStates — run-halt terminal patching", () => {
     expect(nodes[0]?.state).toBe("failed");
     // lastEventSeq should be the node_aborted seq, not the halt seq
     expect(nodes[0]?.lastEventSeq).toBe(2);
+  });
+});
+
+describe("runStateToDetail — HITL projection", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown>): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  test("paused_hitl projects nodeId/label/options from the latest fact.run_paused_hitl", () => {
+    const state = makeState({ status: "paused_hitl", currentNode: "review" });
+    const options = [
+      { key: "A", label: "[A] Approve", to: "publish" },
+      { key: "R", label: "[R] Revise", to: "draft" },
+    ];
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(2, "fact.node_started", { nodeId: "review" }),
+      evWithSeq(3, "fact.run_paused_hitl", {
+        nodeId: "review",
+        label: "Review the draft",
+        options,
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.runStatus).toBe("paused_hitl");
+    expect(detail.hitlNodeId).toBe("review");
+    expect(detail.hitlLabel).toBe("Review the draft");
+    expect(detail.hitlOptions).toEqual(options);
+  });
+
+  test("paused_hitl with multiple paused events picks the latest one (re-yield after revise)", () => {
+    const state = makeState({ status: "paused_hitl", currentNode: "review" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_paused_hitl", { nodeId: "review", label: "first", options: [] }),
+      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_hitl" }),
+      evWithSeq(3, "fact.run_paused_hitl", {
+        nodeId: "review",
+        label: "second iteration",
+        options: [{ key: "X", label: "X", to: "n" }],
+      }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlLabel).toBe("second iteration");
+    expect(detail.hitlOptions?.[0]?.key).toBe("X");
+  });
+
+  test("non-paused statuses leave HITL fields undefined", () => {
+    const state = makeState({ status: "running" });
+    const events: StoredEvent[] = [
+      // A stale paused_hitl from earlier in the run shouldn't leak through
+      // when the run has since resumed and is now running again.
+      evWithSeq(1, "fact.run_paused_hitl", { nodeId: "review", label: "stale", options: [] }),
+      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_hitl" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.runStatus).toBe("running");
+    expect(detail.hitlNodeId).toBeUndefined();
+    expect(detail.hitlLabel).toBeUndefined();
+    expect(detail.hitlOptions).toBeUndefined();
+  });
+
+  test("paused_hitl tolerates malformed payload (missing fields stay undefined)", () => {
+    const state = makeState({ status: "paused_hitl" });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_paused_hitl", { nodeId: 42, label: null, options: "not an array" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.hitlNodeId).toBeUndefined();
+    expect(detail.hitlLabel).toBeUndefined();
+    expect(detail.hitlOptions).toBeUndefined();
   });
 });

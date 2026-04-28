@@ -1,44 +1,100 @@
 // wait.human handler — ARCHITECTURE.md §0.
 //
-// First call: returns yield_hitl. The executor emits fact.run_paused_hitl
-// and releases the fiber. Process is free to die or do other work.
+// First call: returns yield_hitl with the configured label and the
+// structured option list (one per outgoing edge, with parsed accelerator
+// keys). The executor commits fact.run_paused_hitl and frees the slot.
 //
 // Second call (after intent.hitl_input arrives): ctx.hitlInput is populated
-// by the executor from the fold. Returns a transition to nextNode, carrying
-// the input in routing so downstream nodes can read it.
+// by the executor from the fold. The handler resolves the chosen option
+// (case-insensitive key match) and returns a transition with
+// suggestedNextIds=[chosen.to] plus context updates under `human.gate.*`.
+// Edge selection routes without conditions.
 
+import { parseAcceleratorKey, stripAcceleratorPrefix } from "../../accelerator.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
+export { parseAcceleratorKey, stripAcceleratorPrefix };
+
+export interface HitlOption {
+  key: string;
+  label: string;
+  to: string;
+}
+
+export interface HitlInput {
+  selected: string;
+  note?: string;
+}
+
 export interface WaitHumanConfig {
-  prompt: string;
-  nextNode: string;
-  /** Routing key where the HITL input lands on resume. Defaults to `hitl.${nodeId}`. */
+  label?: string;
+  options: HitlOption[];
+  /** Optional routing key where the operator-supplied selected key is
+   * mirrored on resume. When unset, only the canonical
+   * `human.gate.selected` / `human.gate.label` pair is written. */
   inputKey?: string;
 }
 
 export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
+  validateOptions(cfg.options);
+  const label = cfg.label ?? "Select an option:";
+  const options = cfg.options;
+  const inputKey = cfg.inputKey;
+
   const handler: Handler = async (ctx) => {
     if (ctx.hitlInput === undefined) {
+      return { kind: "yield_hitl", label, options } satisfies HandlerResult;
+    }
+
+    const { selected, note } = normaliseHitlInput(ctx.hitlInput);
+    const chosen = options.find((o) => o.key.toUpperCase() === selected.toUpperCase());
+    if (chosen === undefined) {
+      const valid = options.map((o) => o.key).join(", ");
       return {
-        kind: "yield_hitl",
-        prompt: cfg.prompt,
+        kind: "halt",
+        reason: "error",
+        detail: `wait.human: unknown selected key "${selected}" (expected one of: ${valid})`,
       } satisfies HandlerResult;
     }
 
-    const key = cfg.inputKey ?? `hitl.${ctx.nodeId}`;
+    const routingDelta: Record<string, unknown> = {
+      "human.gate.selected": chosen.key,
+      "human.gate.label": chosen.label,
+    };
+    if (note !== undefined) routingDelta["human.gate.note"] = note;
+    if (inputKey !== undefined) routingDelta[inputKey] = chosen.key;
+
     return {
       kind: "transition",
-      nextNode: cfg.nextNode,
-      routingDelta: { [key]: ctx.hitlInput },
+      suggestedNextIds: [chosen.to],
+      routingDelta,
       tokens: 0,
       costUsd: 0,
     } satisfies HandlerResult;
   };
 
-  return {
-    kind: "wait.human",
-    sideEffect: "none",
-    maxMs: 1_000,
-    handler,
-  };
+  return { kind: "wait.human", sideEffect: "none", maxMs: 1_000, handler };
+}
+
+function validateOptions(options: HitlOption[]): void {
+  if (options.length === 0) {
+    throw new Error("wait.human: at least one option is required (a hexagon node must have outgoing edges)");
+  }
+  const seen = new Set<string>();
+  for (const o of options) {
+    const k = o.key.toUpperCase();
+    if (seen.has(k)) {
+      throw new Error(
+        `wait.human: duplicate accelerator key "${k}" — disambiguate edge labels (e.g. [A] Approve, [B] Acknowledge)`,
+      );
+    }
+    seen.add(k);
+  }
+}
+
+function normaliseHitlInput(raw: HitlInput | string): HitlInput {
+  if (typeof raw === "string") return { selected: raw };
+  // Empty-string note is treated as absent (matches server-side trim).
+  if (raw.note !== undefined && raw.note.length > 0) return { selected: raw.selected, note: raw.note };
+  return { selected: raw.selected };
 }

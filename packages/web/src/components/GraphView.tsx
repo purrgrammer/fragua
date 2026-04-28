@@ -66,6 +66,9 @@ export interface GraphViewProps {
   selectedNodeId?: string | null;
   /** Flow direction. Default `"TB"`. */
   orientation?: LayoutOrientation;
+  /** Node currently paused at a HITL gate. Renders with "waiting" state
+   * so operators can distinguish it from an actively-running node. */
+  hitlNodeId?: string | null;
 }
 
 const NODE_TYPE = "swarmNode";
@@ -96,6 +99,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     activeNodeId,
     selectedNodeId,
     orientation = "TB",
+    hitlNodeId,
   } = props;
 
   // Backstop fetch for the `runId`-only call shape. RunDetail passes
@@ -129,12 +133,19 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 
   const { flowNodes, flowEdges } = useMemo(() => {
     if (!graph) return { flowNodes: [], flowEdges: [] };
+    const resolvedHitlNodeId =
+      hitlNodeId !== undefined
+        ? hitlNodeId
+        : readyDetail?.runStatus === "paused_hitl"
+          ? (readyDetail.hitlNodeId ?? null)
+          : null;
     return toFlowGraph(readyDetail, graph, {
       activeNodeId: activeNodeId ?? null,
       selectedNodeId: selectedNodeId ?? null,
       orientation,
+      hitlNodeId: resolvedHitlNodeId,
     });
-  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation]);
+  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId]);
 
   const handleNodeClick = useCallback(
     (_e: unknown, node: FlowNode) => {
@@ -295,7 +306,7 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   );
 }
 
-function StateDot({ state }: { state: NodeState["state"] }): JSX.Element {
+function StateDot({ state }: { state: NodeState["state"] | "waiting" }): JSX.Element {
   const { tone, pulse } = stateStyle(state);
   return (
     <span
@@ -310,10 +321,12 @@ function StateDot({ state }: { state: NodeState["state"] }): JSX.Element {
   );
 }
 
-function stateStyle(state: NodeState["state"]): { tone: string; pulse: boolean } {
+function stateStyle(state: NodeState["state"] | "waiting"): { tone: string; pulse: boolean } {
   switch (state) {
     case "running":
       return { tone: "bg-sw-accent-thinking", pulse: true };
+    case "waiting":
+      return { tone: "bg-sw-accent-human", pulse: false };
     case "retrying":
       return { tone: "bg-sw-accent-warn", pulse: true };
     case "completed":
@@ -387,7 +400,7 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
-  state: NodeState["state"] | null;
+  state: NodeState["state"] | "waiting" | null;
   lastEventSeq: number;
   hasIncoming: boolean;
   hasOutgoing: boolean;
@@ -405,6 +418,7 @@ export interface ToFlowGraphOptions {
   activeNodeId?: string | null;
   selectedNodeId?: string | null;
   orientation?: LayoutOrientation;
+  hitlNodeId?: string | null;
 }
 
 /**
@@ -429,7 +443,7 @@ export function toFlowGraph(
   graph: Graph,
   opts: ToFlowGraphOptions = {},
 ): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
-  const { activeNodeId = null, selectedNodeId = null, orientation = "TB" } = opts;
+  const { activeNodeId = null, selectedNodeId = null, orientation = "TB", hitlNodeId = null } = opts;
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
   // `selectedEdges` is an ordered log of every (from,to) pair the executor
   // traversed. A Set lookup is enough because multiple traversals of the
@@ -468,6 +482,10 @@ export function toFlowGraph(
   const flowNodes: FlowNode[] = [...ids].map((id) => {
     const stateEntry = stateById.get(id);
     const topo: GraphNode | undefined = graph.nodes[id];
+    const rawState: SwarmNodeData["state"] = stateEntry ? stateEntry.state : detail ? "pending" : null;
+    // When the run is paused at a HITL gate, show that node as "waiting"
+    // so operators can distinguish it from an actively-running node.
+    const resolvedState: SwarmNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
     const data: SwarmNodeData = {
       nodeId: id,
       label: topo?.attrs.label ?? id,
@@ -475,7 +493,7 @@ export function toFlowGraph(
       handler: topo ? handlerOf(topo) : "unknown",
       goalGate: Boolean(topo?.attrs.goal_gate),
       model: topo?.attrs.model,
-      state: stateEntry ? stateEntry.state : detail ? "pending" : null,
+      state: resolvedState,
       lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),

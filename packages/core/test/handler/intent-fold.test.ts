@@ -20,7 +20,7 @@ describe("foldIntents", () => {
         ev(1, "intent.pause_requested", {}),
         ev(2, "intent.steering_requested", { text: "hi" }),
         ev(3, "intent.cancel_requested", { reason: "user" }),
-        ev(4, "intent.hitl_input", { input: { answer: "yes" } }),
+        ev(4, "intent.hitl_input", { selected: "A" }),
       ],
       "running",
     );
@@ -42,14 +42,14 @@ describe("foldIntents", () => {
       [
         ev(1, "intent.steering_requested", { text: "focus tests" }),
         ev(2, "intent.steering_requested", { text: "skip lint" }),
-        ev(3, "intent.hitl_input", { input: 42 }),
+        ev(3, "intent.hitl_input", { selected: "A" }),
       ],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.steering).toBe("focus tests\nskip lint");
-      expect(out.hitlInput).toBe(42);
+      expect(out.hitlInput).toEqual({ selected: "A" });
       expect(out.shouldPause).toBe(false);
       expect(out.shouldPauseAfterDispatch).toBe(false);
       expect(out.appliedSeqs).toEqual([1, 2, 3]);
@@ -83,12 +83,12 @@ describe("foldIntents", () => {
 
   test("pause + hitl → hitl applies, pause defers", () => {
     const out = foldIntents(
-      [ev(1, "intent.pause_requested", {}), ev(2, "intent.hitl_input", { input: "answer" })],
+      [ev(1, "intent.pause_requested", {}), ev(2, "intent.hitl_input", { selected: "A", note: "answer" })],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toBe("answer");
+      expect(out.hitlInput).toEqual({ selected: "A", note: "answer" });
       expect(out.shouldPause).toBe(false);
       expect(out.shouldPauseAfterDispatch).toBe(true);
       expect(out.dropped).toEqual([]);
@@ -118,15 +118,15 @@ describe("foldIntents", () => {
   test("multiple hitl_input → last-wins, earlier dropped with later_input_won", () => {
     const out = foldIntents(
       [
-        ev(1, "intent.hitl_input", { input: "first" }),
-        ev(2, "intent.hitl_input", { input: "second" }),
-        ev(3, "intent.hitl_input", { input: "third" }),
+        ev(1, "intent.hitl_input", { selected: "A" }),
+        ev(2, "intent.hitl_input", { selected: "B" }),
+        ev(3, "intent.hitl_input", { selected: "C" }),
       ],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toBe("third");
+      expect(out.hitlInput).toEqual({ selected: "C" });
       const dropped = out.dropped.map((d) => `${d.seq}:${d.reason}`).sort();
       expect(dropped).toEqual(["1:later_input_won", "2:later_input_won"]);
     }
@@ -159,7 +159,7 @@ describe("foldIntents", () => {
   });
 
   test("hitl_input on a quarantined run is dropped with reason wrong_state", () => {
-    const out = foldIntents([ev(1, "intent.hitl_input", { input: "x" })], "quarantined");
+    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "quarantined");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.hitlInput).toBeUndefined();

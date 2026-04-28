@@ -41,7 +41,7 @@ export interface BuildContextOpts {
    * store.appendObservabilityEvents after the node's terminal fact lands.
    * If omitted, ctx.emit becomes a no-op (useful for tests). */
   emitObservability?: (type: string, payload: Record<string, unknown>) => void;
-  hitlInput?: unknown;
+  hitlInput?: { selected: string; note?: string } | string;
   steering?: string;
   /** Per-run filesystem + shell environment. When set, handlers run
    * inside this env's cwd rather than the daemon's process cwd. Wired

@@ -103,7 +103,7 @@ queued → running → {completed, paused_hitl, paused_provider_error, halted, c
 
 - `queued` — enqueued; ready to be claimed
 - `running` — a daemon has claimed it and is dispatching handlers
-- `paused_hitl` — a `wait.human` node yielded; awaits `intent.hitl_input` or `intent.resume`
+- `paused_hitl` — a `wait.human` node yielded; `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`
 - `paused_provider_error` — an LLM provider returned a transport error (402, 429, 5xx, network); awaits `intent.resume`. Re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript
 - `completed` / `halted` / `cancelled` — terminal
 - `quarantined` — startup sweep found an orphan `side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine`
@@ -114,7 +114,7 @@ All operator actions are intent writes:
 - `POST /runs/:id/steer` — inject text; aborts current handler so next dispatch sees the steering
 - `POST /runs/:id/pause` — abort + transition to `paused_hitl`
 - `POST /runs/:id/cancel` — abort + transition to `cancelled`
-- `POST /runs/:id/hitl` — deliver human input; wakes `paused_hitl` runs
+- `POST /runs/:id/hitl` — deliver `{ selected: string, note?: string }`; wakes `paused_hitl` runs; `selected` must be an accelerator key from `fact.run_paused_hitl.options`
 - `POST /runs/:id/resume` — generic wake for any `paused_*` run (no payload required)
 - `POST /runs/:id/unquarantine` — operator decision on a quarantined run
 

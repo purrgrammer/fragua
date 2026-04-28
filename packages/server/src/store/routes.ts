@@ -319,13 +319,15 @@ export function createRoutes(deps: ServerDeps): Hono {
   });
 
   app.post("/runs/:id/hitl", async (c) => {
-    const body = await readJson<{ input: unknown }>(c);
-    if (!body || !("input" in body)) {
-      return c.json({ error: "input required" }, 400);
+    const body = await readJson<{ selected?: string; note?: string }>(c);
+    if (!body || typeof body.selected !== "string" || body.selected.length === 0) {
+      return c.json({ error: "selected required" }, 400);
     }
+    const payload: { selected: string; note?: string } = { selected: body.selected };
+    if (typeof body.note === "string" && body.note.length > 0) payload.note = body.note;
     return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.hitl_input",
-      payload: { input: body.input },
+      payload,
     });
   });
 

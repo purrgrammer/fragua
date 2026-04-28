@@ -1,12 +1,11 @@
 // hitl-approval.dot — two human-in-the-loop checkpoints.
 //
-// review (hexagon) emits `hitl.review`; confirm (hexagon) emits `hitl.confirm`.
-// Edge conditions route on literal match — no parsing node needed.
+// review (hexagon) shows [A]pprove / [R]evise buttons.
+// confirm (hexagon) shows [P]ublish / [C]ancel buttons.
+// Edge routing is driven by the handler's suggestedNextIds — no conditions needed.
 //
 //   bun run packages/cli/bin/swarm.ts run workflows/hitl-approval.dot \
 //     --input="draft a changelog entry for the new HITL UI"
-//   bun run packages/cli/bin/swarm.ts resume <run-id> --input="APPROVED"
-//   bun run packages/cli/bin/swarm.ts resume <run-id> --input="REVISE: tighten summary"
 
 digraph hitl_approval {
   graph [
@@ -17,18 +16,18 @@ digraph hitl_approval {
   start [shape=Mdiamond]
 
   draft [
-    prompt = "Draft the artifact: $ARGUMENTS. If the prior reviewer said `REVISE: <note>` (see context.hitl.review), address it. Under 200 words. End with `<promise>DRAFT_READY</promise>`."
+    prompt = "Draft the artifact: $ARGUMENTS. If context.human.gate.note is set, the reviewer asked: \"$context.human.gate.note\" — address it. Under 200 words. End with `<promise>DRAFT_READY</promise>`."
     allowed_tools = "read, write, edit, bash"
   ]
 
   review [
     shape  = hexagon
-    prompt = "Read the current draft. Reply `APPROVED` or `REVISE: <note>`."
+    label  = "Review the draft"
   ]
 
   confirm [
     shape  = hexagon
-    prompt = "Publish this artifact? Reply `PUBLISH` or `CANCEL`."
+    label  = "Publish this artifact?"
   ]
 
   publish [
@@ -41,13 +40,11 @@ digraph hitl_approval {
   start  -> draft
   draft  -> review
 
-  // APPROVED → confirm. Anything else (including REVISE:) loops back to draft.
-  review -> confirm [condition="context.hitl.review=APPROVED"]
-  review -> draft
+  review -> confirm [label="[A] Approve"]
+  review -> draft   [label="[R] Revise"]
 
-  // PUBLISH → publish. Anything else (CANCEL, etc.) bails.
-  confirm -> publish [condition="context.hitl.confirm=PUBLISH"]
-  confirm -> done
+  confirm -> publish [label="[P] Publish"]
+  confirm -> done    [label="[C] Cancel"]
 
   publish -> done
 }

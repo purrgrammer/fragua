@@ -459,7 +459,7 @@ describe("intent-write routes", () => {
     ["steer", "/steer", { text: "go" }, "intent.steering_requested"],
     ["pause", "/pause", undefined, "intent.pause_requested"],
     ["cancel", "/cancel", { reason: "stop" }, "intent.cancel_requested"],
-    ["hitl", "/hitl", { input: "approved" }, "intent.hitl_input"],
+    ["hitl", "/hitl", { selected: "A" }, "intent.hitl_input"],
     ["resume", "/resume", { note: "topped up" }, "intent.resume"],
     ["resume-noargs", "/resume", undefined, "intent.resume"],
     ["unquarantine", "/unquarantine", { resolution: "retry", note: "try again" }, "intent.unquarantine"],

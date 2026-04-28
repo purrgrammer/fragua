@@ -42,22 +42,117 @@ function stubCtx(
 }
 
 describe("wait.human handler", () => {
-  const cfg = { prompt: "review PR", nextNode: "after" };
+  const cfg = {
+    label: "Review PR",
+    options: [
+      { key: "A", label: "[A] Approve", to: "after" },
+      { key: "R", label: "[R] Revise", to: "draft" },
+    ],
+  };
 
-  test("first call yields for HITL with the configured prompt", async () => {
+  test("first call yields for HITL with the configured label and options", async () => {
     const spec = makeWaitHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ nodeId: "wait" }));
     expect(result.kind).toBe("yield_hitl");
-    if (result.kind === "yield_hitl") expect(result.prompt).toBe("review PR");
+    if (result.kind === "yield_hitl") {
+      expect(result.label).toBe("Review PR");
+      expect(result.options).toHaveLength(2);
+      expect(result.options[0]?.key).toBe("A");
+    }
   });
 
-  test("call with hitlInput transitions to nextNode and stores input", async () => {
+  test("call with hitlInput transitions to chosen option's target", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: { answer: "approve" } }));
+    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: { selected: "A" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.nextNode).toBe("after");
-      expect(result.routingDelta?.["hitl.wait"]).toEqual({ answer: "approve" });
+      expect(result.suggestedNextIds).toEqual(["after"]);
+      expect(result.routingDelta?.["human.gate.selected"]).toBe("A");
     }
+  });
+
+  test("call with bare string hitlInput resolves option by key", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: "R" }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.suggestedNextIds).toEqual(["draft"]);
+    }
+  });
+
+  test("yield_hitl uses default label when cfg.label is unset", async () => {
+    const spec = makeWaitHumanHandler({ options: cfg.options });
+    const result = await spec.handler(stubCtx());
+    expect(result.kind).toBe("yield_hitl");
+    if (result.kind === "yield_hitl") {
+      expect(result.label).toBe("Select an option:");
+    }
+  });
+
+  test("selected key matching is case-insensitive", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const lower = await spec.handler(stubCtx({ hitlInput: { selected: "a" } }));
+    expect(lower.kind).toBe("transition");
+    if (lower.kind === "transition") {
+      expect(lower.suggestedNextIds).toEqual(["after"]);
+      // Routing delta carries the canonical (uppercase) key from the option.
+      expect(lower.routingDelta?.["human.gate.selected"]).toBe("A");
+    }
+  });
+
+  test("note propagates into human.gate.note when present", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "looks good" } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.routingDelta?.["human.gate.note"]).toBe("looks good");
+      expect(result.routingDelta?.["human.gate.label"]).toBe("[A] Approve");
+    }
+  });
+
+  test("empty-string note is treated as absent (no human.gate.note key)", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "" } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.routingDelta).not.toHaveProperty("human.gate.note");
+    }
+  });
+
+  test("inputKey override mirrors the selected key into a custom routing slot", async () => {
+    const spec = makeWaitHumanHandler({ ...cfg, inputKey: "review.decision" });
+    const result = await spec.handler(stubCtx({ hitlInput: { selected: "R" } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.routingDelta?.["review.decision"]).toBe("R");
+      // Canonical keys are still written.
+      expect(result.routingDelta?.["human.gate.selected"]).toBe("R");
+    }
+  });
+
+  test("unknown selected key halts the run with a descriptive detail", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ hitlInput: { selected: "Z" } }));
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") {
+      expect(result.reason).toBe("error");
+      expect(result.detail).toMatch(/unknown selected key "Z"/);
+      expect(result.detail).toMatch(/A, R/); // valid keys listed
+    }
+  });
+
+  test("construction throws when options are empty", () => {
+    expect(() => makeWaitHumanHandler({ options: [] })).toThrow(/at least one option/);
+  });
+
+  test("construction throws on duplicate accelerator keys", () => {
+    expect(() =>
+      makeWaitHumanHandler({
+        options: [
+          { key: "A", label: "Approve", to: "x" },
+          { key: "a", label: "Acknowledge", to: "y" }, // collides after upper-casing
+        ],
+      }),
+    ).toThrow(/duplicate accelerator key "A"/);
   });
 });

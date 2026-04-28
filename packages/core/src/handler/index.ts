@@ -8,8 +8,8 @@ export type { JoinPolicy, ParallelBranchResult, ParallelConfig } from "./handler
 export { makeParallelHandler } from "./handlers/parallel.ts";
 export type { SpawnFn, ToolConfig, ToolRunResult } from "./handlers/tool.ts";
 export { makeToolHandler, runWithBun } from "./handlers/tool.ts";
-export type { WaitHumanConfig } from "./handlers/wait-human.ts";
-export { makeWaitHumanHandler } from "./handlers/wait-human.ts";
+export type { HitlInput, HitlOption, WaitHumanConfig } from "./handlers/wait-human.ts";
+export { makeWaitHumanHandler, parseAcceleratorKey, stripAcceleratorPrefix } from "./handlers/wait-human.ts";
 export type { HttpClientOpts } from "./http-client.ts";
 export { makeHttpClient } from "./http-client.ts";
 export type { IntentDecision } from "./intent-fold.ts";

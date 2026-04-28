@@ -24,7 +24,7 @@ function pause(r: ReturnType<typeof rig>, runId: string): void {
   const s = r.store.getState(runId)!;
   r.store.appendFact(
     runId,
-    [{ type: "fact.run_paused_hitl", payload: { nodeId: "start", prompt: "wait" } }],
+    [{ type: "fact.run_paused_hitl", payload: { nodeId: "start", label: "wait", options: [] } }],
     s.version,
   );
 }
@@ -197,7 +197,7 @@ describe("wakePending — precedence", () => {
     const r = rig();
     startRun(r, "rp2");
     pause(r, "rp2");
-    r.store.appendIntent("rp2", { type: "intent.hitl_input", payload: { input: "answer" } });
+    r.store.appendIntent("rp2", { type: "intent.hitl_input", payload: { selected: "A" } });
     r.store.appendIntent("rp2", { type: "intent.cancel_requested", payload: {} });
     wakePending(r.store);
     expect(r.store.getState("rp2")!.status).toBe("cancelled");

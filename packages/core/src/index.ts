@@ -1,5 +1,6 @@
 export const SWARM_CORE_VERSION = "0.0.0";
 
+export * from "./accelerator.ts";
 export * from "./duration.ts";
 export * from "./engine/index.ts";
 export * from "./executor/index.ts";

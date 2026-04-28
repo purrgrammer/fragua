@@ -604,7 +604,11 @@ describe("executor — multi-step graph", () => {
 describe("executor — HITL yield and resume", () => {
   test("yields paused_hitl, resumes after intent.hitl_input", async () => {
     const r = rig();
-    r.dispatcher.register(r.workflowSha, "ask", handler.makeWaitHumanHandler({ prompt: "ok?", nextNode: "__end__" }));
+    r.dispatcher.register(
+      r.workflowSha,
+      "ask",
+      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+    );
     enqueue(r, "run3", "ask");
     r.store.claimNextRun(1);
 
@@ -627,7 +631,7 @@ describe("executor — HITL yield and resume", () => {
     // Web writes the HITL input intent; wakePending sweep resurrects the run.
     r.store.appendIntent("run3", {
       type: "intent.hitl_input",
-      payload: { input: "approved" },
+      payload: { selected: "O" },
     });
     expect(wakePending(r.store).hitlWoken).toContain("run3");
     expect(r.store.getState("run3")!.status).toBe("queued");

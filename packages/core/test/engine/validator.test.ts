@@ -177,6 +177,127 @@ describe("validate", () => {
   });
 });
 
+describe("HITL (wait.human) lint rules", () => {
+  test("E009: hexagon node with no outgoing edges", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          done [shape=Msquare]
+          s -> gate
+        }
+      `),
+    );
+    const e009 = diags.find((d) => d.code === "E009");
+    expect(e009).toBeDefined();
+    expect(e009?.severity).toBe("error");
+    expect(e009?.nodeId).toBe("gate");
+    expect(e009?.message).toMatch(/no outgoing edges/);
+  });
+
+  test("E009 not raised for hexagon with at least one outgoing edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E009")).toBe(false);
+  });
+
+  test("E010: hexagon outgoing edges with colliding accelerator keys", () => {
+    // Both `Approve` and `Acknowledge` start with A → collision.
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          a [shape=box]
+          b [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a [label="Approve"]
+          gate -> b [label="Acknowledge"]
+          a -> done
+          b -> done
+        }
+      `),
+    );
+    const e010 = diags.find((d) => d.code === "E010");
+    expect(e010).toBeDefined();
+    expect(e010?.severity).toBe("error");
+    expect(e010?.nodeId).toBe("gate");
+    expect(e010?.message).toContain('"A"');
+    expect(e010?.message).toMatch(/Approve/);
+    expect(e010?.message).toMatch(/Acknowledge/);
+  });
+
+  test("E010 not raised when authors disambiguate via [K] prefixes", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          a [shape=box]
+          b [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a [label="[A] Approve"]
+          gate -> b [label="[B] Acknowledge"]
+          a -> done
+          b -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E010")).toBe(false);
+  });
+
+  test("E010 not raised for a single outgoing edge (no collision possible)", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          done [shape=Msquare]
+          s -> gate -> done [label="Continue"]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E010")).toBe(false);
+  });
+
+  test("E010 reports unique-key sets independently per hexagon node", () => {
+    // Two hexagons; only the second has a collision.
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          g1 [shape=hexagon]
+          g2 [shape=hexagon]
+          a [shape=box]
+          b [shape=box]
+          done [shape=Msquare]
+          s -> g1
+          g1 -> g2 [label="[Y] Yes"]
+          g1 -> done [label="[N] No"]
+          g2 -> a [label="Save"]
+          g2 -> b [label="Send"]
+          a -> done
+          b -> done
+        }
+      `),
+    );
+    const e010s = diags.filter((d) => d.code === "E010");
+    expect(e010s).toHaveLength(1);
+    expect(e010s[0]?.nodeId).toBe("g2");
+  });
+});
+
 describe("validateOrThrow", () => {
   test("ok graph does not throw", () => {
     validateOrThrow(

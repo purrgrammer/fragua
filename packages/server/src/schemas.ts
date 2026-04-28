@@ -3,6 +3,13 @@
 
 import { type Static, Type } from "@sinclair/typebox";
 
+export const HitlOption = Type.Object({
+  key: Type.String(),
+  label: Type.String(),
+  to: Type.String(),
+});
+export type HitlOption = Static<typeof HitlOption>;
+
 /** Coarse UI status — one badge per category. The Inbox / fine-grained
  * filters use `runStatus` (the raw store status) instead. */
 const UiStatus = Type.Union([
@@ -93,6 +100,9 @@ export const RunDetail = Type.Object({
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
+  hitlNodeId: Type.Optional(Type.String()),
+  hitlLabel: Type.Optional(Type.String()),
+  hitlOptions: Type.Optional(Type.Array(HitlOption)),
 });
 export type RunDetail = Static<typeof RunDetail>;
 

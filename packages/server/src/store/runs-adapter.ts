@@ -6,7 +6,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { IEventStore, RunState, RunStatus, StoredEvent } from "@swarm/store";
-import type { NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
+import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -98,6 +98,20 @@ export function runStateToDetail(
     selectedEdges: deriveSelectedEdges(events),
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
+
+  if (state.status === "paused_hitl") {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i]!;
+      if (ev.type === "fact.run_paused_hitl") {
+        const p = ev.payload as { nodeId?: unknown; label?: unknown; options?: unknown };
+        if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
+        if (typeof p.label === "string") detail.hitlLabel = p.label;
+        if (Array.isArray(p.options)) detail.hitlOptions = p.options as HitlOption[];
+        break;
+      }
+    }
+  }
+
   return detail;
 }
 

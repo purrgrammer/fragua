@@ -82,10 +82,13 @@ function specsForGraph(
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
-  const outgoing = new Map<string, string[]>();
+  const outgoing = new Map<string, Array<{ to: string; label?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];
-    list.push(edge.to);
+    const edgeLabel = typeof edge.attrs.label === "string" ? edge.attrs.label : undefined;
+    const entry: { to: string; label?: string } = { to: edge.to };
+    if (edgeLabel !== undefined) entry.label = edgeLabel;
+    list.push(entry);
     outgoing.set(edge.from, list);
   }
   const specs = new Map<string, HandlerSpec>();
@@ -94,7 +97,8 @@ function specsForGraph(
   for (const node of Object.values(graph.nodes)) {
     const kind = handlerKindOf(node.attrs);
     if (kind === "parallel" || kind === "parallel.fan_in") continue;
-    const first = outgoing.get(node.id)?.[0] ?? "__end__";
+    const edges = outgoing.get(node.id) ?? [];
+    const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
     try {
       const fallback = kind === "codergen" ? defaultMaxMs?.codergen : kind === "tool" ? defaultMaxMs?.tool : undefined;
@@ -109,9 +113,7 @@ function specsForGraph(
     const useFactory = kind === "codergen" && codergenFactory != null;
     specs.set(
       node.id,
-      useFactory
-        ? codergenFactory(node, first, resolvedMaxMs)
-        : specForNode(node.id, outgoing.get(node.id) ?? [], node.attrs, resolvedMaxMs),
+      useFactory ? codergenFactory(node, first, resolvedMaxMs) : specForNode(node.id, edges, node.attrs, resolvedMaxMs),
     );
   }
 
@@ -119,7 +121,7 @@ function specsForGraph(
   for (const node of Object.values(graph.nodes)) {
     const kind = handlerKindOf(node.attrs);
     if (kind === "parallel") {
-      const children = outgoing.get(node.id) ?? [];
+      const children = outgoing.get(node.id)?.map((e) => e.to) ?? [];
       const fanInId = typeof node.attrs.fan_in === "string" ? node.attrs.fan_in : "";
       if (fanInId.length === 0 || children.length === 0) {
         // Validator flags these at authoring; at runtime we halt with a
@@ -207,6 +209,19 @@ function malformedParallelSpec(nodeId: string): HandlerSpec {
   };
 }
 
+function malformedWaitHumanSpec(nodeId: string, message: string): HandlerSpec {
+  return {
+    kind: "wait.human",
+    sideEffect: "none",
+    maxMs: 50,
+    handler: async () => ({
+      kind: "halt",
+      reason: "error",
+      detail: `wait.human node "${nodeId}": ${message}`,
+    }),
+  };
+}
+
 function malformedFanInSpec(nodeId: string): HandlerSpec {
   return {
     kind: "parallel.fan_in",
@@ -222,19 +237,28 @@ function malformedFanInSpec(nodeId: string): HandlerSpec {
 
 function specForNode(
   nodeId: string,
-  outbound: string[],
+  edges: Array<{ to: string; label?: string }>,
   attrs: { shape?: string; type?: string; prompt?: string; tool_command?: string },
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
-  const first = outbound[0] ?? "__end__";
+  const first = edges[0]?.to ?? "__end__";
   const kind = handlerKindOf(attrs);
 
   switch (kind) {
-    case "wait.human":
-      return handler.makeWaitHumanHandler({
-        prompt: attrs.prompt ?? `waiting at ${nodeId}`,
-        nextNode: first,
+    case "wait.human": {
+      const options = edges.map((e) => {
+        const lbl = e.label ?? e.to;
+        return { key: handler.parseAcceleratorKey(lbl), label: lbl, to: e.to };
       });
+      try {
+        return handler.makeWaitHumanHandler({
+          label: attrs.prompt ?? `waiting at ${nodeId}`,
+          options,
+        });
+      } catch (err) {
+        return malformedWaitHumanSpec(nodeId, err instanceof Error ? err.message : String(err));
+      }
+    }
     case "tool": {
       const cmd = typeof attrs.tool_command === "string" ? attrs.tool_command : "";
       const toolOpts: Parameters<typeof handler.makeToolHandler>[0] = { toolCommand: cmd };

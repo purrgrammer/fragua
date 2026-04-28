@@ -53,13 +53,25 @@ return {
 ```
 
 ### `yield_hitl`
-Handler needs a human to answer something. Run transitions to `paused_hitl`, the executor frees the process. When an operator writes `intent.hitl_input`, `wakePendingHitl` moves the run back to `queued`; the handler re-enters with `ctx.hitlInput` set.
+Handler needs a human to choose one of a structured set of options. Run transitions to `paused_hitl`, the executor frees the process. The `fact.run_paused_hitl` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
+
+When an operator writes `intent.hitl_input { selected, note? }`, `wakePendingHitl` moves the run back to `queued`; the handler re-enters with `ctx.hitlInput` set to `{ selected: string; note?: string }`.
+
+On resume the handler writes:
+- `human.gate.selected` — accelerator key of the chosen option
+- `human.gate.label` — display label
+- `human.gate.note` — operator annotation (if provided)
+
+and returns `suggestedNextIds: [chosen.to]` so edge selection routes to the matching target without conditions.
 
 ```typescript
 return {
   kind: "yield_hitl",
-  prompt: "approve the plan?",
-  routingDelta?: { ... },
+  label: "Review the draft:",
+  options: [
+    { key: "A", label: "[A] Approve", to: "publish" },
+    { key: "R", label: "[R] Revise",  to: "revise"  },
+  ],
 };
 ```
 

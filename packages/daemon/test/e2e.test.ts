@@ -118,7 +118,11 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const s1 = new SqliteStore({ path: dbPath });
     s1.saveWorkflow("wf-sha", "hitl-wf", "digraph { ask -> __end__ }");
     const dispatcher = new Dispatcher();
-    dispatcher.register("wf-sha", "ask", handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }));
+    dispatcher.register(
+      "wf-sha",
+      "ask",
+      handler.makeWaitHumanHandler({ options: [{ key: "A", label: "[A] Approve", to: "__end__" }] }),
+    );
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
       content: "",
@@ -156,7 +160,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const hitlRes = await app1.request(`/runs/${runId}/hitl`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input: "approved" }),
+      body: JSON.stringify({ selected: "A" }),
     });
     expect(hitlRes.status).toBe(200);
     s1.close();
@@ -166,7 +170,11 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     expect(s2.getState(runId)!.status).toBe("paused_hitl");
     // Re-register the dispatcher (in-memory state doesn't survive).
     const dispatcher2 = new Dispatcher();
-    dispatcher2.register("wf-sha", "ask", handler.makeWaitHumanHandler({ prompt: "approve?", nextNode: "__end__" }));
+    dispatcher2.register(
+      "wf-sha",
+      "ask",
+      handler.makeWaitHumanHandler({ options: [{ key: "A", label: "[A] Approve", to: "__end__" }] }),
+    );
 
     wakePending(s2);
     s2.claimNextRun(1);

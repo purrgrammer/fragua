@@ -69,7 +69,7 @@ describe("P3 — intents never lost", () => {
               case "hitl":
                 r.store.appendIntent("rp3", {
                   type: "intent.hitl_input",
-                  payload: { input: 1 },
+                  payload: { selected: "A" },
                 });
                 break;
               case "priority":
@@ -196,7 +196,11 @@ describe("P11 — HITL durability across simulated crash", () => {
     const s1 = new SqliteStore({ path: dbPath });
     s1.saveWorkflow("wf", "t", "digraph{}");
     const dispatcher = new Dispatcher();
-    dispatcher.register("wf", "ask", handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }));
+    dispatcher.register(
+      "wf",
+      "ask",
+      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+    );
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
       content: "",
@@ -224,7 +228,7 @@ describe("P11 — HITL durability across simulated crash", () => {
     expect(s1.getState("rp11")!.status).toBe("paused_hitl");
     s1.appendIntent("rp11", {
       type: "intent.hitl_input",
-      payload: { input: "ok" },
+      payload: { selected: "O" },
     });
     s1.close();
 
@@ -254,7 +258,11 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
   test("when N runs wake via HITL back to back, claim order matches wake order", async () => {
     const r = rig();
     closers.push(() => r.store.close());
-    r.dispatcher.register(r.workflowSha, "ask", handler.makeWaitHumanHandler({ prompt: "?", nextNode: "__end__" }));
+    r.dispatcher.register(
+      r.workflowSha,
+      "ask",
+      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+    );
 
     // Prime: three runs all pause at HITL.
     const ids = ["q1", "q2", "q3"];
@@ -281,7 +289,7 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
     for (const id of ids) {
       r.store.appendIntent(id, {
         type: "intent.hitl_input",
-        payload: { input: id },
+        payload: { selected: "O" },
       });
     }
     wakePending(r.store);

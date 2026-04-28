@@ -269,7 +269,7 @@ CREATE TABLE daemon_lock (
 | `intent.steering_requested` | `payload: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
-| `intent.hitl_input` | `payload: unknown` | Wake a `paused_hitl` run (specialised; carries human reply) |
+| `intent.hitl_input` | `selected: string`, `note?: string` | Wake a `paused_hitl` run; `selected` is the accelerator key chosen by the operator |
 | `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
 | `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note: string` | Operator acknowledgement for a quarantined run |
 | `intent.priority_adjusted` | `newPriority: number`, `note: string` | Operator bump |
@@ -287,7 +287,7 @@ CREATE TABLE daemon_lock (
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
-| `fact.run_paused_hitl` | `nodeId`, `prompt` | Yielded for human input |
+| `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input; `options` mirrors the outgoing edge set with parsed accelerator keys |
 | `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage` | LLM provider returned a transport error mid-stream; transcript intact |
 | `fact.run_resumed` | `fromStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
@@ -410,7 +410,7 @@ export type HandlerContext = Readonly<{
 
 export type HandlerResult =
   | { kind: "transition"; nextNode: string; outputRef?: ArtifactRef; routingDelta?: Record<string, unknown>; tokens: number; costUsd: number }
-  | { kind: "yield_hitl"; prompt: string; routingDelta?: Record<string, unknown> }
+  | { kind: "yield_hitl"; label: string; options: Array<{ key: string; label: string; to: string }> }
   | { kind: "halt"; reason: "budget" | "max_loops" | "error"; detail?: string };
 ```
 

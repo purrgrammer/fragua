@@ -1,6 +1,7 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
+import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
@@ -195,6 +196,52 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           ...(n.loc !== undefined ? { loc: n.loc } : {}),
         });
       }
+    }
+  }
+
+  // E009: hexagon (wait.human) needs ≥1 outgoing edge — otherwise the
+  // operator has no choices to pick. Catches the same construction
+  // failure auto-dispatcher flags at runtime, but at validate-time so
+  // bad workflows never enqueue.
+  for (const n of nodes) {
+    if (n.shape !== "hexagon") continue;
+    const out = graph.edges.filter((e) => e.from === n.id);
+    if (out.length === 0) {
+      diags.push({
+        severity: "error",
+        code: "E009",
+        message: `wait.human node "${n.id}" has no outgoing edges (operator would have no choices)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // E010: hexagon outgoing edges must produce unique accelerator keys.
+  // Auto-dispatcher derives keys via parseAcceleratorKey; collisions
+  // would shadow each other in the option list (and the handler refuses
+  // to construct). Surface at validate-time with the offending labels.
+  for (const n of nodes) {
+    if (n.shape !== "hexagon") continue;
+    const out = graph.edges.filter((e) => e.from === n.id);
+    if (out.length < 2) continue;
+    const byKey = new Map<string, string[]>();
+    for (const e of out) {
+      const lbl = typeof e.attrs.label === "string" ? e.attrs.label : e.to;
+      const key = parseAcceleratorKey(lbl);
+      const list = byKey.get(key) ?? [];
+      list.push(lbl);
+      byKey.set(key, list);
+    }
+    for (const [key, labels] of byKey) {
+      if (labels.length < 2) continue;
+      diags.push({
+        severity: "error",
+        code: "E010",
+        message: `wait.human node "${n.id}" has ${labels.length} edges sharing accelerator key "${key}" (${labels.map((l) => `"${l}"`).join(", ")}) — disambiguate via [A]/[B] prefixes`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
     }
   }
 

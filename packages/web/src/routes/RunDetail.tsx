@@ -20,6 +20,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
+import { HitlChoice } from "../components/HitlChoice.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
@@ -132,7 +133,10 @@ export function RunDetail(): JSX.Element {
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} />
 
-      {detail?.status === "paused" && <RunPausedNotice runId={id} />}
+      {detail?.runStatus === "paused_provider_error" && <RunPausedNotice runId={id} />}
+      {detail?.runStatus === "paused_hitl" && (
+        <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
+      )}
 
       {isError && !detail ? (
         <EmptyState
@@ -402,6 +406,7 @@ const RunGraphTab = memo(function RunGraphTab({
   }, [detail?.workflowSource]);
 
   const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
+  const hitlNodeId = detail?.runStatus === "paused_hitl" ? (detail.hitlNodeId ?? null) : null;
   const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
   const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;
 
@@ -414,6 +419,7 @@ const RunGraphTab = memo(function RunGraphTab({
             orientation="TB"
             activeNodeId={activeNodeId}
             selectedNodeId={selectedNodeId}
+            hitlNodeId={hitlNodeId}
             onNodeClick={onSelect}
           />
         ) : null}
