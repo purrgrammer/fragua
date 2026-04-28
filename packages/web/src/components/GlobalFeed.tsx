@@ -5,6 +5,15 @@
 // AnimatePresence/layout — subtle slide+fade tuned for an at-a-glance
 // view operators see all day, not a marketing splash. Reduced-motion
 // users see the rows snap in with no transition.
+//
+// Re-render discipline:
+//   - The "Xs ago" tick lives in `useNowSeconds` (external store), so
+//     the parent component never re-renders on the per-second tick —
+//     only `<FeedRowTime>` does.
+//   - `<FeedRow>` is memo'd on `(event, reduce)`. Per-row run metadata
+//     (title, workflow) is fetched inside the row via
+//     `useQuery(queries.runs.detail(id))`; TanStack dedupes
+//     concurrent reads of the same id.
 
 import type { FeedEvent } from "@swarm/types";
 import { useQuery } from "@tanstack/react-query";
@@ -27,21 +36,21 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { createContext, memo, useContext, useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
+import type { RunDetail } from "../lib/api.ts";
 import { feedAtom, feedEventKey } from "../lib/globalFeed.ts";
 import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
-import { useNow } from "../lib/useNow.ts";
+import { useNowSeconds } from "../lib/useNowExternal.ts";
+import { Badge } from "./ui/badge.tsx";
 
-/** Display metadata for each event kind: icon, human verb, and an
- * `attention` flag that adds a left accent border to the row. The flag
- * is reserved for events an operator might want to act on (paused
- * runs, halts, quarantines, system-health warnings). The dedicated
- * Inbox section will own the actual CTAs once it lands. */
 interface FeedKindMeta {
   Icon: typeof Play;
   verb: string;
+  /** Reserved for events an operator might want to act on (paused
+   * runs, halts, quarantines, system-health warnings). Renders a
+   * left amber accent. The Inbox section will own actual CTAs. */
   attention?: boolean;
 }
 
@@ -69,48 +78,18 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
-// Animation choices, per the web-animation-design skill:
-//   - Easing: ease-out-cubic — items entering the viewport.
-//   - Duration: 180ms — short, fires constantly, never showy.
-//   - Initial: translateY(-6px) + scale(0.98), not from scale(0).
-//   - Properties: only transform + opacity (GPU-only, no layout thrash).
-//   - Reflow on existing rows: shorter ease-in-out (movement on screen).
+// Animation choices per the web-animation-design skill: ease-out-cubic
+// for entries (items entering the viewport), 180ms duration (under
+// 250ms — fires constantly), only transform + opacity (GPU-only, no
+// layout thrash). Reflow on neighbours uses ease-in-out (movement on
+// screen).
 const EASE_OUT_CUBIC: [number, number, number, number] = [0.215, 0.61, 0.355, 1];
 const ENTER_DURATION_S = 0.18;
-const EXIT_DURATION_S = 0.12;
 const LAYOUT_DURATION_S = 0.18;
-
-/**
- * Single ticking `now` source, scoped to the feed. Each row reads it
- * via `useContext` so the `useNow(1000, …)` interval stays in one
- * place — N rows otherwise meant N intervals firing per second, all
- * fanning out to identical re-renders. Combined with `memo` on
- * `FeedRow`, the per-second tick now only re-renders the small
- * `<FeedRowTime>` leaf inside each row, not the row itself.
- */
-const NowContext = createContext(0);
 
 export function GlobalFeed(): JSX.Element {
   const events = useAtomValue(feedAtom);
-  // Tick once a second so "Xs ago" rows update without re-fetching.
-  // Disabled when the feed is empty so we don't burn a timer on quiet
-  // pages.
-  const now = useNow(1000, events.length > 0);
   const reduce = useReducedMotion() ?? false;
-
-  // Look up workflow names from the runs.list cache. This query is
-  // already mounted across the app (Home/RunsList both subscribe), so
-  // reading it here is free — no extra request, just shared cache.
-  // Newly-enqueued runs that aren't in the list yet fall back to a
-  // truncated runId until the next invalidation refetch lands; that
-  // refetch is itself triggered by useGlobalEventStream on the same
-  // intent.run_enqueued frame, so the gap is sub-second in practice.
-  const { data: runs } = useQuery(queries.runs.list());
-  const runMap = useMemo(() => {
-    const m = new Map<string, { workflowName?: string; workflow?: string }>();
-    for (const r of runs ?? []) m.set(r.runId, { workflowName: r.workflowName, workflow: r.workflow });
-    return m;
-  }, [runs]);
 
   // Render newest-first — operators glance at the top of the list.
   const rows = useMemo(() => events.slice().reverse(), [events]);
@@ -129,17 +108,13 @@ export function GlobalFeed(): JSX.Element {
   return (
     <section data-testid="global-feed" aria-label="Recent activity">
       <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
-      <NowContext.Provider value={now}>
-        <ul className="flex flex-col gap-px overflow-hidden rounded border border-border/60 bg-card">
-          <AnimatePresence initial={false}>
-            {rows.map((event) => {
-              const summary = runMap.get(event.runId);
-              const label = summary?.workflowName ?? summary?.workflow ?? `${event.runId.slice(0, 8)}…`;
-              return <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} runLabel={label} />;
-            })}
-          </AnimatePresence>
-        </ul>
-      </NowContext.Provider>
+      <ul className="flex flex-col gap-px overflow-hidden rounded border border-border/60 bg-card">
+        <AnimatePresence initial={false}>
+          {rows.map((event) => (
+            <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
+          ))}
+        </AnimatePresence>
+      </ul>
     </section>
   );
 }
@@ -147,21 +122,27 @@ export function GlobalFeed(): JSX.Element {
 interface FeedRowProps {
   event: FeedEvent;
   reduce: boolean;
-  /** Display label for the run — workflow name when known, runId
-   * prefix as fallback. Stable across re-renders for a given event
-   * unless the underlying run summary changes. */
-  runLabel: string;
 }
 
-const FeedRow = memo(function FeedRow({ event, reduce, runLabel }: FeedRowProps): JSX.Element {
+const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element {
   const meta = KIND_META[event.type] ?? FALLBACK_META;
   const { Icon, verb, attention } = meta;
+
+  // Dedicated detail query per runId. TanStack dedupes concurrent
+  // reads of the same id, so 30 feed rows pointing at 12 distinct
+  // runs result in 12 fetches max — and each row only re-renders
+  // when *its* run's data lands. Lifecycle SSE frames invalidate
+  // this query for the affected run only (see useGlobalEventStream),
+  // so the title fills in promptly after the auto-titler runs.
+  const { data: run } = useQuery(queries.runs.detail(event.runId));
 
   const initial = reduce ? false : { opacity: 0, y: -6, scale: 0.98 };
   const animate = { opacity: 1, y: 0, scale: 1 };
   const exit = reduce ? undefined : { opacity: 0 };
   const transition = reduce ? { duration: 0 } : { duration: ENTER_DURATION_S, ease: EASE_OUT_CUBIC };
   const layoutTransition = reduce ? { duration: 0 } : { duration: LAYOUT_DURATION_S, ease: "easeInOut" as const };
+
+  const wf = run?.workflowName ?? run?.workflow;
 
   return (
     <motion.li
@@ -178,29 +159,68 @@ const FeedRow = memo(function FeedRow({ event, reduce, runLabel }: FeedRowProps)
     >
       <motion.div layout="position" transition={layoutTransition} className="contents">
         <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="shrink-0 text-muted-foreground">{verb}</span>
         <Link
           to={`/runs/${event.runId}`}
-          className="min-w-0 flex-1 truncate text-foreground transition-colors hover:text-primary"
+          title={runTitleTooltip(event.runId, run)}
+          className="min-w-0 flex-1 truncate font-medium text-foreground hover:underline"
         >
-          <span className="font-medium">{verb}</span>
-          <span className="ml-2 truncate text-xs text-muted-foreground">{runLabel}</span>
+          {displayRunTitle(event.runId, run)}
         </Link>
+        {wf ? (
+          <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-[10rem] shrink-0">
+            <Badge variant="muted" className="max-w-full truncate hover:underline" onClick={stopPropagation}>
+              {wf}
+            </Badge>
+          </Link>
+        ) : null}
         <FeedRowTime ts={event.ts} />
       </motion.div>
     </motion.li>
   );
 });
 
-/** Time leaf — the only thing that re-renders on the 1 Hz tick.
- * Reads `NowContext` directly instead of taking `now` as a prop so
- * the parent `FeedRow`'s memo isn't broken by a per-second prop
- * change. */
+/** Time leaf — the only thing in a row that re-renders on the 1 Hz
+ * tick. Subscribes to the external `useNowSeconds` store directly so
+ * neither the parent `GlobalFeed` nor the memo'd `FeedRow` re-renders
+ * when wall-clock advances. */
 function FeedRowTime({ ts }: { ts: number }): JSX.Element {
-  const now = useContext(NowContext);
-  const ago = now > 0 ? formatRelative(ts, { now: new Date(now) }) : "";
+  const now = useNowSeconds();
   return (
     <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={new Date(ts).toISOString()}>
-      {ago}
+      {formatRelative(ts, { now: new Date(now) })}
     </span>
   );
+}
+
+/** Same priority order as RunRow's `displayTitle`, applied to a
+ * partial RunDetail (the row's data may not have arrived yet, in
+ * which case we fall back to the runId prefix). */
+function displayRunTitle(runId: string, run: RunDetail | undefined): string {
+  if (run?.title && run.title.length > 0) return run.title;
+  if (run?.input && run.input.length > 0) return clampInline(run.input, 80);
+  return `${runId.slice(0, 8)}…`;
+}
+
+function runTitleTooltip(runId: string, run: RunDetail | undefined): string {
+  const parts: string[] = [];
+  if (run?.title) parts.push(`title: ${run.title}`);
+  if (run?.input) parts.push(`input: ${run.input}`);
+  const wf = run?.workflowName ?? run?.workflow;
+  if (wf) parts.push(`workflow: ${wf}`);
+  parts.push(`runId: ${runId}`);
+  return parts.join("\n");
+}
+
+function clampInline(s: string, cap: number): string {
+  const singleLine = s.replace(/\s+/g, " ").trim();
+  return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
+}
+
+/** Stop the workflow badge link from triggering the outer run-link
+ * navigation when both happen to nest inside the same flex row. The
+ * badge is its own `<Link>`, so the surrounding `<Link>` should not
+ * intercept its click. */
+function stopPropagation(e: React.MouseEvent): void {
+  e.stopPropagation();
 }

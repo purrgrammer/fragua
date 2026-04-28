@@ -101,11 +101,14 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
 
       appendFeed(parsed);
 
-      // Invalidate run queries so RunsList / Home tiles refetch.
-      // Cheap — TanStack Query coalesces concurrent invalidations and
-      // only refetches what's currently mounted+observed.
+      // Invalidate just the queries that *this* event's lifecycle
+      // change actually affects. Blanket-invalidating queries.runs.all
+      // would force every mounted run-detail query to refetch (the
+      // global feed has up to 50 of those at once), which is overkill
+      // for a single run's status flip.
       if (RUN_INVALIDATE_KINDS.has(parsed.type)) {
-        void qc.invalidateQueries({ queryKey: queries.runs.all() });
+        void qc.invalidateQueries({ queryKey: queries.runs.list().queryKey });
+        void qc.invalidateQueries({ queryKey: queries.runs.detail(parsed.runId).queryKey });
       }
     },
     [appendFeed, qc],
