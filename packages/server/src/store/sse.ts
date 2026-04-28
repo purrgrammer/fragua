@@ -40,21 +40,33 @@ interface SseLoopConfig<C> {
   shouldClose?: () => boolean;
   batchSize: number;
   pollMs: number;
-  /** Send a `: keepalive\n\n` comment on the wire after this many ms
-   * without any event. Stops dev proxies (Vite's http-proxy in
-   * particular) and intermediate routers from killing idle SSE
-   * connections — the most common cause of "Running stuck" because
-   * `fact.run_completed` arrives 15+ seconds after `fact.run_started`.
-   * Comments are ignored by the EventSource API but reset proxy idle
-   * timers. Default 10s — comfortably under typical 15s/30s proxy
-   * idle thresholds. */
+  /** Send a `swarm.ping` data frame on the wire after this many ms
+   * without any event. Two jobs in one wire write:
+   *   1. Resets dev proxies / load balancers' idle timers (any bytes
+   *      flushed do this — comments would too).
+   *   2. Fires the client `EventSource.onmessage` handler so the web
+   *      hook's stall watchdog can re-arm and detect a half-open TCP
+   *      socket that the browser hasn't noticed yet.
+   * The previous shape was a `: keepalive` comment, which solved (1)
+   * but is invisible to the JS event-source API, so a half-dead
+   * connection could sit "open" without delivering events for many
+   * minutes. A `data:` frame is observable. Default 10s — comfortably
+   * under typical 15s/30s proxy idle thresholds AND under the client
+   * watchdog window (35s). */
   keepaliveMs?: number;
   /** Test injection: monotonic clock. */
   now?: () => number;
 }
 
 const DEFAULT_KEEPALIVE_MS = 10_000;
-const KEEPALIVE_COMMENT = ": keepalive\n\n";
+/** Wire shape of a keepalive. Intentionally lacks `runId`/`seq` so the
+ * client's loose envelope check (which requires both) drops it from the
+ * feed atom — the watchdog rearm fires regardless via `onmessage`.
+ * Exported for the global-feed loop in routes.ts (which has its own
+ * drain loop separate from runSseLoop). */
+export function pingFrameData(now: number): string {
+  return JSON.stringify({ type: "swarm.ping", ts: now });
+}
 
 /**
  * Drain-emit-sleep loop shared by per-run and global SSE streams.
@@ -80,11 +92,12 @@ export async function runSseLoop<C>(stream: SSEStreamingApi, initialCursor: C, c
     if (batch.length < cfg.batchSize) {
       if (cfg.shouldClose?.()) return;
       // Keepalive when the live tail has been quiet long enough that a
-      // proxy might be eyeing the connection for closure. Comment lines
-      // (lines starting with `:`) are ignored by EventSource clients
-      // but reset proxy idle timers and the kernel TCP keepalive.
+      // proxy might close the connection or that the client-side stall
+      // watchdog might fire on a half-dead socket. Sent as a real
+      // `data:` frame (no `id:`, no `event:`) so the client's
+      // `onmessage` handler runs and re-arms its watchdog.
       if (now() - lastWriteAt >= keepaliveMs) {
-        await stream.write(KEEPALIVE_COMMENT);
+        await stream.writeSSE({ data: pingFrameData(now()) });
         lastWriteAt = now();
       }
       await stream.sleep(cfg.pollMs);

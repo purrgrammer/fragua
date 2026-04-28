@@ -252,6 +252,69 @@ describe("useEventSource", () => {
     expect(FakeEventSource.instances.length).toBe(1);
   });
 
+  it("stall watchdog force-reconnects when no message arrives within stallMs", async () => {
+    // Half-dead-socket scenario: the browser keeps readyState=1 ("open")
+    // and never fires error, but no bytes arrive. The hook arms a timer
+    // on `open`/`message`; if it fires before re-arming, we close the
+    // dead ES and reconnect — without this, the dashboard stays
+    // silently stale until TCP timeout (minutes) or page reload.
+    const { result } = renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5,
+        stallMs: 30,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    const first = FakeEventSource.instances[0]!;
+    act(() => first._open());
+    await waitFor(() => {
+      expect(result.current.status).toBe("open");
+    });
+    // Don't emit anything — let the watchdog fire after ~30ms.
+    await waitFor(
+      () => {
+        expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 500 },
+    );
+    // Watchdog must have closed the first ES (so a future delayed
+    // event on the dead connection doesn't interfere with the new one).
+    expect(first.closed).toBe(true);
+    // New connection has the same URL.
+    expect(FakeEventSource.instances[1]?.url).toBe("/api/events/stream");
+  });
+
+  it("stall watchdog rearms on every inbound frame (real or ping)", async () => {
+    // A flowing stream — even one carrying only server keepalives —
+    // must NOT trigger a reconnect. The rearm fires on every
+    // `message`, before the consumer's parsing logic runs.
+    renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5,
+        stallMs: 40,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    const es = FakeEventSource.instances[0]!;
+    act(() => es._open());
+
+    // Heartbeat for ~120ms total at 20ms cadence (well under the 40ms
+    // stall window). If the rearm path is broken, the watchdog would
+    // fire mid-heartbeat and a second instance would appear.
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      act(() => es._emit('{"type":"swarm.ping","ts":1}'));
+    }
+    expect(FakeEventSource.instances.length).toBe(1);
+    expect(es.closed).toBe(false);
+  });
+
   it("changing url tears down the old connection and opens a new one", async () => {
     const { rerender } = renderHook(
       ({ url }: { url: string | null }) =>

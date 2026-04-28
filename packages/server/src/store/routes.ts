@@ -18,7 +18,14 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
-import { encodeGlobalEventId, parseGlobalFromTsMax, parseSeqCursorMax, runSseLoop, serializeEvent } from "./sse.ts";
+import {
+  encodeGlobalEventId,
+  parseGlobalFromTsMax,
+  parseSeqCursorMax,
+  pingFrameData,
+  runSseLoop,
+  serializeEvent,
+} from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared
@@ -486,12 +493,13 @@ export function createRoutes(deps: ServerDeps): Hono {
         // filtered (server is correctly at the head of the feed but
         // would otherwise spin re-fetching the same `cursor.ts` rows).
         if (batch.length < batchSize || emittedThisBatch === 0) {
-          // Idle keepalive — see runSseLoop for the rationale. Comment
-          // lines reset Vite's http-proxy idle timer; without them, a
-          // 15s pause between fact.run_started and fact.run_completed
-          // is enough for the proxy to silently drop the upstream.
+          // Idle keepalive — see runSseLoop for the rationale. Sent as
+          // a real `data:` frame so the client's onmessage handler
+          // fires and re-arms its stall watchdog (a `:` comment is
+          // invisible to EventSource and would let half-dead sockets
+          // appear healthy on the JS side for many minutes).
           if (Date.now() - lastWriteAt >= 10_000) {
-            await stream.write(": keepalive\n\n");
+            await stream.writeSSE({ data: pingFrameData(Date.now()) });
             lastWriteAt = Date.now();
           }
           await stream.sleep(pollMs);

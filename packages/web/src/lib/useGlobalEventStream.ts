@@ -16,7 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
-import { appendFeedEventsAtom, feedLoadingAtom } from "./globalFeed.ts";
+import { appendFeedEventsAtom, feedLoadingAtom, feedSseStatusAtom } from "./globalFeed.ts";
 import { queries } from "./queries.ts";
 import { useEventSource } from "./useEventSource.ts";
 
@@ -43,6 +43,9 @@ export interface UseGlobalEventStreamOptions {
   /** Test override: shrinks the SSE reconnect backoff so reconnect
    * paths don't add a real-world second to test runtime. */
   reconnectBaseMs?: number;
+  /** Test override: shrinks the stall watchdog so tests can drive the
+   * "half-dead socket" path without sleeping 35s. */
+  stallMs?: number;
 }
 
 /**
@@ -57,6 +60,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
   const qc = useQueryClient();
   const appendFeed = useSetAtom(appendFeedEventsAtom);
   const setLoading = useSetAtom(feedLoadingAtom);
+  const setSseStatus = useSetAtom(feedSseStatusAtom);
 
   // Cursor for the live SSE: undefined until backfill resolves. The
   // SSE URL is gated on this so we don't open a stream that immediately
@@ -98,28 +102,36 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
 
   const onFrame = useCallback(
     (ev: MessageEvent): void => {
-      let parsed: FeedEvent | null = null;
+      let parsed: FeedEvent | { type?: string } | null = null;
       try {
-        parsed = JSON.parse(String(ev.data ?? "")) as FeedEvent;
+        parsed = JSON.parse(String(ev.data ?? "")) as FeedEvent | { type?: string };
       } catch {
         return;
       }
-      if (parsed == null || typeof parsed.runId !== "string" || typeof parsed.seq !== "number") return;
+      if (parsed == null) return;
+      // Server keepalive: fires `useEventSource`'s stall watchdog rearm
+      // (in the layer above) but isn't a feed event — has no runId/seq
+      // and shouldn't trigger query invalidations. Drop it before the
+      // envelope check so it doesn't show up in any future "rejected
+      // frame" instrumentation either.
+      if ((parsed as { type?: string }).type === "swarm.ping") return;
+      if (typeof (parsed as FeedEvent).runId !== "string" || typeof (parsed as FeedEvent).seq !== "number") return;
+      const evt = parsed as FeedEvent;
 
-      appendFeed(parsed);
+      appendFeed(evt);
 
       // Invalidate just the queries that *this* event's lifecycle
       // change actually affects. Blanket-invalidating queries.runs.all
       // would force every mounted run-detail query to refetch (the
       // global feed has up to 50 of those at once), which is overkill
       // for a single run's status flip.
-      if (RUN_INVALIDATE_KINDS.has(parsed.type)) {
+      if (RUN_INVALIDATE_KINDS.has(evt.type)) {
         // Prefix-match every list variant — unfiltered (Stats),
         // `{status:["running"]}` (Control Center's Running), and
         // `{status:["paused_hitl",...]}` (Inbox) all refetch from one
         // invalidate.
         void qc.invalidateQueries({ queryKey: queries.runs.lists() });
-        void qc.invalidateQueries({ queryKey: queries.runs.detail(parsed.runId).queryKey });
+        void qc.invalidateQueries({ queryKey: queries.runs.detail(evt.runId).queryKey });
       }
     },
     [appendFeed, qc],
@@ -132,7 +144,17 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
   const sseOpts: Parameters<typeof useEventSource>[2] = {};
   if (opts.eventSourceImpl) sseOpts.eventSourceImpl = opts.eventSourceImpl;
   if (opts.reconnectBaseMs !== undefined) sseOpts.reconnectBaseMs = opts.reconnectBaseMs;
-  useEventSource(sseUrl, onFrame, sseOpts);
+  if (opts.stallMs !== undefined) sseOpts.stallMs = opts.stallMs;
+  const { status } = useEventSource(sseUrl, onFrame, sseOpts);
+
+  // Mirror the SSE status into a global atom so the sidebar pill (and
+  // anything else that cares) can read it without prop-drilling — this
+  // hook is mounted at the app root, sibling to the router subtree
+  // where the sidebar lives, so context wiring would have to thread
+  // through the router boundary.
+  useEffect(() => {
+    setSseStatus(status);
+  }, [status, setSseStatus]);
 }
 
 /** Internal export — exposed for tests so they can assert which run

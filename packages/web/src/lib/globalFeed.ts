@@ -10,6 +10,7 @@
 
 import type { FeedEvent } from "@swarm/types";
 import { atom } from "jotai";
+import type { SseStatus } from "./useEventSource.ts";
 
 /** Hard cap on feed length — events past this fall off the head as
  * new ones arrive. 50 is enough to fill several screens of timeline
@@ -25,6 +26,14 @@ export const feedAtom = atom<FeedEvent[]>([]);
  * full list when the response lands a few hundred ms after mount. Set
  * by `useGlobalEventStream`. */
 export const feedLoadingAtom = atom<boolean>(true);
+
+/** Live SSE connection status for the global feed. Surfaced in the
+ * sidebar so operators see when the live update channel degrades —
+ * a `closed`/`error` pill is the signal that the dashboard might be
+ * showing stale data even though the rest of the page renders fine.
+ * Set by `useGlobalEventStream`; defaults to `connecting` so the pill
+ * doesn't flash "open" before the first SSE handshake completes. */
+export const feedSseStatusAtom = atom<SseStatus>("connecting");
 
 /**
  * Identity for a feed event, used for client-side dedup. The triple

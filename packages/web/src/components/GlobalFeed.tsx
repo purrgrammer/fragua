@@ -45,10 +45,26 @@ import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNowSeconds } from "../lib/useNowExternal.ts";
+import { SseLiveDot } from "./SseLiveDot.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
+
+/** Activity heading composes a live-stream dot inline with the title.
+ * The dot is the only signal an operator gets that the timeline below
+ * might be stale — placed next to the heading rather than tucked into
+ * the sidebar so it sits in the operator's primary line of sight. */
+function ActivityHeading(): JSX.Element {
+  return (
+    <SectionTitle>
+      <span className="inline-flex items-center gap-2">
+        Activity
+        <SseLiveDot />
+      </span>
+    </SectionTitle>
+  );
+}
 
 interface FeedKindMeta {
   Icon: typeof Play;
@@ -123,12 +139,13 @@ export function GlobalFeed(): JSX.Element {
   // Render newest-first — operators glance at the top of the list.
   const rows = useMemo(() => events.slice().reverse(), [events]);
 
-  // Initial-load skeleton: occupies the same vertical real estate as a
-  // populated feed, so the page doesn't reflow when the backfill lands.
-  if (isLoading && rows.length === 0) {
-    return (
-      <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
-        <SectionTitle>Activity</SectionTitle>
+  return (
+    <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
+      <ActivityHeading />
+      {/* Three body states — initial-load skeleton (sized to match the
+          populated layout so the backfill lands without reflow), empty
+          state, and the live list. */}
+      {isLoading && rows.length === 0 ? (
         <ul
           aria-busy="true"
           className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
@@ -137,14 +154,7 @@ export function GlobalFeed(): JSX.Element {
             <FeedRowSkeleton key={k} />
           ))}
         </ul>
-      </section>
-    );
-  }
-
-  if (rows.length === 0) {
-    return (
-      <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
-        <SectionTitle>Activity</SectionTitle>
+      ) : rows.length === 0 ? (
         <EmptyState
           data-testid="global-feed-empty"
           icon={<Play className="size-6" aria-hidden />}
@@ -152,31 +162,26 @@ export function GlobalFeed(): JSX.Element {
           description="Run events appear here as workflows execute."
           className="min-h-[120px]"
         />
-      </section>
-    );
-  }
-
-  return (
-    <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
-      <SectionTitle>Activity</SectionTitle>
-      {/* CSS grid on the list, subgrid on each row, so the icon and
-          verb columns size to the widest content across all rows
-          without a hand-tuned width.
-          - Mobile (< sm): each row is its own 3-column grid laid out
-            in two rows: `[icon][verb][ts] / [title spans 2][workflow]`.
-            We can't use subgrid for the mobile layout because the
-            cross-row alignment we want there is intra-row, not
-            inter-row.
-          - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
-            uses `grid-cols-subgrid`, so the icon / verb columns size
-            to the widest content across every row. */}
-      <ul className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
-        <AnimatePresence initial={false}>
-          {rows.map((event) => (
-            <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
-          ))}
-        </AnimatePresence>
-      </ul>
+      ) : (
+        // CSS grid on the list, subgrid on each row, so the icon and
+        // verb columns size to the widest content across all rows
+        // without a hand-tuned width.
+        // - Mobile (< sm): each row is its own 3-column grid laid out
+        //   in two rows: `[icon][verb][ts] / [title spans 2][workflow]`.
+        //   We can't use subgrid for the mobile layout because the
+        //   cross-row alignment we want there is intra-row, not
+        //   inter-row.
+        // - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
+        //   uses `grid-cols-subgrid`, so the icon / verb columns size
+        //   to the widest content across every row.
+        <ul className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
+          <AnimatePresence initial={false}>
+            {rows.map((event) => (
+              <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
+            ))}
+          </AnimatePresence>
+        </ul>
+      )}
     </section>
   );
 }
