@@ -47,6 +47,8 @@ const CLEAN_PATHS_CONTAINING = [
   "components/ui/table",
   "components/ui/spinner",
   "components/ui/textarea",
+  "components/ui/chart",
+  "components/ui/sheet",
   "components/ai-elements",
   // DaemonBanner uses amber for an OS-level warning outside normal state accents.
   "components/DaemonBanner",

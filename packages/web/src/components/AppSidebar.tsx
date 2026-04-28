@@ -8,7 +8,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { Cpu, Drone, Inbox as InboxIcon, ListChecks, TowerControl, Workflow } from "lucide-react";
+import { BarChart3, Cpu, Drone, Inbox as InboxIcon, ListChecks, TowerControl, Workflow } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
@@ -28,6 +28,7 @@ import {
 
 const NAV = [
   { to: "/", label: "Control Center", icon: TowerControl, end: true },
+  { to: "/analytics", label: "Analytics", icon: BarChart3, end: false },
   { to: "/inbox", label: "Inbox", icon: InboxIcon, end: false },
   { to: "/runs", label: "Runs", icon: ListChecks, end: false },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },

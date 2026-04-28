@@ -14,6 +14,7 @@ import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { providersRoutes } from "./routes/providers.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
+import { analyticsRoutes } from "./store/analytics-routes.ts";
 import { createRoutes as createStoreRoutes, type WorkflowModelValidator } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
 
@@ -62,6 +63,7 @@ function buildApiApp(opts: ServerOptions): Hono {
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
+  api.route("/", analyticsRoutes({ store: opts.store, workflowReader }));
   api.route(
     "/",
     createStoreRoutes({

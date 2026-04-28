@@ -5,6 +5,7 @@
 
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
 import { AppShell } from "../components/AppShell.tsx";
+import { Analytics } from "../routes/Analytics.tsx";
 import { Home } from "../routes/Home.tsx";
 import { InboxPage } from "../routes/Inbox.tsx";
 import { ProviderDetail } from "../routes/ProviderDetail.tsx";
@@ -21,6 +22,7 @@ export function createRoutes(): RouteObject[] {
       element: <AppShell />,
       children: [
         { index: true, element: <Home /> },
+        { path: "analytics", element: <Analytics /> },
         { path: "inbox", element: <InboxPage /> },
         { path: "workflows", element: <Workflows /> },
         { path: "workflows/:name", element: <WorkflowDetail /> },

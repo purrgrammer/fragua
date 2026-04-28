@@ -21,6 +21,7 @@
 // injection seam required.
 
 import type { AgentMessage, FeedEvent } from "@swarm/types";
+import type { AnalyticsPayload, AnalyticsRunsPage, BucketKind } from "../types/analytics.ts";
 
 export type { FeedEvent };
 
@@ -492,6 +493,76 @@ export async function resumeRun(id: string): Promise<{ id: string }> {
 export async function cancelRun(id: string, reason?: string): Promise<{ id: string }> {
   const body = reason !== undefined ? { reason } : undefined;
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
+}
+
+// ── Analytics ────────────────────────────────────────────────────────
+
+export interface AnalyticsRequest {
+  fromMs: number;
+  toMs: number;
+  bucket: BucketKind;
+  tzOffsetMinutes: number;
+  compareFromMs?: number | null;
+  compareToMs?: number | null;
+}
+
+export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayload> {
+  const params = new URLSearchParams({
+    from: String(req.fromMs),
+    to: String(req.toMs),
+    bucket: req.bucket,
+    tzOffsetMinutes: String(req.tzOffsetMinutes),
+  });
+  if (req.compareFromMs != null && req.compareToMs != null) {
+    params.set("compareFrom", String(req.compareFromMs));
+    params.set("compareTo", String(req.compareToMs));
+  }
+  return getJson(`/analytics?${params.toString()}`, isAnalyticsPayload);
+}
+
+export interface AnalyticsRunsRequest {
+  fromMs: number;
+  toMs: number;
+  workflowSha?: string | undefined;
+  haltCategory?: string | undefined;
+  model?: string | undefined;
+  limit?: number;
+  cursor?: string | null | undefined;
+}
+
+export async function getAnalyticsRuns(req: AnalyticsRunsRequest): Promise<AnalyticsRunsPage> {
+  const params = new URLSearchParams({
+    from: String(req.fromMs),
+    to: String(req.toMs),
+  });
+  if (req.workflowSha) params.set("workflow", req.workflowSha);
+  if (req.haltCategory) params.set("halt", req.haltCategory);
+  if (req.model) params.set("model", req.model);
+  if (req.limit !== undefined) params.set("limit", String(req.limit));
+  if (req.cursor) params.set("cursor", req.cursor);
+  return getJson(`/analytics/runs?${params.toString()}`, isAnalyticsRunsPage);
+}
+
+function isAnalyticsPayload(v: unknown): v is AnalyticsPayload {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o["window"] === "object" &&
+    typeof o["totals"] === "object" &&
+    Array.isArray(o["runsByBucket"]) &&
+    Array.isArray(o["spendByBucket"]) &&
+    Array.isArray(o["tokensByBucket"]) &&
+    Array.isArray(o["cacheByBucket"]) &&
+    Array.isArray(o["haltDistribution"]) &&
+    Array.isArray(o["modelDistribution"]) &&
+    Array.isArray(o["topWorkflows"])
+  );
+}
+
+function isAnalyticsRunsPage(v: unknown): v is AnalyticsRunsPage {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return Array.isArray(o["runs"]) && (o["nextCursor"] === null || typeof o["nextCursor"] === "string");
 }
 
 // ── Providers ────────────────────────────────────────────────────────

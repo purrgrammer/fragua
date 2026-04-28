@@ -87,7 +87,12 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
   "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
-  "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "provider error", iconClass: "text-sw-accent-error", attention: true },
+  "fact.run_paused_provider_error": {
+    Icon: AlertTriangle,
+    verb: "provider error",
+    iconClass: "text-sw-accent-error",
+    attention: true,
+  },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },

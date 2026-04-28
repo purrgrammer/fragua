@@ -38,6 +38,7 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router-dom": "7.14.1",
+    "recharts": "3.8.0",
     "shadcn": "4.3.0",
     "shiki": "4.0.2",
     "streamdown": "2.5.0",

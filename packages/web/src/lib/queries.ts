@@ -1,5 +1,5 @@
-import { queryOptions } from "@tanstack/react-query";
-import type { JobStatus, ListRunsFilter } from "./api.ts";
+import { keepPreviousData, queryOptions } from "@tanstack/react-query";
+import type { AnalyticsRequest, AnalyticsRunsRequest, JobStatus, ListRunsFilter } from "./api.ts";
 import * as api from "./api.ts";
 
 /** Canonicalize a `ListRunsFilter` so the same logical filter always
@@ -87,6 +87,38 @@ export const queries = {
         queryKey: [...queries.jobs.all(), "list", filter ?? null] as const,
         queryFn: () => api.listJobs(filter),
         refetchInterval: 2_000,
+      }),
+  },
+
+  analytics: {
+    all: () => ["analytics"] as const,
+    /** Single batch payload powering every chart on /analytics. The
+     *  cache key encodes the resolved window so the previous tick's
+     *  data sticks around when the user toggles between windows. */
+    summary: (req: AnalyticsRequest) =>
+      queryOptions({
+        queryKey: [...queries.analytics.all(), "summary", req] as const,
+        queryFn: () => api.getAnalytics(req),
+        // 30s tick keeps "Today" (and any auto-refreshing window) fresh
+        // without hammering the SQL aggregation queries. Hidden tabs
+        // pause via TanStack's default `refetchIntervalInBackground:false`.
+        refetchInterval: 30_000,
+        staleTime: 0,
+        // When the user toggles windows the request key changes —
+        // without `keepPreviousData` the tiles drop to undefined,
+        // EMPTY_TOTALS substitutes in, and AnimatedNumber animates
+        // every value down to 0 then back up. Keeping the previous
+        // payload mounted means only the genuine deltas animate.
+        placeholderData: keepPreviousData,
+      }),
+    /** Drill-down: paginated run list filtered to a chart-element slice. */
+    drilldown: (req: AnalyticsRunsRequest) =>
+      queryOptions({
+        queryKey: [...queries.analytics.all(), "drilldown", req] as const,
+        queryFn: () => api.getAnalyticsRuns(req),
+        // Pinned by the slice the user clicked; refetches only when the
+        // slice itself changes. No polling — the data is anchored.
+        staleTime: 30_000,
       }),
   },
 
