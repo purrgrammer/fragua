@@ -54,26 +54,30 @@ interface FeedKindMeta {
   attention?: boolean;
 }
 
+// Verbs are kept short on purpose — the icon already conveys mood,
+// and the attention border distinguishes "paused (awaiting input)"
+// from "paused (provider error)" without spelling that out in the
+// gutter. Hover tooltip on the row link carries the longer context.
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "intent.run_enqueued": { Icon: Inbox, verb: "queued" },
   "fact.run_started": { Icon: Play, verb: "started" },
   "fact.run_completed": { Icon: Check, verb: "completed" },
-  "fact.run_paused_hitl": { Icon: Pause, verb: "paused (awaiting input)", attention: true },
-  "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "paused (provider error)", attention: true },
+  "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", attention: true },
+  "fact.run_paused_provider_error": { Icon: AlertTriangle, verb: "provider error", attention: true },
   "fact.run_resumed": { Icon: Play, verb: "resumed" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
   "fact.run_quarantined": { Icon: ShieldAlert, verb: "quarantined", attention: true },
-  "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued after crash" },
-  "intent.pause_requested": { Icon: Pause, verb: "pause requested" },
-  "intent.cancel_requested": { Icon: X, verb: "cancel requested" },
+  "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued" },
+  "intent.pause_requested": { Icon: Pause, verb: "pausing" },
+  "intent.cancel_requested": { Icon: X, verb: "cancelling" },
   "intent.steering_requested": { Icon: MessageSquare, verb: "steered" },
   "intent.unquarantine": { Icon: ShieldCheck, verb: "unquarantined" },
-  "intent.priority_adjusted": { Icon: ArrowUpDown, verb: "priority adjusted" },
-  "intent.hitl_input": { Icon: UserIcon, verb: "human input" },
-  "intent.resume": { Icon: Play, verb: "resume requested" },
-  "fact.daemon_takeover": { Icon: Server, verb: "daemon takeover", attention: true },
-  "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "handler timeout leaked", attention: true },
+  "intent.priority_adjusted": { Icon: ArrowUpDown, verb: "reprioritized" },
+  "intent.hitl_input": { Icon: UserIcon, verb: "input" },
+  "intent.resume": { Icon: Play, verb: "resuming" },
+  "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
+  "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
 };
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
@@ -85,7 +89,6 @@ const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 // screen).
 const EASE_OUT_CUBIC: [number, number, number, number] = [0.215, 0.61, 0.355, 1];
 const ENTER_DURATION_S = 0.18;
-const LAYOUT_DURATION_S = 0.18;
 
 export function GlobalFeed(): JSX.Element {
   const events = useAtomValue(feedAtom);
@@ -108,7 +111,11 @@ export function GlobalFeed(): JSX.Element {
   return (
     <section data-testid="global-feed" aria-label="Recent activity">
       <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
-      <ul className="flex flex-col gap-px overflow-hidden rounded border border-border/60 bg-card">
+      {/* CSS grid on the list, subgrid on each row, so the icon and
+          verb columns size to the widest content across all rows
+          without a hand-tuned width. Columns: icon · verb · title
+          (flex 1, can truncate) · workflow · time. */}
+      <ul className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] gap-x-3 overflow-hidden rounded border border-border/60 bg-card">
         <AnimatePresence initial={false}>
           {rows.map((event) => (
             <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
@@ -140,7 +147,6 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
   const animate = { opacity: 1, y: 0, scale: 1 };
   const exit = reduce ? undefined : { opacity: 0 };
   const transition = reduce ? { duration: 0 } : { duration: ENTER_DURATION_S, ease: EASE_OUT_CUBIC };
-  const layoutTransition = reduce ? { duration: 0 } : { duration: LAYOUT_DURATION_S, ease: "easeInOut" as const };
 
   const wf = run?.workflowName ?? run?.workflow;
 
@@ -153,29 +159,33 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       transition={transition}
       style={{ willChange: reduce ? undefined : "transform" }}
       className={[
-        "group flex items-center gap-3 px-3 py-2 text-sm",
+        // `col-span-full` makes the row span all columns of the parent
+        // grid; `grid-cols-subgrid` aligns each child to that grid so
+        // the icon / verb columns size to the widest content across
+        // every row without a hand-tuned width.
+        "group col-span-full grid grid-cols-subgrid items-center px-3 py-2 text-sm",
         attention ? "border-l-2 border-amber-500/70 bg-amber-500/5" : "border-l-2 border-transparent",
       ].join(" ")}
     >
-      <motion.div layout="position" transition={layoutTransition} className="contents">
-        <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="shrink-0 text-muted-foreground">{verb}</span>
-        <Link
-          to={`/runs/${event.runId}`}
-          title={runTitleTooltip(event.runId, run)}
-          className="min-w-0 flex-1 truncate font-medium text-foreground hover:underline"
-        >
-          {displayRunTitle(event.runId, run)}
+      <Icon className="size-4 text-muted-foreground" aria-hidden />
+      <span className="text-muted-foreground">{verb}</span>
+      <Link
+        to={`/runs/${event.runId}`}
+        title={runTitleTooltip(event.runId, run)}
+        className="min-w-0 truncate font-medium text-foreground hover:underline"
+      >
+        {displayRunTitle(event.runId, run)}
+      </Link>
+      {wf ? (
+        <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-[10rem]">
+          <Badge variant="muted" className="max-w-full truncate hover:underline">
+            {wf}
+          </Badge>
         </Link>
-        {wf ? (
-          <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-[10rem] shrink-0">
-            <Badge variant="muted" className="max-w-full truncate hover:underline" onClick={stopPropagation}>
-              {wf}
-            </Badge>
-          </Link>
-        ) : null}
-        <FeedRowTime ts={event.ts} />
-      </motion.div>
+      ) : (
+        <span aria-hidden />
+      )}
+      <FeedRowTime ts={event.ts} />
     </motion.li>
   );
 });
@@ -217,10 +227,3 @@ function clampInline(s: string, cap: number): string {
   return singleLine.length > cap ? `${singleLine.slice(0, cap - 1)}…` : singleLine;
 }
 
-/** Stop the workflow badge link from triggering the outer run-link
- * navigation when both happen to nest inside the same flex row. The
- * badge is its own `<Link>`, so the surrounding `<Link>` should not
- * intercept its click. */
-function stopPropagation(e: React.MouseEvent): void {
-  e.stopPropagation();
-}
