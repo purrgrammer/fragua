@@ -3,14 +3,11 @@ import type { JobStatus, ListRunsFilter } from "./api.ts";
 import * as api from "./api.ts";
 
 /** Canonicalize a `ListRunsFilter` so the same logical filter always
- * produces the same query-key fragment (sorted statuses, undefined
- * fields normalized). Returning `null` for "no filter" keeps the
- * unfiltered list's queryKey shape backwards-compatible
- * (`["runs", "list", null]`). */
+ * produces the same query-key fragment. */
 function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null {
   if (!filter) return null;
   const out: ListRunsFilter = {};
-  if (filter.status && filter.status.length > 0) out.status = [...filter.status].sort();
+  if (filter.status?.length) out.status = [...filter.status].sort();
   if (filter.order && filter.order !== "newest") out.order = filter.order;
   if (filter.limit !== undefined) out.limit = filter.limit;
   return Object.keys(out).length === 0 ? null : out;

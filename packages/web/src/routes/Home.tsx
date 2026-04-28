@@ -42,23 +42,15 @@ import { computeStats } from "../lib/stats.ts";
 import { useHealth } from "../types/health.ts";
 
 /** Cap for the Home Inbox — overflow funnels to /inbox via "View all →". */
-const INBOX_HOME_LIMIT = 5;
+export const INBOX_HOME_LIMIT = 5;
 
-/** Module-scope so `queries.runs.list({ status: RUNNING_STATUSES })`
- * has a stable reference across renders (TanStack hashes the queryKey
- * by structure, but keeping the array stable is still cheaper for the
- * canonicalize/sort dance). */
 const RUNNING_STATUSES = ["running"] as const;
 
 export function Home(): JSX.Element {
-  // Stats needs the full run list to compute global aggregates
-  // (totalCostUsd, freshTokens, cacheHitRate, …). Inbox + Running
-  // each use their own narrowed query so the two big sections of the
-  // page don't pay for each other's data shape.
-  const stats = useStats();
-  const { data: runningData, isPending: runningPending } = useQuery(
-    queries.runs.list({ status: RUNNING_STATUSES }),
-  );
+  // Stats reads the full list (global aggregates); Inbox + Running
+  // each use their own narrowed query so sections don't share a shape.
+  const [stats, statsLoading] = useStats();
+  const { data: runningData, isPending: runningPending } = useQuery(queries.runs.list({ status: RUNNING_STATUSES }));
   const running = runningData ?? [];
 
   return (
@@ -66,7 +58,7 @@ export function Home(): JSX.Element {
       {/* Overview launcher temporarily removed — hits POST /jobs, which
           no longer exists on the daemon. Restore once the enqueue API is
           wired up again. */}
-      <StatsTiles stats={stats.value} loading={stats.loading} />
+      <StatsTiles stats={stats} loading={statsLoading} />
       <Inbox limit={INBOX_HOME_LIMIT} viewAllHref="/inbox" />
       <RunningSection running={running} loading={runningPending} />
       <GlobalFeed />
@@ -74,10 +66,10 @@ export function Home(): JSX.Element {
   );
 }
 
-function useStats(): { value: ReturnType<typeof computeStats>; loading: boolean } {
+function useStats(): [ReturnType<typeof computeStats>, boolean] {
   const { data, isPending } = useQuery(queries.runs.list());
   const value = useMemo(() => computeStats(data ?? []), [data]);
-  return { value, loading: isPending };
+  return [value, isPending];
 }
 
 // ── Overview launcher ────────────────────────────────────────────────

@@ -16,6 +16,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RunSummary, WorkflowSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
+import { INBOX_HOME_LIMIT } from "../../src/routes/Home.tsx";
 import { HealthContext, type HealthContextValue, type HealthDaemonSnapshot } from "../../src/types/health.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
@@ -91,34 +92,26 @@ function typeInto(el: HTMLTextAreaElement, value: string): void {
   Simulate.change(el);
 }
 
-/** Inbox cap kept in sync with `INBOX_HOME_LIMIT` in `Home.tsx`. The
- * Home page asks for `limit + 1` rows so it can detect overflow; the
- * test seed mirrors that. */
-const INBOX_HOME_LIMIT_FOR_TESTS = 5;
-
+/** Seed the per-section caches the way the server would respond.
+ * Stats uses the unfiltered list; Running and Inbox use narrowed
+ * queries with server-enforced status/order/limit. */
 function withRows(rows: RunSummary[]) {
   const client = createTestQueryClient();
-  // Stats reads the unfiltered list — seed it with everything.
   client.setQueryData(queries.runs.list().queryKey, rows);
-  // Running + Inbox use server-filtered queries (server enforces
-  // status, order, and limit). The test seed mirrors what the server
-  // would return. Fixtures only set the coarse `status` field, so we
-  // approximate `runStatus` filtering through it where possible.
   client.setQueryData(
     queries.runs.list({ status: ["running"] }).queryKey,
     rows.filter((r) => r.status === "running"),
   );
   const inboxRows = rows.filter(
-    (r) =>
-      r.runStatus === "paused_hitl" || r.runStatus === "paused_provider_error" || r.runStatus === "quarantined",
+    (r) => r.runStatus === "paused_hitl" || r.runStatus === "paused_provider_error" || r.runStatus === "quarantined",
   );
   client.setQueryData(
     queries.runs.list({
       status: ["paused_hitl", "paused_provider_error", "quarantined"],
       order: "oldest",
-      limit: INBOX_HOME_LIMIT_FOR_TESTS + 1,
+      limit: INBOX_HOME_LIMIT + 1,
     }).queryKey,
-    inboxRows.slice(0, INBOX_HOME_LIMIT_FOR_TESTS + 1),
+    inboxRows.slice(0, INBOX_HOME_LIMIT + 1),
   );
   return client;
 }

@@ -188,13 +188,10 @@ function parseLimit(raw: string | undefined): number | undefined {
 /** Parse `?status=a,b,c` into a deduped list of valid `RunStatus`
  * literals. Empty + invalid tokens are dropped. */
 function parseStatusList(raw: string): RunStatus[] {
-  const out: RunStatus[] = [];
-  const seen = new Set<string>();
+  const out = new Set<RunStatus>();
   for (const token of raw.split(",")) {
-    const t = token.trim();
-    if (t === "" || seen.has(t)) continue;
-    seen.add(t);
-    if (VALID_STATUSES.has(t as RunStatus)) out.push(t as RunStatus);
+    const t = token.trim() as RunStatus;
+    if (VALID_STATUSES.has(t)) out.add(t);
   }
-  return out;
+  return [...out];
 }

@@ -340,23 +340,16 @@ export interface ListRunsFilter {
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
-  const path = buildRunsListPath(filter);
-  return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
-}
-
-/** Exported for query-key stability tests. */
-export function buildRunsListPath(filter?: ListRunsFilter): string {
-  if (!filter) return "/runs";
   const params = new URLSearchParams();
-  if (filter.status && filter.status.length > 0) {
+  if (filter?.status && filter.status.length > 0) {
     // Sort so the same logical filter always produces the same URL.
-    const statuses = [...filter.status].sort();
-    params.set("status", statuses.join(","));
+    params.set("status", [...filter.status].sort().join(","));
   }
-  if (filter.order && filter.order !== "newest") params.set("order", filter.order);
-  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
+  if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
   const qs = params.toString();
-  return qs.length > 0 ? `/runs?${qs}` : "/runs";
+  const path = qs ? `/runs?${qs}` : "/runs";
+  return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
 }
 
 export async function getRun(id: string): Promise<RunDetail> {

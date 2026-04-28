@@ -207,35 +207,24 @@ export interface ListRunsOpts {
 
 /**
  * Enumerate run ids with optional filtering, ordering, and limit. All
- * three are pushed into SQL — there is intentionally no client-side
- * sort/slice anywhere in the read path. Uses a raw SQL escape hatch
- * since the web UI's needs (small filtered slices) aren't yet worth a
- * dedicated method on `IEventStore`.
+ * three are pushed into SQL — the read path does no client-side
+ * sort/slice. Raw SQL escape hatch since the web UI's needs (small
+ * filtered slices) aren't yet worth a method on `IEventStore`.
  */
 export function listRuns(store: IEventStore, opts: ListRunsOpts = {}): string[] {
   const db = (store as unknown as { db?: Database }).db;
   if (db == null) return [];
   const { statuses, order = "newest", limit } = opts;
-  // "newest" is by updated_at — matches the archive view on /runs and
-  // makes recently-touched runs appear first. "oldest" is by
-  // enqueued_at — Inbox semantics (longest-waiting first).
+  if (statuses !== undefined && statuses.length === 0) return [];
+
+  const where = statuses ? `WHERE status IN (${statuses.map(() => "?").join(",")})` : "";
+  // "newest" → updated_at (archive view); "oldest" → enqueued_at (Inbox).
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
   const limitClause = limit !== undefined ? "LIMIT ?" : "";
-  const limitArgs: number[] = limit !== undefined ? [limit] : [];
-
-  if (statuses === undefined) {
-    const sql = `SELECT run_id FROM run_state ORDER BY ${orderBy} ${limitClause}`.trim();
-    return db
-      .query<{ run_id: string }, number[]>(sql)
-      .all(...limitArgs)
-      .map((r) => r.run_id);
-  }
-  if (statuses.length === 0) return [];
-  const placeholders = statuses.map(() => "?").join(", ");
-  const sql =
-    `SELECT run_id FROM run_state WHERE status IN (${placeholders}) ORDER BY ${orderBy} ${limitClause}`.trim();
+  const sql = `SELECT run_id FROM run_state ${where} ORDER BY ${orderBy} ${limitClause}`;
+  const args: (RunStatus | number)[] = [...(statuses ?? []), ...(limit !== undefined ? [limit] : [])];
   return db
     .query<{ run_id: string }, (RunStatus | number)[]>(sql)
-    .all(...statuses, ...limitArgs)
+    .all(...args)
     .map((r) => r.run_id);
 }

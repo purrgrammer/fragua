@@ -13,10 +13,9 @@
 //   - <Inbox />                                 on /inbox (uncapped)
 //
 // The list reads a server-filtered `queries.runs.list({ status: [...] })`
-// — only paused / quarantined runs cross the wire. The unfiltered
-// list (Stats) and the running-only list (Control Center's Running
-// strip) live on their own keys; SSE invalidation prefix-matches
-// `["runs", "list"]` so all three refetch on a single lifecycle event.
+// — only paused / quarantined runs cross the wire. SSE invalidation
+// prefix-matches `["runs", "list"]` so this and the unfiltered/Running
+// lists all refetch on one lifecycle event.
 
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Pause, ShieldAlert, ShieldCheck } from "lucide-react";
@@ -27,9 +26,8 @@ import { displayTitle, displayTooltip } from "./RunRow.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
-/** The raw lifecycle statuses an operator can act on. Module-scope
- * constant so the `queries.runs.list({ status })` queryKey reference
- * stays stable across renders (no useMemo gymnastics in callers). */
+/** Raw lifecycle statuses an operator can act on. Module-scope so the
+ * queryKey reference stays stable across renders. */
 const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
   "paused_hitl",
   "paused_provider_error",
@@ -67,11 +65,8 @@ export interface InboxProps {
 }
 
 export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
-  // Server returns the slice we want directly: filtered by status,
-  // ordered oldest-first by enqueued_at, capped at `limit + 1` so we
-  // can detect overflow without a separate count query. No client-
-  // side sort or slice anywhere — the server is the single source of
-  // truth for the displayed window.
+  // Ask for `limit + 1` so the extra row signals overflow without a
+  // separate count query. Server enforces filter/order/limit.
   const { data, isPending } = useQuery(
     queries.runs.list({
       status: ATTENTION_STATUSES,
@@ -80,9 +75,6 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
     }),
   );
   const rows = data ?? [];
-
-  // The +1 row, when present, is the overflow indicator: trim it for
-  // display and use its presence to gate the "View all" link.
   const hasOverflow = limit !== undefined && rows.length > limit;
   const attention = hasOverflow ? rows.slice(0, limit) : rows;
   const showViewAll = viewAllHref !== undefined && hasOverflow;
