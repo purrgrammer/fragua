@@ -1,21 +1,59 @@
 // swarm store — public types. Mirrors §4 of docs/ARCHITECTURE.md.
+//
+// The typed event unions (IntentEvent, FactEvent, RunStatus, etc.) live
+// in @swarm/types so the web client can import them without pulling in
+// the SQLite-backed store. We re-export them here so existing daemon /
+// server callers keep their `from "@swarm/store"` imports working.
 
-import type { AgentMessage } from "@swarm/types";
+import type {
+  AgentMessage,
+  AnyEvent as AnyEventFromTypes,
+  EventEnvelope,
+  EventWriter as EventWriterFromTypes,
+  FactEvent as FactEventFromTypes,
+  FactType as FactTypeFromTypes,
+  HaltReason as HaltReasonFromTypes,
+  IntentEvent as IntentEventFromTypes,
+  IntentType as IntentTypeFromTypes,
+  MessageRole as MessageRoleFromTypes,
+  QuarantineReason as QuarantineReasonFromTypes,
+  RunStatus as RunStatusFromTypes,
+} from "@swarm/types";
 import type { RunCostTotalsRow, StepAggregateRow } from "./queries.ts";
 
+export type {
+  AnyEvent,
+  AnyEventType,
+  EventEnvelope,
+  EventWriter,
+  FactEvent,
+  FactType,
+  FeedEvent,
+  HaltReason,
+  IntentEvent,
+  IntentType,
+  MessageRole,
+  QuarantineReason,
+  RawEvent,
+  RunStatus,
+} from "@swarm/types";
 export type { RunCostTotalsRow, StepAggregateRow };
 
-export type RunStatus =
-  | "queued"
-  | "running"
-  | "paused_hitl"
-  | "paused_provider_error"
-  | "completed"
-  | "cancelled"
-  | "halted"
-  | "quarantined";
-
-export type EventWriter = "daemon" | "web";
+// Local aliases below let us narrow the re-exported unions in places
+// that previously referenced these names directly. Equivalent to the
+// re-exports above; just keeps function signatures in this file
+// readable without long type-import names.
+type RunStatus = RunStatusFromTypes;
+type EventWriter = EventWriterFromTypes;
+type IntentEvent = IntentEventFromTypes;
+type FactEvent = FactEventFromTypes;
+type HaltReason = HaltReasonFromTypes;
+type QuarantineReason = QuarantineReasonFromTypes;
+type IntentType = IntentTypeFromTypes;
+type FactType = FactTypeFromTypes;
+type MessageRole = MessageRoleFromTypes;
+// Re-affirm so unused-import check passes on the aliases above.
+type _Touch = AnyEventFromTypes | EventEnvelope | HaltReason | QuarantineReason | IntentType | FactType | MessageRole;
 
 export interface RunMetrics {
   /** Sum across input + output + cacheRead + cacheWrite. The "what hits
@@ -71,176 +109,6 @@ export interface RunState {
   title: string | null;
 }
 
-// ─────────────── Intent events (writer: "web", no OCC) ───────────────
-
-export type IntentEvent =
-  | { type: "intent.run_enqueued"; payload: { workflowSha: string; priority?: number } }
-  | { type: "intent.steering_requested"; payload: { text: string } }
-  | { type: "intent.pause_requested"; payload: Record<string, never> }
-  | { type: "intent.cancel_requested"; payload: { reason?: string } }
-  | { type: "intent.hitl_input"; payload: { input: unknown } }
-  | { type: "intent.resume"; payload: { note?: string } }
-  | {
-      type: "intent.unquarantine";
-      payload: { resolution: "treat_as_done" | "retry" | "cancel"; note: string };
-    }
-  | {
-      type: "intent.priority_adjusted";
-      payload: { newPriority: number; note: string };
-    };
-
-export type IntentType = IntentEvent["type"];
-
-// ─────────────── Fact events (writer: "daemon", OCC-checked) ───────────
-
-export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" | "error" | "aborted_exit";
-
-export type QuarantineReason = "orphan_side_effect" | "other";
-
-/**
- * Payload-shape contract for fact events: every payload must serialise
- * comfortably below `MAX_EVENT_PAYLOAD_BYTES` (4 KB, §I7) under realistic
- * loads. Bulky free-form strings (LLM output, prompts, large artefact
- * snapshots) DO NOT belong in fact payloads — push them to the
- * `messages` table or to an `artifacts` row and reference by sha or
- * `(node, iteration, key)`. The 4 KB cap is enforced at insert time
- * via a CHECK constraint, so a payload that grows past the limit on
- * real input is a bug, not a runtime question.
- *
- * Operator-supplied intents (`intent.steering_requested.text`,
- * `intent.hitl_input.input`, etc.) flow through the cap too; the
- * server translates `PayloadTooLargeError` to a 413 so callers see a
- * typed `code: "payload_too_large"` instead of a 500.
- */
-export type FactEvent =
-  | {
-      type: "fact.run_started";
-      payload: { workflowSha: string; schemaVersion: number; startNode: string };
-    }
-  | { type: "fact.node_started"; payload: { nodeId: string; iteration: number } }
-  | {
-      type: "fact.node_completed";
-      payload: {
-        nodeId: string;
-        iteration: number;
-        outputRef?: string;
-        tokens: number;
-        costUsd: number;
-        /** Input/output/cache split. Optional so older runs (pre-split)
-         * still round-trip through replay; the reducer defaults missing
-         * fields to 0 so totals never NaN. */
-        inputTokens?: number;
-        outputTokens?: number;
-        cacheReadTokens?: number;
-        cacheWriteTokens?: number;
-        /** Optional: LLM provider model id, e.g. "gemini-1.5-pro". */
-        modelName?: string;
-        nextNode: string;
-        /** Outcome status the handler (or edge selector) decided — lets the
-         * UI distinguish "completed OK" from "completed with outcome=fail"
-         * without walking `edge.selected` / `fact.run_halted`. */
-        outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
-      };
-    }
-  | {
-      type: "fact.node_aborted";
-      payload: {
-        nodeId: string;
-        iteration: number;
-        cause: string;
-        partialTokens: number;
-        partialCostUsd: number;
-        /** Partial split for work done before the abort. Optional for
-         * back-compat with pre-split runs. */
-        partialInputTokens?: number;
-        partialOutputTokens?: number;
-        partialCacheReadTokens?: number;
-        partialCacheWriteTokens?: number;
-      };
-    }
-  | {
-      type: "fact.intents_folded";
-      payload: { intentSeq: number; folded: string };
-    }
-  | {
-      type: "fact.side_effect_intent";
-      payload: {
-        nodeId: string;
-        iteration: number;
-        toolName: string;
-        argsHash: string;
-        attempt: number;
-        idempotencyKey: string;
-      };
-    }
-  | {
-      type: "fact.side_effect_done";
-      payload: {
-        idempotencyKey: string;
-        artifactKey: string;
-        tokens?: number;
-        costUsd?: number;
-      };
-    }
-  | {
-      type: "fact.side_effect_failed";
-      payload: { idempotencyKey: string; errorCode: string; retriable: boolean };
-    }
-  | {
-      type: "fact.tool_completed";
-      payload: {
-        toolName: string;
-        argsHash: string;
-        artifactKey: string;
-        preview: string;
-        summary?: string;
-      };
-    }
-  | {
-      type: "fact.message_appended";
-      payload: {
-        ordinal: number;
-        role: MessageRole;
-        nodeId: string | null;
-        iteration: number;
-      };
-    }
-  | { type: "fact.run_paused_hitl"; payload: { nodeId: string; prompt: string } }
-  | {
-      type: "fact.run_paused_provider_error";
-      payload: {
-        nodeId: string;
-        httpStatus: number | null;
-        provider: string;
-        errorMessage: string;
-      };
-    }
-  | {
-      type: "fact.run_resumed";
-      payload: {
-        fromStatus: RunStatus;
-        inputIntentSeq?: number;
-      };
-    }
-  | { type: "fact.run_completed"; payload: { finalNode: string } }
-  | {
-      type: "fact.run_halted";
-      payload: { reason: HaltReason; detail?: string };
-    }
-  | { type: "fact.run_cancelled"; payload: { intentSeq: number } }
-  | {
-      type: "fact.run_quarantined";
-      payload: { reason: QuarantineReason; orphanedIntents?: number[] };
-    }
-  | { type: "fact.run_requeued_after_crash"; payload: { prevNode?: string } }
-  | {
-      type: "fact.handler_timeout_leaked";
-      payload: { nodeId: string; leakedAt: number };
-    }
-  | { type: "fact.daemon_takeover"; payload: { reclaimedFrom: number; at: number } };
-
-export type FactType = FactEvent["type"];
-
 /**
  * Observability events carry the agent / LLM / tool / cost streaming trail
  * the UI projects into its conversation + step views. They ride alongside
@@ -256,45 +124,12 @@ export interface ObservabilityEvent {
   payload: Record<string, unknown>;
 }
 
-export type AnyEvent = IntentEvent | FactEvent;
-export type EventType = AnyEvent["type"];
+/** Re-export: `AnyEvent["type"]` — preserved as `EventType` for
+ * @swarm/store callers that already imported it under that name. New
+ * code should prefer `AnyEventType` from @swarm/types. */
+export type EventType = import("@swarm/types").AnyEventType;
 
-/**
- * Operator-relevant event kinds for the global Home feed. These are the
- * events whose arrival warrants a row in the timeline — run lifecycle,
- * operator-initiated intents, and system-health signals. Excludes
- * node-level facts, side-effect facts, message_appended, and the entire
- * observability family (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`)
- * because at sustained run rates those would drown the feed.
- *
- * Both `GET /events` (backfill) and `GET /events/stream` (live SSE)
- * filter through this list. Adding a new kind here is the only step
- * needed to surface it on Home.
- */
-export const FEED_EVENT_KINDS: readonly EventType[] = [
-  // Run lifecycle (intent that creates the run + every fact that flips status)
-  "intent.run_enqueued",
-  "fact.run_started",
-  "fact.run_completed",
-  "fact.run_paused_hitl",
-  "fact.run_paused_provider_error",
-  "fact.run_resumed",
-  "fact.run_cancelled",
-  "fact.run_halted",
-  "fact.run_quarantined",
-  "fact.run_requeued_after_crash",
-  // Operator actions (writer: "web")
-  "intent.pause_requested",
-  "intent.cancel_requested",
-  "intent.steering_requested",
-  "intent.unquarantine",
-  "intent.priority_adjusted",
-  "intent.hitl_input",
-  "intent.resume",
-  // System health
-  "fact.daemon_takeover",
-  "fact.handler_timeout_leaked",
-];
+export { FEED_EVENT_KINDS } from "@swarm/types";
 
 /**
  * What the store actually gives you back from the `events` table. The
@@ -314,9 +149,7 @@ export interface StoredEvent {
 
 // ─────────────── Messages and artifacts ───────────────
 
-/** pi-agent-core roles (including custom-message-type roles). Kept as
- * `string` to match `AgentMessage["role"]` — no swarm-side narrowing. */
-export type MessageRole = AgentMessage["role"];
+// `MessageRole` is re-exported from @swarm/types at the top of this file.
 
 export interface Message {
   runId: string;

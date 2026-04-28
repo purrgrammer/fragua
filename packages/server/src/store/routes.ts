@@ -453,11 +453,21 @@ export function createRoutes(deps: ServerDeps): Hono {
       });
       const seenAtBoundary = new Set<string>();
       while (!stream.aborted) {
-        const batch = deps.store.getGlobalEventsAfter({
-          fromTs,
-          kindIn: FEED_EVENT_KINDS,
-          limit: batchSize,
-        });
+        let batch: ReturnType<typeof deps.store.getGlobalEventsAfter>;
+        try {
+          batch = deps.store.getGlobalEventsAfter({
+            fromTs,
+            kindIn: FEED_EVENT_KINDS,
+            limit: batchSize,
+          });
+        } catch (err) {
+          // The store can be torn down (test cleanup, daemon restart)
+          // while the loop is mid-iteration. Treat a closed-DB error as
+          // an implicit stream abort instead of letting the exception
+          // bubble out of the streamSSE async generator.
+          if (err instanceof Error && /closed database/i.test(err.message)) return;
+          throw err;
+        }
         let emittedThisBatch = 0;
         for (const event of batch) {
           if (event.ts > fromTs) {

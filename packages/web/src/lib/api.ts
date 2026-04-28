@@ -20,7 +20,9 @@
 // boundary (`mock.module`) — both standard bun patterns, no in-module
 // injection seam required.
 
-import type { AgentMessage } from "@swarm/types";
+import type { AgentMessage, FeedEvent } from "@swarm/types";
+
+export type { FeedEvent };
 
 export const BASE_URL = "/api";
 
@@ -250,6 +252,32 @@ const isAcceptedId = (v: unknown): v is { id: string } =>
   typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
 
 // ── URL helpers ─────────────────────────────────────────────────────
+
+/** Loose runtime shape check for a `FeedEvent`. The full discriminated
+ * union (`@swarm/types` `FeedEvent`) is enforced at the type layer;
+ * over the wire we only validate the envelope columns are present and
+ * trust the server-side allow-list to keep `type` to a known kind. */
+const isFeedEvent = (v: unknown): v is FeedEvent =>
+  typeof v === "object" &&
+  v !== null &&
+  typeof (v as { runId?: unknown }).runId === "string" &&
+  typeof (v as { seq?: unknown }).seq === "number" &&
+  typeof (v as { type?: unknown }).type === "string" &&
+  typeof (v as { ts?: unknown }).ts === "number";
+
+/** Backfill: most-recent N allow-listed events, oldest-first. */
+export async function getFeedEvents(limit?: number): Promise<FeedEvent[]> {
+  const qs = typeof limit === "number" ? `?limit=${limit}` : "";
+  return getJson(`/events${qs}`, (v): v is FeedEvent[] => Array.isArray(v) && v.every(isFeedEvent));
+}
+
+/** SSE URL for the live global feed. `fromTs` is inclusive — the server
+ * uses `ts >= fromTs` and the client dedupes the bounded redelivery at
+ * the boundary. Pass the max ts of the backfill to start from. */
+export function getFeedStreamUrl(fromTs?: number): string {
+  const base = "/events/stream";
+  return url(typeof fromTs === "number" && fromTs > 0 ? `${base}?fromTs=${fromTs}` : base);
+}
 
 export function getRunEventsUrl(id: string, sinceSeq?: number): string {
   // SSE endpoint (text/event-stream). The sibling `/events` route is the

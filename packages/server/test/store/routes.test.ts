@@ -876,7 +876,11 @@ describe("global event feed (cross-run)", () => {
 
     const streamRes = await routes.fetch(
       new Request(
-        `http://test/events/stream?fromTs=${cursor.ts + 1}`,
+        // `?fromTs=cursor.ts` (not `+1`) matches the new `>=` semantics —
+        // seed events at cursor.ts may be re-delivered (server has no
+        // memory of what the prior connection saw); the test only
+        // asserts on the *new* events, which is the correctness bar.
+        `http://test/events/stream?fromTs=${cursor.ts}`,
       ),
     );
     expect(streamRes.status).toBe(200);
