@@ -3,21 +3,41 @@
 
 import { type Static, Type } from "@sinclair/typebox";
 
+/** Coarse UI status — one badge per category. The Inbox / fine-grained
+ * filters use `runStatus` (the raw store status) instead. */
+const UiStatus = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+  Type.Literal("paused"),
+  Type.Literal("success"),
+  Type.Literal("fail"),
+  Type.Literal("canceled"),
+  Type.Literal("unknown"),
+]);
+
+/** Raw run lifecycle status, mirrored from `@swarm/types` `RunStatus`.
+ * Carried alongside the coarse `status` so the web can distinguish
+ * `paused_hitl` vs `paused_provider_error` (Inbox) and `halted` vs
+ * `quarantined` (Inbox vs Feed) without re-reading the event log. */
+const RawRunStatus = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+  Type.Literal("paused_hitl"),
+  Type.Literal("paused_provider_error"),
+  Type.Literal("completed"),
+  Type.Literal("cancelled"),
+  Type.Literal("halted"),
+  Type.Literal("quarantined"),
+]);
+
 /** Summary row returned by `GET /runs`. */
 export const RunSummary = Type.Object({
   runId: Type.String(),
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
-  status: Type.Union([
-    Type.Literal("queued"),
-    Type.Literal("running"),
-    Type.Literal("paused"),
-    Type.Literal("success"),
-    Type.Literal("fail"),
-    Type.Literal("canceled"),
-    Type.Literal("unknown"),
-  ]),
+  status: UiStatus,
+  runStatus: RawRunStatus,
   eventCount: Type.Integer({ minimum: 0 }),
   costUsd: Type.Number({ minimum: 0, default: 0 }),
   inputTokens: Type.Integer({ minimum: 0, default: 0 }),
@@ -59,15 +79,8 @@ export const RunDetail = Type.Object({
   workflow: Type.Optional(Type.String()),
   workflowName: Type.Optional(Type.String()),
   startedAt: Type.String(),
-  status: Type.Union([
-    Type.Literal("queued"),
-    Type.Literal("running"),
-    Type.Literal("paused"),
-    Type.Literal("success"),
-    Type.Literal("fail"),
-    Type.Literal("canceled"),
-    Type.Literal("unknown"),
-  ]),
+  status: UiStatus,
+  runStatus: RawRunStatus,
   lastEventSeq: Type.Integer({ minimum: 0 }),
   nodes: Type.Array(NodeState),
   selectedEdges: Type.Array(SelectedEdge),

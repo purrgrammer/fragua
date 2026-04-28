@@ -1,9 +1,15 @@
-// Home dashboard — Stats + Runs (running + recent collapsed into one
-// section). Overview launcher is temporarily disabled (its POST /jobs
-// endpoint is gone); bring it back when the enqueue API is restored.
+// Control Center — the operator's at-a-glance dashboard.
 //
-// Cadence: the 5s poll lives on the query factory
-// (`queries.runs.list`'s `refetchInterval`). No local timer needed.
+// Layout (top → bottom by urgency):
+//   1. Stats        — system-wide health (running count, spend, tokens, cache)
+//   2. Inbox        — runs that need operator attention (capped + view all)
+//   3. Running      — runs currently in flight (no pagination)
+//   4. Activity     — global feed of recent system events
+//
+// "Recent runs" intentionally moved out of here — that view lives on
+// /runs. The Control Center should answer "what does the system need
+// from me right now?" first, "what's executing?" second; archive
+// browsing is a different mode.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Play } from "lucide-react";
@@ -24,6 +30,7 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
 import { GlobalFeed } from "../components/GlobalFeed.tsx";
+import { Inbox } from "../components/Inbox.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
@@ -34,7 +41,8 @@ import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
 import { useHealth } from "../types/health.ts";
 
-const RECENT_LIMIT = 10;
+/** Cap for the Home Inbox — overflow funnels to /inbox via "View all →". */
+const INBOX_HOME_LIMIT = 5;
 
 export function Home(): JSX.Element {
   const { data, isPending } = useQuery(queries.runs.list());
@@ -42,9 +50,6 @@ export function Home(): JSX.Element {
   const rows = data ?? [];
   const running = useMemo(() => rows.filter((r) => r.status === "running"), [rows]);
   const stats = useMemo(() => computeStats(rows), [rows]);
-  // Exclude currently-running runs from the recent list so they aren't
-  // duplicated above.
-  const recent = useMemo(() => rows.filter((r) => r.status !== "running").slice(0, RECENT_LIMIT), [rows]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -52,8 +57,9 @@ export function Home(): JSX.Element {
           no longer exists on the daemon. Restore once the enqueue API is
           wired up again. */}
       <StatsTiles stats={stats} loading={isPending} />
+      <Inbox limit={INBOX_HOME_LIMIT} viewAllHref="/inbox" />
+      <RunningSection running={running} loading={isPending} />
       <GlobalFeed />
-      <RunsSection running={running} recent={recent} loading={isPending} />
     </div>
   );
 }
@@ -187,20 +193,21 @@ function _Overview(): JSX.Element {
   );
 }
 
-// ── Runs section (running + recent in one block) ─────────────────────
+// ── Running section (currently-executing runs only) ──────────────────
+//
+// No pagination, no "recent" tail — the Control Center shows what's
+// in flight right now. Archive browsing lives on /runs.
 
-interface RunsSectionProps {
+interface RunningSectionProps {
   running: RunSummary[];
-  recent: RunSummary[];
   loading: boolean;
 }
 
-function RunsSection({ running, recent, loading }: RunsSectionProps): JSX.Element {
-  const hasAny = running.length > 0 || recent.length > 0;
+function RunningSection({ running, loading }: RunningSectionProps): JSX.Element {
   return (
-    <section data-testid="runs-section" className="flex flex-col gap-4">
+    <section data-testid="running-section" className="flex flex-col gap-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="font-heading text-base font-semibold">Runs</h2>
+        <h2 className="font-heading text-base font-semibold">Running</h2>
         <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground">
           View all →
         </Link>
@@ -210,32 +217,20 @@ function RunsSection({ running, recent, loading }: RunsSectionProps): JSX.Elemen
         <div className="flex flex-col gap-2">
           <Skeleton className="h-10" />
           <Skeleton className="h-10" />
-          <Skeleton className="h-10" />
         </div>
-      ) : !hasAny ? (
+      ) : running.length === 0 ? (
         <EmptyState
-          data-testid="runs-empty"
+          data-testid="running-empty"
           icon={<Play className="size-6" />}
-          title="No runs yet"
-          description="They'll show up here as soon as `swarm run` records one."
-          className="min-h-[160px]"
+          title="Nothing running"
+          description="Active runs appear here while they execute."
+          className="min-h-[120px]"
         />
       ) : (
-        <div className="flex flex-col gap-2">
-          {running.length > 0 && (
-            <div data-testid="running-strip" className="flex flex-col gap-2">
-              {running.map((row) => (
-                <RunRow key={row.runId} row={row} variant="compact" />
-              ))}
-            </div>
-          )}
-          {recent.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {recent.map((row) => (
-                <RunRow key={row.runId} row={row} variant="compact" />
-              ))}
-            </div>
-          )}
+        <div data-testid="running-strip" className="flex flex-col gap-2">
+          {running.map((row) => (
+            <RunRow key={row.runId} row={row} variant="compact" />
+          ))}
         </div>
       )}
     </section>

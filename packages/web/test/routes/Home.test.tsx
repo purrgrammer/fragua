@@ -106,7 +106,7 @@ useDom();
 describe("Home route", () => {
   afterEach(() => cleanup());
 
-  it("Runs section omits the running strip when nothing is executing", async () => {
+  it("Running section shows the empty state when nothing is executing", async () => {
     const client = withRows([
       row({ runId: "a", status: "success", durationMs: 1_000 }),
       row({ runId: "b", status: "fail", durationMs: 2_000 }),
@@ -114,21 +114,22 @@ describe("Home route", () => {
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("runs-section")).toBeTruthy();
+      expect(q.getByTestId("running-section")).toBeTruthy();
     });
     expect(q.queryByTestId("running-strip")).toBeNull();
+    expect(q.getByTestId("running-empty")).toBeTruthy();
   });
 
-  it("Runs section shows the empty state when no runs exist at all", async () => {
+  it("Running section shows the empty state when no runs exist at all", async () => {
     const client = withRows([]);
     const { container } = mount(client);
     const q = within(container);
     await waitFor(() => {
-      expect(q.getByTestId("runs-empty")).toBeTruthy();
+      expect(q.getByTestId("running-empty")).toBeTruthy();
     });
   });
 
-  it("renders running runs in the running strip (not duplicated below)", async () => {
+  it("renders only currently-running runs in the running strip", async () => {
     const client = withRows([
       row({ runId: "live-1", status: "running", workflow: "wf-A", eventCount: 7 }),
       row({ runId: "live-2", status: "running", workflow: "wf-B", eventCount: 3 }),
@@ -142,11 +143,9 @@ describe("Home route", () => {
     const strip = q.getByTestId("running-strip");
     expect(within(strip).getByTestId("recent-run-live-1")).toBeTruthy();
     expect(within(strip).getByTestId("recent-run-live-2")).toBeTruthy();
-    expect(within(strip).queryByTestId("recent-run-done")).toBeNull();
-    // The "done" run appears only once in the recent list, not duplicated.
-    expect(container.querySelectorAll("[data-testid=recent-run-done]").length).toBe(1);
-    // Running runs only appear inside the strip, not again below.
-    expect(container.querySelectorAll("[data-testid=recent-run-live-1]").length).toBe(1);
+    // Non-running runs no longer appear on the Control Center — that
+    // archive view lives on /runs.
+    expect(q.queryByTestId("recent-run-done")).toBeNull();
   });
 
   it("running strip excludes queued and paused runs (they are not actively executing)", async () => {
@@ -164,9 +163,6 @@ describe("Home route", () => {
     expect(within(strip).getByTestId("recent-run-active")).toBeTruthy();
     expect(within(strip).queryByTestId("recent-run-waiting")).toBeNull();
     expect(within(strip).queryByTestId("recent-run-on-hold")).toBeNull();
-    // Queued + paused show up in the recent list below the strip.
-    expect(q.getByTestId("recent-run-waiting")).toBeTruthy();
-    expect(q.getByTestId("recent-run-on-hold")).toBeTruthy();
   });
 
   it("renders the four stats tiles populated from the reducer", async () => {
@@ -233,34 +229,14 @@ describe("Home route", () => {
     expect(q.getByTestId("tile-cache")).toBeTruthy();
   });
 
-  it("renders at most ten row entries under the Runs section", async () => {
-    const many: RunSummary[] = Array.from({ length: 15 }, (_, i) =>
-      row({
-        runId: `run-${i.toString().padStart(2, "0")}`,
-        startedAt: `2024-01-${(i + 1).toString().padStart(2, "0")}T00:00:00Z`,
-        status: "success",
-        durationMs: 1_000,
-      }),
-    );
-    const client = withRows(many);
-    const { container } = mount(client);
-    const q = within(container);
-    await waitFor(() => {
-      expect(q.getByTestId("runs-section")).toBeTruthy();
-    });
-    // RunRow (variant="compact") renders an <a> with data-testid="recent-run-<id>".
-    const rows = container.querySelectorAll("[data-testid^=recent-run-]");
-    expect(rows.length).toBe(10);
-  });
-
   it("shows skeletons before the first response resolves", () => {
     const mock = installFetchMock({
       "/api/runs": () => new Promise<Response>(() => {}),
     });
     try {
       const { container } = mount();
-      expect(within(container).getByTestId("runs-section")).toBeTruthy();
-      expect(within(container).queryByTestId("runs-empty")).toBeNull();
+      expect(within(container).getByTestId("running-section")).toBeTruthy();
+      expect(within(container).queryByTestId("running-empty")).toBeNull();
       expect(container.querySelectorAll(".sw-pulse").length).toBeGreaterThan(0);
     } finally {
       mock.restore();

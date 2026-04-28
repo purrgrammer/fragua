@@ -46,6 +46,7 @@ export function runStateToSummary(
     runId: state.runId,
     startedAt,
     status: mapStatus(state.status),
+    runStatus: state.status,
     eventCount: events.length,
     costUsd: m.totalCostUsd,
     inputTokens: m.totalInputTokens,

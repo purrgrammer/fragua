@@ -50,6 +50,20 @@ export interface RunSummary {
   workflowName?: string;
   startedAt: string;
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
+  /** Raw lifecycle status from the store. Used by Inbox and other
+   * fine-grained filters that need to distinguish e.g. `paused_hitl`
+   * from `paused_provider_error`. The coarse `status` above is what
+   * the badge renders. Optional because older server builds may omit
+   * it — mirrors the soft-validate pattern below. */
+  runStatus?:
+    | "queued"
+    | "running"
+    | "paused_hitl"
+    | "paused_provider_error"
+    | "completed"
+    | "cancelled"
+    | "halted"
+    | "quarantined";
   eventCount: number;
   costUsd: number;
   inputTokens: number;
@@ -87,6 +101,20 @@ export interface RunDetail {
   workflowName?: string;
   startedAt: string;
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
+  /** Raw lifecycle status from the store. Used by Inbox and other
+   * fine-grained filters that need to distinguish e.g. `paused_hitl`
+   * from `paused_provider_error`. The coarse `status` above is what
+   * the badge renders. Optional because older server builds may omit
+   * it — mirrors the soft-validate pattern below. */
+  runStatus?:
+    | "queued"
+    | "running"
+    | "paused_hitl"
+    | "paused_provider_error"
+    | "completed"
+    | "cancelled"
+    | "halted"
+    | "quarantined";
   lastEventSeq: number;
   nodes: NodeState[];
   selectedEdges: SelectedEdge[];

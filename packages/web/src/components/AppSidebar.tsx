@@ -8,7 +8,7 @@
 // the rail is collapsed to the icon-only width). Status itself is
 // read from `HealthContext` — see `App.tsx` for the publisher.
 
-import { Cpu, Drone, Home, ListChecks, Workflow } from "lucide-react";
+import { Cpu, Drone, Inbox as InboxIcon, ListChecks, TowerControl, Workflow } from "lucide-react";
 import { NavLink, useMatch } from "react-router-dom";
 import { useHealth } from "../types/health.ts";
 import { HealthBadge } from "./HealthBadge.tsx";
@@ -27,9 +27,10 @@ import {
 } from "./ui/sidebar.tsx";
 
 const NAV = [
-  { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
+  { to: "/", label: "Control Center", icon: TowerControl, end: true },
+  { to: "/inbox", label: "Inbox", icon: InboxIcon, end: false },
   { to: "/runs", label: "Runs", icon: ListChecks, end: false },
+  { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
   { to: "/providers", label: "Providers", icon: Cpu, end: false },
 ] as const;
 
@@ -88,7 +89,7 @@ function NavItem({ entry }: { entry: NavEntry }): JSX.Element {
         <NavLink
           to={to}
           end={end}
-          data-testid={`nav-${label.toLowerCase()}`}
+          data-testid={`nav-${label.toLowerCase().replace(/\s+/g, "-")}`}
           aria-current={isActive ? "page" : undefined}
         >
           <span className="flex w-full min-w-0 items-center gap-2">

@@ -134,8 +134,11 @@ export function crumbsFor(
   params: Record<string, string | undefined>,
   workflowName?: string,
 ): Crumb[] {
-  if (pathname === "/" || pathname === "") return [{ label: "Home" }];
+  if (pathname === "/" || pathname === "") return [{ label: "Control Center" }];
   const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] === "inbox") {
+    return [{ label: "Inbox" }];
+  }
   if (segments[0] === "workflows") {
     if (segments.length === 1) {
       return [{ label: "Workflows" }];

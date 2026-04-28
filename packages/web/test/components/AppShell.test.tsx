@@ -29,17 +29,19 @@ describe("AppShell + AppSidebar", () => {
     }
   });
 
-  it("renders the three nav entries", () => {
+  it("renders the nav entries", () => {
     const { container } = mount("/");
     const q = within(container);
-    expect(q.getByTestId("nav-home")).toBeTruthy();
-    expect(q.getByTestId("nav-workflows")).toBeTruthy();
+    expect(q.getByTestId("nav-control-center")).toBeTruthy();
+    expect(q.getByTestId("nav-inbox")).toBeTruthy();
     expect(q.getByTestId("nav-runs")).toBeTruthy();
+    expect(q.getByTestId("nav-workflows")).toBeTruthy();
+    expect(q.getByTestId("nav-providers")).toBeTruthy();
   });
 
   it("renders a lucide icon next to each nav label", () => {
     const { container } = mount("/");
-    for (const id of ["nav-home", "nav-workflows", "nav-runs"]) {
+    for (const id of ["nav-control-center", "nav-inbox", "nav-runs", "nav-workflows", "nav-providers"]) {
       const link = within(container).getByTestId(id);
       expect(link.querySelector("svg")).not.toBeNull();
     }
@@ -51,7 +53,7 @@ describe("AppShell + AppSidebar", () => {
     const active = container.querySelector('[aria-current="page"]');
     expect(active).not.toBeNull();
     expect(q.getByTestId("nav-workflows").getAttribute("aria-current")).toBe("page");
-    expect(q.getByTestId("nav-home").getAttribute("aria-current")).toBeNull();
+    expect(q.getByTestId("nav-control-center").getAttribute("aria-current")).toBeNull();
   });
 
   it("toggles the sidebar collapsed state on ⌘+B and persists via cookie", () => {
@@ -82,8 +84,12 @@ describe("AppShell + AppSidebar", () => {
 });
 
 describe("crumbsFor (route → breadcrumb derivation)", () => {
-  it("home", () => {
-    expect(crumbsFor("/", {})).toEqual([{ label: "Home" }]);
+  it("home (Control Center)", () => {
+    expect(crumbsFor("/", {})).toEqual([{ label: "Control Center" }]);
+  });
+
+  it("inbox", () => {
+    expect(crumbsFor("/inbox", {})).toEqual([{ label: "Inbox" }]);
   });
 
   it("workflows", () => {

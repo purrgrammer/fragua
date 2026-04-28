@@ -4,7 +4,7 @@
 //   - The table is intentionally minimal: Title / Workflow / Status.
 //     Per-run detail (started-at, cost, tokens, events, duration) lives
 //     on the run detail page, not here.
-//   - Row markup is shared with Home's "Recent runs" via
+//   - Row markup is shared with the Control Center's Running strip via
 //     `components/RunRow.tsx`. This file owns the table chrome
 //     (header, empty/loading states); the row-level styling lives there.
 //   - Loading, empty, and error states all render as purpose-built
