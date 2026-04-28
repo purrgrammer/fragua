@@ -1,6 +1,8 @@
 # swarm — conventions for AI agents
 
 > Read this first. If anything here conflicts with `docs/`, the docs win — update this file.
+>
+> `CLAUDE.md` is a symlink to this file — edit `AGENTS.md`. Skills live in `.agents/skills/<name>/SKILL.md` and are symlinked into `.claude/skills/<name>`; add both when creating a new skill.
 
 ## What this is
 
@@ -15,7 +17,7 @@ Authoritative docs:
 
 ## Stack
 
-Bun ≥ 1.2 (Node ≥ 20 compat) · TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · `@sinclair/typebox` · `bun:sqlite` (WAL, STRICT, generated columns) · `hono` · `bun test` · `biome` · `@mariozechner/pi-agent-core` + `pi-ai` · `fast-check` · React 18 + Vite 5 + Tailwind 3 + react-router v7
+Bun ≥ 1.2 (Node ≥ 20 compat) · TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) · `@sinclair/typebox` · `bun:sqlite` (WAL, STRICT, generated columns) · `hono` · `bun test` · `biome` · `@mariozechner/pi-agent-core` + `pi-ai` · `fast-check` · React 18 + Vite 5 + Tailwind 4 (CSS-first, `@theme inline`, no `tailwind.config.ts`) + react-router v7
 
 ## Commands
 
@@ -27,11 +29,12 @@ bun run lint                             # biome check
 bun run format                           # biome format --write
 bun run ci                               # lint + typecheck + tests, pass-noise filtered
 
-bun run swarm daemon                     # executor against .swarm/swarm.db
-bun run swarm serve                      # HTTP + SSE
-bun run swarm run <workflow.dot>         # upload + enqueue + stream events
+bun run swarm daemon                     # executor + built-in HTTP, port written to .swarm/daemon/daemon.json
+bun run swarm serve                      # standalone HTTP + SSE, default :3000
+bun run swarm run <workflow.dot> --input="<task>"  # upload + enqueue + stream events
 bun run swarm validate <workflow.dot>    # parse + lint, no execution
 bun run swarm db {vacuum,gc-blobs,backup --to <path>}
+bun run dev:web                          # Vite dev server (:5173), proxies /api/** to daemon; run daemon first
 ```
 
 ## Codebase map
@@ -40,6 +43,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 
 | Package | Entry points | What lives here |
 |---|---|---|
+| `@swarm/types` | `src/index.ts`, `src/events.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by agent, core, web |
 | `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
 | `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,fan-in,retry-policy}.ts`, `src/parser/` | Pure types; DOT parser; handler contract; engine reducers |
 | `@swarm/daemon` | `src/{executor,supervisor,auto-dispatcher,result-to-facts,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner |
@@ -50,6 +54,10 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 | `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `daemon` / `serve` / `run` / `validate` / `db` |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
+
+Runtime state: `.swarm/swarm.db` (the store), `.swarm/daemon/daemon.json` (daemon HTTP port + PID), `.swarm/serve.json` (serve URL, read by `swarm run` for discovery).
+
+Skills (domain context loaded on demand): `.agents/skills/` — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`, `ai-elements`, `shadcn`. Load before touching any file in a skill's domain.
 
 ## Commit conventions
 
