@@ -7,6 +7,7 @@
 // users see the rows snap in with no transition.
 
 import type { FeedEvent } from "@swarm/types";
+import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import {
   AlertOctagon,
@@ -26,9 +27,10 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useMemo } from "react";
+import { createContext, memo, useContext, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { feedAtom, feedEventKey } from "../lib/globalFeed.ts";
+import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNow } from "../lib/useNow.ts";
 
@@ -78,13 +80,37 @@ const ENTER_DURATION_S = 0.18;
 const EXIT_DURATION_S = 0.12;
 const LAYOUT_DURATION_S = 0.18;
 
+/**
+ * Single ticking `now` source, scoped to the feed. Each row reads it
+ * via `useContext` so the `useNow(1000, …)` interval stays in one
+ * place — N rows otherwise meant N intervals firing per second, all
+ * fanning out to identical re-renders. Combined with `memo` on
+ * `FeedRow`, the per-second tick now only re-renders the small
+ * `<FeedRowTime>` leaf inside each row, not the row itself.
+ */
+const NowContext = createContext(0);
+
 export function GlobalFeed(): JSX.Element {
   const events = useAtomValue(feedAtom);
   // Tick once a second so "Xs ago" rows update without re-fetching.
-  // Disabled when the feed is empty so we don't burn timers on quiet
+  // Disabled when the feed is empty so we don't burn a timer on quiet
   // pages.
   const now = useNow(1000, events.length > 0);
   const reduce = useReducedMotion() ?? false;
+
+  // Look up workflow names from the runs.list cache. This query is
+  // already mounted across the app (Home/RunsList both subscribe), so
+  // reading it here is free — no extra request, just shared cache.
+  // Newly-enqueued runs that aren't in the list yet fall back to a
+  // truncated runId until the next invalidation refetch lands; that
+  // refetch is itself triggered by useGlobalEventStream on the same
+  // intent.run_enqueued frame, so the gap is sub-second in practice.
+  const { data: runs } = useQuery(queries.runs.list());
+  const runMap = useMemo(() => {
+    const m = new Map<string, { workflowName?: string; workflow?: string }>();
+    for (const r of runs ?? []) m.set(r.runId, { workflowName: r.workflowName, workflow: r.workflow });
+    return m;
+  }, [runs]);
 
   // Render newest-first — operators glance at the top of the list.
   const rows = useMemo(() => events.slice().reverse(), [events]);
@@ -103,40 +129,39 @@ export function GlobalFeed(): JSX.Element {
   return (
     <section data-testid="global-feed" aria-label="Recent activity">
       <h2 className="mb-2 text-sm font-medium text-muted-foreground">Activity</h2>
-      <ul className="flex flex-col gap-px overflow-hidden rounded border border-border/60 bg-card">
-        <AnimatePresence initial={false}>
-          {rows.map((event) => (
-            <FeedRow key={feedEventKey(event)} event={event} now={now} reduce={reduce} />
-          ))}
-        </AnimatePresence>
-      </ul>
+      <NowContext.Provider value={now}>
+        <ul className="flex flex-col gap-px overflow-hidden rounded border border-border/60 bg-card">
+          <AnimatePresence initial={false}>
+            {rows.map((event) => {
+              const summary = runMap.get(event.runId);
+              const label = summary?.workflowName ?? summary?.workflow ?? `${event.runId.slice(0, 8)}…`;
+              return <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} runLabel={label} />;
+            })}
+          </AnimatePresence>
+        </ul>
+      </NowContext.Provider>
     </section>
   );
 }
 
 interface FeedRowProps {
   event: FeedEvent;
-  now: number;
   reduce: boolean;
+  /** Display label for the run — workflow name when known, runId
+   * prefix as fallback. Stable across re-renders for a given event
+   * unless the underlying run summary changes. */
+  runLabel: string;
 }
 
-function FeedRow({ event, now, reduce }: FeedRowProps): JSX.Element {
+const FeedRow = memo(function FeedRow({ event, reduce, runLabel }: FeedRowProps): JSX.Element {
   const meta = KIND_META[event.type] ?? FALLBACK_META;
   const { Icon, verb, attention } = meta;
 
   const initial = reduce ? false : { opacity: 0, y: -6, scale: 0.98 };
   const animate = { opacity: 1, y: 0, scale: 1 };
   const exit = reduce ? undefined : { opacity: 0 };
-  const transition = reduce
-    ? { duration: 0 }
-    : { duration: ENTER_DURATION_S, ease: EASE_OUT_CUBIC };
-  const layoutTransition = reduce
-    ? { duration: 0 }
-    : { duration: LAYOUT_DURATION_S, ease: "easeInOut" as const };
-
-  // Suppress the time-ago string until `now` is initialized; otherwise
-  // SSR mismatch warnings on hydration.
-  const ago = now > 0 ? formatRelative(event.ts, { now: new Date(now) }) : "";
+  const transition = reduce ? { duration: 0 } : { duration: ENTER_DURATION_S, ease: EASE_OUT_CUBIC };
+  const layoutTransition = reduce ? { duration: 0 } : { duration: LAYOUT_DURATION_S, ease: "easeInOut" as const };
 
   return (
     <motion.li
@@ -158,12 +183,24 @@ function FeedRow({ event, now, reduce }: FeedRowProps): JSX.Element {
           className="min-w-0 flex-1 truncate text-foreground transition-colors hover:text-primary"
         >
           <span className="font-medium">{verb}</span>
-          <span className="ml-2 font-mono text-xs text-muted-foreground">{event.runId.slice(0, 8)}</span>
+          <span className="ml-2 truncate text-xs text-muted-foreground">{runLabel}</span>
         </Link>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={new Date(event.ts).toISOString()}>
-          {ago}
-        </span>
+        <FeedRowTime ts={event.ts} />
       </motion.div>
     </motion.li>
+  );
+});
+
+/** Time leaf — the only thing that re-renders on the 1 Hz tick.
+ * Reads `NowContext` directly instead of taking `now` as a prop so
+ * the parent `FeedRow`'s memo isn't broken by a per-second prop
+ * change. */
+function FeedRowTime({ ts }: { ts: number }): JSX.Element {
+  const now = useContext(NowContext);
+  const ago = now > 0 ? formatRelative(ts, { now: new Date(now) }) : "";
+  return (
+    <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={new Date(ts).toISOString()}>
+      {ago}
+    </span>
   );
 }
