@@ -93,7 +93,20 @@ function typeInto(el: HTMLTextAreaElement, value: string): void {
 
 function withRows(rows: RunSummary[]) {
   const client = createTestQueryClient();
+  // Stats reads the unfiltered list — seed it with everything.
   client.setQueryData(queries.runs.list().queryKey, rows);
+  // Running + Inbox use server-filtered queries; mirror that filter
+  // in the test seed so each section sees its own slice. Fixtures
+  // currently only set the coarse `status` field; we project that
+  // into the implied `runStatus` for filtering purposes.
+  client.setQueryData(
+    queries.runs.list({ status: ["running"] }).queryKey,
+    rows.filter((r) => r.status === "running"),
+  );
+  client.setQueryData(
+    queries.runs.list({ status: ["paused_hitl", "paused_provider_error", "quarantined"] }).queryKey,
+    rows.filter((r) => r.runStatus === "paused_hitl" || r.runStatus === "paused_provider_error" || r.runStatus === "quarantined"),
+  );
   return client;
 }
 

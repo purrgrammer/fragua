@@ -1,6 +1,16 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { JobStatus } from "./api.ts";
+import type { JobStatus, ListRunsFilter } from "./api.ts";
 import * as api from "./api.ts";
+
+/** Canonicalize a `ListRunsFilter` so the same logical filter always
+ * produces the same query-key fragment (sorted statuses, undefined
+ * fields normalized). Returning `null` for "no filter" keeps the
+ * unfiltered list's queryKey shape backwards-compatible
+ * (`["runs", "list", null]`). */
+function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null {
+  if (!filter || !filter.status || filter.status.length === 0) return null;
+  return { status: [...filter.status].sort() };
+}
 
 export const queries = {
   health: () =>
@@ -13,16 +23,22 @@ export const queries = {
 
   runs: {
     all: () => ["runs"] as const,
-    list: () =>
-      queryOptions({
-        queryKey: [...queries.runs.all(), "list"] as const,
-        queryFn: api.listRuns,
+    /** Prefix key for every run-list variant. Pass to
+     * `invalidateQueries` to refetch the unfiltered list AND every
+     * filtered list (Inbox, Running) in one call. */
+    lists: () => [...queries.runs.all(), "list"] as const,
+    list: (filter?: ListRunsFilter) => {
+      const canonical = canonicalizeRunsFilter(filter);
+      return queryOptions({
+        queryKey: [...queries.runs.lists(), canonical] as const,
+        queryFn: () => api.listRuns(canonical ?? undefined),
         // No polling — `useGlobalEventStream` (mounted in App.tsx)
         // invalidates this query on every run-lifecycle SSE frame, so
         // the list refetches on actual state changes instead of every
         // 15 seconds regardless. Polling would be a strict regression
         // (latency + waste) once the SSE is wired.
-      }),
+      });
+    },
     detail: (id: string) =>
       queryOptions({
         queryKey: [...queries.runs.all(), "detail", id] as const,

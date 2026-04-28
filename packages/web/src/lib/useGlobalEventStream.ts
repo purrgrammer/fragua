@@ -111,7 +111,11 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       // global feed has up to 50 of those at once), which is overkill
       // for a single run's status flip.
       if (RUN_INVALIDATE_KINDS.has(parsed.type)) {
-        void qc.invalidateQueries({ queryKey: queries.runs.list().queryKey });
+        // Prefix-match every list variant — unfiltered (Stats),
+        // `{status:["running"]}` (Control Center's Running), and
+        // `{status:["paused_hitl",...]}` (Inbox) all refetch from one
+        // invalidate.
+        void qc.invalidateQueries({ queryKey: queries.runs.lists() });
         void qc.invalidateQueries({ queryKey: queries.runs.detail(parsed.runId).queryKey });
       }
     },

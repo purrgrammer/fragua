@@ -328,8 +328,23 @@ export async function health(): Promise<HealthResponse> {
   );
 }
 
-export async function listRuns(): Promise<RunSummary[]> {
-  return getJson("/runs", (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
+/** Filter passed to `GET /runs`. `status` is mapped to a comma-
+ * separated `?status=` query param, server-side narrows via `IN (…)`. */
+export interface ListRunsFilter {
+  status?: ReadonlyArray<NonNullable<RunSummary["runStatus"]>>;
+}
+
+export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
+  const path = buildRunsListPath(filter);
+  return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
+}
+
+/** Exported for query-key stability tests. */
+export function buildRunsListPath(filter?: ListRunsFilter): string {
+  if (!filter || !filter.status || filter.status.length === 0) return "/runs";
+  // Sort so cache keys are stable regardless of caller order.
+  const statuses = [...filter.status].sort();
+  return `/runs?status=${statuses.map((s) => encodeURIComponent(s)).join(",")}`;
 }
 
 export async function getRun(id: string): Promise<RunDetail> {

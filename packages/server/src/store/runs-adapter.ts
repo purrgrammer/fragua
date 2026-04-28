@@ -194,15 +194,33 @@ function nodeIdOf(event: StoredEvent): string | null {
 export { deriveNodeStates, deriveSelectedEdges };
 
 /**
- * Enumerate every run in the store. Uses a raw SQL escape hatch — we
- * don't want to add a list method to IEventStore just for this
- * adapter, since the real web UI path will eventually paginate.
+ * Enumerate run ids, optionally narrowed to the given lifecycle
+ * statuses. Uses a raw SQL escape hatch — we don't want to add a list
+ * method to IEventStore just for this adapter, since the real web UI
+ * path will eventually paginate.
+ *
+ * `statuses`, when provided, is filtered server-side via `IN (?, ?, …)`
+ * — Inbox and the Running strip pull a small slice of the run_state
+ * table this way instead of loading every row to filter in JS. An
+ * empty array yields zero rows (deliberate — caller asked for a
+ * filtered list with no matches).
  */
-export function listRuns(store: IEventStore): string[] {
+export function listRuns(store: IEventStore, opts: { statuses?: RunStatus[] } = {}): string[] {
   const db = (store as unknown as { db?: Database }).db;
   if (db == null) return [];
+  const statuses = opts.statuses;
+  if (statuses === undefined) {
+    return db
+      .query<{ run_id: string }, []>("SELECT run_id FROM run_state ORDER BY updated_at DESC")
+      .all()
+      .map((r) => r.run_id);
+  }
+  if (statuses.length === 0) return [];
+  const placeholders = statuses.map(() => "?").join(", ");
   return db
-    .query<{ run_id: string }, []>("SELECT run_id FROM run_state ORDER BY updated_at DESC")
-    .all()
+    .query<{ run_id: string }, RunStatus[]>(
+      `SELECT run_id FROM run_state WHERE status IN (${placeholders}) ORDER BY updated_at DESC`,
+    )
+    .all(...statuses)
     .map((r) => r.run_id);
 }

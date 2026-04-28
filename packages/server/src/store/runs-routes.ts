@@ -4,7 +4,7 @@
 // run_state + the event log. Workflow name/source comes from the
 // workflows table (saveWorkflow writes DOT on enqueue).
 
-import { type IEventStore, isTerminal as isTerminalStatus } from "@swarm/store";
+import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
 import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
@@ -32,7 +32,13 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   }
 
   app.get("/runs", async (c) => {
-    const ids = listRuns(store);
+    // Optional `?status=a,b,c` narrows the result to specific lifecycle
+    // statuses (Inbox / Running queries care only about a small slice).
+    // Unknown statuses are dropped silently — old clients should never
+    // send them, and a typo shouldn't 400 a list endpoint.
+    const statusParam = c.req.query("status");
+    const statuses = statusParam !== undefined ? parseStatusList(statusParam) : undefined;
+    const ids = listRuns(store, statuses !== undefined ? { statuses } : {});
     const summaries = [];
     for (const runId of ids) {
       const state = store.getState(runId);
@@ -145,4 +151,29 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   });
 
   return app;
+}
+
+const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  "queued",
+  "running",
+  "paused_hitl",
+  "paused_provider_error",
+  "completed",
+  "cancelled",
+  "halted",
+  "quarantined",
+]);
+
+/** Parse `?status=a,b,c` into a deduped list of valid `RunStatus`
+ * literals. Empty + invalid tokens are dropped. */
+function parseStatusList(raw: string): RunStatus[] {
+  const out: RunStatus[] = [];
+  const seen = new Set<string>();
+  for (const token of raw.split(",")) {
+    const t = token.trim();
+    if (t === "" || seen.has(t)) continue;
+    seen.add(t);
+    if (VALID_STATUSES.has(t as RunStatus)) out.push(t as RunStatus);
+  }
+  return out;
 }

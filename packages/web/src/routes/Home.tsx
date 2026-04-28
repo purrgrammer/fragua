@@ -44,24 +44,40 @@ import { useHealth } from "../types/health.ts";
 /** Cap for the Home Inbox — overflow funnels to /inbox via "View all →". */
 const INBOX_HOME_LIMIT = 5;
 
-export function Home(): JSX.Element {
-  const { data, isPending } = useQuery(queries.runs.list());
+/** Module-scope so `queries.runs.list({ status: RUNNING_STATUSES })`
+ * has a stable reference across renders (TanStack hashes the queryKey
+ * by structure, but keeping the array stable is still cheaper for the
+ * canonicalize/sort dance). */
+const RUNNING_STATUSES = ["running"] as const;
 
-  const rows = data ?? [];
-  const running = useMemo(() => rows.filter((r) => r.status === "running"), [rows]);
-  const stats = useMemo(() => computeStats(rows), [rows]);
+export function Home(): JSX.Element {
+  // Stats needs the full run list to compute global aggregates
+  // (totalCostUsd, freshTokens, cacheHitRate, …). Inbox + Running
+  // each use their own narrowed query so the two big sections of the
+  // page don't pay for each other's data shape.
+  const stats = useStats();
+  const { data: runningData, isPending: runningPending } = useQuery(
+    queries.runs.list({ status: RUNNING_STATUSES }),
+  );
+  const running = runningData ?? [];
 
   return (
     <div className="flex flex-col gap-8">
       {/* Overview launcher temporarily removed — hits POST /jobs, which
           no longer exists on the daemon. Restore once the enqueue API is
           wired up again. */}
-      <StatsTiles stats={stats} loading={isPending} />
+      <StatsTiles stats={stats.value} loading={stats.loading} />
       <Inbox limit={INBOX_HOME_LIMIT} viewAllHref="/inbox" />
-      <RunningSection running={running} loading={isPending} />
+      <RunningSection running={running} loading={runningPending} />
       <GlobalFeed />
     </div>
   );
+}
+
+function useStats(): { value: ReturnType<typeof computeStats>; loading: boolean } {
+  const { data, isPending } = useQuery(queries.runs.list());
+  const value = useMemo(() => computeStats(data ?? []), [data]);
+  return { value, loading: isPending };
 }
 
 // ── Overview launcher ────────────────────────────────────────────────
