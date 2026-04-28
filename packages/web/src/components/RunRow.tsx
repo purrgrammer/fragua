@@ -21,13 +21,13 @@
 
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
+import { shortRunId } from "../lib/runId.ts";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
 
-/** Number of leading runId chars shown in hover tooltips or callers
- *  that still want a short form. No longer used in-row, but kept as
- *  an export because Home's `RunningCard` imports it. */
-const RUN_ID_SHORT_LEN = 8;
+// Run-id formatting moved to `lib/runId.ts` (`shortRunId`) so it
+// produces `prefix…suffix` and disambiguates runs queued in the same
+// second. Kept `shortenRunId` here as a re-export for back-compat.
 
 export interface RunRowProps {
   row: RunSummary;
@@ -95,11 +95,10 @@ function CompactRow({ row }: { row: RunSummary }): JSX.Element {
   );
 }
 
-/** Truncate a runId to its leading `RUN_ID_SHORT_LEN` chars, no ellipsis.
- *  Re-exported for Home's `RunningCard`, which still shows a short runId
- *  on its in-progress cards. */
+/** Compact runId for in-progress cards. Delegates to the shared helper
+ *  so all surfaces produce the same `prefix…suffix` shape. */
 export function shortenRunId(runId: string): string {
-  return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
+  return shortRunId(runId);
 }
 
 /** Display priority for the row's primary label:

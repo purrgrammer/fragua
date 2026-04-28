@@ -42,6 +42,7 @@ import type { RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
 import { queries } from "../lib/queries.ts";
+import { shortRunId } from "../lib/runId.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNowSeconds } from "../lib/useNowExternal.ts";
 import { Badge } from "./ui/badge.tsx";
@@ -78,13 +79,33 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "intent.steering_requested": { Icon: MessageSquare, verb: "steered" },
   "intent.unquarantine": { Icon: ShieldCheck, verb: "unquarantined" },
   "intent.priority_adjusted": { Icon: ArrowUpDown, verb: "reprioritized" },
-  "intent.hitl_input": { Icon: UserIcon, verb: "input" },
-  "intent.resume": { Icon: Play, verb: "resuming" },
+  "intent.hitl_input": { Icon: UserIcon, verb: "human input" },
+  "intent.resume": { Icon: Play, verb: "operator resume" },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
 };
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
+
+/** Resolve the row's icon + verb. For most kinds the static
+ *  {@link KIND_META} is enough; a few are payload-aware so the
+ *  operator can tell at a glance what choice was made or what kind of
+ *  pause was just lifted. Exported for unit tests. */
+export function metaForEvent(event: FeedEvent): FeedKindMeta {
+  const base = KIND_META[event.type] ?? FALLBACK_META;
+  if (event.type === "intent.hitl_input") {
+    const selected = (event.payload as { selected?: unknown } | null)?.selected;
+    if (typeof selected === "string" && selected.length > 0) {
+      return { ...base, verb: `chose ${selected}` };
+    }
+  }
+  if (event.type === "fact.run_resumed") {
+    const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
+    if (fromStatus === "paused_hitl") return { ...base, verb: "resumed (HITL)" };
+    if (fromStatus === "paused_provider_error") return { ...base, verb: "resumed (retry)" };
+  }
+  return base;
+}
 
 // Animation choices per the web-animation-design skill: ease-out-cubic
 // for entries (items entering the viewport), 180ms duration (under
@@ -166,8 +187,7 @@ interface FeedRowProps {
 }
 
 const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element {
-  const meta = KIND_META[event.type] ?? FALLBACK_META;
-  const { Icon, verb, attention } = meta;
+  const { Icon, verb, attention } = metaForEvent(event);
 
   // Dedicated detail query per runId. TanStack dedupes concurrent
   // reads of the same id, so 30 feed rows pointing at 12 distinct
@@ -262,7 +282,7 @@ function FeedRowTime({ ts, className }: { ts: number; className?: string }): JSX
 function displayRunTitle(runId: string, run: RunDetail | undefined): string {
   if (run?.title && run.title.length > 0) return run.title;
   if (run?.input && run.input.length > 0) return clampInline(run.input, 80);
-  return `${runId.slice(0, 8)}…`;
+  return shortRunId(runId);
 }
 
 function runTitleTooltip(runId: string, run: RunDetail | undefined): string {

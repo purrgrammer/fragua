@@ -14,8 +14,6 @@ export interface ResultContext {
   appliedIntentSeqs: number[];
   /** For cancel: the seq of the cancel intent. */
   cancelIntentSeq?: number;
-  /** For resume from HITL: the seq of the hitl_input intent. */
-  hitlInputSeq?: number;
 }
 
 /**
@@ -38,15 +36,11 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
   }
 
-  if (ctx.hitlInputSeq != null) {
-    facts.push({
-      type: "fact.run_resumed",
-      payload: {
-        fromStatus: ctx.state.status,
-        inputIntentSeq: ctx.hitlInputSeq,
-      },
-    });
-  }
+  // No `fact.run_resumed` emitted here. `wakeHitl` / `wakeResume` /
+  // `wakeUnquarantine` already commit the resume fact when the wake
+  // intent is processed (see daemon/src/wake-pending.ts) — re-emitting
+  // it on dispatch completion was a leftover from M3's earlier design
+  // and produced a redundant `fromStatus: "running"` row in the feed.
 
   // Result-specific facts.
   switch (result.kind) {

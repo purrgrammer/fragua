@@ -736,7 +736,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       const factsCtx = {
         state,
         appliedIntentSeqs: decision.appliedSeqs,
-        ...(decision.hitlInput !== undefined && unapplied.length > 0 ? { hitlInputSeq: lastHitlSeq(unapplied) } : {}),
       };
       let facts = resultToFacts(result, factsCtx);
 
@@ -884,14 +883,6 @@ function routingString(routing: Record<string, unknown>, key: string): string | 
 function nodeRetryCount(routing: Record<string, unknown>): number {
   const v = routing["retry_count"];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
-function lastHitlSeq(unapplied: ReadonlyArray<{ type: string; seq: number }>): number {
-  for (let i = unapplied.length - 1; i >= 0; i--) {
-    const e = unapplied[i]!;
-    if (e.type === "intent.hitl_input") return e.seq;
-  }
-  return 0;
 }
 
 /** Reserved routing key for budget-warn dedup. Holds the set of

@@ -129,7 +129,9 @@ describe("RunDetail", () => {
         expect(within(container).getByTestId("detail-status")).toBeTruthy();
       });
       const h2 = container.querySelector("h2");
-      expect(h2?.textContent).toBe("abc12345");
+      // shortRunId formats as `prefix…suffix` so runs queued in the
+      // same second remain distinguishable.
+      expect(h2?.textContent).toBe("abc1…5xyz");
       expect(h2?.getAttribute("title")).toBe("abc12345xyz");
       expect(within(container).getByTestId("conversation-region")).toBeTruthy();
       expect(within(container).queryByTestId("graph-region")).toBeNull();

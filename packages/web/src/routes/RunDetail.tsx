@@ -32,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
+import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import { mergeDetail } from "../lib/useDetailOverlay.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
@@ -431,11 +432,7 @@ const RunGraphTab = memo(function RunGraphTab({
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-const RUN_ID_SHORT_LEN = 8;
-
-function shortenRunId(runId: string): string {
-  return runId.length > RUN_ID_SHORT_LEN ? runId.slice(0, RUN_ID_SHORT_LEN) : runId;
-}
+const shortenRunId = shortRunId;
 
 function headingText(detail: RunDetailT): string {
   if (detail.title && detail.title.length > 0) return detail.title;
