@@ -15,9 +15,9 @@
 // Allowlist:
 //   CLEAN_PATHS  — shadcn-generated primitives and ai-elements, correct by design.
 
+import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 
 const SRC = join(import.meta.dir, "..", "src");
 

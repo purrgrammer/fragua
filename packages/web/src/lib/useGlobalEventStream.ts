@@ -11,10 +11,10 @@
 // the backfill ended, with the server's `ts >= cursor` semantics
 // absorbing any boundary-ms appends via per-connection dedup.
 
-import { useQueryClient } from "@tanstack/react-query";
 import type { FeedEvent } from "@swarm/types";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
 import { appendFeedEventsAtom, feedLoadingAtom } from "./globalFeed.ts";
 import { queries } from "./queries.ts";
@@ -89,9 +89,9 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
     return () => {
       cancelled = true;
     };
-    // appendFeed/setLoading are stable (jotai); only bootstrap once per mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // appendFeed/setLoading are stable jotai atom setters; listing them
+    // satisfies the exhaustive-deps rule without changing behaviour.
+  }, [appendFeed, setLoading]);
 
   const onFrame = useCallback(
     (ev: MessageEvent): void => {

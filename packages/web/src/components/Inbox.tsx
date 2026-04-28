@@ -134,9 +134,9 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
   );
 }
 
-function InboxRow({ row }: { row: RunSummary }): JSX.Element {
+function InboxRow({ row }: { row: RunSummary }): JSX.Element | null {
   const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
-  if (!meta) return <></>;
+  if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;
   return (

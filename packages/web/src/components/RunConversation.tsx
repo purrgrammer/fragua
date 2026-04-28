@@ -200,9 +200,7 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
     >
       <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
-        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">
-          {label}
-        </span>
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">{label}</span>
         {state && <NodeStatusLabel state={state.state} isLive={isLive} isPaused={isPaused} />}
         <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
       </header>

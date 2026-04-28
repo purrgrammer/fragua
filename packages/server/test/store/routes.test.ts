@@ -808,11 +808,7 @@ describe("global event feed (cross-run)", () => {
       [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: a0.schemaVersion, startNode: "n" } }],
       a0.version,
     );
-    store.appendFact(
-      "a",
-      [{ type: "fact.node_started", payload: { nodeId: "n", iteration: 1 } }],
-      a1.newVersion,
-    );
+    store.appendFact("a", [{ type: "fact.node_started", payload: { nodeId: "n", iteration: 1 } }], a1.newVersion);
     store.appendObservabilityEvents("a", [
       { type: "cost.recorded", payload: { cost_usd: 0.001, total_tokens: 5, nodeId: "n" } },
     ]);
@@ -893,9 +889,7 @@ describe("global event feed (cross-run)", () => {
     const aState2 = store.getState("a")!;
     // node_aborted on a non-running run would fail OCC; use cost.recorded
     // (observability, doesn't bump version) to inject an excluded kind.
-    store.appendObservabilityEvents("a", [
-      { type: "agent.warning", payload: { message: "noise" } },
-    ]);
+    store.appendObservabilityEvents("a", [{ type: "agent.warning", payload: { message: "noise" } }]);
     // And a real allow-listed event on `b`.
     store.appendIntent("b", { type: "intent.cancel_requested", payload: { reason: "stop" } });
 
@@ -998,7 +992,7 @@ describe("global event feed (cross-run)", () => {
     // connection dedup specifically to absorb this case.
     //
     // Pin both runs to the same `now` so every event shares ts.
-    let nowVal = 5_000_000;
+    const nowVal = 5_000_000;
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
       tStore.saveWorkflow("wf", "t", "digraph {}");

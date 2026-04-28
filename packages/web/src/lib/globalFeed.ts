@@ -8,8 +8,8 @@
 // server's `ts >= cursor` filter intentionally re-emits at the
 // boundary millisecond).
 
-import { atom } from "jotai";
 import type { FeedEvent } from "@swarm/types";
+import { atom } from "jotai";
 
 /** Hard cap on feed length — events past this fall off the head as
  * new ones arrive. 50 is enough to fill several screens of timeline

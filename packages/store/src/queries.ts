@@ -342,10 +342,7 @@ export function selectGlobalEventsAfter(
  * a subquery; the outer ORDER BY ASC reshapes the result so the API
  * contract ("chronological") matches the SQL — no client-side reverse.
  */
-export function selectGlobalEventsLatest(
-  db: Database,
-  opts: { kindIn: readonly string[]; limit: number },
-): EventRow[] {
+export function selectGlobalEventsLatest(db: Database, opts: { kindIn: readonly string[]; limit: number }): EventRow[] {
   const kindsJson = JSON.stringify(opts.kindIn);
   return db.query<EventRow, [string, number]>(SELECT_GLOBAL_EVENTS_LATEST_SQL).all(kindsJson, opts.limit);
 }

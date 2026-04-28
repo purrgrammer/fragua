@@ -18,13 +18,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
-import {
-  encodeGlobalEventId,
-  parseGlobalFromTsMax,
-  parseSeqCursorMax,
-  runSseLoop,
-  serializeEvent,
-} from "./sse.ts";
+import { encodeGlobalEventId, parseGlobalFromTsMax, parseSeqCursorMax, runSseLoop, serializeEvent } from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared

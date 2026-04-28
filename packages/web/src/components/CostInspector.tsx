@@ -191,7 +191,8 @@ function StepCostRow({
   // `justify-self-end` on each metric cell right-aligns its chip;
   // empty cells (e.g. a step missing cost data) still hold column
   // space so neighbouring rows' chips don't shift.
-  const rowGridClass = "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-sw-surface px-3 py-2";
+  const rowGridClass =
+    "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-sw-surface px-3 py-2";
 
   return (
     <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>

@@ -23,7 +23,6 @@ export type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
-export { FEED_EVENT_KINDS } from "./swarm-events.ts";
 export type {
   AnyEvent,
   AnyEventType,
@@ -40,6 +39,7 @@ export type {
   RawEvent,
   RunStatus,
 } from "./swarm-events.ts";
+export { FEED_EVENT_KINDS } from "./swarm-events.ts";
 
 /** Swarm-specific custom message type: the assembled system prompt
  * for a single LLM call. Persisted in the `messages` table so UIs

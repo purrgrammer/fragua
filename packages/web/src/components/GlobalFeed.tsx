@@ -112,9 +112,8 @@ export function GlobalFeed(): JSX.Element {
           aria-busy="true"
           className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
         >
-          {Array.from({ length: 4 }).map((_, i) => (
-            // eslint-disable-next-line react/no-array-index-key
-            <FeedRowSkeleton key={i} />
+          {(["a", "b", "c", "d"] as const).map((k) => (
+            <FeedRowSkeleton key={k} />
           ))}
         </ul>
       </section>
@@ -193,7 +192,9 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       exit={exit}
       transition={transition}
       style={
-        attention ? { willChange: reduce ? undefined : "transform", borderLeftColor: "var(--sw-accent-thinking)" } : { willChange: reduce ? undefined : "transform" }
+        attention
+          ? { willChange: reduce ? undefined : "transform", borderLeftColor: "var(--sw-accent-thinking)" }
+          : { willChange: reduce ? undefined : "transform" }
       }
       className={cn(
         "group grid items-center px-3 py-2 text-sw-sm",
@@ -208,20 +209,14 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
         attention ? "border-l-2" : "border-l-2 border-transparent",
       )}
     >
-      <Icon
-        className="col-start-1 row-start-1 size-4 self-center text-sw-muted"
-        aria-hidden
-      />
+      <Icon className="col-start-1 row-start-1 size-4 self-center text-sw-muted" aria-hidden />
       <span className="col-start-2 row-start-1 truncate text-sw-muted">{verb}</span>
       {/* Time: top-right on mobile (col 3 row 1); col 5 row 1 on
           desktop. Explicit `sm:row-start-1` everywhere (instead of
           `row-auto`) keeps the desktop row truly single-line — the
           row-auto shorthand was unreliable next to a longhand
           `row-start-2` from the mobile variant. */}
-      <FeedRowTime
-        ts={event.ts}
-        className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0"
-      />
+      <FeedRowTime ts={event.ts} className="col-start-3 row-start-1 ml-auto text-right sm:col-start-5 sm:ml-0" />
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
@@ -306,4 +301,3 @@ function FeedRowSkeleton(): JSX.Element {
     </li>
   );
 }
-
