@@ -17,10 +17,11 @@ export const queries = {
       queryOptions({
         queryKey: [...queries.runs.all(), "list"] as const,
         queryFn: api.listRuns,
-        // Poll infrequently; the list view is a dashboard, not a live
-        // tail. Live state goes through the per-run SSE stream. Pause
-        // when the query has errored so we don't hammer a dead server.
-        refetchInterval: (q) => (q.state.error ? false : 15_000),
+        // No polling — `useGlobalEventStream` (mounted in App.tsx)
+        // invalidates this query on every run-lifecycle SSE frame, so
+        // the list refetches on actual state changes instead of every
+        // 15 seconds regardless. Polling would be a strict regression
+        // (latency + waste) once the SSE is wired.
       }),
     detail: (id: string) =>
       queryOptions({

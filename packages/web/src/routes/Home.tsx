@@ -23,6 +23,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "../components/ai-elements/prompt-input.tsx";
+import { GlobalFeed } from "../components/GlobalFeed.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
@@ -51,6 +52,7 @@ export function Home(): JSX.Element {
           no longer exists on the daemon. Restore once the enqueue API is
           wired up again. */}
       <StatsTiles stats={stats} loading={isPending} />
+      <GlobalFeed />
       <RunsSection running={running} recent={recent} loading={isPending} />
     </div>
   );

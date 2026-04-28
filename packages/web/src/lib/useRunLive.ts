@@ -14,9 +14,10 @@
 //   - `totalEvents` — monotonic counter, cheap invalidation trigger.
 //   - `controlEvents` — filtered slice for `usePendingSteers`.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
 import { type DetailOverlay, EMPTY_DETAIL_OVERLAY, foldDetailFrame, isDetailEvent } from "./useDetailOverlay.ts";
+import { useEventSource } from "./useEventSource.ts";
 import { type CostAggregate, EMPTY_COST_AGGREGATE, foldCostFrame } from "./useLiveCostAggregate.ts";
 
 export type RunLiveStatus = "idle" | "loading" | "live" | "closed" | "error";
@@ -105,7 +106,6 @@ function isControlReconcileEvent(type: string, data: Record<string, unknown> | n
 export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOptions = {}): UseRunLiveResult {
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
-  const [status, setStatus] = useState<RunLiveStatus>(runId ? "loading" : "idle");
   const [totalEvents, setTotalEvents] = useState(0);
   const [controlEvents, setControlEvents] = useState<UseRunLiveResult["controlEvents"]>([]);
   const [liveCost, setLiveCost] = useState<CostAggregate>(EMPTY_COST_AGGREGATE);
@@ -116,7 +116,9 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   // Coalesce refetches — a burst of message_end events under 30ms triggers a single fetch.
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: eventSourceImpl is a stable test injection; effect keys on runId + terminal + sinceSeq.
+  // Reset state on runId change, then bootstrap-fetch the historical
+  // messages backlog. Both are gated on `terminal !== undefined` —
+  // see the comment block on the URL gate below for rationale.
   useEffect(() => {
     setMessages([]);
     setStreaming(null);
@@ -126,91 +128,46 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     setDetailOverlay(EMPTY_DETAIL_OVERLAY);
     lastOrdinalRef.current = 0;
 
-    if (!runId) {
-      setStatus("idle");
-      return;
-    }
+    if (!runId || opts.terminal === undefined) return;
 
-    setStatus("loading");
     let cancelled = false;
-
-    const refetchMessages = (): void => {
-      if (cancelled) return;
-      const since = lastOrdinalRef.current;
-      getRunMessages(runId, since)
-        .then((rows) => {
-          if (cancelled || rows.length === 0) return;
-          lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
-          setMessages((prev) => (since === 0 ? rows : [...prev, ...rows]));
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          console.warn("[useRunLive] messages fetch failed for", runId, "—", err);
-        });
-    };
-
-    const scheduleRefetch = (): void => {
-      if (refetchTimerRef.current) return;
-      refetchTimerRef.current = setTimeout(() => {
+    getRunMessages(runId, 0)
+      .then((rows) => {
+        if (cancelled || rows.length === 0) return;
+        lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
+        setMessages(rows);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.warn("[useRunLive] messages fetch failed for", runId, "—", err);
+      });
+    return () => {
+      cancelled = true;
+      if (refetchTimerRef.current) {
+        clearTimeout(refetchTimerRef.current);
         refetchTimerRef.current = null;
-        refetchMessages();
-      }, 30);
+      }
     };
+  }, [runId, opts.terminal]);
 
-    // Skip SSE entirely on terminal runs — no new frames will ever
-    // arrive, and the snapshot+messages fetch already loaded everything.
-    // Also skip while the snapshot is still loading (`terminal === undefined`):
-    // opening an SSE we'd close 50ms later when the snapshot resolves
-    // is wasted work and shows up in the network log as transient
-    // connections. The effect re-runs once `terminal` settles to a
-    // boolean, opening SSE only if the run is genuinely live.
-    //
-    // Bootstrap fetch is also gated on `terminal !== undefined` — the
-    // effect is re-keyed on `terminal` and `sinceSeq`, so issuing a
-    // first fetch before either resolves just to re-issue it 50ms later
-    // (and again under React 18 strict-mode double-invoke) burned three
-    // /messages requests on every conversation page mount.
-    if (opts.terminal === undefined) {
-      setStatus("loading");
-      return () => {
-        cancelled = true;
-      };
-    }
+  // SSE subscription. URL is null when:
+  //   - runId is missing (no run to watch).
+  //   - opts.terminal === undefined: snapshot still loading; opening
+  //     an SSE we'd close 50ms later when the snapshot resolves shows
+  //     up in the network log as transient connections.
+  //   - opts.terminal === true: confirmed terminal; no new frames will
+  //     ever arrive, snapshot+messages fetch already loaded everything.
+  //
+  // `sinceSeq` short-circuits the historical replay: server resumes
+  // from sinceSeq+1 instead of seq 0. Without this, opening a 14k-event
+  // run lit up the browser with every prior event before any new one
+  // could arrive — the `setStreaming` accumulator alone ran tens of
+  // thousands of state updates.
+  const sseUrl = runId && opts.terminal === false ? getRunEventsUrl(runId, opts.sinceSeq) : null;
 
-    refetchMessages();
-
-    if (opts.terminal === true) {
-      setStatus("closed");
-      return () => {
-        cancelled = true;
-        if (refetchTimerRef.current) {
-          clearTimeout(refetchTimerRef.current);
-          refetchTimerRef.current = null;
-        }
-      };
-    }
-
-    const Ctor = opts.eventSourceImpl ?? (globalThis as { EventSource?: typeof EventSource }).EventSource;
-    if (!Ctor) {
-      setStatus("closed");
-      return () => {
-        cancelled = true;
-        if (refetchTimerRef.current) {
-          clearTimeout(refetchTimerRef.current);
-          refetchTimerRef.current = null;
-        }
-      };
-    }
-
-    // `sinceSeq` short-circuits the historical replay: the server
-    // resumes from sinceSeq+1 instead of seq 0. Without this, opening
-    // a 14k-event run lit up the browser with every prior event before
-    // any new one could arrive — the `setStreaming` accumulator alone
-    // ran tens of thousands of state updates.
-    const es = new Ctor(getRunEventsUrl(runId, opts.sinceSeq));
-    setStatus("live");
-
-    const onFrame = (ev: MessageEvent): void => {
+  const onFrame = useCallback(
+    (ev: MessageEvent): void => {
+      if (!runId) return;
       const idNum = ev.lastEventId ? Number.parseInt(ev.lastEventId, 10) : Number.NaN;
       setTotalEvents((n) => n + 1);
 
@@ -245,7 +202,21 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         });
       }
       if (MESSAGE_SIGNAL_TYPES.has(type)) {
-        scheduleRefetch();
+        if (refetchTimerRef.current) return;
+        const id = runId;
+        refetchTimerRef.current = setTimeout(() => {
+          refetchTimerRef.current = null;
+          const since = lastOrdinalRef.current;
+          getRunMessages(id, since)
+            .then((rows) => {
+              if (rows.length === 0) return;
+              lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
+              setMessages((prev) => [...prev, ...rows]);
+            })
+            .catch((err: unknown) => {
+              console.warn("[useRunLive] messages fetch failed for", id, "—", err);
+            });
+        }, 30);
       }
 
       // Streaming buffer: open on assistant message_start, accumulate
@@ -267,37 +238,27 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
           type === "llm.text_delta" ? "text" : type === "llm.thinking_delta" ? "thinking" : "toolCall";
         setStreaming((prev) => applyDelta(prev, nodeId, kind, index, delta));
       }
-    };
+    },
+    [runId],
+  );
 
-    const onOpen = (): void => {
-      if (!cancelled) setStatus("live");
-    };
-    const onError = (): void => {
-      if (cancelled) return;
-      setStatus(es.readyState === 2 ? "closed" : "error");
-    };
+  const sseOpts = opts.eventSourceImpl ? { eventSourceImpl: opts.eventSourceImpl } : {};
+  const { status: sseStatus } = useEventSource(sseUrl, onFrame, sseOpts);
 
-    // Single listener — the server emits frames without an `event:`
-    // field so they all dispatch as `message`. The frame's actual type
-    // lives in the JSON payload (`parsed["type"]`), which `onFrame`
-    // reads directly. Previously we registered 45 typed listeners per
-    // mount; the closure chain alone added measurable retention.
-    es.addEventListener("open", onOpen);
-    es.addEventListener("error", onError);
-    es.addEventListener("message", onFrame as EventListener);
-
-    return () => {
-      cancelled = true;
-      if (refetchTimerRef.current) {
-        clearTimeout(refetchTimerRef.current);
-        refetchTimerRef.current = null;
-      }
-      es.removeEventListener("open", onOpen);
-      es.removeEventListener("error", onError);
-      es.removeEventListener("message", onFrame as EventListener);
-      es.close();
-    };
-  }, [runId, opts.terminal, opts.sinceSeq]);
+  // Project the SSE primitive's status into the legacy RunLiveStatus
+  // shape used by callers — `loading` while bootstrap pending, `closed`
+  // for terminal runs, otherwise the raw SSE status.
+  const status: RunLiveStatus = !runId
+    ? "idle"
+    : opts.terminal === undefined
+      ? "loading"
+      : opts.terminal === true
+        ? "closed"
+        : sseStatus === "open"
+          ? "live"
+          : sseStatus === "connecting"
+            ? "loading"
+            : sseStatus;
 
   return { messages, streaming, status, totalEvents, controlEvents, liveCost, detailOverlay };
 }

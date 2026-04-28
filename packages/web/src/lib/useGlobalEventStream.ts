@@ -1,0 +1,125 @@
+// useGlobalEventStream — single top-level hook that drives:
+//   (1) the global feed atom (powers <GlobalFeed/> on Home)
+//   (2) cross-app run-query invalidation (replaces the 15s polling
+//       window — TanStack Query refetches whenever a run-lifecycle
+//       event lands, so RunsList / Home tiles stay in sync without
+//       wasting requests in between)
+//
+// Bootstrap order matters: backfill THEN open SSE. The backfill
+// returns the latest N events (oldest-first) and we use the max ts
+// as the SSE cursor — that way the stream picks up exactly where
+// the backfill ended, with the server's `ts >= cursor` semantics
+// absorbing any boundary-ms appends via per-connection dedup.
+
+import { useQueryClient } from "@tanstack/react-query";
+import type { FeedEvent } from "@swarm/types";
+import { useSetAtom } from "jotai";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getFeedEvents, getFeedStreamUrl } from "./api.ts";
+import { appendFeedEventsAtom } from "./globalFeed.ts";
+import { queries } from "./queries.ts";
+import { useEventSource } from "./useEventSource.ts";
+
+/** Event kinds that imply the runs-list / run-detail caches are stale.
+ * On any of these, invalidate the relevant queries so subscribed
+ * components refetch. The set is intentionally narrow — node-level
+ * progress doesn't change the runs-list summary. */
+const RUN_INVALIDATE_KINDS = new Set<string>([
+  "intent.run_enqueued",
+  "fact.run_started",
+  "fact.run_completed",
+  "fact.run_paused_hitl",
+  "fact.run_paused_provider_error",
+  "fact.run_resumed",
+  "fact.run_cancelled",
+  "fact.run_halted",
+  "fact.run_quarantined",
+  "fact.run_requeued_after_crash",
+]);
+
+export interface UseGlobalEventStreamOptions {
+  /** Test injection. */
+  eventSourceImpl?: typeof EventSource;
+}
+
+/**
+ * Mount once, near the app root. Returns nothing — the hook drives
+ * the `feedAtom` and the React Query cache as side effects.
+ *
+ * Idempotent: re-mounting (e.g. via React 18 strict-mode double-
+ * invoke or HMR) just runs another bootstrap; the feed atom dedupes
+ * the resulting overlap.
+ */
+export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): void {
+  const qc = useQueryClient();
+  const appendFeed = useSetAtom(appendFeedEventsAtom);
+
+  // Cursor for the live SSE: undefined until backfill resolves. The
+  // SSE URL is gated on this so we don't open a stream that immediately
+  // re-replays the entire history. Once set, the URL stays stable
+  // until the hook re-mounts.
+  const [fromTs, setFromTs] = useState<number | null>(null);
+
+  // Backfill on mount: fetch the latest N events, seed the atom,
+  // capture the max ts as the SSE cursor.
+  useEffect(() => {
+    let cancelled = false;
+    getFeedEvents()
+      .then((events) => {
+        if (cancelled) return;
+        appendFeed(events);
+        const last = events[events.length - 1];
+        // If the backfill is empty, start from "now" so the stream
+        // doesn't replay a whole DB worth of history. Slightly past
+        // the wall clock so we don't accidentally land before any
+        // event the server stamped at this exact ms.
+        setFromTs(last ? last.ts : Date.now());
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.warn("[useGlobalEventStream] backfill failed:", err);
+        // Still open the stream from now — the feed will just be
+        // empty until live events arrive.
+        setFromTs(Date.now());
+      });
+    return () => {
+      cancelled = true;
+    };
+    // appendFeed is stable (jotai); we only want bootstrap once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onFrame = useCallback(
+    (ev: MessageEvent): void => {
+      let parsed: FeedEvent | null = null;
+      try {
+        parsed = JSON.parse(String(ev.data ?? "")) as FeedEvent;
+      } catch {
+        return;
+      }
+      if (parsed == null || typeof parsed.runId !== "string" || typeof parsed.seq !== "number") return;
+
+      appendFeed(parsed);
+
+      // Invalidate run queries so RunsList / Home tiles refetch.
+      // Cheap — TanStack Query coalesces concurrent invalidations and
+      // only refetches what's currently mounted+observed.
+      if (RUN_INVALIDATE_KINDS.has(parsed.type)) {
+        void qc.invalidateQueries({ queryKey: queries.runs.all() });
+      }
+    },
+    [appendFeed, qc],
+  );
+
+  // Keep onFrame stable across renders so useEventSource doesn't
+  // re-key on every parent render. The hook's own ref handling absorbs
+  // the closure update.
+  const sseUrl = fromTs != null ? getFeedStreamUrl(fromTs) : null;
+  const sseOpts = opts.eventSourceImpl ? { eventSourceImpl: opts.eventSourceImpl } : {};
+  useEventSource(sseUrl, onFrame, sseOpts);
+}
+
+/** Internal export — exposed for tests so they can assert which run
+ * kinds trigger invalidation without coupling the test to the
+ * mount-order of the runs cache. */
+export const __invalidateKinds = RUN_INVALIDATE_KINDS;

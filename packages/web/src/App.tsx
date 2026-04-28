@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { queries } from "./lib/queries.ts";
 import { createQueryClient } from "./lib/query-client.ts";
 import { createRoutes } from "./lib/router.tsx";
+import { useGlobalEventStream } from "./lib/useGlobalEventStream.ts";
 import { HealthContext, type HealthContextValue } from "./types/health.ts";
 
 export type { HealthStatus } from "./types/health.ts";
@@ -24,11 +25,21 @@ export function App({ router, queryClient }: AppProps = {}): JSX.Element {
 
   return (
     <QueryClientProvider client={qc}>
+      <GlobalFeedHost />
       <HealthProvider>
         <RouterProvider router={activeRouter} />
       </HealthProvider>
     </QueryClientProvider>
   );
+}
+
+/** Side-effect-only component: drives the global event feed atom and
+ * cross-app run-query invalidation. Mounted once at the app root so
+ * the SSE connection survives navigation and the feed buffer persists
+ * across pages. Renders nothing. */
+function GlobalFeedHost(): null {
+  useGlobalEventStream();
+  return null;
 }
 
 function HealthProvider({ children }: { children: ReactNode }): JSX.Element {
