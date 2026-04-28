@@ -38,7 +38,7 @@ digraph build {
 
   approval [
     shape = hexagon
-    prompt = "Review the diff with `git diff HEAD`. Reply APPROVED or REJECT: <reason>."
+    label = "Review the diff with `git diff HEAD`. Approve or reject?"
   ]
 
   commit [
@@ -69,8 +69,8 @@ digraph build {
   verify -> approval  [condition="outcome=success"]
   verify -> done      [condition="outcome=fail"]
 
-  approval -> commit  [condition="context.hitl.approval=APPROVED"]
-  approval -> done
+  approval -> commit [label="[A] Approve"]
+  approval -> done   [label="[R] Reject"]
 
   commit -> merge
   merge -> done

@@ -271,6 +271,46 @@ describe("HITL (wait.human) lint rules", () => {
     expect(diags.some((d) => d.code === "E010")).toBe(false);
   });
 
+  test("W004: legacy context.hitl.* condition on a hexagon outgoing edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a    [condition="context.hitl.gate=APPROVED"]
+          gate -> done
+          a -> done
+        }
+      `),
+    );
+    const w004 = diags.find((d) => d.code === "W004");
+    expect(w004).toBeDefined();
+    expect(w004?.severity).toBe("warning");
+    expect(w004?.edge).toEqual({ from: "gate", to: "a" });
+    expect(w004?.message).toMatch(/legacy/);
+  });
+
+  test("W004 not raised on non-hexagon edges or non-hitl conditions", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> gate
+          gate -> a    [label="[A] Approve"]
+          gate -> done [label="[R] Reject"]
+          a -> done    [condition="outcome=success"]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W004")).toBe(false);
+  });
+
   test("E010 reports unique-key sets independently per hexagon node", () => {
     // Two hexagons; only the second has a collision.
     const diags = validate(

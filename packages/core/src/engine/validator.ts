@@ -217,6 +217,31 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // W004: hexagon outgoing edge carries a legacy `context.hitl.*`
+  // condition. The pre-structured-HITL handler wrote operator input to
+  // `routing["hitl.<nodeId>"]` so workflows could branch on it via
+  // edge conditions. The structured handler writes
+  // `human.gate.{selected,label,note}` and routes via `suggestedNextIds`;
+  // the legacy condition will never match and the edge is dead code.
+  // Authors should drop the condition and rely on the `[K] Label`
+  // accelerator on the edge to drive routing.
+  for (const n of nodes) {
+    if (n.shape !== "hexagon") continue;
+    for (const e of graph.edges) {
+      if (e.from !== n.id) continue;
+      const cond = e.attrs.condition;
+      if (typeof cond !== "string") continue;
+      if (!/\bcontext\.hitl\b/.test(cond)) continue;
+      diags.push({
+        severity: "warning",
+        code: "W004",
+        message: `wait.human edge "${e.from}" → "${e.to}" uses a legacy "context.hitl.*" condition that the structured HITL handler never writes (use "[K] Label" on the edge instead)`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
   // E010: hexagon outgoing edges must produce unique accelerator keys.
   // Auto-dispatcher derives keys via parseAcceleratorKey; collisions
   // would shadow each other in the option list (and the handler refuses

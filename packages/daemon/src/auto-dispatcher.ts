@@ -238,7 +238,7 @@ function malformedFanInSpec(nodeId: string): HandlerSpec {
 function specForNode(
   nodeId: string,
   edges: Array<{ to: string; label?: string }>,
-  attrs: { shape?: string; type?: string; prompt?: string; tool_command?: string },
+  attrs: { shape?: string; type?: string; prompt?: string; label?: string; tool_command?: string },
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = edges[0]?.to ?? "__end__";
@@ -250,9 +250,14 @@ function specForNode(
         const lbl = e.label ?? e.to;
         return { key: handler.parseAcceleratorKey(lbl), label: lbl, to: e.to };
       });
+      // Question text precedence: graphviz `label=` (the convention for
+      // visible node text) → `prompt=` (legacy / shared with codergen)
+      // → fallback. Authors who type `label="Approve?"` on a hexagon
+      // expect that to be the operator-facing question.
+      const questionLabel = attrs.label ?? attrs.prompt ?? `waiting at ${nodeId}`;
       try {
         return handler.makeWaitHumanHandler({
-          label: attrs.prompt ?? `waiting at ${nodeId}`,
+          label: questionLabel,
           options,
         });
       } catch (err) {

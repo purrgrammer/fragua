@@ -24,14 +24,23 @@ Current rules in `packages/core/src/engine/validator.ts`:
 | W001 | warning | (extension) | orphan: no incoming edges |
 | W002 | warning | `reachability` | unreachable from start |
 | W003 | warning | (extension) | no fail-edge fallback |
+| W004 | warning | (extension) | hexagon edge uses legacy `context.hitl.*` condition (Attractor migration smell) |
 | W005 | warning | (extension) | duplicate edges |
 
-E006/E007/E008/E009/E010/W001/W003/W005 are swarm extensions — useful, keep
+E006/E007/E008/E009/E010/W001/W003/W004/W005 are swarm extensions — useful, keep
 them.
 
 E009/E010 catch the two HITL construction errors at validate-time
 instead of at first dispatch (auto-dispatcher catches them too as
 defense-in-depth).
+
+W004 catches the migration smell from the pre-structured-HITL handler:
+the old handler wrote operator input to `routing["hitl.<nodeId>"]` so
+authors branched on it via edge `condition="context.hitl.foo=BAR"`.
+The structured handler writes `human.gate.{selected,label,note}` and
+routes via `suggestedNextIds`, so legacy conditions are dead code. The
+warning prompts authors to drop the condition and rely on `[K] Label`
+on the edge.
 
 ## Gap vs §7.2
 

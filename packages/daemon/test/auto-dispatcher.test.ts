@@ -52,6 +52,39 @@ describe("autoDispatcherResolver", () => {
     store.close();
   });
 
+  test("hexagon question text comes from attrs.label (graphviz convention)", async () => {
+    // Authors put question text on `label=` (the visible-name attr in
+    // graphviz). Earlier code only read `prompt=`, so the UI showed
+    // "waiting at <id>" instead of the authored question. Verify both
+    // attrs work, with `label` winning.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         g1 [shape=hexagon, label="From label"]
+         g2 [shape=hexagon, prompt="From prompt"]
+         g3 [shape=hexagon, label="Label wins", prompt="From prompt"]
+         done [shape=Msquare]
+         start -> g1 -> g2 -> g3 -> done
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    for (const [id, expected] of [
+      ["g1", "From label"],
+      ["g2", "From prompt"],
+      ["g3", "Label wins"],
+    ] as const) {
+      const spec = dispatcher.get("sha", id);
+      const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
+      expect(result.kind).toBe("yield_hitl");
+      if (result.kind === "yield_hitl") expect(result.label).toBe(expected);
+    }
+    store.close();
+  });
+
   test("hexagon yield_hitl carries options derived from outgoing edge labels", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
