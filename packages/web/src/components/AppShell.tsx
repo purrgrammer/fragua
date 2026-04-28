@@ -37,6 +37,7 @@ import { queries } from "../lib/queries.ts";
 import { useHealth } from "../types/health.ts";
 import { AppSidebar } from "./AppSidebar.tsx";
 import { DaemonBanner } from "./DaemonBanner.tsx";
+import { ThemeToggle } from "./ThemeToggle.tsx";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -68,13 +69,14 @@ export function AppShell(): JSX.Element {
       <SidebarInset className="h-full min-w-0">
         <header
           data-testid="app-shell-header"
-          className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3"
+          className="flex h-11 shrink-0 items-center gap-2 border-b border-sw-border px-3"
         >
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
           <div className="min-w-0 flex-1 overflow-hidden">
             <RouteBreadcrumb />
           </div>
+          <ThemeToggle />
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-4">
           <ShellDaemonBanner />

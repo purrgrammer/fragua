@@ -24,6 +24,8 @@ import type { RunSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { displayTitle, displayTooltip } from "./RunRow.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { EmptyState } from "./ui/empty-state.tsx";
+import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 /** Raw lifecycle statuses an operator can act on. Module-scope so the
@@ -37,16 +39,31 @@ const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = 
 interface ReasonMeta {
   Icon: typeof Pause;
   label: string;
-  /** Tailwind classes for the leading icon — same amber accent the
-   * Feed uses for attention-worthy events, so the visual language is
-   * consistent across sections. */
+  /** Swarm state-accent class for the leading icon. The matching attention
+   * border on the row uses the same accent via the `--sw-accent-*` vars. */
   iconClass: string;
+  borderVar: string;
 }
 
 const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | undefined> = {
-  paused_hitl: { Icon: Pause, label: "awaiting input", iconClass: "text-amber-600" },
-  paused_provider_error: { Icon: AlertTriangle, label: "provider error", iconClass: "text-rose-600" },
-  quarantined: { Icon: ShieldAlert, label: "quarantined", iconClass: "text-rose-600" },
+  paused_hitl: {
+    Icon: Pause,
+    label: "awaiting input",
+    iconClass: "text-sw-accent-human",
+    borderVar: "var(--sw-accent-human)",
+  },
+  paused_provider_error: {
+    Icon: AlertTriangle,
+    label: "provider error",
+    iconClass: "text-sw-accent-error",
+    borderVar: "var(--sw-accent-error)",
+  },
+  quarantined: {
+    Icon: ShieldAlert,
+    label: "quarantined",
+    iconClass: "text-sw-accent-error",
+    borderVar: "var(--sw-accent-error)",
+  },
   // Non-attention statuses — the filter never reaches these, but we
   // exhaustively type the map so a new RunStatus literal forces a
   // compile-time decision here.
@@ -81,14 +98,17 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
 
   return (
     <section data-testid="inbox" className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between">
-        <h2 className="font-heading text-base font-semibold">Inbox</h2>
-        {showViewAll && viewAllHref ? (
-          <Link to={viewAllHref} className="text-xs text-muted-foreground hover:text-foreground">
-            View all →
-          </Link>
-        ) : null}
-      </div>
+      <SectionTitle
+        action={
+          showViewAll && viewAllHref ? (
+            <Link to={viewAllHref} className="text-sw-muted hover:text-sw-text">
+              View all →
+            </Link>
+          ) : null
+        }
+      >
+        Inbox
+      </SectionTitle>
 
       {isPending ? (
         <div className="flex flex-col gap-2">
@@ -96,7 +116,13 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
           <Skeleton className="h-10" />
         </div>
       ) : attention.length === 0 ? (
-        <InboxEmptyState />
+        <EmptyState
+          data-testid="inbox-empty"
+          icon={<ShieldCheck className="size-6 text-sw-accent-success" aria-hidden />}
+          title="All clear"
+          description="No runs need attention."
+          className="min-h-[120px]"
+        />
       ) : (
         <ul className="flex flex-col gap-2">
           {attention.map((row) => (
@@ -111,7 +137,7 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
 function InboxRow({ row }: { row: RunSummary }): JSX.Element {
   const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
   if (!meta) return <></>;
-  const { Icon, label, iconClass } = meta;
+  const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;
   return (
     <li>
@@ -120,32 +146,18 @@ function InboxRow({ row }: { row: RunSummary }): JSX.Element {
         title={displayTooltip(row)}
         data-testid={`inbox-run-${row.runId}`}
         data-reason={row.runStatus}
-        className="flex w-full min-w-0 items-center gap-3 rounded-md border border-border/60 border-l-2 border-l-amber-500/70 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+        style={{ borderLeftColor: borderVar }}
+        className="flex w-full min-w-0 items-center gap-3 rounded-sw-card border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
       >
         <Icon className={`size-4 shrink-0 ${iconClass}`} aria-hidden />
-        <span className="flex-1 min-w-0 truncate font-medium">{displayTitle(row)}</span>
+        <span className="inbox-row-title flex-1 min-w-0 truncate font-medium text-sw-text">{displayTitle(row)}</span>
         {wf ? (
           <Badge variant="muted" className="max-w-[12rem] shrink-0 truncate">
             {wf}
           </Badge>
         ) : null}
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{label}</span>
+        <span className="shrink-0 text-sw-xs text-sw-muted tabular-nums">{label}</span>
       </Link>
     </li>
-  );
-}
-
-/** Calm "all clear" state — when nothing needs attention, the Inbox
- * stays present (vs hiding) to reassure the operator that the system
- * is healthy. Lower-key visual weight than the populated rows. */
-function InboxEmptyState(): JSX.Element {
-  return (
-    <div
-      data-testid="inbox-empty"
-      className="flex items-center gap-3 rounded-md border border-dashed border-border/60 px-3 py-3 text-sm text-muted-foreground"
-    >
-      <ShieldCheck className="size-4 shrink-0 text-emerald-600" aria-hidden />
-      <span>All clear — no runs need attention.</span>
-    </div>
   );
 }

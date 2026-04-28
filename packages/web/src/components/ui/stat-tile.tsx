@@ -52,7 +52,7 @@ export function StatTile({
   return (
     <Card size="sm" data-testid={testId} className="ring-0" title={hint}>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between text-xs font-medium text-muted-foreground">
+        <CardTitle className="flex items-center justify-between text-sw-xs font-medium text-sw-muted">
           <span>{label}</span>
           {icon ? <span aria-hidden="true">{icon}</span> : null}
         </CardTitle>

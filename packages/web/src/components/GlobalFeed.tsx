@@ -45,6 +45,8 @@ import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNowSeconds } from "../lib/useNowExternal.ts";
 import { Badge } from "./ui/badge.tsx";
+import { EmptyState } from "./ui/empty-state.tsx";
+import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
 interface FeedKindMeta {
@@ -104,11 +106,11 @@ export function GlobalFeed(): JSX.Element {
   // populated feed, so the page doesn't reflow when the backfill lands.
   if (isLoading && rows.length === 0) {
     return (
-      <section data-testid="global-feed" aria-label="Recent activity">
-        <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
+      <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
+        <SectionTitle>Activity</SectionTitle>
         <ul
           aria-busy="true"
-          className="overflow-hidden rounded border border-border/60 bg-card sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
+          className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
         >
           {Array.from({ length: 4 }).map((_, i) => (
             // eslint-disable-next-line react/no-array-index-key
@@ -121,18 +123,22 @@ export function GlobalFeed(): JSX.Element {
 
   if (rows.length === 0) {
     return (
-      <section data-testid="global-feed" aria-label="Recent activity">
-        <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
-        <div className="rounded border border-dashed border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">
-          No recent events.
-        </div>
+      <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
+        <SectionTitle>Activity</SectionTitle>
+        <EmptyState
+          data-testid="global-feed-empty"
+          icon={<Play className="size-6" aria-hidden />}
+          title="No activity yet"
+          description="Run events appear here as workflows execute."
+          className="min-h-[120px]"
+        />
       </section>
     );
   }
 
   return (
-    <section data-testid="global-feed" aria-label="Recent activity">
-      <h2 className="mb-2 font-heading text-base font-semibold">Activity</h2>
+    <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
+      <SectionTitle>Activity</SectionTitle>
       {/* CSS grid on the list, subgrid on each row, so the icon and
           verb columns size to the widest content across all rows
           without a hand-tuned width.
@@ -144,7 +150,7 @@ export function GlobalFeed(): JSX.Element {
           - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
             uses `grid-cols-subgrid`, so the icon / verb columns size
             to the widest content across every row. */}
-      <ul className="overflow-hidden rounded border border-border/60 bg-card sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
+      <ul className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
         <AnimatePresence initial={false}>
           {rows.map((event) => (
             <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
@@ -186,9 +192,11 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       animate={animate}
       exit={exit}
       transition={transition}
-      style={{ willChange: reduce ? undefined : "transform" }}
+      style={
+        attention ? { willChange: reduce ? undefined : "transform", borderLeftColor: "var(--sw-accent-thinking)" } : { willChange: reduce ? undefined : "transform" }
+      }
       className={cn(
-        "group grid items-center px-3 py-2 text-sm",
+        "group grid items-center px-3 py-2 text-sw-sm",
         // Mobile: 3-col, 2-row grid. Children placed via col-start /
         // row-start below. `gap-y-0.5` (2px) gives a tight visual
         // separation between the verb line and the title line.
@@ -197,14 +205,14 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
         // 5-column grid. The mobile col/row placements below get
         // overridden with `sm:` modifiers.
         "sm:col-span-full sm:grid-cols-subgrid sm:gap-x-3 sm:gap-y-0",
-        attention ? "border-l-2 border-amber-500/70 bg-amber-500/5" : "border-l-2 border-transparent",
+        attention ? "border-l-2" : "border-l-2 border-transparent",
       )}
     >
       <Icon
-        className="col-start-1 row-start-1 size-4 self-center text-muted-foreground"
+        className="col-start-1 row-start-1 size-4 self-center text-sw-muted"
         aria-hidden
       />
-      <span className="col-start-2 row-start-1 truncate text-muted-foreground">{verb}</span>
+      <span className="col-start-2 row-start-1 truncate text-sw-muted">{verb}</span>
       {/* Time: top-right on mobile (col 3 row 1); col 5 row 1 on
           desktop. Explicit `sm:row-start-1` everywhere (instead of
           `row-auto`) keeps the desktop row truly single-line — the
@@ -217,7 +225,7 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
-        className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-foreground hover:underline sm:col-span-1 sm:col-start-3 sm:row-start-1"
+        className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-sw-text hover:underline sm:col-span-1 sm:col-start-3 sm:row-start-1"
       >
         {displayRunTitle(event.runId, run)}
       </Link>
@@ -245,7 +253,7 @@ function FeedRowTime({ ts, className }: { ts: number; className?: string }): JSX
   const now = useNowSeconds();
   return (
     <span
-      className={cn("shrink-0 text-xs text-muted-foreground tabular-nums", className)}
+      className={cn("shrink-0 text-sw-xs text-sw-muted tabular-nums", className)}
       title={new Date(ts).toISOString()}
     >
       {formatRelative(ts, { now: new Date(now) })}

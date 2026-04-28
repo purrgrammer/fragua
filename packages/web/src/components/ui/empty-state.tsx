@@ -1,39 +1,44 @@
-// Reusable empty / graceful-error state. Used whenever a fetch returns
-// nothing meaningful (404, 500, empty list) and we'd rather show a
-// purpose-built card than leak a stack trace to the user.
+// Reusable empty / graceful-error state. The single primitive every
+// section reaches for when a fetch returned nothing meaningful, when a
+// list is empty, or when a graceful "all clear" message is the answer.
 //
-// Solid 1px hairline via the `border` token, 4px card radius — no
-// dashed ornament (dashed reads as decorative). Sits on --sw-surface
-// rather than a tinted muted variant; hierarchy comes from the hairline,
-// not a background shade. Padding snaps to --sw-space-4. Typography is
-// monospace (inherited); hierarchy via weight, not size jumps — title
-// uses --sw-text-base weight 500, description uses --sw-text-sm in
-// --sw-muted. Only --sw-* tokens; no opacity dimming steps.
+// Two densities, both on `bg-sw-surface` with a solid hairline (no
+// dashed ornament — dashed reads as decorative). Hierarchy comes from
+// the hairline, not from a tinted bg.
 //
-// Real errors (caught in the parent) should be `console.warn`'d by the
-// caller before rendering this; the UI stays clean while devs keep full
+//   density="default"  full bento card  icon-on-top + title + description
+//   density="compact"  inline strip     icon-left + title (description optional)
+//
+// Compact density is for the secondary "calm" empty states that sit
+// between populated sections (e.g. an Inbox that has nothing in it on
+// the Control Center). Default density is for stand-alone empty states
+// that own their region (e.g. "Nothing running" on the dashboard, the
+// graph-load failure card on RunDetail).
+//
+// Real errors caught upstream should be `console.warn`'d by the caller
+// before rendering this; the UI stays clean while devs keep full
 // diagnostics in the console.
 //
-// A note on `role="status"` vs `<output>`:
-//   Biome's `useSemanticElements` rule suggests `<output>` for
-//   role="status". `<output>` is form-oriented (it lives inside a form
-//   and represents a calculation result); this card is a generic
-//   empty/error state that is not tied to a form. `role="status"` on a
-//   `<div>` is the established ARIA pattern for non-form live regions,
-//   so we suppress the rule at the opening tag.
+// `role="status"` on a `<div>` is the established ARIA pattern for
+// non-form live regions; Biome's `useSemanticElements` rule prefers
+// `<output>` but that element is form-oriented, so we suppress here.
 
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn.ts";
 
+export type EmptyStateDensity = "default" | "compact";
+
 export interface EmptyStateProps {
-  /** Short headline, e.g. "No graph available". */
+  /** Short headline. */
   title: string;
-  /** Supporting copy, e.g. the run id. Rendered below the title. */
+  /** Supporting copy. In `compact` density it sits on the right of the strip. */
   description?: ReactNode;
-  /** Optional icon element — typically a `lucide-react` icon. */
+  /** Optional icon — typically a `lucide-react` icon. */
   icon?: ReactNode;
-  /** Optional action node (button, link) placed under the description. */
+  /** Optional action node (button, link). */
   action?: ReactNode;
+  /** `compact` renders an inline strip; `default` renders the full bento card. */
+  density?: EmptyStateDensity;
   /** Extra classes appended to the container. */
   className?: string;
   /** Lets tests disambiguate multiple empty states on one page. */
@@ -45,35 +50,52 @@ export function EmptyState({
   description,
   icon,
   action,
+  density = "default",
   className,
   "data-testid": testId = "empty-state",
 }: EmptyStateProps): JSX.Element {
+  const surface = "bg-sw-surface text-sw-muted border border-sw-border rounded-sw-card";
+
+  if (density === "compact") {
+    return (
+      <div
+        data-testid={testId}
+        role="status"
+        className={cn("flex items-center gap-3 px-3 py-3 text-sw-sm", surface, className)}
+      >
+        {icon && (
+          <span className="shrink-0" aria-hidden="true">
+            {icon}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-sw-muted">{title}</span>
+        {description && <span className="shrink-0 text-sw-muted">{description}</span>}
+        {action && <span className="shrink-0">{action}</span>}
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid={testId}
       role="status"
       className={cn(
-        // Layout: bento cell, content-driven; min-height matches the
-        // graph container baseline so swapping in an empty state doesn't
-        // cause the page to snap shorter. The 240px figure is a layout
-        // contract with GraphView, not a spacing decision — it lives
-        // outside the spacing token scale by design.
+        // 240px min-height matches the GraphView container baseline so
+        // swapping in an empty state doesn't snap the page shorter.
         "flex min-h-[240px] w-full flex-col items-center justify-center text-center",
-        "gap-[var(--sw-space-2)] p-[var(--sw-space-4)]",
-        // Surface + hairline (no shadow, no dashed ornament, no tinted bg)
-        "bg-[var(--sw-surface)] text-[var(--sw-muted)]",
-        "border border-[var(--sw-border)] rounded-[var(--sw-radius-card)]",
+        "gap-2 p-4",
+        surface,
         className,
       )}
     >
       {icon && (
-        <div className="text-[var(--sw-muted)]" aria-hidden="true">
+        <div className="text-sw-muted" aria-hidden="true">
           {icon}
         </div>
       )}
-      <p className="font-medium text-[var(--sw-text)] text-[length:var(--sw-text-base)]">{title}</p>
-      {description && <div className="text-[var(--sw-muted)] text-[length:var(--sw-text-sm)]">{description}</div>}
-      {action && <div className="mt-[var(--sw-space-1)]">{action}</div>}
+      <p className="font-medium text-sw-text text-sw-base">{title}</p>
+      {description && <div className="text-sw-muted text-sw-sm">{description}</div>}
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }

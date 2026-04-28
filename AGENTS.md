@@ -46,7 +46,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 | `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,fidelity,event-bridge,tool-adapter}.ts` | `PiCodergenBackend`; pi-ai → handler bridge; per-run system-prompt builder |
 | `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
 | `@swarm/server` | `src/store/{routes,runs-routes,runs-adapter,steps}.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
-| `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard |
+| `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Swarm primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
 | `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `daemon` / `serve` / `run` / `validate` / `db` |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.

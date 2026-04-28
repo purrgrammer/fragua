@@ -33,6 +33,7 @@ import { GlobalFeed } from "../components/GlobalFeed.tsx";
 import { Inbox } from "../components/Inbox.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
+import { SectionTitle } from "../components/ui/section-title.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
@@ -214,12 +215,15 @@ interface RunningSectionProps {
 function RunningSection({ running, loading }: RunningSectionProps): JSX.Element {
   return (
     <section data-testid="running-section" className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between">
-        <h2 className="font-heading text-base font-semibold">Running</h2>
-        <Link to="/runs" className="text-xs text-muted-foreground hover:text-foreground">
-          View all →
-        </Link>
-      </div>
+      <SectionTitle
+        action={
+          <Link to="/runs" className="text-sw-muted hover:text-sw-text">
+            View all →
+          </Link>
+        }
+      >
+        Running
+      </SectionTitle>
 
       {loading ? (
         <div className="flex flex-col gap-2">

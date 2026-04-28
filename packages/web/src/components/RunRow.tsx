@@ -43,18 +43,15 @@ export function RunRow({ row, variant = "default" }: RunRowProps): JSX.Element {
  *  Title link · Workflow badge · Status pill (right-aligned). */
 function TableRow({ row }: { row: RunSummary }): JSX.Element {
   const wf = row.workflowName ?? row.workflow;
-  // Design skill: "Hover on hot rows — omit hover animation on list rows
-  // users traverse hundreds of times per session." The previous
-  // `hover:bg-slate-50` painted a light wash that collided with light
-  // text in dark mode (white-on-off-white). Dropped the row hover; the
-  // title link keeps its underline-on-hover for affordance.
+  // Hover on hot rows: omit bg animation on rows users traverse hundreds
+  // of times per session. Title link keeps underline-on-hover for affordance.
   return (
-    <tr className="border-b border-border/60">
+    <tr className="border-b border-sw-border">
       <td className="py-2 pr-4 max-w-0">
         <Link
           to={`/runs/${row.runId}`}
           title={displayTooltip(row)}
-          className="block truncate font-medium text-foreground hover:underline"
+          className="block truncate font-medium text-sw-text hover:underline"
         >
           {displayTitle(row)}
         </Link>
@@ -85,9 +82,9 @@ function CompactRow({ row }: { row: RunSummary }): JSX.Element {
       to={`/runs/${row.runId}`}
       title={displayTooltip(row)}
       data-testid={`recent-run-${row.runId}`}
-      className="flex w-full min-w-0 items-center gap-3 rounded-md border border-border/60 bg-card px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+      className="flex w-full min-w-0 items-center gap-3 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.run-title]:underline"
     >
-      <span className="flex-1 min-w-0 truncate font-medium">{displayTitle(row)}</span>
+      <span className="run-title flex-1 min-w-0 truncate font-medium text-sw-text">{displayTitle(row)}</span>
       {wf ? (
         <Badge variant="muted" className="max-w-[12rem] shrink-0 truncate">
           {wf}

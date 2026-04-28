@@ -47,7 +47,7 @@ export function WorkflowDetail(): JSX.Element {
         title="Missing workflow name"
         description="The URL didn't include a workflow name."
         action={
-          <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link to="/workflows" className="text-sw-xs text-sw-muted hover:text-sw-text hover:underline">
             ← all workflows
           </Link>
         }
@@ -66,7 +66,7 @@ export function WorkflowDetail(): JSX.Element {
           </span>
         }
         action={
-          <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link to="/workflows" className="text-sw-xs text-sw-muted hover:text-sw-text hover:underline">
             ← all workflows
           </Link>
         }
@@ -81,7 +81,7 @@ export function WorkflowDetail(): JSX.Element {
         title="Couldn't load workflow"
         description="The server didn't return this workflow. Check the console for details."
         action={
-          <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+          <Link to="/workflows" className="text-sw-xs text-sw-muted hover:text-sw-text hover:underline">
             ← all workflows
           </Link>
         }
@@ -105,7 +105,7 @@ export function WorkflowDetail(): JSX.Element {
   return (
     <section data-testid="workflow-detail" className="flex h-full w-full min-w-0 flex-col gap-4">
       <header className="min-w-0">
-        <Link to="/workflows" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+        <Link to="/workflows" className="text-sw-xs text-sw-muted hover:text-sw-text hover:underline">
           ← all workflows
         </Link>
         <h2

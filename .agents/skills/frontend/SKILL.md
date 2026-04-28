@@ -134,6 +134,27 @@ Defer form libraries (React Hook Form, etc.) until a form has ≥5 fields or cro
 
 ---
 
+## UI primitives
+
+Four load-bearing components that every surface in `packages/web` reaches for. If you're hand-rolling the shape one of these provides, reach for the component instead.
+
+| Component | File | When to use |
+|---|---|---|
+| `<PageTitle>` | `components/ui/page-title.tsx` | Exactly one per route — renders `<h1>` at `text-sw-lg`. Optional `action` slot for per-page controls. |
+| `<SectionTitle>` | `components/ui/section-title.tsx` | Per bento section inside a route ("Inbox", "Running", "Activity") — renders `<h2>` at `text-sw-md`. Optional `action` slot for "View all →" links. |
+| `<EmptyState>` | `components/ui/empty-state.tsx` | Whenever a section has nothing to show. `density="default"` for a full bento card; `density="compact"` for the calm one-liner strip (e.g. "All clear"). |
+| `<Card>` | `components/ui/card.tsx` | Bento surface for data cells (stats tiles, detail panels). Owns surface bg + hairline; don't apply those tokens yourself. |
+
+Other component directories to be aware of:
+
+- `components/ui/` — shadcn-generated primitives (`Badge`, `Button`, `Dialog`, etc.). Token layer: shadcn vars. Don't add product logic here.
+- `components/ai-elements/` — AI chat interface elements (`Conversation`, `Message`, `PromptInput`, etc.).
+- `components/` root — product components (`RunRow`, `GlobalFeed`, `Inbox`, `AppShell`, etc.). Token layer: `sw-*`.
+
+Design tokens and the rule for mixing layers are in `.agents/skills/design/SKILL.md`. Pair that skill with this one for any style decision.
+
+---
+
 ## When principles conflict
 
 Simplicity wins. Default answer to "should I add another hook/memo/library/abstraction" is no.

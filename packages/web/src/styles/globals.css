@@ -106,7 +106,8 @@
     border-radius: var(--sw-radius-default, 2px);
   }
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--sw-bg);
+    color: var(--sw-text);
   }
 }
 

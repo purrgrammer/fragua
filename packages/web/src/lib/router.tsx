@@ -46,7 +46,7 @@ export function createAppRouter(): ReturnType<typeof createBrowserRouter> {
 
 function NotFound(): JSX.Element {
   return (
-    <div className="p-8 text-center text-muted-foreground">
+    <div className="p-8 text-center text-sw-muted">
       <h2 className="text-lg font-semibold mb-2">Not found</h2>
       <p className="text-sm">That page doesn't exist.</p>
     </div>
