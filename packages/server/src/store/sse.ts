@@ -40,7 +40,21 @@ interface SseLoopConfig<C> {
   shouldClose?: () => boolean;
   batchSize: number;
   pollMs: number;
+  /** Send a `: keepalive\n\n` comment on the wire after this many ms
+   * without any event. Stops dev proxies (Vite's http-proxy in
+   * particular) and intermediate routers from killing idle SSE
+   * connections — the most common cause of "Running stuck" because
+   * `fact.run_completed` arrives 15+ seconds after `fact.run_started`.
+   * Comments are ignored by the EventSource API but reset proxy idle
+   * timers. Default 10s — comfortably under typical 15s/30s proxy
+   * idle thresholds. */
+  keepaliveMs?: number;
+  /** Test injection: monotonic clock. */
+  now?: () => number;
 }
+
+const DEFAULT_KEEPALIVE_MS = 10_000;
+const KEEPALIVE_COMMENT = ": keepalive\n\n";
 
 /**
  * Drain-emit-sleep loop shared by per-run and global SSE streams.
@@ -52,15 +66,27 @@ interface SseLoopConfig<C> {
  * tail", which is when closing or sleeping is safe.
  */
 export async function runSseLoop<C>(stream: SSEStreamingApi, initialCursor: C, cfg: SseLoopConfig<C>): Promise<void> {
+  const now = cfg.now ?? Date.now;
+  const keepaliveMs = cfg.keepaliveMs ?? DEFAULT_KEEPALIVE_MS;
   let cursor = initialCursor;
+  let lastWriteAt = now();
   while (!stream.aborted) {
     const batch = cfg.fetchBatch(cursor, cfg.batchSize);
     for (const event of batch) {
       await stream.writeSSE({ id: cfg.idOf(event), data: serializeEvent(event) });
       cursor = cfg.cursorOf(event);
+      lastWriteAt = now();
     }
     if (batch.length < cfg.batchSize) {
       if (cfg.shouldClose?.()) return;
+      // Keepalive when the live tail has been quiet long enough that a
+      // proxy might be eyeing the connection for closure. Comment lines
+      // (lines starting with `:`) are ignored by EventSource clients
+      // but reset proxy idle timers and the kernel TCP keepalive.
+      if (now() - lastWriteAt >= keepaliveMs) {
+        await stream.write(KEEPALIVE_COMMENT);
+        lastWriteAt = now();
+      }
       await stream.sleep(cfg.pollMs);
     }
   }

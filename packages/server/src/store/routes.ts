@@ -448,6 +448,7 @@ export function createRoutes(deps: ServerDeps): Hono {
         lastEventId: c.req.header("Last-Event-ID"),
       });
       const seenAtBoundary = new Set<string>();
+      let lastWriteAt = Date.now();
       while (!stream.aborted) {
         let batch: ReturnType<typeof deps.store.getGlobalEventsAfter>;
         try {
@@ -478,12 +479,21 @@ export function createRoutes(deps: ServerDeps): Hono {
             data: serializeEvent(event),
           });
           emittedThisBatch++;
+          lastWriteAt = Date.now();
         }
         // Sleep when we've reached the live tail. Detected as either an
         // un-full batch OR a full batch whose rows were all dedupe-
         // filtered (server is correctly at the head of the feed but
         // would otherwise spin re-fetching the same `cursor.ts` rows).
         if (batch.length < batchSize || emittedThisBatch === 0) {
+          // Idle keepalive — see runSseLoop for the rationale. Comment
+          // lines reset Vite's http-proxy idle timer; without them, a
+          // 15s pause between fact.run_started and fact.run_completed
+          // is enough for the proxy to silently drop the upstream.
+          if (Date.now() - lastWriteAt >= 10_000) {
+            await stream.write(": keepalive\n\n");
+            lastWriteAt = Date.now();
+          }
           await stream.sleep(pollMs);
         }
       }
