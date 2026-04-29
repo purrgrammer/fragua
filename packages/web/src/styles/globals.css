@@ -123,6 +123,11 @@
     background-color: var(--sw-bg);
     color: var(--sw-text);
   }
+
+  a:hover {
+    text-decoration: underline dotted;
+    cursor: crosshair;
+  }
 }
 
 /*
