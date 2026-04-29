@@ -97,16 +97,19 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
         `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_quarantined', 'daemon', ?, ?)`,
       ).run(runId, seq, quarantinePayloads.get(runId)!, ts);
+      // Leave last_applied_seq alone: sweep doesn't fold operator
+      // intents, so it can't pretend they've been applied. Advancing
+      // the watermark past, e.g., a pre-crash intent.cancel_requested
+      // would silently drop it from the next executor fold.
       db.query(
         `UPDATE run_state SET
              status = 'quarantined',
              current_node = NULL,
              node_started_at = NULL,
              version = version + 1,
-             last_applied_seq = ?,
              updated_at = ?
            WHERE run_id = ?`,
-      ).run(seq, ts, runId);
+      ).run(ts, runId);
     }
 
     // Requeue runs still in 'running'. Re-read status here (inside the txn)
@@ -129,10 +132,9 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
              node_started_at = NULL,
              ready_at = ?,
              version = version + 1,
-             last_applied_seq = ?,
              updated_at = ?
            WHERE run_id = ?`,
-      ).run(ts, seq, ts, row.run_id);
+      ).run(ts, ts, row.run_id);
       requeued.push(row.run_id);
     }
 

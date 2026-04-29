@@ -71,6 +71,48 @@ describe("startupSweep", () => {
     store.close();
   });
 
+  test("preserves unapplied intents across requeue (cancel filed before crash)", async () => {
+    // Repro for the cancel-eaten-by-requeue bug: a user appends
+    // intent.cancel_requested while the run is `running`; the daemon
+    // crashes before the executor's fold can pick it up; a new daemon's
+    // startup sweep flips the run back to `queued`. The cancel intent
+    // must still be visible to the next fold (i.e. its seq must remain
+    // > lastAppliedSeq) so the executor honours the kill before
+    // dispatching more LLM work.
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: s0.workflowSha,
+            schemaVersion: s0.schemaVersion,
+            startNode: "a",
+          },
+        },
+      ],
+      s0.version,
+    );
+    expect(store.getState(runId)!.status).toBe("running");
+
+    const cancel = store.appendIntent(runId, {
+      type: "intent.cancel_requested",
+      payload: {},
+    });
+
+    store.startupSweep();
+
+    const after = store.getState(runId)!;
+    expect(after.status).toBe("queued");
+    // The cancel intent must remain unapplied — sweep can't pretend
+    // to have folded operator intents it never looked at.
+    expect(after.lastAppliedSeq).toBeLessThan(cancel.seq);
+    store.close();
+  });
+
   test("does not re-quarantine runs that already have matching done", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
