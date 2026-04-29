@@ -11,8 +11,15 @@ export interface BridgedEvent {
   data: Record<string, unknown>;
 }
 
-/** Extract an AssistantMessage's usage + cost into a cost.recorded payload. */
+/** Extract an AssistantMessage's usage + cost into a cost.recorded payload.
+ *
+ * Cost split between input/output tokens prefers `usage.reportedCost`
+ * (authoritative when the provider returns it via OpenRouter-style
+ * `usage: { include: true }`), falling back to pi-ai's locally-computed
+ * `usage.cost.input` / `usage.cost.output`. */
 export function costPayload(msg: AssistantMessage): Record<string, unknown> {
+  const inputCost = msg.usage.reportedCost?.input ?? msg.usage.cost.input;
+  const outputCost = msg.usage.reportedCost?.output ?? msg.usage.cost.output;
   return {
     provider: msg.provider,
     model: msg.model,
@@ -23,6 +30,8 @@ export function costPayload(msg: AssistantMessage): Record<string, unknown> {
     cache_write_tokens: msg.usage.cacheWrite,
     total_tokens: msg.usage.totalTokens,
     cost_usd: msg.usage.cost.total,
+    cost_input_usd: inputCost,
+    cost_output_usd: outputCost,
   };
 }
 

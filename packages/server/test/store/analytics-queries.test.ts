@@ -149,8 +149,28 @@ describe("getRunsByBucket", () => {
       tzOffsetMinutes: 0, // UTC
     });
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ bucket: Date.UTC(2026, 3, 28, 12), success: 2, fail: 0, other: 0 });
-    expect(rows[1]).toEqual({ bucket: Date.UTC(2026, 3, 28, 13), success: 0, fail: 1, other: 0 });
+    expect(rows[0]).toEqual({
+      bucket: Date.UTC(2026, 3, 28, 12),
+      completed: 2,
+      queued: 0,
+      running: 0,
+      paused_hitl: 0,
+      paused_provider_error: 0,
+      cancelled: 0,
+      halted: 0,
+      quarantined: 0,
+    });
+    expect(rows[1]).toEqual({
+      bucket: Date.UTC(2026, 3, 28, 13),
+      completed: 0,
+      queued: 0,
+      running: 0,
+      paused_hitl: 0,
+      paused_provider_error: 0,
+      cancelled: 0,
+      halted: 1,
+      quarantined: 0,
+    });
   });
 
   test("day buckets shift by tz offset (PT, UTC-8 → tzOffsetMinutes=480)", () => {
@@ -185,10 +205,21 @@ describe("getSpendByBucket / getTokensByBucket", () => {
       tzOffsetMinutes: 0,
     };
     const spend = getSpendByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, w);
-    expect(spend).toEqual([
-      { bucket: Date.UTC(2026, 3, 28, 10), costUsd: 2.0 },
-      { bucket: Date.UTC(2026, 3, 28, 11), costUsd: 2.0 },
-    ]);
+    // The fallback ladder: when metrics has no recorded input/output
+    // cost split (these seeds don't set one), the SQL splits each
+    // run's `total_cost_usd` by the input/output token ratio. Sums
+    // round-trip to `costUsd` per bucket. Bucket 10:00 holds
+    // 1.5 USD * (100/125) + 0.5 USD * (50/75) = 1.2 + 0.333… = 1.533…
+    // for input; the rest goes to output.
+    expect(spend).toHaveLength(2);
+    expect(spend[0]?.bucket).toBe(Date.UTC(2026, 3, 28, 10));
+    expect(spend[0]?.costUsd).toBeCloseTo(2.0, 5);
+    expect(spend[0]?.inputCostUsd).toBeCloseTo(1.5 * (100 / 125) + 0.5 * (50 / 75), 5);
+    expect(spend[0]?.outputCostUsd).toBeCloseTo(1.5 * (25 / 125) + 0.5 * (25 / 75), 5);
+    expect(spend[1]?.bucket).toBe(Date.UTC(2026, 3, 28, 11));
+    expect(spend[1]?.costUsd).toBeCloseTo(2.0, 5);
+    expect(spend[1]?.inputCostUsd).toBeCloseTo(2.0 * (200 / 300), 5);
+    expect(spend[1]?.outputCostUsd).toBeCloseTo(2.0 * (100 / 300), 5);
 
     const tokens = getTokensByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, w);
     expect(tokens).toEqual([
@@ -309,7 +340,7 @@ describe("getDrilldownPage", () => {
 
     const onlyHalted = getDrilldownPage(
       db,
-      { fromMs: nowMs - 1, toMs: nowMs + 1, haltCategory: "fail" },
+      { fromMs: nowMs - 1, toMs: nowMs + 1, haltCategory: "failure" },
       { limit: 10 },
     );
     expect(onlyHalted.runIds).toHaveLength(1);

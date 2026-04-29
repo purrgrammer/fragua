@@ -18,14 +18,67 @@ const HALT_LABELS: Record<string, string> = {
   halted: "Failure",
   quarantined: "Quarantined",
   cancelled: "Cancelled",
-  paused_hitl: "Awaiting human",
-  paused_provider_error: "Provider error",
+  paused_hitl: "Paused",
+  paused_provider_error: "Errored",
   running: "Running",
   queued: "Queued",
 };
 
 export function humanizeHaltReason(status: string): string {
   return HALT_LABELS[status] ?? titleCaseFromSnake(status);
+}
+
+// ── Status → category collapse (4 buckets) ─────────────────────────────
+
+/** Coarse outcome buckets the Runs / Outcomes charts render as a single
+ *  stacked layer or donut slice. Eight raw statuses (the schema CHECK
+ *  enum) compress into four user-facing categories so the legend stays
+ *  scannable: success, queued (queued + running, "in flight, fine"),
+ *  paused (paused_* states needing attention), failure (halted +
+ *  quarantined + cancelled, "didn't reach success"). Cancelled lives
+ *  with failure since it's terminal-non-success — there isn't a separate
+ *  "Cancelled" category to keep the stack to four. */
+export type RunCategory = "success" | "failure" | "paused" | "queued";
+
+export const RUN_CATEGORIES: readonly RunCategory[] = ["success", "failure", "paused", "queued"];
+
+const STATUS_TO_CATEGORY: Record<string, RunCategory> = {
+  completed: "success",
+  queued: "queued",
+  running: "queued",
+  paused_hitl: "paused",
+  paused_provider_error: "paused",
+  cancelled: "failure",
+  halted: "failure",
+  quarantined: "failure",
+};
+
+export function statusCategory(status: string): RunCategory {
+  return STATUS_TO_CATEGORY[status] ?? "queued";
+}
+
+export function categoryAccentVar(c: RunCategory): string {
+  switch (c) {
+    case "success":
+      return "--sw-accent-success";
+    case "failure":
+      return "--sw-accent-error";
+    case "paused":
+      return "--sw-accent-human";
+    case "queued":
+      return "--sw-accent-idle";
+  }
+}
+
+const CATEGORY_LABELS: Record<RunCategory, string> = {
+  success: "Success",
+  queued: "Queued",
+  paused: "Paused",
+  failure: "Failure",
+};
+
+export function categoryLabel(c: RunCategory): string {
+  return CATEGORY_LABELS[c];
 }
 
 /** Map a halt-reason key to a Swarm CSS-var name (without the `--` prefix)
@@ -94,7 +147,9 @@ export function formatBucketTick(bucketMs: number, kind: BucketKind, locale: str
   const d = toBucketDate(bucketMs);
   if (!d) return "";
   if (kind === "hour") {
-    return new Intl.DateTimeFormat(locale, { hour: "numeric" }).format(d);
+    // 24-hour numeric only — "15" not "3 PM" or "3:00". Tooltips
+    // carry the full date+time when a tick alone is ambiguous.
+    return new Intl.DateTimeFormat(locale, { hour: "numeric", hour12: false }).format(d);
   }
   if (kind === "day") {
     return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(d);

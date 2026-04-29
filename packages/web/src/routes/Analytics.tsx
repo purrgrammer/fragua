@@ -4,25 +4,23 @@
 // Layout:
 //   ┌──────────────────────────────────────────────┐
 //   │ Title                       [Window selector]│
-//   ├──────────────────────────────────────────────┤
-//   │ KPI · KPI · KPI · KPI                        │
 //   ├────────────────────┬─────────────────────────┤
-//   │ Runs (stacked bar) │ Spend (bar)             │
+//   │ Runs (header+chart)│ Spend (header+chart)    │
 //   ├────────────────────┼─────────────────────────┤
-//   │ Tokens (stacked)   │ Cache (stacked)         │
+//   │ Tokens             │ Cache                   │
 //   ├──────────┬─────────┴─────────────────────────┤
 //   │ Outcomes │ Models  │ Top workflows           │
 //   └──────────┴─────────┴─────────────────────────┘
 //
-// All charts are wired with onClick callbacks that open the drill-down
-// drawer scoped to the clicked slice. The drawer reuses RunRow.compact.
+// Each metric card carries its total + delta in the header next to the
+// icon/title; clicking a bar opens the drill-down drawer scoped to the
+// clicked slice. The drawer reuses RunRow.compact.
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
 import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
-import { KpiTilesRow } from "../components/analytics/KpiTilesRow.tsx";
 import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
 import { RunsChart } from "../components/analytics/RunsChart.tsx";
 import { SpendChart } from "../components/analytics/SpendChart.tsx";
@@ -30,11 +28,11 @@ import { TokensChart } from "../components/analytics/TokensChart.tsx";
 import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
 import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
 import { resolveWindow, WINDOWS, type WindowKey } from "../lib/analytics.ts";
-import { formatBucketTooltip } from "../lib/humanize.ts";
+import { categoryLabel, formatBucketTooltip } from "../lib/humanize.ts";
 import { useLocale } from "../lib/locale.ts";
 import { queries } from "../lib/queries.ts";
 import { useNow } from "../lib/useNow.ts";
-import type { DrillSlice } from "../types/analytics.ts";
+import type { AnalyticsTotals, DrillSlice } from "../types/analytics.ts";
 
 export function Analytics(): JSX.Element {
   const [windowKey, setWindowKey] = useState<WindowKey>("today");
@@ -60,6 +58,19 @@ export function Analytics(): JSX.Element {
   const [slice, setSlice] = useState<DrillSlice | null>(null);
   const locale = useLocale();
 
+  const current = data?.totals.current ?? null;
+  const previous = data?.totals.previous ?? null;
+  const runsTotal = { current: current?.runs, previous: previous?.runs ?? null };
+  const spendTotal = { current: current?.costUsd, previous: previous?.costUsd ?? null };
+  const tokensTotal = {
+    current: current ? current.inputTokens + current.outputTokens : undefined,
+    previous: previous ? previous.inputTokens + previous.outputTokens : null,
+  };
+  const cacheTotal = {
+    current: cacheHitRate(current) ?? undefined,
+    previous: cacheHitRate(previous),
+  };
+
   // Build a slice from a clicked time bucket. The bucket spans
   // [bucketMs, bucketMs + bucketWidth); the drawer query uses the same
   // semantics.
@@ -78,47 +89,55 @@ export function Analytics(): JSX.Element {
         <WindowSelector value={windowKey} onChange={setWindowKey} />
       </div>
 
-      <KpiTilesRow current={data?.totals.current ?? null} previous={data?.totals.previous ?? null} />
-
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <RunsChart
           rows={data?.runsByBucket ?? []}
           bucket={resolved.bucket}
           loading={isPending}
-          onSelectBucket={(b) => openBucketSlice(b, "Runs")}
+          onSelectSlice={(b, category) => {
+            const next = nextBucketStart(b, resolved.bucket);
+            setSlice({
+              fromMs: b,
+              toMs: Math.min(next, resolved.toMs),
+              haltCategory: category,
+              haltLabel: categoryLabel(category),
+              title: `Runs · ${categoryLabel(category)} · ${formatBucketTooltip(b, resolved.bucket, locale)}`,
+            });
+          }}
+          total={runsTotal}
         />
         <SpendChart
           rows={data?.spendByBucket ?? []}
           bucket={resolved.bucket}
           loading={isPending}
           onSelectBucket={(b) => openBucketSlice(b, "Spend")}
+          total={spendTotal}
         />
         <TokensChart
           rows={data?.tokensByBucket ?? []}
           bucket={resolved.bucket}
           loading={isPending}
           onSelectBucket={(b) => openBucketSlice(b, "Tokens")}
+          total={tokensTotal}
         />
         <CacheChart
           rows={data?.cacheByBucket ?? []}
           bucket={resolved.bucket}
           loading={isPending}
           onSelectBucket={(b) => openBucketSlice(b, "Cache")}
+          total={cacheTotal}
         />
       </div>
 
-      {/* 4-col grid so the horizontal-bar Top Workflows chart gets a 2-col
-          slot — with only ~1/3 page width the workflow labels truncated
-          and the bars had no room to differentiate. */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <HaltDonut
           rows={data?.haltDistribution ?? []}
           loading={isPending}
-          onSelectStatus={(status, label) =>
+          onSelectCategory={(category, label) =>
             setSlice({
               fromMs: resolved.fromMs,
               toMs: resolved.toMs,
-              haltCategory: status,
+              haltCategory: category,
               haltLabel: label,
               title: `${label} · ${windowDef.label.toLowerCase()}`,
             })
@@ -136,26 +155,32 @@ export function Analytics(): JSX.Element {
             })
           }
         />
-        <div className="lg:col-span-2">
-          <TopWorkflowsBar
-            rows={data?.topWorkflows ?? []}
-            loading={isPending}
-            onSelectWorkflow={(sha, label) =>
-              setSlice({
-                fromMs: resolved.fromMs,
-                toMs: resolved.toMs,
-                workflowSha: sha,
-                workflowName: label,
-                title: `${label} · ${windowDef.label.toLowerCase()}`,
-              })
-            }
-          />
-        </div>
       </div>
+
+      <TopWorkflowsBar
+        rows={data?.topWorkflows ?? []}
+        loading={isPending}
+        onSelectWorkflow={(sha, label) =>
+          setSlice({
+            fromMs: resolved.fromMs,
+            toMs: resolved.toMs,
+            workflowSha: sha,
+            workflowName: label,
+            title: `${label} · ${windowDef.label.toLowerCase()}`,
+          })
+        }
+      />
 
       <DrillDownDrawer slice={slice} onOpenChange={(open) => (open ? null : setSlice(null))} />
     </div>
   );
+}
+
+function cacheHitRate(totals: AnalyticsTotals | null): number | null {
+  if (!totals) return null;
+  const denom = totals.inputTokens + totals.cacheReadTokens;
+  if (!Number.isFinite(denom) || denom <= 0) return null;
+  return totals.cacheReadTokens / denom;
 }
 
 function nextBucketStart(bucketMs: number, bucket: "hour" | "day" | "month"): number {

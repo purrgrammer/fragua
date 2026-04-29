@@ -207,6 +207,13 @@ export type HandlerResult =
       routingDelta?: Record<string, unknown>;
       tokens: number;
       costUsd: number;
+      /** USD cost split between input and output tokens. Sourced from
+       * pi-ai's `usage.cost.input` / `usage.cost.output` (or
+       * `usage.reportedCost.*` when the provider returns it). Optional
+       * — handlers that only know the lump-sum `costUsd` skip these
+       * and the run-level reducer defaults to 0. */
+      inputCostUsd?: number;
+      outputCostUsd?: number;
       /** Input/output/cache split accumulated across every `cost.recorded`
        * event the node emitted. Optional so legacy handlers that only
        * report `tokens` + `costUsd` (e.g. tool handlers, wait.human)

@@ -4,6 +4,8 @@ export function emptyMetrics(): RunMetrics {
   return {
     billedTokens: 0,
     totalCostUsd: 0,
+    totalInputCostUsd: 0,
+    totalOutputCostUsd: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalCacheReadTokens: 0,
@@ -51,6 +53,8 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       const p = fact.payload;
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
+      next.metrics.totalInputCostUsd += p.inputCostUsd ?? 0;
+      next.metrics.totalOutputCostUsd += p.outputCostUsd ?? 0;
       next.metrics.totalInputTokens += p.inputTokens ?? 0;
       next.metrics.totalOutputTokens += p.outputTokens ?? 0;
       next.metrics.totalCacheReadTokens += p.cacheReadTokens ?? 0;
@@ -79,6 +83,8 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       const p = fact.payload;
       next.metrics.billedTokens += p.partialTokens;
       next.metrics.totalCostUsd += p.partialCostUsd;
+      next.metrics.totalInputCostUsd += p.partialInputCostUsd ?? 0;
+      next.metrics.totalOutputCostUsd += p.partialOutputCostUsd ?? 0;
       next.metrics.totalInputTokens += p.partialInputTokens ?? 0;
       next.metrics.totalOutputTokens += p.partialOutputTokens ?? 0;
       next.metrics.totalCacheReadTokens += p.partialCacheReadTokens ?? 0;
@@ -170,6 +176,8 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
   return {
     billedTokens: m.billedTokens,
     totalCostUsd: m.totalCostUsd,
+    totalInputCostUsd: m.totalInputCostUsd ?? 0,
+    totalOutputCostUsd: m.totalOutputCostUsd ?? 0,
     totalInputTokens: m.totalInputTokens,
     totalOutputTokens: m.totalOutputTokens,
     totalCacheReadTokens: m.totalCacheReadTokens,

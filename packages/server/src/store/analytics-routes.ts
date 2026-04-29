@@ -35,43 +35,6 @@ import {
 } from "./analytics-queries.ts";
 import { runStateToSummary } from "./runs-adapter.ts";
 
-// Server-side bucket sequence + zero-fill. Mirrors the SQL bucket math
-// (fixed-offset, no DST awareness within the window) so the bucket
-// values returned in `data` line up exactly with what SQL emits, and
-// the client doesn't need to re-derive bucket boundaries (which used
-// to drift by an hour for windows crossing a DST transition).
-function bucketsInRange(fromMs: number, toMs: number, bucket: BucketKind, tzOffsetMinutes: number): number[] {
-  if (toMs <= fromMs) return [];
-  // Positive `tzOffsetMinutes` means local is BEHIND UTC, mirroring
-  // `Date.getTimezoneOffset()`. local = utc - tzMs.
-  const tzMs = tzOffsetMinutes * 60_000;
-  if (bucket === "hour" || bucket === "day") {
-    const step = bucket === "hour" ? 3_600_000 : 86_400_000;
-    const alignedLocal = Math.floor((fromMs - tzMs) / step) * step;
-    const aligned = alignedLocal + tzMs;
-    const out: number[] = [];
-    for (let t = aligned; t < toMs; t += step) out.push(t);
-    return out;
-  }
-  // Monthly: walk calendar months in UTC (after tz shift), then shift back.
-  const out: number[] = [];
-  const localFrom = new Date(fromMs - tzMs);
-  const cursor = new Date(Date.UTC(localFrom.getUTCFullYear(), localFrom.getUTCMonth(), 1));
-  while (true) {
-    const t = cursor.getTime() + tzMs;
-    if (t >= toMs) break;
-    out.push(t);
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  return out;
-}
-
-function zeroFill<R extends { bucket: number }>(rows: readonly R[], buckets: number[], zero: Omit<R, "bucket">): R[] {
-  const byBucket = new Map<number, R>();
-  for (const r of rows) byBucket.set(r.bucket, r);
-  return buckets.map((b) => byBucket.get(b) ?? ({ bucket: b, ...zero } as R));
-}
-
 export interface AnalyticsRoutesOpts {
   store: IEventStore;
   workflowReader?: WorkflowReader;
@@ -101,16 +64,19 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
       previous: previous ? getKpiTotals(db, previous) : null,
     };
 
-    const buckets = bucketsInRange(current.fromMs, current.toMs, bucket, tzOffsetMinutes);
-
     return c.json({
       window: { fromMs: current.fromMs, toMs: current.toMs, bucket, tzOffsetMinutes },
       compareWindow: previous ? { fromMs: previous.fromMs, toMs: previous.toMs } : null,
       totals,
-      runsByBucket: zeroFill(getRunsByBucket(db, bucketed), buckets, { success: 0, fail: 0, other: 0 }),
-      spendByBucket: zeroFill(getSpendByBucket(db, bucketed), buckets, { costUsd: 0 }),
-      tokensByBucket: zeroFill(getTokensByBucket(db, bucketed), buckets, { inputTokens: 0, outputTokens: 0 }),
-      cacheByBucket: zeroFill(getCacheByBucket(db, bucketed), buckets, { cacheReadTokens: 0, cacheWriteTokens: 0 }),
+      // No zero-fill — empty buckets are omitted entirely. The chart's
+      // x-axis compresses to only the buckets SQL actually returned, so
+      // a quiet stretch shows as a missing tick rather than a 0-height
+      // bar. Drill-down still works since each row carries its own
+      // bucket-ms.
+      runsByBucket: getRunsByBucket(db, bucketed),
+      spendByBucket: getSpendByBucket(db, bucketed),
+      tokensByBucket: getTokensByBucket(db, bucketed),
+      cacheByBucket: getCacheByBucket(db, bucketed),
       haltDistribution: getHaltDistribution(db, current),
       modelDistribution: getModelDistribution(db, current),
       topWorkflows: getTopWorkflows(db, current, TOP_WORKFLOWS_LIMIT),

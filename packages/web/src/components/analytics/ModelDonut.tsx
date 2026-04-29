@@ -1,9 +1,11 @@
 // Model spend distribution. Slice value = USD (the operationally
 // useful axis); tooltip carries the formatted dollar amount + tokens.
 //
-// Palette: rotates through the swarm accents — restrained, repeats on
-// long lists rather than introducing branded "model colours."
+// Palette: shared neutral ramp (`NEUTRAL_PALETTE`) — models aren't a
+// status, so they stay outside the green/red/blue/amber set reserved
+// for Runs and Outcomes.
 
+import { Cpu } from "lucide-react";
 import { Cell, Pie, PieChart } from "recharts";
 import { formatTokensCompact, formatUsd } from "@/lib/format";
 import { humanizeModel } from "@/lib/humanize";
@@ -18,21 +20,13 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
+import { NEUTRAL_PALETTE } from "./chart-palette.ts";
 
 export interface ModelDonutProps {
   rows: readonly ModelDistributionRow[];
   loading?: boolean;
   onSelectModel?: (model: string, label: string) => void;
 }
-
-const PALETTE: readonly string[] = [
-  "var(--sw-accent-thinking)",
-  "var(--sw-accent-loop)",
-  "var(--sw-accent-success)",
-  "var(--sw-accent-human)",
-  "var(--sw-accent-warn)",
-  "var(--sw-accent-idle)",
-];
 
 export function ModelDonut({ rows, loading, onSelectModel }: ModelDonutProps): JSX.Element {
   const reduceMotion = useReducedMotion();
@@ -45,14 +39,20 @@ export function ModelDonut({ rows, loading, onSelectModel }: ModelDonutProps): J
   const entries = rows.map((r, i) => ({
     row: r,
     cssKey: `m${i}`,
-    color: PALETTE[i % PALETTE.length]!,
+    color: NEUTRAL_PALETTE[i % NEUTRAL_PALETTE.length]!,
   }));
   const config: ChartConfig = {};
   for (const e of entries) {
     config[e.cssKey] = { label: humanizeModel(e.row.model), color: e.color };
   }
   return (
-    <ChartCard title="Models" caption="spend share" height={260} loading={loading} empty={total === 0 && !loading}>
+    <ChartCard
+      title="Models"
+      icon={<Cpu className="size-4" />}
+      height={260}
+      loading={loading}
+      empty={total === 0 && !loading}
+    >
       <ChartContainer config={config} className="mx-auto aspect-square max-h-full">
         <PieChart>
           <ChartTooltip

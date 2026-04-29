@@ -37,7 +37,11 @@ export const WINDOWS: readonly WindowDefinition[] = [
   { key: "last7", label: "Last 7 days", comparisonCaption: "previous 7 days", bucket: "day" },
   { key: "last30", label: "Last 30 days", comparisonCaption: "previous 30 days", bucket: "day" },
   { key: "last90", label: "Last 90 days", comparisonCaption: "previous 90 days", bucket: "day" },
-  { key: "all", label: "All time", comparisonCaption: null, bucket: "month" },
+  // "all" defaults to day buckets — most users have weeks-to-months
+  // of data, and a monthly grain collapses everything to one or two
+  // bars (looks like the chart broke). Day handles years of data too:
+  // recharts skips ticks that don't fit, but every bar still renders.
+  { key: "all", label: "All time", comparisonCaption: null, bucket: "day" },
 ];
 
 export interface ResolvedWindow {

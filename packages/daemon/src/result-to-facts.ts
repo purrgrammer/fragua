@@ -73,6 +73,8 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       if (result.cacheWriteTokens != null && result.cacheWriteTokens > 0) {
         payload.cacheWriteTokens = result.cacheWriteTokens;
       }
+      if (result.inputCostUsd != null && result.inputCostUsd > 0) payload.inputCostUsd = result.inputCostUsd;
+      if (result.outputCostUsd != null && result.outputCostUsd > 0) payload.outputCostUsd = result.outputCostUsd;
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {
@@ -139,6 +141,8 @@ export function abortResultToFacts(
   partial: {
     tokens: number;
     costUsd: number;
+    inputCostUsd?: number;
+    outputCostUsd?: number;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
@@ -152,6 +156,10 @@ export function abortResultToFacts(
     partialTokens: partial.tokens,
     partialCostUsd: partial.costUsd,
   };
+  if (partial.inputCostUsd != null && partial.inputCostUsd > 0) payload.partialInputCostUsd = partial.inputCostUsd;
+  if (partial.outputCostUsd != null && partial.outputCostUsd > 0) {
+    payload.partialOutputCostUsd = partial.outputCostUsd;
+  }
   if (partial.inputTokens != null && partial.inputTokens > 0) payload.partialInputTokens = partial.inputTokens;
   if (partial.outputTokens != null && partial.outputTokens > 0) payload.partialOutputTokens = partial.outputTokens;
   if (partial.cacheReadTokens != null && partial.cacheReadTokens > 0) {

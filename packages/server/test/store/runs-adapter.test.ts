@@ -24,6 +24,8 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     metrics: {
       billedTokens: 0,
       totalCostUsd: 0,
+      totalInputCostUsd: 0,
+      totalOutputCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalCacheReadTokens: 0,

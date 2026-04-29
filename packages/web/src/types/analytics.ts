@@ -17,14 +17,38 @@ export interface AnalyticsTotals {
 
 export interface RunsBucketRow {
   bucket: number;
-  success: number;
-  fail: number;
-  other: number;
+  completed: number;
+  queued: number;
+  running: number;
+  paused_hitl: number;
+  paused_provider_error: number;
+  cancelled: number;
+  halted: number;
+  quarantined: number;
 }
+
+/** Ordered list of `RunsBucketRow` status keys — the canonical stack
+ *  order used by the Runs chart (success at the bottom, failures at
+ *  the top, in-flight states layered between). Drives bar render
+ *  order, tooltip rank, and legend labels. */
+export const RUN_STATUS_KEYS = [
+  "completed",
+  "queued",
+  "running",
+  "paused_hitl",
+  "paused_provider_error",
+  "cancelled",
+  "halted",
+  "quarantined",
+] as const;
+
+export type RunStatusKey = (typeof RUN_STATUS_KEYS)[number];
 
 export interface SpendBucketRow {
   bucket: number;
   costUsd: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
 }
 
 export interface TokensBucketRow {

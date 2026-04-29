@@ -120,23 +120,34 @@ export function getKpiTotals(db: Database, w: AnalyticsWindow): KpiTotalsRow {
 
 export interface RunsByBucketRow {
   bucket: number;
-  success: number;
-  fail: number;
-  other: number;
+  completed: number;
+  queued: number;
+  running: number;
+  paused_hitl: number;
+  paused_provider_error: number;
+  cancelled: number;
+  halted: number;
+  quarantined: number;
 }
 
-/** SUM(CASE …) for each status bucket. `success` = `completed`,
- *  `fail` = halted ∪ quarantined, `other` = everything else (queued,
- *  running, paused_*, cancelled). The donut gives the precise
- *  per-status breakdown — this series is for the success/fail timeline. */
+/** One column per actual run status (mirrors the schema's CHECK enum
+ *  and the Outcomes donut), so the Runs chart can stack a single
+ *  layer per status without the client having to re-derive what
+ *  belongs in "fail" / "paused" / etc. — the chart picks colour and
+ *  label from `humanizeHaltReason` / `haltReasonAccentVar`. */
 export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
   const sql = `
     SELECT
       ${bucketExpr} AS bucket,
-      SUM(CASE WHEN status = 'completed'                          THEN 1 ELSE 0 END) AS success,
-      SUM(CASE WHEN status IN ('halted','quarantined')            THEN 1 ELSE 0 END) AS fail,
-      SUM(CASE WHEN status NOT IN ('completed','halted','quarantined') THEN 1 ELSE 0 END) AS other
+      SUM(CASE WHEN status = 'completed'             THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN status = 'queued'                THEN 1 ELSE 0 END) AS queued,
+      SUM(CASE WHEN status = 'running'               THEN 1 ELSE 0 END) AS running,
+      SUM(CASE WHEN status = 'paused_hitl'           THEN 1 ELSE 0 END) AS paused_hitl,
+      SUM(CASE WHEN status = 'paused_provider_error' THEN 1 ELSE 0 END) AS paused_provider_error,
+      SUM(CASE WHEN status = 'cancelled'             THEN 1 ELSE 0 END) AS cancelled,
+      SUM(CASE WHEN status = 'halted'                THEN 1 ELSE 0 END) AS halted,
+      SUM(CASE WHEN status = 'quarantined'           THEN 1 ELSE 0 END) AS quarantined
     FROM run_state
     WHERE enqueued_at >= ?1 AND enqueued_at < ?2
     GROUP BY bucket
@@ -147,15 +158,59 @@ export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRo
 
 export interface SpendByBucketRow {
   bucket: number;
+  /** Total cost = input + output (+ any cache/other) per the run-level
+   *  `total_cost_usd` generated column. The split fields below sum the
+   *  reducer-projected `metrics.totalInputCostUsd` /
+   *  `metrics.totalOutputCostUsd`; runs that pre-date the split show 0
+   *  in the components but still contribute to `costUsd`. */
   costUsd: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
 }
 
 export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
+  // Fallback ladder per run for the input/output split:
+  //   1. If the reducer recorded a split (`totalInput/OutputCostUsd` non-zero),
+  //      use it verbatim.
+  //   2. Otherwise, if input/output token counts are present, split
+  //      `total_cost_usd` by the token ratio. Approximate but visually
+  //      truthful — keeps pre-split runs from rendering as empty stacks.
+  //   3. As a last resort, split 50/50.
+  const inputCost = `
+    CASE
+      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')  AS REAL), 0) > 0
+        OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0) > 0
+        THEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd') AS REAL), 0)
+      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
+         + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0) > 0
+        THEN total_cost_usd
+             * COALESCE(CAST(json_extract(metrics, '$.totalInputTokens') AS REAL), 0)
+             / (COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
+              + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0))
+      ELSE total_cost_usd * 0.5
+    END
+  `;
+  const outputCost = `
+    CASE
+      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')  AS REAL), 0) > 0
+        OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0) > 0
+        THEN COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0)
+      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
+         + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0) > 0
+        THEN total_cost_usd
+             * COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0)
+             / (COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
+              + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0))
+      ELSE total_cost_usd * 0.5
+    END
+  `;
   const sql = `
     SELECT
       ${bucketExpr}                       AS bucket,
-      COALESCE(SUM(total_cost_usd), 0)    AS costUsd
+      COALESCE(SUM(total_cost_usd), 0)    AS costUsd,
+      COALESCE(SUM(${inputCost}),  0)     AS inputCostUsd,
+      COALESCE(SUM(${outputCost}), 0)     AS outputCostUsd
     FROM run_state
     WHERE enqueued_at >= ?1 AND enqueued_at < ?2
     GROUP BY bucket
@@ -286,10 +341,13 @@ export function getTopWorkflows(db: Database, w: AnalyticsWindow, limit: number)
 export interface DrilldownFilters extends AnalyticsWindow {
   /** Filter to one workflow_sha. */
   workflowSha?: string;
-  /** Filter to runs whose lifecycle status matches. Coarse buckets:
-   *  `'success'` → completed; `'fail'` → halted ∪ quarantined; otherwise
-   *  treated as a literal RunStatus. */
-  haltCategory?: "success" | "fail" | "other" | string;
+  /** Filter to runs whose lifecycle status matches. Coarse buckets
+   *  mirror the four-category collapse the Runs / Outcomes charts
+   *  surface: `'success'` → completed; `'failure'` → halted ∪
+   *  quarantined ∪ cancelled; `'paused'` → paused_hitl ∪
+   *  paused_provider_error; `'queued'` → queued ∪ running. Any other
+   *  string falls through as a literal RunStatus match. */
+  haltCategory?: "success" | "failure" | "paused" | "queued" | string;
   /** Filter to runs whose `metrics.models` contains this model key. */
   model?: string;
 }
@@ -341,10 +399,10 @@ export function getDrilldownPage(
   }
   if (filters.haltCategory) {
     if (filters.haltCategory === "success") where.push("rs.status = 'completed'");
-    else if (filters.haltCategory === "fail") where.push("rs.status IN ('halted','quarantined')");
-    else if (filters.haltCategory === "other") {
-      where.push("rs.status NOT IN ('completed','halted','quarantined')");
-    } else {
+    else if (filters.haltCategory === "failure") where.push("rs.status IN ('halted','quarantined','cancelled')");
+    else if (filters.haltCategory === "paused") where.push("rs.status IN ('paused_hitl','paused_provider_error')");
+    else if (filters.haltCategory === "queued") where.push("rs.status IN ('queued','running')");
+    else {
       where.push("rs.status = ?");
       params.push(filters.haltCategory);
     }

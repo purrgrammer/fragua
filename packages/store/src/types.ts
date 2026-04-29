@@ -62,6 +62,15 @@ export interface RunMetrics {
    * which is what `budget_tokens` fences against. */
   billedTokens: number;
   totalCostUsd: number;
+  /** Cost attributable to input/prompt tokens. Sums `cost.recorded`
+   * payloads' input cost split (pi-ai's `usage.cost.input`). 0 on
+   * older runs that pre-date the split — reducers default missing
+   * fields defensively. */
+  totalInputCostUsd: number;
+  /** Cost attributable to output/completion tokens (includes
+   * reasoning/thinking on providers that bundle them under output).
+   * 0 on older runs. */
+  totalOutputCostUsd: number;
   /** Fresh prompt tokens (excludes cache hits on providers that track
    * them separately, e.g. Anthropic). Zero on older runs that predate
    * the split — reducers accept missing fields defensively. */
