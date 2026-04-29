@@ -271,7 +271,7 @@ function FeedRowTime({ ts, className }: { ts: number; className?: string }): JSX
   const now = useNowSeconds();
   return (
     <span
-      className={cn("shrink-0 text-sw-xs text-sw-muted tabular-nums", className)}
+      className={cn("shrink-0 min-w-[7rem] text-right text-sw-xs text-sw-muted tabular-nums", className)}
       title={new Date(ts).toISOString()}
     >
       {formatRelative(ts, { now: new Date(now) })}
@@ -318,7 +318,7 @@ function FeedRowSkeleton(): JSX.Element {
     >
       <Skeleton className="col-start-1 row-start-1 size-4" />
       <Skeleton className="col-start-2 row-start-1 h-3 w-20" />
-      <Skeleton className="col-start-3 row-start-1 ml-auto h-3 w-12 sm:col-start-5 sm:ml-0" />
+      <Skeleton className="col-start-3 row-start-1 ml-auto h-3 w-28 sm:col-start-5 sm:ml-0" />
       <Skeleton className="col-span-2 col-start-1 row-start-2 h-3 w-48 max-w-full sm:col-span-1 sm:col-start-3 sm:row-start-1" />
       <Skeleton className="col-start-3 row-start-2 h-4 w-20 justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto" />
     </li>
