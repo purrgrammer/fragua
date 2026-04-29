@@ -38,31 +38,40 @@
 
   /* — Accent / state tokens ——————————————————————————————————————————— */
 
-  /* accent.success: calm green, not lime — done, healthy, passed */
-  --sw-accent-success: oklch(0.52 0.10 148);
+  /* accent.success: calm green, not lime — done, healthy, passed.
+   * Chroma deliberately well under typical "success-green" so the dot
+   * sits in the same chromatic register as the rest of the UI rather
+   * than asserting itself. */
+  --sw-accent-success: oklch(0.55 0.07 148);
 
-  /* accent.error: serious red, not neon — failure, blocker, over-budget */
-  --sw-accent-error: oklch(0.50 0.14 25);
+  /* accent.error: serious red, not neon — failure, blocker, over-budget.
+   * Same restraint: identifiable as red, not a stop sign. */
+  --sw-accent-error: oklch(0.55 0.10 25);
 
-  /* accent.thinking: warm amber — processing, awaiting, streaming */
-  --sw-accent-thinking: oklch(0.62 0.10 68);
+  /* accent.thinking: warm amber — processing, awaiting, streaming.
+   * Same restrained chroma as the rest of the informational accents;
+   * the .sw-pulse animation does the "alive" work, not the colour. */
+  --sw-accent-thinking: oklch(0.62 0.07 68);
 
-  /* accent.idle: neutral gray — queued, paused */
-  --sw-accent-idle: oklch(0.60 0 0);
+  /* accent.idle: neutral gray — queued, paused. Lifted toward border-tier
+   * so an inactive dot reads as the absence of activity, not a state. */
+  --sw-accent-idle: oklch(0.72 0 0);
 
-  /* accent.warn: muted orange — resource pressure, soft threshold */
-  --sw-accent-warn: oklch(0.60 0.10 48);
+  /* accent.warn: muted orange — resource pressure, soft threshold. Stays
+   * one hue-step warmer than thinking (48 vs 68) so the two are still
+   * distinguishable side-by-side at low chroma. */
+  --sw-accent-warn: oklch(0.60 0.07 48);
 
   /* accent.human: calm steel blue — awaiting human (HITL / paused_hitl).
    * Cool-family hue deliberately sits opposite the warm thinking/warn
    * accents so HITL reads distinctly from loop/retry states. */
-  --sw-accent-human: oklch(0.58 0.10 230);
+  --sw-accent-human: oklch(0.58 0.07 230);
 
   /* accent.loop: teal/cyan — iteration / cycling control-flow.
    * Sits between success (green, 148) and human (blue, 230) so the four
    * structural accents (warn/loop/human/success) fan out across the hue
    * wheel without colliding. */
-  --sw-accent-loop: oklch(0.58 0.09 195);
+  --sw-accent-loop: oklch(0.58 0.07 195);
 
   /* — Chart neutral palette ————————————————————————————————————————————
    * Non-status chart fills (Spend, Tokens, Cache, Workflows). True neutral
@@ -137,26 +146,31 @@
 
   /* — Accent / state tokens ——————————————————————————————————————————— */
 
-  /* accent.success: calm green, slightly brightened for dark bg */
-  --sw-accent-success: oklch(0.60 0.11 148);
+  /* accent.success: calm green, slightly brightened for dark bg.
+   * Chroma matches the light value so the dot reads as the same hue,
+   * not "louder green at night." */
+  --sw-accent-success: oklch(0.65 0.07 148);
 
-  /* accent.error: serious red, lifted for dark bg legibility */
-  --sw-accent-error: oklch(0.60 0.14 25);
+  /* accent.error: serious red, lifted for dark bg legibility — same
+   * restraint on chroma as the light token. */
+  --sw-accent-error: oklch(0.62 0.10 25);
 
-  /* accent.thinking: warm amber, slightly lifted */
-  --sw-accent-thinking: oklch(0.68 0.10 68);
+  /* accent.thinking: warm amber, lifted for dark bg. Chroma matches the
+   * light token — pulse carries the "alive" signal, not saturation. */
+  --sw-accent-thinking: oklch(0.68 0.07 68);
 
-  /* accent.idle: neutral gray — slightly lighter on dark */
-  --sw-accent-idle: oklch(0.50 0 0);
+  /* accent.idle: neutral gray — dimmed below muted so an inactive dot
+   * recedes against the dark surface. */
+  --sw-accent-idle: oklch(0.42 0 0);
 
-  /* accent.warn: muted orange — lifted slightly */
-  --sw-accent-warn: oklch(0.66 0.10 48);
+  /* accent.warn: muted orange, lifted for dark bg. */
+  --sw-accent-warn: oklch(0.66 0.07 48);
 
-  /* accent.human: calm steel blue — lifted slightly for dark bg. */
-  --sw-accent-human: oklch(0.66 0.10 230);
+  /* accent.human: calm steel blue, lifted for dark bg. */
+  --sw-accent-human: oklch(0.66 0.07 230);
 
-  /* accent.loop: teal/cyan — lifted slightly for dark bg. */
-  --sw-accent-loop: oklch(0.66 0.09 195);
+  /* accent.loop: teal/cyan, lifted for dark bg. */
+  --sw-accent-loop: oklch(0.66 0.07 195);
 
   /* Chart neutral palette — inverted: lighter neutrals read "more
    * prominent" against the near-ink surface. Same lightness stops as
