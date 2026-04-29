@@ -18,8 +18,8 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
+import { visibleSegmentRadius } from "./chart-stack.ts";
 
 const CACHE_KEYS = ["cacheReadTokens", "cacheWriteTokens"] as const;
 type CacheKey = (typeof CACHE_KEYS)[number];

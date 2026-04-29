@@ -19,8 +19,8 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
+import { visibleSegmentRadius } from "./chart-stack.ts";
 
 const SPEND_KEYS = ["inputCostUsd", "outputCostUsd"] as const;
 type SpendKey = (typeof SPEND_KEYS)[number];

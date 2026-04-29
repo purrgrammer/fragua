@@ -17,8 +17,8 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
+import { visibleSegmentRadius } from "./chart-stack.ts";
 
 const TOKEN_KEYS = ["inputTokens", "outputTokens"] as const;
 type TokenKey = (typeof TOKEN_KEYS)[number];

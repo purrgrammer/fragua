@@ -20,15 +20,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
-import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
 // Hidden pending revisit — see commented JSX below.
+// import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
 // import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
 import { RunsChart } from "../components/analytics/RunsChart.tsx";
 import { SpendChart } from "../components/analytics/SpendChart.tsx";
 import { TokensChart } from "../components/analytics/TokensChart.tsx";
-import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
+// import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
 import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
-import { resolveWindow, WINDOWS, type WindowKey } from "../lib/analytics.ts";
+import { resolveWindow, type WindowKey } from "../lib/analytics.ts";
 import { categoryLabel, formatBucketTooltip } from "../lib/humanize.ts";
 import { useLocale } from "../lib/locale.ts";
 import { queries } from "../lib/queries.ts";
@@ -43,7 +43,6 @@ export function Analytics(): JSX.Element {
   // on the analytics summary query.
   const now = useNow(60_000, true);
   const resolved = useMemo(() => resolveWindow(windowKey, new Date(now)), [windowKey, now]);
-  const windowDef = WINDOWS.find((w) => w.key === windowKey) ?? WINDOWS[0]!;
 
   const { data, isPending } = useQuery(
     queries.analytics.summary({
@@ -130,6 +129,12 @@ export function Analytics(): JSX.Element {
         />
       </div>
 
+      {/* Outcomes (HaltDonut), Models (ModelDonut), and Top workflows hidden
+          pending more thinking + visual work. Restore `lg:grid-cols-2` on the
+          outcomes/models wrapper when re-enabling both donuts. Re-add `windowDef`
+          (was `WINDOWS.find(...) ?? WINDOWS[0]!`) when bringing these back —
+          the title strings depend on it.
+
       <div className="grid grid-cols-1 gap-3">
         <HaltDonut
           rows={data?.haltDistribution ?? []}
@@ -144,8 +149,6 @@ export function Analytics(): JSX.Element {
             })
           }
         />
-        {/* ModelDonut hidden pending palette/sizing revisit. Restore the
-            `lg:grid-cols-2` on the wrapper above when re-enabling.
         <ModelDonut
           rows={data?.modelDistribution ?? []}
           loading={isPending}
@@ -158,7 +161,6 @@ export function Analytics(): JSX.Element {
             })
           }
         />
-        */}
       </div>
 
       <TopWorkflowsBar
@@ -174,6 +176,7 @@ export function Analytics(): JSX.Element {
           })
         }
       />
+      */}
 
       <DrillDownDrawer slice={slice} onOpenChange={(open) => (open ? null : setSlice(null))} />
     </div>
