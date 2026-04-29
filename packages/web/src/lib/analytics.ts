@@ -8,10 +8,12 @@
 // the same TZ offset.
 //
 // Comparison windows (totals.previous on the wire):
-//   Today      → the same elapsed-fraction of yesterday (00:00 yesterday
-//                → 00:00 yesterday + (now - 00:00 today)). Without this
-//                partial-window correction, partial-today always reads
-//                as a negative delta.
+//   Today      → yesterday's full 24h (00:00 yesterday → 00:00 today).
+//                Today reads negative early in the day until it
+//                accumulates against yesterday's full total — accepted
+//                as the price of comparing against a stable denominator.
+//                Same-elapsed-fraction comparison was tried first and
+//                hid deltas on quiet mornings (prior fraction = 0).
 //   Last 7 d   → previous 7 days
 //   Last 30 d  → previous 30 days
 //   Last 90 d  → previous 90 days
@@ -62,7 +64,6 @@ export function resolveWindow(key: WindowKey, now: Date = new Date()): ResolvedW
     case "today": {
       const todayStart = startOfLocalDay(now);
       const yesterdayStart = todayStart - DAY_MS;
-      const elapsed = nowMs - todayStart;
       return {
         key: def.key,
         label: def.label,
@@ -70,7 +71,7 @@ export function resolveWindow(key: WindowKey, now: Date = new Date()): ResolvedW
         fromMs: todayStart,
         toMs: nowMs,
         compareFromMs: yesterdayStart,
-        compareToMs: yesterdayStart + elapsed,
+        compareToMs: todayStart,
         tzOffsetMinutes,
       };
     }

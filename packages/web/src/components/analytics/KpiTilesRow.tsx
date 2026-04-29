@@ -3,7 +3,21 @@
 // matches Control Center exactly. Each tile carries an inline
 // percentage delta vs the previous window — no separate caption row,
 // the window selector communicates the comparison context.
+//
+// Tokens KPI counts only fresh tokens (input + output), mirroring the
+// Control Center "Tokens" tile. Cache reads/writes are surfaced by
+// the dedicated Cache KPI and the Cache time-series chart.
+//
+// Loading state: when `current` is null we pass `undefined` numeric
+// values to AnimatedNumber so it renders the "—" placeholder instead
+// of animating from 0 → real value on the first payload.
+//
+// `NumberFlowGroup` wraps the main number and the delta percentage so
+// their digit transitions tick in lockstep on every refresh — without
+// it, the two NumberFlow instances animate on independent frames and
+// the strip looks shimmery.
 
+import { NumberFlowGroup } from "@number-flow/react";
 import { Coins, Database, DollarSign, type LucideIcon, Play } from "lucide-react";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "@/lib/format";
 import type { AnalyticsTotals } from "@/types/analytics";
@@ -12,14 +26,16 @@ import { StatTile } from "../ui/stat-tile.tsx";
 import { ComparisonDelta } from "./ComparisonDelta.tsx";
 
 export interface KpiTilesRowProps {
-  current: AnalyticsTotals;
+  /** `null` while the first payload is in flight — tiles render `"—"`. */
+  current: AnalyticsTotals | null;
   previous: AnalyticsTotals | null;
 }
 
 interface Tile {
   label: string;
   icon: LucideIcon;
-  current: number;
+  /** `undefined` ⇒ AnimatedNumber renders the loading placeholder. */
+  current: number | undefined;
   previous: number | null;
   format: Intl.NumberFormatOptions;
   /** When `'inverse'`, increases render as negative tone (spend). */
@@ -28,14 +44,16 @@ interface Tile {
 }
 
 export function KpiTilesRow({ current, previous }: KpiTilesRowProps): JSX.Element {
-  const cacheHitRate = computeCacheHitRate(current.inputTokens, current.cacheReadTokens);
+  const cacheHitRate = current ? computeCacheHitRate(current.inputTokens, current.cacheReadTokens) : null;
   const previousCacheHitRate = previous ? computeCacheHitRate(previous.inputTokens, previous.cacheReadTokens) : null;
+  const freshTokens = current ? current.inputTokens + current.outputTokens : undefined;
+  const previousFreshTokens = previous ? previous.inputTokens + previous.outputTokens : null;
 
   const tiles: Tile[] = [
     {
       label: "Runs",
       icon: Play,
-      current: current.runs,
+      current: current?.runs,
       previous: previous?.runs ?? null,
       format: { notation: "compact", maximumFractionDigits: 1 },
       testId: "kpi-runs",
@@ -43,29 +61,25 @@ export function KpiTilesRow({ current, previous }: KpiTilesRowProps): JSX.Elemen
     {
       label: "Spend",
       icon: DollarSign,
-      current: current.costUsd,
+      current: current?.costUsd,
       previous: previous?.costUsd ?? null,
-      format: usdFormatOptions(current.costUsd),
+      format: usdFormatOptions(current?.costUsd ?? 0),
       direction: "inverse",
       testId: "kpi-spend",
     },
     {
       label: "Tokens",
       icon: Coins,
-      current: current.inputTokens + current.outputTokens + current.cacheReadTokens + current.cacheWriteTokens,
-      previous: previous
-        ? previous.inputTokens + previous.outputTokens + previous.cacheReadTokens + previous.cacheWriteTokens
-        : null,
-      format: tokensCompactFormatOptions(
-        current.inputTokens + current.outputTokens + current.cacheReadTokens + current.cacheWriteTokens,
-      ),
+      current: freshTokens,
+      previous: previousFreshTokens,
+      format: tokensCompactFormatOptions(freshTokens ?? 0),
       direction: "inverse",
       testId: "kpi-tokens",
     },
     {
-      label: "Cache hit rate",
+      label: "Cache",
       icon: Database,
-      current: cacheHitRate ?? 0,
+      current: cacheHitRate ?? undefined,
       previous: previousCacheHitRate,
       format: percentFormatOptions(),
       testId: "kpi-cache",
@@ -78,10 +92,12 @@ export function KpiTilesRow({ current, previous }: KpiTilesRowProps): JSX.Elemen
         const Icon = t.icon;
         return (
           <StatTile key={t.label} label={t.label} icon={<Icon className="size-4" />} testId={t.testId}>
-            <span className="inline-flex items-baseline gap-2">
-              <AnimatedNumber value={t.current} format={t.format} />
-              <ComparisonDelta current={t.current} previous={t.previous} direction={t.direction} />
-            </span>
+            <NumberFlowGroup>
+              <span className="inline-flex items-center gap-2">
+                <AnimatedNumber value={t.current} format={t.format} />
+                <ComparisonDelta current={t.current} previous={t.previous} direction={t.direction} />
+              </span>
+            </NumberFlowGroup>
           </StatTile>
         );
       })}

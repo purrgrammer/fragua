@@ -78,7 +78,7 @@ export function Analytics(): JSX.Element {
         <WindowSelector value={windowKey} onChange={setWindowKey} />
       </div>
 
-      <KpiTilesRow current={data?.totals.current ?? EMPTY_TOTALS} previous={data?.totals.previous ?? null} />
+      <KpiTilesRow current={data?.totals.current ?? null} previous={data?.totals.previous ?? null} />
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <RunsChart
@@ -157,15 +157,6 @@ export function Analytics(): JSX.Element {
     </div>
   );
 }
-
-const EMPTY_TOTALS = {
-  runs: 0,
-  costUsd: 0,
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-};
 
 function nextBucketStart(bucketMs: number, bucket: "hour" | "day" | "month"): number {
   const d = new Date(bucketMs);

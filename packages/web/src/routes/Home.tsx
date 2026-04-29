@@ -274,14 +274,15 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
     <section data-testid="stats-tiles">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile
-          label="Running"
+          label="Runs"
           loading={loading}
-          numericValue={stats.running}
+          numericValue={stats.totalRuns}
+          format={{ notation: "compact", maximumFractionDigits: 1 }}
           icon={<Play className="size-4" />}
-          testId="tile-running"
+          testId="tile-runs"
         />
         <StatTile
-          label="Total spend"
+          label="Spend"
           loading={loading}
           numericValue={stats.totalCostUsd}
           format={usdFormatOptions(stats.totalCostUsd ?? 0)}
@@ -298,7 +299,7 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
           testId="tile-tokens"
         />
         <StatTile
-          label="Cache hit rate"
+          label="Cache"
           loading={loading}
           numericValue={stats.cacheHitRate}
           format={percentFormatOptions()}
