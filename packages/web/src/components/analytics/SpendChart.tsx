@@ -19,7 +19,6 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { NEUTRAL_PAIR } from "./chart-palette.ts";
 import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
 
@@ -36,8 +35,8 @@ export interface SpendChartProps {
 }
 
 const config: ChartConfig = {
-  inputCostUsd: { label: "Input", color: NEUTRAL_PAIR.primary },
-  outputCostUsd: { label: "Output", color: NEUTRAL_PAIR.secondary },
+  inputCostUsd: { label: "Input", color: "var(--sw-chart-pair-primary)" },
+  outputCostUsd: { label: "Output", color: "var(--sw-chart-pair-secondary)" },
 };
 
 function rankOf(key: string): number {

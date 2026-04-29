@@ -1,9 +1,9 @@
 // Model spend distribution. Slice value = USD (the operationally
 // useful axis); tooltip carries the formatted dollar amount + tokens.
 //
-// Palette: shared neutral ramp (`NEUTRAL_PALETTE`) — models aren't a
-// status, so they stay outside the green/red/blue/amber set reserved
-// for Runs and Outcomes.
+// Palette: shared neutral ramp (`--sw-chart-1..6` in theme.css) — models
+// aren't a status, so they stay outside the green/red/blue/amber set
+// reserved for Runs and Outcomes. Cycles when slices > ramp length.
 
 import { Cpu } from "lucide-react";
 import { Cell, Pie, PieChart } from "recharts";
@@ -20,7 +20,10 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { NEUTRAL_PALETTE } from "./chart-palette.ts";
+
+// Length of the `--sw-chart-1..N` ramp declared in theme.css. Update
+// both together if more stops are added.
+const CHART_RAMP_LEN = 4;
 
 export interface ModelDonutProps {
   rows: readonly ModelDistributionRow[];
@@ -39,7 +42,7 @@ export function ModelDonut({ rows, loading, onSelectModel }: ModelDonutProps): J
   const entries = rows.map((r, i) => ({
     row: r,
     cssKey: `m${i}`,
-    color: NEUTRAL_PALETTE[i % NEUTRAL_PALETTE.length]!,
+    color: `var(--sw-chart-${(i % CHART_RAMP_LEN) + 1})`,
   }));
   const config: ChartConfig = {};
   for (const e of entries) {

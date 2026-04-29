@@ -17,7 +17,6 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { NEUTRAL_PAIR } from "./chart-palette.ts";
 import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
 
@@ -34,8 +33,8 @@ export interface TokensChartProps {
 }
 
 const config: ChartConfig = {
-  inputTokens: { label: "Input", color: NEUTRAL_PAIR.primary },
-  outputTokens: { label: "Output", color: NEUTRAL_PAIR.secondary },
+  inputTokens: { label: "Input", color: "var(--sw-chart-pair-primary)" },
+  outputTokens: { label: "Output", color: "var(--sw-chart-pair-secondary)" },
 };
 
 export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: TokensChartProps): JSX.Element {

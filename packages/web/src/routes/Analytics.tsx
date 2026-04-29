@@ -21,7 +21,8 @@ import { useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
 import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
-import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
+// Hidden pending revisit — see commented JSX below.
+// import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
 import { RunsChart } from "../components/analytics/RunsChart.tsx";
 import { SpendChart } from "../components/analytics/SpendChart.tsx";
 import { TokensChart } from "../components/analytics/TokensChart.tsx";
@@ -129,7 +130,7 @@ export function Analytics(): JSX.Element {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3">
         <HaltDonut
           rows={data?.haltDistribution ?? []}
           loading={isPending}
@@ -143,6 +144,8 @@ export function Analytics(): JSX.Element {
             })
           }
         />
+        {/* ModelDonut hidden pending palette/sizing revisit. Restore the
+            `lg:grid-cols-2` on the wrapper above when re-enabling.
         <ModelDonut
           rows={data?.modelDistribution ?? []}
           loading={isPending}
@@ -155,6 +158,7 @@ export function Analytics(): JSX.Element {
             })
           }
         />
+        */}
       </div>
 
       <TopWorkflowsBar

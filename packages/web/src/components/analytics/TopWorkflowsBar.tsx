@@ -18,7 +18,6 @@ import { useReducedMotion } from "@/lib/useReducedMotion";
 import type { TopWorkflowRow } from "@/types/analytics";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { NEUTRAL_SOLO } from "./chart-palette.ts";
 
 export interface TopWorkflowsBarProps {
   rows: readonly TopWorkflowRow[];
@@ -27,7 +26,7 @@ export interface TopWorkflowsBarProps {
 }
 
 const config: ChartConfig = {
-  runs: { label: "Runs", color: NEUTRAL_SOLO },
+  runs: { label: "Runs", color: "var(--sw-chart-solo)" },
 };
 
 interface BarRow extends TopWorkflowRow {
@@ -95,8 +94,8 @@ export function TopWorkflowsBar({ rows, loading, onSelectWorkflow }: TopWorkflow
             }
             cursor={onSelectWorkflow ? "pointer" : undefined}
           >
-            <LabelList dataKey="label" position="insideLeft" offset={8} fill="var(--sw-text)" fontSize={12} />
-            <LabelList dataKey="runs" position="right" offset={8} fill="var(--sw-muted)" fontSize={12} />
+            <LabelList dataKey="label" position="insideLeft" offset={8} fill="var(--sw-bg)" fontSize={13} />
+            <LabelList dataKey="runs" position="right" offset={8} fill="var(--sw-muted)" fontSize={13} />
           </Bar>
         </BarChart>
       </ChartContainer>

@@ -64,6 +64,22 @@
    * wheel without colliding. */
   --sw-accent-loop: oklch(0.58 0.09 195);
 
+  /* — Chart neutral palette ————————————————————————————————————————————
+   * Non-status chart fills (Spend, Tokens, Cache, Workflows). True neutral
+   * (chroma 0) so charts sit in the same chromatic world as bg/surface/
+   * text — Tailwind's slate ramp pulls cool, which fights the rest of the
+   * UI. Four stops only: more would be a finer distinction than the eye
+   * can use at small sizes. Pair / solo reference ramp positions so dark-
+   * mode inversion below cascades for free. Tweak here.
+   * ——————————————————————————————————————————————————————————————————— */
+  --sw-chart-1: oklch(0.37 0 0);
+  --sw-chart-2: oklch(0.54 0 0);
+  --sw-chart-3: oklch(0.71 0 0);
+  --sw-chart-4: oklch(0.88 0 0);
+  --sw-chart-pair-primary:   var(--sw-chart-2);
+  --sw-chart-pair-secondary: var(--sw-chart-4);
+  --sw-chart-solo:           var(--sw-chart-2);
+
   /* — Typography scale ————————————————————————————————————————————————
    * Hierarchy via weight/case/spacing — NOT size.
    * xs=13px  sm=15px(default body)  base=16px  md=18px  lg=22px
@@ -141,6 +157,17 @@
 
   /* accent.loop: teal/cyan — lifted slightly for dark bg. */
   --sw-accent-loop: oklch(0.66 0.09 195);
+
+  /* Chart neutral palette — inverted: lighter neutrals read "more
+   * prominent" against the near-ink surface. Same lightness stops as
+   * light, mirrored. Pair / solo aliases unchanged so they auto-flip. */
+  --sw-chart-1: oklch(0.88 0 0);
+  --sw-chart-2: oklch(0.71 0 0);
+  --sw-chart-3: oklch(0.54 0 0);
+  --sw-chart-4: oklch(0.37 0 0);
+  --sw-chart-pair-primary:   var(--sw-chart-2);
+  --sw-chart-pair-secondary: var(--sw-chart-4);
+  --sw-chart-solo:           var(--sw-chart-2);
 
   /* Typography scale tokens are theme-independent (rem values, not colors).
    * Re-declared to make dark block self-contained for readability; values

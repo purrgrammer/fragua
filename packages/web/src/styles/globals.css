@@ -317,6 +317,45 @@ body {
 }
 
 /*
+ * Scrollbars — match the hairline aesthetic.
+ *
+ * Default browser scrollbars are thick, opaque, and chromatically loud
+ * — three things the rest of the UI explicitly avoids. This pulls them
+ * into line: thin, transparent track, thumb in the same hairline tone
+ * as `border-sw-border`, lifting to `--sw-muted` on hover.
+ *
+ * Modern engines: `scrollbar-width: thin` + `scrollbar-color` (Firefox,
+ * Chromium 121+, Safari 18+) handle thumb colour but not :hover; the
+ * `::-webkit-scrollbar*` pseudo-elements provide the hover state for
+ * older WebKit/Blink versions and finer control everywhere else.
+ *
+ * Applied globally via `*` so every overflowing pane (main, drawers,
+ * tables, code blocks) shares the same look — no opt-in needed.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sw-border) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--sw-border);
+  border-radius: var(--sw-radius-default);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sw-muted);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
  * React Flow — hide the default handle circles. The swarm graph is a
  * read-only visualisation, so the little circles at each handle point
  * read as extra arrow-like decoration (and make edges look bidirectional

@@ -18,7 +18,6 @@ import {
   ChartTooltipContent,
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
-import { NEUTRAL_PAIR } from "./chart-palette.ts";
 import { visibleSegmentRadius } from "./chart-stack.ts";
 import { ChartTotal } from "./ChartTotal.tsx";
 
@@ -35,8 +34,8 @@ export interface CacheChartProps {
 }
 
 const config: ChartConfig = {
-  cacheReadTokens: { label: "Cache reads", color: NEUTRAL_PAIR.primary },
-  cacheWriteTokens: { label: "Cache writes", color: NEUTRAL_PAIR.secondary },
+  cacheReadTokens: { label: "Cache reads", color: "var(--sw-chart-pair-primary)" },
+  cacheWriteTokens: { label: "Cache writes", color: "var(--sw-chart-pair-secondary)" },
 };
 
 export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: CacheChartProps): JSX.Element {
