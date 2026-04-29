@@ -19,8 +19,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Pause, ShieldAlert, ShieldCheck } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
+import { rowEnterFromBottom } from "../lib/feedMotion.ts";
 import { queries } from "../lib/queries.ts";
 import { displayTitle, displayTooltip } from "./RunRow.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -95,6 +97,7 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
   const hasOverflow = limit !== undefined && rows.length > limit;
   const attention = hasOverflow ? rows.slice(0, limit) : rows;
   const showViewAll = viewAllHref !== undefined && hasOverflow;
+  const reduce = useReducedMotion() ?? false;
 
   return (
     <section data-testid="inbox" className="flex flex-col gap-4">
@@ -125,22 +128,32 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
         />
       ) : (
         <ul className="flex flex-col gap-2">
-          {attention.map((row) => (
-            <InboxRow key={row.runId} row={row} />
-          ))}
+          <AnimatePresence initial={false}>
+            {attention.map((row) => (
+              <InboxRow key={row.runId} row={row} reduce={reduce} />
+            ))}
+          </AnimatePresence>
         </ul>
       )}
     </section>
   );
 }
 
-function InboxRow({ row }: { row: RunSummary }): JSX.Element | null {
+function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.Element | null {
   const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
   if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;
+  const { initial, animate, exit, transition } = rowEnterFromBottom(reduce);
   return (
-    <li>
+    <motion.li
+      layout
+      initial={initial}
+      animate={animate}
+      exit={exit}
+      transition={transition}
+      style={{ willChange: reduce ? undefined : "transform" }}
+    >
       <Link
         to={`/runs/${row.runId}`}
         title={displayTooltip(row)}
@@ -158,6 +171,6 @@ function InboxRow({ row }: { row: RunSummary }): JSX.Element | null {
         ) : null}
         <span className="shrink-0 text-sw-xs text-sw-muted tabular-nums">{label}</span>
       </Link>
-    </li>
+    </motion.li>
   );
 }

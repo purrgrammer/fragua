@@ -13,6 +13,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Play } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -37,6 +38,7 @@ import { SectionTitle } from "../components/ui/section-title.tsx";
 import { Skeleton } from "../components/ui/skeleton.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { enqueueJob, type RunSummary } from "../lib/api.ts";
+import { rowEnterFromTop } from "../lib/feedMotion.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { computeStats } from "../lib/stats.ts";
@@ -213,6 +215,19 @@ interface RunningSectionProps {
 }
 
 function RunningSection({ running, loading }: RunningSectionProps): JSX.Element {
+  const reduce = useReducedMotion() ?? false;
+  const { initial, animate, exit, transition } = rowEnterFromTop(reduce);
+
+  // Server returns `updated_at DESC`, which re-sorts as a run emits
+  // events. Stabilise on `startedAt` (set once to the first event's ts;
+  // never re-computed) so a row's slot doesn't move while it runs. ISO
+  // strings sort lexicographically by date because they share the same
+  // UTC format.
+  const sorted = useMemo(
+    () => running.slice().sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0)),
+    [running],
+  );
+
   return (
     <section data-testid="running-section" className="flex flex-col gap-4">
       <SectionTitle
@@ -230,7 +245,7 @@ function RunningSection({ running, loading }: RunningSectionProps): JSX.Element 
           <Skeleton className="h-10" />
           <Skeleton className="h-10" />
         </div>
-      ) : running.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <EmptyState
           data-testid="running-empty"
           icon={<Play className="size-6" />}
@@ -240,9 +255,20 @@ function RunningSection({ running, loading }: RunningSectionProps): JSX.Element 
         />
       ) : (
         <div data-testid="running-strip" className="flex flex-col gap-2">
-          {running.map((row) => (
-            <RunRow key={row.runId} row={row} variant="compact" />
-          ))}
+          <AnimatePresence initial={false}>
+            {sorted.map((row) => (
+              <motion.div
+                key={row.runId}
+                initial={initial}
+                animate={animate}
+                exit={exit}
+                transition={transition}
+                style={{ willChange: reduce ? undefined : "transform" }}
+              >
+                <RunRow row={row} variant="compact" />
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
       )}
     </section>

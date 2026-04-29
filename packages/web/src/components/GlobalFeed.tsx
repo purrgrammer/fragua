@@ -40,6 +40,7 @@ import { memo, useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { rowEnterFromTop } from "../lib/feedMotion.ts";
 import { feedAtom, feedEventKey, feedLoadingAtom } from "../lib/globalFeed.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
@@ -131,14 +132,6 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
   return base;
 }
 
-// Animation choices per the web-animation-design skill: ease-out-cubic
-// for entries (items entering the viewport), 180ms duration (under
-// 250ms — fires constantly), only transform + opacity (GPU-only, no
-// layout thrash). Reflow on neighbours uses ease-in-out (movement on
-// screen).
-const EASE_OUT_CUBIC: [number, number, number, number] = [0.215, 0.61, 0.355, 1];
-const ENTER_DURATION_S = 0.18;
-
 export function GlobalFeed(): JSX.Element {
   const events = useAtomValue(feedAtom);
   const isLoading = useAtomValue(feedLoadingAtom);
@@ -210,10 +203,7 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
   // so the title fills in promptly after the auto-titler runs.
   const { data: run } = useQuery(queries.runs.detail(event.runId));
 
-  const initial = reduce ? false : { opacity: 0, y: -6, scale: 0.98 };
-  const animate = { opacity: 1, y: 0, scale: 1 };
-  const exit = reduce ? undefined : { opacity: 0 };
-  const transition = reduce ? { duration: 0 } : { duration: ENTER_DURATION_S, ease: EASE_OUT_CUBIC };
+  const { initial, animate, exit, transition } = rowEnterFromTop(reduce);
 
   const wf = run?.workflowName ?? run?.workflow;
 
