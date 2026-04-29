@@ -18,14 +18,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { newRunId } from "./run-id.ts";
-import {
-  encodeGlobalEventId,
-  parseGlobalFromTsMax,
-  parseSeqCursorMax,
-  pingFrameData,
-  runSseLoop,
-  serializeEvent,
-} from "./sse.ts";
+import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
 /** Per-node model-resolution check injected by the daemon. Returns a
  * non-empty array of node-level offenders when one or more declared
@@ -439,71 +432,25 @@ export function createRoutes(deps: ServerDeps): Hono {
 
   app.get("/events/stream", (c) =>
     streamSSE(c, async (stream) => {
-      // The query for the global feed uses `ts >= cursor` (not strict
-      // `>` on a tuple) — see the SQL constant in @swarm/store/queries.
-      // That means each batch can re-include events at the boundary
-      // millisecond. We dedupe in two layers:
-      //   1. Per-connection Set keyed on `runId.seq`, scoped to the
-      //      current cursor ts. As soon as ts advances, the Set clears
-      //      — bounded memory, eliminates in-loop redelivery.
-      //   2. Client-side identity check (the SSE `id:` carries the full
-      //      `<ts>.<runId>.<seq>` triple) — handles the cursor-ts
-      //      replay window on reconnect, when the server has no memory
-      //      of what was previously emitted.
-      let fromTs = parseGlobalFromTsMax({
+      const initialCursor = parseGlobalCursorFromHeader({
         fromTs: c.req.query("fromTs"),
         lastEventId: c.req.header("Last-Event-ID"),
       });
-      const seenAtBoundary = new Set<string>();
-      let lastWriteAt = Date.now();
-      while (!stream.aborted) {
-        let batch: ReturnType<typeof deps.store.getGlobalEventsAfter>;
-        try {
-          batch = deps.store.getGlobalEventsAfter({
-            fromTs,
-            kindIn: FEED_EVENT_KINDS,
-            limit: batchSize,
-          });
-        } catch (err) {
-          // The store can be torn down (test cleanup, daemon restart)
-          // while the loop is mid-iteration. Treat a closed-DB error as
-          // an implicit stream abort instead of letting the exception
-          // bubble out of the streamSSE async generator.
-          if (err instanceof Error && /closed database/i.test(err.message)) return;
-          throw err;
-        }
-        let emittedThisBatch = 0;
-        for (const event of batch) {
-          if (event.ts > fromTs) {
-            fromTs = event.ts;
-            seenAtBoundary.clear();
-          }
-          const key = `${event.runId}.${event.seq}`;
-          if (seenAtBoundary.has(key)) continue;
-          seenAtBoundary.add(key);
-          await stream.writeSSE({
-            id: encodeGlobalEventId({ ts: event.ts, runId: event.runId, seq: event.seq }),
-            data: serializeEvent(event),
-          });
-          emittedThisBatch++;
-          lastWriteAt = Date.now();
-        }
-        // Sleep when we've reached the live tail. Detected as either an
-        // un-full batch OR a full batch whose rows were all dedupe-
-        // filtered (server is correctly at the head of the feed but
-        // would otherwise spin re-fetching the same `cursor.ts` rows).
-        if (batch.length < batchSize || emittedThisBatch === 0) {
-          // Idle keepalive — see runSseLoop for the rationale. Sent as
-          // a real `data:` frame so the client's onmessage handler
-          // fires and re-arms its stall watchdog (a `:` comment is
-          // invisible to EventSource and would let half-dead sockets
-          // appear healthy on the JS side for many minutes).
-          if (Date.now() - lastWriteAt >= 10_000) {
-            await stream.writeSSE({ data: pingFrameData(Date.now()) });
-            lastWriteAt = Date.now();
-          }
-          await stream.sleep(pollMs);
-        }
+      try {
+        await runGlobalFeedLoop(stream, initialCursor, {
+          fetchForward: (opts) => deps.store.getGlobalEventsForward(opts),
+          fetchAtFloor: (opts) => deps.store.getGlobalEventsAtFloor(opts),
+          kindIn: FEED_EVENT_KINDS,
+          batchSize,
+          pollMs,
+        });
+      } catch (err) {
+        // The store can be torn down (test cleanup, daemon restart)
+        // while the loop is mid-iteration. Treat a closed-DB error as
+        // an implicit stream abort instead of letting the exception
+        // bubble out of the streamSSE async generator.
+        if (err instanceof Error && /closed database/i.test(err.message)) return;
+        throw err;
       }
     }),
   );

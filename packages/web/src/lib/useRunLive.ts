@@ -14,11 +14,16 @@
 //   - `totalEvents` — monotonic counter, cheap invalidation trigger.
 //   - `controlEvents` — filtered slice for `usePendingSteers`.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
 import { type DetailOverlay, EMPTY_DETAIL_OVERLAY, foldDetailFrame, isDetailEvent } from "./useDetailOverlay.ts";
 import { useEventSource } from "./useEventSource.ts";
-import { type CostAggregate, EMPTY_COST_AGGREGATE, foldCostFrame } from "./useLiveCostAggregate.ts";
+import {
+  aggregateLiveFrames,
+  type CostAggregate,
+  frameFromPayload,
+  type LiveCostFrame,
+} from "./useLiveCostAggregate.ts";
 
 export type RunLiveStatus = "idle" | "loading" | "live" | "closed" | "error";
 
@@ -52,10 +57,11 @@ export interface UseRunLiveResult {
   /** Filtered slice of control-channel events (steering, control) for
    * `usePendingSteers` reconciliation. */
   controlEvents: ReadonlyArray<{ type: string; data?: Record<string, unknown> | null }>;
-  /** Running cost/token aggregate folded from `cost.recorded` SSE frames.
-   * O(1) memory — only the running totals are kept, not the underlying
-   * events. Reset on `runId` change. Use this for live header tiles;
-   * the server snapshot remains the source of truth post-terminal. */
+  /** Running cost/token aggregate over `cost.recorded` SSE frames whose
+   * seq exceeds `opts.sinceSeq` — the snapshot watermark. Frames the
+   * snapshot already accounts for are filtered out automatically when
+   * the snapshot advances, so `snapshot.costUsd + liveCost.totalCostUsd`
+   * never double-counts. Reset on `runId` change. */
   liveCost: CostAggregate;
   /** Event-driven overlay for the run-detail snapshot — node states,
    * selectedEdges appended since `sinceSeq`, and run-level status.
@@ -108,7 +114,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
   const [totalEvents, setTotalEvents] = useState(0);
   const [controlEvents, setControlEvents] = useState<UseRunLiveResult["controlEvents"]>([]);
-  const [liveCost, setLiveCost] = useState<CostAggregate>(EMPTY_COST_AGGREGATE);
+  const [liveCostFrames, setLiveCostFrames] = useState<LiveCostFrame[]>([]);
   const [detailOverlay, setDetailOverlay] = useState<DetailOverlay>(EMPTY_DETAIL_OVERLAY);
 
   // Latest ordinal persisted so incremental fetches don't re-load the world.
@@ -124,7 +130,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     setStreaming(null);
     setTotalEvents(0);
     setControlEvents([]);
-    setLiveCost(EMPTY_COST_AGGREGATE);
+    setLiveCostFrames([]);
     setDetailOverlay(EMPTY_DETAIL_OVERLAY);
     lastOrdinalRef.current = 0;
 
@@ -181,8 +187,19 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       const payload = (parsed["payload"] ?? null) as Record<string, unknown> | null;
       const nodeId = typeof payload?.["nodeId"] === "string" ? (payload["nodeId"] as string) : null;
 
-      if (type === "cost.recorded" && payload != null) {
-        setLiveCost((prev) => foldCostFrame(prev, payload));
+      // Cost frames are tagged with their seq so the consumer can filter
+      // out anything the snapshot already accounts for. Drop frames
+      // without a parseable seq — production SSE always carries one in
+      // the `id:` field, so a missing/NaN seq is a test-fixture bug, not
+      // a real-world condition we should silently absorb.
+      if (type === "cost.recorded" && payload != null && Number.isFinite(idNum)) {
+        setLiveCostFrames((prev) => {
+          // Idempotent against reconnect replay: a frame at a seq we
+          // already captured is dropped on the spot.
+          const last = prev.length > 0 ? prev[prev.length - 1]!.seq : -1;
+          if (idNum <= last) return prev;
+          return [...prev, frameFromPayload(idNum, payload)];
+        });
       }
 
       // Fold structural events (node/edge/run-status) into the detail
@@ -245,9 +262,32 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   const sseOpts = opts.eventSourceImpl ? { eventSourceImpl: opts.eventSourceImpl } : {};
   const { status: sseStatus } = useEventSource(sseUrl, onFrame, sseOpts);
 
-  // Project the SSE primitive's status into the legacy RunLiveStatus
-  // shape used by callers — `loading` while bootstrap pending, `closed`
-  // for terminal runs, otherwise the raw SSE status.
+  // Prune frames the snapshot has absorbed. Keeps the array bounded as
+  // `react-query` advances `snapshot.lastEventSeq` past in-flight cost
+  // events. Pure cleanup — `aggregateLiveFrames` filters again on render
+  // (belt-and-suspenders), so missing this prune doesn't double-count.
+  useEffect(() => {
+    if (typeof opts.sinceSeq !== "number") return;
+    setLiveCostFrames((prev) => {
+      const cutoff = opts.sinceSeq!;
+      const i = prev.findIndex((f) => f.seq > cutoff);
+      if (i < 0) return prev.length === 0 ? prev : [];
+      if (i === 0) return prev;
+      return prev.slice(i);
+    });
+  }, [opts.sinceSeq]);
+
+  // Aggregate against the snapshot watermark. Disjoint by construction —
+  // snapshot.costUsd covers seq ≤ sinceSeq (server SQL aggregate), this
+  // delta covers seq > sinceSeq.
+  const liveCost = useMemo<CostAggregate>(
+    () => aggregateLiveFrames(liveCostFrames, opts.sinceSeq ?? 0),
+    [liveCostFrames, opts.sinceSeq],
+  );
+
+  // Project the SSE primitive's status into the RunLiveStatus shape
+  // callers consume — `loading` while bootstrap pending, `closed` for
+  // terminal runs, otherwise the raw SSE status.
   const status: RunLiveStatus = !runId
     ? "idle"
     : opts.terminal === undefined

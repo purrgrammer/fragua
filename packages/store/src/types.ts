@@ -334,12 +334,33 @@ export interface GetEventsOpts {
   limit?: number;
 }
 
-export interface GetGlobalEventsAfterOpts {
-  /** Wall-clock ms; events with `ts >= fromTs` are returned. The
-   * `>=` semantics (vs strict greater on a tuple) avoid dropping
-   * same-ms appends to lex-smaller `run_id`s. The route layer
-   * dedupes the bounded redelivery at `cursor.ts` per-connection. */
-  fromTs: number;
+export interface GetGlobalEventsForwardOpts {
+  /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
+   * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
+   * returned. */
+  floorTs: number;
+  /** Lex-max `run_id` already emitted at `floorTs`. On first connect
+   * (no emission at this ts yet), pass the sentinel `""` so every
+   * real run_id qualifies as strictly greater. */
+  lastRunId: string;
+  /** Lex-max `seq` already emitted at `floorTs` for `lastRunId`. On
+   * first connect, pass `-1` so every real seq qualifies. */
+  lastSeq: number;
+  /** Allow-listed event kinds. Required — the global feed always filters. */
+  kindIn: readonly string[];
+  limit: number;
+}
+
+export interface GetGlobalEventsAtFloorOpts {
+  /** Boundary `ts` to scan. Only events at exactly this `ts` are
+   * returned. */
+  floorTs: number;
+  /** Pagination cursor — only events with `(run_id, seq) > (afterRunId,
+   * afterSeq)` qualify. Pass `""` / `-1` on the first call to walk the
+   * full boundary; advance to the last returned `(runId, seq)` on
+   * subsequent calls. */
+  afterRunId: string;
+  afterSeq: number;
   /** Allow-listed event kinds. Required — the global feed always filters. */
   kindIn: readonly string[];
   limit: number;
@@ -392,13 +413,21 @@ export interface IEventStore {
   getState(runId: string): RunState | null;
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   /**
-   * Cross-run, ascending scan of events strictly after `cursor`,
-   * filtered by `kindIn`. Powers the global SSE feed
-   * (`GET /events/stream`). `kindIn` is required and allow-listed at
-   * the route layer (see {@link FEED_EVENT_KINDS}). At most `limit`
-   * rows. Returns events in (ts, runId, seq) ASC order.
+   * Forward direction of the global SSE feed: cross-run, ascending
+   * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
+   * cursor, filtered by `kindIn`. Returns events in `(ts, run_id,
+   * seq)` ASC order, at most `limit` rows. `kindIn` is required and
+   * allow-listed at the route layer (see {@link FEED_EVENT_KINDS}).
    */
-  getGlobalEventsAfter(opts: GetGlobalEventsAfterOpts): StoredEvent[];
+  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
+  /**
+   * Boundary rescan for the global SSE feed: events at exactly
+   * `floorTs` with `(run_id, seq) > (afterRunId, afterSeq)`. The
+   * loop paginates ASC from `("", -1)` and filters duplicates via a
+   * per-`floorTs` Set; this covers any event at the boundary `ts`
+   * the forward cursor has already stepped past.
+   */
+  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
   /**
    * The most-recent `limit` events allow-listed by `kindIn`, returned
    * oldest-first. Powers the backfill route (`GET /events`).

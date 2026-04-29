@@ -140,6 +140,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 5, // tiny backoff so the test doesn't sleep
+        jitter: 0, // deterministic timing
       }),
     );
     await waitFor(() => {
@@ -175,6 +176,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 5,
+        jitter: 0,
       }),
     );
     await waitFor(() => {
@@ -212,6 +214,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 5,
+        jitter: 0,
       }),
     );
     await waitFor(() => {
@@ -235,6 +238,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 50,
+        jitter: 0,
       }),
     );
     await waitFor(() => {
@@ -262,6 +266,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 5,
+        jitter: 0,
         stallMs: 30,
       }),
     );
@@ -295,6 +300,7 @@ describe("useEventSource", () => {
       useEventSource("/api/events/stream", () => {}, {
         eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
         reconnectBaseMs: 5,
+        jitter: 0,
         stallMs: 40,
       }),
     );
@@ -313,6 +319,77 @@ describe("useEventSource", () => {
     }
     expect(FakeEventSource.instances.length).toBe(1);
     expect(es.closed).toBe(false);
+  });
+
+  it("changing url during a pending reconnect cancels the queued reconnect", async () => {
+    // Permanent-close on URL A schedules a reconnect timer. Before it
+    // fires, the consumer rerenders with URL B. The cleanup must clear
+    // the pending timer so the new effect doesn't race with a stale
+    // reconnect to URL A — the only EventSource instances created
+    // after rerender should target URL B.
+    const { rerender } = renderHook(
+      ({ url }: { url: string }) =>
+        useEventSource(url, () => {}, {
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+          reconnectBaseMs: 200, // long enough that we can rerender before it fires
+          jitter: 0,
+        }),
+      { initialProps: { url: "/api/runs/a/stream" } },
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    // Permanent close on URL A — schedules a 200ms reconnect timer.
+    act(() => {
+      const es = FakeEventSource.instances[0]!;
+      es.readyState = 2;
+      es._error();
+    });
+    // Rerender with URL B before the timer fires.
+    rerender({ url: "/api/runs/b/stream" });
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(2);
+    });
+    // Wait past the original 200ms backoff window — no third instance
+    // should appear (the URL-A reconnect was cancelled by cleanup).
+    await new Promise((r) => setTimeout(r, 300));
+    expect(FakeEventSource.instances.length).toBe(2);
+    expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/b/stream");
+  });
+
+  it("stall watchdog rearms after a forced reconnect succeeds", async () => {
+    // Watchdog → reconnect → open → silence → watchdog must fire
+    // again on the new instance. Verifies the timer lifecycle survives
+    // a full reconnect cycle, not just the initial open.
+    renderHook(() =>
+      useEventSource("/api/events/stream", () => {}, {
+        eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        reconnectBaseMs: 5,
+        jitter: 0,
+        stallMs: 30,
+      }),
+    );
+    await waitFor(() => {
+      expect(FakeEventSource.instances.length).toBe(1);
+    });
+    act(() => FakeEventSource.instances[0]!._open());
+    // First watchdog firing → reconnect.
+    await waitFor(
+      () => {
+        expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 500 },
+    );
+    // Open the second instance. Watchdog rearms on `open`.
+    act(() => FakeEventSource.instances[1]!._open());
+    // Second silence → second watchdog firing → third instance.
+    await waitFor(
+      () => {
+        expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(3);
+      },
+      { timeout: 500 },
+    );
+    expect(FakeEventSource.instances[1]?.closed).toBe(true);
   });
 
   it("changing url tears down the old connection and opens a new one", async () => {

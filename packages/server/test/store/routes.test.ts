@@ -1021,6 +1021,30 @@ describe("global event feed (cross-run)", () => {
     }
   });
 
+  test("GET /events/stream — full batch of same-ms events does not stall", async () => {
+    // Same-ms write burst: 8 runs enqueued at the same pinned now,
+    // batchSize forced to 3 so the SSE handler must paginate through
+    // them across multiple iterations. The forward strict-tuple cursor
+    // advances on each emission so every event reaches the wire.
+    const nowVal = 12_000_000;
+    const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
+    try {
+      tStore.saveWorkflow("wf", "t", "digraph {}");
+      const runIds = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"];
+      for (const rid of runIds) tStore.enqueueRun({ runId: rid, workflowSha: "wf" });
+
+      const tRoutes = createRoutes({ store: tStore, ssePollMs: 5, sseBatchSize: 3 });
+      const res = await tRoutes.fetch(new Request("http://test/events/stream"));
+
+      const chunks = await drainSSE(res, '"runId":"r08"');
+      for (const rid of runIds) {
+        expect(chunks).toContain(`"runId":"${rid}"`);
+      }
+    } finally {
+      tStore.close();
+    }
+  });
+
   test("GET /events/stream stays open across runs (no terminal close)", async () => {
     // Seed a single completed run; the per-run stream would close, the
     // global stream must not — terminality is a per-run concept.

@@ -10,7 +10,8 @@ import {
   getRunCostTotals as queryRunCostTotals,
   getStepAggregates as queryStepAggregates,
   selectEvents,
-  selectGlobalEventsAfter,
+  selectGlobalEventsAtFloor,
+  selectGlobalEventsForward,
   selectGlobalEventsLatest,
   selectMessages,
   selectMessagesNarrow,
@@ -32,7 +33,8 @@ import {
   type FactAppendResult,
   type FactEvent,
   type GetEventsOpts,
-  type GetGlobalEventsAfterOpts,
+  type GetGlobalEventsAtFloorOpts,
+  type GetGlobalEventsForwardOpts,
   type GetGlobalEventsLatestOpts,
   type GetMessagesOpts,
   type IEventStore,
@@ -385,8 +387,12 @@ export class SqliteStore implements IEventStore {
     return selectEvents(this.db, runId, queryOpts).map(rowToStoredEvent);
   }
 
-  getGlobalEventsAfter(opts: GetGlobalEventsAfterOpts): StoredEvent[] {
-    return selectGlobalEventsAfter(this.db, opts).map(rowToStoredEvent);
+  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {
+    return selectGlobalEventsForward(this.db, opts).map(rowToStoredEvent);
+  }
+
+  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[] {
+    return selectGlobalEventsAtFloor(this.db, opts).map(rowToStoredEvent);
   }
 
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[] {

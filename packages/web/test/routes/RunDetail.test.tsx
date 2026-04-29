@@ -47,20 +47,25 @@ class FakeEventSource {
   }
 
   /** Dispatch a JSON-serialised frame.
+   * `seq` lands on `MessageEvent.lastEventId` so consumers (notably
+   * `useRunLive`'s cost-frame log) can tag frames by event seq. Pass a
+   * concrete number for cost.recorded frames so the snapshot-cutoff
+   * filter has a watermark to compare against; production SSE always
+   * carries a seq in the `id:` field. Defaults to "" to keep older
+   * tests that don't care about seq from breaking.
+   *
    * When the event type is one of the named SSE event types registered
    * by useRunLive (ALL_EVENT_TYPES), fire only the type-specific
    * listeners. The generic "message" listener is only for frames that
    * lack an `event:` field — firing both would double-count. */
-  dispatch(eventType: string, payload: unknown): void {
+  dispatch(eventType: string, payload: unknown, seq?: number): void {
     const data = JSON.stringify({ type: eventType, payload });
-    const ev = new MessageEvent(eventType, { data, lastEventId: "" });
-    // If there are type-specific listeners registered (useRunLive does
-    // this for all ALL_EVENT_TYPES), prefer those only.
+    const lastEventId = typeof seq === "number" ? String(seq) : "";
+    const ev = new MessageEvent(eventType, { data, lastEventId });
     const typeListeners = this.listeners.get(eventType) ?? [];
     if (typeListeners.length > 0) {
       for (const l of typeListeners) l(ev);
     } else {
-      // Fall back to generic "message" listeners for un-typed frames.
       for (const l of this.listeners.get("message") ?? []) l(ev);
     }
   }
@@ -372,24 +377,33 @@ describe("RunDetail", () => {
         expect(q.getByTestId("detail-cost-tile")).toBeTruthy();
       });
 
-      // Dispatch two cost.recorded SSE frames.
+      // Dispatch two cost.recorded SSE frames at successive seqs past
+      // the snapshot watermark (lastEventSeq=1).
       await act(async () => {
         const es = fakeEs.getEs();
         if (es) {
-          es.dispatch("cost.recorded", {
-            cost_usd: 0.05,
-            input_tokens: 500,
-            output_tokens: 100,
-            cache_read_tokens: 50,
-            cache_write_tokens: 0,
-          });
-          es.dispatch("cost.recorded", {
-            cost_usd: 0.05,
-            input_tokens: 500,
-            output_tokens: 100,
-            cache_read_tokens: 50,
-            cache_write_tokens: 0,
-          });
+          es.dispatch(
+            "cost.recorded",
+            {
+              cost_usd: 0.05,
+              input_tokens: 500,
+              output_tokens: 100,
+              cache_read_tokens: 50,
+              cache_write_tokens: 0,
+            },
+            2,
+          );
+          es.dispatch(
+            "cost.recorded",
+            {
+              cost_usd: 0.05,
+              input_tokens: 500,
+              output_tokens: 100,
+              cache_read_tokens: 50,
+              cache_write_tokens: 0,
+            },
+            3,
+          );
         }
       });
 
@@ -413,6 +427,82 @@ describe("RunDetail", () => {
         expect(cacheText).not.toBe("—");
         expect(cacheText).toContain("%");
       });
+    } finally {
+      mock.restore();
+      fakeEs.restore();
+    }
+  });
+
+  it("does NOT double-count cost when the snapshot refetches past in-flight live frames", async () => {
+    // Cost-overlap invariant. Setup:
+    //   1. Snapshot v1: costUsd=0, lastEventSeq=100. Live delta is 0.
+    //   2. Two cost.recorded SSE frames arrive at seqs 101, 102
+    //      totalling $0.10. Tile reads $0 + $0.10 = $0.10.
+    //   3. The snapshot refetches: costUsd=0.10, lastEventSeq=102. The
+    //      server-side SQL aggregate now covers events 101+102.
+    //
+    // The tile must still read $0.10. The live frames at seqs ≤ 102
+    // drop out of the aggregate via the `aggregateLiveFrames` cutoff
+    // filter, so `snapshot.costUsd + liveCost.totalCostUsd` stays
+    // disjoint and there's no double-count over the overlap range.
+    const detailV1: RunDetailT = {
+      runId: "run-cost-overlap",
+      startedAt: "2024-01-01T00:00:00Z",
+      status: "running",
+      lastEventSeq: 100,
+      nodes: [],
+      selectedEdges: [],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+    };
+    const { client, mock } = prepare("run-cost-overlap", detailV1);
+    const fakeEs = installFakeEventSource();
+    try {
+      const { container } = mount(client, "/runs/run-cost-overlap");
+      const q = within(container);
+
+      await waitFor(() => {
+        expect(q.getByTestId("detail-cost-tile")).toBeTruthy();
+      });
+
+      // Phase 1: dispatch two frames past the snapshot watermark.
+      await act(async () => {
+        const es = fakeEs.getEs();
+        if (es) {
+          es.dispatch(
+            "cost.recorded",
+            { cost_usd: 0.05, input_tokens: 500, output_tokens: 100, cache_read_tokens: 0, cache_write_tokens: 0 },
+            101,
+          );
+          es.dispatch(
+            "cost.recorded",
+            { cost_usd: 0.05, input_tokens: 500, output_tokens: 100, cache_read_tokens: 0, cache_write_tokens: 0 },
+            102,
+          );
+        }
+      });
+      await waitFor(() => {
+        expect(q.getByTestId("detail-cost-tile").textContent ?? "").toContain("$0.10");
+      });
+
+      // Phase 2: snapshot advances to absorb both frames. The overlap
+      // range drops out of the live delta and the tile stays at $0.10.
+      const detailV2: RunDetailT = {
+        ...detailV1,
+        costUsd: 0.1,
+        inputTokens: 1000,
+        outputTokens: 200,
+        lastEventSeq: 102,
+      };
+      await act(async () => {
+        client.setQueryData(queries.runs.detail("run-cost-overlap").queryKey, detailV2);
+      });
+      await Bun.sleep(50);
+      const costText = q.getByTestId("detail-cost-tile").textContent ?? "";
+      expect(costText).not.toContain("$0.20");
+      expect(costText).toContain("$0.10");
     } finally {
       mock.restore();
       fakeEs.restore();

@@ -1,24 +1,33 @@
-// Incremental + bulk reducers for folding `cost.recorded` SSE frames
-// into a live cost / token / cache-hit aggregate.
+// Per-seq cost frame log + cutoff aggregator for live cost / token /
+// cache-hit totals.
 //
-// `foldCostFrame` runs in O(1) per frame and is what `useRunLive` calls
-// on each SSE event — the running aggregate is what the UI consumes.
-// `reduceCostEvents` is a thin bulk wrapper kept for tests + ad-hoc
-// recomputation from a known event list.
+// Each `cost.recorded` SSE frame is captured as a `LiveCostFrame` tagged
+// with its store-side `seq`. `aggregateLiveFrames(frames, cutoffSeq)`
+// sums only frames with `seq > cutoffSeq` — the consumer passes the
+// snapshot's `lastEventSeq` so frames the server-side SQL aggregate
+// already covers are filtered out, keeping the two sources disjoint by
+// construction. When the snapshot refetches and `lastEventSeq`
+// advances, frames that fall under the new watermark drop out of the
+// aggregate automatically — `snapshot.costUsd + liveCost.totalCostUsd`
+// is the run's true total at all times.
 //
 // Only `cost.recorded` events are folded. Payload field extraction is
-// defensive (non-number → 0) so the reducer never NaNs on partial or
-// future-shaped payloads.
+// defensive (non-number → 0) so the aggregator never NaNs on partial
+// or future-shaped payloads.
 
-/** Parsed SSE frame shape — the minimal slice `useRunLive` once
- * accumulated. Kept for the bulk `reduceCostEvents` helper that takes
- * a ready-made event list. */
-export interface LiveEvent {
-  type: string;
-  payload: Record<string, unknown> | null;
+/** A single `cost.recorded` payload tagged with its event seq. The seq
+ * lets `aggregateLiveFrames` drop frames the snapshot already covered
+ * once it advances. */
+export interface LiveCostFrame {
+  seq: number;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
-/** Live aggregate produced by folding a run's SSE event stream. */
+/** Live aggregate of frames not yet covered by the server snapshot. */
 export interface CostAggregate {
   totalCostUsd: number;
   totalInputTokens: number;
@@ -45,29 +54,48 @@ function asNum(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** Add a single `cost.recorded` payload onto an existing aggregate.
- * Returns a new object — safe to use as a `setState` updater. */
-export function foldCostFrame(prev: CostAggregate, payload: Record<string, unknown>): CostAggregate {
-  const totalInputTokens = prev.totalInputTokens + asNum(payload["input_tokens"]);
-  const totalCacheReadTokens = prev.totalCacheReadTokens + asNum(payload["cache_read_tokens"]);
-  const readDenom = totalInputTokens + totalCacheReadTokens;
+/** Build a `LiveCostFrame` from a `cost.recorded` payload. Defensive on
+ * field types — non-numeric inputs land as 0 instead of NaN-ing through
+ * the aggregator. */
+export function frameFromPayload(seq: number, payload: Record<string, unknown>): LiveCostFrame {
   return {
-    totalCostUsd: prev.totalCostUsd + asNum(payload["cost_usd"]),
-    totalInputTokens,
-    totalOutputTokens: prev.totalOutputTokens + asNum(payload["output_tokens"]),
-    totalCacheReadTokens,
-    totalCacheWriteTokens: prev.totalCacheWriteTokens + asNum(payload["cache_write_tokens"]),
-    cacheHitRate: readDenom > 0 ? totalCacheReadTokens / readDenom : undefined,
+    seq,
+    costUsd: asNum(payload["cost_usd"]),
+    inputTokens: asNum(payload["input_tokens"]),
+    outputTokens: asNum(payload["output_tokens"]),
+    cacheReadTokens: asNum(payload["cache_read_tokens"]),
+    cacheWriteTokens: asNum(payload["cache_write_tokens"]),
   };
 }
 
-/** Bulk fold — kept for tests and ad-hoc recomputation. Equivalent to
- * threading `foldCostFrame` over every `cost.recorded` event. */
-export function reduceCostEvents(events: ReadonlyArray<LiveEvent>): CostAggregate {
-  let agg: CostAggregate = EMPTY_COST_AGGREGATE;
-  for (const ev of events) {
-    if (ev.type !== "cost.recorded") continue;
-    agg = foldCostFrame(agg, ev.payload ?? {});
+/** Sum `frames` whose `seq` strictly exceeds `cutoffSeq` into a
+ * `CostAggregate`. The cutoff is the snapshot's `lastEventSeq` — any
+ * frame the snapshot already accounts for is filtered out, so adding
+ * the snapshot's server-side total to this aggregate's total never
+ * double-counts.
+ *
+ * Pass `cutoffSeq: 0` to fold every frame (bulk-replay semantics). */
+export function aggregateLiveFrames(frames: ReadonlyArray<LiveCostFrame>, cutoffSeq: number): CostAggregate {
+  let totalCostUsd = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheWriteTokens = 0;
+  for (const f of frames) {
+    if (f.seq <= cutoffSeq) continue;
+    totalCostUsd += f.costUsd;
+    totalInputTokens += f.inputTokens;
+    totalOutputTokens += f.outputTokens;
+    totalCacheReadTokens += f.cacheReadTokens;
+    totalCacheWriteTokens += f.cacheWriteTokens;
   }
-  return agg;
+  const readDenom = totalInputTokens + totalCacheReadTokens;
+  return {
+    totalCostUsd,
+    totalInputTokens,
+    totalOutputTokens,
+    totalCacheReadTokens,
+    totalCacheWriteTokens,
+    cacheHitRate: readDenom > 0 ? totalCacheReadTokens / readDenom : undefined,
+  };
 }

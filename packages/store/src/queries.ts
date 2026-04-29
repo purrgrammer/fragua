@@ -264,29 +264,53 @@ export function selectEvents(db: Database, runId: string, opts: { sinceSeq: numb
 // `type IN (SELECT value FROM json_each(?))` lets a single bound
 // parameter carry an arbitrary-sized kind list — keeps the SQL static
 // (no dynamic placeholder building) and the parameter list fixed-arity.
-// Both global-events queries below use the same trick.
+// All global-events queries below use the same trick.
 
-// Why `ts >= ?` (not `ts > ?`) and `run_id ASC, seq ASC` tie-breakers:
+// Two-query design for the global SSE feed.
 //
 // `seq` is per-run, so a single-int cursor doesn't carry a global
-// order. The natural triple `(ts, run_id, seq)` has a subtle bug
-// under strict-greater: a same-ms append to a `run_id` that
-// lexicographically sorts *before* the cursor's `run_id` is filtered
-// out — its tuple is "less than" the cursor even though it's a brand-
-// new row the client hasn't seen. Strictly-greater on a tuple where
-// `ts` ties on milliseconds drops events.
+// order. The natural triple `(ts, run_id, seq)` is the index key, but
+// strict-greater on the triple has a hole at the boundary `ts`: a
+// new INSERT whose `run_id` falls lex-between two already-emitted
+// `run_id`s at the same `ts` is filtered out. The forward cursor has
+// already advanced past it.
 //
-// `ts >= ?` keeps the new event in. The cost is bounded redelivery of
-// rows at exactly `cursor.ts`, which the route layer dedupes via a
-// per-connection Set keyed on `(runId, seq)`. The SSE `id:` carries the
-// full triple so the client can re-dedupe across reconnects.
-const SELECT_GLOBAL_EVENTS_AFTER_SQL = `
+// Two queries on `idx_events_ts(ts, run_id, seq)`:
+//
+//   - FORWARD: strict-tuple `(ts, run_id, seq) > (floorTs, lastRunId,
+//     lastSeq)`. Advances on every emission, so a same-ts batch
+//     larger than `LIMIT N` paginates across iterations without
+//     re-fetching the same N rows.
+//
+//   - BOUNDARY RESCAN: events at exactly `ts == floorTs` with
+//     `(run_id, seq) > (afterRunId, afterSeq)`. The loop paginates
+//     ASC from `("", -1)` and filters via a per-`floorTs` `Set` of
+//     emitted `(runId, seq)` keys. Catches every event at `floorTs`
+//     the forward cursor stepped past.
+//
+// The Set is bounded by events at one millisecond — typically a
+// handful — and clears whenever `floorTs` advances. By construction
+// every event at `floorTs` is covered by either the forward cursor
+// (when emitted before being walked past) or the rescan (when
+// inserted afterward), and the Set ensures each is emitted exactly
+// once on a given connection.
+const SELECT_GLOBAL_EVENTS_FORWARD_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events
-   WHERE ts >= ?1
-     AND type IN (SELECT value FROM json_each(?2))
+   WHERE (ts, run_id, seq) > (?1, ?2, ?3)
+     AND type IN (SELECT value FROM json_each(?4))
    ORDER BY ts ASC, run_id ASC, seq ASC
-   LIMIT ?3
+   LIMIT ?5
+`;
+
+const SELECT_GLOBAL_EVENTS_AT_FLOOR_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE ts = ?1
+     AND (run_id, seq) > (?2, ?3)
+     AND type IN (SELECT value FROM json_each(?4))
+   ORDER BY run_id ASC, seq ASC
+   LIMIT ?5
 `;
 
 // Backfill: take the most-recent N events DESC inside a subquery, then
@@ -307,32 +331,59 @@ const SELECT_GLOBAL_EVENTS_LATEST_SQL = `
 `;
 
 /**
- * Cross-run, ascending scan of events with `ts >= fromTs`, filtered by
- * `kindIn`. Used by the global SSE feed (`/events/stream`). Returns up
- * to `limit` rows ordered by `(ts, run_id, seq)` for stable iteration.
+ * Forward strict-tuple scan: events `(ts, run_id, seq) > (floorTs,
+ * lastRunId, lastSeq)`, filtered by `kindIn`, ordered ASC. Powers the
+ * forward direction of the global SSE feed.
  *
- * The `>=` semantics are deliberate — see the SQL constant above for
- * why strict-greater on `(ts, run_id, seq)` would silently drop same-ms
- * appends. The route layer dedupes the bounded redelivery at
- * `cursor.ts` with a per-connection Set; the client re-dedupes across
- * reconnects via `(runId, seq)` identity.
+ * On first connect with no prior emission at the boundary `ts`, pass
+ * `lastRunId: ""` and `lastSeq: -1` — every real `(runId, seq)` at
+ * `floorTs` is then strictly greater than the sentinel and included.
  *
- * `kindIn` is required: the global feed always allow-lists. To list every
- * kind without filtering, pass `FEED_EVENT_KINDS` (the operator-relevant
- * union exported from `@swarm/store`).
- *
- * The `idx_events_ts(ts, run_id, seq)` index lets SQLite walk this
- * query without a sort step; the `type IN (json_each(?))` filter is
- * applied as a predicate on the indexed walk.
+ * `idx_events_ts(ts, run_id, seq)` covers the row-value comparison;
+ * SQLite walks the index from `(floorTs, lastRunId, lastSeq)+ε` without
+ * a sort step. The `type IN (json_each(?))` filter is applied as a
+ * predicate on the indexed walk.
  */
-export function selectGlobalEventsAfter(
+export function selectGlobalEventsForward(
   db: Database,
-  opts: { fromTs: number; kindIn: readonly string[]; limit: number },
+  opts: {
+    floorTs: number;
+    lastRunId: string;
+    lastSeq: number;
+    kindIn: readonly string[];
+    limit: number;
+  },
 ): EventRow[] {
   const kindsJson = JSON.stringify(opts.kindIn);
   return db
-    .query<EventRow, [number, string, number]>(SELECT_GLOBAL_EVENTS_AFTER_SQL)
-    .all(opts.fromTs, kindsJson, opts.limit);
+    .query<EventRow, [number, string, number, string, number]>(SELECT_GLOBAL_EVENTS_FORWARD_SQL)
+    .all(opts.floorTs, opts.lastRunId, opts.lastSeq, kindsJson, opts.limit);
+}
+
+/**
+ * Boundary rescan: events at exactly `ts == floorTs` with
+ * `(run_id, seq) > (afterRunId, afterSeq)`. The caller paginates ASC
+ * from the sentinel `("", -1)` and filters duplicates via a
+ * per-`floorTs` Set; this covers any event at the boundary `ts` the
+ * forward cursor has already stepped past.
+ *
+ * On first connect with no emission yet at this ts, pass
+ * `afterRunId: ""` and `afterSeq: -1` to walk the full boundary.
+ */
+export function selectGlobalEventsAtFloor(
+  db: Database,
+  opts: {
+    floorTs: number;
+    afterRunId: string;
+    afterSeq: number;
+    kindIn: readonly string[];
+    limit: number;
+  },
+): EventRow[] {
+  const kindsJson = JSON.stringify(opts.kindIn);
+  return db
+    .query<EventRow, [number, string, number, string, number]>(SELECT_GLOBAL_EVENTS_AT_FLOOR_SQL)
+    .all(opts.floorTs, opts.afterRunId, opts.afterSeq, kindsJson, opts.limit);
 }
 
 /**

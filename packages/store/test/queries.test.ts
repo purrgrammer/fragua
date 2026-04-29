@@ -195,6 +195,189 @@ describe("getStepAggregates", () => {
   });
 });
 
+describe("getGlobalEventsForward", () => {
+  // Use FEED_EVENT_KINDS-shaped allow-list so the query engine sees the
+  // realistic set. `intent.run_enqueued` is the most convenient seed —
+  // enqueueRun emits one per run.
+  const KINDS = ["intent.run_enqueued", "fact.run_started", "fact.run_completed"] as const;
+
+  test("empty store → empty result", () => {
+    const store = freshStore();
+    const out = store.getGlobalEventsForward({
+      floorTs: 0,
+      lastRunId: "",
+      lastSeq: -1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(out).toEqual([]);
+    store.close();
+  });
+
+  test('first-connect sentinel `("", -1)` includes all events at floorTs', async () => {
+    const t = 5_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    store.enqueueRun({ runId: "z", workflowSha: "wf" });
+
+    const out = store.getGlobalEventsForward({
+      floorTs: t,
+      lastRunId: "",
+      lastSeq: -1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(out.map((e) => e.runId)).toEqual(["a", "z"]);
+    store.close();
+  });
+
+  test("strict-tuple cursor: `> (ts, runId, seq)` excludes the cursor row", async () => {
+    const t = 6_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    store.enqueueRun({ runId: "m", workflowSha: "wf" });
+    store.enqueueRun({ runId: "z", workflowSha: "wf" });
+
+    // Cursor at (t, "m", 1) — only "z" should come back.
+    const out = store.getGlobalEventsForward({
+      floorTs: t,
+      lastRunId: "m",
+      lastSeq: 1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(out.map((e) => e.runId)).toEqual(["z"]);
+    store.close();
+  });
+
+  test("advances within same ts when LIMIT clips: pagination is monotonic", async () => {
+    // Seed N=3 events at the same ts. With LIMIT 1 the cursor must
+    // step through them one at a time without stalling — the very
+    // failure mode the redesign fixes (the old `ts >= ?` + Set kept
+    // returning the same first row forever).
+    const t = 7_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "r1", workflowSha: "wf" });
+    store.enqueueRun({ runId: "r2", workflowSha: "wf" });
+    store.enqueueRun({ runId: "r3", workflowSha: "wf" });
+
+    const collected: string[] = [];
+    let cur = { lastRunId: "", lastSeq: -1 };
+    for (let i = 0; i < 5; i++) {
+      const batch = store.getGlobalEventsForward({
+        floorTs: t,
+        lastRunId: cur.lastRunId,
+        lastSeq: cur.lastSeq,
+        kindIn: KINDS,
+        limit: 1,
+      });
+      if (batch.length === 0) break;
+      for (const ev of batch) {
+        collected.push(ev.runId);
+        cur = { lastRunId: ev.runId, lastSeq: ev.seq };
+      }
+    }
+    expect(collected).toEqual(["r1", "r2", "r3"]);
+    store.close();
+  });
+
+  test("kindIn filter excludes non-matching event types", async () => {
+    const t = 8_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "r1", workflowSha: "wf" });
+
+    // intent.run_enqueued is in KINDS; querying with an empty allow-list
+    // (or one missing the type) should return nothing.
+    const out = store.getGlobalEventsForward({
+      floorTs: 0,
+      lastRunId: "",
+      lastSeq: -1,
+      kindIn: ["fact.run_started"],
+      limit: 100,
+    });
+    expect(out).toEqual([]);
+    store.close();
+  });
+});
+
+describe("getGlobalEventsAtFloor", () => {
+  const KINDS = ["intent.run_enqueued"] as const;
+
+  test("returns events at exactly `floorTs`, paginated by `(runId, seq) > cursor`", async () => {
+    // Three runs at the same ts. The full-boundary cursor `("", -1)`
+    // returns all three; advancing the cursor narrows the window.
+    const t = 9_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    store.enqueueRun({ runId: "m", workflowSha: "wf" });
+    store.enqueueRun({ runId: "z", workflowSha: "wf" });
+
+    const all = store.getGlobalEventsAtFloor({
+      floorTs: t,
+      afterRunId: "",
+      afterSeq: -1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(all.map((e) => e.runId)).toEqual(["a", "m", "z"]);
+
+    const afterM = store.getGlobalEventsAtFloor({
+      floorTs: t,
+      afterRunId: "m",
+      afterSeq: 1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(afterM.map((e) => e.runId)).toEqual(["z"]);
+    store.close();
+  });
+
+  test("ignores events at other `ts` values", async () => {
+    // One event at t1, two at t2. A scan at `floorTs=t2` returns only
+    // t2's events, even though t1's is lex-smaller in `(run_id, seq)`.
+    let t = 10_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    t = 10_000_001;
+    store.enqueueRun({ runId: "b", workflowSha: "wf" });
+    store.enqueueRun({ runId: "z", workflowSha: "wf" });
+
+    const out = store.getGlobalEventsAtFloor({
+      floorTs: 10_000_001,
+      afterRunId: "",
+      afterSeq: -1,
+      kindIn: KINDS,
+      limit: 100,
+    });
+    expect(out.map((e) => e.runId)).toEqual(["b", "z"]);
+    store.close();
+  });
+
+  test("kindIn filter excludes non-matching event types", async () => {
+    const t = 11_000_000;
+    const store = new (await import("../src/index.ts")).SqliteStore({ path: ":memory:", now: () => t });
+    store.saveWorkflow("wf", "t", "digraph {}");
+    store.enqueueRun({ runId: "a", workflowSha: "wf" });
+    store.enqueueRun({ runId: "z", workflowSha: "wf" });
+
+    const out = store.getGlobalEventsAtFloor({
+      floorTs: t,
+      afterRunId: "",
+      afterSeq: -1,
+      kindIn: ["fact.run_started"],
+      limit: 100,
+    });
+    expect(out).toEqual([]);
+    store.close();
+  });
+});
+
 describe("getRunCostTotals", () => {
   test("empty run → zero row", async () => {
     const store = freshStore();
