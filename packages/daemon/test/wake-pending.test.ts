@@ -72,6 +72,37 @@ describe("wakePending — cancel on non-dispatching runs", () => {
     r.store.close();
   });
 
+  test("cancel filed while running survives a crash-induced quarantine sweep", async () => {
+    // SPEC §3.5 + intent-fold R1: cancel beats every other intent. The
+    // path: operator cancels a running run, daemon crashes mid-handler
+    // before the executor's fold runs, a fresh daemon's startup sweep
+    // sees an orphan side-effect-intent and quarantines the run, then
+    // wakePending runs. The cancel must terminate the run — not stay
+    // buried under a watermark advance.
+    const r = rig();
+    startRun(r, "rwcq");
+    const s = r.store.getState("rwcq")!;
+    r.store.appendFact(
+      "rwcq",
+      [
+        {
+          type: "fact.side_effect_intent",
+          payload: { nodeId: "start", iteration: 0, toolName: "charge", argsHash: "h", attempt: 1, idempotencyKey: "ik-q1" },
+        },
+      ],
+      s.version,
+    );
+    // Operator cancels BEFORE the sweep runs.
+    r.store.appendIntent("rwcq", { type: "intent.cancel_requested", payload: {} });
+    r.store.startupSweep();
+    expect(r.store.getState("rwcq")!.status).toBe("quarantined");
+
+    const result = wakePending(r.store);
+    expect(result.cancelled).toContain("rwcq");
+    expect(r.store.getState("rwcq")!.status).toBe("cancelled");
+    r.store.close();
+  });
+
   test("idempotent across multiple calls", async () => {
     const r = rig();
     startRun(r, "rwc3");
