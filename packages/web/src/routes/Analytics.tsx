@@ -29,7 +29,6 @@ import { SpendChart } from "../components/analytics/SpendChart.tsx";
 import { TokensChart } from "../components/analytics/TokensChart.tsx";
 import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
 import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
-import { PageTitle } from "../components/ui/page-title.tsx";
 import { resolveWindow, WINDOWS, type WindowKey } from "../lib/analytics.ts";
 import { formatBucketTooltip } from "../lib/humanize.ts";
 import { useLocale } from "../lib/locale.ts";
@@ -75,7 +74,9 @@ export function Analytics(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageTitle action={<WindowSelector value={windowKey} onChange={setWindowKey} />}>Analytics</PageTitle>
+      <div className="flex justify-end">
+        <WindowSelector value={windowKey} onChange={setWindowKey} />
+      </div>
 
       <KpiTilesRow current={data?.totals.current ?? EMPTY_TOTALS} previous={data?.totals.previous ?? null} />
 

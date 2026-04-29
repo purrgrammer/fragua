@@ -163,6 +163,9 @@ export function crumbsFor(
     const id = params["id"] ?? segments[1] ?? "";
     return [{ label: "Runs", href: "/runs" }, { label: id.length > 8 ? id.slice(0, 8) : id }];
   }
+  if (segments[0] === "analytics") {
+    return [{ label: "Analytics" }];
+  }
   // Unknown route — just label it from the first segment.
   return [{ label: segments[0] ?? "Unknown" }];
 }
