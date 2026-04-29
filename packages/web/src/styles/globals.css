@@ -33,6 +33,20 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Radix UI primitives expose state via `data-state="open"`/`"closed"` (and
+ * `"instant-open"`/`"delayed-open"` on Tooltip), not the boolean `data-open`/
+ * `data-closed` attributes Tailwind v4's default shorthand targets. Without
+ * these overrides, the shadcn animation classes baked into Sheet/Dialog/
+ * Tooltip/HoverCard/Popover (`data-open:animate-in`, `data-closed:fade-out-0`,
+ * `data-[side=right]:data-open:slide-in-from-right`, …) silently no-op
+ * because `[data-open]` never matches a Radix element. The substring match
+ * on `*="open"` lets Tooltip's delayed-open / instant-open ride the same
+ * variant as the plain `"open"` used by every other Radix Dialog peer.
+ */
+@custom-variant data-open (&[data-state*="open"]);
+@custom-variant data-closed (&[data-state="closed"]);
+
 @layer base {
   :root {
     --background: oklch(1 0 0);

@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { RunSummary } from "@/lib/api";
 import { queries } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 import type { DrillSlice } from "@/types/analytics";
 import { RunRow } from "../RunRow.tsx";
 import { Button } from "../ui/button.tsx";
@@ -22,10 +23,22 @@ export interface DrillDownDrawerProps {
   onOpenChange: (open: boolean) => void;
 }
 
+// A side drawer crossing ~28rem of travel reads as rushed at the design
+// system's default `--sw-duration-enter` (200ms), which is tuned for
+// popovers/tooltips. Override scoped to this consumer so other Sheet usages
+// keep the system cadence; entrance uses an Apple-style ease-out for a
+// confident-but-soft settle, exit is ~20% faster, and prefers-reduced-motion
+// collapses both to ~0ms (instant state swap without keyframe motion).
+const DRAWER_MOTION = cn(
+  "data-open:[animation-duration:280ms] data-open:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "data-closed:[animation-duration:220ms] data-closed:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "motion-reduce:data-open:[animation-duration:1ms] motion-reduce:data-closed:[animation-duration:1ms]",
+);
+
 export function DrillDownDrawer({ slice, onOpenChange }: DrillDownDrawerProps): JSX.Element {
   return (
     <Sheet open={slice !== null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-md">
+      <SheetContent side="right" className={cn("flex w-full flex-col gap-0 sm:max-w-md", DRAWER_MOTION)}>
         {slice ? <Body slice={slice} /> : null}
       </SheetContent>
     </Sheet>
