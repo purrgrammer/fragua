@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { uuidv7 } from "@swarm/core";
+import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 
 const GITIGNORE_BLOCK = `# swarm runtime — never commit these
@@ -68,6 +69,18 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
   await mkdir(resolve(cwd, ".swarm/workflows"), { recursive: true });
   await writeFile(configPath, body, "utf8");
   await mergeGitignore(cwd);
+
+  // Pre-register in the projects display cache so `swarm projects ls` and
+  // the UI show the project before its first run. Opens (and creates, if
+  // missing) `<cwd>/.swarm/swarm.db`. `enqueueRun` UPSERTs the same row
+  // on every run, so this is a fast-path for the post-init UX and not a
+  // correctness requirement.
+  const store = new SqliteStore({ path: resolve(cwd, ".swarm/swarm.db") });
+  try {
+    store.upsertProject({ id, name, rootPath: resolve(cwd) });
+  } finally {
+    store.close();
+  }
 
   console.log(chalk.green(`✓ wrote ${configPath}`));
   console.log(chalk.dim(`  id: ${id}`));
