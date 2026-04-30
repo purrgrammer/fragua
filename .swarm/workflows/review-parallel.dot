@@ -18,8 +18,9 @@
 
 digraph review_parallel {
   graph [
-    goal  = "Produce a ranked multi-angle review of a diff, then a signoff-gated test run."
-    label = "review-parallel"
+    goal             = "Produce a ranked multi-angle review of a diff, then a signoff-gated test run."
+    label            = "review-parallel"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

@@ -5,8 +5,9 @@
 
 digraph fix_bug {
   graph [
-    goal  = "Turn a bug report into a minimal regression test + fix that leaves CI green."
-    label = "fix-bug"
+    goal             = "Turn a bug report into a minimal regression test + fix that leaves CI green."
+    label            = "fix-bug"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

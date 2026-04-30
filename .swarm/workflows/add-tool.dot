@@ -5,8 +5,9 @@
 
 digraph add_tool {
   graph [
-    goal  = "Add a new tool to @swarm/workspace with tests, passing CI."
-    label = "add-tool"
+    goal             = "Add a new tool to @swarm/workspace with tests, passing CI."
+    label            = "add-tool"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

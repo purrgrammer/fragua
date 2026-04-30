@@ -8,8 +8,9 @@
 
 digraph quick_change {
   graph [
-    goal  = "Land a small, self-contained change on swarm, rebased onto main."
-    label = "quick-change"
+    goal             = "Land a small, self-contained change on swarm, rebased onto main."
+    label            = "quick-change"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

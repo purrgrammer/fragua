@@ -9,8 +9,9 @@
 
 digraph hitl_approval {
   graph [
-    goal  = "Produce an artifact the human explicitly signed off on."
-    label = "HITL approval"
+    goal             = "Produce an artifact the human explicitly signed off on."
+    label            = "HITL approval"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

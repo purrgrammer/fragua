@@ -11,8 +11,9 @@
 
 digraph build_feature {
   graph [
-    goal  = "Land a reviewable feature change on swarm. Human merges the diff."
-    label = "build-feature"
+    goal             = "Land a reviewable feature change on swarm. Human merges the diff."
+    label            = "build-feature"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

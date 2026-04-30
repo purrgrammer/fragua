@@ -145,3 +145,42 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Blob encryption.** Single-user local tool; DB read = full read anyway.
 - **Auto-migration of schema drift.** Runs pin a `schema_version`; mismatches halt rather than auto-upgrade.
 - **Workflow hot-reload.** `workflow_sha` is pinned at enqueue time.
+
+---
+
+## 6. Conscious divergences from attractor
+
+swarm is *inspired by* the attractor specification (`attractor-spec.md`) — its DOT-as-workflow shape, deterministic state machine, pluggable handlers, and edge-routed control flow are taken directly. The deviations below are intentional, not lag: each one is a place attractor is incomplete, incorrect for production use, or addresses a concern swarm solves differently. Lint gaps and unimplemented attractor features are tracked separately in the per-decision docs at the repo root, not here.
+
+### 6.1 Coordination & persistence
+
+- **Checkpoint storage** (attractor §5.3 → swarm I1). Attractor prescribes `{logs_root}/checkpoint.json` after each node. swarm uses the event log + `run_state` projection updated in the same SQLite transaction. Filesystem coordination is forbidden by I1 — every workflow engine that has tried it bears the same stale-checkpoint scars.
+- **Artifact addressing** (attractor §5.5 → swarm I8/I9). Attractor's `ArtifactStore.store(id, name, data)` is keyed by a single `id` that collides on retries and parallel branches. swarm scopes by `(run, node, iteration, key)` with sha256-addressed blobs; LLM-visible preview (`messages`) is distinct from system-recorded raw (`artifacts`).
+- **Run directory layout** (attractor §5.6). swarm has none. SQLite is the only coordination surface.
+
+### 6.2 Lifecycle & operator control
+
+- **`paused_provider_error`** (extends attractor §3.1). Attractor models provider transport failures as either retryable-by-policy or terminal FAIL. Real operators need a third state: pause the run with the transcript intact, fix the API key / quota, then `intent.resume`. This state is first-class in swarm.
+- **`quarantined`** (extends attractor §3.1). Attractor handwaves at-most-once for external side effects. swarm emits `side_effect_intent` before any external call and `side_effect_done|failed` after; the startup sweep quarantines runs whose intent has no terminal pair, awaiting `intent.unquarantine`.
+- **`should_retry` shape** (attractor §3.6 underspecified → `non_retryable: boolean` on `Outcome`). Attractor's predicate is described in prose with no interface signature. swarm answers concretely: handlers set `non_retryable=true` on auth/4xx/validation errors at the boundary where the error class is known; the reducer treats it as terminal regardless of status.
+- **Intent / fact dual taxonomy + OCC** (attractor §9.6 → I3). Attractor's observability is observer-only; it has no model of operator interventions. swarm splits `intent.*` (operator-initiated, always-appendable) from `fact.*` (engine-initiated, OCC-checked against `run_state.version`). `steer_requested` / `pause_requested` / `cancel_requested` / `hitl_input` / `unquarantine` / `resume` / `priority_changed` are all intents.
+
+### 6.3 Naming
+
+- **HTTP paths**: `/runs/...` and `/workflows/...` (not `/pipelines/...`). swarm splits *workflow* (source SHA) from *run* (one execution) — attractor conflates them. The split survives one-to-many naturally.
+- **Event names**: snake_case (`run.started`, `node.completed`, `parallel.branch_started`). Attractor §9.6 uses PascalCase (`PipelineStarted`, `StageStarted`); the rest of the spec is snake_case. swarm normalises to one convention.
+- **Diagnostic codes**: swarm validators emit `code` (e.g. `E001`, `W002`) alongside the rule name from attractor §7.2. Codes are stable through rule renames; rule names are searchable in spec text. Both ship in the `Diagnostic` shape.
+
+### 6.4 Extensions (no attractor counterpart)
+
+- **Budget primitives** — `budget_usd`, `max_cost_usd`, `budget_policy: warn|stop`, `max_tokens` on graph + node. Attractor has nothing on cost. Any spec for AI workflow orchestration that lacks budget primitives is incomplete; swarm enforces them at the executor.
+- **Per-node agent config** — `system_prompt`, `allowed_tools`, `denied_tools`, `context_files`, `skills`, `skills_disabled`. Attractor §4.5 leaves codergen backend opaque. swarm surfaces these in workflow grammar so a `.dot` file fully specifies what the agent can do.
+- **`<abort>` / `<promise>` prompt contract** — codergen handler's structured outcome markers in prompts; documented in `handler-contract.md`. Not orchestration but contract between workflow author and codergen handler.
+- **`max_goal_gate_retries`** — per-run safety bound on the §3.4 goal-gate retarget chain (default 3). Attractor §3.4 step 4 is unbounded — a workflow whose `retry_target` itself fails forever loops. swarm caps it.
+
+### 6.5 Deliberate omissions
+
+- **`stack.manager_loop`** (attractor §4.11, `house` shape). Composition lives at the workflow level via separate runs sharing artifacts. swarm does not ship a supervisor-loop primitive.
+- **`loop_restart` edge attribute** (attractor §2.7). Same rationale; loops are backward conditional edges bounded by `max_retries`.
+- **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception; not orchestration.
+- **Interviewer pattern** (attractor §6). swarm replaces the question/answer Interviewer interface with `wait.human` nodes plus the `intent.hitl_input { selected, note? }` event. Different shape, same purpose.

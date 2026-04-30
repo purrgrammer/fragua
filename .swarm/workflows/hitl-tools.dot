@@ -22,8 +22,9 @@
 
 digraph hitl_tools {
   graph [
-    goal  = "Exercise wait.human pause+resume across 3 gates with no LLM cost."
-    label = "HITL tools (no LLM)"
+    goal             = "Exercise wait.human pause+resume across 3 gates with no LLM cost."
+    label            = "HITL tools (no LLM)"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]

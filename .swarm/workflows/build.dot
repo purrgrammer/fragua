@@ -5,8 +5,9 @@
 
 digraph build {
   graph [
-    goal  = "Plan, implement, review, and land a change. Human approves before commit."
-    label = "build"
+    goal             = "Plan, implement, review, and land a change. Human approves before commit."
+    label            = "build"
+    default_fidelity = "compact"
   ]
 
   start [shape=Mdiamond]
