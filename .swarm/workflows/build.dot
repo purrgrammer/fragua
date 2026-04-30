@@ -14,21 +14,24 @@ digraph build {
   plan [
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nIf $ARGUMENTS is empty, names nothing specific, or the target is blocked, emit `<abort>missing or blocked target</abort>`.\n\nRead the codebase to understand the task. Produce a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add (file path, test name, what it asserts).\n  3. Public exports to add/change.\n  4. Implementation notes per file — cite existing symbols.\n\nEnd with `<promise>PLAN_READY</promise>`."
     allowed_tools = "read, bash"
-    model = "claude-opus-4.7"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   implement [
     prompt = "Implement $plan.output. Stay inside the files the plan names.\n\nAfter edits, run `bun run typecheck` on modified packages and fix errors (max 5 rounds). Verify every planned test exists with grep. If a test is missing, add it now.\n\nSummarise: files touched, tests added, any skipped items + why."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    model = "claude-sonnet-4.6"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
     max_retries = 3
   ]
 
   review [
     prompt = "Judge the diff, not the process. Inputs: $plan.output, $implement.output, and `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every planned test is realised.\n  (c) Obvious bugs, type errors, security issues.\n  (d) Scope creep.\n\nReply EXACTLY one of:\n  `APPROVE: <one line>`\n  `<abort>REJECT: <one line>. fixes: <numbered list of concrete items></abort>`"
     allowed_tools = "read, bash"
-    model = "claude-sonnet-4.6"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   verify [
@@ -44,13 +47,15 @@ digraph build {
   commit [
     prompt = "Commit per AGENTS.md conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: `git add` explicit paths, commit with imperative subject ≤72 chars. No --amend, no --no-verify. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    model = "claude-sonnet-4.6"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   merge [
     prompt = "Rebase this worktree's branch onto main and fast-forward main. Fresh thread.\n\nSkip (emit `MERGE_SKIPPED: <reason>`) if: not inside a worktree, on main or detached, no commits ahead of main.\n\nOtherwise: `git rebase main`, resolve conflicts preferring main, run `bun run ci`, then `git update-ref refs/heads/main HEAD`. Emit `MERGED: <short-sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    model = "claude-sonnet-4.6"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]

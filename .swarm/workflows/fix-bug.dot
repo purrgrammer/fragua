@@ -15,12 +15,16 @@ digraph fix_bug {
     prompt = "Bug: $ARGUMENTS. Locate the affected package, write a failing test next to the source (or find an existing one), confirm it fails. Output: (1) package+file, (2) test path, (3) failing assertion."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   fix [
     prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer, then the full package suite. Stay in the bug's package."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   verify [
@@ -29,12 +33,16 @@ digraph fix_bug {
     thread_id = "dev"
     max_cost_usd = 0.30
     max_tokens = 800000
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   summarize [
     prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: bug, root cause, fix (file:line), regression test."
     allowed_tools = "write"
     fidelity = "truncate"
+    provider = "anthropic"
+    model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]
