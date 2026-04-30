@@ -16,7 +16,13 @@ export interface BridgedEvent {
  * Cost split between input/output tokens prefers `usage.reportedCost`
  * (authoritative when the provider returns it via OpenRouter-style
  * `usage: { include: true }`), falling back to pi-ai's locally-computed
- * `usage.cost.input` / `usage.cost.output`. */
+ * `usage.cost.input` / `usage.cost.output`.
+ *
+ * Per-chunk accounting is upstream-blocked: pi-ai exposes the assembled
+ * `usage` only on the final AssistantMessage at message_end, so we can't
+ * fire cost.recorded mid-stream. On crash/abort before message_end the
+ * partial-stream cost is dropped (no estimation per the no-guesswork
+ * policy). See cost.md ⑨. */
 export function costPayload(msg: AssistantMessage): Record<string, unknown> {
   const inputCost = msg.usage.reportedCost?.input ?? msg.usage.cost.input;
   const outputCost = msg.usage.reportedCost?.output ?? msg.usage.cost.output;
