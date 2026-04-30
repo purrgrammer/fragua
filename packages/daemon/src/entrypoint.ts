@@ -106,10 +106,24 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       const now = Date.now();
       if (now - current.heartbeatAt > lockTtl) {
         opts.store.forceAcquireDaemonLock(pid, hostname);
+        opts.store.appendDaemonEvent({
+          type: "daemon.reaper_took_over",
+          payload: {
+            priorPid: current.pid,
+            priorHostname: current.hostname,
+            priorHeartbeatAt: current.heartbeatAt,
+            staleForMs: now - current.heartbeatAt,
+          },
+        });
       } else {
         throw new DaemonAlreadyRunningError(current.pid, current.hostname);
       }
     }
+
+    opts.store.appendDaemonEvent({
+      type: "daemon.started",
+      payload: { pid, hostname },
+    });
 
     try {
       opts.store.startupSweep();
