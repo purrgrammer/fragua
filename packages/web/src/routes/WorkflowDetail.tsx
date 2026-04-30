@@ -1,7 +1,8 @@
 // /workflows/:name — static workflow detail page.
 //
-// Two-pane bento: the parsed graph on the left (via `GraphView mode="graph"`)
-// and a `NodeInspector` on the right for whichever node the user clicks.
+// The parsed graph spans the full width; clicking a node opens a
+// right-side `Sheet` drawer with `NodeInspector` so the topology stays
+// uncropped while the operator inspects details.
 // No live run is involved — this is the "what does this workflow do?"
 // answer before you press launch. Topology is parsed client-side via
 // `@swarm/core`'s `parseDotSource`; on parse failure the server's raw
@@ -13,7 +14,7 @@
 //   - Parsed `Graph` is memoised off `detail.source` so clicks don't
 //     reparse.
 //   - `selectedNodeId` is local state; the graph shows it as a neutral
-//     ring, and the inspector reads the matching `Graph.nodes[id]`.
+//     ring, and the drawer reads the matching `Graph.nodes[id]`.
 
 import { parseDotSource } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
@@ -22,8 +23,21 @@ import { Link, useParams } from "react-router-dom";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { ApiError } from "../lib/api.ts";
+import { cn } from "../lib/cn.ts";
 import { queries } from "../lib/queries.ts";
+
+// Side drawer crossing ~28rem reads as rushed at the system's default
+// 200ms (tuned for popovers); slow entrance to 280ms ease-out, exit to
+// 220ms, and collapse to ~0ms under prefers-reduced-motion. Mirrors the
+// override used by `DrillDownDrawer` so all right-side drawers share a
+// cadence without globally retuning the token.
+const DRAWER_MOTION = cn(
+  "data-open:[animation-duration:280ms] data-open:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "data-closed:[animation-duration:220ms] data-closed:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "motion-reduce:data-open:[animation-duration:1ms] motion-reduce:data-closed:[animation-duration:1ms]",
+);
 
 export function WorkflowDetail(): JSX.Element {
   const { name = "" } = useParams();
@@ -139,12 +153,31 @@ export function WorkflowDetail(): JSX.Element {
       </header>
 
       {graph ? (
-        <div className="grid min-h-[480px] flex-1 grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-h-[480px] min-w-0">
+        <>
+          <div className="min-h-[480px] min-w-0 flex-1">
             <GraphView graph={graph} orientation="TB" selectedNodeId={selectedNodeId} onNodeClick={setSelectedNodeId} />
           </div>
-          <NodeInspector node={selected} />
-        </div>
+          <Sheet
+            open={selected !== null}
+            onOpenChange={(open) => {
+              if (!open) setSelectedNodeId(null);
+            }}
+          >
+            <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}>
+              {selected ? (
+                <>
+                  <SheetHeader className="border-b border-sw-border px-4 py-3">
+                    <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
+                      {selected.attrs.label ?? selected.id}
+                    </SheetTitle>
+                    <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
+                  </SheetHeader>
+                  <NodeInspector node={selected} className="min-h-0 flex-1 rounded-none border-0 bg-transparent" />
+                </>
+              ) : null}
+            </SheetContent>
+          </Sheet>
+        </>
       ) : (
         <EmptyState
           data-testid="workflow-detail-parse-error"

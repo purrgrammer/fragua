@@ -5,7 +5,7 @@
 // source, and asserts:
 //   - header renders label / name / short sha
 //   - the graph region renders with one node per `node` in the DOT
-//   - clicking a node (`data-node-id`) populates the NodeInspector
+//   - clicking a node (`data-node-id`) opens the inspector drawer
 //
 // Error paths install a URL-routing fake fetch to exercise 404 and 500.
 
@@ -85,7 +85,13 @@ describe("WorkflowDetail route", () => {
     expect(ids).toContain("done");
   });
 
-  it("shows the empty-selection hint until a node is clicked", async () => {
+  it("renders no inspector by default and selects a node on click", async () => {
+    // Inspector lives inside a `Sheet` portal (`DrillDownDrawer`-style).
+    // happy-dom registers globals AFTER radix-ui imports run, so radix's
+    // useLayoutEffect short-circuits and the portal never mounts in
+    // tests — see `test/setup.ts`. We verify the visible state instead:
+    // graph is full-width with no inspector chrome before click, and the
+    // clicked node carries the "selected" ring afterwards.
     const detail: WorkflowDetailT = {
       name: "demo",
       path: "workflows/demo.dot",
@@ -97,22 +103,23 @@ describe("WorkflowDetail route", () => {
 
     const { container } = mount(client);
     await waitFor(() => {
-      expect(within(container).getByTestId("node-inspector-empty")).toBeTruthy();
+      expect(within(container).getByTestId("graphview")).toBeTruthy();
     });
+
+    expect(container.querySelector('[data-testid="node-inspector"]')).toBeNull();
+    expect(container.querySelector('[data-testid="node-inspector-empty"]')).toBeNull();
 
     const middle = container.querySelector('[data-node-id="middle"]');
     expect(middle).toBeTruthy();
     if (!middle) return;
     fireEvent.click(middle);
 
+    // Selection rendered via the node's ring class — see GraphView
+    // toFlowGraph: `d.selected && ... && "ring-2 ring-sw-accent-idle"`.
     await waitFor(() => {
-      expect(within(container).getByTestId("node-inspector")).toBeTruthy();
+      const node = container.querySelector('[data-node-id="middle"]');
+      expect(node?.className ?? "").toContain("ring-sw-accent-idle");
     });
-    const inspector = within(container).getByTestId("node-inspector");
-    expect(inspector.getAttribute("data-node-id")).toBe("middle");
-    expect(inspector.getAttribute("data-handler")).toBe("codergen");
-    // Model surfaced for this node.
-    expect(inspector.textContent ?? "").toContain("opus-4");
   });
 
   it("renders a dedicated not-found state when the server 404s", async () => {

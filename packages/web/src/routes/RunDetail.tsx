@@ -27,9 +27,11 @@ import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
+import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
@@ -110,6 +112,7 @@ export function RunDetail(): JSX.Element {
     setSelectedNodeId(nodeId);
     document.getElementById(`node-${nodeId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+  const handleDeselect = useCallback(() => setSelectedNodeId(null), []);
 
   // Canonicalize the URL: bare /runs/:id → /runs/:id/conversation,
   // invalid view → same. Runs AFTER all hooks to stay rules-compliant.
@@ -184,7 +187,12 @@ export function RunDetail(): JSX.Element {
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
-              <RunGraphTab detail={detail ?? null} selectedNodeId={selectedNodeId} onSelect={handleNodeClick} />
+              <RunGraphTab
+                detail={detail ?? null}
+                selectedNodeId={selectedNodeId}
+                onSelect={handleNodeClick}
+                onDeselect={handleDeselect}
+              />
             </TabsContent>
             <TabsContent value="cost" className="h-full">
               <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
@@ -382,20 +390,31 @@ export const StatsStrip = memo(function StatsStrip({
 
 // ─── Graph tab ────────────────────────────────────────────────────
 //
-// Radix `TabsContent` already lazy-mounts non-active tabs, so this
-// only renders when the user is on the graph view. Memoising still
-// pays off there: streaming-delta-driven parent re-renders skip the
-// graph subtree entirely (its props don't depend on `streaming` /
-// `messages`).
+// Graph spans the full tab width; clicking a node opens a right-side
+// `Sheet` drawer containing `NodeInspector`. Radix `TabsContent`
+// already lazy-mounts non-active tabs, so this only renders when the
+// user is on the graph view. Memoising still pays off there:
+// streaming-delta-driven parent re-renders skip the graph subtree
+// entirely (its props don't depend on `streaming` / `messages`).
+
+// Same drawer cadence as `WorkflowDetail` / `DrillDownDrawer` — see
+// the comment over `DRAWER_MOTION` there for the rationale.
+const DRAWER_MOTION = cn(
+  "data-open:[animation-duration:280ms] data-open:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "data-closed:[animation-duration:220ms] data-closed:[animation-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+  "motion-reduce:data-open:[animation-duration:1ms] motion-reduce:data-closed:[animation-duration:1ms]",
+);
 
 const RunGraphTab = memo(function RunGraphTab({
   detail,
   selectedNodeId,
   onSelect,
+  onDeselect,
 }: {
   detail: RunDetailT | null;
   selectedNodeId: string | null;
   onSelect: (id: string) => void;
+  onDeselect: () => void;
 }): JSX.Element {
   const graph = useMemo(() => {
     if (!detail?.workflowSource) return null;
@@ -412,8 +431,8 @@ const RunGraphTab = memo(function RunGraphTab({
   const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;
 
   return (
-    <div className="grid h-full min-h-[480px] grid-cols-1 gap-4 p-2 md:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="min-h-[480px] min-w-0">
+    <>
+      <div className="h-full min-h-[480px] min-w-0 p-2">
         {detail ? (
           <GraphView
             detail={detail}
@@ -425,8 +444,31 @@ const RunGraphTab = memo(function RunGraphTab({
           />
         ) : null}
       </div>
-      <NodeInspector node={selected} state={selectedState} />
-    </div>
+      <Sheet
+        open={selected !== null}
+        onOpenChange={(open) => {
+          if (!open) onDeselect();
+        }}
+      >
+        <SheetContent side="right" className={cn("flex w-full flex-col gap-0 p-0 sm:max-w-md", DRAWER_MOTION)}>
+          {selected ? (
+            <>
+              <SheetHeader className="border-b border-sw-border px-4 py-3">
+                <SheetTitle className="truncate text-sw-md font-medium text-sw-text">
+                  {selected.attrs.label ?? selected.id}
+                </SheetTitle>
+                <SheetDescription className="text-sw-xs text-sw-muted">Node configuration</SheetDescription>
+              </SheetHeader>
+              <NodeInspector
+                node={selected}
+                state={selectedState}
+                className="min-h-0 flex-1 rounded-none border-0 bg-transparent"
+              />
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 });
 
