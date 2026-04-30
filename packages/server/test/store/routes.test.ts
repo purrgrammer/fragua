@@ -798,7 +798,8 @@ describe("global event feed (cross-run)", () => {
    *   - a, b: fact.run_started / fact.run_completed (allow-listed)
    *   - a:    fact.node_started, fact.node_completed (excluded)
    *   - a:    cost.recorded (excluded — observability)
-   * Each enqueueRun also lands `intent.run_enqueued` (seq 1, allow-listed).
+   * `enqueueRun` lands `intent.run_enqueued` (seq 1) but that's not in
+   * `FEED_EVENT_KINDS` — the feed is facts-only.
    */
   function seedTwoRuns(): void {
     store.enqueueRun({ runId: "a", workflowSha: "wf" });
@@ -832,10 +833,11 @@ describe("global event feed (cross-run)", () => {
 
     const types = events.map((e) => e.type);
     // Allow-listed kinds present
-    expect(types).toContain("intent.run_enqueued");
     expect(types).toContain("fact.run_started");
     expect(types).toContain("fact.run_completed");
-    // Excluded kinds absent
+    // Excluded kinds absent — node-level facts, observability, and the
+    // seq-1 enqueue intent are filtered out (facts-only feed).
+    expect(types).not.toContain("intent.run_enqueued");
     expect(types).not.toContain("fact.node_started");
     expect(types).not.toContain("cost.recorded");
 
@@ -890,13 +892,18 @@ describe("global event feed (cross-run)", () => {
     // node_aborted on a non-running run would fail OCC; use cost.recorded
     // (observability, doesn't bump version) to inject an excluded kind.
     store.appendObservabilityEvents("a", [{ type: "agent.warning", payload: { message: "noise" } }]);
-    // And a real allow-listed event on `b`.
-    store.appendIntent("b", { type: "intent.cancel_requested", payload: { reason: "stop" } });
+    // And a real allow-listed event on `b`. The reducer is permissive
+    // about logical transitions (b is at `completed`); the OCC version
+    // bump is what we care about here, and the SSE filter only inspects
+    // event type. `quarantined` is unique to b in this test, so it makes
+    // an unambiguous SSE marker.
+    const bState = store.getState("b")!;
+    store.appendFact("b", [{ type: "fact.run_quarantined", payload: { reason: "other" } }], bState.version);
 
-    const chunks = await drainSSE(streamRes, "intent.cancel_requested");
+    const chunks = await drainSSE(streamRes, "fact.run_quarantined");
 
     expect(chunks).toContain("fact.run_halted");
-    expect(chunks).toContain("intent.cancel_requested");
+    expect(chunks).toContain("fact.run_quarantined");
     // Excluded kinds must not appear, even though they share the same
     // events table.
     expect(chunks).not.toContain("agent.warning");
@@ -904,6 +911,19 @@ describe("global event feed (cross-run)", () => {
 
     void aState2;
   });
+
+  /** Enqueue a run and append `fact.run_started` so the run produces
+   *  at least one event in `FEED_EVENT_KINDS` (the enqueue intent isn't
+   *  in the facts-only feed). Both events land at the current `now`. */
+  function enqueueWithStart(s: SqliteStore, runId: string, workflowSha: string): void {
+    s.enqueueRun({ runId, workflowSha });
+    const st = s.getState(runId)!;
+    s.appendFact(
+      runId,
+      [{ type: "fact.run_started", payload: { workflowSha, schemaVersion: st.schemaVersion, startNode: "n" } }],
+      st.version,
+    );
+  }
 
   test("GET /events/stream resume via Last-Event-ID skips events with ts < cursor.ts", async () => {
     // The server filter is `ts >= cursor.ts`, deliberately — strict
@@ -919,10 +939,10 @@ describe("global event feed (cross-run)", () => {
     try {
       tStore.saveWorkflow("wf", "t", "digraph {}");
       // Window 1 @ ts=1_000_000
-      tStore.enqueueRun({ runId: "r1", workflowSha: "wf" });
+      enqueueWithStart(tStore, "r1", "wf");
       // Window 2 @ ts=1_000_500 (500 ms later)
       nowVal = 1_000_500;
-      tStore.enqueueRun({ runId: "r2", workflowSha: "wf" });
+      enqueueWithStart(tStore, "r2", "wf");
 
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
       // Cursor at end of window 1 — its events should NOT cross the
@@ -955,11 +975,11 @@ describe("global event feed (cross-run)", () => {
     try {
       tStore.saveWorkflow("wf", "t", "digraph {}");
       // ts windows: 2_000_000, 2_000_100, 2_000_200
-      tStore.enqueueRun({ runId: "r1", workflowSha: "wf" });
+      enqueueWithStart(tStore, "r1", "wf");
       nowVal = 2_000_100;
-      tStore.enqueueRun({ runId: "r2", workflowSha: "wf" });
+      enqueueWithStart(tStore, "r2", "wf");
       nowVal = 2_000_200;
-      tStore.enqueueRun({ runId: "r3", workflowSha: "wf" });
+      enqueueWithStart(tStore, "r3", "wf");
 
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
       const stale = 2_000_000; // baked-in query cursor
@@ -996,12 +1016,13 @@ describe("global event feed (cross-run)", () => {
     const tStore = new SqliteStore({ path: ":memory:", now: () => nowVal });
     try {
       tStore.saveWorkflow("wf", "t", "digraph {}");
-      // Seed run "z" first, then take its last event as the cursor.
-      tStore.enqueueRun({ runId: "z", workflowSha: "wf" });
+      // Seed run "z" first, then take its last delivered event as the cursor.
+      enqueueWithStart(tStore, "z", "wf");
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 10 });
 
-      // Cursor = (ts, "z", 1) — last event from run "z".
-      const cursorId = `${nowVal}.z.1`;
+      // Cursor = (ts, "z", 2) — z's run_started fact (seq 1 is the
+      // enqueue intent, which the facts-only feed filter excludes).
+      const cursorId = `${nowVal}.z.2`;
       const res = await tRoutes.fetch(
         new Request("http://test/events/stream", {
           headers: { "Last-Event-ID": cursorId },
@@ -1010,12 +1031,12 @@ describe("global event feed (cross-run)", () => {
 
       // Now append a new run "a" — same ts, lex-smaller run_id. With
       // a strict-greater tuple cursor this would be filtered.
-      tStore.enqueueRun({ runId: "a", workflowSha: "wf" });
+      enqueueWithStart(tStore, "a", "wf");
 
       const chunks = await drainSSE(res, '"runId":"a"');
       expect(chunks).toContain('"runId":"a"');
-      // And the SSE id matches the (ts, runId, seq) we expect.
-      expect(chunks).toContain(`id: ${nowVal}.a.1\n`);
+      // SSE id matches the (ts, runId, seq) of a's run_started fact.
+      expect(chunks).toContain(`id: ${nowVal}.a.2\n`);
     } finally {
       tStore.close();
     }
@@ -1031,7 +1052,7 @@ describe("global event feed (cross-run)", () => {
     try {
       tStore.saveWorkflow("wf", "t", "digraph {}");
       const runIds = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"];
-      for (const rid of runIds) tStore.enqueueRun({ runId: rid, workflowSha: "wf" });
+      for (const rid of runIds) enqueueWithStart(tStore, rid, "wf");
 
       const tRoutes = createRoutes({ store: tStore, ssePollMs: 5, sseBatchSize: 3 });
       const res = await tRoutes.fetch(new Request("http://test/events/stream"));

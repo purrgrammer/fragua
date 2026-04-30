@@ -21,18 +21,14 @@ import { useAtomValue } from "jotai";
 import {
   AlertOctagon,
   AlertTriangle,
-  ArrowUpDown,
   Check,
   Inbox,
-  MessageSquare,
   Pause,
   Play,
   RotateCcw,
   Server,
   ShieldAlert,
-  ShieldCheck,
   TimerOff,
-  User as UserIcon,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -84,7 +80,6 @@ interface FeedKindMeta {
 // from "paused (provider error)" without spelling that out in the
 // gutter. Hover tooltip on the row link carries the longer context.
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
-  "intent.run_enqueued": { Icon: Inbox, verb: "queued" },
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
   "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
@@ -99,13 +94,6 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
   "fact.run_quarantined": { Icon: ShieldAlert, verb: "quarantined", attention: true },
   "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued" },
-  "intent.pause_requested": { Icon: Pause, verb: "pausing" },
-  "intent.cancel_requested": { Icon: X, verb: "cancelling" },
-  "intent.steering_requested": { Icon: MessageSquare, verb: "steered" },
-  "intent.unquarantine": { Icon: ShieldCheck, verb: "unquarantined" },
-  "intent.priority_adjusted": { Icon: ArrowUpDown, verb: "reprioritized" },
-  "intent.hitl_input": { Icon: UserIcon, verb: "human input" },
-  "intent.resume": { Icon: Play, verb: "operator resume", iconClass: "text-sw-accent-thinking" },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
 };
@@ -113,17 +101,11 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
 /** Resolve the row's icon + verb. For most kinds the static
- *  {@link KIND_META} is enough; a few are payload-aware so the
- *  operator can tell at a glance what choice was made or what kind of
- *  pause was just lifted. Exported for unit tests. */
+ *  {@link KIND_META} is enough; `fact.run_resumed` is payload-aware so
+ *  the operator can tell at a glance what kind of pause was just lifted.
+ *  Exported for unit tests. */
 export function metaForEvent(event: FeedEvent): FeedKindMeta {
   const base = KIND_META[event.type] ?? FALLBACK_META;
-  if (event.type === "intent.hitl_input") {
-    const selected = (event.payload as { selected?: unknown } | null)?.selected;
-    if (typeof selected === "string" && selected.length > 0) {
-      return { ...base, verb: `chose ${selected}` };
-    }
-  }
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed (HITL)" };

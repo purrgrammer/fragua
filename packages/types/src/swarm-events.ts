@@ -339,20 +339,25 @@ export interface RawEvent extends EventEnvelope {
 }
 
 /**
- * Operator-relevant event kinds for the global Home feed. These are the
- * events whose arrival warrants a row in the timeline — run lifecycle,
- * operator-initiated intents, and system-health signals. Excludes
- * node-level facts, side-effect facts, message_appended, and the entire
- * observability family (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`)
- * because at sustained run rates those would drown the feed.
+ * Operator-relevant event kinds for the global Home feed. Facts only —
+ * the things that *happened*. Operator intents (pause, cancel, steer,
+ * resume, hitl_input, unquarantine, priority) are intentionally excluded
+ * because each request either has a corresponding fact that lands when
+ * it takes effect (pause→paused, resume→resumed, cancel→cancelled), or
+ * is a request the daemon may still be working through. Showing the
+ * intent rows in addition to the fact rows just duplicates signal.
+ *
+ * Excludes node-level facts, side-effect facts, message_appended, and
+ * the entire observability family (`agent.*`, `llm.*`, `tool.*`,
+ * `cost.recorded`) because at sustained run rates those would drown
+ * the feed.
  *
  * Both `GET /events` (backfill) and `GET /events/stream` (live SSE)
  * filter through this list on the server side. Adding a new kind here
  * is the only step needed to surface it on Home.
  */
 export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
-  // Run lifecycle (intent that creates the run + every fact that flips status)
-  "intent.run_enqueued",
+  // Run lifecycle facts — every transition that flips status.
   "fact.run_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
@@ -362,14 +367,6 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
-  // Operator actions (writer: "web")
-  "intent.pause_requested",
-  "intent.cancel_requested",
-  "intent.steering_requested",
-  "intent.unquarantine",
-  "intent.priority_adjusted",
-  "intent.hitl_input",
-  "intent.resume",
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",

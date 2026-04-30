@@ -9,14 +9,6 @@ function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
 }
 
 describe("metaForEvent", () => {
-  test("intent.hitl_input → 'chose <selected>' when payload has it", () => {
-    expect(metaForEvent(evt("intent.hitl_input", { selected: "A", note: "ok" })).verb).toBe("chose A");
-  });
-
-  test("intent.hitl_input → 'human input' fallback when payload is malformed", () => {
-    expect(metaForEvent(evt("intent.hitl_input", {})).verb).toBe("human input");
-  });
-
   test("fact.run_resumed distinguishes HITL vs provider-error vs unknown", () => {
     expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_hitl" })).verb).toBe("resumed (HITL)");
     expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_provider_error" })).verb).toBe("resumed (retry)");
