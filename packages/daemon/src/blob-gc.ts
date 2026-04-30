@@ -38,8 +38,13 @@ export function startBlobGc(opts: BlobGcOpts): { promise: Promise<void> } {
       // pattern when many daemons restart at once.
       await sleep(intervalMs, opts.shutdownSignal);
       if (opts.shutdownSignal.aborted) return;
+      const startedAt = Date.now();
       try {
         const { deleted } = opts.store.gcBlobs(maxRows);
+        opts.store.appendDaemonEvent({
+          type: "daemon.blob_gc_completed",
+          payload: { deleted, durationMs: Date.now() - startedAt },
+        });
         if (opts.onSweep) opts.onSweep(deleted);
       } catch (err) {
         // Never crash the loop. GC failures (filesystem permission, race

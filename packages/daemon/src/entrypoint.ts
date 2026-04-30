@@ -127,8 +127,21 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       payload: { pid, hostname },
     });
 
+    let stoppedReason: "clean" | "leak_limit" | "signal" | "error" = "clean";
+    let stoppedDetail: string | undefined;
     try {
-      opts.store.startupSweep(priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined);
+      const sweepStart = Date.now();
+      const sweepResult = opts.store.startupSweep(
+        priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined,
+      );
+      opts.store.appendDaemonEvent({
+        type: "daemon.sweep_completed",
+        payload: {
+          requeued: sweepResult.requeued.length,
+          quarantined: sweepResult.quarantined.length,
+          durationMs: Date.now() - sweepStart,
+        },
+      });
 
       const registry = new AbortRegistry();
 
@@ -183,17 +196,34 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       // outer drain takes over. The daemon singleton + startup sweep
       // recovers stuck runs when a fresh daemon takes over.
       executorOpts.onLeakLimitExceeded = (count) => {
+        stoppedReason = "leak_limit";
+        stoppedDetail = `${count} handler leaks`;
         // eslint-disable-next-line no-console
         console.error(`[daemon] ${count} handler leaks — initiating shutdown so a fresh daemon can recover`);
         ctrl.abort();
       };
       await runExecutor(executorOpts);
+      if (stoppedReason === "clean" && externalSignal?.aborted) stoppedReason = "signal";
 
       registry.tripAll(new Error("shutdown"));
       await supervisor.promise;
       if (blobGc) await blobGc.promise;
       if (opts.autoTitler) await opts.autoTitler.drain();
+    } catch (err) {
+      stoppedReason = "error";
+      stoppedDetail = err instanceof Error ? err.message : String(err);
+      throw err;
     } finally {
+      try {
+        const stoppedPayload: { pid: number; reason: typeof stoppedReason; detail?: string } = {
+          pid,
+          reason: stoppedReason,
+        };
+        if (stoppedDetail !== undefined) stoppedPayload.detail = stoppedDetail;
+        opts.store.appendDaemonEvent({ type: "daemon.stopped", payload: stoppedPayload });
+      } catch {
+        // Best-effort — never let event-emit failure mask the underlying stop.
+      }
       try {
         opts.store.releaseDaemonLock(pid);
       } catch {

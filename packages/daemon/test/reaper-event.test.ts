@@ -98,4 +98,42 @@ describe("daemon entrypoint — daemon_events", () => {
     expect(takeover!.seq).toBeLessThan(started!.seq);
     r.store.close();
   });
+
+  test("daemon.sweep_completed and daemon.stopped land on a clean run", async () => {
+    const r = rig();
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const handle = startDaemon({
+      store: r.store,
+      dispatcher: r.dispatcher,
+      tools: r.tools,
+      llmCall: r.llmCall,
+      pid: 8888,
+      hostname: "hostStop",
+      maxConcurrentRuns: 1,
+      shutdownSignal: ctrl.signal,
+    });
+    await handle.done.catch(() => undefined);
+
+    const events = r.store.getDaemonEvents();
+    const sweep = events.find((e) => e.type === "daemon.sweep_completed");
+    expect(sweep).toBeDefined();
+    const sweepPayload = sweep!.payload as { requeued: number; quarantined: number; durationMs: number };
+    expect(sweepPayload.requeued).toBe(0);
+    expect(sweepPayload.quarantined).toBe(0);
+    expect(sweepPayload.durationMs).toBeGreaterThanOrEqual(0);
+
+    const stopped = events.find((e) => e.type === "daemon.stopped");
+    expect(stopped).toBeDefined();
+    const stoppedPayload = stopped!.payload as { pid: number; reason: string };
+    expect(stoppedPayload.pid).toBe(8888);
+    // pre-aborted shutdown signal → executor exits via the signal path
+    expect(stoppedPayload.reason).toBe("signal");
+
+    // Order: started → sweep_completed → stopped
+    const started = events.find((e) => e.type === "daemon.started");
+    expect(started!.seq).toBeLessThan(sweep!.seq);
+    expect(sweep!.seq).toBeLessThan(stopped!.seq);
+    r.store.close();
+  });
 });

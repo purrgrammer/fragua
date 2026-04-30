@@ -114,6 +114,17 @@ describe("executor + worktree provisioner", () => {
     expect(payload.detail).toContain("worktree_provision_failed");
     expect(payload.detail).toContain("no disk space");
 
+    // Provisioning failure also lands a daemon.worktree_provisioned
+    // event with ok=false and the underlying error detail.
+    const provisioned = r.store
+      .getDaemonEvents()
+      .find((e) => e.type === "daemon.worktree_provisioned");
+    expect(provisioned).toBeDefined();
+    const provPayload = provisioned!.payload as { runId: string; ok: boolean; errorDetail?: string };
+    expect(provPayload.runId).toBe("run-fail");
+    expect(provPayload.ok).toBe(false);
+    expect(provPayload.errorDetail).toContain("no disk space");
+
     r.store.close();
   });
 

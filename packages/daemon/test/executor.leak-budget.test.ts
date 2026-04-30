@@ -101,6 +101,17 @@ describe("executor — leak budget", () => {
     // Limit is 3; third leak crosses it → callback fires once with count=3.
     expect(exceededCalls).toEqual([3]);
 
+    // Each leak also lands a daemon.leak_detected event scoped to its
+    // run (run_id populated). counts run 1..3, ceiling=3.
+    const leakEvents = r.store.getDaemonEvents().filter((e) => e.type === "daemon.leak_detected");
+    expect(leakEvents.length).toBe(3);
+    expect(leakEvents.map((e) => (e.payload as { count: number }).count)).toEqual([1, 2, 3]);
+    for (const e of leakEvents) {
+      const p = e.payload as { ceiling: number };
+      expect(p.ceiling).toBe(3);
+      expect(e.runId).toBeTruthy();
+    }
+
     // Cleanup the dangling handler promise so the test runner doesn't
     // accumulate work after the test ends.
     for (const rel of releases) rel();

@@ -324,13 +324,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (opts.provisioner && runEnv === undefined) {
         try {
           runEnv = await opts.provisioner.ensure(runId);
+          opts.store.appendDaemonEvent(
+            { type: "daemon.worktree_provisioned", payload: { runId, ok: true } },
+            { runId },
+          );
         } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          opts.store.appendDaemonEvent(
+            { type: "daemon.worktree_provisioned", payload: { runId, ok: false, errorDetail: detail } },
+            { runId },
+          );
           await tryAppendFact(opts.store, runId, state.version, [
             {
               type: "fact.run_halted",
               payload: {
                 reason: "error",
-                detail: `worktree_provision_failed: ${err instanceof Error ? err.message : String(err)}`,
+                detail: `worktree_provision_failed: ${detail}`,
               },
             },
           ]);
@@ -997,6 +1006,14 @@ export function makeLeakBudget(opts: ExecutorOpts): LeakBudget {
   return {
     recordLeak: (runId, nodeId) => {
       n += 1;
+      try {
+        opts.store.appendDaemonEvent(
+          { type: "daemon.leak_detected", payload: { runId, nodeId, count: n, ceiling: limit } },
+          { runId },
+        );
+      } catch {
+        // Best-effort — never let event-emit failure mask the leak signal.
+      }
       // eslint-disable-next-line no-console
       console.warn(`[executor] handler leak #${n} on ${runId}/${nodeId} (limit=${limit})`);
       if (!fired && n >= limit) {

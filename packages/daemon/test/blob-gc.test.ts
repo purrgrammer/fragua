@@ -29,6 +29,17 @@ describe("startBlobGc", () => {
     // No artifacts in the rig → every sweep deletes 0 files. The
     // assertion is that the sweep ran, not that anything was reaped.
     expect(sweeps.every((d) => d === 0)).toBe(true);
+
+    // Each sweep also lands a daemon.blob_gc_completed event in the
+    // audit log. Counts match (one event per sweep), durationMs ≥ 0.
+    const events = r.store.getDaemonEvents({ limit: 50 });
+    const gcEvents = events.filter((e) => e.type === "daemon.blob_gc_completed");
+    expect(gcEvents.length).toBe(sweeps.length);
+    for (const e of gcEvents) {
+      const p = e.payload as { deleted: number; durationMs: number };
+      expect(p.deleted).toBe(0);
+      expect(p.durationMs).toBeGreaterThanOrEqual(0);
+    }
     r.store.close();
   });
 
