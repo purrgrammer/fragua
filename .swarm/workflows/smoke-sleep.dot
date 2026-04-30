@@ -6,9 +6,9 @@
 // 'running' at the same time under the fire-and-forget executor; a
 // serial `await runOne` would serialise them at ~15s each.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/smoke-sleep.dot
-//   bun run packages/cli/bin/swarm.ts run workflows/smoke-sleep.dot
-//   bun run packages/cli/bin/swarm.ts run workflows/smoke-sleep.dot
+//   bun run swarm run smoke-sleep
+//   bun run swarm run smoke-sleep
+//   bun run swarm run smoke-sleep
 //   curl http://localhost:4444/api/runs   # expect 3 × status=running
 
 digraph smoke_sleep {

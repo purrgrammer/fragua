@@ -17,6 +17,7 @@ import type {
   IntentEvent as IntentEventFromTypes,
   IntentType as IntentTypeFromTypes,
   MessageRole as MessageRoleFromTypes,
+  Project,
   QuarantineReason as QuarantineReasonFromTypes,
   RunStatus as RunStatusFromTypes,
 } from "@swarm/types";
@@ -37,6 +38,7 @@ export type {
   IntentEvent,
   IntentType,
   MessageRole,
+  Project,
   QuarantineReason,
   RawEvent,
   RunStatus,
@@ -365,6 +367,18 @@ export interface EnqueueRunParams {
   workflowSha: string;
   priority?: number;
   initialRouting?: Record<string, unknown>;
+  /** UUIDv7 from the project's `.swarm/config.jsonc`. NULL when the
+   * caller has no project context (ephemeral runs, integration tests). */
+  projectId?: string;
+  /** Human-readable project name (from `config.jsonc` `name`, falling
+   * back to `basename(cwd)`). UPSERTed into `projects` so UI filters
+   * can label by name instead of UUID. Ignored when `projectId` is
+   * absent. */
+  projectName?: string;
+  /** Project root absolute path at enqueue time. Stored on `projects`
+   * for UI navigation; nullable since some callers (CI, mocks) don't
+   * have one. Multi-clone is last-writer-wins. */
+  projectRoot?: string;
 }
 
 export interface GetEventsOpts {
@@ -594,6 +608,15 @@ export interface IEventStore {
   // ─── Workflows
   saveWorkflow(sha: string, name: string, dotSource: string): void;
   getWorkflow(sha: string): WorkflowRow | null;
+
+  // ─── Projects (display cache; refreshed on every enqueueRun that
+  // carries projectName)
+  listProjects(): Project[];
+  getProject(id: string): Project | null;
+  /** Insert or refresh a project row outside the enqueue path
+   * (e.g. `swarm projects rename`). Inside `enqueueRun` the same
+   * UPSERT runs in the run-insert txn — no extra call needed. */
+  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
 
   // ─── Maintenance
   vacuum(): void;

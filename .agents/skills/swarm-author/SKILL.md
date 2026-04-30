@@ -14,10 +14,10 @@ Authoritative references: `docs/SPEC.md` §3 (primitives), §4 (validation), `do
 
 ## Fast path
 
-1. **Find a template.** `workflows/quick-change.dot` (5 nodes, shell+LLM), `workflows/build-feature.dot` (8 nodes, full pipeline with fresh-thread review + REJECT_FIXABLE salvage loop), `workflows/review-parallel.dot` (every shape), `workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
+1. **Find a template.** `.swarm/workflows/quick-change.dot` (5 nodes, shell+LLM), `.swarm/workflows/build-feature.dot` (8 nodes, full pipeline with fresh-thread review + REJECT_FIXABLE salvage loop), `.swarm/workflows/review-parallel.dot` (every shape), `.swarm/workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
 2. **Sketch the shape, not the prose.** Nodes + edges first. Name the nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow — `implement -> verify -> commit`. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
-3. **Validate.** `bun run swarm validate workflows/my-thing.dot`. Fix every error; warnings are strong hints.
-4. **Smoke-run.** `bun run swarm run workflows/my-thing.dot --input="<realistic task>"` against a cheap model first (see §9) before wiring to Opus / Sonnet.
+3. **Validate.** `bun run swarm validate .swarm/workflows/my-thing.dot`. Fix every error; warnings are strong hints.
+4. **Smoke-run.** `bun run swarm run my-thing --input="<realistic task>"` against a cheap model first (see §9) before wiring to Opus / Sonnet.
 
 ---
 
@@ -206,7 +206,7 @@ APPROVE: <one line>
 <abort>REJECT: <one line — architecture / scope / contract violation></abort>
 ```
 
-Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`. See `workflows/build-feature.dot` for a wired-up example.
+Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`. See `.swarm/workflows/build-feature.dot` for a wired-up example.
 
 ---
 
@@ -377,7 +377,7 @@ graph [
 
 ## 14. Validation
 
-`bun run swarm validate workflows/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
+`bun run swarm validate .swarm/workflows/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
 
 | Code | Severity | What it means |
 |---|---|---|
@@ -405,11 +405,11 @@ Between "it validates" and "it runs with your production model", there's this:
 
 ```sh
 # 1. Parse+lint.
-bun run swarm validate workflows/my-thing.dot
+bun run swarm validate .swarm/workflows/my-thing.dot
 
 # 2. Dry-enqueue with a cheap model. Override in the .dot if every node
 #    pins a model — `provider` / `model` at node level is the only way.
-bun run swarm run workflows/my-thing.dot --input="a realistic sample task"
+bun run swarm run my-thing --input="a realistic sample task"
 
 # 3. Watch. Expect to see fact.run_started → fact.node_started (per node)
 #    → intermittent llm.text_delta → fact.node_completed → ... → terminal.
@@ -484,8 +484,8 @@ digraph NAME {
 
 ```sh
 # Iterate.
-bun run swarm validate workflows/my-thing.dot
-bun run swarm run      workflows/my-thing.dot --input="…"
+bun run swarm validate .swarm/workflows/my-thing.dot
+bun run swarm run      my-thing --input="…"   # bare-name resolves under .swarm/workflows/
 ```
 
 When a workflow misbehaves, switch to swarm-debug to post-mortem the run. When a run needs steering or pausing mid-flight, switch to swarm-run.

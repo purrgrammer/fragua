@@ -107,7 +107,7 @@ describe("discoverSkills", () => {
     expect(skills).toEqual([]);
   });
 
-  test("trust_project=false hides project-scope skills but discovers them", async () => {
+  test("trustProject=false hides project-scope skills but discovers them", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/untrusted", "untrusted", "vendored by repo");
@@ -115,13 +115,13 @@ describe("discoverSkills", () => {
     const { skills } = await discoverSkills({
       cwd,
       homeDir: home,
-      config: { trust_project: false },
+      config: { trustProject: false },
     });
     expect(skills).toHaveLength(1);
-    expect(skills[0]!.disabled_reason).toContain("trust_project");
+    expect(skills[0]!.disabled_reason).toContain("trustProject");
   });
 
-  test("trust_project defaults to true (no disabled_reason)", async () => {
+  test("trustProject defaults to true (no disabled_reason)", async () => {
     const cwd = tmp;
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/ok", "ok", "project skill");

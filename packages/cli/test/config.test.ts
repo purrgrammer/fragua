@@ -1,5 +1,6 @@
-// Tests for .swarm/config.yaml loading. Config is always optional; missing or
-// malformed files return `{}` rather than throwing so first-run UX is smooth.
+// Tests for .swarm/config.jsonc loading. Missing file returns `{}`
+// for first-run UX. Malformed JSONC and schema-invalid content throw
+// — silent fallback would hide typos that mis-route runs.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -19,62 +20,104 @@ describe("loadConfig", () => {
     await rm(scratch, { recursive: true, force: true });
   });
 
-  test("returns {} when .swarm/config.yaml is missing", async () => {
+  async function write(body: string): Promise<void> {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(join(scratch, ".swarm/config.jsonc"), body, "utf8");
+  }
+
+  test("returns {} when .swarm/config.jsonc is missing", async () => {
     const cfg = await loadConfig(scratch);
     expect(cfg).toEqual({});
   });
 
   test("parses defaults.provider and defaults.model", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(
-      join(scratch, ".swarm/config.yaml"),
-      `defaults:\n  provider: openrouter\n  model: anthropic/claude-opus-4.7\n`,
-      "utf8",
-    );
+    await write(`{
+      "defaults": {
+        "provider": "openrouter",
+        "model": "anthropic/claude-opus-4.7"
+      }
+    }`);
     const cfg = await loadConfig(scratch);
     expect(cfg.defaults?.provider).toBe("openrouter");
     expect(cfg.defaults?.model).toBe("anthropic/claude-opus-4.7");
   });
 
-  test("returns {} on malformed YAML (never throws)", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), ": : not yaml : :", "utf8");
+  test("accepts comments and trailing commas (JSONC features)", async () => {
+    await write(`{
+      // pin model so the demo doesn't drift
+      "defaults": {
+        "provider": "ppq",
+        "model": "claude-sonnet-4.6",
+      },
+    }`);
     const cfg = await loadConfig(scratch);
-    expect(cfg).toEqual({});
+    expect(cfg.defaults?.provider).toBe("ppq");
   });
 
-  test("returns {} when file parses to a non-object (e.g. just a string)", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(join(scratch, ".swarm/config.yaml"), "just-a-string", "utf8");
-    const cfg = await loadConfig(scratch);
-    expect(cfg).toEqual({});
+  test("throws on malformed JSONC (no silent fallback)", async () => {
+    await write("{ this is not json }");
+    await expect(loadConfig(scratch)).rejects.toThrow(/parse error/);
   });
 
-  test("parses runtime ceilings: max_queued_runs, abort_loop_ceiling, max_leaked_handlers", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(
-      join(scratch, ".swarm/config.yaml"),
-      `max_queued_runs: 500\nabort_loop_ceiling: 8\nmax_leaked_handlers: 2\n`,
-      "utf8",
-    );
-    const cfg = await loadConfig(scratch);
-    expect(cfg.max_queued_runs).toBe(500);
-    expect(cfg.abort_loop_ceiling).toBe(8);
-    expect(cfg.max_leaked_handlers).toBe(2);
+  test("throws when the root is not an object", async () => {
+    await write(`"just-a-string"`);
+    await expect(loadConfig(scratch)).rejects.toThrow(/must be a JSON object/);
   });
 
-  test("parses the timeouts section", async () => {
-    await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(
-      join(scratch, ".swarm/config.yaml"),
-      `timeouts:\n  codergen: 30m\n  tool: "5m"\n  http: 30s\n  leak_grace: 10s\n`,
-      "utf8",
-    );
+  test("throws on schema violation (typo'd key)", async () => {
+    await write(`{ "autoTitler": true }`);
+    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
+  });
+
+  test("throws on snake_case key from the legacy YAML schema", async () => {
+    await write(`{ "auto_title": true }`);
+    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
+  });
+
+  test("parses runtime ceilings: maxQueuedRuns, abortLoopCeiling, maxLeakedHandlers", async () => {
+    await write(`{
+      "maxQueuedRuns": 500,
+      "abortLoopCeiling": 8,
+      "maxLeakedHandlers": 2
+    }`);
+    const cfg = await loadConfig(scratch);
+    expect(cfg.maxQueuedRuns).toBe(500);
+    expect(cfg.abortLoopCeiling).toBe(8);
+    expect(cfg.maxLeakedHandlers).toBe(2);
+  });
+
+  test("parses the timeouts section with leakGrace + shutdownDrain", async () => {
+    await write(`{
+      "timeouts": {
+        "codergen": "30m",
+        "tool": "5m",
+        "http": "30s",
+        "leakGrace": "10s",
+        "shutdownDrain": "30s"
+      }
+    }`);
     const cfg = await loadConfig(scratch);
     expect(cfg.timeouts?.codergen).toBe("30m");
     expect(cfg.timeouts?.tool).toBe("5m");
     expect(cfg.timeouts?.http).toBe("30s");
-    expect(cfg.timeouts?.leak_grace).toBe("10s");
+    expect(cfg.timeouts?.leakGrace).toBe("10s");
+    expect(cfg.timeouts?.shutdownDrain).toBe("30s");
+  });
+
+  test("parses identity (id + name) when present", async () => {
+    await write(`{
+      "version": 1,
+      "id": "019de01e-5ccd-7010-9184-defb237e74db",
+      "name": "demo"
+    }`);
+    const cfg = await loadConfig(scratch);
+    expect(cfg.id).toBe("019de01e-5ccd-7010-9184-defb237e74db");
+    expect(cfg.name).toBe("demo");
+  });
+
+  test("rejects ids that are not UUIDv7", async () => {
+    await write(`{ "id": "00000000-0000-4000-8000-000000000000" }`);
+    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
   });
 });
 
@@ -91,8 +134,8 @@ describe("resolveTimeouts", () => {
         bootstrap: 600_000,
         shell: "30s",
         http: "30s",
-        leak_grace: "10s",
-        shutdown_drain: "30s",
+        leakGrace: "10s",
+        shutdownDrain: "30s",
       },
     });
     expect(r.codergen).toBe(30 * 60 * 1000);
@@ -100,8 +143,8 @@ describe("resolveTimeouts", () => {
     expect(r.bootstrap).toBe(600_000);
     expect(r.shell).toBe(30_000);
     expect(r.http).toBe(30_000);
-    expect(r.leak_grace).toBe(10_000);
-    expect(r.shutdown_drain).toBe(30_000);
+    expect(r.leakGrace).toBe(10_000);
+    expect(r.shutdownDrain).toBe(30_000);
   });
 
   test("invalid value throws with config-prefixed message", () => {

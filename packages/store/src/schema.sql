@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS run_state (
   dispatch_started_at INTEGER,
   updated_at INTEGER NOT NULL,
   title TEXT,
+  -- UUIDv7 from `<project>/.swarm/config.jsonc` `id`. NULL for ephemeral
+  -- runs (no project file). Indexed for `WHERE project_id = ?` listings
+  -- and cross-project aggregation under the global daemon.
+  project_id TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -55,6 +59,21 @@ CREATE INDEX IF NOT EXISTS idx_run_state_queue
 CREATE INDEX IF NOT EXISTS idx_run_state_status ON run_state(status);
 CREATE INDEX IF NOT EXISTS idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX IF NOT EXISTS idx_run_state_updated ON run_state(updated_at);
+CREATE INDEX IF NOT EXISTS idx_run_state_project ON run_state(project_id);
+
+-- Display cache for project ids. Source of truth is each project's
+-- `<root>/.swarm/config.jsonc` `name`; this table is a denormalized
+-- copy so the UI can label runs without filesystem access (the daemon
+-- may not have it under the eventual harness model). Refreshed on
+-- every `POST /runs`: last-runner wins, so an active project is always
+-- current. Rows persist after the project's directory is gone so
+-- historical run listings keep their labels.
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  root_path TEXT,
+  updated_at INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,

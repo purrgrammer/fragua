@@ -4,7 +4,7 @@
 // confirm (hexagon) shows [P]ublish / [C]ancel buttons.
 // Edge routing is driven by the handler's suggestedNextIds — no conditions needed.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/hitl-approval.dot \
+//   bun run swarm run hitl-approval \
 //     --input="draft a changelog entry for the new HITL UI"
 
 digraph hitl_approval {

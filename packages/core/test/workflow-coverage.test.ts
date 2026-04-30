@@ -1,9 +1,10 @@
 // Workflow-coverage smoke test.
 //
-// Two invariants over the shipped `workflows/*.dot` examples:
+// Two invariants over the shipped `.swarm/workflows/*.dot` examples:
 //
-//   1. Every .dot file in the repo's `workflows/` directory parses AND
-//      validates cleanly. A broken example is a broken onboarding.
+//   1. Every .dot file in the repo's `.swarm/workflows/` directory
+//      parses AND validates cleanly. A broken example is broken
+//      onboarding.
 //
 //   2. Together, the shipped workflows exercise every canonical node
 //      handler kind from attractor-spec §2.8 — so when someone removes
@@ -16,7 +17,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDLER_BY_SHAPE, type HandlerType, type NodeShape, parseDotSource, validate } from "../src/index.ts";
 
-const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", "workflows");
+const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", ".swarm", "workflows");
 
 function listWorkflowFiles(): string[] {
   return readdirSync(WORKFLOWS_DIR)
@@ -29,7 +30,7 @@ function shapeOf(node: { shape?: string; attrs?: { shape?: string } }): NodeShap
   return s as NodeShape;
 }
 
-describe("workflows/*.dot — coverage + validity", () => {
+describe(".swarm/workflows/*.dot — coverage + validity", () => {
   const files = listWorkflowFiles();
 
   test("repo ships at least one workflow", () => {
@@ -64,7 +65,7 @@ describe("workflows/*.dot — coverage + validity", () => {
     if (missing.length > 0) {
       throw new Error(
         `No shipped workflow demonstrates handler kind(s): ${missing.join(", ")}. ` +
-          "Add a node with the corresponding shape to one of workflows/*.dot.",
+          "Add a node with the corresponding shape to one of .swarm/workflows/*.dot.",
       );
     }
     expect(missing).toEqual([]);

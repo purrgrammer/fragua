@@ -13,7 +13,7 @@
 // the operator never sees the same key meaning two different things
 // over the lifetime of one run.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/hitl-tools.dot
+//   bun run swarm run hitl-tools
 //
 // Then in another terminal, after the run pauses at each hexagon:
 //   curl -XPOST http://localhost:4444/api/runs/<id>/hitl \

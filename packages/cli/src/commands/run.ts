@@ -1,8 +1,16 @@
-// `swarm run <workflow.dot>` — enqueue a run via HTTP and stream events.
+// `swarm run <workflow>` — enqueue a run via HTTP and stream events.
 //
+// `<workflow>` resolves in two flavours:
+//   - bare name (no slash, no `.dot` suffix): looks up
+//     `<cwd>/.swarm/workflows/<name>.dot`. Misses surface as
+//     "workflow not found" with the directory path.
+//   - path (relative or absolute, with slash or `.dot` suffix): read
+//     directly. Backwards-compatible with the original API.
+//
+// Then:
 //   1. Read the DOT file.
 //   2. POST /workflows to register it and receive the sha.
-//   3. POST /runs with that sha (+ any routing/priority).
+//   3. POST /runs with that sha (+ any routing/priority/projectId).
 //   4. Stream /runs/:id/stream (SSE) to stdout until the run reaches a
 //      terminal state or the user hits Ctrl-C.
 //
@@ -10,8 +18,10 @@
 // `swarm daemon` + `swarm serve`.
 
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import chalk from "chalk";
+import { loadConfig } from "../config.ts";
+import { resolveWorkflow } from "../workflow-path.ts";
 
 async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
   try {
@@ -59,8 +69,17 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     : resolve(cwd, ".swarm/serve.json");
   const resolvedUrl = opts.url ?? (await discoverServerUrl(discoveryPath)) ?? "http://localhost:3000";
   const baseUrl = resolvedUrl.replace(/\/$/, "");
-  const dotPath = resolve(cwd, opts.workflow);
-  const name = basename(opts.workflow);
+
+  const resolved = await resolveWorkflow(cwd, opts.workflow);
+  if (resolved == null) {
+    console.error(
+      chalk.red(
+        `run: workflow not found: ${opts.workflow} (looked in .swarm/workflows/${opts.workflow}.dot, then as a path)`,
+      ),
+    );
+    return 1;
+  }
+  const { dotPath, name } = resolved;
 
   let dotSource: string;
   try {
@@ -69,6 +88,15 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     console.error(chalk.red(`run: cannot read ${dotPath}: ${(err as Error).message}`));
     return 1;
   }
+
+  // Project identity from .swarm/config.jsonc — null when not initialised.
+  // Server falls back to project_id NULL on the run row (ephemeral).
+  // Name + root ride along so the daemon's projects cache stays fresh
+  // (last-runner wins) without round-tripping the config.jsonc itself.
+  const cfg = await loadConfig(cwd).catch(() => ({}) as Awaited<ReturnType<typeof loadConfig>>);
+  const projectId = cfg.id;
+  const projectName = projectId !== undefined ? (cfg.name ?? basename(resolve(cwd))) : undefined;
+  const projectRoot = projectId !== undefined ? resolve(cwd) : undefined;
 
   // 1. Upload workflow
   const uploadRes = await postJson(`${baseUrl}/workflows`, {
@@ -86,6 +114,11 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
   if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
   if (opts.input !== undefined) enqueueBody["input"] = opts.input;
+  if (projectId !== undefined) {
+    enqueueBody["projectId"] = projectId;
+    enqueueBody["projectName"] = projectName;
+    enqueueBody["projectRoot"] = projectRoot;
+  }
   const enqueueRes = await postJson(`${baseUrl}/runs`, enqueueBody);
   if (!enqueueRes.ok) {
     return fail(`enqueue failed (${enqueueRes.status})`, enqueueRes);
@@ -191,11 +224,4 @@ async function fail(msg: string, res: Response): Promise<number> {
     console.error(chalk.dim(`  ${await res.text()}`));
   } catch {}
   return 1;
-}
-
-function basename(p: string): string {
-  const slash = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  const leaf = slash >= 0 ? p.slice(slash + 1) : p;
-  const dot = leaf.lastIndexOf(".");
-  return dot > 0 ? leaf.slice(0, dot) : leaf;
 }

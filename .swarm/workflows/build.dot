@@ -1,6 +1,6 @@
 // build.dot — plan, implement, review (with retry), CI, human sign-off, commit+merge.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/build.dot \
+//   bun run swarm run build \
 //     --input="add a health-check endpoint to @swarm/server"
 
 digraph build {

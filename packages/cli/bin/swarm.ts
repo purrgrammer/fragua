@@ -11,6 +11,7 @@ import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
+import { initCommand } from "../src/commands/init.ts";
 import {
   providersAddCommand,
   providersAddCustomCommand,
@@ -31,6 +32,15 @@ cli.command("validate <workflow>", "Parse + lint a workflow without executing").
   const code = await validateCommand(workflow);
   process.exit(code);
 });
+
+cli
+  .command("init", "Initialize this directory as a swarm project (writes .swarm/config.jsonc)")
+  .option("--cwd <path>", "Project root (default process.cwd)")
+  .action(async (options: Record<string, unknown>) => {
+    const cwd = typeof options["cwd"] === "string" ? (options["cwd"] as string) : undefined;
+    const code = await initCommand(cwd !== undefined ? { cwd } : {});
+    process.exit(code);
+  });
 
 // `swarm providers [action]` — bare form prints subcommand help, per
 // the "top-level commands without arguments should list options"

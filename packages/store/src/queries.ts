@@ -10,6 +10,7 @@
 // the reducer happens to model.
 
 import type { Database } from "bun:sqlite";
+import type { Project } from "@swarm/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Step cost / token aggregates
@@ -115,6 +116,44 @@ export function getStepAggregates(db: Database, runId: string): StepAggregateRow
       [string]
     >(STEP_AGGREGATES_SQL)
     .all(runId);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Projects display cache
+// ─────────────────────────────────────────────────────────────────────
+
+const SELECT_PROJECTS_SQL = `
+  SELECT id, name, root_path AS rootPath, updated_at AS updatedAt
+  FROM projects
+  ORDER BY updated_at DESC, id ASC
+`;
+
+const SELECT_PROJECT_BY_ID_SQL = `
+  SELECT id, name, root_path AS rootPath, updated_at AS updatedAt
+  FROM projects
+  WHERE id = ?
+`;
+
+/**
+ * UPSERT pattern: name + root_path are display fields refreshed on every
+ * `enqueueRun` so the active clone of a project always wins. Caller
+ * provides the timestamp so the store's `now()` injector stays the
+ * single source of clock truth.
+ */
+export const UPSERT_PROJECT_SQL = `
+  INSERT INTO projects (id, name, root_path, updated_at) VALUES (?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    root_path = excluded.root_path,
+    updated_at = excluded.updated_at
+`;
+
+export function selectProjects(db: Database): Project[] {
+  return db.query<Project, []>(SELECT_PROJECTS_SQL).all();
+}
+
+export function selectProjectById(db: Database, id: string): Project | null {
+  return db.query<Project, [string]>(SELECT_PROJECT_BY_ID_SQL).get(id);
 }
 
 // ─────────────────────────────────────────────────────────────────────

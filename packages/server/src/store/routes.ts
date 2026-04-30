@@ -220,6 +220,17 @@ export function createRoutes(deps: ServerDeps): Hono {
       /** Positional input — lands in `routing.input`, where the
        * executor's buildSubstitutionArgs() picks it up as $ARGUMENTS. */
       input?: string;
+      /** UUIDv7 of the calling project, from its `.swarm/config.jsonc`.
+       * Persisted on `run_state.project_id` so cross-project listings
+       * group correctly under a global daemon. */
+      projectId?: string;
+      /** Human-readable name (from `config.jsonc` `name`, falling back
+       * to `basename(cwd)`). UPSERTed into the projects display cache
+       * so UI filters can label by name. */
+      projectName?: string;
+      /** Project root absolute path at enqueue time. Stored on
+       * projects for UI navigation. */
+      projectRoot?: string;
     }>(c);
     if (!body || typeof body.workflowSha !== "string") {
       return c.json({ error: "workflowSha required" }, 400);
@@ -254,6 +265,9 @@ export function createRoutes(deps: ServerDeps): Hono {
         workflowSha: body.workflowSha,
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
+        ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
+        ...(typeof body.projectName === "string" ? { projectName: body.projectName } : {}),
+        ...(typeof body.projectRoot === "string" ? { projectRoot: body.projectRoot } : {}),
       });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

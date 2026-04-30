@@ -1,6 +1,6 @@
 // add-tool.dot — add a new @swarm/workspace tool end-to-end.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/add-tool.dot \
+//   bun run swarm run add-tool \
 //     --input="add a `touch` tool that creates an empty file"
 
 digraph add_tool {

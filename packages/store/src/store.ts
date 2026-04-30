@@ -15,6 +15,9 @@ import {
   selectGlobalEventsLatest,
   selectMessages,
   selectMessagesNarrow,
+  selectProjectById,
+  selectProjects,
+  UPSERT_PROJECT_SQL,
 } from "./queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import { sha256Hex } from "./sha256.ts";
@@ -52,6 +55,7 @@ import {
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
+  type Project,
   type RunCostTotalsRow,
   type RunMetrics,
   type RunState,
@@ -346,8 +350,9 @@ export class SqliteStore implements IEventStore {
           `INSERT INTO run_state (
              run_id, version, status, current_node, workflow_sha, schema_version,
              routing, metrics, next_seq, last_applied_seq, priority,
-             enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at
-           ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?)`,
+             enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
+             project_id
+           ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?)`,
         )
         .run(
           params.runId,
@@ -359,7 +364,15 @@ export class SqliteStore implements IEventStore {
           now,
           now,
           now,
+          params.projectId ?? null,
         );
+
+      // Refresh the projects display cache. Same txn as the run insert
+      // so a successful enqueue always carries a labelable row; a failed
+      // enqueue rolls the projects update back together with the run.
+      if (params.projectId != null && params.projectName != null) {
+        this.db.query(UPSERT_PROJECT_SQL).run(params.projectId, params.projectName, params.projectRoot ?? null, now);
+      }
 
       const seq = this.bumpSeq(params.runId);
       this.db
@@ -876,6 +889,23 @@ export class SqliteStore implements IEventStore {
       dotSource: row.dot_source,
       createdAt: row.created_at,
     };
+  }
+
+  // ─────────────── Projects ───────────────
+
+  listProjects(): Project[] {
+    return selectProjects(this.db);
+  }
+
+  getProject(id: string): Project | null {
+    return selectProjectById(this.db, id);
+  }
+
+  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void {
+    const now = this.now();
+    this.writeTxn(() => {
+      this.db.query(UPSERT_PROJECT_SQL).run(args.id, args.name, args.rootPath ?? null, now);
+    });
   }
 
   // ─────────────── Maintenance ───────────────

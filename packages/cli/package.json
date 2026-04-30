@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.41",
     "@swarm/agent": "workspace:*",
     "@swarm/core": "workspace:*",
     "@swarm/daemon": "workspace:*",
@@ -27,9 +28,9 @@
     "ink": "5.2.1",
     "ink-big-text": "2.0.0",
     "ink-spinner": "5.0.0",
+    "jsonc-parser": "3.3.1",
     "prompts": "2.4.2",
-    "react": "18.3.1",
-    "yaml": "2.7.0"
+    "react": "18.3.1"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "0.67.68",

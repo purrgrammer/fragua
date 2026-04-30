@@ -1,128 +1,139 @@
-// Load `.swarm/config.yaml` from the project root. Missing / malformed →
-// empty config (no errors). The file is a *user preference* layer:
+// Load `.swarm/config.jsonc` from the project root. The file is the
+// project's identity (`id`, `name`) and a *user preference* layer:
 // CLI flags beat config, config beats hard-coded defaults.
+//
+// Missing file → `{}` (first-run UX). Malformed file or schema-invalid
+// content → throw with a caller-friendly message; silent fallback would
+// hide typos that would otherwise mis-route runs.
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { type Static, Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { parseDurationMs } from "@swarm/core";
-import YAML from "yaml";
+import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
 
-export interface SwarmConfig {
-  project?: {
-    name?: string;
-    /** Shell command run inside each fresh worktree before the first node
-     * fires. Use whatever the project's stack needs — `bun install
-     * --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
-     * `./scripts/bootstrap.sh`, etc. Omit for source-only projects that
-     * don't need a per-worktree install. Non-zero exit fails the run. */
-    bootstrap?: string;
-  };
-  defaults?: {
-    provider?: string;
-    model?: string;
-    permissions?: string;
-    /** Small-model summariser config. Powers auto-title and
-     * fidelity=summary:medium/high. Leave unset to disable summarisation
-     * (runs proceed, but summary:* fidelities fall back to the
-     * deterministic template). Per-provider defaults are used when
-     * `model` is unset — see `defaultSummariserModel` in @swarm/agent. */
-    summariser?: {
-      provider?: string;
-      model?: string;
-    };
-  };
-  /** Policy for auto-generated run titles. Omit or set `"on"` to
-   * enable (default); `"off"` disables regardless of CLI flag. */
-  auto_title?: "on" | "off";
-  blocklist?: string[];
-  workflows?: Record<string, string>;
-  /** Max concurrent runs the daemon will claim from its queue.
-   * CLI `--concurrency` overrides this. Default 8 when unset. */
-  concurrency?: number;
-  /** Per-run ceiling on handler dispatches. A workflow that loops
-   * indefinitely without aborting halts with `reason: "max_loops"` once
-   * this many dispatches have run on the same run. Absent = executor
-   * default (1000). Raise it for long-running HITL workflows that
-   * legitimately iterate through many nodes across many human turns. */
-  max_loops?: number;
-  /** Backpressure cap on `status='queued'` runs. When the queue depth
-   * reaches this number, `POST /runs` returns 429 with
-   * `Retry-After: 30` instead of accepting the enqueue. `running` runs
-   * are NOT counted (those are bounded by `concurrency`). Absent =
-   * uncapped — operators set this to bound the blast radius of a
-   * misconfigured client that would otherwise fill `run_state`. */
-  max_queued_runs?: number;
-  /** Maximum consecutive handler aborts on the same node before the run
-   * halts with `reason: "abort_loop"`. The counter resets on any
-   * non-abort handler return. Absent = executor default (5). */
-  abort_loop_ceiling?: number;
-  /** Cap on per-process leaked handlers (handler ignored AbortSignal
-   * past `maxMs + leakGrace`). When the count crosses this, the daemon
-   * shuts itself down — singleton + sweep recovers stuck runs on the
-   * next start. Absent = executor default (3). */
-  max_leaked_handlers?: number;
-  /** Background blob garbage collection. Sweeps orphan files left by
-   * `putArtifact` crashes between file write and row insert (§I8). */
-  blob_gc?: {
-    /** Interval as a duration string ("6h", "30m", …) or raw ms.
-     * Set to 0 / "0s" to disable; operators run `swarm db gc` by hand. */
-    interval?: string | number;
-    /** Max rows visited per sweep. Bounds latency. Default 1000. */
-    max_rows?: number;
-  };
-  /** Skill discovery knobs. Absent / empty enables auto-discovery of the
-   * well-known paths (`.agents/skills`, `.claude/skills`
-   * under both project and user scopes). See `packages/workspace/src/skills`
-   * and docs/skills.md. */
-  skills?: {
-    /** Explicit directory list. When set, auto-discovery is disabled and
-     * only these directories are scanned (each expected to contain
-     * `<skill-name>/SKILL.md` subdirs). */
-    paths?: string[];
-    /** Names to hide from the tier-1 catalog. Still discovered so the UI
-     * can list them as disabled. */
-    disabled?: string[];
-    /** Trust gate for project-scope skills. Default true. */
-    trust_project?: boolean;
-  };
-  /** Global per-kind timeout defaults. Each value accepts a duration
-   * string ("30s", "5m", "2h") or a raw millisecond integer. Per-node
-   * DOT `timeout=`/`maxMs=` attrs override these; handler built-in
-   * defaults apply when a kind is absent. Invalid values fail daemon
-   * startup loudly — silent fall-through would make runtime behavior
-   * silently diverge from authored intent. */
-  timeouts?: {
-    codergen?: string | number;
-    tool?: string | number;
-    bootstrap?: string | number;
-    shell?: string | number;
-    http?: string | number;
-    leak_grace?: string | number;
-    shutdown_drain?: string | number;
-  };
-}
+const TimeoutValue = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
-/** Every timeout key in `SwarmConfig.timeouts`, resolved to milliseconds.
- * Populated by {@link resolveTimeouts}. Absent keys stay `undefined`
- * so callers know to fall through to handler defaults. */
+const Summariser = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const Defaults = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    permissions: Type.Optional(Type.String()),
+    summariser: Type.Optional(Summariser),
+  },
+  { additionalProperties: false },
+);
+
+const BlobGc = Type.Object(
+  {
+    interval: Type.Optional(TimeoutValue),
+    maxRows: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const Skills = Type.Object(
+  {
+    paths: Type.Optional(Type.Array(Type.String())),
+    disabled: Type.Optional(Type.Array(Type.String())),
+    trustProject: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const Timeouts = Type.Object(
+  {
+    codergen: Type.Optional(TimeoutValue),
+    tool: Type.Optional(TimeoutValue),
+    bootstrap: Type.Optional(TimeoutValue),
+    shell: Type.Optional(TimeoutValue),
+    http: Type.Optional(TimeoutValue),
+    leakGrace: Type.Optional(TimeoutValue),
+    shutdownDrain: Type.Optional(TimeoutValue),
+  },
+  { additionalProperties: false },
+);
+
+export const SwarmConfigSchema = Type.Object(
+  {
+    // Schema version. Currently always 1; bumped when the on-disk shape
+    // changes in a way readers must opt into.
+    version: Type.Optional(Type.Literal(1)),
+    // Project identity (UUIDv7) — set by `swarm init`, committed to git.
+    // Two clones of the same repo see the same id; runs join on it.
+    id: Type.Optional(
+      Type.String({ pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }),
+    ),
+    // Display name. Advisory only — never key on this; rename-safe routing
+    // uses `id`.
+    name: Type.Optional(Type.String()),
+    // Shell command run inside each fresh worktree before the first node
+    // fires. Use whatever the project's stack needs — `bun install
+    // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
+    // `./scripts/bootstrap.sh`, etc. Omit for source-only projects.
+    // Non-zero exit fails the run.
+    bootstrap: Type.Optional(Type.String()),
+    defaults: Type.Optional(Defaults),
+    // Auto-generated run titles from $ARGUMENTS. true (default) kicks off
+    // a fire-and-forget summariser call at run start. false disables.
+    // CLI flag --no-auto-title wins over this.
+    autoTitle: Type.Optional(Type.Boolean()),
+    // Command blocklist applied even in unsafe mode. Matched as literal
+    // substrings against the shell command.
+    blocklist: Type.Optional(Type.Array(Type.String())),
+    // Max concurrent runs the daemon will claim from its queue. CLI
+    // `--concurrency` overrides this. Default 8 when unset.
+    concurrency: Type.Optional(Type.Integer({ minimum: 1 })),
+    // Per-run ceiling on handler dispatches. A workflow that loops
+    // indefinitely halts with `reason: "max_loops"`. Default 1000.
+    maxLoops: Type.Optional(Type.Integer({ minimum: 1 })),
+    // Backpressure cap on `status='queued'` runs. POST /runs returns 429
+    // when queue depth reaches this. Absent = uncapped.
+    maxQueuedRuns: Type.Optional(Type.Integer({ minimum: 1 })),
+    // Max consecutive handler aborts on the same node before halt with
+    // `reason: "abort_loop"`. Default 5.
+    abortLoopCeiling: Type.Optional(Type.Integer({ minimum: 1 })),
+    // Cap on per-process leaked handlers (handler ignored AbortSignal
+    // past `maxMs + leakGrace`). Daemon shuts down when crossed.
+    // Default 3.
+    maxLeakedHandlers: Type.Optional(Type.Integer({ minimum: 1 })),
+    blobGc: Type.Optional(BlobGc),
+    skills: Type.Optional(Skills),
+    timeouts: Type.Optional(Timeouts),
+  },
+  { additionalProperties: false },
+);
+
+export type SwarmConfig = Static<typeof SwarmConfigSchema>;
+
+/** Every timeout key, resolved to milliseconds. Absent keys stay
+ * `undefined` so callers fall through to handler defaults. */
 export interface ResolvedTimeouts {
   codergen?: number;
   tool?: number;
   bootstrap?: number;
   shell?: number;
   http?: number;
-  leak_grace?: number;
-  shutdown_drain?: number;
+  leakGrace?: number;
+  shutdownDrain?: number;
 }
 
 /** Parse and validate each present key in `cfg.timeouts`. Throws a
  * caller-friendly Error on the first invalid value so the daemon
- * startup path can surface the name + reason without a stack-trace
- * dump. */
+ * startup path can surface the name + reason without a stack-trace. */
 export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
   const out: ResolvedTimeouts = {};
   if (cfg.timeouts == null) return out;
-  const keys = ["codergen", "tool", "bootstrap", "shell", "http", "leak_grace", "shutdown_drain"] as const;
+  const keys = ["codergen", "tool", "bootstrap", "shell", "http", "leakGrace", "shutdownDrain"] as const;
   for (const key of keys) {
     const raw = cfg.timeouts[key];
     if (raw == null) continue;
@@ -136,20 +147,40 @@ export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
   return out;
 }
 
-/** Load and parse `<cwd>/.swarm/config.yaml`. Returns `{}` if the file is
- * missing or unparseable — config is always optional. */
+function formatParseErrors(errors: ParseError[]): string {
+  return errors
+    .slice(0, 3)
+    .map((e) => `${printParseErrorCode(e.error)} at offset ${e.offset}`)
+    .join("; ");
+}
+
+function formatValidationErrors(errors: Iterable<{ path: string; message: string }>): string {
+  const list = [...errors].slice(0, 3);
+  return list.map((e) => `${e.path || "<root>"}: ${e.message}`).join("; ");
+}
+
+/** Load and parse `<cwd>/.swarm/config.jsonc`. Returns `{}` if the file
+ * is missing — config is always optional. Throws on parse or schema
+ * errors so typos surface immediately. */
 export async function loadConfig(cwd: string): Promise<SwarmConfig> {
-  const path = resolve(cwd, ".swarm/config.yaml");
+  const path = resolve(cwd, ".swarm/config.jsonc");
   let body: string;
   try {
     body = await readFile(path, "utf8");
   } catch {
     return {};
   }
-  try {
-    const parsed = YAML.parse(body);
-    return (parsed && typeof parsed === "object" ? parsed : {}) as SwarmConfig;
-  } catch {
-    return {};
+  const errors: ParseError[] = [];
+  const parsed = parse(body, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) {
+    throw new Error(`config: parse error in ${path}: ${formatParseErrors(errors)}`);
   }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`config: ${path} must be a JSON object`);
+  }
+  if (!Value.Check(SwarmConfigSchema, parsed)) {
+    const msg = formatValidationErrors(Value.Errors(SwarmConfigSchema, parsed));
+    throw new Error(`config: validation failed in ${path}: ${msg}`);
+  }
+  return parsed;
 }

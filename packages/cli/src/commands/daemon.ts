@@ -147,7 +147,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const modelRegistry = ModelRegistry.create(authStorage);
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
-  // Resolve provider/model. Precedence: CLI flags > .swarm/config.yaml
+  // Resolve provider/model. Precedence: CLI flags > .swarm/config.jsonc
   // defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
@@ -271,7 +271,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // Auto-title summariser — cheap cross-run call that labels each run
   // post-enqueue. Uses `defaults.summariser.{provider,model}` when set;
   // otherwise defaults to the cheapest known model for the primary
-  // provider. `auto_title: "off"` disables even when a backend is
+  // provider. `autoTitle: false` disables even when a backend is
   // configured.
   const autoTitler = buildAutoTitler({
     store,
@@ -282,15 +282,15 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   // Worktree provisioner — every run gets a `git worktree` with its
   // own branch so agents never mutate the user's working copy and
-  // concurrent runs don't stomp on each other. `project.bootstrap`
-  // from config.yaml runs once per fresh worktree (e.g. `bun install
+  // concurrent runs don't stomp on each other. `bootstrap` from
+  // config.jsonc runs once per fresh worktree (e.g. `bun install
   // --frozen-lockfile`). Falls back to a shared LocalEnvironment if
   // the cwd isn't inside a git repo — tests + demo paths shouldn't
   // require a worktree to get off the ground.
   const provisioner: Provisioner = (await isGitRepo(cwd))
     ? new WorktreeProvisioner({
         repoRoot: cwd,
-        ...(config.project?.bootstrap ? { bootstrap: config.project.bootstrap } : {}),
+        ...(config.bootstrap ? { bootstrap: config.bootstrap } : {}),
         ...(timeouts.bootstrap !== undefined ? { bootstrapTimeoutMs: timeouts.bootstrap } : {}),
         ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
       })
@@ -300,14 +300,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       );
   const provisionerLabel =
     provisioner instanceof WorktreeProvisioner
-      ? `worktree (.swarm/worktrees/<run-id>${config.project?.bootstrap ? `, bootstrap: "${config.project.bootstrap}"` : ""})`
+      ? `worktree (.swarm/worktrees/<run-id>${config.bootstrap ? `, bootstrap: "${config.bootstrap}"` : ""})`
       : `local (cwd=${cwd}, no git repo detected)`;
 
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
   console.log(chalk.dim(`  concurrency: ${concurrency}`));
   const sourceSuffix =
-    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.yaml)" : "";
+    llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.jsonc)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
     : "stub (set a provider API key, or pass --provider + --model)";
@@ -333,21 +333,21 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       provisioner,
     };
     if (autoTitler.titler) daemonOpts.autoTitler = autoTitler.titler;
-    if (timeouts.leak_grace !== undefined) daemonOpts.leakGraceMs = timeouts.leak_grace;
-    if (timeouts.shutdown_drain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdown_drain;
+    if (timeouts.leakGrace !== undefined) daemonOpts.leakGraceMs = timeouts.leakGrace;
+    if (timeouts.shutdownDrain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdownDrain;
     if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;
-    if (config.max_loops !== undefined) daemonOpts.maxLoops = config.max_loops;
-    if (config.abort_loop_ceiling !== undefined) daemonOpts.abortLoopCeiling = config.abort_loop_ceiling;
-    if (config.max_leaked_handlers !== undefined) daemonOpts.maxLeakedHandlers = config.max_leaked_handlers;
-    if (config.blob_gc?.interval !== undefined) {
+    if (config.maxLoops !== undefined) daemonOpts.maxLoops = config.maxLoops;
+    if (config.abortLoopCeiling !== undefined) daemonOpts.abortLoopCeiling = config.abortLoopCeiling;
+    if (config.maxLeakedHandlers !== undefined) daemonOpts.maxLeakedHandlers = config.maxLeakedHandlers;
+    if (config.blobGc?.interval !== undefined) {
       try {
-        daemonOpts.blobGcIntervalMs = parseDurationMs(config.blob_gc.interval);
+        daemonOpts.blobGcIntervalMs = parseDurationMs(config.blobGc.interval);
       } catch (err) {
-        console.error(chalk.red(`config: blob_gc.interval: ${(err as Error).message}`));
+        console.error(chalk.red(`config: blobGc.interval: ${(err as Error).message}`));
         return 1;
       }
     }
-    if (config.blob_gc?.max_rows !== undefined) daemonOpts.blobGcMaxRows = config.blob_gc.max_rows;
+    if (config.blobGc?.maxRows !== undefined) daemonOpts.blobGcMaxRows = config.blobGc.maxRows;
     const handleRef = startDaemon(daemonOpts);
     await handleRef.done;
   } catch (err) {
@@ -414,7 +414,7 @@ function buildAutoTitler(args: {
   shutdownSignal: AbortSignal;
 }): { titler: AutoTitler | undefined; label: string | undefined } {
   const { store, config, summariser, shutdownSignal } = args;
-  if (config.auto_title === "off") {
+  if (config.autoTitle === false) {
     return { titler: undefined, label: "off (config)" };
   }
   if (!summariser.backend) {

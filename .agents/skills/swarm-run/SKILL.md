@@ -21,7 +21,7 @@ sqlite3 -readonly .swarm/swarm.db "SELECT pid, (strftime('%s','now')*1000 - hear
 bun run swarm providers ls                             # at least the default provider shows ✓
 
 # 1. Run. Trailing args become $ARGUMENTS; use --input to be explicit.
-bun run swarm run workflows/quick-change.dot --input="rename foo() to bar() in packages/core"
+bun run swarm run quick-change --input="rename foo() to bar() in packages/core"
 ```
 
 The CLI does three things for you: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), then `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts are `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_quarantined`; the CLI exits non-zero on halt / cancel.
@@ -95,7 +95,7 @@ URL=$(jq -r .url .swarm/serve.json)
 # 1. Upload (idempotent — sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg n quick-change --rawfile s workflows/quick-change.dot \
+  -d "$(jq -n --arg n quick-change --rawfile s .swarm/workflows/quick-change.dot \
         '{name:$n, dotSource:$s}')" | jq -r .sha)
 
 # 2. Enqueue. `input` lands in routing.input → substituted as $ARGUMENTS.
@@ -256,7 +256,7 @@ Multiple runs in flight is the normal case; the daemon has concurrency (`--concu
 ```sh
 # Enqueue a batch of smoke runs to exercise concurrency.
 for _ in 1 2 3 4 5; do
-  bun run swarm run workflows/smoke-sleep.dot --no-follow
+  bun run swarm run smoke-sleep --no-follow
 done
 
 # Watch all currently-running runs' status:
@@ -280,7 +280,7 @@ For long-running batches, prefer `--no-follow` + polling `/runs/:id` over N open
 ```sh
 bun run swarm serve  --db /tmp/other.swarm/swarm.db &
 bun run swarm daemon start --db /tmp/other.swarm/swarm.db &
-bun run swarm run workflows/ci-gate.dot --db /tmp/other.swarm/swarm.db
+bun run swarm run ci-gate --db /tmp/other.swarm/swarm.db
 ```
 
 This is how parallel swarms coexist on one machine. Always pass `--db` consistently; mixing a CLI invocation with the default db against a non-default daemon will silently target the wrong store.
@@ -307,11 +307,11 @@ sqlite3 -readonly .swarm/swarm.db "SELECT (strftime('%s','now')*1000 - heartbeat
 bun run swarm providers ls
 
 # Enqueue + watch
-bun run swarm run workflows/quick-change.dot --input="…"
+bun run swarm run quick-change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n quick-change --rawfile s workflows/quick-change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
+   -d "$(jq -n --arg n quick-change --rawfile s .swarm/workflows/quick-change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" '{workflowSha:$sha, input:$in}')" | jq -r .runId)
 

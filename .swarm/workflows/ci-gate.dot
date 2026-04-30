@@ -3,7 +3,7 @@
 // All tool nodes (parallelogram), no LLM. `tool_command` substitutes
 // $ARGUMENTS / ${context.*}; exit 0 → success, non-zero → fail.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/ci-gate.dot
+//   bun run swarm run ci-gate
 
 digraph ci_gate {
   graph [

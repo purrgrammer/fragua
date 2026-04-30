@@ -3,7 +3,7 @@
 // For typo fixes, tiny refactors, dep bumps. Anything needing explore/review
 // goes through build-feature.dot instead.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/quick-change.dot \
+//   bun run swarm run quick-change \
 //     --input="rename foo() to bar() in packages/core"
 //
 // Hardening notes (2026-04-21):

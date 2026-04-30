@@ -1,6 +1,6 @@
 // fix-bug.dot — reproduce, fix, regression-test.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/fix-bug.dot \
+//   bun run swarm run fix-bug \
 //     --input="bash tool hangs when command writes to stdin"
 
 digraph fix_bug {

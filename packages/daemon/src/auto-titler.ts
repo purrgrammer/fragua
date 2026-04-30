@@ -30,10 +30,10 @@ import type { IEventStore } from "@swarm/store";
 
 export interface AutoTitlerOpts {
   /** Summariser implementation. When unset, `titleRun` is a no-op — the
-   * daemon wires this from `.swarm/config.yaml`'s `summariser:` block,
+   * daemon wires this from `.swarm/config.jsonc`'s `summariser:` block,
    * and omits the backend when no provider/model is configured. */
   backend?: SummariserBackend;
-  /** Policy toggle — `auto_title: "off"` in config disables even when a
+  /** Policy toggle — `autoTitle: false` in config disables even when a
    * backend is configured. Defaults to `true`. */
   enabled?: boolean;
   store: IEventStore;

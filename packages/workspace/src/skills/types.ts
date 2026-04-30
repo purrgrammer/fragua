@@ -47,7 +47,7 @@ export interface SkillsConfig {
    * dropped before the precedence merge — they do not appear in the
    * agent catalog, on GET /skills, or in the web UI. Use this when you
    * want to pretend a skill isn't installed. For temporary soft-hiding
-   * that keeps the skill visible in /skills, use `trust_project: false`
+   * that keeps the skill visible in /skills, use `trustProject: false`
    * on project-scope skills instead. */
   disabled?: string[];
   /** Trust gate for project-scope skills. Default true — swarm agents
@@ -55,7 +55,7 @@ export interface SkillsConfig {
    * adds friction without a real security delta. Flip to false in
    * untrusted clones where project-scope skills should be hidden until
    * reviewed. */
-  trust_project?: boolean;
+  trustProject?: boolean;
 }
 
 export interface DiscoverOptions {
@@ -64,7 +64,7 @@ export interface DiscoverOptions {
   /** User home directory. Used for `~/.agents/skills/` etc. Pass empty
    * string to skip user-scope discovery. */
   homeDir: string;
-  /** Merged skills config from `.swarm/config.yaml`. */
+  /** Merged skills config from `.swarm/config.jsonc`. */
   config?: SkillsConfig;
 }
 

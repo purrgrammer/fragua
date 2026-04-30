@@ -1,6 +1,6 @@
 // build-feature.dot — swarm builds a feature on its own codebase.
 //
-//   bun run packages/cli/bin/swarm.ts run workflows/build-feature.dot \
+//   bun run swarm run build-feature \
 //     --input="add a new tool named `touch` to @swarm/workspace"
 //
 // Stages: plan (read-only) → implement → review (fresh thread) → verify →

@@ -1,12 +1,24 @@
-// `swarm validate <workflow.dot>` — parse + lint a workflow without executing.
+// `swarm validate <workflow>` — parse + lint a workflow without executing.
+// `<workflow>` resolves the same way `swarm run` does: bare name looks up
+// `<cwd>/.swarm/workflows/<name>.dot`, anything pathy is read directly.
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { parseDotSource, validate } from "@swarm/core";
 import chalk from "chalk";
+import { resolveWorkflow } from "../workflow-path.ts";
 
-export async function validateCommand(path: string): Promise<number> {
-  const source = await readFile(resolve(path), "utf8");
+export async function validateCommand(workflow: string): Promise<number> {
+  const cwd = process.cwd();
+  const resolved = await resolveWorkflow(cwd, workflow);
+  if (resolved == null) {
+    console.error(
+      chalk.red(
+        `validate: workflow not found: ${workflow} (looked in .swarm/workflows/${workflow}.dot, then as a path)`,
+      ),
+    );
+    return 1;
+  }
+  const source = await readFile(resolved.dotPath, "utf8");
   const graph = parseDotSource(source);
   const diags = validate(graph);
 

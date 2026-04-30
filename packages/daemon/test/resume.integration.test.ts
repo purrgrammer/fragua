@@ -22,7 +22,6 @@ import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
-import { startDaemon } from "../src/entrypoint.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 
@@ -130,7 +129,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // Handler-1 hangs on a deferred. We'll abandon the runOne promise
     // mid-flight, then resolve the deferred at test end so the orphan
     // handler can drain.
-    let resolveHang: ((v: { kind: "halt"; reason: "error"; detail: string }) => void) = () => undefined;
+    let resolveHang: (v: { kind: "halt"; reason: "error"; detail: string }) => void = () => undefined;
     const hangPromise = new Promise<{ kind: "halt"; reason: "error"; detail: string }>((res) => {
       resolveHang = res;
     });
@@ -229,7 +228,10 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     r.store.appendFact(
       "pr-1",
       [
-        { type: "fact.run_started", payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" } },
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "start" },
+        },
       ],
       s0.version,
     );
@@ -256,9 +258,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     const final = r.store.getState("pr-1")!;
     expect(final.status).toBe("completed");
 
-    const dispatchStarted = r.store
-      .getEvents("pr-1")
-      .filter((e) => e.type === "fact.dispatch_started");
+    const dispatchStarted = r.store.getEvents("pr-1").filter((e) => e.type === "fact.dispatch_started");
     expect(dispatchStarted.length).toBe(1);
     expect((dispatchStarted[0]!.payload as { resumeOf: string }).resumeOf).toBe("paused_hitl");
     r.cleanup();
@@ -322,9 +322,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // after start. resumeOf="fresh" because the latest preceding fact
     // is fact.node_completed; the pause provenance lives on
     // fact.run_resumed.fromStatus, which analytics joins separately.
-    const dispatchStarted = r.store
-      .getEvents("multi")
-      .filter((e) => e.type === "fact.dispatch_started");
+    const dispatchStarted = r.store.getEvents("multi").filter((e) => e.type === "fact.dispatch_started");
     expect(dispatchStarted.length).toBe(1);
     const ds = dispatchStarted[0]!.payload as { nodeId: string; resumeOf: string };
     expect(ds.nodeId).toBe("mid");

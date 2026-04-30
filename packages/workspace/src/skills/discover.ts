@@ -1,5 +1,5 @@
 // Skill discovery. Scans well-known paths by default; honours an explicit
-// `skills.paths` override from `.swarm/config.yaml`.
+// `skills.paths` override from `.swarm/config.jsonc`.
 //
 // Precedence on name collision: project scope beats user scope. Within the
 // same scope, the path listed earlier wins (swarm-native before cross-client
@@ -23,7 +23,7 @@ export interface DiscoverResult {
 
 export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverResult> {
   const config = opts.config ?? {};
-  const trustProject = config.trust_project ?? true;
+  const trustProject = config.trustProject ?? true;
   const disabledSet = new Set(config.disabled ?? []);
 
   const roots = buildRoots(opts, config);
@@ -36,10 +36,10 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverRes
       // skills.disabled is an exclusion list: drop matching skills before
       // the precedence merge so they're absent from the catalog, GET /skills,
       // and the web UI — the user's intent is "pretend this isn't installed".
-      // For soft-hiding that still surfaces in /skills, see trust_project.
+      // For soft-hiding that still surfaces in /skills, see trustProject.
       if (disabledSet.has(skill.name)) continue;
       if (skill.scope === "project" && !trustProject) {
-        skill.disabled_reason = "project scope hidden (skills.trust_project=false)";
+        skill.disabled_reason = "project scope hidden (skills.trustProject=false)";
       }
 
       const existing = byName.get(skill.name);

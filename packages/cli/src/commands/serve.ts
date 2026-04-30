@@ -98,13 +98,13 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // providers are credentialed.
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
-  // Backpressure cap on `status='queued'` runs from `.swarm/config.yaml`.
+  // Backpressure cap on `status='queued'` runs from `.swarm/config.jsonc`.
   // Opt-in (default uncapped); non-positive / unparseable values are
   // silently ignored.
   const cfg = await loadConfig(cwd);
   const maxQueuedRuns =
-    typeof cfg.max_queued_runs === "number" && Number.isFinite(cfg.max_queued_runs) && cfg.max_queued_runs > 0
-      ? cfg.max_queued_runs
+    typeof cfg.maxQueuedRuns === "number" && Number.isFinite(cfg.maxQueuedRuns) && cfg.maxQueuedRuns > 0
+      ? cfg.maxQueuedRuns
       : undefined;
   const app = createServer({
     cwd,

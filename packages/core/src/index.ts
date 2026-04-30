@@ -6,6 +6,7 @@ export * from "./engine/index.ts";
 export * from "./executor/index.ts";
 export * from "./parser/index.ts";
 export * from "./types/index.ts";
+export * from "./uuid.ts";
 
 // `handler/` is intentionally NOT re-exported here — it pulls in
 // `@swarm/store` (which uses `bun:sqlite` + node built-ins). Import

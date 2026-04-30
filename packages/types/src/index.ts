@@ -23,6 +23,7 @@ export type {
   UserMessage,
 } from "@mariozechner/pi-ai";
 export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
+export type { Project } from "./project.ts";
 export type {
   AnyEvent,
   AnyEventType,
