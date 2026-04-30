@@ -354,7 +354,6 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Run lifecycle (intent that creates the run + every fact that flips status)
   "intent.run_enqueued",
   "fact.run_started",
-  "fact.dispatch_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
   "fact.run_paused_provider_error",
