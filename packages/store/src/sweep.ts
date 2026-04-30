@@ -129,7 +129,9 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
     // because the quarantine loop above may have moved some of them.
     for (const row of running) {
       const current = db
-        .query<{ status: string }, [string]>("SELECT status FROM run_state WHERE run_id = ?")
+        .query<{ status: string; dispatch_started_at: number | null }, [string]>(
+          "SELECT status, dispatch_started_at FROM run_state WHERE run_id = ?",
+        )
         .get(row.run_id);
       if (current == null || current.status !== "running") continue;
       const ts = now();
@@ -138,6 +140,16 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
         `INSERT INTO events (run_id, seq, type, writer, payload, ts)
            VALUES (?, ?, 'fact.run_requeued_after_crash', 'daemon', ?, ?)`,
       ).run(row.run_id, seq, requeuePayloads.get(row.run_id) ?? "{}", ts);
+      // Sweep bypasses the reducer, so the activeMs credit logic in
+      // applyFact for fact.run_requeued_after_crash doesn't fire here.
+      // Mirror it in SQL: when priorHeartbeatAt is set and strictly
+      // after dispatchStartedAt, credit the pre-crash span. Otherwise
+      // drop it (heartbeat unavailable or stale).
+      const lastAlive = opts?.priorHeartbeatAt;
+      let activeMsDelta = 0;
+      if (typeof lastAlive === "number" && current.dispatch_started_at != null && lastAlive > current.dispatch_started_at) {
+        activeMsDelta = lastAlive - current.dispatch_started_at;
+      }
       db.query(
         `UPDATE run_state SET
              status = 'queued',
@@ -146,9 +158,11 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
              dispatch_started_at = NULL,
              ready_at = ?,
              version = version + 1,
-             updated_at = ?
+             updated_at = ?,
+             metrics = json_set(metrics, '$.activeMs',
+                                COALESCE(json_extract(metrics, '$.activeMs'), 0) + ?)
            WHERE run_id = ?`,
-      ).run(ts, ts, row.run_id);
+      ).run(ts, ts, activeMsDelta, row.run_id);
       requeued.push(row.run_id);
     }
 

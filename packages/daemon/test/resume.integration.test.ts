@@ -22,6 +22,7 @@ import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { Dispatcher } from "../src/dispatch.ts";
+import { startDaemon } from "../src/entrypoint.ts";
 import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 
@@ -368,6 +369,126 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // Crucially: NOT requeued_after_crash. Timeout is a clean handler
     // boundary, not a process death.
     expect(events.find((e) => e.type === "fact.run_requeued_after_crash")).toBeUndefined();
+    r.cleanup();
+  });
+
+  test("crash + reaper takeover: daemon_events trail records the recovery, lastAliveAt credits pre-crash activeMs", async () => {
+    // End-to-end audit-trail assertion across a crash boundary. We
+    // simulate the daemon2 startup flow inline (lock takeover + reaper
+    // event + sweep with priorHeartbeatAt) instead of spinning up a
+    // full startDaemon; the entrypoint is unit-tested in
+    // reaper-event.test.ts. This test focuses on the cross-cutting
+    // assertion: daemon_events + per-run events + projection all
+    // tell the same story.
+    const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
+    const r = makeRig(dot);
+
+    // Phase 1 — start a run, dispatch hangs, abandon the runOne.
+    let resolveHang: (v: { kind: "halt"; reason: "error"; detail: string }) => void = () => undefined;
+    const hangPromise = new Promise<{ kind: "halt"; reason: "error"; detail: string }>((res) => {
+      resolveHang = res;
+    });
+    let handlerCalled = false;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 60_000,
+      handler: async () => {
+        handlerCalled = true;
+        return hangPromise;
+      },
+    });
+    enqueue(r, "rec-1");
+
+    const PRIOR_PID = 99001;
+    r.store.acquireDaemonLock(PRIOR_PID, "host-dead");
+
+    const ac = new AbortController();
+    r.store.claimNextRun(1);
+    const ranAway = runOne("rec-1", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      shutdownSignal: ac.signal,
+    });
+
+    for (let i = 0; i < 100 && !handlerCalled; i++) await new Promise((res) => setTimeout(res, 5));
+    expect(handlerCalled).toBe(true);
+    const dispatchedAt = r.store.getState("rec-1")!.dispatchStartedAt!;
+
+    // Phase 2 — open store2, simulate the entrypoint takeover path.
+    const store2 = reopenStore(r.dbPath);
+    const heartbeatAt = dispatchedAt + 5;
+    const lock = store2.currentDaemonLock();
+    expect(lock).not.toBeNull();
+    store2.forceAcquireDaemonLock(99002, "host-new");
+    store2.appendDaemonEvent({
+      type: "daemon.reaper_took_over",
+      payload: {
+        priorPid: lock!.pid,
+        priorHostname: lock!.hostname,
+        priorHeartbeatAt: heartbeatAt,
+        staleForMs: Date.now() - heartbeatAt,
+      },
+    });
+    const sweepStart = Date.now();
+    const sweepResult = store2.startupSweep({ priorHeartbeatAt: heartbeatAt });
+    store2.appendDaemonEvent({
+      type: "daemon.sweep_completed",
+      payload: {
+        requeued: sweepResult.requeued.length,
+        quarantined: sweepResult.quarantined.length,
+        durationMs: Date.now() - sweepStart,
+      },
+    });
+
+    // Phase 3 — drain the orphan first so it stops touching the DB,
+    // THEN run executor2 to completion. Order matters: the orphan
+    // would otherwise OCC-spin against store2's writes.
+    resolveHang({ kind: "halt", reason: "error", detail: "test cleanup" });
+    ac.abort();
+    await ranAway.catch(() => undefined);
+
+    const dispatcher2 = new Dispatcher();
+    dispatcher2.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    await runUntilSettled(store2, dispatcher2, "rec-1");
+
+    // Phase 4 — assertions.
+    const daemonEvents = store2.getDaemonEvents();
+
+    const takeover = daemonEvents.find((e) => e.type === "daemon.reaper_took_over");
+    expect(takeover).toBeDefined();
+    const tPayload = takeover!.payload as { priorPid: number; priorHeartbeatAt: number; staleForMs: number };
+    expect(tPayload.priorPid).toBe(PRIOR_PID);
+    expect(tPayload.priorHeartbeatAt).toBe(heartbeatAt);
+
+    const sweepCompleted = daemonEvents.find((e) => e.type === "daemon.sweep_completed");
+    expect(sweepCompleted).toBeDefined();
+    const sPayload = sweepCompleted!.payload as { requeued: number };
+    expect(sPayload.requeued).toBe(1);
+
+    const runEvents = store2.getEvents("rec-1");
+    const requeued = runEvents.find((e) => e.type === "fact.run_requeued_after_crash");
+    expect(requeued).toBeDefined();
+    expect((requeued!.payload as { lastAliveAt?: number }).lastAliveAt).toBe(heartbeatAt);
+
+    const finalState = store2.getState("rec-1")!;
+    expect(finalState.status).toBe("completed");
+    expect(finalState.dispatchStartedAt).toBeNull();
+    // Pre-crash credit: heartbeatAt - dispatchedAt == 5ms. Plus the
+    // post-resume dispatch span (small but ≥ 0).
+    expect(finalState.metrics.activeMs).toBeGreaterThanOrEqual(5);
+
+    store2.close();
     r.cleanup();
   });
 });
