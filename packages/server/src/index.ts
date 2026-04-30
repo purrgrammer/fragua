@@ -21,9 +21,11 @@ import { storeRunsRoutes } from "./store/runs-routes.ts";
 export interface ServerOptions {
   /** SQLite event store — the backbone for all reads and intent writes. */
   store: IEventStore;
-  /** Directory with `*.dot` workflow sources listed by `GET /workflows`. */
+  /** Directory with `*.dot` workflow sources listed by `GET /workflows`.
+   * Defaults to `<cwd>/.swarm/workflows`. */
   workflowsDir?: string;
-  /** Project root. Defaults to `process.cwd()`. */
+  /** Project root. Defaults to `process.cwd()`. Used as the base for
+   * `workflowsDir` when none is provided. */
   cwd?: string;
   /** Optional port overrides. Any omitted port falls back to defaults. */
   ports?: ServerPorts;
@@ -56,7 +58,7 @@ export interface ServerOptions {
 
 function buildApiApp(opts: ServerOptions): Hono {
   const ports = opts.ports ?? {};
-  const workflowsDir = opts.workflowsDir ?? "workflows";
+  const workflowsDir = opts.workflowsDir ?? resolve(opts.cwd ?? process.cwd(), ".swarm/workflows");
   const workflowReader: WorkflowReader = ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
 
   const api = new Hono();

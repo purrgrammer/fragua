@@ -46,7 +46,9 @@ export function Workflows(): JSX.Element {
           title="No workflows configured"
           description={
             <span>
-              Add a <code className="font-mono">.dot</code> file under <code className="font-mono">workflows/</code>.
+              Add a <code className="font-mono">.dot</code> file under{" "}
+              <code className="font-mono">.swarm/workflows/</code>, or run <code className="font-mono">swarm init</code>{" "}
+              if this project hasn't been initialized.
             </span>
           }
         />
