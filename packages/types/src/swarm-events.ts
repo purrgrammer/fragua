@@ -74,6 +74,18 @@ export type FactEvent =
       type: "fact.run_started";
       payload: { workflowSha: string; schemaVersion: number; startNode: string };
     }
+  | {
+      type: "fact.dispatch_started";
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Why this dispatch is starting. "fresh" = first dispatch of the
+         * run; the others = resuming from the named prior state. Lets
+         * analytics distinguish "ran straight through" from "had to be
+         * woken up after X". */
+        resumeOf: "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "quarantined";
+      };
+    }
   | { type: "fact.node_started"; payload: { nodeId: string; iteration: number } }
   | {
       type: "fact.node_completed";
@@ -275,6 +287,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Run lifecycle (intent that creates the run + every fact that flips status)
   "intent.run_enqueued",
   "fact.run_started",
+  "fact.dispatch_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
   "fact.run_paused_provider_error",

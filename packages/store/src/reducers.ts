@@ -13,6 +13,7 @@ export function emptyMetrics(): RunMetrics {
     loopCounts: {},
     models: {},
     nodeCosts: {},
+    activeMs: 0,
   };
 }
 
@@ -41,6 +42,13 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.status = "running";
       next.currentNode = fact.payload.startNode;
       next.nodeStartedAt = now;
+      // The first dispatch fires implicitly with run_started — no
+      // separate fact.dispatch_started precedes it.
+      next.dispatchStartedAt = now;
+      return next;
+    }
+    case "fact.dispatch_started": {
+      next.dispatchStartedAt = now;
       return next;
     }
     case "fact.node_started": {
@@ -50,6 +58,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_completed": {
+      closeDispatchInterval(next, now);
       const p = fact.payload;
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
@@ -80,6 +89,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_aborted": {
+      closeDispatchInterval(next, now);
       const p = fact.payload;
       next.metrics.billedTokens += p.partialTokens;
       next.metrics.totalCostUsd += p.partialCostUsd;
@@ -97,11 +107,13 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_paused_hitl": {
+      closeDispatchInterval(next, now);
       next.status = "paused_hitl";
       next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_paused_provider_error": {
+      closeDispatchInterval(next, now);
       next.status = "paused_provider_error";
       next.nodeStartedAt = null;
       return next;
@@ -111,33 +123,47 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Go back to queued so the executor's claim loop picks the run up
       // and re-dispatches the same node — paused_provider_error preserves
       // the same iteration since the prior LLM call never produced output.
+      // dispatchStartedAt is already null (cleared by the prior pause); the
+      // next fact.dispatch_started will set it fresh.
       next.status = "queued";
       next.nodeStartedAt = null;
       next.readyAt = now;
       return next;
     }
     case "fact.run_completed": {
+      closeDispatchInterval(next, now);
       next.status = "completed";
       next.currentNode = fact.payload.finalNode;
       next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_halted": {
+      closeDispatchInterval(next, now);
       next.status = "halted";
       next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_cancelled": {
+      closeDispatchInterval(next, now);
       next.status = "cancelled";
       next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_quarantined": {
+      closeDispatchInterval(next, now);
       next.status = "quarantined";
       next.nodeStartedAt = null;
       return next;
     }
     case "fact.run_requeued_after_crash": {
+      // Don't add `now - dispatchStartedAt` to activeMs: `now` is sweep
+      // time, not crash time, so it would include the dead-daemon
+      // window. We don't know when the daemon actually died (the lock
+      // heartbeat is a 30s-coarse upper bound, and not threaded through
+      // here), so the conservative call is to drop the pre-crash active
+      // span entirely. Result: activeMs slightly undercounts on crash;
+      // pause windows remain accurate.
+      next.dispatchStartedAt = null;
       next.status = "queued";
       next.currentNode = null;
       next.nodeStartedAt = null;
@@ -163,13 +189,19 @@ export function foldFacts(initial: RunState, facts: FactEvent[], now: number): R
   return state;
 }
 
+function closeDispatchInterval(next: RunState, now: number): void {
+  if (next.dispatchStartedAt != null) {
+    next.metrics.activeMs += now - next.dispatchStartedAt;
+    next.dispatchStartedAt = null;
+  }
+}
+
 function cloneMetrics(m: RunMetrics): RunMetrics {
   const models: Record<string, { tokens: number; costUsd: number }> = {};
   for (const [k, v] of Object.entries(m.models)) {
     models[k] = { tokens: v.tokens, costUsd: v.costUsd };
   }
   const nodeCosts: Record<string, { tokens: number; costUsd: number }> = {};
-  // Existing rows pre-dating the field have nodeCosts undefined; treat as {}.
   for (const [k, v] of Object.entries(m.nodeCosts ?? {})) {
     nodeCosts[k] = { tokens: v.tokens, costUsd: v.costUsd };
   }
@@ -185,5 +217,6 @@ function cloneMetrics(m: RunMetrics): RunMetrics {
     loopCounts: { ...m.loopCounts },
     models,
     nodeCosts,
+    activeMs: m.activeMs ?? 0,
   };
 }

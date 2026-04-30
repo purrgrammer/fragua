@@ -92,6 +92,11 @@ export interface RunMetrics {
    * fence against. `costUsd` is billed (provider invoice). Empty on runs
    * that predate the field — reducers accept missing maps defensively. */
   nodeCosts: Record<string, { tokens: number; costUsd: number }>;
+  /** Accumulated active dispatch time in milliseconds. Excludes time
+   * spent paused (HITL / provider error / quarantined) or while the
+   * daemon was dead. Compute pause time from
+   * `terminal_ts - run_started_ts - activeMs`. */
+  activeMs: number;
 }
 
 export interface RunState {
@@ -109,6 +114,10 @@ export interface RunState {
   enqueuedAt: number;
   readyAt: number;
   nodeStartedAt: number | null;
+  /** Wall-clock when the current dispatch began. Set by
+   * `fact.dispatch_started`, cleared by every terminal/pause fact (which
+   * accumulates `metrics.activeMs` first). */
+  dispatchStartedAt: number | null;
   updatedAt: number;
   /** Auto-generated run title (short prose, ≤80 chars by convention).
    * Populated by the daemon's auto-titler after `fact.run_started` via

@@ -74,6 +74,7 @@ interface RunStateRow {
   enqueued_at: number;
   ready_at: number;
   node_started_at: number | null;
+  dispatch_started_at: number | null;
   updated_at: number;
   title: string | null;
 }
@@ -286,8 +287,8 @@ export class SqliteStore implements IEventStore {
           `INSERT INTO run_state (
              run_id, version, status, current_node, workflow_sha, schema_version,
              routing, metrics, next_seq, last_applied_seq, priority,
-             enqueued_at, ready_at, node_started_at, updated_at
-           ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, ?)`,
+             enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at
+           ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?)`,
         )
         .run(
           params.runId,
@@ -899,8 +900,8 @@ export class SqliteStore implements IEventStore {
         .query<RunStateRow, [string]>(
           `SELECT run_id, version, status, current_node, workflow_sha,
                   schema_version, routing, metrics, next_seq, last_applied_seq,
-                  priority, enqueued_at, ready_at, node_started_at, updated_at,
-                  title
+                  priority, enqueued_at, ready_at, node_started_at,
+                  dispatch_started_at, updated_at, title
              FROM run_state
             WHERE run_id = ?`,
         )
@@ -921,8 +922,8 @@ export class SqliteStore implements IEventStore {
       totalCacheWriteTokens: parsedMetrics.totalCacheWriteTokens ?? 0,
       loopCounts: parsedMetrics.loopCounts ?? {},
       models: parsedMetrics.models ?? {},
-      // Pre-budget rows have no per-node accumulation; treat as empty.
       nodeCosts: parsedMetrics.nodeCosts ?? {},
+      activeMs: parsedMetrics.activeMs ?? 0,
     };
     const routing = JSON.parse(row.routing) as Record<string, unknown>;
     return {
@@ -940,6 +941,7 @@ export class SqliteStore implements IEventStore {
       enqueuedAt: row.enqueued_at,
       readyAt: row.ready_at,
       nodeStartedAt: row.node_started_at,
+      dispatchStartedAt: row.dispatch_started_at,
       updatedAt: row.updated_at,
       title: row.title,
     };
@@ -981,16 +983,17 @@ export class SqliteStore implements IEventStore {
     this.db
       .query(
         `UPDATE run_state SET
-           version          = ?,
-           status           = ?,
-           current_node     = ?,
-           routing          = ?,
-           metrics          = ?,
-           last_applied_seq = ?,
-           priority         = ?,
-           ready_at         = ?,
-           node_started_at  = ?,
-           updated_at       = ?
+           version             = ?,
+           status              = ?,
+           current_node        = ?,
+           routing             = ?,
+           metrics             = ?,
+           last_applied_seq    = ?,
+           priority            = ?,
+           ready_at            = ?,
+           node_started_at     = ?,
+           dispatch_started_at = ?,
+           updated_at          = ?
          WHERE run_id = ?`,
       )
       .run(
@@ -1003,6 +1006,7 @@ export class SqliteStore implements IEventStore {
         state.priority,
         state.readyAt,
         state.nodeStartedAt,
+        state.dispatchStartedAt,
         state.updatedAt,
         state.runId,
       );

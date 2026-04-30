@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   enqueued_at INTEGER NOT NULL,
   ready_at INTEGER NOT NULL,
   node_started_at INTEGER,
+  dispatch_started_at INTEGER,
   updated_at INTEGER NOT NULL,
   title TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
