@@ -87,7 +87,14 @@ describe("wakePending — cancel on non-dispatching runs", () => {
       [
         {
           type: "fact.side_effect_intent",
-          payload: { nodeId: "start", iteration: 0, toolName: "charge", argsHash: "h", attempt: 1, idempotencyKey: "ik-q1" },
+          payload: {
+            nodeId: "start",
+            iteration: 0,
+            toolName: "charge",
+            argsHash: "h",
+            attempt: 1,
+            idempotencyKey: "ik-q1",
+          },
         },
       ],
       s.version,
