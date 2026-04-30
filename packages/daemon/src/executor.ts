@@ -929,7 +929,10 @@ type ResumeOf = "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "q
  * Bounded lookback — 20 events is plenty when the trigger fact is the
  * most recent one. We can't gate on status alone because claimNextRun
  * flips queued → running before this point. */
-function deriveResumeOf(store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> }, runId: string): ResumeOf {
+function deriveResumeOf(
+  store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> },
+  runId: string,
+): ResumeOf {
   const recent = store.getEvents(runId, { limit: 20 });
   for (let i = recent.length - 1; i >= 0; i--) {
     const e = recent[i];

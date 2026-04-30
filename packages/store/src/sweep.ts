@@ -147,7 +147,11 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
       // drop it (heartbeat unavailable or stale).
       const lastAlive = opts?.priorHeartbeatAt;
       let activeMsDelta = 0;
-      if (typeof lastAlive === "number" && current.dispatch_started_at != null && lastAlive > current.dispatch_started_at) {
+      if (
+        typeof lastAlive === "number" &&
+        current.dispatch_started_at != null &&
+        lastAlive > current.dispatch_started_at
+      ) {
         activeMsDelta = lastAlive - current.dispatch_started_at;
       }
       db.query(

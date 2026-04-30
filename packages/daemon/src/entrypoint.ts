@@ -131,9 +131,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
     let stoppedDetail: string | undefined;
     try {
       const sweepStart = Date.now();
-      const sweepResult = opts.store.startupSweep(
-        priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined,
-      );
+      const sweepResult = opts.store.startupSweep(priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined);
       opts.store.appendDaemonEvent({
         type: "daemon.sweep_completed",
         payload: {
