@@ -397,7 +397,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             payload: {
               nodeId: currentNode,
               iteration: nodeRetryCount(state.routing),
-              resumeOf: deriveResumeOf(opts.store, runId, state.status),
+              resumeOf: deriveResumeOf(opts.store, runId),
             },
           },
         ]);
@@ -912,15 +912,15 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
 type ResumeOf = "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
- * resumeOf field. Status === "running" → in-run transition (fresh).
- * Status === "queued" with currentNode set → wakePending just fired
- * fact.run_resumed, so look back for its fromStatus. (Crash recovery
- * routes through needsStart/run_started instead because
- * fact.run_requeued_after_crash clears currentNode, so it can't reach
- * here.) Bounded lookback — 20 events is plenty when the trigger fact
- * is the most recent one. */
-function deriveResumeOf(store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> }, runId: string, status: string): ResumeOf {
-  if (status === "running") return "fresh";
+ * resumeOf field. Walks recent facts looking for the one that flipped
+ * the run back to a dispatchable state:
+ *   fact.run_resumed{fromStatus} → forward fromStatus
+ *   fact.run_requeued_after_crash → "crash"
+ *   any other fact (run_started, dispatch_started, node_*) → "fresh"
+ * Bounded lookback — 20 events is plenty when the trigger fact is the
+ * most recent one. We can't gate on status alone because claimNextRun
+ * flips queued → running before this point. */
+function deriveResumeOf(store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> }, runId: string): ResumeOf {
   const recent = store.getEvents(runId, { limit: 20 });
   for (let i = recent.length - 1; i >= 0; i--) {
     const e = recent[i];
