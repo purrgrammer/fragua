@@ -9,13 +9,15 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { bridgeAgentEvent } from "../src/event-bridge.ts";
 
 // Build a message_update wrapper around an inner stream event. The
-// inner event needs a `partial: AssistantMessage` to satisfy the
-// type — the bridge ignores it for these cases, so a stub is fine.
+// outer envelope and the embedded `partial: AssistantMessage` are
+// required by the type but unused by the bridge for these cases —
+// stubs through `unknown` keep the test focused on the bridge logic.
 function streamEvent(inner: { type: string; contentIndex: number }): AgentEvent {
   return {
     type: "message_update",
+    message: {} as never,
     assistantMessageEvent: { ...inner, partial: {} as never } as never,
-  } as AgentEvent;
+  } as unknown as AgentEvent;
 }
 
 describe("event-bridge — *_end content-block markers", () => {
@@ -37,8 +39,9 @@ describe("event-bridge — *_end content-block markers", () => {
   test("text_delta still bridges (regression check on the delta path)", () => {
     const out = bridgeAgentEvent({
       type: "message_update",
+      message: {} as never,
       assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi", partial: {} as never } as never,
-    } as AgentEvent);
+    } as unknown as AgentEvent);
     expect(out).toEqual({ type: "llm.text_delta", data: { delta: "hi", content_index: 0 } });
   });
 });

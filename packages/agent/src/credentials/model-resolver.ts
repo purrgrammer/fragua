@@ -48,7 +48,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   xai: "grok-4-fast-non-reasoning",
   groq: "openai/gpt-oss-120b",
   cerebras: "zai-glm-4.7",
-  zai: "glm-5",
+  zai: "glm-5.1",
   mistral: "devstral-medium-latest",
   minimax: "MiniMax-M2.7",
   "minimax-cn": "MiniMax-M2.7",
@@ -56,6 +56,9 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   opencode: "claude-opus-4-6",
   "opencode-go": "kimi-k2.5",
   "kimi-coding": "kimi-for-coding",
+  deepseek: "deepseek-v4-pro",
+  fireworks: "accounts/fireworks/models/deepseek-v4-pro",
+  "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.5",
 };
 
 /** Find a model by bare id across every provider in the registry.
