@@ -7,20 +7,7 @@
 // update_docs → commit → merge. `thread_id="dev"` shares context between
 // implement, fix, and verify so downstream turns remember edits; every other
 // stage runs on a fresh thread and reads state via git. AGENTS.md is
-// auto-prepended to every codergen system prompt by the agent backend —
-// no per-node `context_files` needed.
-//
-// Hardening notes (2026-04-21):
-//   - plan enforces a scope guard — no cross-package / shared-contract creep
-//   - plan's test list must be concrete (test ids + assertions, not prose)
-//   - implement self-verifies that every planned test file+assertion exists
-//     before emitting DONE, so missing-tests REJECTs are the reviewer's
-//     last line of defence rather than its first
-//   - review distinguishes REJECT_FIXABLE (narrow, mechanical) from REJECT
-//     (architecture/scope) so a `fix` node can salvage the former without
-//     re-running plan+implement
-//   - the fix node is scoped to applying the review's numbered fix list;
-//     anything bigger aborts
+// auto-prepended to every codergen system prompt by the agent backend.
 
 digraph build_feature {
   graph [
@@ -31,25 +18,25 @@ digraph build_feature {
   start [shape=Mdiamond]
 
   plan [
-    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT conditions — emit the marker and stop:\n  - empty, names nothing specific, or the target is blocked → `<abort>missing or blocked target: <reason></abort>`\n  - SCOPE GUARD: the plan would touch >3 packages OR modify shared contracts (HandlerContext, BuildContextOpts, executor internals, core engine reducers, store schema, event envelope) → `<abort>scope too large: <what contracts/packages></abort>`. If the user wants such a change they'll say so explicitly (e.g. in a tasks/ spec); otherwise propose a narrower cut in the abort reason.\n  - SCOPE GUARD: estimated implementation >500 lines of non-test code → `<abort>too large, split: <suggested split></abort>`\n\nIf $ARGUMENTS references `tasks/<phase>/NN-*.md`, its Scope section is authoritative and overrides the scope guards above.\n\nYou have read-only tools. Read docs/SPEC.md, docs/PLAN.md, any file named in $ARGUMENTS, and (if relevant) a skill's SKILL.md.\n\nProduce a numbered plan:\n  1. Files to create/modify (full paths — not directories).\n  2. Tests to add. Each test item MUST specify: (a) full test file path, (b) the exact `describe`/`test` block name, (c) what the test asserts (one concrete sentence per test, not `covers X`). Vague test items are a review trigger — make them concrete here.\n  3. Public exports to add/change (symbol name + package).\n  4. Implementation notes per file — specific enough that a cheaper model can execute without further discovery. Cite existing symbols + line numbers.\n  5. Conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd with `<promise>PLAN_READY</promise>`."
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT conditions:\n  - empty, names nothing specific, or blocked → `<abort>missing or blocked target: <reason></abort>`\n  - touches >3 packages OR shared contracts (HandlerContext, BuildContextOpts, executor internals, core engine reducers, store schema, event envelope) → `<abort>scope too large: <what></abort>`\n  - estimated >500 lines of non-test code → `<abort>too large, split: <suggested split></abort>`\n\nProduce a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add. Each: (a) full path, (b) exact `describe`/`test` name, (c) one concrete assertion sentence.\n  3. Public exports to add/change (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers.\n  5. Conventions to flag (pure core, spec-first, no silent deps, etc.).\n\nEnd with `<promise>PLAN_READY</promise>`."
     allowed_tools = "read"
   ]
 
   implement [
-    prompt = "Implement $plan.output. Stay inside the package(s) the plan names. Do NOT modify docs/SPEC.md, docs/PLAN.md, or AGENTS.md unless the plan says so.\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` on every modified package; fix errors. Cap typecheck-fix cycles at 5 per package — if still red, emit `<abort>typecheck blocked: <top error></abort>`.\n\nSELF-VERIFY BEFORE EMITTING: for EACH test item in $plan.output (section 2), confirm the test exists. Use `grep -nH \"<describe-or-test-name>\" <test-file>` for each item. If any planned test is missing OR asserts less than the plan promised:\n  (a) add it NOW,\n  (b) re-run `bun run --filter='@swarm/<pkg>' typecheck` on the test's package,\n  (c) re-verify with grep.\nDo not rely on the review node to catch missing tests — that wastes a plan+implement round.\n\nSummarise: files touched, public surface, each planned test name (one per line, proving they exist), any skipped plan items + why."
+    prompt = "Implement $plan.output. Stay inside the package(s) the plan names. Do NOT modify docs/SPEC.md or AGENTS.md unless the plan says so.\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` on every modified package; fix errors. Cap typecheck-fix cycles at 5 per package — if still red, emit `<abort>typecheck blocked: <top error></abort>`.\n\nBefore finishing: for each test item in $plan.output section 2, grep the test file for the `describe`/`test` name. If missing or weaker than promised, add it, re-run typecheck on its package, re-verify.\n\nSummarise: files touched, public surface, each planned test name (one per line), any skipped items + why."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
   ]
 
   review [
-    prompt = "Fresh thread. Judge the diff, not the process. Inputs: $plan.output, $implement.output, and `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every test item in $plan.output (section 2) is realised: the file exists, the `describe`/`test` name matches, the assertions match the plan's promise.\n  (c) Obvious bugs, type errors the compiler missed, security issues.\n  (d) Scope creep — edits outside the plan's named files OR touching shared contracts the plan didn't list.\n\nReply EXACTLY one of:\n  `APPROVE: <one line>`\n  `<abort>REJECT_FIXABLE: <one line>. fixes: <numbered list, 1-3 mechanical items — missing test, forgotten import, narrow type, typo></abort>`\n  `<abort>REJECT: <one line — architecture, scope creep, contract violation, or anything requiring re-plan></abort>`\n\nUse REJECT_FIXABLE only when every fix is: narrow in blast radius, obvious in mechanism, and implementable without consulting the plan further. Otherwise REJECT.\n\nDon't hedge. If unsure, REJECT with a concrete concern. Read-only tools."
+    prompt = "Judge the diff, not the process. Inputs: $plan.output, $implement.output, `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every plan §2 test is realised: file exists, name matches, assertions match.\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files outside the plan OR shared contracts not listed.\n\nReply EXACTLY one of:\n  `APPROVE: <one line>`\n  `<abort>REJECT_FIXABLE: <one line>. fixes: <numbered list, 1-3 mechanical items></abort>`\n  `<abort>REJECT: <one line — architecture, scope creep, contract violation></abort>`\n\nREJECT_FIXABLE only when every fix is narrow, mechanical, and needs no re-plan. Otherwise REJECT. If unsure, REJECT."
     allowed_tools = "read, bash"
     model = "claude-sonnet-4.6"
   ]
 
   fix [
-    prompt = "$review.output REJECTed with a numbered fix list. Apply the fixes verbatim — don't add new behaviour, don't re-architect, don't touch files the review didn't point at.\n\nABORT conditions:\n  - review marker says `REJECT:` (not `REJECT_FIXABLE:`) → `<abort>not fixable: review demanded structural changes</abort>`\n  - a fix requires touching files outside $plan.output's file list → `<abort>fix outside plan scope: <file></abort>`\n  - more than 5 edits needed to apply the numbered list → `<abort>fix list too broad, needs re-plan</abort>`\n\nOtherwise, for each numbered fix:\n  1. Apply the edit.\n  2. `bun run --filter='@swarm/<pkg>' typecheck` on the touched package.\n  3. If the fix added a test, run just that test file (`bun test <file>`); it must pass before moving on.\n\nEmit `FIXED: <n> items applied, typecheck clean` on success."
+    prompt = "$review.output rejected with a numbered fix list. Apply the fixes verbatim — no new behaviour, no re-architecture, no edits outside files the review names.\n\nABORT:\n  - marker is `REJECT:` (not `REJECT_FIXABLE:`) → `<abort>not fixable: structural change required</abort>`\n  - fix needs files outside $plan.output's file list → `<abort>fix outside plan scope: <file></abort>`\n  - >5 edits needed → `<abort>fix list too broad, needs re-plan</abort>`\n\nFor each numbered fix: apply, typecheck the touched package, run the test file if one was added.\n\nEmit `FIXED: <n> items applied, typecheck clean`."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
@@ -57,7 +44,7 @@ digraph build_feature {
   ]
 
   verify [
-    prompt = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds. If still red after 5, emit `<abort>CI unstable: <last failure signature></abort>`. Do NOT disable tests or relax assertions to go green. Emit `CI_GREEN` when all pass."
+    prompt = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds — then `<abort>CI unstable: <last failure signature></abort>`. Don't disable tests or relax assertions. Emit `CI_GREEN` on a clean run."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
@@ -66,13 +53,13 @@ digraph build_feature {
   ]
 
   update_docs [
-    prompt = "Fresh thread — read state via git. `git diff --stat HEAD`. If empty, emit `DOCS_READY: no changes`. If only internal source/tests changed (nothing a docs reader would notice), emit `DOCS_READY: no changes`. Only user-visible shifts (public APIs, CLI flags, workflow contracts, repo layout, stack) warrant updates. Edit docs/SPEC.md / docs/PLAN.md / AGENTS.md as needed — minimal, on-topic, nothing outside those files. Emit `DOCS_READY: updated <files>` or `DOCS_READY: no changes`."
+    prompt = "`git diff --stat HEAD`. If empty or only internal source/tests changed, emit `DOCS_READY: no changes`. Only user-visible shifts (public APIs, CLI flags, workflow contracts, repo layout, stack) warrant updates. Edit docs/SPEC.md / docs/ARCHITECTURE.md / AGENTS.md as needed — minimal, on-topic, nothing outside those files. Emit `DOCS_READY: updated <files>` or `DOCS_READY: no changes`."
     allowed_tools = "read, write, edit, bash"
     model = "claude-sonnet-4.6"
   ]
 
   commit [
-    prompt = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: pick `[P<n>]` phase tag from docs/PLAN.md (prefer current in-progress phase on doubt), `git add` explicit paths, commit with a HEREDOC message (imperative subject ≤72 chars; body stands alone as run summary). No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Keep iterating until it lands. Emit `COMMITTED: <short sha>`. Don't push."
+    prompt = "Commit per AGENTS.md §Commit conventions. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: `git add` explicit paths, commit with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone as a run summary. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
     model = "claude-sonnet-4.6"
   ]

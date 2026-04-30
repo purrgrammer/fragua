@@ -16,7 +16,7 @@ digraph hitl_approval {
   start [shape=Mdiamond]
 
   draft [
-    prompt = "Draft the artifact: $ARGUMENTS. If context.human.gate.note is set, the reviewer asked: \"$context.human.gate.note\" — address it. Under 200 words. End with `<promise>DRAFT_READY</promise>`."
+    prompt = "Draft the artifact: $ARGUMENTS. If the reviewer left a note, address it: \"${context.human.gate.note}\". Under 200 words. End with `<promise>DRAFT_READY</promise>`."
     allowed_tools = "read, write, edit, bash"
   ]
 

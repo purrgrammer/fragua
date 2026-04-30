@@ -5,10 +5,6 @@
 //
 //   bun run swarm run quick-change \
 //     --input="rename foo() to bar() in packages/core"
-//
-// Hardening notes (2026-04-21):
-//   - implement must ABORT on ambiguous input rather than silently guess
-//   - verify caps its own retry count so a stuck CI doesn't spin forever
 
 digraph quick_change {
   graph [
@@ -19,7 +15,7 @@ digraph quick_change {
   start [shape=Mdiamond]
 
   implement [
-    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT conditions — emit the marker and stop:\n  - empty or ill-specified → `<abort>missing or blocked target</abort>`\n  - ambiguous (multiple reasonable interpretations) → `<abort>ambiguous: <specific question the user must answer></abort>`\n  - needs exploration, a plan, multi-package refactor, or shared-contract changes (HandlerContext, BuildContextOpts, executor internals, core engine reducers) → `<abort>task too large for quick-change: use build-feature</abort>`\n  - forbidden files are docs/SPEC.md, docs/PLAN.md, AGENTS.md — emit abort if the task requires touching them\n\nOTHERWISE implement the change. Rules:\n  - Stay in the package(s) named by the task. Don't drift.\n  - After edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. If typecheck still fails after 3 iterations, emit `<abort>typecheck blocked: <top error></abort>`.\n  - Don't add tests unless the task explicitly asks (quick-change is for changes small enough that verify catches regressions).\n\nEmit `IMPLEMENTED: <one-line summary of files touched>` on success."
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nABORT:\n  - empty or ill-specified → `<abort>missing or blocked target</abort>`\n  - ambiguous → `<abort>ambiguous: <specific question></abort>`\n  - needs exploration, a plan, multi-package refactor, or shared-contract changes (HandlerContext, BuildContextOpts, executor internals, core engine reducers) → `<abort>task too large for quick-change: use build-feature</abort>`\n  - touches docs/SPEC.md or AGENTS.md → `<abort>quick-change cannot touch docs/SPEC.md or AGENTS.md</abort>`\n\nImplement the change. Stay in the named package(s). After edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. Cap typecheck-fix at 3 iterations — then `<abort>typecheck blocked: <top error></abort>`. Don't add tests unless the task asks.\n\nEmit `IMPLEMENTED: <files touched>`."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
@@ -27,7 +23,7 @@ digraph quick_change {
   ]
 
   verify [
-    prompt = "Run `bun run ci`. If it fails, FIX the regression and re-run. Cap: 3 fix iterations. If CI is still red after 3 rounds, emit `<abort>CI unstable: <last failure signature></abort>` — don't keep burning budget.\n\nDo NOT disable tests, skip test files, or relax assertions to go green. That's what the failure signature is for. If a test is genuinely broken (pre-existing, unrelated to $implement.output), say so in the abort reason rather than silently skipping it.\n\nEmit `CI_GREEN` on a clean run."
+    prompt = "Run `bun run ci`. Fix failures, iterate. Cap: 3 fix rounds — then `<abort>CI unstable: <last failure signature></abort>`. Don't disable tests or relax assertions; if a failure is pre-existing and unrelated, say so in the abort reason. Emit `CI_GREEN` on a clean run."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
     model = "claude-sonnet-4.6"
@@ -37,7 +33,7 @@ digraph quick_change {
   ]
 
   commit [
-    prompt = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: pick `[P<n>]` phase tag from docs/PLAN.md (prefer in-progress phase on doubt), `git add` explicit paths, commit with a HEREDOC message (imperative subject ≤72 chars; body explains why). No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
+    prompt = "Commit per AGENTS.md §Commit conventions. If `git status --short` is empty, emit `COMMITTED: no changes`. Otherwise: `git add` explicit paths, commit with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that explains why. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
     model = "claude-sonnet-4.6"
   ]
