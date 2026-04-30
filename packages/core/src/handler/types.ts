@@ -7,6 +7,7 @@
 
 import type { ArtifactRef, ArtifactScope, Message } from "@swarm/store";
 import type { AgentMessage, Message as PiMessage } from "@swarm/types";
+import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
@@ -147,6 +148,16 @@ export interface HandlerContext {
    * substitution context, not from this map.
    */
   readonly args: Readonly<Record<string, string>>;
+  /**
+   * Captured outputs of prior nodes in this run, keyed by `nodeId`. The
+   * executor folds the run's `fact.node_completed` events with `outputRef`
+   * set into this map before each dispatch, dereferencing the artifact text
+   * once. Handlers pass it through to `substitute()` so prompt tokens like
+   * `$plan.output` resolve to the captured assistant text. When a node has
+   * been re-entered via a backward edge, the most recent iteration's
+   * output wins.
+   */
+  readonly nodeOutputs: ReadonlyMap<string, NodeOutput>;
   /**
    * Emit an observability event (agent.*, llm.*, tool.*, cost.recorded,
    * summary.*). The executor persists these to the store under their

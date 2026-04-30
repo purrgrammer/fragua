@@ -300,6 +300,43 @@ export function selectEvents(db: Database, runId: string, opts: { sinceSeq: numb
   return db.query<EventRow, [string, number, number]>(SELECT_EVENTS_SQL).all(runId, opts.sinceSeq, limit);
 }
 
+/** One captured node output ref (latest iteration per node, success or fail —
+ * the executor's fold prefers the most recent entry). Joined against
+ * artifacts at the store layer so the executor never reaches for raw blobs.
+ *
+ * Rationale for filtering at the SQL layer: `fact.node_completed` is a
+ * small fraction of the events table on a real run (the bulk is
+ * `llm.text_delta`), and we re-fold this on every dispatch. A static-SQL
+ * filter on `type = 'fact.node_completed'` keeps the read O(completed
+ * nodes) instead of O(total events). */
+export interface NodeOutputRefRow {
+  nodeId: string;
+  iteration: number;
+  outcomeStatus: string | null;
+  outputRefKey: string;
+  seq: number;
+}
+
+const SELECT_NODE_OUTPUT_REFS_SQL = `
+  SELECT
+    json_extract(payload, '$.nodeId')        AS nodeId,
+    CAST(COALESCE(json_extract(payload, '$.iteration'), 0) AS INTEGER) AS iteration,
+    json_extract(payload, '$.outcomeStatus') AS outcomeStatus,
+    json_extract(payload, '$.outputRef')     AS outputRefKey,
+    seq                                      AS seq
+  FROM events
+  WHERE run_id = ?1
+    AND type = 'fact.node_completed'
+    AND json_extract(payload, '$.outputRef') IS NOT NULL
+  ORDER BY seq ASC
+`;
+
+/** All node output refs for a run, ordered oldest-first. Caller is
+ * responsible for keeping latest-per-node and dereferencing artifacts. */
+export function selectNodeOutputRefs(db: Database, runId: string): NodeOutputRefRow[] {
+  return db.query<NodeOutputRefRow, [string]>(SELECT_NODE_OUTPUT_REFS_SQL).all(runId);
+}
+
 // `type IN (SELECT value FROM json_each(?))` lets a single bound
 // parameter carry an arbitrary-sized kind list — keeps the SQL static
 // (no dynamic placeholder building) and the parameter list fixed-arity.

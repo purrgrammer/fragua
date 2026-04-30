@@ -15,6 +15,7 @@ import {
   selectGlobalEventsLatest,
   selectMessages,
   selectMessagesNarrow,
+  selectNodeOutputRefs,
   selectProjectById,
   selectProjects,
   UPSERT_PROJECT_SQL,
@@ -727,6 +728,44 @@ export class SqliteStore implements IEventStore {
       sizeBytes: row.size_bytes,
       mime: row.mime,
     };
+  }
+
+  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }> {
+    const refs = selectNodeOutputRefs(this.db, runId);
+    const out = new Map<string, { output: string; success: boolean; timestamp: number }>();
+    const decoder = new TextDecoder();
+    // Refs come back ordered by seq ASC, so a later iteration of the same
+    // node naturally overwrites the earlier one. The artifact key on the
+    // event is the canonical "<nodeId>:<key>" string the daemon writes;
+    // the artifact itself was put under the node's own scope, so we
+    // recover (nodeId, iteration, key) from the payload directly.
+    for (const ref of refs) {
+      // outputRefKey shape: "<refNodeId>:<key>"; the refNodeId may differ
+      // from the node that emitted the fact when handlers eventually
+      // surface child-node refs (e.g. parallel branches). Until that
+      // lands, both strings agree.
+      const colon = ref.outputRefKey.indexOf(":");
+      if (colon < 0) continue;
+      const refNodeId = ref.outputRefKey.slice(0, colon);
+      const key = ref.outputRefKey.slice(colon + 1);
+      let bytes: Uint8Array;
+      try {
+        bytes = this.getArtifact({ runId, nodeId: refNodeId, iteration: ref.iteration, key });
+      } catch {
+        // Artifact missing on disk (orphan after an out-of-band gc-blobs
+        // run, say). Skip rather than throw — the substituted prompt
+        // will treat the value as empty, same as a node that never
+        // produced output.
+        continue;
+      }
+      const text = decoder.decode(bytes);
+      out.set(ref.nodeId, {
+        output: text,
+        success: ref.outcomeStatus !== "fail",
+        timestamp: ref.seq,
+      });
+    }
+    return out;
   }
 
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null {

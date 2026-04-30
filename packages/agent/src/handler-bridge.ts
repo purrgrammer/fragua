@@ -71,7 +71,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // before the prompt hits the LLM. Without this the agent sees the
     // literal placeholder and every workflow with an abort-on-empty
     // guard halts on its first node.
-    const prompt = substitute(rawPrompt, { args: ctx.args, context });
+    const prompt = substitute(rawPrompt, { args: ctx.args, context, nodeOutputs: ctx.nodeOutputs });
 
     let tokens = 0;
     let costUsd = 0;
@@ -82,6 +82,13 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
     let modelName: string | undefined;
+    // Track the most recent assistant message's text. The "node output"
+    // (referenceable downstream as `$<nodeId>.output`) is the full final
+    // assistant turn. We set it on every assistant persistMessage call so a
+    // tool-using turn followed by a final summary turn ends up keeping the
+    // summary — last-writer-wins matches the user-visible "agent's final
+    // answer" semantics.
+    let finalAssistantText = "";
 
     const emit = async (type: EventType, data: Record<string, unknown>) => {
       // Persist every agent/llm/tool/cost/summary event to the store so the
@@ -125,6 +132,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
       ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
       persistMessage: (message) => {
+        if (message.role === "assistant") {
+          const text = extractAssistantText(message);
+          if (text.length > 0) finalAssistantText = text;
+        }
         try {
           ctx.messages.append(message);
           return;
@@ -201,6 +212,24 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // stays as a legacy-compat fallback for auto-dispatcher code paths that
     // pre-compute a single outgoing edge (noop transition nodes).
     const explicitNext = outcome.next_node_override ?? opts.nextNode;
+
+    // Persist the final assistant text as an artifact and surface its ref on
+    // the terminal fact. Downstream nodes that reference `$<thisNode>.output`
+    // resolve through the executor's nodeOutputs fold, which dereferences
+    // this artifact. Skipped when the run produced no assistant text (rare
+    // edge: handler aborted before the first assistant turn streamed).
+    let outputRef: import("@swarm/store").ArtifactRef | undefined;
+    if (finalAssistantText.length > 0) {
+      try {
+        outputRef = ctx.artifacts.put("output", finalAssistantText, "text/plain", { replace: true });
+      } catch {
+        // Capture is best-effort; an artifact write failure must not break
+        // the run, but downstream `$<nodeId>.output` references will resolve
+        // to "" until the next successful entry of the same node.
+        outputRef = undefined;
+      }
+    }
+
     const result: HandlerResult = {
       kind: "transition",
       outcomeStatus: outcome.status,
@@ -217,6 +246,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       cacheWriteTokens,
       ...(Object.keys(routingDelta).length > 0 ? { routingDelta } : {}),
       ...(modelName !== undefined ? { modelName } : {}),
+      ...(outputRef !== undefined ? { outputRef } : {}),
     };
     return result;
   };
@@ -253,6 +283,20 @@ function numAt(data: Record<string, unknown>, key: string): number {
 function strAt(data: Record<string, unknown>, key: string): string | undefined {
   const v = data[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Concatenate every TextContent block on an assistant message. Mirrors
+ * `fullAssistantText` in backend.ts but operates on the persisted
+ * `AgentMessage` shape, so it picks up the same final reply the abort/
+ * promise marker scanner sees. ToolCall + Thinking blocks are excluded
+ * — they are not the agent's "answer" the next node references. */
+function extractAssistantText(message: AgentMessage): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+  const parts = message.content as ReadonlyArray<{ type: string; text?: unknown }>;
+  return parts
+    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text as string)
+    .join("\n");
 }
 
 /** Hydrate the pi-agent-core `AgentMessage[]` history for a

@@ -1,5 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BlobFS } from "../src/blob-fs.ts";
 import {
   ArtifactTooLargeError,
@@ -13,6 +16,7 @@ import {
   MAX_ROUTING_BYTES,
   MessageTooLargeError,
   PayloadTooLargeError,
+  SqliteStore,
 } from "../src/index.ts";
 import { freshStore, nextId, seedRun, seedWorkflow } from "./helpers.ts";
 
@@ -468,6 +472,119 @@ describe("SqliteStore — artifacts & blobs", () => {
     const runId = await seedRun(store);
     const big = new Uint8Array(MAX_BLOB_BYTES + 1);
     expect(() => store.putArtifact({ runId, nodeId: "n", iteration: 0, key: "k" }, big)).toThrow(ArtifactTooLargeError);
+    store.close();
+  });
+});
+
+describe("SqliteStore — getNodeOutputs", () => {
+  // Helper: emit fact.node_completed with outputRef + write the artifact
+  // it points at. Mirrors what the executor + handler-bridge do during a
+  // real dispatch, but compressed into one call so the substitution-fold
+  // can be exercised at the store boundary.
+  function recordNodeOutput(
+    store: ReturnType<typeof freshStore>,
+    runId: string,
+    nodeId: string,
+    iteration: number,
+    text: string,
+    opts: { outcomeStatus?: "success" | "fail" } = {},
+  ): void {
+    store.putArtifact({ runId, nodeId, iteration, key: "output" }, new TextEncoder().encode(text), "text/plain", {
+      replace: true,
+    });
+    const state = store.getState(runId)!;
+    const payload: Extract<FactEvent, { type: "fact.node_completed" }>["payload"] = {
+      nodeId,
+      iteration,
+      tokens: 0,
+      costUsd: 0,
+      nextNode: "next",
+      outputRef: `${nodeId}:output`,
+    };
+    if (opts.outcomeStatus !== undefined) payload.outcomeStatus = opts.outcomeStatus;
+    store.appendFact(runId, [{ type: "fact.node_completed", payload }], state.version);
+  }
+
+  test("empty run → empty map", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.getNodeOutputs(runId).size).toBe(0);
+    store.close();
+  });
+
+  test("dereferences outputRef artifacts and keys by nodeId", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    recordNodeOutput(store, runId, "plan", 0, "PLAN: implement X", { outcomeStatus: "success" });
+    recordNodeOutput(store, runId, "implement", 0, "DIFF: 3 files changed", { outcomeStatus: "success" });
+
+    const outputs = store.getNodeOutputs(runId);
+    expect(outputs.size).toBe(2);
+    expect(outputs.get("plan")?.output).toBe("PLAN: implement X");
+    expect(outputs.get("plan")?.success).toBe(true);
+    expect(outputs.get("implement")?.output).toBe("DIFF: 3 files changed");
+    store.close();
+  });
+
+  test("a node re-entered via a backward edge keeps the latest iteration's output", async () => {
+    // Loops re-enter the same nodeId at iteration N+1. Downstream
+    // substitution should see the most recent answer, not the first
+    // attempt that triggered the retry.
+    const store = freshStore();
+    const runId = await seedRun(store);
+    recordNodeOutput(store, runId, "plan", 0, "first attempt", { outcomeStatus: "fail" });
+    recordNodeOutput(store, runId, "plan", 1, "second attempt — corrected", { outcomeStatus: "success" });
+
+    const outputs = store.getNodeOutputs(runId);
+    expect(outputs.size).toBe(1);
+    expect(outputs.get("plan")?.output).toBe("second attempt — corrected");
+    expect(outputs.get("plan")?.success).toBe(true);
+    store.close();
+  });
+
+  test("survives close + reopen of the same on-disk database (resume / restart parity)", async () => {
+    // The pause / resume / daemon-restart story relies on outputs being
+    // recoverable after the in-memory state of the daemon is gone. This
+    // test simulates that crash by closing the SqliteStore and opening
+    // a fresh handle on the same file: the artifact bytes plus the
+    // fact.node_completed events on disk must reproduce the same map.
+    const dir = mkdtempSync(join(tmpdir(), "swarm-node-outputs-"));
+    const dbPath = join(dir, "swarm.db");
+
+    const s1 = new SqliteStore({ path: dbPath });
+    s1.saveWorkflow("sha", "t", "digraph G { plan -> implement }");
+    const runId = "r-resume-1";
+    s1.enqueueRun({ runId, workflowSha: "sha" });
+    recordNodeOutput(s1, runId, "plan", 0, "PERSISTED: plan body", { outcomeStatus: "success" });
+
+    // First handle sees what it just wrote.
+    const before = s1.getNodeOutputs(runId);
+    expect(before.get("plan")?.output).toBe("PERSISTED: plan body");
+    s1.close();
+
+    // Second handle (the post-resume daemon) sees the same map.
+    const s2 = new SqliteStore({ path: dbPath });
+    const after = s2.getNodeOutputs(runId);
+    expect(after.size).toBe(1);
+    expect(after.get("plan")?.output).toBe("PERSISTED: plan body");
+    expect(after.get("plan")?.success).toBe(true);
+    s2.close();
+  });
+
+  test("missing artifact file (gc race) is skipped, not thrown", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    recordNodeOutput(store, runId, "plan", 0, "ok", { outcomeStatus: "success" });
+    // Drop the artifact row out from under the fact.node_completed event
+    // to simulate an out-of-band gc-blobs / corruption. The fold should
+    // skip rather than throw — substitution falls back to "" the same as
+    // for a node that never produced output.
+    (store as unknown as { db: import("bun:sqlite").Database }).db
+      .query<unknown, [string]>("DELETE FROM artifacts WHERE run_id = ?")
+      .run(runId);
+
+    const outputs = store.getNodeOutputs(runId);
+    expect(outputs.size).toBe(0);
     store.close();
   });
 });

@@ -56,7 +56,19 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
       put: (key, content) => {
         const text = typeof content === "string" ? content : new TextDecoder().decode(content);
         artifacts.push({ key, content: text });
-        return { runId: "r", nodeId: "n", iteration: 0, key, sha256: "", sizeBytes: text.length, mime: null };
+        // nodeId / iteration mirror the node the handler is running on so
+        // assertions about outputRef.nodeId can match real behaviour. The
+        // production stub (buildHandlerContext) does the same — it pulls
+        // these from the surrounding scope before calling store.putArtifact.
+        return {
+          runId: "r",
+          nodeId: overrides.nodeId ?? "lint",
+          iteration: 0,
+          key,
+          sha256: "",
+          sizeBytes: text.length,
+          mime: null,
+        };
       },
       get: () => new Uint8Array(),
       ref: () => null,
@@ -64,6 +76,7 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     },
     externalCall: async (_, fn) => fn("stub-key"),
     args: overrides.args ?? {},
+    nodeOutputs: overrides.nodeOutputs ?? new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
   };
   const merged = { ...base, ...overrides };
@@ -162,6 +175,44 @@ describe("makeToolHandler — substitution", () => {
     });
     await spec.handler(ctx);
     expect(ranWith).toBe("bun run --filter='@swarm/core' typecheck");
+  });
+
+  test("$<nodeId>.output from prior nodes is substituted into tool_command", async () => {
+    const ctx = stubCtx({
+      nodeOutputs: new Map([["plan", { output: "scope.txt", success: true, timestamp: 1 }]]),
+    });
+    let ranWith = "";
+    const spec = makeToolHandler({
+      toolCommand: "wc -l $plan.output",
+      spawner: async (cmd) => {
+        ranWith = cmd;
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
+      },
+    });
+    await spec.handler(ctx);
+    expect(ranWith).toBe("wc -l scope.txt");
+  });
+});
+
+describe("makeToolHandler — output capture", () => {
+  test("stdout lands as artifact 'output' and outputRef is on the transition", async () => {
+    // Mirrors the codergen capture contract: a tool node produces a single
+    // canonical "output" artifact that downstream `$<nodeId>.output`
+    // substitution dereferences. Without this, $build.output (where build
+    // is a tool node) silently became "".
+    const ctx = stubCtx({ nodeId: "build" });
+    const spec = makeToolHandler({
+      toolCommand: "bun run build",
+      spawner: fakeSpawner({ exitCode: 0, stdout: "compiled 12 files\n", stderr: "" }),
+    });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outputRef?.nodeId).toBe("build");
+      expect(result.outputRef?.key).toBe("output");
+    }
+    const outputArt = ctx.__artifacts.find((a) => a.key === "output");
+    expect(outputArt?.content).toBe("compiled 12 files\n");
   });
 });
 

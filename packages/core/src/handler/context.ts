@@ -1,5 +1,6 @@
 import type { ArtifactRef, ArtifactScope, IEventStore, Message } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
+import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
@@ -36,6 +37,11 @@ export interface BuildContextOpts {
    * from `routing.input`); empty when the run has no input string.
    * Passed through to HandlerContext unchanged. */
   args?: Readonly<Record<string, string>>;
+  /** Captured outputs of prior nodes (latest iteration wins). Materialised
+   * by the executor from prior `fact.node_completed` events that have
+   * `outputRef`. When omitted, the context exposes an empty map and every
+   * `$<nodeId>.output` token resolves to "". */
+  nodeOutputs?: ReadonlyMap<string, NodeOutput>;
   /** Observability sink. Every ctx.emit(type, payload) call routes here.
    * The executor wires this to a collector it drains into
    * store.appendObservabilityEvents after the node's terminal fact lands.
@@ -59,6 +65,8 @@ export interface BuildContextOpts {
  * computes idempotency keys and reports into the recorder (which the
  * executor translates into fact events inside its write transaction).
  */
+const EMPTY_NODE_OUTPUTS: ReadonlyMap<string, NodeOutput> = new Map();
+
 export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   const { runId, nodeId, iteration, store } = opts;
 
@@ -153,6 +161,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     artifacts,
     externalCall,
     args: opts.args ?? {},
+    nodeOutputs: opts.nodeOutputs ?? EMPTY_NODE_OUTPUTS,
     emit,
     ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),

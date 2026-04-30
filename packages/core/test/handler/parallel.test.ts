@@ -42,6 +42,7 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): MutableHandlerContext
     },
     externalCall: async (_, fn) => fn("stub-key"),
     args: {},
+    nodeOutputs: new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
   };
   return Object.assign({ ...base, ...overrides }, { __emitted: emitted });

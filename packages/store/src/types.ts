@@ -595,6 +595,19 @@ export interface IEventStore {
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
+  /**
+   * Captured outputs of every prior node in this run, keyed by `nodeId`.
+   * Folds `fact.node_completed` events that carry an `outputRef`,
+   * dereferences each artifact, and returns the latest entry per nodeId
+   * (so a re-entered loop sees the most recent iteration's output).
+   *
+   * Used by the executor to build the substitution `nodeOutputs` map at
+   * dispatch time. Returns an empty Map when no prior node has captured
+   * output. UTF-8-decodes artifact bytes; non-text artifacts (codergen
+   * always writes text/plain; tool nodes write stdout) round-trip
+   * losslessly through the decode.
+   */
+  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
   // ─── Daemon lock
   acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;

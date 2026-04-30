@@ -25,7 +25,7 @@ export interface SubstitutionArgs {
 
 export interface SubstitutionOptions {
   context?: ContextMap;
-  nodeOutputs?: Map<string, NodeOutput>;
+  nodeOutputs?: ReadonlyMap<string, NodeOutput>;
   args?: SubstitutionArgs;
   /** If true, wrap substituted values in single quotes for shell safety. */
   escapeForShell?: boolean;

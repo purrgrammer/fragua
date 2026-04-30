@@ -36,6 +36,7 @@ function stubCtx(
     },
     externalCall: async (_, fn) => fn("stub-key"),
     args: {},
+    nodeOutputs: new Map(),
     emit: () => {},
   };
   return { ...base, ...overrides };

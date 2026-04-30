@@ -84,7 +84,7 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     }
 
     const context = mergeContext(cfg.defaultContext, ctx.routing);
-    const command = substitute(rawCommand, { args: ctx.args, context });
+    const command = substitute(rawCommand, { args: ctx.args, context, nodeOutputs: ctx.nodeOutputs });
 
     let ranResult: ToolRunResult | undefined;
     try {
@@ -117,6 +117,10 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     if (ranResult.stderr.length > 0) {
       ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
     }
+    // The bare `output` artifact is the contract the executor's nodeOutputs
+    // fold reads via `outputRef` below; downstream `$<nodeId>.output`
+    // resolves to stdout, the natural "what did the tool produce" default.
+    const outputRef = ctx.artifacts.put("output", ranResult.stdout, "text/plain", { replace: true });
 
     ctx.emit("tool.completed", {
       command,
@@ -132,6 +136,7 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       outcomeStatus,
       tokens: 0,
       costUsd: 0,
+      outputRef,
       routingDelta: {
         [`tool.${ctx.nodeId}.exit_code`]: ranResult.exitCode,
       },

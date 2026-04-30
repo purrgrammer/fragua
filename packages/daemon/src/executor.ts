@@ -494,6 +494,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         ? (nodeAttrs.denied_tools as readonly string[])
         : undefined;
 
+      // Captured outputs of every prior node, keyed by nodeId. Re-folded on
+      // every dispatch from `fact.node_completed` events that carry an
+      // outputRef. Without this, downstream `$<nodeId>.output` substitution
+      // resolves to the empty string and aborts cascade through the graph.
+      const nodeOutputs = opts.store.getNodeOutputs(runId);
+
       const ctxOpts: core.BuildContextOpts = {
         runId,
         nodeId: currentNode,
@@ -512,6 +518,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         tools: opts.tools,
         recorder,
         args: buildSubstitutionArgs(runId, state.routing),
+        nodeOutputs,
         emitObservability: (type, payload) => {
           // Stamp nodeId + iteration so the UI can scope without the
           // handler having to thread it through every payload.
