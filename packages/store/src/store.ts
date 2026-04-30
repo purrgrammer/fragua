@@ -26,12 +26,15 @@ import {
   type ArtifactScope,
   ArtifactTooLargeError,
   ConcurrencyError,
+  type DaemonEvent,
+  type DaemonEventRow,
   type DaemonLockResult,
   type DaemonLockRow,
   type EnqueueRunParams,
   type EventWriter,
   type FactAppendResult,
   type FactEvent,
+  type GetDaemonEventsOpts,
   type GetEventsOpts,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
@@ -264,6 +267,62 @@ export class SqliteStore implements IEventStore {
     return { seqs };
   }
 
+  // ─────────────── Daemon events ───────────────
+
+  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number } {
+    const payload = this.validatePayload(event.payload);
+    const ts = this.now();
+    const runId = opts?.runId ?? null;
+    let seq = 0;
+
+    this.writeTxn(() => {
+      const row = this.db
+        .query<{ seq: number }, [string, string, number, string | null]>(
+          `INSERT INTO daemon_events (type, payload, ts, run_id)
+                VALUES (?, ?, ?, ?)
+              RETURNING seq`,
+        )
+        .get(event.type, payload, ts, runId);
+      if (row == null) throw new Error("daemon_events insert returned no row");
+      seq = row.seq;
+    });
+
+    return { seq, ts };
+  }
+
+  getDaemonEvents(opts: GetDaemonEventsOpts = {}): DaemonEventRow[] {
+    const sinceSeq = opts.sinceSeq ?? 0;
+    const limit = opts.limit ?? -1;
+    type Row = { seq: number; type: string; payload: string; ts: number; run_id: string | null };
+    const rows: Row[] =
+      opts.runId != null
+        ? this.db
+            .query<Row, [string, number, number]>(
+              `SELECT seq, type, payload, ts, run_id
+                 FROM daemon_events
+                WHERE run_id = ? AND seq > ?
+                ORDER BY seq ASC
+                LIMIT ?`,
+            )
+            .all(opts.runId, sinceSeq, limit)
+        : this.db
+            .query<Row, [number, number]>(
+              `SELECT seq, type, payload, ts, run_id
+                 FROM daemon_events
+                WHERE seq > ?
+                ORDER BY seq ASC
+                LIMIT ?`,
+            )
+            .all(sinceSeq, limit);
+    return rows.map((r) => ({
+      seq: r.seq,
+      type: r.type,
+      payload: JSON.parse(r.payload),
+      ts: r.ts,
+      runId: r.run_id,
+    }));
+  }
+
   // ─────────────── Run lifecycle ───────────────
 
   enqueueRun(params: EnqueueRunParams): void {
@@ -357,8 +416,8 @@ export class SqliteStore implements IEventStore {
     return claimed != null ? { runId: claimed } : null;
   }
 
-  startupSweep(): SweepResult {
-    return startupSweep(this.db, this.now);
+  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult {
+    return startupSweep(this.db, this.now, opts);
   }
 
   setRunTitle(runId: string, title: string): void {

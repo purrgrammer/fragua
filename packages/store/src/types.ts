@@ -8,6 +8,7 @@
 import type {
   AgentMessage,
   AnyEvent as AnyEventFromTypes,
+  DaemonEvent as DaemonEventFromTypes,
   EventEnvelope,
   EventWriter as EventWriterFromTypes,
   FactEvent as FactEventFromTypes,
@@ -24,6 +25,9 @@ import type { RunCostTotalsRow, StepAggregateRow } from "./queries.ts";
 export type {
   AnyEvent,
   AnyEventType,
+  DaemonEvent,
+  DaemonEventEnvelope,
+  DaemonEventType,
   EventEnvelope,
   EventWriter,
   FactEvent,
@@ -37,6 +41,7 @@ export type {
   RawEvent,
   RunStatus,
 } from "@swarm/types";
+export { ALL_DAEMON_EVENT_TYPES } from "@swarm/types";
 export type { RunCostTotalsRow, StepAggregateRow };
 
 // Local aliases below let us narrow the re-exported unions in places
@@ -47,6 +52,7 @@ type RunStatus = RunStatusFromTypes;
 type EventWriter = EventWriterFromTypes;
 type IntentEvent = IntentEventFromTypes;
 type FactEvent = FactEventFromTypes;
+type DaemonEvent = DaemonEventFromTypes;
 type HaltReason = HaltReasonFromTypes;
 type QuarantineReason = QuarantineReasonFromTypes;
 type IntentType = IntentTypeFromTypes;
@@ -163,6 +169,20 @@ export interface StoredEvent {
   writer: EventWriter;
   payload: unknown;
   ts: number;
+}
+
+/**
+ * Read shape for a row in the `daemon_events` table. `seq` is the
+ * AUTOINCREMENT primary key — disjoint from any per-run `seq` space.
+ * `runId` is set for run-scoped daemon events; global lifecycle / sweep
+ * / GC events leave it `null`.
+ */
+export interface DaemonEventRow {
+  seq: number;
+  type: string;
+  payload: unknown;
+  ts: number;
+  runId: string | null;
 }
 
 // ─────────────── Messages and artifacts ───────────────
@@ -401,6 +421,16 @@ export interface SweepResult {
   quarantined: string[];
 }
 
+export interface GetDaemonEventsOpts {
+  /** Return rows with `seq > sinceSeq`. Defaults to 0 (all rows). */
+  sinceSeq?: number;
+  /** Cap rows returned. Default: unbounded (`LIMIT -1`). */
+  limit?: number;
+  /** Filter to a specific run. NULL run_id rows (global events) are
+   * excluded when this is set. */
+  runId?: string;
+}
+
 export interface IEventStore {
   // ─── Writes
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
@@ -415,10 +445,34 @@ export interface IEventStore {
    */
   appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
 
+  /**
+   * Append a daemon-level event to the dedicated `daemon_events` table.
+   * Disjoint from the per-run event log: no OCC, no reducer, no
+   * `run_state.version` bump. Use for process lifecycle (started /
+   * stopped / reaper takeover), sweep summaries, GC summaries, leak
+   * detection, worktree provisioning. Set `opts.runId` for run-scoped
+   * events; leave undefined for global lifecycle.
+   */
+  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
+  /**
+   * Read daemon events ordered by `seq ASC`. Filters apply at the SQL
+   * layer via indexed reads. When `opts.runId` is set, only rows whose
+   * `run_id` matches qualify (NULL run_ids excluded).
+   */
+  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
+
   // ─── Run lifecycle
   enqueueRun(params: EnqueueRunParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;
-  startupSweep(): SweepResult;
+  /**
+   * Heal crash damage on daemon startup (requeue 'running' runs,
+   * quarantine orphan side-effect intents). When the caller is the
+   * reaper that just force-acquired the lock, pass
+   * `priorHeartbeatAt` from the prior daemon's lock row so the
+   * `fact.run_requeued_after_crash` payload carries `lastAliveAt` and
+   * the reducer can credit the pre-crash active span within ~5s.
+   */
+  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
   /**
    * Project an auto-generated title onto `run_state.title`. Idempotent —
    * last-writer wins. Never bumps `version` (the title is a UI hint, not

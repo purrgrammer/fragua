@@ -216,7 +216,19 @@ export type FactEvent =
       type: "fact.run_quarantined";
       payload: { reason: QuarantineReason; orphanedIntents?: number[] };
     }
-  | { type: "fact.run_requeued_after_crash"; payload: { prevNode?: string } }
+  | {
+      type: "fact.run_requeued_after_crash";
+      payload: {
+        prevNode?: string;
+        /** Last `daemon_lock.heartbeat_at` recorded by the dying daemon
+         * before the reaper took over. Heartbeats fire every ~5s, so
+         * this is a tight upper bound on real active time and the
+         * reducer uses `lastAliveAt - dispatchStartedAt` to credit the
+         * pre-crash span. Undefined on the clean-acquire path (no
+         * stale lock) — the reducer drops the span in that case. */
+        lastAliveAt?: number;
+      };
+    }
   | {
       type: "fact.handler_timeout_leaked";
       payload: { nodeId: string; leakedAt: number };
@@ -228,6 +240,61 @@ export type FactType = FactEvent["type"];
 /** Discriminated union over every typed event swarm emits. */
 export type AnyEvent = IntentEvent | FactEvent;
 export type AnyEventType = AnyEvent["type"];
+
+// ─────────────── Daemon events (process / infrastructure scope) ───────────
+
+/**
+ * Daemon-level events: process lifecycle, sweep activity, reaper
+ * takeovers, GC, leak detection, worktree provisioning. Persisted in
+ * the dedicated `daemon_events` table (not `events`) because many
+ * entries are global — no run scope — and they must not interleave
+ * into the per-run `seq` space the reducer projects.
+ *
+ * Same 4 KB payload cap as fact events; payloads stay flat and small.
+ */
+export type DaemonEvent =
+  | { type: "daemon.started"; payload: { pid: number; hostname: string } }
+  | {
+      type: "daemon.stopped";
+      payload: { pid: number; reason: "clean" | "leak_limit" | "signal" | "error"; detail?: string };
+    }
+  | {
+      type: "daemon.reaper_took_over";
+      payload: { priorPid: number; priorHostname: string; priorHeartbeatAt: number; staleForMs: number };
+    }
+  | {
+      type: "daemon.sweep_completed";
+      payload: { requeued: number; quarantined: number; durationMs: number };
+    }
+  | { type: "daemon.blob_gc_completed"; payload: { deleted: number; durationMs: number } }
+  | {
+      type: "daemon.leak_detected";
+      payload: { runId: string; nodeId: string; count: number; ceiling: number };
+    }
+  | { type: "daemon.worktree_provisioned"; payload: { runId: string; ok: boolean; errorDetail?: string } };
+
+export type DaemonEventType = DaemonEvent["type"];
+
+export const ALL_DAEMON_EVENT_TYPES: readonly DaemonEventType[] = [
+  "daemon.started",
+  "daemon.stopped",
+  "daemon.reaper_took_over",
+  "daemon.sweep_completed",
+  "daemon.blob_gc_completed",
+  "daemon.leak_detected",
+  "daemon.worktree_provisioned",
+];
+
+/** Wire shape for `daemon_events` rows. `seq` is the AUTOINCREMENT
+ * primary key of the `daemon_events` table — disjoint from the per-run
+ * `seq` space. `runId` is set for run-scoped daemon events
+ * (leak_detected, worktree_provisioned); global lifecycle / sweep / GC
+ * events leave it undefined. */
+export type DaemonEventEnvelope = {
+  seq: number;
+  ts: number;
+  runId?: string;
+} & DaemonEvent;
 
 // ─────────────── Wire envelope ───────────────
 

@@ -132,3 +132,23 @@ CREATE TABLE IF NOT EXISTS daemon_lock (
   started_at INTEGER NOT NULL,
   heartbeat_at INTEGER NOT NULL
 ) STRICT;
+
+-- Daemon-level audit log for process lifecycle, sweep activity,
+-- reaper takeovers, GC, leak detection, and worktree provisioning.
+-- Separate from the per-run `events` table because some entries are
+-- global (no run scope). Read paths: getDaemonEvents (latest N) and
+-- a future "infrastructure" UI surface; the per-run feed is unaffected.
+CREATE TABLE IF NOT EXISTS daemon_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL CHECK (length(payload) < 4096),
+  ts INTEGER NOT NULL,
+  -- Optional reference for run-scoped events (leak_detected,
+  -- worktree_provisioned). Global events leave it NULL. ON DELETE
+  -- SET NULL keeps the audit trail intact when runs are GC'd.
+  run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_daemon_events_ts ON daemon_events(ts, seq);
+CREATE INDEX IF NOT EXISTS idx_daemon_events_type ON daemon_events(type, ts);
+CREATE INDEX IF NOT EXISTS idx_daemon_events_run ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
