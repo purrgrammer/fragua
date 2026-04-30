@@ -168,6 +168,66 @@ describe("startupSweep", () => {
     store.close();
   });
 
+  test("threads priorHeartbeatAt into fact.run_requeued_after_crash.payload.lastAliveAt", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: s0.workflowSha,
+            schemaVersion: s0.schemaVersion,
+            startNode: "a",
+          },
+        },
+      ],
+      s0.version,
+    );
+    expect(store.getState(runId)!.status).toBe("running");
+
+    const HEARTBEAT_TS = 1_700_000_900_000;
+    store.startupSweep({ priorHeartbeatAt: HEARTBEAT_TS });
+
+    const events = store.getEvents(runId);
+    const requeued = events.find((e) => e.type === "fact.run_requeued_after_crash")!;
+    const payload = requeued.payload as { prevNode?: string; lastAliveAt?: number };
+    expect(payload.lastAliveAt).toBe(HEARTBEAT_TS);
+    expect(payload.prevNode).toBe("a");
+    store.close();
+  });
+
+  test("omits lastAliveAt on the clean-acquire path (no opts)", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: s0.workflowSha,
+            schemaVersion: s0.schemaVersion,
+            startNode: "a",
+          },
+        },
+      ],
+      s0.version,
+    );
+
+    store.startupSweep();
+
+    const events = store.getEvents(runId);
+    const requeued = events.find((e) => e.type === "fact.run_requeued_after_crash")!;
+    const payload = requeued.payload as { prevNode?: string; lastAliveAt?: number };
+    expect(payload.lastAliveAt).toBeUndefined();
+    expect(payload.prevNode).toBe("a");
+    store.close();
+  });
+
   test("does not re-quarantine runs that already have matching done", async () => {
     const store = freshStore();
     const runId = await seedRun(store);

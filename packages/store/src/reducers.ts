@@ -161,14 +161,18 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_requeued_after_crash": {
-      // Don't add `now - dispatchStartedAt` to activeMs: `now` is sweep
-      // time, not crash time, so it would include the dead-daemon
-      // window. We don't know when the daemon actually died (the lock
-      // heartbeat is a 30s-coarse upper bound, and not threaded through
-      // here), so the conservative call is to drop the pre-crash active
-      // span entirely. Result: activeMs slightly undercounts on crash;
-      // pause windows remain accurate.
-      next.dispatchStartedAt = null;
+      // If sweep captured the dying daemon's last heartbeat, use it as a
+      // tight upper bound on real active time (heartbeat updates ~every 5s,
+      // so this gives crash-time accuracy within ~5s). Otherwise fall back
+      // to dropping the pre-crash span entirely — we can't tell active
+      // time from dead-daemon time.
+      if (next.dispatchStartedAt != null) {
+        const lastAlive = (fact.payload as { lastAliveAt?: number }).lastAliveAt;
+        if (typeof lastAlive === "number" && lastAlive > next.dispatchStartedAt) {
+          next.metrics.activeMs += lastAlive - next.dispatchStartedAt;
+        }
+        next.dispatchStartedAt = null;
+      }
       next.status = "queued";
       next.currentNode = null;
       next.nodeStartedAt = null;

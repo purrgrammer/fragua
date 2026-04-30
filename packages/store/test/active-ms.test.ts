@@ -32,7 +32,10 @@ const RUN_STARTED: FactEvent = {
   payload: { workflowSha: "wf", schemaVersion: 1, startNode: "a" },
 };
 
-function dispatchStarted(now: number, resumeOf: "fresh" | "crash" | "paused_hitl" | "paused_provider_error"): FactEvent {
+function dispatchStarted(
+  now: number,
+  resumeOf: "fresh" | "crash" | "paused_hitl" | "paused_provider_error",
+): FactEvent {
   // `now` is a label only — the reducer reads its own `now` arg. Kept
   // here so call sites read like the timeline.
   void now;
@@ -62,10 +65,11 @@ const RUN_COMPLETED: FactEvent = {
   payload: { finalNode: "b" },
 };
 
-const RUN_REQUEUED: FactEvent = {
-  type: "fact.run_requeued_after_crash",
-  payload: { prevNode: "a" },
-};
+function runRequeued(lastAliveAt?: number): FactEvent {
+  const payload: { prevNode: string; lastAliveAt?: number } = { prevNode: "a" };
+  if (lastAliveAt != null) payload.lastAliveAt = lastAliveAt;
+  return { type: "fact.run_requeued_after_crash", payload };
+}
 
 describe("dispatch interval bookkeeping", () => {
   test("fact.run_started sets dispatchStartedAt to `now`", () => {
@@ -105,14 +109,14 @@ describe("dispatch interval bookkeeping", () => {
     expect(s.dispatchStartedAt).toBeNull();
   });
 
-  test("crash recovery: dead-daemon window dropped, post-resume span counted", () => {
-    // Sweep emits run_requeued_after_crash with `now=sweep_time`, which
-    // is much later than the actual crash. The reducer can't tell
-    // pre-crash active time from dead-daemon time, so it drops the
-    // whole pre-crash span. activeMs only accumulates the post-resume
-    // dispatch interval.
+  test("crash recovery (no lastAliveAt): pre-crash span dropped, post-resume span counted", () => {
+    // Clean-acquire path: prior daemon released its lock cleanly but
+    // left a 'running' run behind, so sweep has no priorHeartbeatAt
+    // to thread. The reducer can't tell pre-crash active time from
+    // idle time, so it drops the pre-crash span entirely. activeMs
+    // only accumulates the post-resume dispatch interval.
     let s = applyFact(blankState(), RUN_STARTED, 100);
-    s = applyFact(s, RUN_REQUEUED, 900);
+    s = applyFact(s, runRequeued(), 900);
     expect(s.metrics.activeMs).toBe(0);
     expect(s.dispatchStartedAt).toBeNull();
 
@@ -124,56 +128,88 @@ describe("dispatch interval bookkeeping", () => {
     expect(s.dispatchStartedAt).toBeNull();
   });
 
-  test("multiple pause + crash cycles still produce accurate durations", () => {
-    // Timeline with two pause cycles and two crash cycles. Only the
-    // active dispatch spans count toward activeMs:
-    //   t=100   run_started               (active span 1 begins)
-    //   t=300   paused_hitl               (+200 → activeMs=200)
+  test("crash recovery (with lastAliveAt): pre-crash span credited up to last heartbeat", () => {
+    // Reaper path: sweep captured the dying daemon's last heartbeat
+    // and threaded it into the payload as `lastAliveAt`. The reducer
+    // uses `lastAliveAt - dispatchStartedAt` so the pre-crash active
+    // span is credited within ~5s of the real crash time.
+    let s = applyFact(blankState(), RUN_STARTED, 100);
+    // dispatchStartedAt=100, lastAliveAt=750 → +650 to activeMs
+    s = applyFact(s, runRequeued(750), 900);
+    expect(s.metrics.activeMs).toBe(650);
+    expect(s.dispatchStartedAt).toBeNull();
+
+    s = applyFact(s, dispatchStarted(950, "crash"), 950);
+    s = applyFact(s, NODE_COMPLETED, 1200);
+    expect(s.metrics.activeMs).toBe(650 + 250);
+    expect(s.dispatchStartedAt).toBeNull();
+  });
+
+  test("crash recovery (lastAliveAt earlier than dispatchStartedAt): clamp to zero", () => {
+    // Defensive: a clock skew or stale heartbeat that predates the
+    // current dispatch must not produce negative activeMs.
+    let s = applyFact(blankState(), RUN_STARTED, 1000);
+    s = applyFact(s, runRequeued(500), 2000);
+    expect(s.metrics.activeMs).toBe(0);
+    expect(s.dispatchStartedAt).toBeNull();
+  });
+
+  test("multiple pause + crash cycles produce accurate durations with lastAliveAt", () => {
+    // Timeline with two pause cycles and two crash cycles. Pre-crash
+    // active spans are credited via `lastAliveAt` (heartbeat captured
+    // ~10ms before sweep time):
+    //   t=100   run_started                       (span 1 begins)
+    //   t=300   paused_hitl                       (+200 → activeMs=200)
     //   t=900   resumed
-    //   t=1000  dispatch_started          (active span 2 begins)
-    //   t=1500  requeued_after_crash      (dropped: dead-daemon time)
-    //   t=2000  dispatch_started          (active span 3 begins)
-    //   t=2200  paused_provider_error     (+200 → activeMs=400)
+    //   t=1000  dispatch_started                  (span 2 begins)
+    //   t=1500  requeued_after_crash @1490        (+490 → activeMs=690)
+    //   t=2000  dispatch_started                  (span 3 begins)
+    //   t=2200  paused_provider_error             (+200 → activeMs=890)
     //   t=2900  resumed
-    //   t=3000  dispatch_started          (active span 4 begins)
-    //   t=3500  requeued_after_crash      (dropped)
-    //   t=4000  dispatch_started          (active span 5 begins)
-    //   t=4300  run_completed             (+300 → activeMs=700)
+    //   t=3000  dispatch_started                  (span 4 begins)
+    //   t=3500  requeued_after_crash @3490        (+490 → activeMs=1380)
+    //   t=4000  dispatch_started                  (span 5 begins)
+    //   t=4300  run_completed                     (+300 → activeMs=1680)
     let s = applyFact(blankState(), RUN_STARTED, 100);
     s = applyFact(s, RUN_PAUSED_HITL, 300);
     expect(s.metrics.activeMs).toBe(200);
 
     s = applyFact(s, RUN_RESUMED, 900);
     s = applyFact(s, dispatchStarted(1000, "paused_hitl"), 1000);
-    s = applyFact(s, RUN_REQUEUED, 1500);
-    expect(s.metrics.activeMs).toBe(200);
+    s = applyFact(s, runRequeued(1490), 1500);
+    expect(s.metrics.activeMs).toBe(690);
     expect(s.dispatchStartedAt).toBeNull();
 
     s = applyFact(s, dispatchStarted(2000, "crash"), 2000);
     s = applyFact(
       s,
-      { type: "fact.run_paused_provider_error", payload: { nodeId: "a", httpStatus: 500, provider: "p", errorMessage: "" } },
+      {
+        type: "fact.run_paused_provider_error",
+        payload: { nodeId: "a", httpStatus: 500, provider: "p", errorMessage: "" },
+      },
       2200,
     );
-    expect(s.metrics.activeMs).toBe(400);
+    expect(s.metrics.activeMs).toBe(890);
 
-    s = applyFact(
-      s,
-      { type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } },
-      2900,
-    );
+    s = applyFact(s, { type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } }, 2900);
     s = applyFact(s, dispatchStarted(3000, "paused_provider_error"), 3000);
-    s = applyFact(s, RUN_REQUEUED, 3500);
-    expect(s.metrics.activeMs).toBe(400);
+    s = applyFact(s, runRequeued(3490), 3500);
+    expect(s.metrics.activeMs).toBe(1380);
 
     s = applyFact(s, dispatchStarted(4000, "crash"), 4000);
     s = applyFact(s, RUN_COMPLETED, 4300);
-    expect(s.metrics.activeMs).toBe(700);
+    expect(s.metrics.activeMs).toBe(1680);
     expect(s.dispatchStartedAt).toBeNull();
   });
 
   test("foldFacts is idempotent: same event list folded twice yields identical state", () => {
-    const facts: FactEvent[] = [RUN_STARTED, RUN_PAUSED_HITL, RUN_RESUMED, dispatchStarted(0, "paused_hitl"), RUN_COMPLETED];
+    const facts: FactEvent[] = [
+      RUN_STARTED,
+      RUN_PAUSED_HITL,
+      RUN_RESUMED,
+      dispatchStarted(0, "paused_hitl"),
+      RUN_COMPLETED,
+    ];
     // The reducer reads `now` per-call, so to make folding deterministic
     // we synthesise a single `now` for the whole fold; that's what the
     // store does at write time too (one ts per appendFact call). Each

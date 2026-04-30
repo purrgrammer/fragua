@@ -100,12 +100,14 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
   }
 
   const done = (async () => {
+    let priorHeartbeatAt: number | undefined;
     const lock = opts.store.acquireDaemonLock(pid, hostname);
     if (!lock.acquired) {
       const current = lock.current;
       const now = Date.now();
       if (now - current.heartbeatAt > lockTtl) {
         opts.store.forceAcquireDaemonLock(pid, hostname);
+        priorHeartbeatAt = current.heartbeatAt;
         opts.store.appendDaemonEvent({
           type: "daemon.reaper_took_over",
           payload: {
@@ -126,7 +128,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
     });
 
     try {
-      opts.store.startupSweep();
+      opts.store.startupSweep(priorHeartbeatAt != null ? { priorHeartbeatAt } : undefined);
 
       const registry = new AbortRegistry();
 

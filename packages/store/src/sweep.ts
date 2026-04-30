@@ -28,7 +28,16 @@ interface OrphanRow {
  * side-effect intent does flip to quarantined — quarantine takes
  * precedence over pause.)
  */
-export function startupSweep(db: Database, now: () => number): SweepResult {
+export interface StartupSweepOpts {
+  /** Heartbeat timestamp captured from the dying daemon's lock just
+   * before the reaper called `forceAcquireDaemonLock`. Threaded into
+   * the `fact.run_requeued_after_crash` payload as `lastAliveAt` so
+   * the reducer can credit pre-crash active time within ~5s. Omit on
+   * the clean-acquire path. */
+  priorHeartbeatAt?: number;
+}
+
+export function startupSweep(db: Database, now: () => number, opts?: StartupSweepOpts): SweepResult {
   const requeued: string[] = [];
   const quarantined = new Map<string, number[]>();
 
@@ -69,7 +78,10 @@ export function startupSweep(db: Database, now: () => number): SweepResult {
     .all();
   const requeuePayloads = new Map<string, string>();
   for (const row of running) {
-    requeuePayloads.set(row.run_id, JSON.stringify(row.current_node != null ? { prevNode: row.current_node } : {}));
+    const payload: { prevNode?: string; lastAliveAt?: number } = {};
+    if (row.current_node != null) payload.prevNode = row.current_node;
+    if (opts?.priorHeartbeatAt != null) payload.lastAliveAt = opts.priorHeartbeatAt;
+    requeuePayloads.set(row.run_id, JSON.stringify(payload));
   }
 
   db.exec("BEGIN IMMEDIATE");
