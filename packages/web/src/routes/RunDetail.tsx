@@ -364,7 +364,7 @@ export const StatsStrip = memo(function StatsStrip({
         hint={detail ? `input ${inputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}` : undefined}
       />
       <StatTile
-        label="Cache hit rate"
+        label="Cache"
         loading={loading}
         numericValue={cacheHitRate}
         format={percentFormatOptions()}
