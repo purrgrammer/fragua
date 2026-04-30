@@ -102,10 +102,20 @@ function bridgeMessageUpdate(e: AssistantStreamEvent): BridgedEvent | undefined 
       return undefined;
     case "text_delta":
       return { type: "llm.text_delta", data: { delta: e.delta, content_index: e.contentIndex } };
+    case "text_end":
+      // Boundary marker for partial-turn recovery on resume: lets a
+      // replay walker know "block N is complete, sum its deltas."
+      // Payload stays minimal — the assembled content is reconstructable
+      // from the deltas already in the event log.
+      return { type: "llm.text_end", data: { content_index: e.contentIndex } };
     case "thinking_delta":
       return { type: "llm.thinking_delta", data: { delta: e.delta, content_index: e.contentIndex } };
+    case "thinking_end":
+      return { type: "llm.thinking_end", data: { content_index: e.contentIndex } };
     case "toolcall_delta":
       return { type: "llm.toolcall_delta", data: { delta: e.delta, content_index: e.contentIndex } };
+    case "toolcall_end":
+      return { type: "llm.toolcall_end", data: { content_index: e.contentIndex } };
     case "done":
       return { type: "llm.done", data: { stop_reason: e.reason } };
     case "error":

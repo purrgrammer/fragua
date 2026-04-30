@@ -41,8 +41,11 @@ export type EventType =
   // LLM layer
   | "llm.start"
   | "llm.text_delta"
+  | "llm.text_end"
   | "llm.thinking_delta"
+  | "llm.thinking_end"
   | "llm.toolcall_delta"
+  | "llm.toolcall_end"
   | "llm.done"
   | "llm.error"
   // Tool layer
@@ -98,8 +101,11 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "agent.info",
   "llm.start",
   "llm.text_delta",
+  "llm.text_end",
   "llm.thinking_delta",
+  "llm.thinking_end",
   "llm.toolcall_delta",
+  "llm.toolcall_end",
   "llm.done",
   "llm.error",
   "tool.execution_start",
