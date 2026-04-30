@@ -384,6 +384,30 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
       dispatches++;
 
+      // Stamp dispatchStartedAt before handing control to the handler
+      // so activeMs accounting captures this dispatch interval.
+      // fact.run_started covers the very first dispatch (it stamps
+      // dispatchStartedAt directly via its own reducer case), so we
+      // only emit here when the projection's dispatchStartedAt was
+      // reset by a prior terminal/pause fact.
+      if (state.dispatchStartedAt == null) {
+        const ok = await tryAppendFact(opts.store, runId, state.version, [
+          {
+            type: "fact.dispatch_started",
+            payload: {
+              nodeId: currentNode,
+              iteration: nodeRetryCount(state.routing),
+              resumeOf: deriveResumeOf(opts.store, runId, state.status),
+            },
+          },
+        ]);
+        if (!ok) {
+          dispatches--;
+          continue;
+        }
+        continue;
+      }
+
       // Dispatch.
       const spec = opts.dispatcher.get(state.workflowSha, currentNode);
       const steerCtrl = new AbortController();
@@ -883,6 +907,33 @@ function routingString(routing: Record<string, unknown>, key: string): string | 
 function nodeRetryCount(routing: Record<string, unknown>): number {
   const v = routing["retry_count"];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+type ResumeOf = "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "quarantined";
+
+/** Determine why this dispatch is starting, for fact.dispatch_started's
+ * resumeOf field. Status === "running" → in-run transition (fresh).
+ * Status === "queued" with currentNode set → wakePending just fired
+ * fact.run_resumed, so look back for its fromStatus. (Crash recovery
+ * routes through needsStart/run_started instead because
+ * fact.run_requeued_after_crash clears currentNode, so it can't reach
+ * here.) Bounded lookback — 20 events is plenty when the trigger fact
+ * is the most recent one. */
+function deriveResumeOf(store: { getEvents: (runId: string, opts?: { limit?: number }) => Array<{ type: string; payload: unknown }> }, runId: string, status: string): ResumeOf {
+  if (status === "running") return "fresh";
+  const recent = store.getEvents(runId, { limit: 20 });
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const e = recent[i];
+    if (e == null) continue;
+    if (e.type === "fact.run_resumed") {
+      const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;
+      if (fs === "paused_hitl" || fs === "paused_provider_error" || fs === "quarantined") return fs;
+      return "fresh";
+    }
+    if (e.type === "fact.run_requeued_after_crash") return "crash";
+    if (e.type.startsWith("fact.")) return "fresh";
+  }
+  return "fresh";
 }
 
 /** Reserved routing key for budget-warn dedup. Holds the set of

@@ -48,6 +48,11 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.dispatch_started": {
+      // Flip queued → running so the projection reflects "actively
+      // executing" once the executor commits to the handler call.
+      // Symmetrical with fact.run_started's status flip on the first
+      // dispatch.
+      if (next.status === "queued") next.status = "running";
       next.dispatchStartedAt = now;
       return next;
     }
