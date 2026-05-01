@@ -137,22 +137,54 @@ than the actual repo.
 
 **Pain.** Real cost on machines without much disk.
 
----
+### B9 — Workflows that commit in-worktree silently lose their branch ref
 
-## Open questions
+Observed empirically while merging a 4-batch parallel `change.dot` run
+on 2026-05-02. Each run's `commit` node ran `git commit` inside its
+worktree. After the commit landed, `git status --porcelain` was clean
+(the whole point of committing). Dispose's preservation rule fires on
+`git status --porcelain` being non-empty (B2 above), so it saw a clean
+tree and dropped the worktree without creating a `swarm/runs/<id>`
+branch ref. The commits remained in git's object database as
+**dangling objects** — recoverable only by sha (visible in
+`reflog --all` for the recently-removed worktree refs, but with no
+ref pointing at them, GC will collect them in 90 days).
 
-1. **Should preserve-on-delta be the default, or opt-in?** Preserve-by-default
-   is what we have. Operators who don't want the branch noise can't easily
-   opt out. A `routing.preserve_branch=false` flag would let workflows pick.
-2. **GC policy.** Time-based (`older than 30d`)? Count-based (`keep last 50`)?
-   Status-based (`only failed`)?
-3. **Stale-base detection.** On resume from a multi-day pause, do we
-   `git fetch && git rebase`? `warn but proceed`? `halt with reason`?
-4. **Per-branch parallel isolation.** Spawn a worktree per branch
-   (cost: filesystem fanout) vs. virtualize via git's index trickery
-   (cost: complexity). Which?
-5. **Editor conflict.** Detect (lockfile? `fs.watch` for external
-   writes?), or accept and document?
+`run_state.branch` was NULL on every run, the `fact.run_branched`
+fact never landed, and the worktree directory was gone. The user-side
+"merge them all" step had to dig the SHAs out of the commit-node's
+final assistant message and `git cherry-pick` each by sha.
+
+**Root cause.** `git status --porcelain` measures **working-tree
+delta vs. HEAD**, not **HEAD delta vs. base_git_sha**. A workflow that
+commits in-worktree advances HEAD inside the worktree while leaving
+the working tree clean. Both the "preserve" and "drop" branches of
+dispose's logic agree the tree is clean — but they disagree on
+whether the commit is *recoverable*.
+
+**Fix candidates.**
+
+- Replace the `git status --porcelain` heuristic with `git rev-list
+  base_git_sha..HEAD --count`. Non-zero → preserve. This catches both
+  "uncommitted changes" (rev-list still has at least one commit if
+  the agent committed) and "committed-and-clean" (the case that bit
+  us). The check needs `base_git_sha` from `run_state` (already
+  recorded since `fact.run_started`).
+- OR: capture both signals — `--porcelain` for working-tree deltas
+  (uncommitted scratch the agent left behind) and `rev-list count` for
+  committed-but-unmerged work. Preserve if either is non-empty. The
+  preserved-branch payload should distinguish them so the operator
+  knows whether they're cherry-picking a clean commit chain or also
+  inheriting work-in-progress.
+- Document the operational workaround until the fix lands: any
+  workflow whose terminal node commits should leave a marker file
+  (e.g. `.swarm/.commit-marker`) so dispose's `--porcelain` check
+  trips. Ugly, but recoverable today.
+
+**Pain.** This is the loudest in-tree behaviour gap. Workflows that
+commit (the `change.dot` daily driver, `fix-bug.dot`, `merge.dot`) are
+exactly the ones whose work the operator most wants to recover, and
+they're the ones whose branches go missing.
 
 ---
 
