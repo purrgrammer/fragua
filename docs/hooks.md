@@ -416,9 +416,6 @@ Concrete changes to `.swarm/workflows/change.dot`:
 
 ## 8. What this does NOT include
 
-- **No `tool_hooks.pre` / `tool_hooks.post` graph attrs.** The TypeScript
-  hook system supersedes these dead declarations in `GraphAttrs`. Remove
-  them or repurpose for per-workflow hook overrides later.
 - **No UI.** Hooks are headless. Visibility is through `hook.executed`
   events in the web dashboard.
 - **No hot-reload.** Hooks load once per daemon start (global) or per
