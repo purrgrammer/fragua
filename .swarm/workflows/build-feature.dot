@@ -5,8 +5,8 @@
 //
 // Stages: plan (read-only) → implement → review (fresh thread) → verify →
 // update_docs → commit → merge. `thread_id="dev"` shares context between
-// implement, fix, and verify so downstream turns remember edits; every other
-// stage runs on a fresh thread and reads state via git. AGENTS.md is
+// implement and fix so the fixer remembers the edits; every other stage
+// runs on a fresh thread and reads state via git. AGENTS.md is
 // auto-prepended to every codergen system prompt by the agent backend.
 
 digraph build_feature {
@@ -52,9 +52,8 @@ digraph build_feature {
   verify [
     prompt = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds — then `<abort>CI unstable: <last failure signature></abort>`. Don't disable tests or relax assertions. Emit `CI_GREEN` on a clean run."
     allowed_tools = "read, write, edit, bash"
-    thread_id = "dev"
     provider = "anthropic"
-    model = "claude-opus-4-7"
+    model = "claude-sonnet-4-6"
     max_cost_usd = 0.30
     max_tokens = 800000
   ]
