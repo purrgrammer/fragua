@@ -177,7 +177,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','paused_provider_error',
+    'queued','running','paused_hitl','paused_provider_error','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -191,7 +191,16 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   enqueued_at INTEGER NOT NULL,                   -- original enqueue, immutable
   ready_at INTEGER NOT NULL,                      -- set on every transition INTO 'queued'
   node_started_at INTEGER,
-  updated_at INTEGER NOT NULL
+  dispatch_started_at INTEGER,                    -- when the current dispatch began (activeMs accounting)
+  updated_at INTEGER NOT NULL,
+  title TEXT,                                     -- auto-titler output; NULL until generated
+  project_id TEXT,                                -- UUIDv7 from <project>/.swarm/config.jsonc; NULL for ephemeral runs
+  base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
+  branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
+  total_cost_usd REAL GENERATED ALWAYS AS
+    (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+  billed_tokens INTEGER GENERATED ALWAYS AS
+    (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
 ) STRICT;
 
 -- Partial index = queue in disguise; O(log N) claim
@@ -199,7 +208,10 @@ CREATE INDEX idx_run_state_queue
   ON run_state(priority DESC, ready_at ASC)
   WHERE status = 'queued';
 
-CREATE INDEX idx_run_state_status ON run_state(status);
+CREATE INDEX idx_run_state_status   ON run_state(status);
+CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+CREATE INDEX idx_run_state_project  ON run_state(project_id);
 
 CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -212,14 +224,26 @@ CREATE TABLE events (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX idx_events_type ON events(type, run_id, seq);
+-- Cross-run, time-ordered scans for the global Home feed. Cursor is the
+-- (ts, run_id, seq) tuple — per-run `seq` can't carry a global ordering
+-- on its own.
+CREATE INDEX idx_events_ts ON events(ts, run_id, seq);
 
 CREATE TABLE messages (                           -- append-mostly; never rewritten
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('system','user','assistant','tool')),
-  content TEXT NOT NULL,
+  -- pi-agent-core `AgentMessage` JSON (round-trips losslessly). `role` is a
+  -- generated column extracted from the JSON so UI filters and debug queries
+  -- don't pay `json_extract` on hot paths.
+  content TEXT NOT NULL CHECK (json_valid(content) AND length(content) < 1048576),
+  role TEXT GENERATED ALWAYS AS (json_extract(content, '$.role')) STORED,
   node_id TEXT,
   iteration INTEGER NOT NULL DEFAULT 0,
+  -- sha256 of the serialised content. Backs the opt-in replay dedup path
+  -- (`appendMessage(runId, row, { dedup: true })`); default OFF because
+  -- agent transcripts carry per-call timestamps that legitimately differ
+  -- across attempts even when the semantic message is the same.
+  content_hash TEXT,
   PRIMARY KEY (run_id, ordinal)
 ) STRICT, WITHOUT ROWID;
 
@@ -250,6 +274,35 @@ CREATE TABLE daemon_lock (
   started_at INTEGER NOT NULL,
   heartbeat_at INTEGER NOT NULL
 ) STRICT;
+
+-- Display cache for project ids. Source of truth is each project's
+-- <root>/.swarm/config.jsonc; this table is denormalised so the UI can
+-- label runs without filesystem access. Refreshed on every `POST /runs`
+-- (last-runner wins). Rows persist after the project's directory is gone
+-- so historical run listings keep their labels.
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  root_path TEXT,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- Daemon-level audit log: process lifecycle, sweep activity, reaper
+-- takeovers, GC, leak detection, worktree provisioning. Separate from
+-- the per-run `events` table because some entries are global (no run
+-- scope) and they must not interleave into the per-run `seq` space the
+-- reducer projects. Same 4 KB payload cap as fact events.
+CREATE TABLE daemon_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL CHECK (length(payload) < 4096),
+  ts INTEGER NOT NULL,
+  run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL
+) STRICT;
+
+CREATE INDEX idx_daemon_events_ts   ON daemon_events(ts, seq);
+CREATE INDEX idx_daemon_events_type ON daemon_events(type, ts);
+CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
 ```
 
 **Size targets:**
@@ -266,7 +319,7 @@ CREATE TABLE daemon_lock (
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `intent.run_enqueued` | `workflowSha`, `priority?` | Queue a new run |
-| `intent.steering_requested` | `payload: string` | Abort current node; inject steering before re-entry |
+| `intent.steering_requested` | `text: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
 | `intent.hitl_input` | `selected: string`, `note?: string` | Wake a `paused_hitl` run; `selected` is the accelerator key chosen by the operator |
@@ -277,11 +330,12 @@ CREATE TABLE daemon_lock (
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
 |---|---|---|
-| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode` | Run enters `running` |
+| `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
+| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused_hitl'\|'paused_provider_error'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
 | `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `nextNode` | Node succeeded |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd` | Mid-flight abort |
-| `fact.steering_applied` | `intentSeq`, `folded` | Steer merged into routing/messages |
+| `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed |
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
@@ -289,14 +343,16 @@ CREATE TABLE daemon_lock (
 | `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
 | `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input; `options` mirrors the outgoing edge set with parsed accelerator keys |
 | `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage` | LLM provider returned a transport error mid-stream; transcript intact |
-| `fact.run_resumed` | `fromStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
+| `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Handler returned `outcomeStatus="retry"`; concurrency slot released for the backoff window. Wake-pending sweeper re-queues at `resumeAt` |
+| `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'`, `detail?` | Terminal failure |
+| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'\|'goal_gate_unsatisfied'\|'max_retries_exceeded'`, `detail?` | Terminal failure |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
-| `fact.run_quarantined` | `reason: 'orphan_side_effect'\|...`, `orphanedIntents?: seq[]` | Awaiting operator |
-| `fact.run_requeued_after_crash` | `prevNode?` | Startup sweep requeued |
+| `fact.run_quarantined` | `reason: 'orphan_side_effect'\|'other'`, `orphanedIntents?: seq[]` | Awaiting operator |
+| `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
+| `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. <br/> > Status: in-progress — branch survival semantics still firming up; see PROPOSAL-globalize "run-isolation" |
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
@@ -305,6 +361,22 @@ All payloads ≤ 4KB. Content references are `artifactKey`.
 Anything emitted via `ctx.emitObservability` from a handler — `agent.message_start/end`, `llm.text_delta`, `llm.thinking_delta`, `llm.toolcall_delta`, `cost.recorded`, `tool.execution_start/end`, `intent.dropped`, `budget.warn` / `budget.stop`, etc. Best-effort streaming telemetry, not transactional bundle: no version bump, no decision logic reads them, consumers are SSE tails and projections. Events land in the same `seq` space as facts.
 
 The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
+
+### Daemon events (writer: `daemon`, separate `daemon_events` table)
+
+Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_events` table — disjoint from the per-run `seq` space because many entries are global (no run scope) and they must not interleave into the per-run reducer's projection. Same 4 KB payload cap as fact events.
+
+| Type | Payload fields | Semantics |
+|---|---|---|
+| `daemon.started` | `pid`, `hostname` | Daemon acquired the lock and started the executor |
+| `daemon.stopped` | `pid`, `reason: 'clean'\|'leak_limit'\|'signal'\|'error'`, `detail?` | Daemon exiting; emitted before lock release |
+| `daemon.reaper_took_over` | `priorPid`, `priorHostname`, `priorHeartbeatAt`, `staleForMs` | Lock TTL exceeded; this daemon force-acquired |
+| `daemon.sweep_completed` | `requeued: number`, `quarantined: number`, `durationMs` | Startup sweep finished |
+| `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
+| `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced |
+| `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
+
+`run_id` on the row is set for run-scoped daemon events (leak_detected, worktree_provisioned); global lifecycle / sweep / GC events leave it NULL.
 
 ---
 
@@ -729,7 +801,7 @@ packages/
 ## 13. Deferred decisions
 
 - **Blob encryption** for secret-bearing outputs — single-user local; deferred.
-- **Cross-machine deployment** — single-machine by design; swap SQLite → Postgres behind `IEventStore` if ever needed.
+- **Cross-machine deployment** — single-machine by design. `IEventStore` is synchronous (matches `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite, so this is a future direction rather than a clean drop-in.
 - **Retention policies** per workflow — manual `swarm prune` until demand.
 - **Blob streaming** for >16MB — handler must chunk; revisit on real use case.
 - **Auto-migration across breaking schema bumps** — refuse + manual for v1. Additive bumps are handled in-place by `applyAdditiveMigrations` (`packages/store/src/migrations.ts`) without touching the version row's compat range.

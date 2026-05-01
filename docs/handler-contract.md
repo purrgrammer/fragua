@@ -79,7 +79,13 @@ return {
 Terminal failure. Emits `fact.run_halted`.
 
 ```typescript
-return { kind: "halt", reason: "budget" | "max_loops" | "error", detail?: string };
+return {
+  kind: "halt",
+  reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded",
+  detail?: string,
+};
+// `abort_loop`, `schema_drift`, and `aborted_exit` are also valid `fact.run_halted` reasons,
+// but the executor emits those itself (not via a handler return).
 ```
 
 ### `pause_provider`

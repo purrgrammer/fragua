@@ -11,7 +11,7 @@
 Core values, in priority order:
 
 1. **Simple** — small number of primitives, obvious composition
-2. **Testable** — pure core, first-class simulation, bit-identical replay
+2. **Testable** — pure core, first-class simulation, deterministic replay of the control plane (state machine, intent fold, edge selection). LLM bodies are best-effort and depend on provider determinism (see ARCH §1.11)
 3. **Observable** — every state transition is a typed event in one durable log
 4. **Flexible** — swap providers, models, environments, UIs without touching workflow logic
 5. **Efficient** — reuses mature libraries (`pi-ai`, `pi-agent-core`) instead of rebuilding the stack
@@ -155,7 +155,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 ## 5. Non-goals for this scope
 
-- **Multi-machine deployment.** Everything assumes one machine, one SQLite file. Replace the store with a Postgres implementation of `IEventStore` later if needed.
+- **Multi-machine deployment.** Everything assumes one machine, one SQLite file. The `IEventStore` interface is synchronous (matching `bun:sqlite`), so a Postgres backing is *not* a drop-in port — it would require async-ifying the interface and every callsite. Listed as a future option, not a near-term swap.
 - **Blob encryption.** Single-user local tool; DB read = full read anyway.
 - **Auto-migration of schema drift.** Runs pin a `schema_version`; mismatches halt rather than auto-upgrade.
 - **Workflow hot-reload.** `workflow_sha` is pinned at enqueue time.
@@ -192,7 +192,7 @@ swarm is *inspired by* the attractor specification (`attractor-spec.md`) — its
 - **`<abort>` / `<promise>` prompt contract** — codergen handler's structured outcome markers in prompts; documented in `handler-contract.md`. Not orchestration but contract between workflow author and codergen handler.
 - **`max_goal_gate_retries`** — per-run safety bound on the §3.4 goal-gate retarget chain (default 3). Attractor §3.4 step 4 is unbounded — a workflow whose `retry_target` itself fails forever loops. swarm caps it.
 - **`$ARGUMENTS` substitution token** — expands to the run's `--input` text in node prompts. Attractor §9.2 specifies only `$goal`; `$ARGUMENTS` is the natural per-run-input counterpart and is the substitution most workflow authors reach for first.
-- **`intent.steer` for free-text operator input on a running thread** — attractor's HITL surface (§4.6) is choice-only: the hexagon handler returns `human.gate.selected` (a key) and `human.gate.label`. `intent.steer` fills the free-text gap by injecting operator text into the current handler's transcript without compromising the canonical hexagon contract. Recommended path for "operator wants to clarify or redirect mid-run".
+- **`intent.steering_requested` for free-text operator input on a running thread** — attractor's HITL surface (§4.6) is choice-only: the hexagon handler returns `human.gate.selected` (a key) and `human.gate.label`. The steering intent fills the free-text gap by injecting operator text into the current handler's transcript without compromising the canonical hexagon contract. Recommended path for "operator wants to clarify or redirect mid-run".
 
 ### 6.5 Deliberate omissions
 
