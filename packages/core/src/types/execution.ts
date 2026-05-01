@@ -36,8 +36,11 @@ export interface ExecutionEnvironment {
   ): Promise<ExecResult>;
   /** List entries in a directory (non-recursive). */
   listDir(path: string): Promise<DirEntry[]>;
-  /** Glob against env.cwd() (or override via opts.cwd). Returns sorted, cwd-relative paths. */
-  glob(pattern: string, opts?: { cwd?: string }): Promise<string[]>;
+  /** Glob against env.cwd() (or override via opts.cwd). Returns sorted, cwd-relative paths.
+   * `opts.dot` controls whether dotfiles / hidden directories are visible to the
+   * pattern; defaults to false to match Bun.Glob. Tools that mirror pi-coding-agent's
+   * `--hidden` posture (grep, find) pass `dot: true`. */
+  glob(pattern: string, opts?: { cwd?: string; dot?: boolean }): Promise<string[]>;
 }
 
 export interface DirEntry {

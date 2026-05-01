@@ -44,7 +44,10 @@ export const findTool: Tool<FindArgs, FindResultData> = {
       }
 
       const effectiveLimit = Math.max(1, args.limit ?? DEFAULT_LIMIT);
-      const raw = await env.glob(args.pattern, { cwd: searchRoot });
+      // dot: true mirrors fd's default `--hidden` posture so dotfiles
+      // and hidden dirs are visible to the pattern. The default ignore
+      // set still drops .git/, .swarm/, etc. via shouldIgnore().
+      const raw = await env.glob(args.pattern, { cwd: searchRoot, dot: true });
       // env.glob returns paths relative to env.cwd(); strip the
       // searchRoot prefix so output is relative to the search
       // directory (matches pi-coding-agent and the tool's docstring).

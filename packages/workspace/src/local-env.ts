@@ -68,11 +68,11 @@ export class LocalEnvironment implements ExecutionEnvironment {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async glob(pattern: string, opts: { cwd?: string } = {}): Promise<string[]> {
+  async glob(pattern: string, opts: { cwd?: string; dot?: boolean } = {}): Promise<string[]> {
     const base = opts.cwd ? this.resolvePath(opts.cwd) : this._cwd;
     const g = new Bun.Glob(pattern);
     const matches: string[] = [];
-    for await (const absolute of g.scan({ cwd: base, absolute: true, onlyFiles: false })) {
+    for await (const absolute of g.scan({ cwd: base, absolute: true, onlyFiles: false, dot: opts.dot ?? false })) {
       matches.push(relative(this._cwd, absolute));
     }
     matches.sort();

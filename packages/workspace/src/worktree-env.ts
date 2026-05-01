@@ -308,7 +308,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     return this.local.listDir(path);
   }
 
-  glob(pattern: string, opts?: { cwd?: string }): Promise<string[]> {
+  glob(pattern: string, opts?: { cwd?: string; dot?: boolean }): Promise<string[]> {
     return this.local.glob(pattern, opts);
   }
 

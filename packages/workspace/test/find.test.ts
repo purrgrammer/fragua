@@ -75,4 +75,18 @@ describe("findTool", () => {
     expect(r.is_error).toBe(true);
     expect(r.text).toContain("Path not found");
   });
+
+  test("matches dotfiles and hidden directories (fd --hidden parity)", async () => {
+    await writeFile(join(scratch, ".env"), "");
+    await writeFile(join(scratch, ".gitignore"), "");
+    await mkdir(join(scratch, ".github", "workflows"), { recursive: true });
+    await writeFile(join(scratch, ".github", "workflows", "ci.yml"), "");
+    await writeFile(join(scratch, "regular.txt"), "");
+    const r = await findTool.execute({ pattern: "**/*" }, env);
+    expect(r.is_error).toBeUndefined();
+    expect(r.text).toContain(".env");
+    expect(r.text).toContain(".gitignore");
+    expect(r.text).toContain(".github/workflows/ci.yml");
+    expect(r.text).toContain("regular.txt");
+  });
 });

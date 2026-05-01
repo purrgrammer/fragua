@@ -117,4 +117,18 @@ describe("grepTool", () => {
     expect(r.text).not.toContain("sub/a.txt");
     expect(r.text).not.toContain("top.txt");
   });
+
+  test("searches dotfiles and hidden directories (rg --hidden parity)", async () => {
+    await writeFile(join(scratch, ".env"), "secret=needle\n");
+    await writeFile(join(scratch, ".gitignore"), "node_modules\n");
+    await mkdir(join(scratch, ".github", "workflows"), { recursive: true });
+    await writeFile(join(scratch, ".github", "workflows", "ci.yml"), "needle: true\n");
+    await writeFile(join(scratch, "regular.txt"), "needle here too\n");
+    const r = await grepTool.execute({ pattern: "needle" }, env);
+    expect(r.is_error).toBeUndefined();
+    expect(r.text).toContain(".env:1: secret=needle");
+    expect(r.text).toContain(".github/workflows/ci.yml:1: needle: true");
+    expect(r.text).toContain("regular.txt:1: needle here too");
+    expect(r.data?.matches).toBe(3);
+  });
 });
