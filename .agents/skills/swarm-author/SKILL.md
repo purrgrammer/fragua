@@ -1,6 +1,6 @@
 ---
 name: swarm-author
-description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file in `workflows/` or `examples/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, `<promise>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics E001–E008 / W001–W006, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file in `workflows/` or `examples/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, `<promise>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics E001–E015 / W001–W010, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
 version: 0.1.0
 ---
 
@@ -102,13 +102,10 @@ Applied to `prompt`, `tool_command`, and any string attr. Order of longest-prefi
 | `$ARGUMENTS` | CLI positional input (or `--input`). One of the few things the user controls per-run. |
 | `$<nodeId>.output` | Raw text output of a prior node (codergen last turn's text, or tool stdout). |
 | `$<nodeId>.output.<path>` | JSON-path dive into structured output; returns `""` if absent. |
-| `${context.<key>}` | Read from run context KV. `context.hitl.<nodeId>` carries HITL payloads. |
-| `$RUN_ID` | Stable run identifier. Use for `.swarm/runs/$RUN_ID/summary.md`-style sidecars. |
-| `$WORKTREE_PATH` | Absolute path to the per-run worktree (if the executor created one). |
-| `$ARTIFACTS_DIR` | Scratch dir scoped to the run. |
-| `$LOG_DIR` | Per-run dir for service logs / sidecars. |
-| `$1` … `$9` | Positional args (when the CLI passed multiple). |
-| `$LOOP_USER_INPUT`, `$REJECTION_REASON` | Set by the retry/HITL machinery in loops. |
+| `${context.<key>}` | Read from run context KV. |
+| `$goal` | The graph's `goal` attribute (mirrored into `routing.graph_goal` at run start). |
+
+That's the full set — see `packages/core/src/engine/substitution.ts`. Tokens like `$RUN_ID`, `$WORKTREE_PATH`, `$ARTIFACTS_DIR`, `$LOG_DIR`, `$1`…`$9`, `$LOOP_USER_INPUT`, `$REJECTION_REASON` are not implemented; they appear literally if you write them.
 
 Validator E005 flags `$foo.output` when `foo` isn't a node id — typos surface at parse time, not at run.
 
@@ -351,7 +348,7 @@ signoff -> publish [label="[A] Approve"]
 signoff -> draft   [label="[R] Reject"]
 ```
 
-The accelerator key (the `K` in `[K] Label`) becomes the operator-facing button identifier and the routing key. Keys must be unique across the hexagon's outgoing edges (E010); structured HITL routes by accelerator-normalised match.
+The node's `prompt=` attribute is what the *DOT* attribute is called, but on the wire it fills the `label` field of `fact.run_paused_hitl.payload` (`{nodeId, label, options[]}` per `packages/types/src/swarm-events.ts`) — there is no separate `prompt` field on the payload. The accelerator key (the `K` in `[K] Label`) becomes the operator-facing button identifier and the routing key. Keys must be unique across the hexagon's outgoing edges (E010); structured HITL routes by accelerator-normalised match.
 
 **Don't** put `condition="context.hitl.<nodeId>=…"` on hexagon outgoing edges — that's the legacy codergen-driven path, and the structured handler doesn't write `context.hitl.*` for label-routed gates. W004 flags it. The input the operator submitted is still recorded for audit (visible in events), but routing comes from the label.
 

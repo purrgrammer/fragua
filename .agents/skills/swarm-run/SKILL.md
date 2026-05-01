@@ -155,14 +155,15 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 
 Every operator action is an HTTP POST that appends an `intent.*` event. No OCC: intents are **always appendable** (SPEC §3.5). The daemon picks them up on the next supervisor tick (~50ms).
 
-All six endpoints return `{ seq }` — the sequence number assigned to the intent. Quote it in any follow-up so the user can find the action in the event stream.
+All seven endpoints return `{ seq }` — the sequence number assigned to the intent. Quote it in any follow-up so the user can find the action in the event stream.
 
 | POST | Body | Written intent | Post-condition | When to use |
 |---|---|---|---|---|
 | `/runs/:id/steer` | `{text: "…"}` | `intent.steering_requested` | Handler aborts with `cause:"steer"`; next dispatch sees the steering in the thread. | Push a redirection into a running codergen node without cancelling the run. |
-| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts with `cause:"pause"`; run transitions to `paused_hitl`. | Stop forward progress without losing the run. Resume with `/hitl`. |
+| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts with `cause:"pause"`; run transitions to `paused_hitl`. | Stop forward progress without losing the run. Resume with `/resume` (use `/hitl` only if a `wait.human` gate is what paused it). |
 | `/runs/:id/cancel` | `{reason?: "…"}` | `intent.cancel_requested` | Handler aborts with `cause:"cancel"`; terminal `fact.run_cancelled`. | Kill the run. Unrecoverable. |
-| `/runs/:id/hitl` | `{input: <any>}` | `intent.hitl_input` | If `paused_hitl` (from pause or a `wait.human` node): run transitions back to `queued`; the next dispatch of the paused node sees `context.hitl.<nodeId> = input`. | Resume a paused run; answer a human-gate. |
+| `/runs/:id/hitl` | `{selected: string, note?: string}` | `intent.hitl_input` | Server 400s if `selected` is missing or empty. For a `wait.human` gate: the daemon wakes the run and routes to the outgoing edge whose `[K] Label` accelerator key matches `selected`. | Answer a structured `wait.human` gate (one of the option keys from `fact.run_paused_hitl.payload.options[].key`). |
+| `/runs/:id/resume` | `{note?: string}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued` on the next tick. | Resume an operator-paused run, or wake a `paused_retry` early — when no HITL selection is being supplied. |
 | `/runs/:id/unquarantine` | `{resolution: "treat_as_done"\|"retry"\|"cancel", note?: "…"}` | `intent.unquarantine` | Daemon's next sweep resolves the orphan side effect per `resolution`. | Only when `status='quarantined'`. Decision has external-world consequences — see §6. |
 | `/runs/:id/priority` | `{newPriority: N, note?: "…"}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. | Jump a queued run ahead of the line. |
 
@@ -180,13 +181,13 @@ Post-condition to wait for: `fact.node_aborted { cause: "steer", intentSeq: <the
 
 ### Pause + resume
 
-Pause is steer-without-text: abort the current handler and flip the run to `paused_hitl`. The user (or you, on their behalf) resumes with `/hitl { input }`. The paused node's next dispatch reads the input from `context.hitl.<nodeId>`.
+Pause is steer-without-text: abort the current handler and flip the run to `paused_hitl`. The user (or you, on their behalf) resumes with `/resume`. `/hitl` is reserved for `wait.human` (structured) gates and requires a `selected` accelerator key matching one of the gate's options — sending it to an operator-paused run is the wrong shape.
 
 ```sh
 curl -fsS -X POST "$URL/runs/$RUN/pause"  -H 'content-type: application/json' -d '{}'
 # … user thinks …
-curl -fsS -X POST "$URL/runs/$RUN/hitl"   -H 'content-type: application/json' \
-  -d '{"input":"proceed — the config at packages/web/vite.config.ts is correct"}'
+curl -fsS -X POST "$URL/runs/$RUN/resume" -H 'content-type: application/json' \
+  -d '{"note":"verified the config at packages/web/vite.config.ts is correct"}'
 ```
 
 ### Cancel
@@ -195,16 +196,18 @@ Cancel is final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` +
 
 ### HITL inputs (wait.human nodes)
 
-Workflows can also pause themselves via a `hexagon`-shaped `wait.human` node (see swarm-author §11). Same resume mechanism: post to `/hitl`. The node's prompt tells the operator what shape of input it expects.
+Workflows can also pause themselves via a `hexagon`-shaped `wait.human` node (see swarm-author §12). Resume with `/hitl`, supplying `selected` matching one of the option keys advertised in the pause payload.
 
 ```sh
-# After `fact.run_paused_hitl { nodeId: "review", prompt: "APPROVED | REVISE: <note>" }`:
+# After `fact.run_paused_hitl { nodeId: "review", label: "Approve to ship, or reject.",
+#                                options: [{key:"a", label:"Approve", to:"publish"},
+#                                          {key:"r", label:"Reject",  to:"draft"}] }`:
 curl -fsS -X POST "$URL/runs/$RUN/hitl" \
   -H 'content-type: application/json' \
-  -d '{"input":"APPROVED"}'
+  -d '{"selected":"a"}'
 ```
 
-The input lands at `context.hitl.<nodeId>`. Edge conditions like `[condition="context.hitl.review=APPROVED"]` route on literal match — no parser-node required.
+Routing happens by edge label accelerator key — see swarm-author §12 for the structured-HITL pattern.
 
 ### Priority
 
@@ -219,10 +222,10 @@ Runs sit in `paused_hitl` until you feed them. The payload of `fact.run_paused_h
 ```sh
 curl -fsS "$URL/runs/$RUN/events.json" \
   | jq '[.[] | select(.type=="fact.run_paused_hitl")] | last'
-# { seq, type, payload: { nodeId, prompt, options? }, … }
+# { seq, type, payload: { nodeId, label, options: [{key, label, to}, …] }, … }
 ```
 
-Respond with the shape the prompt asks for. Structured HITL workflows (the modern pattern, used by `showcase.dot`) route by edge label — the hexagon's outgoing edges carry `[K] Label` accelerators, and the operator's selection picks the matching edge. For codergen-driven HITL (rare; the legacy `context.hitl.<nodeId>=…` condition is now W004 on hexagon edges), send the literal token as a string. If the payload carries `options`, those are the suggested values — but the endpoint accepts any JSON, so don't be clever.
+`selected` must equal one of `options[].key`. Structured HITL is the only supported routing path — see swarm-author §12. The legacy `context.hitl.<nodeId>=…` edge condition now raises validator W004.
 
 Present the decision to the user — don't answer HITL on their behalf unless they've explicitly delegated it.
 
@@ -330,7 +333,8 @@ curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, totalCostUsd, totalTokens
 curl -fsS -X POST "$URL/runs/$RUN/steer"         -d '{"text":"…"}'       -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/pause"         -d '{}'                  -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/cancel"        -d '{"reason":"…"}'      -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/hitl"          -d '{"input":"APPROVED"}' -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/hitl"          -d '{"selected":"a"}'      -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/resume"        -d '{}'                  -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine"  -d '{"resolution":"cancel","note":"…"}' -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/priority"      -d '{"newPriority":10}'  -H 'content-type: application/json'
 ```
