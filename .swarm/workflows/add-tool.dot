@@ -8,6 +8,7 @@ digraph add_tool {
     goal             = "Add a new tool to @swarm/workspace with tests, passing CI."
     label            = "add-tool"
     default_fidelity = "compact"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-opus-4-7; }"
   ]
 
   start [shape=Mdiamond]
@@ -15,32 +16,24 @@ digraph add_tool {
   inspect [
     prompt = "Plan a new tool for @swarm/workspace. User request: $ARGUMENTS. Read packages/workspace/src/{tools.ts,types.ts,index.ts}. Output (<400 words): target file+location, ExecutionEnvironment methods needed (flag if new), truncation policy, test cases. Tool `name` is `^[a-z][a-z0-9_]*$`."
     allowed_tools = "read, bash"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   implement [
     prompt = "Implement $inspect.output. Edit packages/workspace only. Add the tool to CORE_TOOLS. Add tests in a new file under packages/workspace/test/. Run `bun run --filter='@swarm/workspace' typecheck` after edits. If ExecutionEnvironment gains a method, implement it in local-env.ts too."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   verify [
     prompt = "Run `bun test ./packages/workspace`. Fix failures. Emit `WORKSPACE_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   summarize [
     prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: tool added, files changed, why ($ARGUMENTS), tests. Under 300 words."
     allowed_tools = "write"
     fidelity = "truncate"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]

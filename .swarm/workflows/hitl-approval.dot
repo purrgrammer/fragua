@@ -12,6 +12,7 @@ digraph hitl_approval {
     goal             = "Produce an artifact the human explicitly signed off on."
     label            = "HITL approval"
     default_fidelity = "compact"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-opus-4-7; }"
   ]
 
   start [shape=Mdiamond]
@@ -19,8 +20,6 @@ digraph hitl_approval {
   draft [
     prompt = "Draft the artifact: $ARGUMENTS. Under 200 words. End with `<promise>DRAFT_READY</promise>`."
     allowed_tools = "read, write, edit, bash"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   review [
@@ -36,8 +35,6 @@ digraph hitl_approval {
   publish [
     prompt = "Publish the approved artifact. End with `PUBLISHED: <ref>`."
     allowed_tools = "read, write, edit, bash"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]

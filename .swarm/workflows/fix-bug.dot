@@ -8,6 +8,7 @@ digraph fix_bug {
     goal             = "Turn a bug report into a minimal regression test + fix that leaves CI green."
     label            = "fix-bug"
     default_fidelity = "compact"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-opus-4-7; }"
   ]
 
   start [shape=Mdiamond]
@@ -16,16 +17,12 @@ digraph fix_bug {
     prompt = "Bug: $ARGUMENTS. Locate the affected package, write a failing test next to the source (or find an existing one), confirm it fails. Output: (1) package+file, (2) test path, (3) failing assertion."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   fix [
     prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer, then the full package suite. Stay in the bug's package."
     allowed_tools = "read, write, edit, bash"
     thread_id = "dev"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   verify [
@@ -34,16 +31,12 @@ digraph fix_bug {
     thread_id = "dev"
     max_cost_usd = 0.30
     max_tokens = 800000
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   summarize [
     prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: bug, root cause, fix (file:line), regression test."
     allowed_tools = "write"
     fidelity = "truncate"
-    llm_provider = "anthropic"
-    llm_model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]
