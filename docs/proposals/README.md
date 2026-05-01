@@ -46,6 +46,12 @@ delta called out in the proposal body.
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
+| [Cap-overflow strategy](./cap-overflow.md) | sketch | 4 KB / 8 KB / 1 MiB / 16 MiB caps need typed observability + spill paths; routing overflow is the loudest production hazard |
+| [Handler discipline rails for extension code](./handler-discipline-extensions.md) | sketch | extend the in-tree lint to user-supplied handlers / tools and the agent backend |
+| [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §14 risk #3; nominal capacity claims have no measurement behind them |
+| [Auto-retry for transient LLM provider errors](./provider-auto-retry.md) | specified | promote PENDING entry; backoff for 429 / 5xx / network reset, manual escape preserved |
+| [Doc-vs-code drift CI lint](./drift-lint.md) | sketch | enforce AGENTS.md rule #1 in CI; structural compare against contract files |
+| [Bound the OCC retry loop](./occ-retry-ceiling.md) | specified | add a ceiling on the unbounded `if (!ok) continue` retry path in `runOneInner` |
 
 ## Deferred
 
