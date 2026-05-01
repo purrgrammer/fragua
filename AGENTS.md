@@ -67,7 +67,16 @@ Skills (domain context loaded on demand): `.agents/skills/` — `frontend`, `des
 
 ## Ground rules
 
-1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in.
+1. **Spec-first.** Code uncovered by `docs/SPEC.md` / `docs/ARCHITECTURE.md` / `docs/handler-contract.md` — stop, update the docs first or check in. Same-PR obligations when load-bearing contract files change:
+
+   | If you touch | Update in the same PR |
+   |---|---|
+   | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
+   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed |
+   | `packages/core/src/handler/types.ts` | `handler-contract.md` |
+   | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
+
+   Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
 2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
 3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
 4. **One coordination surface.** `@swarm/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
