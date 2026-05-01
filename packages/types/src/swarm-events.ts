@@ -54,11 +54,11 @@ export type IntentEvent =
   | { type: "intent.resume"; payload: { note?: string } }
   | {
       type: "intent.unquarantine";
-      payload: { resolution: "treat_as_done" | "retry" | "cancel"; note: string };
+      payload: { resolution: "treat_as_done" | "retry" | "cancel"; note?: string };
     }
   | {
       type: "intent.priority_adjusted";
-      payload: { newPriority: number; note: string };
+      payload: { newPriority: number; note?: string };
     };
 
 export type IntentType = IntentEvent["type"];

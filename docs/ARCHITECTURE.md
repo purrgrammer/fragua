@@ -324,8 +324,8 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
 | `intent.hitl_input` | `selected: string`, `note?: string` | Wake a `paused_hitl` run; `selected` is the accelerator key chosen by the operator |
 | `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
-| `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note: string` | Operator acknowledgement for a quarantined run |
-| `intent.priority_adjusted` | `newPriority: number`, `note: string` | Operator bump |
+| `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note?: string` | Operator acknowledgement for a quarantined run |
+| `intent.priority_adjusted` | `newPriority: number`, `note?: string` | Operator bump |
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
