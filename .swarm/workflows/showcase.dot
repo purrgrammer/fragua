@@ -4,8 +4,10 @@
 //   Mdiamond      → start
 //   Msquare       → exit (done)
 //   box           → codergen          (plan, approach_*, summarize)
-//   component     → parallel          (explore, fan_in=pick_best)
-//   tripleoctagon → parallel.fan_in   (pick_best — LLM rank via prompt)
+//   component     → parallel          (explore — branches converge on pick_best)
+//   tripleoctagon → parallel.fan_in   (pick_best — LLM rank via prompt; fan-in
+//                                       target discovered structurally via edges
+//                                       per attractor §4.8)
 //   diamond       → conditional       (route — pure edge routing)
 //   hexagon       → wait.human        (signoff)
 //   parallelogram → tool              (run_tests — bun test)
@@ -35,7 +37,7 @@ digraph showcase {
     allowed_tools = "read, bash"
   ]
 
-  explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+  explore [shape=component, join_policy="wait_all"]
 
   // cluster_review derives class `review`; the stylesheet gives every node
   // in here Opus + high reasoning. Branches are read-only deliberation.

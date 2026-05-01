@@ -45,8 +45,13 @@ digraph fix_bug {
   ]
 
   summarize [
-    prompt        = "Write $LOG_DIR/summary.md: bug ($ARGUMENTS), root cause, fix (file:line), regression test (file + name). Under 200 words."
-    allowed_tools = "write"
+    // Output flows through the run transcript via the agent's final
+    // assistant text — swarm has no `$LOG_DIR` (attractor §5.6 was
+    // intentionally omitted; see docs/SPEC.md §6.1). Downstream nodes
+    // could reference this as `$summarize.output`; the UI surfaces it
+    // through the messages projection.
+    prompt        = "Output a 200-word summary: bug ($ARGUMENTS), root cause, fix (file:line), regression test (file + name)."
+    allowed_tools = ""
     fidelity      = "truncate"
   ]
 
