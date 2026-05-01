@@ -27,6 +27,7 @@ delta called out in the proposal body.
 | [Run isolation via worktrees](./run-isolation.md) | sketch | partially landed; lots more work needed — see [worktree-design](./worktree-design.md) for the full picture |
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap (cascading from project config) |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` CLI |
+| [Periodic introspection workflow](./introspection-workflow.md) | specified | `.swarm/workflows/introspect.dot` ships; outstanding: glob/list primitive tools, archival path for the synthesised review |
 
 ## Accepted (design done; awaiting scheduling)
 

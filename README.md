@@ -30,6 +30,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - HITL via `wait.human` nodes returning `yield_hitl { label, options[] }`
 - Auto-titler runs once per run (cost-bounded summariser)
 - Daemon-events audit log (process lifecycle, sweeps, GC, leak detection, worktree provisioning)
+- Self-review workflow (`bun run swarm run introspect`) — read-only periodic audit of architecture, doc-vs-code drift, proposal hygiene, and operational health; see [`docs/proposals/introspection-workflow.md`](docs/proposals/introspection-workflow.md)
 
 ## What swarm does not deliver today
 
