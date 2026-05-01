@@ -456,6 +456,119 @@ describe("goal-gate / retry-target lints (attractor §3.4)", () => {
   });
 });
 
+describe("structural lints (attractor §11.2)", () => {
+  test("E012: start node has incoming edges", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+          a -> s
+        }
+      `),
+    );
+    const e012 = diags.find((d) => d.code === "E012");
+    expect(e012).toBeDefined();
+    expect(e012?.severity).toBe("error");
+    expect(e012?.nodeId).toBe("s");
+  });
+
+  test("E013: exit node has outgoing edges", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          done [shape=Msquare]
+          extra [shape=box]
+          s -> done -> extra
+        }
+      `),
+    );
+    const e013 = diags.find((d) => d.code === "E013");
+    expect(e013).toBeDefined();
+    expect(e013?.nodeId).toBe("done");
+  });
+
+  test("E014: edge condition fails to parse", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a [condition="this is not valid && && malformed"]
+          a -> done
+        }
+      `),
+    );
+    const e014 = diags.find((d) => d.code === "E014");
+    expect(e014).toBeDefined();
+  });
+
+  test("W009: codergen node with empty prompt and empty label", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          empty [shape=box]
+          done [shape=Msquare]
+          s -> empty -> done
+        }
+      `),
+    );
+    const w009 = diags.find((d) => d.code === "W009");
+    expect(w009).toBeDefined();
+    expect(w009?.nodeId).toBe("empty");
+  });
+
+  test("W009 not raised when prompt or label is set", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box, label="Do the thing"]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W009")).toBe(false);
+  });
+
+  test("W010: fidelity not a known mode", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, fidelity="compcat"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w010 = diags.find((d) => d.code === "W010");
+    expect(w010).toBeDefined();
+    expect(w010?.nodeId).toBe("work");
+  });
+
+  test("W010: graph default_fidelity not a known mode", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [default_fidelity="weird"]
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W010" && d.message.includes("graph"))).toBe(true);
+  });
+});
+
 describe("retry-policy lints (attractor §3.6)", () => {
   test("W008: node retry_policy is not a known preset name", () => {
     const diags = validate(

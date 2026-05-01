@@ -3,6 +3,7 @@
 
 import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
+import { parseCondition } from "./condition.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
@@ -128,8 +129,12 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // W003: no fail-edge (or unconditional fallback) from codergen/tool nodes
   // with only conditional edges. A run can silently terminate otherwise.
+  // Skip diamond (conditional) and Msquare/Mdiamond — diamond's no-op
+  // handler structurally cannot return fail (attractor §4.7), and the
+  // start/exit shapes have their own structure rules.
   for (const n of nodes) {
     if (n.shape === "Mdiamond" || n.shape === "Msquare") continue;
+    if (n.shape === "diamond") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     if (out.length === 0) continue; // terminal behaviour ok; engine handles
     const anyUnconditional = out.some((e) => isEmptyCondition(e.attrs.condition));
@@ -141,6 +146,101 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         message: `node "${n.id}" has only conditional edges and no "outcome=fail" catch-all; run may silently terminate on failure`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // E012: start node must have no incoming edges (attractor §11.2). The
+  // start handler is the entry point and is reached by the run-started
+  // fact, not by any edge.
+  for (const s of starts) {
+    if ((inDegrees.get(s.id) ?? 0) > 0) {
+      diags.push({
+        severity: "error",
+        code: "E012",
+        message: `start node "${s.id}" must have no incoming edges`,
+        nodeId: s.id,
+        ...(s.loc !== undefined ? { loc: s.loc } : {}),
+      });
+    }
+  }
+
+  // E013: exit nodes must have no outgoing edges (attractor §11.2).
+  for (const e of exits) {
+    const out = graph.edges.filter((edge) => edge.from === e.id);
+    if (out.length > 0) {
+      diags.push({
+        severity: "error",
+        code: "E013",
+        message: `exit node "${e.id}" must have no outgoing edges`,
+        nodeId: e.id,
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
+  // E014: condition syntax — every edge `condition` parses cleanly.
+  // Surfaces author typos at validate-time instead of edge-selection
+  // failures mid-run.
+  for (const e of graph.edges) {
+    const cond = e.attrs.condition;
+    if (typeof cond !== "string" || cond.trim() === "") continue;
+    try {
+      parseCondition(cond);
+    } catch (err) {
+      diags.push({
+        severity: "error",
+        code: "E014",
+        message: `edge "${e.from}" → "${e.to}" condition="${cond}" failed to parse: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+
+  // W009: codergen (box) node has empty prompt and empty label. The agent
+  // boundary substitutes label for prompt when prompt is empty; both
+  // empty leaves the LLM call with nothing to do. Catches "I forgot the
+  // prompt" authoring mistakes.
+  for (const n of nodes) {
+    if (n.shape !== "box") continue;
+    const promptEmpty = !(typeof n.attrs.prompt === "string" && n.attrs.prompt.trim() !== "");
+    const labelEmpty = !(typeof n.attrs.label === "string" && n.attrs.label.trim() !== "");
+    if (promptEmpty && labelEmpty) {
+      diags.push({
+        severity: "warning",
+        code: "W009",
+        message: `codergen node "${n.id}" has empty prompt and empty label — the LLM call will have nothing to do`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // W010: fidelity value not recognised. Falls back to "compact" at
+  // runtime; W010 surfaces typos like "compcat".
+  const VALID_FIDELITY = new Set(["full", "truncate", "compact", "summary:low", "summary:medium", "summary:high"]);
+  for (const n of nodes) {
+    const f = n.attrs.fidelity;
+    if (typeof f === "string" && (f as string) !== "" && !VALID_FIDELITY.has(f as string)) {
+      diags.push({
+        severity: "warning",
+        code: "W010",
+        message: `node "${n.id}" fidelity="${f}" is not a known mode (full|truncate|compact|summary:low|summary:medium|summary:high)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+  {
+    const df = graph.attrs.default_fidelity;
+    if (typeof df === "string" && (df as string) !== "" && !VALID_FIDELITY.has(df as string)) {
+      diags.push({
+        severity: "warning",
+        code: "W010",
+        message: `graph default_fidelity="${df}" is not a known mode`,
       });
     }
   }
