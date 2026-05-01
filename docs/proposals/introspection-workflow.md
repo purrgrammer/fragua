@@ -28,15 +28,31 @@ last-reviewed: 2026-05-01
 1. **`collect`** — load the contract surface (`schema.sql`,
    `swarm-events.ts`, `handler/types.ts`, `intent-fold.ts`), the
    contract docs (SPEC, ARCH, handler-contract, intent-fold, PENDING),
-   README, every `docs/proposals/*.md`. Run `git log -30` and the
+   README, every `docs/proposals/*.md`, and the three `swarm-*` skill
+   files (`.agents/skills/swarm-author/SKILL.md`,
+   `.agents/skills/swarm-run/SKILL.md`,
+   `.agents/skills/swarm-debug/SKILL.md`). Run `git log -30` and the
    per-file commit log. Produces a structured snapshot.
 
 2. **`drift`** — cross-references code-vs-docs surface by surface
    (status enum, intent types, fact types, halt reasons, schema
-   columns, fold rules). Tags each finding by severity (CRITICAL /
-   HIGH / MEDIUM / LOW). Reads recent commits to flag any
-   contract-file change that didn't update its corresponding doc per
-   AGENTS.md rule #1.
+   columns, fold rules) **plus the swarm-* skill files** against the
+   code they document: `swarm-author` against the DOT grammar +
+   validator codes + retry presets + substitution tokens; `swarm-run`
+   against HTTP routes + intent endpoints + the CLI shape;
+   `swarm-debug` against the event taxonomy + halt reasons + run-state
+   shape. Tags each finding by severity (CRITICAL / HIGH / MEDIUM /
+   LOW). Reads recent commits to flag any contract-file change that
+   didn't update its corresponding doc per AGENTS.md rule #1.
+
+   Skill drift is a real exposure: the validator codes (E001–E015,
+   W001–W010), the DOT shape table, the substitution tokens, the
+   retry-policy preset names, the HTTP route shapes, and the event
+   taxonomy each appear inside one or more skills as documented
+   contracts. A change to `validator.ts` that doesn't update
+   `swarm-author/SKILL.md` will silently mislead the next agent
+   loading the skill — exactly the failure mode AGENTS.md rule #1 was
+   designed to prevent for `docs/`.
 
 3. **`health`** — read-only `sqlite3 .swarm/swarm.db` queries: cap-
    near-miss rate (events at 80%+ of the 4 KB cap), routing-bytes
@@ -96,6 +112,16 @@ angles and complement rather than substitute.
   several runs will tell us whether the four-node split is
   cost-efficient or whether collapsing to two nodes (collect+analyse,
   health+synthesise) makes more sense.
+- **Extend AGENTS.md rule #1 to skill files.** The same-PR doc-touch
+  table currently names `schema.sql`, `swarm-events.ts`,
+  `handler/types.ts`, `intent-fold.ts`. The `swarm-*` skills cite each
+  of those plus the validator, the retry-policy presets, and the
+  HTTP/CLI surface — they drift in lockstep. A natural extension is to
+  add rows mapping `validator.ts` → `swarm-author/SKILL.md`,
+  `routes.ts` / `commands/run.ts` → `swarm-run/SKILL.md`,
+  and `swarm-events.ts` → `swarm-debug/SKILL.md`. Pending until this
+  workflow's first run shows what's actually drifting; the table grows
+  in response to evidence rather than speculation.
 
 ## What this does not commit to
 
