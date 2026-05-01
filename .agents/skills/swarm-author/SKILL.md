@@ -14,7 +14,7 @@ Authoritative references: `docs/SPEC.md` §3 (primitives), §4 (validation), `do
 
 ## Fast path
 
-1. **Find a template.** `.swarm/workflows/quick-change.dot` (5 nodes, shell+LLM), `.swarm/workflows/build-feature.dot` (8 nodes, full pipeline with fresh-thread review + REJECT_FIXABLE salvage loop), `.swarm/workflows/review-parallel.dot` (every shape), `.swarm/workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
+1. **Find a template.** `.swarm/workflows/change.dot` (daily driver: plan/implement/review/verify/commit, with goal-gated review that retargets `implement` on REJECT), `.swarm/workflows/fix-bug.dot` (reproduce → fix → verify with shared `dev` thread), `.swarm/workflows/merge.dot` (single-stage rebase + CAS-fast-forward), `.swarm/workflows/showcase.dot` (every shape — parallel + fan_in + HITL + tool + diamond), `.swarm/workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
 2. **Sketch the shape, not the prose.** Nodes + edges first. Name the nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow — `implement -> verify -> commit`. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
 3. **Validate.** `bun run swarm validate .swarm/workflows/my-thing.dot`. Fix every error; warnings are strong hints.
 4. **Smoke-run.** `bun run swarm run my-thing --input="<realistic task>"` against a cheap model first (see §9) before wiring to Opus / Sonnet.
@@ -206,7 +206,9 @@ APPROVE: <one line>
 <abort>REJECT: <one line — architecture / scope / contract violation></abort>
 ```
 
-Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`. See `.swarm/workflows/build-feature.dot` for a wired-up example.
+Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`.
+
+For workflows where most rejects are non-mechanical, prefer the `goal_gate` retarget pattern (see §13b) over a `fix` salvage node — the engine retargets to `retry_target` automatically, capped by `max_goal_gate_retries`. `.swarm/workflows/change.dot` uses this pattern: `review` is goal-gated with `retry_target="implement"`, so REJECT loops back without an explicit `review -> implement` edge.
 
 ---
 
@@ -303,7 +305,7 @@ emit `<abort>missing or blocked target</abort>`. Do NOT retarget silently.
 A node that decides the run can't proceed emits `<abort>reason</abort>` in its final text. The runtime reads this, records `outcome=fail`, writes `fact.node_aborted { cause:"aborted_exit" }`, and the run halts with `reason:"aborted_exit"` unless a downstream edge routes on it.
 
 ```
-If the task needs exploration, plan, or review, emit `<abort>task too large for quick-change</abort>`.
+If the task needs more than the workflow can handle (multi-package refactor, contract change), emit `<abort>task too large, split into <suggested>: <reason></abort>`.
 ```
 
 ### Promise sentinels
@@ -331,7 +333,7 @@ Unconstrained tools surprise operators. Read-only planners stop the agent from e
 
 ### Keep prompts short
 
-Long prompts mean the agent spends tokens re-parsing your essay. `build-feature.dot`'s `plan` prompt is ~200 words — that's the upper end for a production node. If you're over 300 words, either split the node or move rules to `context_files`.
+Long prompts mean the agent spends tokens re-parsing your essay. `change.dot`'s `plan` prompt is ~150 words — that's a reasonable upper end for a production node. If you're over 300 words, either split the node or move rules to `context_files`.
 
 ---
 

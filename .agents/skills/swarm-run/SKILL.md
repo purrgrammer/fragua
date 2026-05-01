@@ -1,6 +1,6 @@
 ---
 name: swarm-run
-description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off build-feature", "enqueue smoke-sleep", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's swarm-debug). Teaches pre-flight (daemon + server + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
+description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue ci-gate", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's swarm-debug). Teaches pre-flight (daemon + server + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
 version: 0.1.0
 ---
 
@@ -21,7 +21,7 @@ sqlite3 -readonly .swarm/swarm.db "SELECT pid, (strftime('%s','now')*1000 - hear
 bun run swarm providers ls                             # at least the default provider shows ✓
 
 # 1. Run. Trailing args become $ARGUMENTS; use --input to be explicit.
-bun run swarm run quick-change --input="rename foo() to bar() in packages/core"
+bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
 The CLI does three things for you: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), then `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts are `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_quarantined`; the CLI exits non-zero on halt / cancel.
@@ -95,7 +95,7 @@ URL=$(jq -r .url .swarm/serve.json)
 # 1. Upload (idempotent — sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg n quick-change --rawfile s .swarm/workflows/quick-change.dot \
+  -d "$(jq -n --arg n change --rawfile s .swarm/workflows/change.dot \
         '{name:$n, dotSource:$s}')" | jq -r .sha)
 
 # 2. Enqueue. `input` lands in routing.input → substituted as $ARGUMENTS.
@@ -214,7 +214,7 @@ curl -fsS "$URL/runs/$RUN/events.json" \
 # { seq, type, payload: { nodeId, prompt, options? }, … }
 ```
 
-Respond with the shape the prompt asks for. If the workflow used `review-parallel.dot`-style `APPROVE | REJECT` tokens, send the literal token as a string. If the payload carries `options`, those are the suggested values — but the endpoint accepts any JSON, so don't be clever.
+Respond with the shape the prompt asks for. Structured HITL workflows (the modern pattern, used by `showcase.dot`) route by edge label — the hexagon's outgoing edges carry `[K] Label` accelerators, and the operator's selection picks the matching edge. For codergen-driven HITL (rare; the legacy `context.hitl.<nodeId>=…` condition is now W004 on hexagon edges), send the literal token as a string. If the payload carries `options`, those are the suggested values — but the endpoint accepts any JSON, so don't be clever.
 
 Present the decision to the user — don't answer HITL on their behalf unless they've explicitly delegated it.
 
@@ -254,9 +254,9 @@ Present the options and evidence to the user. Let them pick. Never auto-choose.
 Multiple runs in flight is the normal case; the daemon has concurrency (`--concurrency N`, default 4). A few idioms:
 
 ```sh
-# Enqueue a batch of smoke runs to exercise concurrency.
+# Enqueue a batch of no-LLM runs to exercise executor concurrency.
 for _ in 1 2 3 4 5; do
-  bun run swarm run smoke-sleep --no-follow
+  bun run swarm run ci-gate --no-follow
 done
 
 # Watch all currently-running runs' status:
@@ -307,11 +307,11 @@ sqlite3 -readonly .swarm/swarm.db "SELECT (strftime('%s','now')*1000 - heartbeat
 bun run swarm providers ls
 
 # Enqueue + watch
-bun run swarm run quick-change --input="…"
+bun run swarm run change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n quick-change --rawfile s .swarm/workflows/quick-change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
+   -d "$(jq -n --arg n change --rawfile s .swarm/workflows/change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" '{workflowSha:$sha, input:$in}')" | jq -r .runId)
 

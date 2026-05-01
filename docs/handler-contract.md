@@ -319,7 +319,7 @@ A tool node is not an agent tool. Agent-callable tools (read / write /
 edit / bash) are what an LLM invokes *inside* a codergen turn; the
 graph-level `tool` node is a distinct primitive for fixed shell steps
 with no LLM in the loop. See `.swarm/workflows/ci-gate.dot` for a pure-tool
-example and `.swarm/workflows/review-parallel.dot` for a tool node alongside
+example and `.swarm/workflows/showcase.dot` for a tool node alongside
 parallel / fan_in / wait.human.
 
 ## Loops

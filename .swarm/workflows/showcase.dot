@@ -1,0 +1,103 @@
+// showcase.dot — reference workflow exercising every shape and key feature.
+//
+// Shapes covered (attractor §2.8):
+//   Mdiamond      → start
+//   Msquare       → exit (done)
+//   box           → codergen          (plan, approach_*, summarize)
+//   component     → parallel          (explore, fan_in=pick_best)
+//   tripleoctagon → parallel.fan_in   (pick_best — LLM rank via prompt)
+//   diamond       → conditional       (route — pure edge routing)
+//   hexagon       → wait.human        (signoff)
+//   parallelogram → tool              (run_tests — bun test)
+//
+// Also exercised: subgraph-derived class (`cluster_review` → `.review`),
+// stylesheet specificity (universal → class → id), `$<nodeId>.output`
+// chaining, condition-language reads on `context.hitl.<nodeId>`.
+//
+//   bun run swarm run showcase --input="explain the diff at HEAD"
+
+digraph showcase {
+  graph [
+    goal             = "Reference: every shape, parallel + fan_in, HITL pause/resume, tool node, class-based stylesheet."
+    label            = "showcase"
+    default_fidelity = "compact"
+    model_stylesheet = "
+      *          { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
+      .review    { llm_model: claude-opus-4-7; }
+      #pick_best { llm_model: claude-opus-4-7; reasoning_effort: high; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+
+  plan [
+    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY. End with `<promise>BRIEF_READY</promise>`."
+    allowed_tools = "read, bash"
+  ]
+
+  explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+
+  // cluster_review derives class `review`; the stylesheet gives every node
+  // in here Opus + high reasoning. Branches are read-only deliberation.
+  subgraph cluster_review {
+    approach_correctness [
+      prompt = "Using $plan.output, run `git diff HEAD` and list up to 3 CORRECTNESS risks (logic bugs, off-by-one, missing null checks): `RISK: <one line> (file:line)`. None → `NO_RISKS`."
+      allowed_tools = "read, bash"
+    ]
+    approach_style [
+      prompt = "Using $plan.output, run `git diff HEAD` and list STYLE/consistency regressions: `STYLE: <one line> (file:line)`. None → `NO_FINDINGS`."
+      allowed_tools = "read, bash"
+    ]
+    approach_security [
+      prompt = "Using $plan.output, run `git diff HEAD` and list SECURITY concerns (unvalidated input, secret leaks, auth bypass, injection): `SEC: <one line> (file:line)`. None → `NO_CONCERNS`."
+      allowed_tools = "read, bash"
+    ]
+  }
+
+  pick_best [
+    shape  = tripleoctagon
+    prompt = "Rank the three review angles by severity. Highlight the worst finding across them. Output a 5-line summary ending with one of `RANK_HIGH`, `RANK_MEDIUM`, `RANK_LOW`, `RANK_CLEAN`."
+  ]
+
+  // Diamond — pure edge routing. No prompt; outgoing edge conditions decide.
+  // Here it short-circuits on a failed fan_in (e.g. every branch aborted).
+  route [shape=diamond]
+
+  signoff [
+    shape  = hexagon
+    prompt = "Reviewers ranked the diff. Approve to run tests, or reject to stop here."
+  ]
+
+  run_tests [shape=parallelogram, tool_command="bun test"]
+
+  summarize [
+    prompt   = "Combine $pick_best.output and $run_tests.output into a 5-line run summary. End with `SHOWCASE_DONE`."
+    fidelity = "truncate"
+  ]
+
+  done [shape=Msquare]
+
+  start -> plan -> explore
+
+  explore -> approach_correctness
+  explore -> approach_style
+  explore -> approach_security
+
+  approach_correctness -> pick_best
+  approach_style       -> pick_best
+  approach_security    -> pick_best
+
+  pick_best -> route
+
+  // Diamond: skip HITL on fan_in failure, otherwise gate on the operator.
+  route -> done    [condition="outcome=fail"]
+  route -> signoff
+
+  // Structured HITL — selection routes by edge label accelerator (§4.6).
+  signoff -> run_tests [label="[A] Approve"]
+  signoff -> done      [label="[R] Reject"]
+
+  run_tests -> summarize [condition="outcome=success"]
+  run_tests -> done      [condition="outcome=fail"]
+  summarize -> done
+}

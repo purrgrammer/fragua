@@ -213,7 +213,7 @@ SQL
 
 The transcript is populated at every `message_end` during `PiCodergenBackend.run()`, so it reflects the live state of an in-flight run — not just terminal ones.
 
-`thread_id` on a node shares the transcript across subsequent entries of nodes with the same `thread_id` (e.g. `build-feature.dot` uses `thread_id="dev"` to share context between `implement` and `verify`). Filter by `node_id` to narrow.
+`thread_id` on a node shares the transcript across subsequent entries of nodes with the same `thread_id` (e.g. `change.dot` puts `implement` + `review` inside `subgraph cluster_dev` with `thread_id="dev"` so the reviewer sees the implementer's session; `fix-bug.dot` shares `dev` across reproduce/fix/verify). Filter by `node_id` to narrow.
 
 ---
 

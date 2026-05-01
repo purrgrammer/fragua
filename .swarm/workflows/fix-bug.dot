@@ -1,47 +1,64 @@
-// fix-bug.dot — reproduce, fix, regression-test.
+// fix-bug.dot — reproduce → fix → verify → summarize.
+//
+// `reproduce` is goal-gated: a fix without a failing test first is a no-op,
+// so if reproduce fails to land an asserting test the run retargets back
+// to it (capped by max_goal_gate_retries=2).
 //
 //   bun run swarm run fix-bug \
 //     --input="bash tool hangs when command writes to stdin"
 
 digraph fix_bug {
   graph [
-    goal             = "Turn a bug report into a minimal regression test + fix that leaves CI green."
-    label            = "fix-bug"
-    default_fidelity = "compact"
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-opus-4-7; }"
+    goal                  = "Turn a bug report into a minimal regression test + fix that leaves CI green."
+    label                 = "fix-bug"
+    default_fidelity      = "compact"
+    max_goal_gate_retries = 2
+    model_stylesheet      = "
+      *        { llm_provider: anthropic; llm_model: claude-opus-4-7; }
+      .verify  { llm_model: claude-sonnet-4-6; }
+    "
   ]
 
   start [shape=Mdiamond]
 
   reproduce [
-    prompt = "Bug: $ARGUMENTS. Locate the affected package, write a failing test next to the source (or find an existing one), confirm it fails. Output: (1) package+file, (2) test path, (3) failing assertion."
+    prompt = "Bug: $ARGUMENTS.\n\nABORT (`<abort>reason</abort>`) when: empty / unclear / cannot localise to a package after a reasonable read.\n\nOtherwise: locate the affected package, write a failing test next to the source (or extend an existing one), confirm it fails. Output: (1) package+file, (2) test path + `describe`/`test` name, (3) failing assertion sentence."
     allowed_tools = "read, write, edit, bash"
-    thread_id = "dev"
+    thread_id     = "dev"
+    goal_gate     = true
+    retry_target  = "reproduce"
   ]
 
   fix [
-    prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer, then the full package suite. Stay in the bug's package."
+    prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer first, then the full package suite. Stay inside the bug's package."
     allowed_tools = "read, write, edit, bash"
-    thread_id = "dev"
+    thread_id     = "dev"
   ]
 
   verify [
-    prompt = "Run `bun run ci`. Fix failures, iterate. Emit `CI_GREEN` when all pass."
+    class         = "verify"
+    prompt        = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds — then `<abort>CI unstable: <last failure signature></abort>`. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
-    thread_id = "dev"
-    max_cost_usd = 0.30
-    max_tokens = 800000
+    thread_id     = "dev"
+    max_cost_usd  = 0.30
+    max_tokens    = 800000
   ]
 
   summarize [
-    prompt = "Write .swarm/runs/${context.graph.run_id}/summary.md: bug, root cause, fix (file:line), regression test."
+    prompt        = "Write $LOG_DIR/summary.md: bug ($ARGUMENTS), root cause, fix (file:line), regression test (file + name). Under 200 words."
     allowed_tools = "write"
-    fidelity = "truncate"
+    fidelity      = "truncate"
   ]
 
   done [shape=Msquare]
 
-  start -> reproduce -> fix -> verify
+  start -> reproduce
+  reproduce -> done [condition="outcome=fail"]
+  reproduce -> fix
+
+  fix -> done [condition="outcome=fail"]
+  fix -> verify
+
   verify -> summarize [condition="outcome=success"]
   verify -> done      [condition="outcome=fail"]
   summarize -> done

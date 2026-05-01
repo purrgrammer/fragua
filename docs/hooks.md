@@ -403,17 +403,14 @@ Typecheck output appears inline after every edit. The agent sees
 call. The `verify` node becomes a final CI gate (`bun run ci`) — not the
 primary feedback loop.
 
-Concrete changes to `.swarm/workflows/build.dot`:
-- Simplify `implement` prompt: remove explicit typecheck/lint instructions
-- The `verify` tool node stays as the final gate
-- The `review → implement` retry loop costs less because most fixable
-  issues are caught by hooks within the implement turn
-
-Concrete changes to `.swarm/workflows/build-feature.dot`:
-- Same simplification of `implement` prompt
-- The `fix` node's typecheck instructions become redundant — hooks handle it
-- `review` sees fewer mechanical issues (missing imports, type errors) and
-  can focus on architecture/scope
+Concrete changes to `.swarm/workflows/change.dot`:
+- Simplify `implement` prompt: remove the explicit per-package typecheck
+  loop — hooks emit diagnostics inline on every `edit`/`write`.
+- `verify` (the `bun run ci` gate) stays as the final check.
+- The goal-gate `review → implement` retarget cycle costs less, because
+  most mechanical fixables are caught by hooks within the implement turn —
+  reviewers see fewer scope-creep / contract-violation issues, which is
+  exactly what they're best at.
 
 ---
 
