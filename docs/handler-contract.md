@@ -35,7 +35,42 @@ dispatcher.register(workflowSha, nodeId, spec);
 
 ---
 
-## The three return kinds
+## HandlerContext members
+
+The context object the executor hands to every handler. The fields below are the ones not already covered by the I/O accessors (`ctx.llm`, `ctx.http`, `ctx.tools`, `ctx.messages`, `ctx.artifacts`, `ctx.externalCall`, `ctx.signal`, `ctx.routing`). Source: `packages/core/src/handler/types.ts` `interface HandlerContext`.
+
+### `ctx.args: Readonly<Record<string, string>>`
+
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. Today the only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Other tokens (`${context.*}`, `$<nodeId>.output[.path]`) read from the substitution context, not from this map.
+
+### `ctx.nodeOutputs: ReadonlyMap<string, NodeOutput>`
+
+Captured outputs of prior nodes in this run, keyed by `nodeId`. Before each dispatch the executor folds the run's `fact.node_completed` events that carry `outputRef` into this map and dereferences each artifact's text once. Handlers pass it through to `substitute()` so prompt tokens like `$plan.output` resolve to the captured assistant text. When a node has been re-entered via a backward edge, the most recent iteration's output wins.
+
+### `ctx.emit(type, payload): void`
+
+Emit an observability event — `agent.*`, `llm.*`, `tool.*`, `cost.recorded`, `summary.*`. The executor persists these to the store under their verbatim type so the UI's conversation + step views can project them. Non-blocking: writes are buffered and flushed alongside the node's terminal fact, and the buffer flushes even if the handler throws.
+
+### `ctx.env?: ExecutionEnvironment`
+
+Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Unset under bare `LocalEnvironment` daemons and most tests; in that case handlers may fall back to a process-cwd default. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
+
+### `ctx.budgetSnapshot?: BudgetSnapshotInput`
+
+Cumulative cost / tokens against configured ceilings, computed by the executor from `run_state.metrics` + the active graph + node attrs at dispatch time. Backends pass it through to surface "X of Y used" on `llm.start.budget`. Undefined when no ceiling is configured for this run.
+
+```typescript
+interface BudgetSnapshotInput {
+  cumulative_cost_usd: number;
+  cumulative_tokens: number;
+  max_cost_usd?: number;
+  run_max_cost_usd?: number;
+}
+```
+
+---
+
+## The four return kinds
 
 ### `transition`
 Handler finished; the executor commits a `fact.node_completed` + a `fact.node_started` (or `fact.run_completed` if `nextNode === "__end__"`), then moves on.
@@ -414,7 +449,7 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 ## Timeouts
 
-`maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (5s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
+`maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (10s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
 ---
 
