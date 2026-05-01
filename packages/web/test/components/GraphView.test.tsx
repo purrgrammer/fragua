@@ -523,7 +523,7 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(synth).toBeUndefined();
   });
 
-  it("assigns per-side arcIndex so multiple loops/retargets stack outward", () => {
+  it("assigns arcIndex by source depth — topmost source gets the widest bulge", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
       a [shape=box]
@@ -532,21 +532,79 @@ describe("toFlowGraph — handler-specific body fields", () => {
       d [shape=box, goal_gate=true, retry_target="a"]
       done [shape=Msquare]
       start -> a -> b -> c -> d -> done
-      // Two right-side back-edges to a — arcIndex 0 and 1.
+      // Two right-side back-edges to a. d is deeper than c, so d's
+      // back-edge gets arcIndex 0 (tightest) and c's gets arcIndex 1.
       c -> a [condition="outcome=fail"]
       d -> a [condition="outcome=fail"]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
-    // Right side: real back-edges from c and d to a.
-    const realLoops = flowEdges
-      .filter((e) => !e.id.startsWith("__retarget__") && (e.data as { isBackEdge?: boolean })?.isBackEdge)
-      .map((e) => (e.data as { arcIndex?: number }).arcIndex);
-    expect(realLoops).toEqual([0, 1]);
-    // Left side: synthetic retargets from c and d. Independent counter.
-    const synth = flowEdges
-      .filter((e) => e.id.startsWith("__retarget__"))
-      .map((e) => (e.data as { arcIndex?: number }).arcIndex);
-    expect(synth).toEqual([0, 1]);
+    const realArcs = new Map<string, number | undefined>();
+    for (const e of flowEdges) {
+      if (e.id.startsWith("__retarget__")) continue;
+      if (!(e.data as { isBackEdge?: boolean })?.isBackEdge) continue;
+      realArcs.set(`${e.source}->${e.target}`, (e.data as { arcIndex?: number }).arcIndex);
+    }
+    // Bottommost (d) → 0, topmost (c) → 1. Assignment is per-side dense.
+    expect(realArcs.get("d->a")).toBe(0);
+    expect(realArcs.get("c->a")).toBe(1);
+
+    // Same rule on the left side: synthetic retargets sort by gate depth
+    // descending, so d's retarget gets arcIndex 0 and c's gets arcIndex 1.
+    const synth = new Map<string, number | undefined>();
+    for (const e of flowEdges) {
+      if (!e.id.startsWith("__retarget__")) continue;
+      synth.set(e.source, (e.data as { arcIndex?: number }).arcIndex);
+    }
+    expect(synth.get("d")).toBe(0);
+    expect(synth.get("c")).toBe(1);
+  });
+
+  it("skip-edges share the right-side arcIndex with loop-channel edges (no overlap)", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      c [shape=box]
+      d [shape=box]
+      done [shape=Msquare]
+      // Linear spine + a back-edge + a skip-edge that bulges right.
+      start -> a -> b -> c -> d -> done
+      d -> a [condition="outcome=fail"]
+      a -> done [condition="outcome=fail"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    // Both kinds participate in the right-side counter. Source order in
+    // the .dot determines assignment, so the skip-edge a->done (declared
+    // last) should get a higher index than the back-edge d->a.
+    const back = flowEdges.find((e) => e.source === "d" && e.target === "a");
+    const skip = flowEdges.find((e) => e.source === "a" && e.target === "done");
+    const backIndex = (back?.data as { arcIndex?: number })?.arcIndex;
+    const skipIndex = (skip?.data as { arcIndex?: number })?.arcIndex;
+    expect(typeof backIndex).toBe("number");
+    expect(typeof skipIndex).toBe("number");
+    expect(skipIndex).not.toBe(backIndex);
+  });
+
+  it("flags HITL edges (from a wait.human source) so they render in idle-gray", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      review [shape=hexagon, prompt="Approve or reject?"]
+      ship [shape=box]
+      stop [shape=Msquare]
+      start -> review
+      review -> ship [label="[A] Approve"]
+      review -> stop [label="[R] Reject"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const approve = flowEdges.find((e) => e.source === "review" && e.target === "ship");
+    const reject = flowEdges.find((e) => e.source === "review" && e.target === "stop");
+    expect((approve?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(true);
+    expect((reject?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(true);
+    // Plain forward edges (start -> review) shouldn't be flagged.
+    const intoReview = flowEdges.find((e) => e.source === "start" && e.target === "review");
+    expect((intoReview?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(false);
   });
 });

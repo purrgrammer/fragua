@@ -22,15 +22,33 @@ const DIM_OPACITY = 0.3;
 /**
  * Build a wide arc path for skip/back edges whose handles live on the
  * node's left or right side. Control points sit past the matching extreme
- * handle x so the curve — and the edge label at its midpoint — clears
+ * handle x so the curve — and the edge label near its source end — clears
  * the node column instead of cutting through it. Returns the SVG path
- * and the (labelX, labelY) midpoint used to anchor the edge pill.
+ * and the (labelX, labelY) anchor used by the edge pill.
  *
  * `arcIndex` lets the host stagger multiple arcs on the same side so they
  * don't overlap. Each step bumps the bulge outward by `ARC_SPREAD_STEP`
  * pixels (and the label with it). Index 0 sits at the base offset.
+ *
+ * Label positioning: anchored at `LABEL_T` along the cubic Bézier (0 =
+ * source, 1 = target). Putting it near the source — rather than the arc
+ * midpoint — makes it obvious *which* node the branch leaves. Especially
+ * valuable for `outcome=fail` edges where the operator wants to see
+ * "this is the fail path out of <node>" without tracing the curve.
  */
-const ARC_SPREAD_STEP = 36;
+// Wider spread between stacked arcs. With three skip-edges converging on
+// the same exit node (e.g. `route -> done`, `signoff -> done`,
+// `run_tests -> done`), 36px-per-step kept the bulges close enough that
+// the curves overlapped near the shared target. 64px gives each arc its
+// own visual lane plus enough room for the label pill at the source end.
+const ARC_SPREAD_STEP = 64;
+const LABEL_T = 0.3;
+// Left-side arcs (synthetic retargets) carry a small base bump on top of
+// the shared offset so their labels — sitting at LABEL_T near the source —
+// don't land on top of the node column when the arc is short. Right-side
+// arcs already clear comfortably; bumping them too would over-widen the
+// loop channel for no reason.
+const LEFT_ARC_BASE_BOOST = 28;
 const wideArcPath = (
   sx: number,
   sy: number,
@@ -43,16 +61,38 @@ const wideArcPath = (
   // arc and long skip-edges push further out. 100 min keeps the label
   // visibly outside a 240-wide node.
   const span = Math.abs(ty - sy);
-  const baseOffset = Math.max(100, Math.min(180, 60 + span * 0.25));
+  const baseOffset =
+    Math.max(100, Math.min(180, 60 + span * 0.25)) + (side === "left" ? LEFT_ARC_BASE_BOOST : 0);
   const offset = baseOffset + Math.max(0, arcIndex) * ARC_SPREAD_STEP;
   const extreme = side === "right" ? Math.max(sx, tx) : Math.min(sx, tx);
   const cx = side === "right" ? extreme + offset : extreme - offset;
   const path = `M ${sx},${sy} C ${cx},${sy} ${cx},${ty} ${tx},${ty}`;
-  // Pull the label slightly inside the arc peak so it sits *just* off-
-  // column rather than at the bulge tip. Sign mirrors the side.
-  const labelX = side === "right" ? cx - 8 : cx + 8;
-  const labelY = (sy + ty) / 2;
+  // Anchor the label at LABEL_T along the actual cubic Bézier so it
+  // tracks the curve rather than a linear midpoint approximation. With
+  // P1 = (cx, sy) and P2 = (cx, ty), the x is dominated by cx through
+  // most of the curve and the y interpolates monotonically from sy to ty.
+  const [labelX, labelY] = bezierPoint(LABEL_T, [sx, sy], [cx, sy], [cx, ty], [tx, ty]);
   return [path, labelX, labelY];
+};
+
+/** Cubic Bézier point evaluator. P0 → P3 are the four control points
+ *  (start, ctrl1, ctrl2, end). `t` is in [0, 1]. */
+const bezierPoint = (
+  t: number,
+  p0: [number, number],
+  p1: [number, number],
+  p2: [number, number],
+  p3: [number, number],
+): [number, number] => {
+  const u = 1 - t;
+  const w0 = u * u * u;
+  const w1 = 3 * u * u * t;
+  const w2 = 3 * u * t * t;
+  const w3 = t * t * t;
+  return [
+    w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0],
+    w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1],
+  ];
 };
 
 // Small inline pill rendered at the edge's midpoint. Shows DOT edge
@@ -86,7 +126,18 @@ const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim }: EdgeLabelProp
   );
 };
 
-type TemporaryData = { label?: string; dim?: boolean };
+type TemporaryData = {
+  label?: string;
+  dim?: boolean;
+  /** Bulge stagger for arcOut mode. Shared with Loop's per-side counter
+   *  so back-edges and right-side skip-edges don't draw on top of each
+   *  other. Ignored when `arcOut` is false. */
+  arcIndex?: number;
+  /** HITL edges (outgoing from `wait.human`) lift to the idle-gray retry
+   *  tone instead of the default very-faint border. Hosts that want this
+   *  signal set the flag; Temporary picks up the matching stroke + tone. */
+  isHitlEdge?: boolean;
+};
 
 /** Outcome coloring — when set, the stroke + label pill track the
  *  outcome accent regardless of the structural edge variant. */
@@ -125,8 +176,10 @@ const Temporary = ({
   arcOut,
   outcome,
 }: TemporaryProps) => {
+  const d = data as TemporaryData | undefined;
+  const arcIndex = typeof d?.arcIndex === "number" ? d.arcIndex : 0;
   const [edgePath, labelX, labelY] = arcOut
-    ? wideArcPath(sourceX, sourceY, targetX, targetY)
+    ? wideArcPath(sourceX, sourceY, targetX, targetY, "right", arcIndex)
     : getSimpleBezierPath({
         sourcePosition,
         sourceX,
@@ -136,14 +189,15 @@ const Temporary = ({
         targetY,
       });
 
-  const d = data as TemporaryData | undefined;
   const label = d?.label;
   const dim = d?.dim;
   const outcomeStroke = strokeForOutcome(outcome);
   const outcomeTone = toneForOutcome(outcome);
 
-  // Hairline (1px) — default Swarm border tone, or outcome accent when
-  // the edge carries pass/fail semantics.
+  // Hairline (1px). Stroke priority: outcome accent (semantic) > HITL
+  // idle-gray (visibility lift for operator-choice edges) > default
+  // border (the quietest tier, used for plain forward flow).
+  const stroke = outcomeStroke ?? (d?.isHitlEdge ? "var(--sw-accent-idle)" : "var(--sw-border)");
   return (
     <>
       <BaseEdge
@@ -151,7 +205,7 @@ const Temporary = ({
         markerEnd={markerEnd}
         path={edgePath}
         style={{
-          stroke: outcomeStroke ?? "var(--sw-border)",
+          stroke,
           strokeDasharray: "5, 5",
           strokeWidth: 1,
           opacity: dim ? DIM_OPACITY : 1,

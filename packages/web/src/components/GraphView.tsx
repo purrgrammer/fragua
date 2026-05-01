@@ -477,10 +477,17 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  through the LEFT-side retarget handles (opposite the back-edge
      *  side) so the two retry channels read as separate visual lanes. */
     isRetargetEdge?: boolean;
-    /** Position of this loop / retarget edge among edges on the same arc
-     *  side. Drives the per-edge bulge offset so multiple arcs don't
-     *  overlap. Set by `toFlowGraph` for any edge routed through the
-     *  loop or retarget handles; AiEdge.Loop reads it. */
+    /** Outgoing from a `wait.human` (hexagon) node — operator choice.
+     *  Renders in the idle-gray tone (same as retry edges) instead of
+     *  the very-faint default border so `[K] Label` accelerators are
+     *  legible at a glance. */
+    isHitlEdge?: boolean;
+    /** Position of this loop / retarget / skip edge among edges on the
+     *  same arc side. Drives the per-edge bulge offset so multiple
+     *  arcs don't overlap. Set by `toFlowGraph` for any edge routed
+     *  through the loop or retarget handles, or any forward skip-edge
+     *  that bulges out via the right-side arc. AiEdge.Loop and
+     *  AiEdge.Temporary (in `arcOut` mode) both read it. */
     arcIndex?: number;
   };
 };
@@ -662,11 +669,32 @@ export function toFlowGraph(
     };
   });
 
-  // Per-side arc counters. Multiple back-edges on the same side stack
-  // outward by `arcIndex` so their bulges don't overlap. Right-side =
-  // real loops (back-edges, self-loops, loop_restart). Left-side =
-  // synthetic goal-gate retargets, counted below.
-  let rightArcIndex = 0;
+  // Per-side arc indices. Multiple arcs on the same side stack outward
+  // by `arcIndex` so their bulges don't overlap.
+  //
+  // Assignment: rank by source depth descending so the *deepest* (bottom-
+  // most in TB, rightmost in LR) edge gets arcIndex 0 — the tightest bulge
+  // — and the topmost edge gets the largest. Top arcs span more vertical
+  // distance and need more horizontal room to look natural; bottom arcs
+  // are short hops that can stay close to the column.
+  //
+  // Tie-breaks on declaration order so the assignment is stable run-to-run.
+  const rightArcEdgeIdxs: { idx: number; depth: number }[] = [];
+  graph.edges.forEach((e, idx) => {
+    const isBack = backEdgeKeys.has(edgeKey(e.from, e.to));
+    const isSelfLoop = e.from === e.to;
+    const sd = depthOf.get(e.from);
+    const td = depthOf.get(e.to);
+    const isSkip = !isBack && !isSelfLoop && sd !== undefined && td !== undefined && td - sd > 1;
+    const loopRestart = e.attrs["loop_restart"] === true;
+    if (isBack || isSelfLoop || loopRestart || isSkip) {
+      rightArcEdgeIdxs.push({ idx, depth: sd ?? 0 });
+    }
+  });
+  rightArcEdgeIdxs.sort((a, b) => b.depth - a.depth || a.idx - b.idx);
+  const rightArcIndexByEdge = new Map<number, number>();
+  rightArcEdgeIdxs.forEach((r, i) => rightArcIndexByEdge.set(r.idx, i));
+
   const flowEdges: FlowEdge[] = graph.edges.map((e, i) => {
     const sd = depthOf.get(e.from);
     const td = depthOf.get(e.to);
@@ -707,7 +735,17 @@ export function toFlowGraph(
     // forward edge — rendering it red would misrepresent the semantic.
     // Forward edges still pick up success/fail tones from outcome.
     const isLoopChannel = isBackEdge || isSelfLoop || loopRestart;
-    const arcIndex = isLoopChannel ? rightArcIndex++ : undefined;
+    // Right-side arc index — assigned above by the depth-aware ranking
+    // pass, not a sequential counter. Topmost source → largest arcIndex
+    // (widest bulge). Skip-edges share the lane with loop-channel edges.
+    const arcIndex = rightArcIndexByEdge.get(i);
+    // HITL edges (outgoing from a hexagon `wait.human` node) carry
+    // operator choices via `[K] Label` accelerators. They're routinely
+    // overlooked at the default border tone, so promote them to the
+    // same neutral idle gray the retry channel uses — distinct from
+    // forward flow without claiming an outcome accent.
+    const sourceNode = graph.nodes[e.from];
+    const isHitlEdge = sourceNode !== undefined && handlerOf(sourceNode) === "wait.human";
     const marker = isLoopChannel
       ? MARKER_RETRY
       : outcome === "success"
@@ -716,7 +754,9 @@ export function toFlowGraph(
           ? MARKER_FAIL
           : taken && !isSkipEdge
             ? MARKER_ANIMATED
-            : MARKER_DEFAULT;
+            : isHitlEdge
+              ? MARKER_RETRY
+              : MARKER_DEFAULT;
     return {
       id: `${e.from}->${e.to}#${i}`,
       source: e.from,
@@ -732,6 +772,7 @@ export function toFlowGraph(
         outcome,
         dim,
         loopRestart,
+        isHitlEdge,
         ...(arcIndex !== undefined ? { arcIndex } : {}),
       },
       sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
@@ -749,20 +790,25 @@ export function toFlowGraph(
   // `retarget · cap N` label. `resolveRetargetChain` returns null when no
   // target resolves — those gates can only halt, which W007 already
   // warns about at validate-time.
+  // Synthetic retargets — sort source-depth descending so the topmost
+  // gate gets the widest left-side arc, mirroring the right-side rule.
   const goalGateCap = maxGoalGateRetries(graph.attrs);
-  const synthEdges: FlowEdge[] = [];
-  let leftArcIndex = 0;
+  const retargetCandidates: { gateId: string; target: string; depth: number }[] = [];
   for (const node of Object.values(graph.nodes)) {
     if (node.attrs.goal_gate !== true) continue;
     const target = resolveRetargetChain(graph, node.id);
     if (target === null || target === node.id) continue;
+    retargetCandidates.push({ gateId: node.id, target, depth: depthOf.get(node.id) ?? 0 });
+  }
+  retargetCandidates.sort((a, b) => b.depth - a.depth || a.gateId.localeCompare(b.gateId));
+  const synthEdges: FlowEdge[] = retargetCandidates.map((r, leftArcIndex) => {
     const capLabel = `retarget · cap ${goalGateCap}${
       goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
     }`;
-    synthEdges.push({
-      id: `__retarget__${node.id}->${target}`,
-      source: node.id,
-      target,
+    return {
+      id: `__retarget__${r.gateId}->${r.target}`,
+      source: r.gateId,
+      target: r.target,
       type: EDGE_TYPE,
       data: {
         animated: false,
@@ -773,15 +819,15 @@ export function toFlowGraph(
         dim: hasRun, // synthetic — never "taken", so dim during a run.
         loopRestart: false,
         isRetargetEdge: true,
-        arcIndex: leftArcIndex++,
+        arcIndex: leftArcIndex,
       },
       // Left-side handles so synthetic retargets visually separate from
       // real back-edges (which route through the right-side LOOP handles).
       sourceHandle: RETARGET_HANDLE_SOURCE,
       targetHandle: RETARGET_HANDLE_TARGET,
       markerEnd: MARKER_RETRY,
-    });
-  }
+    };
+  });
 
   return { flowNodes, flowEdges: [...flowEdges, ...synthEdges] };
 }
