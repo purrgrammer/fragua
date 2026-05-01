@@ -127,8 +127,8 @@ cli
   .option("--concurrency <n>", "`start` only: max concurrent runs (default 4)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
-  .option("--provider <name>", "`start` only: LLM provider override (default: auto-detected)")
-  .option("--model <id>", "`start` only: model id override (e.g. claude-opus-4-7)")
+  .option("--llm-provider <name>", "`start` only: LLM provider override (default: auto-detected)")
+  .option("--llm-model <id>", "`start` only: model id override (e.g. claude-opus-4-7)")
   .action(async (action: string | undefined, options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
       const v = options[key];
@@ -160,8 +160,10 @@ cli
         ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
         ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
         ...(concurrency !== undefined && Number.isFinite(concurrency) ? { concurrency } : {}),
-        ...(pick("provider") !== undefined ? { provider: pick("provider")! } : {}),
-        ...(pick("model") !== undefined ? { model: pick("model")! } : {}),
+        // cac kebab-cases multi-word options: `--llm-provider` arrives as
+        // `options.llmProvider`. The pick() helper reads the kebab key.
+        ...(pick("llmProvider") !== undefined ? { llmProvider: pick("llmProvider")! } : {}),
+        ...(pick("llmModel") !== undefined ? { llmModel: pick("llmModel")! } : {}),
       });
       process.exit(code);
     }

@@ -21,8 +21,8 @@
     //   openrouter  | OPENROUTER_API_KEY   (300+ models, one key)
     //   google      | GEMINI_API_KEY
     //   groq        | GROQ_API_KEY
-    "provider": "ppq",
-    "model": "claude-sonnet-4.6",
+    "llm_provider": "anthropic",
+    "llm_model": "claude-sonnet-4.7",
 
     // Tool permission mode. Phase 2 supports unsafe only. Phase 6 will
     // add classifier + interactive.
@@ -37,8 +37,8 @@
     // fidelity=summary:* falls back to the deterministic
     // `summary:low` template with a warning.
     "summariser": {
-      "provider": "ppq",
-      "model": "claude-haiku-4.5"
+      "llm_provider": "anthropic",
+      "llm_model": "claude-haiku-4.6"
     }
   },
 

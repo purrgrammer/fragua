@@ -1,10 +1,10 @@
 // `swarm daemon` — run the packages/daemon process against the local store.
 //
-// Out of the box the daemon uses a stub LLM. Pass `--provider` + `--model`
-// (or omit both for the defaults) and the auto-dispatcher routes every
-// `box` node through a PiCodergenBackend so real LLM calls fire. Handlers
-// of other shapes (Mdiamond start, Msquare exit, hexagon wait.human, etc.)
-// stay on the trivial transitions.
+// Out of the box the daemon uses a stub LLM. Pass `--llm-provider` +
+// `--llm-model` (or omit both for the defaults) and the auto-dispatcher
+// routes every `box` node through a PiCodergenBackend so real LLM calls
+// fire. Handlers of other shapes (Mdiamond start, Msquare exit, hexagon
+// wait.human, etc.) stay on the trivial transitions.
 
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -119,10 +119,11 @@ export interface DaemonCommandOptions {
   dbPath?: string;
   /** Max concurrent runs. Default 4. */
   concurrency?: number;
-  /** LLM provider. When set with `--model`, enables the real codergen path. */
-  provider?: string;
-  /** Model id. */
-  model?: string;
+  /** LLM provider override. When set with `llmModel`, enables the real
+   * codergen path. Mirrors workflow node `llm_provider` (attractor §2.6). */
+  llmProvider?: string;
+  /** LLM model id. Mirrors workflow node `llm_model` (attractor §2.6). */
+  llmModel?: string;
 }
 
 export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<number> {
@@ -148,8 +149,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const modelRegistry = ModelRegistry.create(authStorage);
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
-  // Resolve provider/model. Precedence: CLI flags > .swarm/config.jsonc
-  // defaults > env autodetect > stub.
+  // Resolve llm_provider/llm_model. Precedence: CLI flags >
+  // .swarm/config.jsonc defaults > env autodetect > stub.
   const config = await loadConfig(cwd);
   let timeouts: ReturnType<typeof resolveTimeouts>;
   try {
@@ -158,10 +159,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     console.error(chalk.red((err as Error).message));
     return 1;
   }
-  const cfgProvider = config.defaults?.provider;
-  const cfgModel = config.defaults?.model;
-  let provider = opts.provider;
-  let model = opts.model;
+  const cfgProvider = config.defaults?.llm_provider;
+  const cfgModel = config.defaults?.llm_model;
+  let provider = opts.llmProvider;
+  let model = opts.llmModel;
   let llmSource: "flags" | "config" | "env" | "stub" = "stub";
   if (provider != null && model != null) {
     llmSource = "flags";
@@ -303,10 +304,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   );
 
   // Auto-title summariser — cheap cross-run call that labels each run
-  // post-enqueue. Uses `defaults.summariser.{provider,model}` when set;
-  // otherwise defaults to the cheapest known model for the primary
-  // provider. `autoTitle: false` disables even when a backend is
-  // configured.
+  // post-enqueue. Uses `defaults.summariser.{llm_provider,llm_model}`
+  // when set; otherwise defaults to the cheapest known model for the
+  // primary provider. `autoTitle: false` disables even when a backend
+  // is configured.
   const autoTitler = buildAutoTitler({
     store,
     config,
@@ -344,10 +345,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     llmSource === "env" ? " (auto-detected from env)" : llmSource === "config" ? " (from .swarm/config.jsonc)" : "";
   const llmLabel = useLlm
     ? `${provider}/${model}${sourceSuffix}`
-    : "stub (set a provider API key, or pass --provider + --model)";
+    : "stub (set a provider API key, or pass --llm-provider + --llm-model)";
   console.log(chalk.dim(`  llm default: ${llmLabel}`));
   if (useLlm) {
-    console.log(chalk.dim(`  nodes can override via \`provider=\`/\`model=\` attrs`));
+    console.log(chalk.dim(`  nodes can override via \`llm_provider=\`/\`llm_model=\` attrs`));
   }
   if (autoTitler.label !== undefined) {
     console.log(chalk.dim(`  auto-title: ${autoTitler.label}`));
@@ -428,9 +429,9 @@ function buildSummariserBackend(args: {
   getApiKey: (provider: string) => Promise<string | undefined>;
 }): SummariserInfo {
   const { config, primaryProvider, modelRegistry, getApiKey } = args;
-  const sumProvider = config.defaults?.summariser?.provider ?? primaryProvider;
+  const sumProvider = config.defaults?.summariser?.llm_provider ?? primaryProvider;
   if (!sumProvider) return { backend: undefined, label: undefined };
-  const sumModel = config.defaults?.summariser?.model ?? defaultSummariserModel(sumProvider);
+  const sumModel = config.defaults?.summariser?.llm_model ?? defaultSummariserModel(sumProvider);
   if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   const backend = new PiSummariserBackend({
     provider: sumProvider,

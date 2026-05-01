@@ -61,9 +61,9 @@ export interface NodeStartedData {
   context_keys?: string[];
   /** Upstream node ids whose outputs are available for substitution. */
   node_outputs_in_scope?: string[];
-  /** Model hint from `node.attrs.model` — authoritative binding is on `llm.start`. */
+  /** Model hint from `node.attrs.llm_model` — authoritative binding is on `llm.start`. */
   model?: string;
-  /** Provider hint from `node.attrs.provider`. */
+  /** Provider hint from `node.attrs.llm_provider`. */
   provider?: string;
   /** Resolved thread id (see engine/fidelity.ts). */
   thread_id?: string;

@@ -22,7 +22,7 @@ import { PiCodergenBackend, type PiCodergenBackendOptions } from "./backend.ts";
 export interface MakeCodergenHandlerOpts {
   /**
    * The parsed graph node this handler corresponds to. The backend reads
-   * `node.attrs.prompt`, `node.attrs.provider`, `node.attrs.model`, etc.
+   * `node.attrs.prompt`, `node.attrs.llm_provider`, `node.attrs.llm_model`, etc.
    */
   node: Node;
   /**

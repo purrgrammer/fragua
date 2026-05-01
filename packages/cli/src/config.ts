@@ -17,16 +17,16 @@ const TimeoutValue = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
 const Summariser = Type.Object(
   {
-    provider: Type.Optional(Type.String()),
-    model: Type.Optional(Type.String()),
+    llm_provider: Type.Optional(Type.String()),
+    llm_model: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
 const Defaults = Type.Object(
   {
-    provider: Type.Optional(Type.String()),
-    model: Type.Optional(Type.String()),
+    llm_provider: Type.Optional(Type.String()),
+    llm_model: Type.Optional(Type.String()),
     permissions: Type.Optional(Type.String()),
     summariser: Type.Optional(Summariser),
   },

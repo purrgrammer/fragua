@@ -34,7 +34,7 @@ Omit `--model` and swarm uses that provider's default (see `swarm providers`). T
   ```sh
   bun run packages/cli/bin/swarm.ts providers add --custom
   ```
-  Prompts for a name, base URL, and API key, then appends the entry to `~/.swarm/models.json` so it is immediately usable as `--provider <name>`.
-- Override per-node inside the workflow: `myNode [provider="openrouter", model="google/gemini-2.5-pro"]`.
+  Prompts for a name, base URL, and API key, then appends the entry to `~/.swarm/models.json` so it is immediately usable as `--llm-provider <name>`.
+- Override per-node inside the workflow: `myNode [llm_provider="openrouter", llm_model="google/gemini-2.5-pro"]`.
 - API keys are picked up from standard env vars automatically (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, etc.). The CLI refuses to run against a provider whose env var is missing and prints the exact variable name you need.
 - Goal-gate retries are capped at 3 by default; override with `graph [max_goal_gate_retries = N]` in a workflow.

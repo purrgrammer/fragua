@@ -33,25 +33,25 @@ describe("loadConfig", () => {
   test("parses defaults.provider and defaults.model", async () => {
     await write(`{
       "defaults": {
-        "provider": "openrouter",
-        "model": "anthropic/claude-opus-4.7"
+        "llm_provider": "openrouter",
+        "llm_model": "anthropic/claude-opus-4.7"
       }
     }`);
     const cfg = await loadConfig(scratch);
-    expect(cfg.defaults?.provider).toBe("openrouter");
-    expect(cfg.defaults?.model).toBe("anthropic/claude-opus-4.7");
+    expect(cfg.defaults?.llm_provider).toBe("openrouter");
+    expect(cfg.defaults?.llm_model).toBe("anthropic/claude-opus-4.7");
   });
 
   test("accepts comments and trailing commas (JSONC features)", async () => {
     await write(`{
       // pin model so the demo doesn't drift
       "defaults": {
-        "provider": "ppq",
-        "model": "claude-sonnet-4.6",
+        "llm_provider": "ppq",
+        "llm_model": "claude-sonnet-4.6",
       },
     }`);
     const cfg = await loadConfig(scratch);
-    expect(cfg.defaults?.provider).toBe("ppq");
+    expect(cfg.defaults?.llm_provider).toBe("ppq");
   });
 
   test("throws on malformed JSONC (no silent fallback)", async () => {
