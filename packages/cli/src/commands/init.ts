@@ -22,6 +22,7 @@ import chalk from "chalk";
 const GITIGNORE_BLOCK = `# swarm runtime — never commit these
 .swarm/runs/
 .swarm/worktrees/
+.swarm/blobs/
 .swarm/swarm.db*
 .swarm/daemon/
 .swarm/credentials.jsonc

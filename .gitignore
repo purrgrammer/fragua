@@ -2,6 +2,7 @@
 /.swarm/runs/
 /.swarm/worktrees/
 /.swarm/daemon/
+/.swarm/blobs/
 /.swarm/swarm.db
 /.swarm/swarm.db-shm
 /.swarm/swarm.db-wal
