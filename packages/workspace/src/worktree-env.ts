@@ -16,16 +16,26 @@
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.
 //
-// Dispose contract (`docs/proposals/run-isolation.md`):
-//   1. `git status --porcelain` in the worktree.
-//   2. If empty → `git worktree remove --force`. Branch never existed.
+// Dispose contract (`docs/proposals/run-isolation.md`,
+// `docs/proposals/worktree-design.md` §B9):
+//   1. Two signals — `git status --porcelain` (working-tree delta vs.
+//      HEAD) AND `git rev-list <baseGitSha>..HEAD --count` (HEAD delta
+//      vs. provisioned base).
+//   2. Both empty → `git worktree remove --force`. Branch never existed.
 //      Return `{ branch: null }`.
-//   3. Otherwise → `git checkout -b swarm/runs/<run-id>`, `git add -A`,
-//      single `git commit` carrying the run's metadata, then
-//      `git worktree remove --force`. Branch persists. Return
-//      `{ branch: "swarm/runs/<run-id>" }`.
+//   3. Either non-empty → `git checkout -b swarm/runs/<run-id>` to make
+//      the in-worktree HEAD reachable from a named ref, then if the
+//      working tree is dirty also `git add -A` + a single dispose
+//      commit carrying the run's metadata, then `git worktree remove
+//      --force`. Branch persists. Return `{ branch: "swarm/runs/<run-id>" }`.
 // Replay reconstructs the starting tree from `baseGitSha`; the branch is
 // the audit trail for "what did the run actually change".
+//
+// The rev-list signal exists because workflows whose nodes commit
+// in-worktree (e.g. `change.dot`, `merge.dot`) leave HEAD ahead of
+// `baseGitSha` while the working tree is clean. Without rev-list,
+// dispose dropped those branches and the commits became dangling git
+// objects.
 
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
@@ -71,9 +81,11 @@ export interface DisposeContext {
   workflowSha: string;
 }
 
-/** Result of `dispose()`. `branch` is non-null exactly when the worktree
- * had a non-empty `git status --porcelain` and dispose committed its
- * working state to a new `swarm/runs/<runId>` branch. */
+/** Result of `dispose()`. `branch` is non-null exactly when dispose
+ * preserved the worktree's state on a new `swarm/runs/<runId>` ref —
+ * either because `git status --porcelain` was non-empty (working-tree
+ * delta) or because `git rev-list <baseGitSha>..HEAD --count` was
+ * non-zero (in-worktree commits ahead of base), or both. */
 export interface DisposeResult {
   branch: string | null;
 }
@@ -202,17 +214,24 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     }
   }
 
-  /** Tear down the worktree, preserving any working-copy delta on the
-   * `swarm/runs/<runId>` branch as a single commit. Returns the branch
-   * name iff a branch was created.
+  /** Tear down the worktree, preserving any working-copy delta or
+   * in-worktree commits on the `swarm/runs/<runId>` branch. Returns
+   * the branch name iff a branch was created.
    *
-   * Algorithm (matches `docs/proposals/run-isolation.md`):
-   *   1. `git status --porcelain` — covers tracked AND untracked, so a
-   *      run that only scattered new files still produces a branch.
-   *   2. Empty → drop the worktree, no branch. `branch: null`.
-   *   3. Non-empty → checkout a fresh `swarm/runs/<runId>`, stage
-   *      everything (`git add -A`), commit with a metadata-rich message,
-   *      then drop the worktree. Branch survives.
+   * Algorithm (matches `docs/proposals/run-isolation.md` and
+   * `docs/proposals/worktree-design.md` §B9):
+   *   1. `git status --porcelain` — working-tree delta vs. HEAD.
+   *      Covers tracked AND untracked.
+   *   2. `git rev-list <baseGitSha>..HEAD --count` — HEAD delta vs.
+   *      the provisioned base. A workflow whose nodes ran `git commit`
+   *      inside the worktree leaves a clean tree but a non-zero count.
+   *   3. Both signals empty → drop the worktree, no branch.
+   *      `branch: null`.
+   *   4. Either non-empty → checkout a fresh `swarm/runs/<runId>` so
+   *      the in-worktree HEAD becomes reachable from a named ref. If
+   *      the working tree is dirty, additionally stage everything
+   *      (`git add -A`) and append a metadata-rich dispose commit.
+   *      Then drop the worktree. Branch survives.
    *
    * No-op if `keepAfterDispose` is true or `dispose()` already ran. The
    * branch lookup tolerates a manually-deleted worktree (status check
@@ -223,16 +242,36 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
 
     let branchCreated: string | null = null;
     try {
-      const { stdout } = await runGitCapture(this.worktreePath, ["status", "--porcelain"]);
-      if (stdout.trim().length > 0) {
+      const { stdout: porcelainOut } = await runGitCapture(this.worktreePath, ["status", "--porcelain"]);
+      const dirty = porcelainOut.trim().length > 0;
+
+      let committedAhead = false;
+      if (this.baseGitSha != null) {
+        try {
+          const { stdout: countOut } = await runGitCapture(this.worktreePath, [
+            "rev-list",
+            `${this.baseGitSha}..HEAD`,
+            "--count",
+          ]);
+          committedAhead = Number.parseInt(countOut.trim(), 10) > 0;
+        } catch {
+          // base sha unreachable from the worktree (rebased / shallow
+          // clone / corrupted refs). Fall back to porcelain-only;
+          // better to under-preserve than to throw out of dispose.
+        }
+      }
+
+      if (dirty || committedAhead) {
         await runGit(this.worktreePath, ["checkout", "-b", this.branch]);
-        await runGit(this.worktreePath, ["add", "-A"]);
-        await runGit(this.worktreePath, ["commit", "--no-gpg-sign", "-m", buildCommitMessage(this.runId, ctx)], {
-          GIT_AUTHOR_NAME: "swarm",
-          GIT_AUTHOR_EMAIL: "noreply@swarm.local",
-          GIT_COMMITTER_NAME: "swarm",
-          GIT_COMMITTER_EMAIL: "noreply@swarm.local",
-        });
+        if (dirty) {
+          await runGit(this.worktreePath, ["add", "-A"]);
+          await runGit(this.worktreePath, ["commit", "--no-gpg-sign", "-m", buildCommitMessage(this.runId, ctx)], {
+            GIT_AUTHOR_NAME: "swarm",
+            GIT_AUTHOR_EMAIL: "noreply@swarm.local",
+            GIT_COMMITTER_NAME: "swarm",
+            GIT_COMMITTER_EMAIL: "noreply@swarm.local",
+          });
+        }
         branchCreated = this.branch;
       }
     } catch {

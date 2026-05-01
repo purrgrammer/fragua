@@ -174,16 +174,14 @@ the working tree clean. Both the "preserve" and "drop" branches of
 dispose's logic agree the tree is clean — but they disagree on
 whether the commit is *recoverable*.
 
-**Fix.** In `WorktreeEnvironment.dispose()`, in addition to the
-existing `git status --porcelain` check, also run
-`git rev-list <baseGitSha>..HEAD --count`. Preserve if **either**
-signal is non-empty. The preserved-branch payload should distinguish
-them so the operator knows whether they're cherry-picking a clean
-commit chain or also inheriting work-in-progress.
-
-Operational workaround until this lands: any workflow whose terminal
-node commits can leave a marker file (e.g. `.swarm/.commit-marker`)
-so the porcelain check trips. Ugly, but recoverable today.
+**Fix.** Landed. `WorktreeEnvironment.dispose()` now reads both
+signals — `git status --porcelain` for working-tree delta and
+`git rev-list <baseGitSha>..HEAD --count` for in-worktree commits
+ahead of base — and preserves the `swarm/runs/<id>` ref when either
+is non-empty. The committed-and-clean path runs only `git checkout
+-b`; the dirty path additionally appends the dispose commit. The
+`DisposeResult` shape is unchanged. The operational marker-file
+workaround is no longer required.
 
 **Pain.** This is the loudest in-tree behaviour gap. Workflows that
 commit (the `change.dot` daily driver, `fix-bug.dot`, `merge.dot`) are
