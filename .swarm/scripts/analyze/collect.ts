@@ -190,20 +190,34 @@ for (const r of runs) {
     ORDER BY seq
   `).all(r.run_id) as { ts: number; payload: string }[];
 
-  const startTsByNodeIter = new Map<string, number>();
+  // Pair starts and ends by per-node sequential order, NOT by `(nodeId,
+  // iteration)`. Goal-gate retargets re-run a downstream node with
+  // `iteration: 0` both times — only the retarget target's iteration
+  // bumps. Keying on `(nodeId, iteration)` lets the second start ts
+  // overwrite the first in the map, and the first node_completed then
+  // sums against a future timestamp = negative wall.
+  const startsByNode = new Map<string, number[]>();
   for (const ns of nodeStartedRows) {
-    const p = JSON.parse(ns.payload) as { nodeId?: string; iteration?: number };
-    if (p.nodeId) startTsByNodeIter.set(`${p.nodeId}:${p.iteration ?? 0}`, ns.ts);
+    const p = JSON.parse(ns.payload) as { nodeId?: string };
+    if (!p.nodeId) continue;
+    const list = startsByNode.get(p.nodeId) ?? [];
+    list.push(ns.ts);
+    startsByNode.set(p.nodeId, list);
   }
-
+  const cursorByNode = new Map<string, number>();
   const wallMsByNode = new Map<string, number>();
   const modelsByNode = new Map<string, Set<string>>();
   for (const nc of nodeCompletedRows) {
-    const p = JSON.parse(nc.payload) as { nodeId?: string; iteration?: number; modelName?: string };
+    const p = JSON.parse(nc.payload) as { nodeId?: string; modelName?: string };
     if (!p.nodeId) continue;
-    const startTs = startTsByNodeIter.get(`${p.nodeId}:${p.iteration ?? 0}`);
-    if (startTs !== undefined) {
-      wallMsByNode.set(p.nodeId, (wallMsByNode.get(p.nodeId) ?? 0) + (nc.ts - startTs));
+    const starts = startsByNode.get(p.nodeId);
+    if (starts !== undefined) {
+      const idx = cursorByNode.get(p.nodeId) ?? 0;
+      const startTs = starts[idx];
+      if (startTs !== undefined) {
+        wallMsByNode.set(p.nodeId, (wallMsByNode.get(p.nodeId) ?? 0) + (nc.ts - startTs));
+        cursorByNode.set(p.nodeId, idx + 1);
+      }
     }
     if (p.modelName) {
       const set = modelsByNode.get(p.nodeId) ?? new Set();
@@ -212,21 +226,43 @@ for (const r of runs) {
     }
   }
 
-  const toolRows = db.prepare(`
+  // Read tool.execution_start (not _end) for tool_name. Result-bearing
+  // events frequently exceed the 4 KB payload cap and lose tool_name on
+  // truncation; start events carry only the args (small) and are
+  // truncated <2% of the time vs. ~34% for ends. Pair with ends for
+  // is_error by tool_call_id when both are intact; otherwise the call
+  // counts but its outcome is unknown.
+  const toolStartRows = db.prepare(`
+    SELECT payload FROM events
+    WHERE run_id = ? AND type = 'tool.execution_start'
+  `).all(r.run_id) as { payload: string }[];
+  const toolEndRows = db.prepare(`
     SELECT payload FROM events
     WHERE run_id = ? AND type = 'tool.execution_end'
   `).all(r.run_id) as { payload: string }[];
 
+  const errorByCallId = new Map<string, boolean>();
+  for (const te of toolEndRows) {
+    const p = JSON.parse(te.payload) as { tool_call_id?: string; is_error?: boolean };
+    if (typeof p.tool_call_id === "string") errorByCallId.set(p.tool_call_id, !!p.is_error);
+  }
+
   const toolsByNode = new Map<string, Map<string, { n: number; n_errors: number }>>();
   let runToolTotal = 0;
-  for (const tr of toolRows) {
-    const p = JSON.parse(tr.payload) as { nodeId?: string; tool_name?: string; is_error?: boolean };
+  for (const ts of toolStartRows) {
+    const p = JSON.parse(ts.payload) as {
+      nodeId?: string;
+      tool_name?: string;
+      tool_call_id?: string;
+    };
     if (!p.nodeId || !p.tool_name) continue;
     runToolTotal++;
     const inner = toolsByNode.get(p.nodeId) ?? new Map();
     const slot = inner.get(p.tool_name) ?? { n: 0, n_errors: 0 };
     slot.n++;
-    if (p.is_error) slot.n_errors++;
+    if (typeof p.tool_call_id === "string" && errorByCallId.get(p.tool_call_id) === true) {
+      slot.n_errors++;
+    }
     inner.set(p.tool_name, slot);
     toolsByNode.set(p.nodeId, inner);
   }
