@@ -1,3 +1,10 @@
+---
+title: Project tools, hooks, skills
+status: proposed
+maturity: sketch
+last-reviewed: 2026-05-01
+---
+
 # Project tools, hooks, skills
 
 > **Status:** DESIGN. The biggest trust-boundary risk in the

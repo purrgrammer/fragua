@@ -1,3 +1,10 @@
+---
+title: Daemon UI — stats + feed
+status: accepted
+maturity: specified
+last-reviewed: 2026-05-01
+---
+
 # Daemon UI — stats + feed
 
 > **Status:** READY for stats. Feed is a follow-up once stats land.

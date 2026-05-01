@@ -1,7 +1,19 @@
+---
+title: Schema additions for project-aware runs
+status: in-progress
+maturity: specified
+last-reviewed: 2026-05-01
+---
+
 # Schema additions for project-aware runs
 
 > **Status:** READY. Pure additive migration; existing code unaffected.
 > Foundation for every other globalization subproject.
+>
+> Partially landed: `run_state.{project_id, base_git_sha, branch}` are in
+> `schema.sql`. Outstanding columns from this proposal: `workflow_name`,
+> `workflow_scope`, `workflow_path`, `project_context_sha`,
+> `parent_run_id`, plus `events.project_id`.
 
 ## What lands
 

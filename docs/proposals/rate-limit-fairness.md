@@ -1,3 +1,11 @@
+---
+title: Rate-limit fairness
+status: deferred
+maturity: sketch
+last-reviewed: 2026-05-01
+rationale: Defer until felt. In single-project mode, the budget cost cap covers the use case.
+---
+
 # Rate-limit fairness
 
 > **Status:** DESIGN. Defer until felt. In single-project mode, the

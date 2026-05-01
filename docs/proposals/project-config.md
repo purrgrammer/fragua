@@ -1,3 +1,10 @@
+---
+title: Project config file
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-01
+---
+
 # Project config file
 
 > **Status:** SHIPPED. Project-scoped only. Cascading global config is

@@ -1,3 +1,10 @@
+---
+title: Migration tool
+status: proposed
+maturity: designed
+last-reviewed: 2026-05-01
+---
+
 # Migration tool
 
 > **Status:** DESIGN. Depends on the [harness](./harness.md) and the

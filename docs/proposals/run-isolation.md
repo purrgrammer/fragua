@@ -1,8 +1,20 @@
+---
+title: Run isolation via worktrees
+status: in-progress
+maturity: sketch
+last-reviewed: 2026-05-01
+---
+
 # Run isolation via worktrees
 
 > **Status:** READY. Per-project worktrees today; the global
 > `~/.swarm/worktrees/` location lands with the
 > [harness](./harness.md).
+>
+> Partially landed: `WorktreeProvisioner.ensure/dispose` exists, branch
+> survival on dispose works, `fact.run_branched` lands. Open questions
+> on cleanup, GC, paused-run lifetime, and per-branch isolation in
+> parallel — see [worktree-design](./worktree-design.md).
 
 ## What lands
 

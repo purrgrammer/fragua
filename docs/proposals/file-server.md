@@ -1,3 +1,11 @@
+---
+title: Git-object file server
+status: deferred
+maturity: sketch
+last-reviewed: 2026-05-01
+rationale: Aspirational. Defer until the multi-project view exists; path-walking reads are fine until then.
+---
+
 # Git-object file server
 
 > **Status:** DESIGN. Aspirational. Defer until the multi-project view

@@ -1,0 +1,59 @@
+# Proposals — index
+
+Per [AGENTS.md](../../AGENTS.md) ground rule #1, every proposal carries YAML
+front-matter with two orthogonal tags:
+
+- **status** — decision state: `proposed | accepted | in-progress | shipped | deferred | discarded`
+- **maturity** — design state: `sketch | designed | specified`
+
+A proposal flips to `shipped` only when the README "What swarm delivers
+today" section can claim its capability without qualification. Until
+then, partially-landed work is `in-progress` with the outstanding
+delta called out in the proposal body.
+
+---
+
+## Shipped
+
+| Proposal | Maturity | Notes |
+|---|---|---|
+| [Project config file](./project-config.md) | specified | `<project>/.swarm/config.jsonc` |
+
+## In progress
+
+| Proposal | Maturity | Outstanding |
+|---|---|---|
+| [Schema additions for project-aware runs](./schema-additions.md) | specified | `workflow_name` / `_scope` / `_path`, `project_context_sha`, `parent_run_id`, `events.project_id` |
+| [Run isolation via worktrees](./run-isolation.md) | sketch | partially landed; lots more work needed — see [worktree-design](./worktree-design.md) for the full picture |
+| [Budget controls](./budget-controls.md) | specified | per-project cost cap (cascading from project config) |
+| [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` CLI |
+
+## Accepted (design done; awaiting scheduling)
+
+| Proposal | Maturity |
+|---|---|
+| [Workflow resolution by name](./workflow-resolution.md) | specified |
+| [Daemon UI — stats + feed](./daemon-ui.md) | specified |
+
+## Proposed (under design)
+
+| Proposal | Maturity | Notes |
+|---|---|---|
+| [Harness](./harness.md) | designed | architectural commitment point; everything below depends on it |
+| [Credentials in DB](./credentials.md) | designed | threat model resolves before project-extensions ship |
+| [Migration tool](./migration.md) | designed | blocked on harness + global DB |
+| [Project tools, hooks, skills](./project-extensions.md) | sketch | trust-boundary risk — biggest open question |
+| [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
+| [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
+| [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
+
+## Deferred
+
+| Proposal | Maturity | Rationale |
+|---|---|---|
+| [Rate-limit fairness](./rate-limit-fairness.md) | sketch | budget cap covers single-project case |
+| [Git-object file server](./file-server.md) | sketch | path-walking reads are fine pre-multi-project |
+
+## Discarded
+
+_(none yet.)_

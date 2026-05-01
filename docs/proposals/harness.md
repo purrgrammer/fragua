@@ -1,3 +1,10 @@
+---
+title: Harness
+status: proposed
+maturity: designed
+last-reviewed: 2026-05-01
+---
+
 # Harness
 
 > **Status:** DESIGN. Architectural commitment point. After it lands,

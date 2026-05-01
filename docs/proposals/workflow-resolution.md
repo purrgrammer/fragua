@@ -1,3 +1,10 @@
+---
+title: Workflow resolution by name
+status: accepted
+maturity: specified
+last-reviewed: 2026-05-01
+---
+
 # Workflow resolution by name
 
 > **Status:** READY for local resolution. Global resolution

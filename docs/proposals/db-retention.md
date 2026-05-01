@@ -1,7 +1,17 @@
+---
+title: Per-project DB retention
+status: in-progress
+maturity: specified
+last-reviewed: 2026-05-01
+---
+
 # Per-project DB retention
 
 > **Status:** READY. Useful in single-project mode today; project filter
 > is a no-op until multi-project.
+>
+> Partially landed: `swarm db {vacuum,gc-blobs,backup --to <path>}` ship.
+> Outstanding: `swarm db prune --project` retention CLI.
 
 ## What lands
 

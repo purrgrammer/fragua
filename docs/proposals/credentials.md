@@ -1,3 +1,10 @@
+---
+title: Credentials in DB
+status: proposed
+maturity: designed
+last-reviewed: 2026-05-01
+---
+
 # Credentials in DB
 
 > **Status:** DESIGN. Threat model resolves *before* [project
