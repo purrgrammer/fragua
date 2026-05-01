@@ -155,6 +155,18 @@ fact never landed, and the worktree directory was gone. The user-side
 "merge them all" step had to dig the SHAs out of the commit-node's
 final assistant message and `git cherry-pick` each by sha.
 
+**Where the bug actually lives.** The porcelain check is in
+`WorktreeEnvironment.dispose()` at
+`packages/workspace/src/worktree-env.ts:226` (the
+`runGitCapture(this.worktreePath, ["status", "--porcelain"])` call).
+The daemon-side `WorktreeProvisioner.dispose()` at
+`packages/daemon/src/worktree-provisioner.ts:113-118` is a thin
+wrapper that just delegates to `env.dispose(ctx)`. A 2026-05-02
+attempt to fix this scoped to the daemon package aborted at plan with
+exactly this finding — the fix has to land in `@swarm/workspace`.
+`WorktreeEnvironment` already carries `baseGitSha` as a field, so the
+rev-list check can be done locally without threading new state.
+
 **Root cause.** `git status --porcelain` measures **working-tree
 delta vs. HEAD**, not **HEAD delta vs. base_git_sha**. A workflow that
 commits in-worktree advances HEAD inside the worktree while leaving
@@ -162,24 +174,16 @@ the working tree clean. Both the "preserve" and "drop" branches of
 dispose's logic agree the tree is clean — but they disagree on
 whether the commit is *recoverable*.
 
-**Fix candidates.**
+**Fix.** In `WorktreeEnvironment.dispose()`, in addition to the
+existing `git status --porcelain` check, also run
+`git rev-list <baseGitSha>..HEAD --count`. Preserve if **either**
+signal is non-empty. The preserved-branch payload should distinguish
+them so the operator knows whether they're cherry-picking a clean
+commit chain or also inheriting work-in-progress.
 
-- Replace the `git status --porcelain` heuristic with `git rev-list
-  base_git_sha..HEAD --count`. Non-zero → preserve. This catches both
-  "uncommitted changes" (rev-list still has at least one commit if
-  the agent committed) and "committed-and-clean" (the case that bit
-  us). The check needs `base_git_sha` from `run_state` (already
-  recorded since `fact.run_started`).
-- OR: capture both signals — `--porcelain` for working-tree deltas
-  (uncommitted scratch the agent left behind) and `rev-list count` for
-  committed-but-unmerged work. Preserve if either is non-empty. The
-  preserved-branch payload should distinguish them so the operator
-  knows whether they're cherry-picking a clean commit chain or also
-  inheriting work-in-progress.
-- Document the operational workaround until the fix lands: any
-  workflow whose terminal node commits should leave a marker file
-  (e.g. `.swarm/.commit-marker`) so dispose's `--porcelain` check
-  trips. Ugly, but recoverable today.
+Operational workaround until this lands: any workflow whose terminal
+node commits can leave a marker file (e.g. `.swarm/.commit-marker`)
+so the porcelain check trips. Ugly, but recoverable today.
 
 **Pain.** This is the loudest in-tree behaviour gap. Workflows that
 commit (the `change.dot` daily driver, `fix-bug.dot`, `merge.dot`) are
