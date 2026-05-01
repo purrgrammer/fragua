@@ -7,8 +7,13 @@ last-reviewed: 2026-05-01
 
 # Harness
 
-> **Status:** DESIGN. Architectural commitment point. After it lands,
-> the harness is the canonical entry point.
+> Architectural commitment point. After this lands, the harness is the
+> canonical entry point and the per-cwd `swarm daemon` mode becomes a
+> CI/power-user primitive. Several other proposals
+> ([credentials](./credentials.md),
+> [migration](./migration.md),
+> [project-extensions](./project-extensions.md),
+> [file-server](./file-server.md)) depend on this.
 
 ## Shape
 

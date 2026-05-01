@@ -7,14 +7,13 @@ last-reviewed: 2026-05-01
 
 # Budget controls
 
-> **Status:** READY for per-project cost cap and auto-titler bound.
-> Multi-project [rate-limit fairness](./rate-limit-fairness.md) is a
-> separate, harder subproject.
+> **Landed:** per-node + per-run `budget_usd` / `max_cost_usd` /
+> `budget_policy` are enforced by the executor; the auto-titler ships.
 >
-> Partially landed: per-node + per-run `budget_usd` / `max_cost_usd` /
-> `budget_policy` are enforced by the executor; auto-titler ships. The
-> per-project cost cap (cascading from project config) is the
-> outstanding piece.
+> **Outstanding:** per-project cost cap (cascading from project
+> config), auto-titler sub-budget. Multi-project
+> [rate-limit fairness](./rate-limit-fairness.md) is a separate,
+> harder subproject.
 
 ## What lands
 

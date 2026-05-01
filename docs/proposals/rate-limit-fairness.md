@@ -8,8 +8,10 @@ rationale: Defer until felt. In single-project mode, the budget cost cap covers 
 
 # Rate-limit fairness
 
-> **Status:** DESIGN. Defer until felt. In single-project mode, the
-> [budget cost cap](./budget-controls.md) covers the use case.
+> Deferred until a multi-project user actually feels the bug. In
+> single-project mode, the [budget cost cap](./budget-controls.md)
+> covers the use case; picking a fair-share algorithm before there's
+> real load to measure means picking blind.
 
 ## The problem
 

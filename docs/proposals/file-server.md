@@ -8,8 +8,11 @@ rationale: Aspirational. Defer until the multi-project view exists; path-walking
 
 # Git-object file server
 
-> **Status:** DESIGN. Aspirational. Defer until the multi-project view
-> exists; path-walking reads are fine until then.
+> Aspirational. Path-walking reads are fine on the current per-cwd
+> model; this becomes valuable once multiple projects exist (so
+> cross-project caching matters), worktrees dispose routinely (so
+> SHAs outlive directories), and the UI does meaningful diff/blob
+> fetches (so `cat-file --batch` amortises).
 
 ## Shape
 

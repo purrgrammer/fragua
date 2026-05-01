@@ -7,9 +7,10 @@ last-reviewed: 2026-05-01
 
 # Daemon UI — stats + feed
 
-> **Status:** READY for stats. Feed is a follow-up once stats land.
-> Backed by `daemon_events` table (committed, fully populated by the
-> daemon today) and the existing `daemon_lock` row.
+> Stats card is the next slice; the feed is a follow-up once stats
+> have soaked. Backed by the `daemon_events` table (committed, fully
+> populated by the daemon today) and the existing `daemon_lock` row —
+> the data is on disk; this is purely a read-side surface.
 
 ## What lands
 

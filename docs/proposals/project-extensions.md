@@ -7,9 +7,10 @@ last-reviewed: 2026-05-01
 
 # Project tools, hooks, skills
 
-> **Status:** DESIGN. The biggest trust-boundary risk in the
-> globalization plan. Resolves the [credentials threat
-> model](./credentials.md) before shipping.
+> The biggest trust-boundary risk in the globalization plan. Cannot
+> ship until the [credentials threat model](./credentials.md) is
+> resolved — a malicious project hook running in the daemon's address
+> space can read every other project's secrets.
 
 ## Shape
 

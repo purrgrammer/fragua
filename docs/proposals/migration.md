@@ -7,8 +7,9 @@ last-reviewed: 2026-05-01
 
 # Migration tool
 
-> **Status:** DESIGN. Depends on the [harness](./harness.md) and the
-> global DB existing.
+> Depends on the [harness](./harness.md) and the global DB existing.
+> The READY/in-progress subprojects all run on the existing per-cwd DB
+> and compose forward without a migration step.
 
 ## Shape
 
@@ -23,7 +24,7 @@ Flow:
 
 1. Read events and `run_state` from the source DB.
 2. Synthesize a project ID — prompt for a UUID or generate one and
-   write it to `<cwd>/.swarm/swarm.jsonc`.
+   write it to `<cwd>/.swarm/config.jsonc`.
 3. Backfill `project_id` on the imported rows.
 4. Resolve workflow names retroactively where possible
    (`workflow_scope = 'path'` for any unresolvable rows).

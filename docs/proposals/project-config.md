@@ -7,8 +7,8 @@ last-reviewed: 2026-05-01
 
 # Project config file
 
-> **Status:** SHIPPED. Project-scoped only. Cascading global config is
-> still part of the [harness](./harness.md) subproject.
+> Project-scoped only. Cascading global config (`~/.swarm/config.jsonc`)
+> is still part of the [harness](./harness.md) subproject.
 
 ## What landed
 

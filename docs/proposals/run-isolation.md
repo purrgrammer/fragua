@@ -7,14 +7,20 @@ last-reviewed: 2026-05-01
 
 # Run isolation via worktrees
 
-> **Status:** READY. Per-project worktrees today; the global
-> `~/.swarm/worktrees/` location lands with the
+> Per-project worktrees today (`<project>/.swarm/worktrees/<run_id>`);
+> the global `~/.swarm/worktrees/` location lands with the
 > [harness](./harness.md).
 >
-> Partially landed: `WorktreeProvisioner.ensure/dispose` exists, branch
-> survival on dispose works, `fact.run_branched` lands. Open questions
-> on cleanup, GC, paused-run lifetime, and per-branch isolation in
-> parallel — see [worktree-design](./worktree-design.md).
+> **Landed:** `WorktreeProvisioner.ensure/dispose`, branch survival on
+> dispose, `fact.run_branched` post-terminal, `run_state.{base_git_sha,
+> branch}`.
+>
+> **Outstanding (lots):** branch GC, paused-run base-drift, per-branch
+> isolation in `parallel`, editor co-occupancy, disk pressure. The
+> current shape is rough enough that the broader design is sketched
+> separately in [worktree-design](./worktree-design.md); treat that
+> doc as the source of truth for *where this is going*, this one for
+> *what's in the tree today*.
 
 ## What lands
 
@@ -27,7 +33,7 @@ Provisioning:
 
 1. `git worktree add .swarm/worktrees/<run_id> <ref>`
 2. Capture `git rev-parse HEAD` → `run_state.base_git_sha`
-3. Run the project's bootstrap command (`swarm.jsonc` field), if any.
+3. Run the project's bootstrap command (`config.jsonc` `bootstrap` field), if any.
 4. Handlers execute against the worktree as `cwd`.
 
 Dispose, on terminal status:

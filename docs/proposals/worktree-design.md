@@ -7,10 +7,10 @@ last-reviewed: 2026-05-01
 
 # Worktree design
 
-> **Status:** sketch. The current state ships and works, but the model
-> has uncomfortable edges — branch GC, paused-run lifetime, parallel
-> isolation, user/editor co-occupancy. This doc enumerates them so we
-> can pick a direction. Not a commitment to any of the options below.
+> The current state ships and works, but the model has uncomfortable
+> edges — branch GC, paused-run lifetime, parallel isolation,
+> user/editor co-occupancy. This doc enumerates them so we can pick a
+> direction. Not a commitment to any of the options below.
 >
 > Sibling: [run-isolation](./run-isolation.md) is the implementation
 > proposal for the per-project worktree layout. This doc is the

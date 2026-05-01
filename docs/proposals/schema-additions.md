@@ -7,13 +7,17 @@ last-reviewed: 2026-05-01
 
 # Schema additions for project-aware runs
 
-> **Status:** READY. Pure additive migration; existing code unaffected.
-> Foundation for every other globalization subproject.
+> Pure additive migration; foundation for every other globalization
+> subproject.
 >
-> Partially landed: `run_state.{project_id, base_git_sha, branch}` are in
-> `schema.sql`. Outstanding columns from this proposal: `workflow_name`,
-> `workflow_scope`, `workflow_path`, `project_context_sha`,
-> `parent_run_id`, plus `events.project_id`.
+> **Landed:** `run_state.{project_id, base_git_sha, branch}` — note
+> that the proposal's `worktree_branch` shipped as `branch` (the
+> `worktree_` prefix was redundant; the column always refers to the
+> run's worktree).
+>
+> **Outstanding:** `workflow_name` / `_scope` / `_path`,
+> `project_context_sha`, `parent_run_id`, plus `events.project_id`
+> (the denormalised cross-project query column).
 
 ## What lands
 
@@ -29,7 +33,7 @@ ALTER TABLE run_state ADD COLUMN workflow_path TEXT;
 ALTER TABLE run_state ADD COLUMN base_git_sha TEXT;
 ALTER TABLE run_state ADD COLUMN project_context_sha TEXT;
 ALTER TABLE run_state ADD COLUMN parent_run_id TEXT;
-ALTER TABLE run_state ADD COLUMN worktree_branch TEXT;
+ALTER TABLE run_state ADD COLUMN branch TEXT;          -- shipped (was `worktree_branch` in the original proposal)
 
 CREATE INDEX IF NOT EXISTS idx_run_state_project ON run_state(project_id);
 CREATE INDEX IF NOT EXISTS idx_run_state_parent  ON run_state(parent_run_id);

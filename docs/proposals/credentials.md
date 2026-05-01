@@ -7,8 +7,10 @@ last-reviewed: 2026-05-01
 
 # Credentials in DB
 
-> **Status:** DESIGN. Threat model resolves *before* [project
-> extensions](./project-extensions.md) ship.
+> Threat model must resolve *before* [project
+> extensions](./project-extensions.md) ship — once user-supplied code
+> runs in the daemon process, in-process credential extraction is one
+> `db.query` away.
 
 ## Shape
 

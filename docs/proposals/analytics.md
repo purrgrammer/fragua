@@ -7,9 +7,9 @@ last-reviewed: 2026-05-01
 
 # Analytics — follow-up roadmap
 
-> **Status:** sketch — a catalogue of stats/charts cut from v1, each
-> sized to a small follow-up slice. Not a single decided spec; pick
-> from the menu when the appetite arrives.
+> A catalogue of stats/charts cut from v1, each sized to a small
+> follow-up slice. Not a single decided spec; pick from the menu when
+> the appetite arrives.
 
 Stats / charts intentionally cut from v1. Each one fits the existing
 `/analytics` endpoint shape (one more `getXByBucket` query + one more

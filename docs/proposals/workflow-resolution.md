@@ -7,7 +7,7 @@ last-reviewed: 2026-05-01
 
 # Workflow resolution by name
 
-> **Status:** READY for local resolution. Global resolution
+> Local resolution is designed and ready. Global resolution
 > (`@global/<name>`) is part of the [harness](./harness.md) subproject.
 
 ## What lands
