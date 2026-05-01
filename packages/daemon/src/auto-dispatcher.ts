@@ -16,6 +16,7 @@ import {
   InvalidDurationError,
   parseDotSource,
   parseDurationMs,
+  prepareGraph,
 } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
@@ -88,6 +89,10 @@ function specsForGraph(
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
+  // Apply transforms (stylesheet, …) so node.attrs reflect the resolved
+  // configuration before per-node specs are derived. Stylesheet syntax
+  // errors are caught at upload via E015; here we just apply silently.
+  prepareGraph(graph);
   const outgoing = new Map<string, Array<{ to: string; label?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];
