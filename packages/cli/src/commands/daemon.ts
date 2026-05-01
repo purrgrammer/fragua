@@ -19,6 +19,7 @@ import {
   makeCodergenHandler,
   PiCodergenBackend,
   PiSummariserBackend,
+  SteeringRegistry,
 } from "@swarm/agent";
 import { parseDurationMs } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
@@ -217,6 +218,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
+  let steeringRegistry: SteeringRegistry | undefined;
   if (useLlm) {
     // `env` is wired per-run via the WorktreeProvisioner below —
     // the backend reads it off `CodergenInput` on each call, so we
@@ -247,6 +249,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     for (const pair of store.listThreadsWithMessages()) {
       inProcessWrites.add(`${pair.runId}::${pair.threadId}`);
     }
+    // Shared steer-buffer registry. The daemon entrypoint hands this same
+    // registry to the supervisor's `onSteer` so an `intent.steering_requested`
+    // routes into pi-agent-core's `steeringQueue` (drained at end-of-turn)
+    // rather than tripping the abort controller — which would force the
+    // codergen handler to classify the in-flight call's `stopReason: "aborted"`
+    // as a fail outcome.
+    steeringRegistry = new SteeringRegistry();
     const backendOpts = {
       registry,
       defaultModel: { provider: provider!, model: model! },
@@ -260,6 +269,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       },
       getApiKey,
       inProcessWrites,
+      steering: steeringRegistry,
       // Tier-1 skills catalog — rendered into the system prompt of every
       // codergen call, filtered per-node by `attrs.skills` /
       // `skills_disabled`. Empty array is a valid no-op.
@@ -372,6 +382,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       }
     }
     if (config.blobGc?.maxRows !== undefined) daemonOpts.blobGcMaxRows = config.blobGc.maxRows;
+    if (steeringRegistry !== undefined) {
+      const reg = steeringRegistry;
+      daemonOpts.onSteer = (runId, text) => reg.steer(runId, text);
+    }
     const handleRef = startDaemon(daemonOpts);
     await handleRef.done;
   } catch (err) {

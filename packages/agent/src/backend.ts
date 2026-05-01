@@ -60,6 +60,14 @@ export interface PiCodergenBackendOptions {
    * pre-existing thread still finds its key present. Omit in
    * tests/one-shots to get the per-instance behaviour. */
   inProcessWrites?: Set<string>;
+  /** Shared per-run live-agent + steer-buffer registry. Each codergen
+   * node builds its own `PiCodergenBackend`, so a per-instance registry
+   * can't deliver a steer issued during node A to node B's agent on the
+   * same run. Pass one daemon-scoped registry here and supervisor's
+   * `onSteer` writes through to it; every backend that runs a node for
+   * the same `runId` finds the live-agent slot it expects. Omit in
+   * tests/one-shots that don't need cross-backend steering. */
+  steering?: SteeringRegistry;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -72,8 +80,10 @@ export class PiCodergenBackend implements CodergenBackend {
   /** Per-run live-agent + pending-steer registry. Scoped by runId so two
    * concurrent runs on this shared backend can each have their own live
    * agent without clobbering each other's slot, and so a steer buffered
-   * between one run's nodes never leaks into another run's agent. */
-  private readonly steering = new SteeringRegistry();
+   * between one run's nodes never leaks into another run's agent. May be
+   * shared across backends via `opts.steering` so a steer arriving while
+   * node B is active still reaches the same run's live agent. */
+  private readonly steering: SteeringRegistry;
   /** Per-backend transcript store keyed by `(run_id, thread_id)`. Scoped
    * to the backend instance so tests that spin up a fresh backend get a
    * clean store. Backends are shared across runs — one per `(workflow,
@@ -109,6 +119,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.skills = opts.skills ?? [];
     this.runEnv = opts.runEnv;
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
+    this.steering = opts.steering ?? new SteeringRegistry();
   }
 
   /** True when we've already persisted `threadId` for `runId` during

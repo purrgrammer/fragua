@@ -34,7 +34,7 @@ function makeRunningStore(runId: string, workflowSha: string): SqliteStore {
   ];
   for (const fact of facts) {
     const v = store.getState(runId)?.version ?? 0;
-    store.appendFact(runId, [fact], v, { advanceAppliedTo: 99 });
+    store.appendFact(runId, [fact], v, { advanceAppliedTo: v });
   }
   return store;
 }
@@ -104,6 +104,144 @@ describe("supervisor — pause-aware leak detection", () => {
     clk.advance(600_000);
     registry.register("r", new AbortController());
     expect(registry.elapsedMs("r")).toBe(0);
+  });
+});
+
+describe("supervisor — intent-aware abort policy", () => {
+  // pi-agent-core's Agent.steer() enqueues into a steeringQueue that drains
+  // at end-of-turn. Tripping the abort controller on a steer would kill the
+  // in-flight LLM call and force the codergen handler to classify the
+  // resulting `stopReason: "aborted"` as fail (backend.ts:464-478) — exactly
+  // the cancel/timeout collapse the comment there warns about. The supervisor
+  // must hand steer text to the backend's queue and leave the controller alone.
+  test("steer-only intent does not trip; calls onSteer with the text", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r1", "sha");
+    const ctrl = new AbortController();
+    registry.register("r1", ctrl);
+    store.appendIntent("r1", { type: "intent.steering_requested", payload: { text: "redirect" } });
+
+    const onSteerCalls: Array<{ runId: string; text: string }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text) => onSteerCalls.push({ runId, text }),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+      expect(onSteerCalls).toEqual([{ runId: "r1", text: "redirect" }]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  test("non-steer intent (cancel) trips the controller and does not call onSteer", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r2", "sha");
+    const ctrl = new AbortController();
+    registry.register("r2", ctrl);
+    store.appendIntent("r2", { type: "intent.cancel_requested", payload: {} });
+
+    const onSteerCalls: Array<{ runId: string; text: string }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text) => onSteerCalls.push({ runId, text }),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(true);
+      expect(onSteerCalls).toEqual([]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  // Mixed batch: a steer at seq N alongside a cancel at seq N+1 within the
+  // same supervisor tick. The cancel wins (trips), and we don't bother
+  // forwarding the steer — pi-agent-core would abort before draining the
+  // queue anyway, and the run is going down. Keep the side-channel quiet.
+  test("steer + cancel batch: trips and skips onSteer forwarding", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r3", "sha");
+    const ctrl = new AbortController();
+    registry.register("r3", ctrl);
+    store.appendIntent("r3", { type: "intent.steering_requested", payload: { text: "ignored" } });
+    store.appendIntent("r3", { type: "intent.cancel_requested", payload: {} });
+
+    const onSteerCalls: Array<{ runId: string; text: string }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text) => onSteerCalls.push({ runId, text }),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      expect(ctrl.signal.aborted).toBe(true);
+      expect(onSteerCalls).toEqual([]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
+
+  // Multiple steers across ticks should each fire onSteer once. lastIntentSeq
+  // dedupe keeps a single steer from re-firing every tick while it sits
+  // unapplied.
+  test("steers fire onSteer exactly once each, even though they stay unapplied", async () => {
+    const registry = new AbortRegistry();
+    const store = makeRunningStore("r4", "sha");
+    const ctrl = new AbortController();
+    registry.register("r4", ctrl);
+    store.appendIntent("r4", { type: "intent.steering_requested", payload: { text: "first" } });
+
+    const onSteerCalls: Array<{ runId: string; text: string }> = [];
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      onSteer: (runId, text) => onSteerCalls.push({ runId, text }),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    store.appendIntent("r4", { type: "intent.steering_requested", payload: { text: "second" } });
+    await new Promise((r) => setTimeout(r, 20));
+
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+      expect(onSteerCalls).toEqual([
+        { runId: "r4", text: "first" },
+        { runId: "r4", text: "second" },
+      ]);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
   });
 });
 

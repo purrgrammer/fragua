@@ -3,14 +3,15 @@
 // One 50ms tick that consolidates:
 //   (a) heartbeat — keeps daemon_lock alive
 //   (b) intent detection — trips per-run AbortControllers when web writes
-//       an intent while the executor is mid-handler
+//       a non-steer intent while the executor is mid-handler; forwards
+//       steer text to the codergen backend's queue without tripping
 //   (c) stuck-node watchdog — detects handlers that exceeded their
 //       maxMs + leak grace and force-aborts them
 //
 // The supervisor owns no state of its own; it reads run_state and events and
 // trips controllers held by the abort registry.
 
-import type { IEventStore } from "@swarm/store";
+import type { IEventStore, StoredEvent } from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 
 export interface SupervisorOpts {
@@ -24,6 +25,15 @@ export interface SupervisorOpts {
   nodeLeakGraceMs?: number;
   /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold. */
   handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number;
+  /** Forward steer text into the codergen backend's queue. pi-agent-core's
+   * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
+   * turn; tripping the abort controller would force the in-flight LLM
+   * call to end with `stopReason: "aborted"`, which the codergen handler
+   * (backend.ts:464) collapses into a `fail` outcome. Steers must therefore
+   * bypass the trip and ride the queue. Only fires for steers in batches
+   * with no other intent type — a co-arriving cancel/pause/hitl trips and
+   * the steer is left to the standard intent fold on re-dispatch. */
+  onSteer?: (runId: string, text: string) => void;
 }
 
 const DEFAULT_TICK_MS = 50;
@@ -56,15 +66,30 @@ export function startSupervisor(opts: SupervisorOpts): {
       }
 
       // (b) Intent detection. For each active run, scan unapplied intents
-      // and trip the abort controller if a new one appeared.
+      // and trip the abort controller if a new non-steer one appeared.
+      // Steers bypass the trip — pi-agent-core's steeringQueue is the
+      // intended ingestion path (see SupervisorOpts.onSteer).
       for (const runId of opts.registry.activeRuns()) {
         const prev = lastIntentSeq.get(runId) ?? 0;
         const unapplied = opts.store.getUnappliedIntents(runId);
         if (unapplied.length === 0) continue;
         const newest = unapplied[unapplied.length - 1]!.seq;
-        if (newest > prev) {
-          lastIntentSeq.set(runId, newest);
+        if (newest <= prev) continue;
+        const fresh = unapplied.filter((e) => e.seq > prev);
+        const hasNonSteer = fresh.some((e) => e.type !== "intent.steering_requested");
+        lastIntentSeq.set(runId, newest);
+        if (hasNonSteer) {
+          // Skip steer forwarding — the abort kills the in-flight call
+          // before pi-agent-core could drain the queue, and the standard
+          // intent fold replays the steer text on the next dispatch.
           opts.registry.trip(runId, new IntentArrivedError(runId, newest));
+          continue;
+        }
+        if (opts.onSteer != null) {
+          for (const ev of fresh) {
+            const text = readSteerText(ev);
+            if (text !== undefined) opts.onSteer(runId, text);
+          }
         }
       }
 
@@ -113,6 +138,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function readSteerText(ev: StoredEvent): string | undefined {
+  if (ev.type !== "intent.steering_requested") return undefined;
+  const payload = ev.payload as { text?: unknown } | null | undefined;
+  const text = payload?.text;
+  return typeof text === "string" && text.length > 0 ? text : undefined;
 }
 
 export class IntentArrivedError extends Error {

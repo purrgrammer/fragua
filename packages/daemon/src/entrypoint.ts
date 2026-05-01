@@ -71,6 +71,12 @@ export interface DaemonMainOpts {
   /** Max rows visited per `gcBlobs` sweep. Bounds latency on huge
    * stores. Defaults to 1000. */
   blobGcMaxRows?: number;
+  /** Forward steer text into the codergen backend's queue when an
+   * `intent.steering_requested` arrives mid-handler. Wired by the CLI to
+   * a daemon-scoped `SteeringRegistry` shared across every codergen
+   * backend. Without this, steers either land via the standard intent
+   * fold on re-dispatch or stay buffered until the next `beginRun`. */
+  onSteer?: (runId: string, text: string) => void;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -155,6 +161,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         },
       };
       if (opts.leakGraceMs !== undefined) supervisorOpts.nodeLeakGraceMs = opts.leakGraceMs;
+      if (opts.onSteer !== undefined) supervisorOpts.onSteer = opts.onSteer;
       const supervisor = startSupervisor(supervisorOpts);
 
       // Background blob GC. Only starts when interval > 0 (operators can
