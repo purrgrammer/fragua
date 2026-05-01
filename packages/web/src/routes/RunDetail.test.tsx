@@ -23,12 +23,14 @@ describe("StatsStrip — Cache hit rate tile", () => {
   useDom();
   afterEach(() => cleanup());
 
-  test("renders detail-cache-tile with correct percentage (400/1000 = 40.0%)", () => {
+  test("renders detail-cache-tile with correct percentage (400/1000 = 40%)", () => {
     const { container } = render(<StatsStrip detail={baseDetail} />);
     const tile = within(container).getByTestId("detail-cache-tile");
     expect(tile).toBeTruthy();
-    // tile textContent contains the label + value; check the value portion
-    expect(tile.textContent).toContain("40.0%");
+    // tile textContent contains the label + value; check the value portion.
+    // Whole percentages render without a trailing `.0` (40%, not 40.0%) so
+    // the tile reads cleanly when the rate happens to land on a round value.
+    expect(tile.textContent).toContain("40%");
   });
 
   test("renders — when input + cacheRead is zero", () => {

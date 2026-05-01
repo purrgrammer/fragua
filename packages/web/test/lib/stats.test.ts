@@ -130,15 +130,17 @@ describe("computeStats", () => {
     expect(s.avgDurationMs).toBe(15_000);
   });
 
-  it("sums cache tokens and computes hit rate as reads / (input + reads)", () => {
+  it("sums cache tokens and computes hit rate as reads / (input + reads + writes)", () => {
     const s = computeStats([
       row({ runId: "a", inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 50 }),
       row({ runId: "b", inputTokens: 200, cacheReadTokens: 100 }),
     ]);
     expect(s.totalCacheReadTokens).toBe(400);
     expect(s.totalCacheWriteTokens).toBe(50);
-    // (300 + 100) / ((100 + 200) + (300 + 100)) = 400 / 700
-    expect(s.cacheHitRate).toBeCloseTo(400 / 700, 6);
+    // (300 + 100) / ((100 + 200) + (300 + 100) + (50 + 0)) = 400 / 750
+    // cacheWrite is in the denominator so a warm thread doesn't asymptote
+    // at 100% — it reflects the prompt-token cost of writing the cache.
+    expect(s.cacheHitRate).toBeCloseTo(400 / 750, 6);
   });
 
   it("cacheHitRate is undefined when no input or cache-read tokens were seen", () => {

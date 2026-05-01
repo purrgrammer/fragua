@@ -114,7 +114,12 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
 
   const terminal = succeeded + failed;
   const successRate = terminal === 0 ? 0 : succeeded / terminal;
-  const readDenom = totalInputTokens + totalCacheReadTokens;
+  // Cache hit rate denominator includes cacheWrite so the rate reflects the
+  // share of prompt-token-equivalents that came from cache (not just the
+  // share that wasn't fresh input). Without cacheWrite, a warm thread
+  // collapses to ~99.99% — the tile shows a misleading "100%". See
+  // packages/web/src/lib/format.ts → formatCacheHitRate for the rationale.
+  const readDenom = totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens;
   const cacheHitRate = readDenom > 0 ? totalCacheReadTokens / readDenom : undefined;
 
   return {

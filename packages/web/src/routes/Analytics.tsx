@@ -185,7 +185,9 @@ export function Analytics(): JSX.Element {
 
 function cacheHitRate(totals: AnalyticsTotals | null): number | null {
   if (!totals) return null;
-  const denom = totals.inputTokens + totals.cacheReadTokens;
+  // Include cacheWrite — see lib/format.ts formatCacheHitRate for rationale.
+  // Without it the rate collapses to ~100% in any run with a warm cache.
+  const denom = totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
   if (!Number.isFinite(denom) || denom <= 0) return null;
   return totals.cacheReadTokens / denom;
 }

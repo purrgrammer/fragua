@@ -330,6 +330,7 @@ export const StatsStrip = memo(function StatsStrip({
   const liveInputTokens = liveCost?.totalInputTokens ?? 0;
   const liveOutputTokens = liveCost?.totalOutputTokens ?? 0;
   const liveCacheReadTokens = liveCost?.totalCacheReadTokens ?? 0;
+  const liveCacheWriteTokens = liveCost?.totalCacheWriteTokens ?? 0;
   const costUsd = (detail?.costUsd ?? 0) + liveCostUsd;
   const inputTokens = (detail?.inputTokens ?? 0) + liveInputTokens;
   const outputTokens = (detail?.outputTokens ?? 0) + liveOutputTokens;
@@ -338,8 +339,12 @@ export const StatsStrip = memo(function StatsStrip({
   // loaded snapshot post-rename always carries a number for cacheReadTokens.
   const cacheReadTokens: number | undefined =
     detail?.cacheReadTokens === undefined ? undefined : detail.cacheReadTokens + liveCacheReadTokens;
+  const cacheWriteTokens: number | undefined =
+    detail?.cacheWriteTokens === undefined ? undefined : detail.cacheWriteTokens + liveCacheWriteTokens;
   const freshTokens = inputTokens + outputTokens;
-  const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0);
+  // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
+  // A warm thread otherwise reads as ~100% on a single-turn re-dispatch.
+  const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
   const cacheHitRate: number | undefined =
     cacheReadTokens !== undefined && cacheHitDenom > 0 ? cacheReadTokens / cacheHitDenom : undefined;
 

@@ -4,12 +4,9 @@ import { formatCacheHitRate } from "./format.ts";
 describe("formatCacheHitRate", () => {
   // ── zero-denominator cases ──────────────────────────────────────
 
-  test("returns — when both inputs are 0", () => {
-    expect(formatCacheHitRate(0, 0)).toBe("—");
-  });
-
-  test("returns — when cacheRead is 0 and input is 0", () => {
-    // redundant but explicit per spec
+  test("returns — when all inputs are 0", () => {
+    expect(formatCacheHitRate(0, 0, 0)).toBe("—");
+    // Default cacheWrite=0 path.
     expect(formatCacheHitRate(0, 0)).toBe("—");
   });
 
@@ -25,6 +22,14 @@ describe("formatCacheHitRate", () => {
 
   test("returns — when both arguments are undefined", () => {
     expect(formatCacheHitRate(undefined, undefined)).toBe("—");
+  });
+
+  test("returns — when cacheWriteTokens is null", () => {
+    expect(formatCacheHitRate(100, 100, null)).toBe("—");
+  });
+
+  test("returns — when cacheWriteTokens is NaN", () => {
+    expect(formatCacheHitRate(100, 100, Number.NaN)).toBe("—");
   });
 
   // ── non-finite guards ───────────────────────────────────────────
@@ -45,25 +50,39 @@ describe("formatCacheHitRate", () => {
     expect(formatCacheHitRate(50, Number.NaN)).toBe("—");
   });
 
-  // ── correct one-decimal rounding ────────────────────────────────
+  // ── new three-argument formula ──────────────────────────────────
 
-  test("computes 10.0% correctly (100 cache / 1000 total)", () => {
-    expect(formatCacheHitRate(100, 900)).toBe("10.0%");
+  test("includes cacheWriteTokens in the denominator (the bug fix)", () => {
+    // Pre-fix would have been 100 / (100 + 0) = 100% — misleadingly high.
+    // Post-fix: 100 / (100 + 0 + 200) = 33.3% — accurately reflects that
+    // we paid cache-write rates on 200 tokens that we only read 100 of.
+    expect(formatCacheHitRate(100, 0, 200)).toBe("33.3%");
   });
 
-  test("computes 42.0% correctly (spec example)", () => {
-    expect(formatCacheHitRate(420, 580)).toBe("42.0%");
+  test("3-arg with realistic warm-thread shape (the failure case)", () => {
+    // Snapshot from a real codergen turn: cacheRead 164847, input 6,
+    // cacheWrite 83035. Pre-fix denom = 164853 → 99.99% → "100.0%"
+    // displayed. Post-fix denom = 247888 → ~66.5%.
+    const r = formatCacheHitRate(164847, 6, 83035);
+    expect(r).toBe("66.5%");
   });
 
-  test("computes 33.3% correctly (rounding 1/3)", () => {
-    expect(formatCacheHitRate(1, 2)).toBe("33.3%");
+  // ── formatting (whole vs. fractional) ───────────────────────────
+
+  test("renders whole percentages without a trailing .0", () => {
+    // 100 / (100 + 0 + 0) = 100% → "100%", not "100.0%"
+    expect(formatCacheHitRate(100, 0, 0)).toBe("100%");
+    // 0 / (0 + 500 + 0) = 0% → "0%", not "0.0%"
+    expect(formatCacheHitRate(0, 500, 0)).toBe("0%");
   });
 
-  test("computes 100.0% when all tokens are cache hits", () => {
-    expect(formatCacheHitRate(100, 0)).toBe("100.0%");
+  test("renders fractional percentages with one decimal", () => {
+    // 1 / (2 + 1 + 0) = 0.333… → "33.3%"
+    expect(formatCacheHitRate(1, 2, 0)).toBe("33.3%");
   });
 
-  test("computes 0.0% when no cache reads with non-zero input", () => {
-    expect(formatCacheHitRate(0, 500)).toBe("0.0%");
+  test("rounds to one decimal place", () => {
+    // 100 / 900 = 11.111…% → "11.1%"
+    expect(formatCacheHitRate(100, 800, 0)).toBe("11.1%");
   });
 });

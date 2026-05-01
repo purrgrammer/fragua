@@ -47,13 +47,15 @@ export function tokensLongFormatOptions(): Intl.NumberFormatOptions {
 }
 
 /**
- * `Intl.NumberFormatOptions` for a 0–1 ratio rendered as a one-decimal
- * percentage (e.g. `0.829` → `"82.9%"`). Used by tiles that feed
- * `AnimatedNumber` directly so the percentage animates and baselines
- * with the other NumberFlow-driven tiles in the same row.
+ * `Intl.NumberFormatOptions` for a 0–1 ratio rendered as a percentage with
+ * up to one decimal of precision (e.g. `0.829` → `"82.9%"`, `1.0` → `"100%"`).
+ * Used by tiles that feed `AnimatedNumber` directly so the percentage
+ * animates and baselines with the other NumberFlow-driven tiles in the same
+ * row. `minimumFractionDigits: 0` so whole percentages render without a
+ * dangling `.0` ("100%" not "100.0%").
  */
 export function percentFormatOptions(): Intl.NumberFormatOptions {
-  return { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 };
+  return { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 };
 }
 
 /**
@@ -90,24 +92,39 @@ export function formatTokensLong(value: number | null | undefined, opts: NumberF
 }
 
 /**
- * Cache hit rate: `cacheReadTokens / (inputTokens + cacheReadTokens)`.
+ * Cache hit rate, expressed as the share of total prompt-token-equivalents
+ * that came from a cache read:
+ *
+ *   cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)
+ *
+ * Including `cacheWriteTokens` in the denominator counts the prompt-token
+ * cost of *writing* to the cache, not just the prompt-token cost of fresh
+ * input. A run that paid cache-write rates on a 100k-token system prompt
+ * once and then read it back twice is ~67% effective cache utilisation,
+ * not 100% — the previous formula (`cacheRead / (input + cacheRead)`)
+ * could push to 99.99%+ for any run after the first turn since fresh
+ * input collapses to single-digit tokens once the cache is warm. That
+ * displays as a misleading "100%" tile.
  *
  * Returns `'—'` when:
- *   - either argument is `null` / `undefined` / `NaN` / non-finite, or
- *   - the denominator (`inputTokens + cacheReadTokens`) is zero.
+ *   - any argument is `null` / `undefined` / `NaN` / non-finite, or
+ *   - the denominator is zero.
  *
- * Otherwise returns a one-decimal percentage string, e.g. `'42.0%'`.
+ * Otherwise returns a percentage string with up to one decimal of
+ * precision (e.g. `'42%'`, `'42.5%'`, `'100%'`).
  */
 export function formatCacheHitRate(
   cacheReadTokens: number | null | undefined,
   inputTokens: number | null | undefined,
+  cacheWriteTokens: number | null | undefined = 0,
 ): string {
   if (!isFiniteNumber(cacheReadTokens) || !isFiniteNumber(inputTokens)) return "—";
-  const denom = inputTokens + cacheReadTokens;
+  if (!isFiniteNumber(cacheWriteTokens)) return "—";
+  const denom = inputTokens + cacheReadTokens + cacheWriteTokens;
   if (denom === 0) return "—";
   const rate = cacheReadTokens / denom;
   if (!Number.isFinite(rate)) return "—";
-  return `${(rate * 100).toFixed(1)}%`;
+  return new Intl.NumberFormat(defaultLocale(), percentFormatOptions()).format(rate);
 }
 
 /**

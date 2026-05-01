@@ -89,7 +89,8 @@ export function aggregateLiveFrames(frames: ReadonlyArray<LiveCostFrame>, cutoff
     totalCacheReadTokens += f.cacheReadTokens;
     totalCacheWriteTokens += f.cacheWriteTokens;
   }
-  const readDenom = totalInputTokens + totalCacheReadTokens;
+  // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
+  const readDenom = totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens;
   return {
     totalCostUsd,
     totalInputTokens,
