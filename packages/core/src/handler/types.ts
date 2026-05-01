@@ -245,7 +245,7 @@ export type HandlerResult =
     }
   | {
       kind: "halt";
-      reason: "budget" | "max_loops" | "error";
+      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied";
       detail?: string;
     }
   | {

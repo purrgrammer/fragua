@@ -25,12 +25,46 @@ import type { OutcomeStatus } from "../types/outcome.ts";
 /** Default retarget cap when graph.attrs.max_goal_gate_retries is unset. */
 export const DEFAULT_MAX_GOAL_GATE_RETRIES = 3;
 
+/** Routing-key prefix for per-gate outcome records. Folded across the run
+ * by appending `goal_gates.<nodeId>: <outcomeStatus>` to the routing patch
+ * whenever a goal_gate=true node completes. */
+export const GOAL_GATE_OUTCOME_KEY_PREFIX = "goal_gates.";
+
+/** Routing key holding the cumulative count of goal-gate retargets in the
+ * current run. Bumped each time `goalGateStep` returns a `retarget` action. */
+export const GOAL_GATE_RETRIES_KEY = "goal_gates.__retries";
+
+/** Build the routing key for a given gate node id. */
+export function goalGateOutcomeKey(nodeId: string): string {
+  return `${GOAL_GATE_OUTCOME_KEY_PREFIX}${nodeId}`;
+}
+
+/** Read the cumulative retarget count from a routing snapshot. Defaults to 0
+ * for a never-retargeted run. */
+export function readGoalGateRetries(routing: Record<string, unknown>): number {
+  const v = routing[GOAL_GATE_RETRIES_KEY];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Read all per-gate outcomes from a routing snapshot. Keys outside the
+ * `goal_gates.*` namespace (or the reserved `__retries` slot) are ignored. */
+export function readGateOutcomes(routing: Record<string, unknown>): GateOutcomes {
+  const out = new Map<string, OutcomeStatus>();
+  for (const [k, v] of Object.entries(routing)) {
+    if (!k.startsWith(GOAL_GATE_OUTCOME_KEY_PREFIX)) continue;
+    if (k === GOAL_GATE_RETRIES_KEY) continue;
+    if (typeof v !== "string") continue;
+    if (v === "success" || v === "partial_success" || v === "fail" || v === "retry" || v === "skipped") {
+      out.set(k.slice(GOAL_GATE_OUTCOME_KEY_PREFIX.length), v);
+    }
+  }
+  return out;
+}
+
 /** Per-gate outcome captured as the run executes. */
 export type GateOutcomes = ReadonlyMap<string, OutcomeStatus>;
 
-export type GateCheck =
-  | { satisfied: true }
-  | { satisfied: false; failedGate: string };
+export type GateCheck = { satisfied: true } | { satisfied: false; failedGate: string };
 
 /** Inspect every gate node. First unsatisfied (visit order) is reported.
  * A gate is satisfied iff it is in `outcomes` AND its status is SUCCESS or
@@ -62,6 +96,23 @@ export function resolveRetargetChain(graph: Graph, failedGateId: string): string
     graph.attrs.retry_target,
     graph.attrs.fallback_retry_target,
   ];
+  for (const id of candidates) {
+    if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
+  }
+  return null;
+}
+
+/** Resolve the §3.7 failure-routing retarget for a single node. Steps 2-3 of
+ * the chain (the fail-edge case lives in edge-selection; pipeline termination
+ * is the absence of any retarget here). Graph-level retry_target is NOT
+ * consulted — that belongs to §3.4 (goal gates), not §3.7 (per-node failure).
+ *
+ * Returns null when the node has neither retarget set or both reference
+ * undefined nodes; the caller should halt the run with the original
+ * failure reason in that case. */
+export function resolveFailRetarget(graph: Graph, sourceNodeId: string): string | null {
+  const node = graph.nodes[sourceNodeId];
+  const candidates: (string | undefined)[] = [node?.attrs.retry_target, node?.attrs.fallback_retry_target];
   for (const id of candidates) {
     if (typeof id === "string" && id !== "" && graph.nodes[id] != null) return id;
   }

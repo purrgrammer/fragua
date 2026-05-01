@@ -27,7 +27,14 @@ export type RunStatus =
  * daemon writes facts (run lifecycle, observability). */
 export type EventWriter = "daemon" | "web";
 
-export type HaltReason = "budget" | "max_loops" | "abort_loop" | "schema_drift" | "error" | "aborted_exit";
+export type HaltReason =
+  | "budget"
+  | "max_loops"
+  | "abort_loop"
+  | "schema_drift"
+  | "error"
+  | "aborted_exit"
+  | "goal_gate_unsatisfied";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 

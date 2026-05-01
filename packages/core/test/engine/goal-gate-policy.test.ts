@@ -14,8 +14,12 @@ import {
   checkGoalGates,
   DEFAULT_MAX_GOAL_GATE_RETRIES,
   type GateOutcomes,
+  goalGateOutcomeKey,
   goalGateStep,
   maxGoalGateRetries,
+  readGateOutcomes,
+  readGoalGateRetries,
+  resolveFailRetarget,
   resolveRetargetChain,
 } from "../../src/engine/goal-gate-policy.ts";
 import type { Graph, Node, NodeAttrs } from "../../src/types/graph.ts";
@@ -37,8 +41,9 @@ function graph(parts: { nodes: Node[]; attrs?: Graph["attrs"] }): Graph {
   };
 }
 
-const outcomes = (entries: Record<string, "success" | "partial_success" | "fail" | "retry" | "skipped">): GateOutcomes =>
-  new Map(Object.entries(entries));
+const outcomes = (
+  entries: Record<string, "success" | "partial_success" | "fail" | "retry" | "skipped">,
+): GateOutcomes => new Map(Object.entries(entries));
 
 describe("checkGoalGates", () => {
   test("no gates → satisfied", () => {
@@ -147,6 +152,83 @@ describe("resolveRetargetChain", () => {
       attrs: { retry_target: "y" },
     });
     expect(resolveRetargetChain(g, "gate")).toBe("y");
+  });
+});
+
+describe("routing-key helpers", () => {
+  test("goalGateOutcomeKey scopes by node id", () => {
+    expect(goalGateOutcomeKey("verify")).toBe("goal_gates.verify");
+  });
+
+  test("readGoalGateRetries — empty routing → 0", () => {
+    expect(readGoalGateRetries({})).toBe(0);
+  });
+
+  test("readGoalGateRetries — explicit count", () => {
+    expect(readGoalGateRetries({ "goal_gates.__retries": 2 })).toBe(2);
+  });
+
+  test("readGoalGateRetries — non-numeric ignored", () => {
+    expect(readGoalGateRetries({ "goal_gates.__retries": "two" })).toBe(0);
+  });
+
+  test("readGateOutcomes — folds gate keys, ignores reserved __retries slot", () => {
+    const routing: Record<string, unknown> = {
+      "goal_gates.verify": "success",
+      "goal_gates.review": "fail",
+      "goal_gates.__retries": 1,
+      unrelated: "value",
+    };
+    const out = readGateOutcomes(routing);
+    expect(out.get("verify")).toBe("success");
+    expect(out.get("review")).toBe("fail");
+    expect(out.has("__retries")).toBe(false);
+    expect(out.has("unrelated")).toBe(false);
+    expect(out.size).toBe(2);
+  });
+
+  test("readGateOutcomes — non-string outcome values ignored", () => {
+    const out = readGateOutcomes({ "goal_gates.bad": 42 });
+    expect(out.size).toBe(0);
+  });
+
+  test("readGateOutcomes — unknown statuses ignored", () => {
+    const out = readGateOutcomes({ "goal_gates.bad": "weird" });
+    expect(out.size).toBe(0);
+  });
+});
+
+describe("resolveFailRetarget — §3.7", () => {
+  test("node.retry_target wins", () => {
+    const g = graph({
+      nodes: [node("a", { retry_target: "fix" }), node("fix")],
+    });
+    expect(resolveFailRetarget(g, "a")).toBe("fix");
+  });
+
+  test("falls back to fallback_retry_target", () => {
+    const g = graph({
+      nodes: [node("a", { fallback_retry_target: "rescue" }), node("rescue")],
+    });
+    expect(resolveFailRetarget(g, "a")).toBe("rescue");
+  });
+
+  test("graph-level retarget NOT consulted (§3.7 is node-only)", () => {
+    const g = graph({
+      nodes: [node("a"), node("z")],
+      attrs: { retry_target: "z" },
+    });
+    expect(resolveFailRetarget(g, "a")).toBeNull();
+  });
+
+  test("retarget references undefined node → null", () => {
+    const g = graph({ nodes: [node("a", { retry_target: "ghost" })] });
+    expect(resolveFailRetarget(g, "a")).toBeNull();
+  });
+
+  test("nothing set → null (caller halts the run)", () => {
+    const g = graph({ nodes: [node("a")] });
+    expect(resolveFailRetarget(g, "a")).toBeNull();
   });
 });
 

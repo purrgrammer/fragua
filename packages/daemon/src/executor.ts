@@ -12,8 +12,14 @@ import {
   type EdgeSelection,
   type ExecutionEnvironment,
   evaluateBudget,
+  GOAL_GATE_RETRIES_KEY,
   type Graph,
+  goalGateOutcomeKey,
+  goalGateStep,
   parseDotSource,
+  readGateOutcomes,
+  readGoalGateRetries,
+  resolveFailRetarget,
   selectEdge,
 } from "@swarm/core";
 import * as core from "@swarm/core/handler";
@@ -714,6 +720,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             if (selection != null) {
               result.nextNode = selection.edge.to;
               recordEdgeSelected(observability, currentNode, selection);
+            } else if (result.outcomeStatus === "fail") {
+              // §3.7 step 2/3 — when no fail-edge claimed the failure,
+              // consult the source node's retry_target / fallback_retry_target
+              // before halting. Step 4 (pipeline termination) is the
+              // `__end__` fallback below when no retarget resolves.
+              const retarget = resolveFailRetarget(graph, currentNode);
+              if (retarget != null) {
+                result.nextNode = retarget;
+              } else {
+                // No fail-edge and no retarget — terminal halt path.
+                result.nextNode = "__end__";
+              }
             } else {
               // No outgoing edges or no viable selection — terminal.
               result.nextNode = "__end__";
@@ -765,6 +783,64 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
+      // Goal-gate enforcement (attractor §3.4). Two responsibilities:
+      //   1. Record this node's outcome under `goal_gates.<id>` whenever it
+      //      has goal_gate=true, so terminal-arrival can read the fold.
+      //   2. When the resolved transition leads to a terminal, check every
+      //      visited gate: if any unsatisfied, redirect to the §3.4 chain
+      //      (gate.retry_target → gate.fallback_retry_target → graph.retry_target
+      //      → graph.fallback_retry_target) bounded by max_goal_gate_retries.
+      //   3. Counter exhaust → halt with `goal_gate_unsatisfied`.
+      //
+      // The current-turn outcome is folded into a synthetic snapshot before
+      // checking gates, so a final-stage gate that just completed can be
+      // evaluated without waiting for the next turn's projection refresh.
+      let goalGateRetargetTarget: string | undefined;
+      let goalGateRetriesPatch: number | undefined;
+      if (result.kind === "transition") {
+        const graph = graphFor(state.workflowSha);
+        const completedNode = graph?.nodes[currentNode];
+        if (graph != null && completedNode != null) {
+          const isTerminalNext =
+            result.nextNode === "__end__" ||
+            result.nextNode === "end" ||
+            result.nextNode === "done" ||
+            (result.nextNode != null && graph.nodes[result.nextNode]?.shape === "Msquare");
+          // Synthetic outcome map: prior gates from routing + this turn's gate.
+          const priorOutcomes = readGateOutcomes(state.routing);
+          const synthOutcomes = new Map(priorOutcomes);
+          if (completedNode.attrs.goal_gate === true && result.outcomeStatus != null) {
+            synthOutcomes.set(currentNode, result.outcomeStatus);
+          }
+          if (isTerminalNext) {
+            const action = goalGateStep({
+              graph,
+              outcomes: synthOutcomes,
+              retries: readGoalGateRetries(state.routing),
+            });
+            if (action.kind === "retarget") {
+              goalGateRetargetTarget = action.target;
+              goalGateRetriesPatch = action.nextRetries;
+              result.nextNode = action.target;
+              observability.push({
+                type: "goal_gate.retarget",
+                payload: { failedGate: action.gate, target: action.target, retries: action.nextRetries },
+              });
+            } else if (action.kind === "halt") {
+              observability.push({
+                type: "goal_gate.unsatisfied",
+                payload: { gate: action.gate },
+              });
+              result = {
+                kind: "halt",
+                reason: "goal_gate_unsatisfied",
+                detail: action.gate,
+              };
+            }
+          }
+        }
+      }
+
       // Tail-drain: the handler may have streamed most of its deltas
       // mid-flight via the timer, but `edge.selected` and any post-handler
       // observability (e.g. budget warnings above) still need to flush
@@ -806,6 +882,26 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const merged = new Set(prior);
         for (const tag of budgetWarnedTags) merged.add(tag);
         routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
+      }
+      // Goal-gate routing keys: record the completed gate's outcome and
+      // (when goalGateStep retargeted) the bumped retry counter. These keys
+      // power the §3.4 fold across turns — readGateOutcomes /
+      // readGoalGateRetries pick them up next turn.
+      if (result.kind === "transition") {
+        const graph = graphFor(state.workflowSha);
+        const completedNode = graph?.nodes[currentNode];
+        if (completedNode?.attrs.goal_gate === true && result.outcomeStatus != null) {
+          routingPatch = {
+            ...(routingPatch ?? {}),
+            [goalGateOutcomeKey(currentNode)]: result.outcomeStatus,
+          };
+        }
+        if (goalGateRetargetTarget !== undefined && goalGateRetriesPatch !== undefined) {
+          routingPatch = {
+            ...(routingPatch ?? {}),
+            [GOAL_GATE_RETRIES_KEY]: goalGateRetriesPatch,
+          };
+        }
       }
       const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
       const appendOpts: {
