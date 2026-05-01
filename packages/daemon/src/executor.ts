@@ -14,13 +14,20 @@ import {
   evaluateBudget,
   GOAL_GATE_RETRIES_KEY,
   type Graph,
+  type GraphAttrs,
   goalGateOutcomeKey,
   goalGateStep,
+  isRetryPresetName,
+  type NodeAttrs,
   parseDotSource,
   prepareGraph,
+  RETRY_PRESETS,
+  type RetryPresetName,
   readGateOutcomes,
   readGoalGateRetries,
   resolveFailRetarget,
+  retryCountKey,
+  retryStep,
   selectEdge,
 } from "@swarm/core";
 import * as core from "@swarm/core/handler";
@@ -867,6 +874,66 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
+      // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
+      // returns outcomeStatus="retry", consult retryStep to decide:
+      //   - retry → sleep delayMs (in-fiber for now; wake-pending move is
+      //     a future follow-up), bump per-node counter, re-enter same node
+      //   - halt  → run halts with `max_retries_exceeded`
+      //   - advance_partial → rewrite outcomeStatus to "partial_success"
+      //     and let edge selection advance (allow_partial branch, §3.5)
+      let retryCounterPatch: Record<string, number> | undefined;
+      if (result.kind === "transition" && result.outcomeStatus === "retry") {
+        const graph = graphFor(state.workflowSha);
+        const completedNode = graph?.nodes[currentNode];
+        if (graph != null && completedNode != null) {
+          const backoff = resolveBackoff(completedNode.attrs, graph.attrs);
+          const maxRetries = resolveMaxRetries(completedNode.attrs, graph.attrs);
+          const allowPartial = completedNode.attrs.allow_partial === true;
+          const counterKey = retryCountKey(currentNode);
+          const priorRetries = readNumber(state.routing[counterKey]);
+          const action = retryStep({
+            state: { retries: priorRetries, maxRetries },
+            status: "retry",
+            backoff,
+            allowPartial,
+          });
+          if (action.kind === "retry") {
+            observability.push({
+              type: "node.retry_scheduled",
+              payload: {
+                nodeId: currentNode,
+                attempt: priorRetries + 1,
+                delayMs: action.delayMs,
+                maxRetries,
+              },
+            });
+            flushObservability();
+            await sleep(action.delayMs, opts.shutdownSignal);
+            // Re-enter the same node next turn. The transition's nextNode
+            // becomes currentNode; iteration counters bump via the
+            // routingPatch below.
+            result.nextNode = currentNode;
+            retryCounterPatch = { [counterKey]: priorRetries + 1 };
+          } else if (action.kind === "halt") {
+            observability.push({
+              type: "node.retry_exhausted",
+              payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
+            });
+            result = {
+              kind: "halt",
+              reason: "max_retries_exceeded",
+              detail: `node "${currentNode}" exhausted ${maxRetries} retries`,
+            };
+          } else if (action.kind === "advance_partial") {
+            observability.push({
+              type: "node.retry_partial_accept",
+              payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
+            });
+            result.outcomeStatus = "partial_success";
+          }
+        }
+      }
+
       // Tail-drain: the handler may have streamed most of its deltas
       // mid-flight via the timer, but `edge.selected` and any post-handler
       // observability (e.g. budget warnings above) still need to flush
@@ -908,6 +975,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const merged = new Set(prior);
         for (const tag of budgetWarnedTags) merged.add(tag);
         routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
+      }
+      // Per-node retry counter: bumped when retryStep returned `retry`
+      // above. Lives at `internal.retry_count.<nodeId>` (see
+      // packages/core/src/types/context.ts:retryCountKey).
+      if (retryCounterPatch !== undefined) {
+        routingPatch = { ...(routingPatch ?? {}), ...retryCounterPatch };
       }
       // Goal-gate routing keys: record the completed gate's outcome and
       // (when goalGateStep retargeted) the bumped retry counter. These keys
@@ -1167,4 +1240,55 @@ export function buildSubstitutionArgs(_runId: string, routing: Record<string, un
   const input = routing["input"];
   if (typeof input === "string") args["$ARGUMENTS"] = input;
   return args;
+}
+
+function readNumber(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Resolve the effective BackoffConfig for a node from
+ * (node.retry_policy → graph.default_retry_policy → "none") plus the
+ * custom-override attrs (retry_initial_delay_ms / retry_backoff_factor /
+ * retry_max_delay_ms / retry_jitter). */
+function resolveBackoff(
+  nodeAttrs: NodeAttrs,
+  graphAttrs: GraphAttrs,
+): {
+  initialDelayMs: number;
+  backoffFactor: number;
+  maxDelayMs: number;
+  jitter: boolean;
+} {
+  const presetName: RetryPresetName = isRetryPresetName(nodeAttrs.retry_policy)
+    ? nodeAttrs.retry_policy
+    : isRetryPresetName(graphAttrs.default_retry_policy)
+      ? graphAttrs.default_retry_policy
+      : "none";
+  const preset = RETRY_PRESETS[presetName];
+  return {
+    initialDelayMs:
+      typeof nodeAttrs.retry_initial_delay_ms === "number" ? nodeAttrs.retry_initial_delay_ms : preset.initialDelayMs,
+    backoffFactor:
+      typeof nodeAttrs.retry_backoff_factor === "number" ? nodeAttrs.retry_backoff_factor : preset.backoffFactor,
+    maxDelayMs: typeof nodeAttrs.retry_max_delay_ms === "number" ? nodeAttrs.retry_max_delay_ms : preset.maxDelayMs,
+    jitter: typeof nodeAttrs.retry_jitter === "boolean" ? nodeAttrs.retry_jitter : preset.jitter,
+  };
+}
+
+/** Resolve max_retries (= max_attempts - 1, attractor §3.5). Precedence:
+ * explicit node.max_retries → preset.maxAttempts - 1 →
+ * graph.default_max_retries → 0. */
+function resolveMaxRetries(nodeAttrs: NodeAttrs, graphAttrs: GraphAttrs): number {
+  if (typeof nodeAttrs.max_retries === "number") return Math.max(0, Math.floor(nodeAttrs.max_retries));
+  const presetName: RetryPresetName = isRetryPresetName(nodeAttrs.retry_policy)
+    ? nodeAttrs.retry_policy
+    : isRetryPresetName(graphAttrs.default_retry_policy)
+      ? graphAttrs.default_retry_policy
+      : "none";
+  const preset = RETRY_PRESETS[presetName];
+  if (preset.maxAttempts > 0) return preset.maxAttempts - 1;
+  if (typeof graphAttrs.default_max_retries === "number") {
+    return Math.max(0, Math.floor(graphAttrs.default_max_retries));
+  }
+  return 0;
 }

@@ -186,15 +186,11 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       } satisfies HandlerResult;
     }
 
-    if (outcome.status === "retry" || outcome.status === "partial_success") {
-      // Treat retries as halt for now — a richer retry strategy can fold
-      // outcome.context_updates back into routing and re-enter the node.
-      return {
-        kind: "halt",
-        reason: "error",
-        detail: outcome.failure_reason ?? `codergen status=${outcome.status}`,
-      } satisfies HandlerResult;
-    }
+    // retry / partial_success now flow through as transitions. The executor
+    // consults retryStep (engine/retry-policy.ts) on outcomeStatus="retry"
+    // to decide between sleep+re-dispatch, halt(max_retries_exceeded), or
+    // advance_partial (for nodes with allow_partial=true). partial_success
+    // is treated as success-like and advances via edge selection.
 
     // `fail` outcomes flow through as transitions so the executor's edge
     // selector can route to a `condition="outcome=fail"` recovery edge

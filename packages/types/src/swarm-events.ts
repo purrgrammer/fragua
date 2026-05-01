@@ -34,7 +34,8 @@ export type HaltReason =
   | "schema_drift"
   | "error"
   | "aborted_exit"
-  | "goal_gate_unsatisfied";
+  | "goal_gate_unsatisfied"
+  | "max_retries_exceeded";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 

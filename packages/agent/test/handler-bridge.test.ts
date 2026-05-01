@@ -222,7 +222,11 @@ describe("makeCodergenHandler", () => {
     store.close();
   });
 
-  test("backend retry → halt (still short-circuits; no edge routing for retry)", async () => {
+  test("backend retry → transition with outcomeStatus=retry (executor consults retry-policy)", async () => {
+    // Per attractor §3.5 / §3.6, retry status flows through as a
+    // transition; the executor calls retryStep to decide between
+    // sleep+re-dispatch, halt(max_retries_exceeded), or advance_partial.
+    // handler-bridge no longer short-circuits to halt.
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3-retry", store, "n1");
     const retrying: CodergenBackend = {
@@ -243,8 +247,8 @@ describe("makeCodergenHandler", () => {
       backend: retrying,
     });
     const result = await spec.handler(ctx);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") expect(result.detail).toBe("transient");
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") expect(result.outcomeStatus).toBe("retry");
     store.close();
   });
 
