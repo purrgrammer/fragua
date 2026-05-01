@@ -34,16 +34,12 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   "azure-openai-responses": "gpt-5.2",
   "openai-codex": "gpt-5.4",
   google: "gemini-2.5-pro",
-  "google-gemini-cli": "gemini-2.5-pro",
-  "google-antigravity": "gemini-3.1-pro-high",
   "google-vertex": "gemini-3-pro-preview",
   "github-copilot": "gpt-4o",
   openrouter: "nvidia/nemotron-3-super-120b-a12b:free",
   // vercel-ai-gateway uses dotted form (not the hyphen form used by
-  // the direct-Anthropic provider). Upstream pi-coding-agent carries
-  // `anthropic/claude-opus-4-6` here which targets a newer pi-ai; swarm
-  // pins pi-ai 0.67.68 so we use the closest equivalent that exists in
-  // that generated model list.
+  // the direct-Anthropic provider). The id below must exist in pi-ai's
+  // generated model list for the active version pin.
   "vercel-ai-gateway": "anthropic/claude-opus-4.6",
   xai: "grok-4-fast-non-reasoning",
   groq: "openai/gpt-oss-120b",
@@ -52,6 +48,8 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   mistral: "devstral-medium-latest",
   minimax: "MiniMax-M2.7",
   "minimax-cn": "MiniMax-M2.7",
+  moonshotai: "kimi-k2-thinking",
+  "moonshotai-cn": "kimi-k2-thinking",
   huggingface: "moonshotai/Kimi-K2.5",
   opencode: "claude-opus-4-6",
   "opencode-go": "kimi-k2.5",
@@ -59,6 +57,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
   deepseek: "deepseek-v4-pro",
   fireworks: "accounts/fireworks/models/deepseek-v4-pro",
   "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.5",
+  "cloudflare-ai-gateway": "claude-3-5-haiku",
 };
 
 /** Find a model by bare id across every provider in the registry.

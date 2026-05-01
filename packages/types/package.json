@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.67.68",
-    "@mariozechner/pi-ai": "0.67.68"
+    "@mariozechner/pi-agent-core": "0.71.0",
+    "@mariozechner/pi-ai": "0.71.0"
   },
   "devDependencies": {
     "typescript": "5.7.3"
