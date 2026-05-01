@@ -24,7 +24,7 @@ bun run swarm providers ls                             # at least the default pr
 bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
-The CLI does three things for you: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), then `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts are `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_quarantined`; the CLI exits non-zero on halt / cancel.
+The CLI does three things for you: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), then `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts are `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused_retry | fact.run_quarantined`; the CLI exits non-zero on halt / cancel. `paused_retry` and `paused_hitl` are *suspensive* — the CLI exits 0 there, the run will resume on its own (retry timer or operator HITL response).
 
 If the fast path works, nothing below matters. Everything after is for when it doesn't — or when you need to drive a run that's already in flight.
 
@@ -140,6 +140,14 @@ curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs
 ```
 
 For running-but-silent runs: if the last event is `fact.node_started` with no follow-up in `maxMs`, the supervisor's watchdog should have fired — if it hasn't, the daemon is wedged. Jump to swarm-debug.
+
+**Lifecycle states you'll see beyond `running`/`completed`:**
+
+- `queued` — waiting for a daemon dispatch slot.
+- `paused_hitl` — `wait.human` (or operator pause). Resume with `POST /runs/:id/hitl`.
+- `paused_retry` — a node returned `outcome=retry` and the executor scheduled a backoff. The run *frees its concurrency slot* during the wait so other runs aren't blocked. Wake-pending re-queues it once `routing.internal.retry_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action needed unless the resume timer never fires (then check daemon heartbeat).
+- `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
+- `halted` / `cancelled` — terminal. See swarm-debug §8 for `reason` codes.
 
 ---
 

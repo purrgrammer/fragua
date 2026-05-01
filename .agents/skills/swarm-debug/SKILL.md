@@ -160,6 +160,11 @@ SQL
 - **`fact.handler_timeout_leaked`** — the executor hard-timed-out a handler that ignored `ctx.signal`. Handler bug; see `docs/handler-contract.md` §4 rule 1.
 - **`fact.daemon_takeover`** — another daemon reclaimed a stale lock. Expect to see `fact.run_requeued_after_crash` nearby on in-flight runs.
 - **`agent.info { event: "thread_rehydrated", thread_id, message_count }`** — a codergen node picked up a `thread_id` with prior messages that were not written by this backend instance (either a fresh node sharing the thread with a prior one, or a true daemon restart). Fidelity is invariant across this; the Agent's `initialState.messages` is seeded byte-identical to the pre-rehydrate state. Informational — not a warning. If you see this during a "why did my run skip context?" investigation, the answer is it didn't: the transcript was restored in full.
+- **`run_state.routing` keys worth a glance.** The routing snapshot is folded across the run; some keys are diagnostic gold:
+  - `goal_gates.<nodeId>` — last outcome of every visited gate. Tells you *which* gate failed and what status it settled in.
+  - `goal_gates.__retries` — cumulative retarget count. If this equals `max_goal_gate_retries` (default 3) and you see `fact.run_halted { reason: "goal_gate_unsatisfied" }`, the cap tripped.
+  - `internal.retry_resume_at` — wall-clock ms when a `paused_retry` run is due to wake. If this is in the past and the run is still `paused_retry`, the wake-pending sweeper is wedged (check daemon heartbeat).
+  - `__budget_warned.*` — tags suppressing duplicate `budget.warn` events. Their presence is a sign budget warnings have already fired for that ceiling.
 
 Observability event types outside the fact/intent union (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`, `agent.info`, `agent.warning`) are stamped with `nodeId` + `iteration` and fold into the step snapshot — don't try to read them raw, use §6.
 
@@ -271,15 +276,18 @@ Map the terminal fact to a root cause. All reason codes come from `docs/ARCHITEC
 |---|---|---|
 | `fact.run_halted` | `"aborted_exit"` | A codergen agent emitted `<abort>…</abort>`. Pull the assistant turn via §5 to read it. |
 | `fact.run_halted` | `"max_retries_exceeded"` | A loop (backward conditional edge) consumed the target node's `max_retries`. Check how `ctx.iteration` grew in the timeline. |
+| `fact.run_halted` | `"goal_gate_unsatisfied"` | A `goal_gate=true` node never settled in SUCCESS/PARTIAL_SUCCESS, and the §3.4 retarget chain was either empty (W007 at validate-time would have warned) or exhausted past `max_goal_gate_retries` (default 3). Payload names the failed gate. Cross-reference `goal_gates.<gateId>` in `run_state.routing` for the gate's last outcome and `goal_gates.__retries` for the cumulative count. |
 | `fact.run_halted` | `"abort_loop"` | 5 consecutive aborts without progress (`ABORT_LOOP_CEILING`). Usually repeated steer/pause or a handler failing at startup. |
 | `fact.run_halted` | `"schema_drift"` | `schema_version` on the run row doesn't match the daemon's `CURRENT_SCHEMA_VERSION`. Happens to long-paused runs across swarm upgrades. Not auto-recoverable. |
-| `fact.run_halted` | `"budget"` / `"max_loops"` | **Declared, not yet enforced** (see §9). If you see this in the wild it's from a handler returning `kind: "halt"` manually, not the runtime ceiling. |
+| `fact.run_halted` | `"budget"` | Cumulative cost or tokens hit a declared ceiling — graph-level `budget_usd`/`budget_tokens` or node-level `max_cost_usd`/`max_tokens`. The run halts unless `graph.budget_policy="warn"` (then `budget.stop` event fires without halting). The preceding `budget.warn` event names which ceiling tripped (run vs. node, dollars vs. tokens). |
 | `fact.run_halted` | `"error"` | Generic handler error. `detail` is a string; cross-reference with `fact.node_aborted { cause: "error" }` on the same seq range. |
 | `fact.run_quarantined` | `"orphan_side_effect"` | A crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload includes `orphanedIntents: seq[]`. Operator must resolve via `POST /runs/:id/unquarantine { resolution: "treat_as_done"|"retry"|"cancel", note }`. Don't auto-retry — the external effect may have succeeded. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to the `intent.cancel_requested`. |
 | `fact.run_paused_hitl` | — | `wait.human` node yielded. Prompt is in the payload; resume with `POST /runs/:id/hitl { payload }`. |
+| `fact.run_paused_retry` | — | A node returned `outcome=retry` and the executor scheduled a backoff. Status is `paused_retry`; `routing.internal.retry_resume_at` (ms epoch) tells you when the wake-pending sweeper will re-queue it. Slot is freed during the wait. Fact payload carries `{ nodeId, attempt, delayMs, resumeAt, maxRetries }`. |
 | `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (5s) without respecting `ctx.signal`. Handler bug. The run is halted separately. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` is older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
+| Status `paused_retry`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Check daemon heartbeat (§1) — sweeper runs in the supervisor tick. |
 
 ---
 
@@ -287,9 +295,10 @@ Map the terminal fact to a root cause. All reason codes come from `docs/ARCHITEC
 
 Per `docs/ARCHITECTURE.md` §13.1, these surfaces parse/serialize but aren't wired:
 
-- **Budgeting.** `graph.attrs.budget_usd`, `graph.attrs.budget_tokens`, `node.attrs.max_cost_usd`, `node.attrs.max_tokens` all round-trip cleanly. `BudgetSnapshot`, `budget.warn`, `budget.stop` event types are declared. No runtime enforces them. Runs exceed declared budgets silently. **Do not** tell the user "it halted because of budget" unless `fact.run_halted { reason: "budget" }` actually appears in the events — and even then, it's a handler-level halt, not the runtime ceiling.
 - **HITL inside parallel branches.** A `yield_hitl` from inside a `component` (parallel) branch is coerced to `fail` with a documented reason. Nested HITL is not supported in v1.
 - **Per-node provider preflight.** `POST /runs` checks that *some* provider key is configured, not the specific provider pinned on each `node.attrs.provider`. A workflow hardcoding an unconfigured provider fails at **dispatch** with `fact.run_halted`, not at enqueue. If the user says "I enqueued a run and nothing happened", check the first `fact.*` on the run for this case.
+
+(Budget enforcement, listed here previously as not-wired, is now live: `budget-policy.ts` evaluates ceilings at every turn boundary and the executor honours `shouldHalt` with `reason="budget"`. Both graph-level `budget_usd`/`budget_tokens` and node-level `max_cost_usd`/`max_tokens` count.)
 
 When you find a surface that looks broken, check §13.1 before filing a bug. It may just be declared-not-wired.
 
