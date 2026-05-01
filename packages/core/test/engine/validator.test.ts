@@ -338,6 +338,124 @@ describe("HITL (wait.human) lint rules", () => {
   });
 });
 
+describe("goal-gate / retry-target lints (attractor §3.4)", () => {
+  test("E011: node retry_target references undefined node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=box, goal_gate=true, retry_target=ghost]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    const e011 = diags.find((d) => d.code === "E011");
+    expect(e011).toBeDefined();
+    expect(e011?.severity).toBe("error");
+    expect(e011?.nodeId).toBe("gate");
+    expect(e011?.message).toMatch(/ghost/);
+  });
+
+  test("E011: graph retry_target references undefined node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [retry_target=phantom]
+          s [shape=Mdiamond]
+          gate [shape=box, goal_gate=true]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    const e011 = diags.find((d) => d.code === "E011" && d.message.includes("graph"));
+    expect(e011).toBeDefined();
+    expect(e011?.severity).toBe("error");
+    expect(e011?.message).toMatch(/phantom/);
+  });
+
+  test("E011 not raised when retry_target points at an existing node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          fix
+          gate [shape=box, goal_gate=true, retry_target=fix]
+          done [shape=Msquare]
+          s -> gate -> done
+          fix -> gate
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E011")).toBe(false);
+  });
+
+  test("W007: goal_gate node with no retarget anywhere", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=box, goal_gate=true]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    const w007 = diags.find((d) => d.code === "W007");
+    expect(w007).toBeDefined();
+    expect(w007?.severity).toBe("warning");
+    expect(w007?.nodeId).toBe("gate");
+  });
+
+  test("W007 not raised when graph-level retry_target is set", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [retry_target=fix]
+          s [shape=Mdiamond]
+          fix
+          gate [shape=box, goal_gate=true]
+          done [shape=Msquare]
+          s -> gate -> done
+          fix -> gate
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W007")).toBe(false);
+  });
+
+  test("W007 not raised when gate-level retry_target is set", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          fix
+          gate [shape=box, goal_gate=true, retry_target=fix]
+          done [shape=Msquare]
+          s -> gate -> done
+          fix -> gate
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W007")).toBe(false);
+  });
+
+  test("W007 not raised when node has no goal_gate", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          plain [shape=box]
+          done [shape=Msquare]
+          s -> plain -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W007")).toBe(false);
+  });
+});
+
 describe("validateOrThrow", () => {
   test("ok graph does not throw", () => {
     validateOrThrow(

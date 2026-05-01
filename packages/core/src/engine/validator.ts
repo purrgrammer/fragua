@@ -286,6 +286,61 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E011: retry_target / fallback_retry_target reference an undefined node.
+  // Fires for both node-level (attractor §3.4 step 1/2) and graph-level
+  // (steps 3/4) targets. Catches typos that would silently halt the run
+  // with `goal_gate_unsatisfied` at the worst possible moment.
+  for (const n of nodes) {
+    for (const key of ["retry_target", "fallback_retry_target"] as const) {
+      const target = n.attrs[key];
+      if (typeof target !== "string" || target === "") continue;
+      if (!nodeIds.has(target)) {
+        diags.push({
+          severity: "error",
+          code: "E011",
+          message: `node "${n.id}" ${key}="${target}" references undefined node`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
+    }
+  }
+  for (const key of ["retry_target", "fallback_retry_target"] as const) {
+    const target = graph.attrs[key];
+    if (typeof target !== "string" || target === "") continue;
+    if (!nodeIds.has(target)) {
+      diags.push({
+        severity: "error",
+        code: "E011",
+        message: `graph ${key}="${target}" references undefined node`,
+      });
+    }
+  }
+
+  // W007: node with goal_gate=true has no retarget at any level.
+  // The §3.4 retarget chain is gate.retry_target → gate.fallback_retry_target
+  // → graph.retry_target → graph.fallback_retry_target → halt. A goal gate
+  // with no chain anywhere can only halt the run on failure, never recover —
+  // almost certainly an authoring oversight.
+  for (const n of nodes) {
+    if (n.attrs.goal_gate !== true) continue;
+    const hasGateTarget =
+      (typeof n.attrs.retry_target === "string" && n.attrs.retry_target !== "") ||
+      (typeof n.attrs.fallback_retry_target === "string" && n.attrs.fallback_retry_target !== "");
+    const hasGraphTarget =
+      (typeof graph.attrs.retry_target === "string" && graph.attrs.retry_target !== "") ||
+      (typeof graph.attrs.fallback_retry_target === "string" && graph.attrs.fallback_retry_target !== "");
+    if (!hasGateTarget && !hasGraphTarget) {
+      diags.push({
+        severity: "warning",
+        code: "W007",
+        message: `goal_gate node "${n.id}" has no retry_target / fallback_retry_target at gate or graph level — failure can only halt`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
   // W005: duplicate edges (same from/to pair with identical attributes)
   const seen = new Map<string, Edge>();
   for (const e of graph.edges) {
