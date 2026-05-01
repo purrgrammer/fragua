@@ -143,7 +143,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 
 ## 2. Schema
 
-All tables `STRICT`, all `WITHOUT ROWID`. Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
+All tables are `STRICT`. The append-mostly per-run tables (`events`, `messages`, `blobs`, `artifacts`) additionally use `WITHOUT ROWID` for compact PK-clustered storage; the lifecycle and singleton tables (`schema_version`, `workflows`, `run_state`, `projects`, `daemon_lock`, `daemon_events`) use the default rowid layout (`daemon_events` in particular relies on `INTEGER PRIMARY KEY AUTOINCREMENT`, which is incompatible with `WITHOUT ROWID`). Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
 
 ```sql
 -- Pragmas applied on every connection open
@@ -645,26 +645,60 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
 ```typescript
 app.post("/runs", async (c) => {
-  const { workflowSha, priority } = await c.req.json();
-  const runId = newRunId();
-  store.enqueueRun({ runId, workflowSha, priority });
+  const body = await c.req.json() as {
+    workflowSha: string;
+    runId?: string;
+    priority?: number;
+    routing?: Record<string, unknown>;
+    input?: string;          // positional input → routing.input → $ARGUMENTS
+    projectId?: string;      // UUIDv7 from <root>/.swarm/config.jsonc
+    projectName?: string;    // display label for the projects cache
+    projectRoot?: string;    // absolute path at enqueue time
+  };
+
+  // Preflight 1: at least one provider credential must be reachable.
+  const provider = preflightProviders?.();
+  if (provider && !provider.ok) {
+    return c.json({ error: provider.detail, code: "provider_unavailable" }, 400);
+  }
+  // Preflight 2: backpressure on queued runs (running runs are bounded
+  // separately by the daemon's maxConcurrentRuns).
+  if (maxQueuedRuns != null && store.runStateCounts().queued >= maxQueuedRuns) {
+    c.header("Retry-After", "30");
+    return c.json({ error: "queue full", code: "queue_full" }, 429);
+  }
+
+  const runId = body.runId ?? newRunId();
+  const initialRouting = { ...(body.routing ?? {}) };
+  if (typeof body.input === "string" && initialRouting.input === undefined) {
+    initialRouting.input = body.input;
+  }
+  store.enqueueRun({ runId, workflowSha: body.workflowSha, priority: body.priority,
+                     initialRouting, projectId: body.projectId,
+                     projectName: body.projectName, projectRoot: body.projectRoot });
   return c.json({ runId });
 });
 
-app.post("/runs/:id/steer",    async (c) => writeIntent(c, "intent.steering_requested"));
-app.post("/runs/:id/pause",    async (c) => writeIntent(c, "intent.pause_requested"));
-app.post("/runs/:id/cancel",   async (c) => writeIntent(c, "intent.cancel_requested"));
-app.post("/runs/:id/hitl",     async (c) => writeIntent(c, "intent.hitl_input"));
+app.post("/runs/:id/steer",        async (c) => writeIntent(c, "intent.steering_requested"));
+app.post("/runs/:id/pause",        async (c) => writeIntent(c, "intent.pause_requested"));
+app.post("/runs/:id/cancel",       async (c) => writeIntent(c, "intent.cancel_requested"));
+app.post("/runs/:id/hitl",         async (c) => writeIntent(c, "intent.hitl_input"));
+app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"));
 app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
+app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
 
 app.get("/runs/:id/events", (c) => streamSSE(c, async (stream) => {
   const runId = c.req.param("id");
-  let lastSeq = Number(c.req.header("Last-Event-ID") ?? 0);
+  let sinceSeq = Number(c.req.header("Last-Event-ID") ?? 0);
   while (!stream.aborted) {
-    const events = store.getEvents(runId, lastSeq, 500);
+    const events = store.getEvents(runId, { sinceSeq, limit: 500 });
     for (const e of events) {
-      await stream.writeSSE({ id: String(e.seq), event: e.type, data: JSON.stringify(e) });
-      lastSeq = e.seq;
+      // No `event:` field on the wire — the type lives inside the JSON
+      // payload, so the browser dispatches every frame via a single
+      // `addEventListener("message", …)` and reads `.type` from there.
+      // Avoids registering ~45 typed listeners per mount for zero gain.
+      await stream.writeSSE({ id: String(e.seq), data: JSON.stringify(e) });
+      sinceSeq = e.seq;
     }
     if (events.length === 0) await sleep(100);
   }
