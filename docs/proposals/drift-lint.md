@@ -42,3 +42,7 @@ This proposal pairs with [`introspection-workflow`](./introspection-workflow.md)
 - **Auto-fixing drift.** Lint reports; humans fix. Auto-generated docs are worse than stale docs because they hide intent.
 - **Catching semantic drift** (e.g., a column whose meaning changed but name didn't). Out of scope; structural only.
 - **Replacing the front-matter discipline in proposals.** Adds a check that the README index matches reality.
+
+## Implementation notes
+
+Landed as `bun run lint:docs` (driven by `packages/store/test/lint-docs.test.ts`) and woven into `bun run ci` between `lint` and `typecheck`. Suppression is line-based: a `-- drift-lint: ignore` line in `schema.sql` directly above a column declaration, or a `// drift-lint: ignore` line in a TS contract file directly above a union member, exempts the next declaration from the audit. No AST. The fixture pair under `packages/store/test/fixtures/drift-lint/` proves the lint catches real drift — a parameterised self-test asserts the drifted fixture surfaces the missing column by name and the clean fixture yields zero findings.
