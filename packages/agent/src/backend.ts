@@ -602,8 +602,10 @@ function summarizeMessage(message: { role: string; content?: unknown }): string 
 }
 
 /** Concatenate every text block in an assistant message. Caller clips for
- *  storage; callers that scan for markers (`<abort>…</abort>`) must NOT
- *  clip first — a trailing marker in a long reply would be lost. */
+ *  storage; callers that scan for trailing markers (`<abort>…</abort>`)
+ *  must NOT clip first — the marker is anchored at the message's final
+ *  non-whitespace position, and a clip from the head would still chop
+ *  the tail in long replies. */
 function fullAssistantText(message: { role: string; content?: unknown }): string {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
   const parts = message.content as Array<{ type: string; text?: string }>;
@@ -615,19 +617,34 @@ function fullAssistantText(message: { role: string; content?: unknown }): string
 
 /**
  * Parse the final assistant text for a self-abort marker. The agent signals
- * "I cannot proceed" by emitting `<abort>reason</abort>` anywhere in its
- * final message. The reason is trimmed and clamped to a single line so it
- * can be surfaced as a `failure_reason` without dragging in kilobytes of
- * reasoning. Returns `null` when no marker is present.
+ * "I cannot proceed" by emitting `<abort>reason</abort>` in the final
+ * non-whitespace position of its last message. Mid-text occurrences (e.g.
+ * `<abort>` quoted as documentation inside a fenced code block) do NOT
+ * trigger a live abort — that matches the documented contract in
+ * `docs/handler-contract.md` §11 ("emit `<abort>reason</abort>` in its
+ * final text") and avoids the self-referential failure mode where an
+ * agent describing the abort contract halts itself.
  *
- * Exported so workflows (and tests) can rely on the exact contract without
- * reimplementing regex matching.
+ * The reason is trimmed and clamped to a single line so it can be
+ * surfaced as a `failure_reason` without dragging in kilobytes of
+ * reasoning. Returns `null` when no trailing marker is present.
+ *
+ * Exported so workflows (and tests) can rely on the exact contract
+ * without reimplementing matching.
  */
 export function parseAbortMarker(text: string): { reason: string } | null {
   if (!text) return null;
-  const m = text.match(/<abort>([\s\S]*?)<\/abort>/i);
-  if (!m) return null;
-  const raw = (m[1] ?? "").trim();
+  const trimmed = text.trimEnd();
+  // Trailing close tag is the necessary condition; bail early if absent.
+  if (!/<\/abort>$/i.test(trimmed)) return null;
+  // Find the LAST opening before the trailing close. lastIndexOf needs
+  // exact case, so we scan a lowercased mirror — string lengths line up
+  // for ASCII tags so the offsets transfer back to the original.
+  const lower = trimmed.toLowerCase();
+  const closeIdx = lower.lastIndexOf("</abort>");
+  const openIdx = lower.lastIndexOf("<abort>", closeIdx);
+  if (openIdx === -1) return null;
+  const raw = trimmed.slice(openIdx + "<abort>".length, closeIdx).trim();
   // Collapse any internal newlines; cap length.
   const oneLine = raw.replace(/\s+/g, " ").slice(0, 400);
   return { reason: oneLine.length > 0 ? oneLine : "agent aborted without a reason" };
