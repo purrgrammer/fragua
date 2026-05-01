@@ -7,13 +7,18 @@ last-reviewed: 2026-05-01
 
 # Per-project DB retention
 
-> **Landed:** `swarm db {vacuum,gc-blobs,backup --to <path>}`.
->
-> **Outstanding:** `swarm db prune --project` retention CLI. Useful in
-> single-project mode today; the `--project` filter is a no-op until
-> multi-project.
+> Maintenance and archival CLIs for a long-running swarm DB. Vacuum,
+> blob GC, and full-DB backup ship; the namesake `prune` retention
+> CLI is the outstanding piece. Useful in single-project mode today;
+> the `--project` filter is a no-op until multi-project lands.
 
-## What lands
+## What landed
+
+- `swarm db vacuum` — SQLite fragmentation reclaim.
+- `swarm db gc-blobs` — sweep unreferenced artifact blobs.
+- `swarm db backup --to <path>` — full-DB snapshot.
+
+## Outstanding
 
 ```
 swarm db prune --project <id> [--older-than <duration>] [--keep <n>]

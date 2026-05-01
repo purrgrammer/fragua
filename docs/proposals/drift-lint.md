@@ -1,7 +1,7 @@
 ---
 title: Doc-vs-code drift CI lint
 status: proposed
-maturity: sketch
+maturity: specified
 last-reviewed: 2026-05-01
 ---
 

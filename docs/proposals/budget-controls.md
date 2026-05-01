@@ -7,17 +7,25 @@ last-reviewed: 2026-05-01
 
 # Budget controls
 
-> **Landed:** per-node + per-run `budget_usd` / `max_cost_usd` /
-> `budget_policy` are enforced by the executor; the auto-titler ships.
->
-> **Outstanding:** per-project cost cap (cascading from project
-> config), auto-titler sub-budget. Multi-project
+> Single-project cost ceilings: per-node and per-run caps already
+> ship; the outstanding piece is a per-project cap that cascades from
+> project config so a long-running project can't silently rack up
+> spend across many runs. Multi-project
 > [rate-limit fairness](./rate-limit-fairness.md) is a separate,
 > harder subproject.
 
-## What lands
+## What landed
 
-[Project config](./project-config.md) gains:
+- Per-node and per-run `budget_usd` / `max_cost_usd` / `budget_policy`
+  enforcement at every turn boundary
+  (`packages/core/src/engine/budget-policy.ts`).
+- Auto-titler fiber with a bounded cost ceiling, so background
+  titling can't eat a project's budget.
+
+## Outstanding
+
+Per-project cost cap cascading from project config. The shape below
+is the proposed extension to [project config](./project-config.md):
 
 ```jsonc
 "budgets": {
@@ -36,21 +44,19 @@ issue an LLM call. Over-budget runs transition to
 resumable via `intent.resume` (typically after raising the cap or
 waiting out the window).
 
-The auto-titler block is its own sub-budget so titling cannot consume
-the whole project budget — degrading to "untitled run" is strictly
-better than degrading the user's actual workflows.
+The auto-titler block stays distinct from the project bucket so the
+already-landed titler ceiling continues to apply independently —
+degrading to "untitled run" is strictly better than degrading the
+user's actual workflows.
 
 ## Why now
 
-The auto-titler is a fiber that polls runs and fires LLM calls
-regardless of whether anyone's watching. Long-running projects rack up
-spend silently. `autoTitler.enabled: false` is a five-line config check
-on the supervisor's admission path; ship it standalone.
-
-`costUsdPerDay` in single-project mode is just a cost cap. No fairness,
-no admission ordering across projects, no per-key bucket layering. That
-heavier work waits for [rate-limit
-fairness](./rate-limit-fairness.md).
+Long-running projects rack up spend silently. The per-node and
+per-run caps stop a single runaway run, but nothing today caps the
+sum across runs in a project. `costUsdPerDay` in single-project mode
+is just a cost cap — no fairness, no admission ordering across
+projects, no per-key bucket layering. That heavier work waits for
+[rate-limit fairness](./rate-limit-fairness.md).
 
 ## What this does not commit to
 

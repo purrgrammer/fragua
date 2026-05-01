@@ -9,20 +9,33 @@ last-reviewed: 2026-05-01
 
 > Per-project worktrees today (`<project>/.swarm/worktrees/<run_id>`);
 > the global `~/.swarm/worktrees/` location lands with the
-> [harness](./harness.md).
->
-> **Landed:** `WorktreeProvisioner.ensure/dispose`, branch survival on
-> dispose, `fact.run_branched` post-terminal, `run_state.{base_git_sha,
-> branch}`.
->
-> **Outstanding (lots):** branch GC, paused-run base-drift, per-branch
-> isolation in `parallel`, editor co-occupancy, disk pressure. The
-> current shape is rough enough that the broader design is sketched
-> separately in [worktree-design](./worktree-design.md); treat that
-> doc as the source of truth for *where this is going*, this one for
-> *what's in the tree today*.
+> [harness](./harness.md). See
+> [worktree-design](./worktree-design.md) for the broader story —
+> this proposal covers what's in the tree today and the GC contract
+> still owed.
 
-## What lands
+## What landed
+
+- `WorktreeProvisioner.ensure` / `dispose`
+  (`packages/daemon/src/worktree-provisioner.ts`).
+- Branch survival on dispose when the worktree has any working-copy
+  delta.
+- `fact.run_branched` emitted post-terminal so the branch name is
+  recoverable from the event log.
+- `run_state.base_git_sha` and `run_state.branch` columns.
+
+## Outstanding
+
+- Branch GC (`swarm gc --branches`) — without it, branch-on-dispose
+  becomes a forest.
+- Paused-run base-drift: `HEAD` advances under a paused run, replay
+  semantics murky.
+- Per-branch isolation in `parallel` nodes — today siblings share a
+  worktree.
+- Editor co-occupancy: a developer with the worktree open conflicts
+  with dispose.
+
+## Shape
 
 Every non-ephemeral run gets its own git worktree under
 `<project>/.swarm/worktrees/<run_id>`. Sibling-of-`.swarm/`-state,
