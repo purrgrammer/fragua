@@ -84,7 +84,7 @@ digraph build_feature {
   start -> plan
 
   // <abort> → outcome=fail → route straight to done. Condition edges are
-  // evaluated before unconditional ones (see docs/SPEC.md §3.8).
+  // evaluated before unconditional ones (see docs/SPEC.md §3.6).
   plan -> done [condition="outcome=fail"]
   plan -> implement
 

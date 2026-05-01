@@ -89,7 +89,6 @@ digraph review_parallel {
 
   gate -> human_signoff [condition="context.risk=high"]
   gate -> run_tests     [condition="context.risk!=high"]
-  gate -> run_tests
 
   human_signoff -> run_tests
   run_tests -> summarize [condition="outcome=success"]
