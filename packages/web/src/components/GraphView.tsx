@@ -283,6 +283,9 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   // LR, on the bottom. xyflow allows multiple handles per node as long
   // as their ids differ.
   const loopPos = d.orientation === "TB" ? Position.Right : Position.Bottom;
+  // Synthetic goal-gate retarget arcs ride on the opposite side from
+  // regular loops — left in TB, top in LR.
+  const retargetPos = d.orientation === "TB" ? Position.Left : Position.Top;
   // Surface the DOT `label` in the header only when it carries meaning
   // beyond the id — otherwise the id (shown in the body) would appear
   // twice. Empty title ⇒ header reduces to handler + state dot.
@@ -307,6 +310,13 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
       {/* Back-edge handles — invisible to the user, routed through by Loop edges. */}
       <Handle id={LOOP_HANDLE_TARGET} position={loopPos} type="target" style={{ opacity: 0 }} />
       <Handle id={LOOP_HANDLE_SOURCE} position={loopPos} type="source" style={{ opacity: 0 }} />
+      {/* Retarget handles — synthetic goal-gate retarget edges arc on the
+          opposite side from regular loops (left in TB, top in LR), so the
+          two retry channels read as separate visual lanes. xyflow drops
+          edges whose handle ids don't exist on the node, so these MUST
+          stay mounted. */}
+      <Handle id={RETARGET_HANDLE_TARGET} position={retargetPos} type="target" style={{ opacity: 0 }} />
+      <Handle id={RETARGET_HANDLE_SOURCE} position={retargetPos} type="source" style={{ opacity: 0 }} />
       <NodeHeader className="gap-0.5 p-2!">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-sw-xs uppercase tracking-[0.06em] text-sw-muted" title={handlerLabel}>
@@ -438,7 +448,13 @@ function SwarmEdge(props: FlowEdgeRenderProps): JSX.Element {
   // fades both its SVG path and its HTML label pill in lockstep.
   const d = props.data;
   const outcome = d?.outcome;
-  if (d?.isBackEdge) return <AiEdge.Loop {...props} outcome={outcome} />;
+  if (d?.isBackEdge) {
+    // Synthetic goal-gate retargets arc on the LEFT; real back-edges /
+    // self-loops / loop_restart arc on the right. Two channels, no
+    // visual collision.
+    const arcSide = d?.isRetargetEdge ? "left" : "right";
+    return <AiEdge.Loop {...props} outcome={outcome} arcSide={arcSide} />;
+  }
   if (d?.isSkipEdge) return <AiEdge.Temporary {...props} arcOut outcome={outcome} />;
   if (d?.animated) return <AiEdge.Animated {...props} outcome={outcome} />;
   return <AiEdge.Temporary {...props} outcome={outcome} />;
@@ -461,6 +477,11 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  through the LEFT-side retarget handles (opposite the back-edge
      *  side) so the two retry channels read as separate visual lanes. */
     isRetargetEdge?: boolean;
+    /** Position of this loop / retarget edge among edges on the same arc
+     *  side. Drives the per-edge bulge offset so multiple arcs don't
+     *  overlap. Set by `toFlowGraph` for any edge routed through the
+     *  loop or retarget handles; AiEdge.Loop reads it. */
+    arcIndex?: number;
   };
 };
 
@@ -641,6 +662,11 @@ export function toFlowGraph(
     };
   });
 
+  // Per-side arc counters. Multiple back-edges on the same side stack
+  // outward by `arcIndex` so their bulges don't overlap. Right-side =
+  // real loops (back-edges, self-loops, loop_restart). Left-side =
+  // synthetic goal-gate retargets, counted below.
+  let rightArcIndex = 0;
   const flowEdges: FlowEdge[] = graph.edges.map((e, i) => {
     const sd = depthOf.get(e.from);
     const td = depthOf.get(e.to);
@@ -681,6 +707,7 @@ export function toFlowGraph(
     // forward edge — rendering it red would misrepresent the semantic.
     // Forward edges still pick up success/fail tones from outcome.
     const isLoopChannel = isBackEdge || isSelfLoop || loopRestart;
+    const arcIndex = isLoopChannel ? rightArcIndex++ : undefined;
     const marker = isLoopChannel
       ? MARKER_RETRY
       : outcome === "success"
@@ -705,6 +732,7 @@ export function toFlowGraph(
         outcome,
         dim,
         loopRestart,
+        ...(arcIndex !== undefined ? { arcIndex } : {}),
       },
       sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
       targetHandle: useSideHandles || loopRestart ? LOOP_HANDLE_TARGET : undefined,
@@ -723,6 +751,7 @@ export function toFlowGraph(
   // warns about at validate-time.
   const goalGateCap = maxGoalGateRetries(graph.attrs);
   const synthEdges: FlowEdge[] = [];
+  let leftArcIndex = 0;
   for (const node of Object.values(graph.nodes)) {
     if (node.attrs.goal_gate !== true) continue;
     const target = resolveRetargetChain(graph, node.id);
@@ -744,6 +773,7 @@ export function toFlowGraph(
         dim: hasRun, // synthetic — never "taken", so dim during a run.
         loopRestart: false,
         isRetargetEdge: true,
+        arcIndex: leftArcIndex++,
       },
       // Left-side handles so synthetic retargets visually separate from
       // real back-edges (which route through the right-side LOOP handles).
@@ -758,13 +788,25 @@ export function toFlowGraph(
 
 /** Surface DOT edge `condition` / `label` attrs as the edge's pill text.
  *  Prefer `condition` — that's where branching semantics live in Swarm
- *  DOT (`outcome=success`, `outcome=fail`, etc.). */
+ *  DOT (`outcome=success`, `outcome=fail`, etc.). The `outcome=` prefix
+ *  is dropped because the EdgeLabel component already uppercases the
+ *  pill text — `outcome=success` reads cleaner as just `SUCCESS`. The
+ *  rest of the condition is preserved verbatim so compound expressions
+ *  like `outcome=fail && context.severity=high` still render. */
 function edgeLabelOf(edge: GraphEdge): string | undefined {
   const cond = edge.attrs.condition;
-  if (typeof cond === "string" && cond.trim().length > 0) return cond;
+  if (typeof cond === "string" && cond.trim().length > 0) return stripOutcomePrefix(cond);
   const label = edge.attrs.label;
   if (typeof label === "string" && label.trim().length > 0) return label;
   return undefined;
+}
+
+/** `outcome=success` → `success`; `outcome=fail && context.x=1` →
+ *  `fail && context.x=1`. Match is case-insensitive on the key only —
+ *  the value is preserved verbatim so callers parsing the original
+ *  condition aren't affected (only the rendered label). */
+function stripOutcomePrefix(cond: string): string {
+  return cond.replace(/\boutcome\s*=\s*/gi, "");
 }
 
 /** Parse `condition`/`label` for a success/fail outcome marker so the

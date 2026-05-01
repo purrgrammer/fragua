@@ -145,19 +145,24 @@ describe("toFlowGraph — back-edge detection + edge labels", () => {
     expect(forward?.targetHandle).toBeUndefined();
   });
 
-  it("surfaces edge condition (and label fallback) as edge.data.label", () => {
+  it("strips the `outcome=` prefix from condition labels (label CSS-uppercases the rest)", () => {
     const src = `digraph g {
       a [shape=box]
       b [shape=box]
       c [shape=box]
+      d [shape=box]
       a -> b [condition="outcome=success"]
       a -> c [label="fallback"]
+      a -> d [condition="outcome=fail && context.severity=high"]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const byPair = new Map(flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { label?: string }]));
-    expect(byPair.get("a->b")?.label).toBe("outcome=success");
+    expect(byPair.get("a->b")?.label).toBe("success");
     expect(byPair.get("a->c")?.label).toBe("fallback");
+    // Compound conditions: only the `outcome=` key gets stripped; the rest
+    // of the expression is preserved verbatim so authors can still read it.
+    expect(byPair.get("a->d")?.label).toBe("fail && context.severity=high");
   });
 });
 
@@ -431,8 +436,10 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(back).toBeDefined();
     const data = back?.data as { label?: string; isBackEdge?: boolean };
     expect(data.isBackEdge).toBe(true);
-    // Condition is "outcome=fail" — preserved, with the cap appended.
-    expect(data.label).toContain("outcome=fail");
+    // Condition `outcome=fail` renders as just `fail` (CSS uppercases),
+    // with the cap appended.
+    expect(data.label).toContain("fail");
+    expect(data.label).not.toContain("outcome=");
     expect(data.label).toContain("· cap 2");
   });
 
@@ -450,6 +457,8 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(self).toBeDefined();
     const data = self?.data as { label?: string; isBackEdge?: boolean };
     expect(data.isBackEdge).toBe(true); // routed as a loop
+    expect(data.label).toContain("fail");
+    expect(data.label).not.toContain("outcome=");
     expect(data.label).toContain("· cap 3");
     // Self-loops also route through the loop handles.
     expect(self?.sourceHandle).toBe("loop-source");
@@ -512,5 +521,32 @@ describe("toFlowGraph — handler-specific body fields", () => {
     const { flowEdges } = toFlowGraph(null, graph);
     const synth = flowEdges.find((e) => e.id.startsWith("__retarget__"));
     expect(synth).toBeUndefined();
+  });
+
+  it("assigns per-side arcIndex so multiple loops/retargets stack outward", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      c [shape=box, goal_gate=true, retry_target="a"]
+      d [shape=box, goal_gate=true, retry_target="a"]
+      done [shape=Msquare]
+      start -> a -> b -> c -> d -> done
+      // Two right-side back-edges to a — arcIndex 0 and 1.
+      c -> a [condition="outcome=fail"]
+      d -> a [condition="outcome=fail"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    // Right side: real back-edges from c and d to a.
+    const realLoops = flowEdges
+      .filter((e) => !e.id.startsWith("__retarget__") && (e.data as { isBackEdge?: boolean })?.isBackEdge)
+      .map((e) => (e.data as { arcIndex?: number }).arcIndex);
+    expect(realLoops).toEqual([0, 1]);
+    // Left side: synthetic retargets from c and d. Independent counter.
+    const synth = flowEdges
+      .filter((e) => e.id.startsWith("__retarget__"))
+      .map((e) => (e.data as { arcIndex?: number }).arcIndex);
+    expect(synth).toEqual([0, 1]);
   });
 });

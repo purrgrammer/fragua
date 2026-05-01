@@ -21,21 +21,36 @@ const DIM_OPACITY = 0.3;
 
 /**
  * Build a wide arc path for skip/back edges whose handles live on the
- * node's right side. Control points sit well to the right of the widest
+ * node's left or right side. Control points sit past the matching extreme
  * handle x so the curve — and the edge label at its midpoint — clears
  * the node column instead of cutting through it. Returns the SVG path
  * and the (labelX, labelY) midpoint used to anchor the edge pill.
+ *
+ * `arcIndex` lets the host stagger multiple arcs on the same side so they
+ * don't overlap. Each step bumps the bulge outward by `ARC_SPREAD_STEP`
+ * pixels (and the label with it). Index 0 sits at the base offset.
  */
-const wideArcPath = (sx: number, sy: number, tx: number, ty: number): [string, number, number] => {
-  const rightmost = Math.max(sx, tx);
+const ARC_SPREAD_STEP = 36;
+const wideArcPath = (
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  side: "right" | "left" = "right",
+  arcIndex = 0,
+): [string, number, number] => {
   // Arc depth scales with the vertical span so short loops get a gentle
-  // arc and long skip-edges push further out. 120 min keeps the label
+  // arc and long skip-edges push further out. 100 min keeps the label
   // visibly outside a 240-wide node.
   const span = Math.abs(ty - sy);
-  const offset = Math.max(100, Math.min(180, 60 + span * 0.25));
-  const cx = rightmost + offset;
+  const baseOffset = Math.max(100, Math.min(180, 60 + span * 0.25));
+  const offset = baseOffset + Math.max(0, arcIndex) * ARC_SPREAD_STEP;
+  const extreme = side === "right" ? Math.max(sx, tx) : Math.min(sx, tx);
+  const cx = side === "right" ? extreme + offset : extreme - offset;
   const path = `M ${sx},${sy} C ${cx},${sy} ${cx},${ty} ${tx},${ty}`;
-  const labelX = cx - 8; // pull the label slightly inside the arc peak
+  // Pull the label slightly inside the arc peak so it sits *just* off-
+  // column rather than at the bulge tip. Sign mirrors the side.
+  const labelX = side === "right" ? cx - 8 : cx + 8;
   const labelY = (sy + ty) / 2;
   return [path, labelX, labelY];
 };
@@ -149,14 +164,27 @@ const Temporary = ({
   );
 };
 
-// Back-edge — "loop" return arrow. Dashed in the warn accent so it reads
-// distinctly from forward flow; the markerEnd arrow lands on the earlier
-// step so the loop direction is unambiguous. The host (GraphView) routes
-// these through right-side handles so the arc sits outside the main flow.
-const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome }: EdgeProps & OutcomeProp) => {
-  const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY);
+type LoopData = TemporaryData & { arcIndex?: number };
 
-  const d = data as TemporaryData | undefined;
+type LoopProps = EdgeProps &
+  OutcomeProp & {
+    /** Which side the arc bulges toward. Real back-edges and self-loops
+     *  arc right (matching the right-side handles GraphView mounts);
+     *  synthetic goal-gate retargets arc left to claim a separate visual
+     *  channel. Defaults to right for backward compatibility. */
+    arcSide?: "left" | "right";
+  };
+
+// Back-edge — "loop" return arrow. Dashed; tone defaults to muted so retry
+// channels read as structural backflow rather than negative outcomes (the
+// warn / error accents are reserved for forward-edge `outcome=fail`).
+// `arcSide` picks which side the bulge falls on so retarget edges and
+// regular loops can coexist without overlapping arcs.
+const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome, arcSide = "right" }: LoopProps) => {
+  const d = data as LoopData | undefined;
+  const arcIndex = typeof d?.arcIndex === "number" ? d.arcIndex : 0;
+  const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY, arcSide, arcIndex);
+
   const label = d?.label;
   const dim = d?.dim;
   const outcomeStroke = strokeForOutcome(outcome);
@@ -169,14 +197,14 @@ const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome
         markerEnd={markerEnd}
         path={edgePath}
         style={{
-          stroke: outcomeStroke ?? "var(--sw-accent-warn)",
+          stroke: outcomeStroke ?? "var(--sw-accent-idle)",
           strokeDasharray: "4, 4",
           strokeWidth: 1,
           opacity: dim ? DIM_OPACITY : 1,
         }}
       />
       {label ? (
-        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "warn"} dim={dim} />
+        <EdgeLabel labelX={labelX} labelY={labelY} label={label} tone={outcomeTone ?? "muted"} dim={dim} />
       ) : null}
     </>
   );
