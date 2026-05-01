@@ -3,7 +3,7 @@
 // Shapes covered (attractor §2.8):
 //   Mdiamond      → start
 //   Msquare       → exit (done)
-//   box           → codergen          (plan, approach_*, summarize)
+//   box           → codergen          (plan, approach_*)
 //   component     → parallel          (explore — branches converge on pick_best)
 //   tripleoctagon → parallel.fan_in   (pick_best — LLM rank via prompt; fan-in
 //                                       target discovered structurally via edges
@@ -72,11 +72,6 @@ digraph showcase {
 
   run_tests [shape=parallelogram, tool_command="bun test"]
 
-  summarize [
-    prompt   = "Combine $pick_best.output and $run_tests.output into a 5-line run summary. End with `SHOWCASE_DONE`."
-    fidelity = "truncate"
-  ]
-
   done [shape=Msquare]
 
   start -> plan -> explore
@@ -99,7 +94,5 @@ digraph showcase {
   signoff -> run_tests [label="[A] Approve"]
   signoff -> done      [label="[R] Reject"]
 
-  run_tests -> summarize [condition="outcome=success"]
-  run_tests -> done      [condition="outcome=fail"]
-  summarize -> done
+  run_tests -> done
 }

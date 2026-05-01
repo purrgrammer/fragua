@@ -5,8 +5,9 @@
 // verifies it is mergeable; rebase runs the heavyweight conflict-resolution
 // + CAS protocol with refresh of any sibling main checkout.
 //
-//   bun run swarm run merge                       # current branch
-//   bun run swarm run merge --input="feat/touch"  # specific branch
+//   bun run swarm run merge                                  # current branch
+//   bun run swarm run merge --input="feat/touch"             # specific branch
+//   bun run swarm run merge --input="01kqhywtzwwqv5nfmc"     # run id → swarm/runs/<id>
 
 digraph merge {
   graph [
@@ -19,7 +20,7 @@ digraph merge {
   start [shape=Mdiamond]
 
   preflight [
-    prompt = "Resolve and validate the target branch. Fresh thread — read state via git.\n\nIf $ARGUMENTS is non-empty, treat it as a branch name and `git checkout \"$ARGUMENTS\"`. On checkout failure: `<abort>branch not found or dirty checkout: <name></abort>`. Otherwise stay on the current HEAD.\n\nGate (any failure → `<abort>not mergeable: <reason></abort>`):\n  - inside a worktree: `git rev-parse --is-inside-work-tree` → true\n  - not on main: current branch != `main` and not detached\n  - linked worktree (otherwise this is the main checkout itself): `git rev-parse --git-common-dir` != `git rev-parse --git-dir`\n  - ahead of main: `git rev-list --count main..HEAD` > 0\n  - working tree clean: `git status --porcelain` empty\n\nEmit `READY: branch=<name>, ahead=<n>`."
+    prompt = "Resolve and validate the target branch. Fresh thread — read state via git.\n\nIf $ARGUMENTS is non-empty, resolve it to a branch:\n  1. `git checkout \"$ARGUMENTS\"`. Success → done.\n  2. Else if `$ARGUMENTS` looks like a swarm run id (matches `^[0-9a-z]{20,}$`), try `git checkout \"swarm/runs/$ARGUMENTS\"`. Success → done.\n  3. Both fail → `<abort>branch not found or dirty checkout: <name></abort>`.\nOtherwise stay on the current HEAD.\n\nGate (any failure → `<abort>not mergeable: <reason></abort>`):\n  - inside a worktree: `git rev-parse --is-inside-work-tree` → true\n  - not on main: current branch != `main` and not detached\n  - linked worktree (otherwise this is the main checkout itself): `git rev-parse --git-common-dir` != `git rev-parse --git-dir`\n  - ahead of main: `git rev-list --count main..HEAD` > 0\n  - working tree clean: `git status --porcelain` empty\n\nEmit `READY: branch=<name>, ahead=<n>`."
     allowed_tools = "read, bash"
   ]
 

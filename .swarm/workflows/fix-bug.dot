@@ -1,4 +1,4 @@
-// fix-bug.dot — reproduce → fix → verify → summarize.
+// fix-bug.dot — reproduce → fix → verify.
 //
 // `reproduce` is goal-gated: a fix without a failing test first is a no-op,
 // so if reproduce fails to land an asserting test the run retargets back
@@ -44,17 +44,6 @@ digraph fix_bug {
     max_tokens    = 800000
   ]
 
-  summarize [
-    // Output flows through the run transcript via the agent's final
-    // assistant text — swarm has no `$LOG_DIR` (attractor §5.6 was
-    // intentionally omitted; see docs/SPEC.md §6.1). Downstream nodes
-    // could reference this as `$summarize.output`; the UI surfaces it
-    // through the messages projection.
-    prompt        = "Output a 200-word summary: bug ($ARGUMENTS), root cause, fix (file:line), regression test (file + name)."
-    allowed_tools = ""
-    fidelity      = "truncate"
-  ]
-
   done [shape=Msquare]
 
   start -> reproduce
@@ -64,7 +53,5 @@ digraph fix_bug {
   fix -> done [condition="outcome=fail"]
   fix -> verify
 
-  verify -> summarize [condition="outcome=success"]
-  verify -> done      [condition="outcome=fail"]
-  summarize -> done
+  verify -> done
 }
