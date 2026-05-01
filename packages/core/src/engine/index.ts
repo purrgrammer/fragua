@@ -6,5 +6,6 @@ export * from "./fidelity.ts";
 export * from "./goal-gate-policy.ts";
 export * from "./parallel-discovery.ts";
 export * from "./retry-policy.ts";
+export * from "./stylesheet.ts";
 export * from "./substitution.ts";
 export * from "./validator.ts";

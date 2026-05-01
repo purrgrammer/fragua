@@ -6,6 +6,7 @@ import type { Edge, Graph } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
 import { discoverFanInTarget } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
+import { parseStylesheet, StylesheetParseError } from "./stylesheet.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
   return !cond || cond.trim() === "";
@@ -423,6 +424,25 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         code: "E011",
         message: `graph ${key}="${target}" references undefined node`,
       });
+    }
+  }
+
+  // E015: model_stylesheet syntax (attractor §8). Surfaces parse errors
+  // at validate-time so authors see them at upload, not run.
+  {
+    const src = graph.attrs.model_stylesheet;
+    if (typeof src === "string" && src.trim() !== "") {
+      try {
+        parseStylesheet(src);
+      } catch (err) {
+        const detail =
+          err instanceof StylesheetParseError ? err.message : err instanceof Error ? err.message : String(err);
+        diags.push({
+          severity: "error",
+          code: "E015",
+          message: `graph model_stylesheet failed to parse: ${detail}`,
+        });
+      }
     }
   }
 

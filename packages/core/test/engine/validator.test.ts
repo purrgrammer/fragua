@@ -569,6 +569,67 @@ describe("structural lints (attractor §11.2)", () => {
   });
 });
 
+describe("stylesheet lint (attractor §8)", () => {
+  test("E015: malformed model_stylesheet", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [model_stylesheet="* { llm_model bad }"]
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    const e015 = diags.find((d) => d.code === "E015");
+    expect(e015).toBeDefined();
+    expect(e015?.severity).toBe("error");
+  });
+
+  test("E015 not raised when stylesheet is empty or absent", () => {
+    const diags1 = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    expect(diags1.some((d) => d.code === "E015")).toBe(false);
+
+    const diags2 = validate(
+      parseDotSource(`
+        digraph {
+          graph [model_stylesheet=""]
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    expect(diags2.some((d) => d.code === "E015")).toBe(false);
+  });
+
+  test("E015 not raised on a well-formed stylesheet", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; }"]
+          s [shape=Mdiamond]
+          a [shape=box]
+          done [shape=Msquare]
+          s -> a -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E015")).toBe(false);
+  });
+});
+
 describe("retry-policy lints (attractor §3.6)", () => {
   test("W008: node retry_policy is not a known preset name", () => {
     const diags = validate(
