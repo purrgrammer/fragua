@@ -120,8 +120,6 @@ export interface GraphAttrs {
   max_goal_gate_retries?: number;
   model_stylesheet?: string;
   thread_id?: string;
-  "tool_hooks.pre"?: string;
-  "tool_hooks.post"?: string;
   /** Per-run cost ceiling in USD. Once the run's cumulative cost crosses
    * this, `budget.stop` fires and the run halts with `reason: "budget"`
    * (unless `budget_policy = "warn"`). Soft `budget.warn` at 80 % of the
