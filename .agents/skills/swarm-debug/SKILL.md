@@ -24,7 +24,7 @@ URL=$(jq -r .url .swarm/serve.json 2>/dev/null)
 RUN=<run-id>                        # or a prefix; resolve first, see below
 
 # If HTTP is up:
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode: .currentNode, title, totalCostUsd, totalTokens, version}'
+curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode: .currentNode, title, costUsd, totalTokens: (.inputTokens + .outputTokens), version}'
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})'
 
 # If not, go to the store directly:
@@ -34,7 +34,7 @@ SELECT run_id, status, current_node, version, workflow_sha,
        datetime(enqueued_at/1000,'unixepoch','localtime') AS enqueued,
        datetime(node_started_at/1000,'unixepoch','localtime') AS node_started,
        datetime(updated_at/1000,'unixepoch','localtime') AS updated,
-       total_cost_usd, total_tokens, routing, metrics
+       total_cost_usd, billed_tokens, routing, metrics
 FROM run_state WHERE run_id LIKE '<RUN>%';
 SQL
 ```
@@ -285,7 +285,8 @@ Map the terminal fact to a root cause. All reason codes come from `docs/ARCHITEC
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to the `intent.cancel_requested`. |
 | `fact.run_paused_hitl` | — | `wait.human` node yielded. Payload is `{nodeId, label, options[]}`; resume with `POST /runs/:id/hitl {selected: <one of options[].key>}`. |
 | `fact.run_paused_retry` | — | A node returned `outcome=retry` and the executor scheduled a backoff. Status is `paused_retry`; `routing.internal.retry_resume_at` (ms epoch) tells you when the wake-pending sweeper will re-queue it. Slot is freed during the wait. Fact payload carries `{ nodeId, attempt, delayMs, resumeAt, maxRetries }`. |
-| `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (5s) without respecting `ctx.signal`. Handler bug. The run is halted separately. |
+| `fact.run_halted` | `"max_loops"` | The executor's last-resort dispatch ceiling (`DEFAULT_MAX_LOOPS = 1000`) tripped — a workflow looped without aborting and without exhausting `max_retries`. Payload `detail` reports the exceeded count. |
+| `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without respecting `ctx.signal`. Handler bug. The run is halted separately. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` is older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
 | Status `paused_retry`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Check daemon heartbeat (§1) — sweeper runs in the supervisor tick. |
 

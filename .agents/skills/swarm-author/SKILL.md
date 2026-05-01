@@ -103,7 +103,7 @@ Applied to `prompt`, `tool_command`, and any string attr. Order of longest-prefi
 | `$<nodeId>.output` | Raw text output of a prior node (codergen last turn's text, or tool stdout). |
 | `$<nodeId>.output.<path>` | JSON-path dive into structured output; returns `""` if absent. |
 | `${context.<key>}` | Read from run context KV. |
-| `$goal` | The graph's `goal` attribute (mirrored into `routing.graph_goal` at run start). |
+| `$goal` | The graph's `goal` attribute (mirrored into `routing["graph.goal"]` at run start). |
 
 That's the full set — see `packages/core/src/engine/substitution.ts`. Tokens like `$RUN_ID`, `$WORKTREE_PATH`, `$ARTIFACTS_DIR`, `$LOG_DIR`, `$1`…`$9`, `$LOOP_USER_INPUT`, `$REJECTION_REASON` are not implemented; they appear literally if you write them.
 
@@ -529,7 +529,6 @@ The `change.dot` daily driver uses this to put `implement` + `review` in a share
 | W003 | warn  | Node has only conditional edges, no `outcome=fail` catch-all. |
 | W004 | warn  | Hexagon outgoing edge uses legacy `context.hitl.*` condition; structured HITL routes by `[K] Label` accelerators (§12). |
 | W005 | warn  | Duplicate edge. |
-| W006 | err   | Cycle with no exit reachable from it (promoted from warn). |
 | W007 | warn  | `goal_gate=true` node has no retarget at any level — failure can only halt. |
 | W008 | warn  | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
 | W009 | warn  | Codergen (`box`) node has empty `prompt` and empty `label` — the agent has nothing to act on. |

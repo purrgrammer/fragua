@@ -134,7 +134,7 @@ curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream' \
 Point-in-time:
 
 ```sh
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode: .currentNode, totalCostUsd, totalTokens}'
+curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode: .currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})'
 curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
 ```
@@ -262,7 +262,7 @@ Present the options and evidence to the user. Let them pick. Never auto-choose.
 
 ## 7. Parallel / scripted operations
 
-Multiple runs in flight is the normal case; the daemon has concurrency (`--concurrency N`, default 4). A few idioms:
+Multiple runs in flight is the normal case; the daemon has concurrency (`--concurrency N`, default 8). A few idioms:
 
 ```sh
 # Enqueue a batch of no-LLM runs to exercise executor concurrency.
@@ -327,7 +327,7 @@ RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" '{workflowSha:$sha, input:$in}')" | jq -r .runId)
 
 # Status
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, totalCostUsd, totalTokens}'
+curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
 
 # Intents
 curl -fsS -X POST "$URL/runs/$RUN/steer"         -d '{"text":"…"}'       -H 'content-type: application/json'
