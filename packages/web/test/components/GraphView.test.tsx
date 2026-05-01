@@ -455,7 +455,7 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(self?.sourceHandle).toBe("loop-source");
   });
 
-  it("synthesises an `↩ retarget` edge per goal_gate node with a §3.4 chain", () => {
+  it("synthesises a retarget edge per goal_gate node with a §3.4 chain", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
       implement [shape=box]
@@ -472,10 +472,14 @@ describe("toFlowGraph — handler-specific body fields", () => {
     const data = synth?.data as { label?: string; isRetargetEdge?: boolean; isBackEdge?: boolean };
     expect(data.isRetargetEdge).toBe(true);
     expect(data.isBackEdge).toBe(true);
-    expect(data.label?.startsWith("↩ retarget")).toBe(true);
+    expect(data.label?.startsWith("retarget")).toBe(true);
     // Default cap is 3 when graph doesn't override.
     expect(data.label).toContain("cap 3");
     expect(data.label).toContain("default");
+    // Synthetic retargets route through the LEFT-side handles so they
+    // visually separate from real back-edges (right-side).
+    expect(synth?.sourceHandle).toBe("retarget-source");
+    expect(synth?.targetHandle).toBe("retarget-target");
   });
 
   it("falls back to graph-level retry_target when the gate has none", () => {

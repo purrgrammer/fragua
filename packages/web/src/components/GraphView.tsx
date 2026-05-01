@@ -88,7 +88,13 @@ const EDGE_TYPE = "swarmEdge";
 // presentation attributes, so markers follow light/dark mode.
 const arrow = (color: string) => ({ type: MarkerType.ArrowClosed, width: 14, height: 14, color }) as const;
 const MARKER_DEFAULT = arrow("var(--sw-border)");
-const MARKER_LOOP = arrow("var(--sw-accent-warn)");
+// Retry / loop / retarget edges share a neutral arrow tone. They're
+// structural backflow — the run intentionally re-traverses upstream
+// work — and shouldn't read as "negative" the way `outcome=fail`
+// forward edges do. `--sw-accent-idle` is the project's neutral
+// accent (gray); back-edges, self-loops, loop_restart, and synthetic
+// goal-gate retargets all share it.
+const MARKER_RETRY = arrow("var(--sw-accent-idle)");
 const MARKER_ANIMATED = arrow("var(--sw-accent-thinking)");
 const MARKER_SUCCESS = arrow("var(--sw-accent-success)");
 const MARKER_FAIL = arrow("var(--sw-accent-error)");
@@ -670,18 +676,20 @@ export function toFlowGraph(
     // everything renders at full opacity.
     const taken = takenEdges.has(edgeKey(e.from, e.to));
     const dim = hasRun && !taken;
-    // Outcome wins over the generic skip/back marker color, so a failure
-    // path renders red regardless of whether it's a skip-edge or not.
-    const marker =
-      outcome === "success"
+    // Loop-channel check wins over outcome: a `verify -> verify
+    // [outcome=fail]` self-loop is a *retry*, not a negative-outcome
+    // forward edge — rendering it red would misrepresent the semantic.
+    // Forward edges still pick up success/fail tones from outcome.
+    const isLoopChannel = isBackEdge || isSelfLoop || loopRestart;
+    const marker = isLoopChannel
+      ? MARKER_RETRY
+      : outcome === "success"
         ? MARKER_SUCCESS
         : outcome === "fail"
           ? MARKER_FAIL
-          : isBackEdge || isSelfLoop || loopRestart
-            ? MARKER_LOOP
-            : taken && !isSkipEdge
-              ? MARKER_ANIMATED
-              : MARKER_DEFAULT;
+          : taken && !isSkipEdge
+            ? MARKER_ANIMATED
+            : MARKER_DEFAULT;
     return {
       id: `${e.from}->${e.to}#${i}`,
       source: e.from,
@@ -709,8 +717,8 @@ export function toFlowGraph(
   // gate.fallback_retry_target → graph.retry_target →
   // graph.fallback_retry_target. The engine doesn't emit these as real
   // edges, but the relationship is load-bearing for understanding the
-  // workflow, so we render them as dashed back-edges with a `↩ retarget`
-  // label and the §3.4 cap. `resolveRetargetChain` returns null when no
+  // workflow, so we render them as neutral back-arcs with a
+  // `retarget · cap N` label. `resolveRetargetChain` returns null when no
   // target resolves — those gates can only halt, which W007 already
   // warns about at validate-time.
   const goalGateCap = maxGoalGateRetries(graph.attrs);
@@ -719,7 +727,7 @@ export function toFlowGraph(
     if (node.attrs.goal_gate !== true) continue;
     const target = resolveRetargetChain(graph, node.id);
     if (target === null || target === node.id) continue;
-    const capLabel = `↩ retarget · cap ${goalGateCap}${
+    const capLabel = `retarget · cap ${goalGateCap}${
       goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
     }`;
     synthEdges.push({
@@ -737,9 +745,11 @@ export function toFlowGraph(
         loopRestart: false,
         isRetargetEdge: true,
       },
-      sourceHandle: LOOP_HANDLE_SOURCE,
-      targetHandle: LOOP_HANDLE_TARGET,
-      markerEnd: MARKER_LOOP,
+      // Left-side handles so synthetic retargets visually separate from
+      // real back-edges (which route through the right-side LOOP handles).
+      sourceHandle: RETARGET_HANDLE_SOURCE,
+      targetHandle: RETARGET_HANDLE_TARGET,
+      markerEnd: MARKER_RETRY,
     });
   }
 
