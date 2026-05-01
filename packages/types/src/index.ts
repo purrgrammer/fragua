@@ -24,6 +24,7 @@ export type {
 } from "@mariozechner/pi-ai";
 export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
 export type { Project } from "./project.ts";
+export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";
 export type {
   AnyEvent,
   AnyEventType,

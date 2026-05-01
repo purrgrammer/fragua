@@ -9,21 +9,25 @@ const BEHAVIORAL_INSTRUCTIONS = [
   "The following skills provide specialized instructions for specific tasks.",
   "When a task matches a skill's description, read the SKILL.md at the",
   "<location> path below using the `read` tool; the body contains the",
-  "detailed workflow. Resources referenced inside a skill live in the",
-  "same directory as its SKILL.md — resolve relative paths there.",
+  "detailed workflow. When a skill references relative paths (scripts/,",
+  "references/, assets/), resolve them against the skill's directory (the",
+  "parent of SKILL.md) and use absolute paths in tool calls.",
 ].join(" ");
 
 export function renderSkillsCatalog(skills: readonly Skill[]): string {
   const visible = skills.filter((s) => !s.disabled_reason);
   if (visible.length === 0) return "";
   const entries = visible.map((s) => {
-    return [
+    const lines = [
       "  <skill>",
       `    <name>${escapeXml(s.name)}</name>`,
       `    <description>${escapeXml(s.description)}</description>`,
-      `    <location>${escapeXml(s.location)}</location>`,
-      "  </skill>",
-    ].join("\n");
+    ];
+    if (s.compatibility) {
+      lines.push(`    <compatibility>${escapeXml(s.compatibility)}</compatibility>`);
+    }
+    lines.push(`    <location>${escapeXml(s.location)}</location>`, "  </skill>");
+    return lines.join("\n");
   });
   return ["<available_skills>", ...entries, "</available_skills>", "", BEHAVIORAL_INSTRUCTIONS].join("\n");
 }
@@ -50,6 +54,7 @@ export function toCatalogRecord(s: Skill): SkillCatalogRecord {
     bytes: s.bytes,
     scope: s.scope,
     source_dir: s.source_dir,
+    ...(s.compatibility !== undefined ? { compatibility: s.compatibility } : {}),
   };
 }
 

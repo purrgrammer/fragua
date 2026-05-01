@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { hostname as osHostname } from "node:os";
+import { homedir, hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
 import type { Model } from "@mariozechner/pi-ai";
 import {
@@ -32,7 +32,7 @@ import {
   WorktreeProvisioner,
 } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
-import { CORE_TOOLS, ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 import { loadConfig, resolveTimeouts } from "../config.ts";
 
@@ -195,6 +195,26 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     getApiKey,
   });
 
+  // Discover skills once at boot. Project-scope (`<cwd>/.agents/skills/`,
+  // `<cwd>/.claude/skills/`) and user-scope (`~/.agents/skills/`,
+  // `~/.claude/skills/`) are scanned by default; `config.skills.paths`
+  // overrides. Result is shared across every codergen backend the
+  // dispatcher mints below — there's no reload-on-change yet, so a new
+  // skill drop requires a daemon restart.
+  const { skills: discoveredSkills, warnings: skillWarnings } = await discoverSkills({
+    cwd,
+    homeDir: homedir(),
+    ...(config.skills ? { config: config.skills } : {}),
+  });
+  for (const w of skillWarnings) console.warn(chalk.yellow(`skills: ${w}`));
+  if (discoveredSkills.length > 0) {
+    console.log(
+      chalk.dim(
+        `discovered ${discoveredSkills.length} skill${discoveredSkills.length === 1 ? "" : "s"} (${discoveredSkills.map((s) => s.name).join(", ")})`,
+      ),
+    );
+  }
+
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   if (useLlm) {
@@ -240,6 +260,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       },
       getApiKey,
       inProcessWrites,
+      // Tier-1 skills catalog — rendered into the system prompt of every
+      // codergen call, filtered per-node by `attrs.skills` /
+      // `skills_disabled`. Empty array is a valid no-op.
+      skills: discoveredSkills,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.

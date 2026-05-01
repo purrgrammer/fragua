@@ -31,6 +31,18 @@ describe("renderSkillsCatalog", () => {
     // tool — no dedicated load_skill tool under the trimmed surface.
     expect(out).toContain("`read`");
     expect(out).toContain("SKILL.md");
+    // Spec wording: relative paths resolve against the skill's directory
+    // and tool calls should use absolute paths.
+    expect(out).toContain("absolute paths");
+    expect(out).toContain("parent of SKILL.md");
+  });
+
+  test("emits <compatibility> only when set on the skill", () => {
+    const withC = renderSkillsCatalog([skill("py", { compatibility: "Requires Python 3.14+" })]);
+    expect(withC).toContain("<compatibility>Requires Python 3.14+</compatibility>");
+
+    const withoutC = renderSkillsCatalog([skill("plain")]);
+    expect(withoutC).not.toContain("<compatibility>");
   });
 
   test("escapes XML special characters in name/description", () => {
@@ -68,5 +80,15 @@ describe("toCatalogRecord", () => {
       scope: "user",
       source_dir: "/abs/skills",
     });
+  });
+
+  test("forwards compatibility when set so replay can correlate env mismatches", () => {
+    const rec = toCatalogRecord(skill("py", { compatibility: "Requires Python 3.14+" }));
+    expect(rec.compatibility).toBe("Requires Python 3.14+");
+  });
+
+  test("omits compatibility when unset", () => {
+    const rec = toCatalogRecord(skill("plain"));
+    expect("compatibility" in rec).toBe(false);
   });
 });

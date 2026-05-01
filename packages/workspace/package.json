@@ -15,6 +15,7 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
+    "@swarm/types": "workspace:*",
     "turndown": "7.2.4",
     "yaml": "2.7.0"
   },
