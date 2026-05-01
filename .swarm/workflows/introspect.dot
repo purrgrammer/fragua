@@ -19,7 +19,7 @@ digraph introspect {
     label            = "introspect"
     default_fidelity = "compact"
     budget_usd       = 5.00
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #synthesize { llm_model: claude-opus-4-7; reasoning_effort: high; }"
   ]
 
   start [shape=Mdiamond]
