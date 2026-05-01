@@ -13,13 +13,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "0.71.0",
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
     "@swarm/types": "workspace:*",
+    "diff": "8.0.4",
     "turndown": "7.2.4",
     "yaml": "2.7.0"
   },
   "devDependencies": {
+    "@types/diff": "8.0.0",
     "@types/turndown": "5.0.6",
     "typescript": "5.7.3"
   }

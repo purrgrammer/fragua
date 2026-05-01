@@ -2,18 +2,14 @@
 
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
-  BotIcon,
   CheckCircleIcon,
   ChevronDownIcon,
   CircleIcon,
   ClockIcon,
   FilePlusIcon,
-  FileSearchIcon,
   FileTextIcon,
-  FolderIcon,
   type LucideIcon,
   PencilIcon,
-  SearchIcon,
   TerminalIcon,
   WrenchIcon,
   XCircleIcon,
@@ -133,42 +129,32 @@ interface ToolPresentation {
   label: string;
 }
 
-// Sentence case (skill: "Never Title Case anywhere.").
+// Sentence case (skill: "Never Title Case anywhere."). Swarm tool
+// names are bare identifiers — `read`, `write`, `edit`, `bash`.
 export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
-  "local:bash": { icon: TerminalIcon, label: "Bash" },
-  "local:read_file": { icon: FileTextIcon, label: "Read file" },
-  "local:write_file": { icon: FilePlusIcon, label: "Write file" },
-  "local:edit_file": { icon: PencilIcon, label: "Edit file" },
-  "local:list_dir": { icon: FolderIcon, label: "List directory" },
-  "local:glob": { icon: FileSearchIcon, label: "Glob" },
-  "local:grep": { icon: SearchIcon, label: "Grep" },
-  "local:subagent": { icon: BotIcon, label: "Subagent" },
+  bash: { icon: TerminalIcon, label: "Bash" },
+  read: { icon: FileTextIcon, label: "Read file" },
+  write: { icon: FilePlusIcon, label: "Write file" },
+  edit: { icon: PencilIcon, label: "Edit file" },
 };
 
-/** Resolve a tool name to its registry entry. Accepts either the
- * canonical `local:bash` form or the AI-SDK slug (`tool-local_bash`)
- * emitted by `toolTypeFromName`. Only the first underscore is the
- * domain separator — tool names themselves may contain underscores
- * (e.g. `read_file`), so a blanket `_`→`:` replace is wrong. */
+/** Resolve a tool name to its registry entry. Accepts either the bare
+ * tool name (`bash`) or the AI-SDK slug (`tool-bash`) emitted by
+ * `toolTypeFromName`. */
 function lookupTool(toolName: string | undefined): ToolPresentation | undefined {
   if (!toolName) return undefined;
   const direct = TOOL_PRESENTATION[toolName];
   if (direct) return direct;
   const stripped = toolName.replace(/^tool-/, "");
-  const sep = stripped.indexOf("_");
-  if (sep !== -1) {
-    const canonical = `${stripped.slice(0, sep)}:${stripped.slice(sep + 1)}`;
-    return TOOL_PRESENTATION[canonical];
-  }
-  return undefined;
+  return TOOL_PRESENTATION[stripped];
 }
 
-/** Sentence-case an unknown tool's name part so `custom:do_thing` renders
- * as "Do thing" instead of leaking the raw slug or producing Title Case
+/** Sentence-case an unknown tool's name so `do_thing` renders as
+ * "Do thing" instead of leaking the raw slug or producing Title Case
  * (which the skill explicitly forbids). */
 function humanizeToolName(toolName: string): string {
   const stripped = toolName.replace(/^tool-/, "");
-  const namePart = stripped.includes(":") ? stripped.split(":").slice(1).join(":") : stripped;
+  const namePart = stripped;
   const words = namePart.split(/[_\s]+/).filter(Boolean);
   if (words.length === 0) return namePart;
   const first = words[0] as string;
@@ -178,7 +164,7 @@ function humanizeToolName(toolName: string): string {
 
 export const ToolHeader = ({ className, title, type, state, toolName, ...props }: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
-  // `title` carries the canonical tool name (e.g. `local:bash`) when the
+  // `title` carries the canonical tool name (e.g. `bash`) when the
   // caller has it; fall back to the derived slug. Look up the registry
   // for icon + human-readable label, and humanize unknown tools.
   const raw = title ?? derivedName;

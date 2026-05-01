@@ -250,10 +250,10 @@ The agent-callable tool surface is deliberately minimal:
 
 | Tool   | Purpose                                                           |
 |--------|-------------------------------------------------------------------|
-| `read` | Read a UTF-8 file                                                 |
-| `write`| Write / overwrite a file (creates parent dirs)                    |
-| `edit` | Replace a unique substring in a file                              |
-| `bash` | Run a shell command (ls, grep, git, curl, any other mutation)     |
+| `read` | Read a file. Text returns line-truncated content; image files (jpg/png/gif/webp) return as inline `ImageContent` blocks the model can see. macOS path quirks (NFD, AM/PM, curly quotes) resolve transparently. |
+| `write`| Write / overwrite a file. Atomic temp+rename via the env, serialized per-path through a mutation queue so concurrent writes can't interleave. Creates parent dirs. |
+| `edit` | Multi-edit exact-text replacement with fuzzy fallback (NFKC + smart-quote / dash / NBSP normalization). Per-edit `oldText` must be unique and non-overlapping; error messages reference `edits[i]` so the model can self-correct. `prepareArguments` recovers from JSON-stringified `edits` arrays and legacy `{oldText, newText}` flat shape. |
+| `bash` | Run a shell command. Detached process group + tree kill on timeout/abort. Rolling buffer + temp-file spill keeps the full transcript recoverable when output exceeds the truncation window — the spill path appears in the truncation notice and in `data.full_output_path`. Optional `onUpdate` streams partial output during execution. Blocklist refuses dangerous commands before spawn. |
 
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
@@ -262,8 +262,9 @@ Anything an agent used to need a dedicated tool for
 (`list_dir` / `glob` / `grep` / `git_read` / `apply_patch` /
 `web_fetch` / `subagent` / `load_skill`) now goes through `bash` (or,
 for skills, through `read` against the SKILL.md `<location>` in the
-system-prompt catalog). This is the "less is more" directive: agents
-spend tokens on thinking, not on picking between seven tools that all
+system-prompt catalog). The four tools are deliberately powerful —
+streaming output, image content, rich diffs, fuzzy edits, atomic
+writes — so an agent never has to pick between seven tools that all
 do variants of the same thing.
 
 Narrowing per-node is a hard filter, not a convention. A node's

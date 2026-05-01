@@ -24,7 +24,7 @@
 //   - `conversation-empty`         — empty state
 
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@swarm/types";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -424,10 +424,7 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
           />
           <ToolContent>
             <ToolInput input={chunk.arguments} />
-            <ToolOutput
-              output={result ? flattenText(result.content) : null}
-              errorText={result?.isError ? flattenText(result.content) : undefined}
-            />
+            <RichToolResult toolName={chunk.name} result={result} />
           </ToolContent>
         </Tool>,
       );
@@ -501,4 +498,210 @@ function flattenText(content: unknown): string {
 
 function toolTypeFromName(name: string): `tool-${string}` {
   return `tool-${name}` as `tool-${string}`;
+}
+
+// ─── Rich tool-result rendering ──────────────────────────────────────
+//
+// The four core tools (read, write, edit, bash) each produce a
+// distinctive payload that benefits from custom rendering:
+//
+//   read   — may carry an ImageContent block alongside text. We render
+//            the image inline so vision-model outputs are auditable.
+//   edit   — `details.data.diff` carries a unified diff with line
+//            numbers. Render with green/red coloring so reviewers can
+//            scan changes at a glance.
+//   bash   — `details.data.full_output_path` points at the spilled
+//            host-file when output was truncated. Surface the path so
+//            an operator can `cat` it from a terminal.
+//
+// Anything we don't recognise falls back to the plain ToolOutput
+// renderer so unknown tools keep working.
+
+interface ToolResultDetails {
+  swarm_tool?: string;
+  is_error?: boolean;
+  data?: unknown;
+  full_output_path?: string;
+}
+
+interface ImageBlock {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
+function isImageBlock(b: unknown): b is ImageBlock {
+  if (b == null || typeof b !== "object") return false;
+  const x = b as { type?: unknown; data?: unknown; mimeType?: unknown };
+  return x.type === "image" && typeof x.data === "string" && typeof x.mimeType === "string";
+}
+
+function isTextBlock(b: unknown): b is { type: "text"; text: string } {
+  if (b == null || typeof b !== "object") return false;
+  const x = b as { type?: unknown; text?: unknown };
+  return x.type === "text" && typeof x.text === "string";
+}
+
+function RichToolResult({
+  toolName,
+  result,
+}: {
+  toolName: string;
+  result: ToolResultMessage | undefined;
+}): JSX.Element | null {
+  if (!result) return null;
+  const text = flattenText(result.content);
+  const errorText = result.isError ? text : undefined;
+  const details = (result.details ?? undefined) as ToolResultDetails | undefined;
+
+  // Image content only shows up on read today, but route on shape so a
+  // future browser/screenshot tool drops in without touching this block.
+  const images = Array.isArray(result.content) ? result.content.filter(isImageBlock) : [];
+  const textBlocks = Array.isArray(result.content) ? result.content.filter(isTextBlock) : [];
+
+  // Edit tool: render the diff prominently. `data.diff` is the
+  // unified-diff string our edit-diff.ts builds; lines are
+  // `±N text` / ` N text` with leading sign + line number.
+  const data = (details?.data ?? undefined) as { diff?: unknown; full_output_path?: unknown } | undefined;
+  const diff = typeof data?.diff === "string" ? (data.diff as string) : null;
+  const fullOutputPath =
+    typeof data?.full_output_path === "string"
+      ? (data.full_output_path as string)
+      : typeof details?.full_output_path === "string"
+        ? (details.full_output_path as string)
+        : null;
+
+  const isEdit = toolName === "edit";
+  const isBash = toolName === "bash";
+
+  return (
+    <div className="space-y-[var(--sw-space-3)]">
+      {isEdit && diff !== null && diff.length > 0 && <DiffView diff={diff} />}
+      {images.length > 0 && (
+        <ImageGallery
+          images={images.map((b, i) => ({
+            data: b.data,
+            mimeType: b.mimeType,
+            key: `${result.toolCallId}-img-${i}`,
+          }))}
+        />
+      )}
+      {/* For tools whose primary signal IS the diff, the text block is just
+          a "Successfully replaced N block(s)" status — keep it as a small
+          subtitle rather than a full ToolOutput card. */}
+      {isEdit && diff !== null && diff.length > 0 && textBlocks.length > 0 && (
+        <p className="font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]">{textBlocks[0]?.text}</p>
+      )}
+      {/* Bash: surface the spilled-output path link so the agent / operator
+          can recover the full transcript. */}
+      {isBash && fullOutputPath !== null && <BashSpillNotice path={fullOutputPath} />}
+      {/* Default text output — skipped when we already rendered a richer
+          variant above (image, diff). Keeps the card focused on the
+          highest-fidelity rendering for that tool. */}
+      {(!isEdit || diff === null || diff.length === 0) && <ToolOutput output={text || null} errorText={errorText} />}
+    </div>
+  );
+}
+
+function DiffView({ diff }: { diff: string }): JSX.Element {
+  const lines = diff.split("\n");
+  return (
+    <div className="space-y-[var(--sw-space-2)]">
+      <h4
+        className={cn(
+          "font-medium uppercase",
+          "text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
+          "tracking-[0.06em]",
+        )}
+      >
+        Diff
+      </h4>
+      <pre
+        data-testid="tool-diff"
+        className={cn(
+          "overflow-x-auto rounded-[var(--sw-radius-default)] border",
+          "p-[var(--sw-space-3)] font-mono text-[length:var(--sw-text-xs)] leading-relaxed",
+        )}
+        style={{ borderColor: "var(--sw-border)", backgroundColor: "var(--sw-surface)" }}
+      >
+        {lines.map((line, i) => {
+          const sign = line[0] ?? " ";
+          const tone =
+            sign === "+"
+              ? { color: "var(--sw-accent-success)" }
+              : sign === "-"
+                ? { color: "var(--sw-accent-error)" }
+                : { color: "var(--sw-muted)" };
+          return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: diff lines have no stable id; list is derived per render and never reorders
+            <div key={`d${i}`} style={tone}>
+              {line || " "}
+            </div>
+          );
+        })}
+      </pre>
+    </div>
+  );
+}
+
+function ImageGallery({ images }: { images: Array<{ data: string; mimeType: string; key: string }> }): JSX.Element {
+  return (
+    <div className="space-y-[var(--sw-space-2)]">
+      <h4
+        className={cn(
+          "font-medium uppercase",
+          "text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
+          "tracking-[0.06em]",
+        )}
+      >
+        {images.length === 1 ? "Image" : `Images (${images.length})`}
+      </h4>
+      <div className="flex flex-wrap gap-[var(--sw-space-2)]">
+        {images.map((img) => (
+          <ImagePreview key={img.key} data={img.data} mimeType={img.mimeType} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ImagePreview({ data, mimeType }: { data: string; mimeType: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const src = `data:${mimeType};base64,${data}`;
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      className={cn(
+        "block overflow-hidden rounded-[var(--sw-radius-default)] border",
+        "transition-[max-width] duration-200",
+      )}
+      style={{ borderColor: "var(--sw-border)", maxWidth: expanded ? "100%" : "16rem" }}
+      aria-label={expanded ? "Collapse image" : "Expand image"}
+    >
+      {/* Embedded as data URL so renders work offline / in archive view. */}
+      <img alt="tool result" src={src} className="block h-auto w-full" />
+    </button>
+  );
+}
+
+function BashSpillNotice({ path }: { path: string }): JSX.Element {
+  return (
+    <div
+      data-testid="bash-spill-notice"
+      className={cn(
+        "flex items-center gap-[var(--sw-space-2)]",
+        "rounded-[var(--sw-radius-default)] border",
+        "px-[var(--sw-space-3)] py-[var(--sw-space-2)]",
+        "font-mono text-[length:var(--sw-text-xs)] text-[var(--sw-muted)]",
+      )}
+      style={{ borderColor: "var(--sw-border)", backgroundColor: "var(--sw-surface)" }}
+      title="Output exceeded the truncation window — the full transcript was spilled to a host-side temp file. Cat this path from the run's working directory to recover it."
+    >
+      <span className="uppercase tracking-[0.06em]" style={{ color: "var(--sw-accent-warn)" }}>
+        Full output
+      </span>
+      <code className="break-all">{path}</code>
+    </div>
+  );
 }

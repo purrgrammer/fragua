@@ -308,7 +308,7 @@ describe("SqliteStore — appendObservabilityEvents", () => {
       { type: "agent.turn_start", payload: { nodeId: "n1", iteration: 0, turnId: "t1" } },
       { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "hel" } },
       { type: "llm.text_delta", payload: { nodeId: "n1", iteration: 0, delta: "lo" } },
-      { type: "tool.execution_end", payload: { nodeId: "n1", iteration: 0, tool_name: "local:bash" } },
+      { type: "tool.execution_end", payload: { nodeId: "n1", iteration: 0, tool_name: "bash" } },
     ]);
 
     expect(res.seqs).toHaveLength(4);

@@ -81,7 +81,13 @@ export class LocalEnvironment implements ExecutionEnvironment {
 
   async exec(
     command: string,
-    opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {},
+    opts: {
+      cwd?: string;
+      timeoutMs?: number;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+      onData?: (chunk: string, kind: "stdout" | "stderr") => void;
+    } = {},
   ): Promise<ExecResult> {
     const blocked = isBlockedCommand(command, this.extraBlocked);
     if (blocked) {
@@ -97,44 +103,107 @@ export class LocalEnvironment implements ExecutionEnvironment {
     const start = Date.now();
 
     return new Promise((resolvePromise) => {
+      // detached: true puts the shell in its own process group so we
+      // can SIGTERM the whole tree on abort/timeout via process.kill
+      // with a negative pid. Without this, grandchild processes
+      // (e.g. `bash -c 'sleep 100 & sleep 200'`) survive a SIGTERM
+      // sent only to the shell.
       const child = spawn("/bin/sh", ["-c", command], {
         cwd,
         env: { ...process.env, ...opts.env },
         stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
       });
       let stdout = "";
       let stderr = "";
       let settled = false;
+      let killReason: "timeout" | "abort" | undefined;
+
+      const killTree = (reason: "timeout" | "abort") => {
+        killReason = reason;
+        if (child.pid !== undefined) {
+          try {
+            process.kill(-child.pid, "SIGTERM");
+          } catch {
+            // group may already be gone — fall through to per-pid kill
+            try {
+              child.kill("SIGTERM");
+            } catch {
+              // ignore
+            }
+          }
+          // Escalate to SIGKILL after a short grace window. If the
+          // process already exited the second kill is harmless.
+          setTimeout(() => {
+            if (child.pid !== undefined) {
+              try {
+                process.kill(-child.pid, "SIGKILL");
+              } catch {
+                try {
+                  child.kill("SIGKILL");
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }, 2_000);
+        }
+      };
 
       const timer = setTimeout(() => {
         if (settled) return;
-        settled = true;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 2_000);
-        resolvePromise({
-          stdout,
-          stderr: `${stderr}\n[swarm: exec timed out after ${timeoutMs}ms]`,
-          exitCode: 124,
-          durationMs: Date.now() - start,
-        });
+        killTree("timeout");
       }, timeoutMs);
 
+      const onAbort = () => {
+        if (settled) return;
+        killTree("abort");
+      };
+      if (opts.signal) {
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
+        const s = chunk.toString();
+        stdout += s;
+        opts.onData?.(s, "stdout");
       });
       child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
+        const s = chunk.toString();
+        stderr += s;
+        opts.onData?.(s, "stderr");
       });
       child.on("close", (code) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        if (killReason === "timeout") {
+          resolvePromise({
+            stdout,
+            stderr: `${stderr}\n[swarm: exec timed out after ${timeoutMs}ms]`,
+            exitCode: 124,
+            durationMs: Date.now() - start,
+          });
+          return;
+        }
+        if (killReason === "abort") {
+          resolvePromise({
+            stdout,
+            stderr: `${stderr}\n[swarm: exec aborted]`,
+            exitCode: 130,
+            durationMs: Date.now() - start,
+          });
+          return;
+        }
         resolvePromise({ stdout, stderr, exitCode: code ?? 0, durationMs: Date.now() - start });
       });
       child.on("error", (err) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
         resolvePromise({ stdout, stderr: err.message, exitCode: 127, durationMs: Date.now() - start });
       });
     });

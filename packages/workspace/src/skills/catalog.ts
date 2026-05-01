@@ -1,7 +1,10 @@
 // Render the tier-1 catalog block prepended to the agent's system prompt.
 // One XML block per call — the agent sees this at session start, decides
 // whether a skill applies, and reads the SKILL.md at `<location>` using
-// the `read` tool. No dedicated load-skill tool — "less is more".
+// the `read` tool. Skill loading happens through `read` rather than a
+// dedicated tool because the catalog is already in the prompt and the
+// SKILL.md path is right there — a separate tool would just round-trip
+// state the agent already holds.
 
 import type { Skill, SkillCatalogRecord } from "./types.ts";
 

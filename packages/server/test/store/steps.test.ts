@@ -28,7 +28,7 @@ describe("eventsToSteps", () => {
         prompt: "Do the thing",
         system_prompt: "You are a helpful assistant",
         thread_id: "dev",
-        allowed_tools: ["local:bash"],
+        allowed_tools: ["bash"],
         denied_tools: [],
         messages: [{ role: "user", content: "hi" }],
         context_files: [],

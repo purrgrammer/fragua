@@ -114,10 +114,12 @@ describe("applyEditsToNormalizedContent", () => {
 });
 
 describe("generateDiffString", () => {
-  test("produces diff for changed lines", () => {
+  test("produces line-numbered diff for changed lines", () => {
     const { diff, firstChangedLine } = generateDiffString("aaa\nbbb\nccc", "aaa\nBBB\nccc");
-    expect(diff).toContain("-bbb");
-    expect(diff).toContain("+BBB");
+    // New format: each line carries a leading +/-/<space>, the line
+    // number from its own file, then the line text.
+    expect(diff).toMatch(/-\s*2 bbb/);
+    expect(diff).toMatch(/\+\s*2 BBB/);
     expect(firstChangedLine).toBe(2);
   });
 
@@ -125,5 +127,61 @@ describe("generateDiffString", () => {
     const { diff, firstChangedLine } = generateDiffString("same", "same");
     expect(diff).toBe("");
     expect(firstChangedLine).toBeUndefined();
+  });
+});
+
+describe("applyEditsToNormalizedContent — new error messages", () => {
+  test("not-found error references oldText", () => {
+    expect(() => applyEditsToNormalizedContent("hello", [{ oldText: "goodbye", newText: "x" }], "f.ts")).toThrow(
+      /oldText not found/,
+    );
+  });
+
+  test("multi-edit not-found references the edit index", () => {
+    expect(() =>
+      applyEditsToNormalizedContent(
+        "hello",
+        [
+          { oldText: "hello", newText: "HELLO" },
+          { oldText: "missing", newText: "x" },
+        ],
+        "f.ts",
+      ),
+    ).toThrow(/edits\[1\]/);
+  });
+
+  test("duplicate match raises duplicate error", () => {
+    expect(() => applyEditsToNormalizedContent("foo foo", [{ oldText: "foo", newText: "x" }], "f.ts")).toThrow(
+      /Found 2 occurrences/,
+    );
+  });
+
+  test("empty oldText is rejected", () => {
+    expect(() => applyEditsToNormalizedContent("hi", [{ oldText: "", newText: "x" }], "f.ts")).toThrow(
+      /must not be empty/,
+    );
+  });
+
+  test("no-change replacement is rejected", () => {
+    expect(() => applyEditsToNormalizedContent("aaa\nbbb", [{ oldText: "aaa", newText: "aaa" }], "f.ts")).toThrow(
+      /No changes made/,
+    );
+  });
+});
+
+describe("normalizeForFuzzyMatch — extended unicode coverage", () => {
+  test("NBSP and narrow NBSP collapse to space", () => {
+    expect(normalizeForFuzzyMatch("a b")).toBe("a b");
+    expect(normalizeForFuzzyMatch("a b")).toBe("a b");
+  });
+  test("ideographic space collapses to space", () => {
+    expect(normalizeForFuzzyMatch("a　b")).toBe("a b");
+  });
+  test("U+2212 minus collapses to ASCII hyphen", () => {
+    expect(normalizeForFuzzyMatch("a−b")).toBe("a-b");
+  });
+  test("NFKC compatibility decomposition", () => {
+    // U+FB01 (LATIN SMALL LIGATURE FI) decomposes to "fi" under NFKC.
+    expect(normalizeForFuzzyMatch("ﬁrst")).toBe("first");
   });
 });
