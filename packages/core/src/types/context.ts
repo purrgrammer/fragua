@@ -18,3 +18,10 @@ export const ENGINE_CONTEXT_KEYS = {
 export function retryCountKey(nodeId: string): string {
   return `internal.retry_count.${nodeId}`;
 }
+
+/** Routing key holding the wall-clock ms timestamp at which a
+ * `paused_retry` run becomes wake-eligible. Set when the executor emits
+ * `fact.run_paused_retry`; read by `wakeRetryDelays` (daemon
+ * wake-pending). Cleared implicitly when the run leaves `paused_retry`
+ * — the routing key persists but is ignored once status moves on. */
+export const RETRY_RESUME_AT_KEY = "internal.retry_resume_at";

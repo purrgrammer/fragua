@@ -22,6 +22,7 @@ import {
   parseDotSource,
   prepareGraph,
   RETRY_PRESETS,
+  RETRY_RESUME_AT_KEY,
   type RetryPresetName,
   readGateOutcomes,
   readGoalGateRetries,
@@ -267,6 +268,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         state.status === "halted" ||
         state.status === "paused_hitl" ||
         state.status === "paused_provider_error" ||
+        state.status === "paused_retry" ||
         state.status === "quarantined"
       ) {
         return;
@@ -876,12 +878,26 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
       // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
       // returns outcomeStatus="retry", consult retryStep to decide:
-      //   - retry → sleep delayMs (in-fiber for now; wake-pending move is
-      //     a future follow-up), bump per-node counter, re-enter same node
-      //   - halt  → run halts with `max_retries_exceeded`
+      //   - retry → emit fact.run_paused_retry (transitions to paused_retry,
+      //     freeing the slot); wake-pending re-queues the run after delayMs
+      //   - halt → run halts with `max_retries_exceeded`
       //   - advance_partial → rewrite outcomeStatus to "partial_success"
       //     and let edge selection advance (allow_partial branch, §3.5)
+      //
+      // For the retry path we DO emit fact.node_completed first (metrics
+      // are real spend), THEN swap fact.node_started for fact.run_paused_retry
+      // — the run sleeps without a slot held, and resume re-dispatches the
+      // same node since state.currentNode points back at the retrying id.
       let retryCounterPatch: Record<string, number> | undefined;
+      let retryPause:
+        | {
+            nodeId: string;
+            attempt: number;
+            delayMs: number;
+            resumeAt: number;
+            maxRetries: number;
+          }
+        | undefined;
       if (result.kind === "transition" && result.outcomeStatus === "retry") {
         const graph = graphFor(state.workflowSha);
         const completedNode = graph?.nodes[currentNode];
@@ -898,6 +914,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             allowPartial,
           });
           if (action.kind === "retry") {
+            const now = clock();
+            const resumeAt = now + Math.max(0, Math.round(action.delayMs));
             observability.push({
               type: "node.retry_scheduled",
               payload: {
@@ -905,15 +923,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
                 attempt: priorRetries + 1,
                 delayMs: action.delayMs,
                 maxRetries,
+                resumeAt,
               },
             });
-            flushObservability();
-            await sleep(action.delayMs, opts.shutdownSignal);
-            // Re-enter the same node next turn. The transition's nextNode
-            // becomes currentNode; iteration counters bump via the
-            // routingPatch below.
+            // Set nextNode = currentNode so fact.node_completed records
+            // the loop intent (state.currentNode lands on the retrying
+            // node; resume re-dispatches it).
             result.nextNode = currentNode;
-            retryCounterPatch = { [counterKey]: priorRetries + 1 };
+            retryCounterPatch = {
+              [counterKey]: priorRetries + 1,
+            };
+            retryPause = {
+              nodeId: currentNode,
+              attempt: priorRetries + 1,
+              delayMs: action.delayMs,
+              resumeAt,
+              maxRetries,
+            };
           } else if (action.kind === "halt") {
             observability.push({
               type: "node.retry_exhausted",
@@ -969,6 +995,19 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
+      // Retry pause: swap fact.node_started for fact.run_paused_retry so
+      // the run releases its concurrency slot during the backoff window.
+      // node_completed is preserved (metrics + the nextNode=currentNode
+      // routing fact). wake-pending re-queues the run once `resumeAt`
+      // has elapsed.
+      if (retryPause !== undefined) {
+        facts = facts.filter((f) => f.type !== "fact.node_started");
+        facts.push({
+          type: "fact.run_paused_retry",
+          payload: retryPause,
+        });
+      }
+
       let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
       if (budgetWarnedTags.length > 0) {
         const prior = readBudgetWarned(state.routing);
@@ -981,6 +1020,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // packages/core/src/types/context.ts:retryCountKey).
       if (retryCounterPatch !== undefined) {
         routingPatch = { ...(routingPatch ?? {}), ...retryCounterPatch };
+      }
+      // Retry pause: stamp the wake-eligibility timestamp so wake-pending
+      // can re-queue this run when the backoff has elapsed.
+      if (retryPause !== undefined) {
+        routingPatch = { ...(routingPatch ?? {}), [RETRY_RESUME_AT_KEY]: retryPause.resumeAt };
       }
       // Goal-gate routing keys: record the completed gate's outcome and
       // (when goalGateStep retargeted) the bumped retry counter. These keys

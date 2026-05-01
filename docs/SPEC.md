@@ -96,15 +96,17 @@ Event log is the source of truth; the `run_state` row is the materialized projec
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused_hitl, paused_provider_error, halted, cancelled, quarantined}
+queued → running → {completed, paused_hitl, paused_provider_error, paused_retry, halted, cancelled, quarantined}
           ▲            │
-          └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine)
+          └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
+                              or wake-pending timer for paused_retry)
 ```
 
 - `queued` — enqueued; ready to be claimed
 - `running` — a daemon has claimed it and is dispatching handlers
 - `paused_hitl` — a `wait.human` node yielded; `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`
 - `paused_provider_error` — an LLM provider returned a transport error (402, 429, 5xx, network); awaits `intent.resume`. Re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript
+- `paused_retry` — a node returned `outcomeStatus="retry"` and the engine scheduled a backoff window per attractor §3.5/§3.6; `fact.run_paused_retry` carries `{ nodeId, attempt, delayMs, resumeAt, maxRetries }`. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_retry" }` once `resumeAt` has elapsed; the run goes back to `queued` and the same node re-dispatches. **The slot is released during the wait — other queued runs can claim while this one sleeps.**
 - `completed` / `halted` / `cancelled` — terminal
 - `quarantined` — startup sweep found an orphan `side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine`
 

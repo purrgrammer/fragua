@@ -123,6 +123,15 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = null;
       return next;
     }
+    case "fact.run_paused_retry": {
+      // Backoff between retries (attractor §3.5 / §3.6). The slot is
+      // released so other queued runs can claim — wake-pending re-queues
+      // this run once `payload.resumeAt` has elapsed.
+      closeDispatchInterval(next, now);
+      next.status = "paused_retry";
+      next.nodeStartedAt = null;
+      return next;
+    }
     case "fact.run_resumed": {
       // Resumed from paused_hitl, paused_provider_error, or quarantined.
       // Go back to queued so the executor's claim loop picks the run up

@@ -33,6 +33,7 @@ export interface WakePendingResult {
   cancelled: string[];
   hitlWoken: string[];
   resumed: string[];
+  retryResumed: string[];
   unquarantined: string[];
 }
 
@@ -41,12 +42,13 @@ export interface WakePendingResult {
  * terminal or queued state. Idempotent — safe to call on every executor
  * tick.
  */
-export function wakePending(store: IEventStore): WakePendingResult {
+export function wakePending(store: IEventStore, now: () => number = Date.now): WakePendingResult {
   const cancelled = wakeCancel(store);
   const hitlWoken = wakeHitl(store);
   const resumed = wakeResume(store);
+  const retryResumed = wakeRetryDelays(store, now);
   const unquarantined = wakeUnquarantine(store);
-  return { cancelled, hitlWoken, resumed, unquarantined };
+  return { cancelled, hitlWoken, resumed, retryResumed, unquarantined };
 }
 
 /**
@@ -183,6 +185,52 @@ function wakeResume(store: IEventStore): string[] {
         ],
         row.version,
         { advanceAppliedTo: intent.seq },
+      );
+      out.push(row.run_id);
+    } catch (err) {
+      if (!(err instanceof ConcurrencyError)) throw err;
+    }
+  }
+  return out;
+}
+
+/**
+ * Wake `paused_retry` runs whose backoff window has elapsed
+ * (attractor §3.5 / §3.6). The executor stamped
+ * `routing.internal.retry_resume_at` (ms epoch) when emitting
+ * fact.run_paused_retry; once `now()` has caught up we emit
+ * fact.run_resumed { fromStatus: "paused_retry" } and the run goes
+ * back to queued for re-claim. The same node re-dispatches because
+ * fact.node_completed already pointed nextNode at the retrying node.
+ */
+function wakeRetryDelays(store: IEventStore, now: () => number): string[] {
+  const out: string[] = [];
+  const db = dbOf(store);
+  if (db == null) return [];
+
+  const nowMs = now();
+  const rows = db
+    .query<DbRow & { resume_at: number | null }, [number]>(
+      `SELECT run_id, version, last_applied_seq,
+              CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) AS resume_at
+         FROM run_state
+        WHERE status = 'paused_retry'
+          AND CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) IS NOT NULL
+          AND CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) <= ?`,
+    )
+    .all(nowMs);
+
+  for (const row of rows) {
+    try {
+      store.appendFact(
+        row.run_id,
+        [
+          {
+            type: "fact.run_resumed",
+            payload: { fromStatus: "paused_retry" },
+          },
+        ],
+        row.version,
       );
       out.push(row.run_id);
     } catch (err) {

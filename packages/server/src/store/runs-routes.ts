@@ -167,6 +167,7 @@ const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "running",
   "paused_hitl",
   "paused_provider_error",
+  "paused_retry",
   "completed",
   "cancelled",
   "halted",

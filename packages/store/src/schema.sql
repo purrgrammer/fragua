@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','paused_provider_error',
+    'queued','running','paused_hitl','paused_provider_error','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,

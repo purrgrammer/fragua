@@ -18,6 +18,7 @@ export type RunStatus =
   | "running"
   | "paused_hitl"
   | "paused_provider_error"
+  | "paused_retry"
   | "completed"
   | "cancelled"
   | "halted"
@@ -208,6 +209,23 @@ export type FactEvent =
       };
     }
   | {
+      /** Emitted when retryStep returns `retry` and the executor decides
+       * to release the concurrency slot during the backoff window
+       * (attractor §3.5 / §3.6). The wake-pending sweeper observes
+       * `resumeAt` and emits `fact.run_resumed { fromStatus: "paused_retry" }`
+       * once the wall-clock has caught up. The same node re-dispatches
+       * on resume — `state.currentNode` is the retrying node since
+       * `fact.node_completed` already pointed `nextNode` back at it. */
+      type: "fact.run_paused_retry";
+      payload: {
+        nodeId: string;
+        attempt: number;
+        delayMs: number;
+        resumeAt: number;
+        maxRetries: number;
+      };
+    }
+  | {
       type: "fact.run_resumed";
       payload: {
         fromStatus: RunStatus;
@@ -370,6 +388,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_completed",
   "fact.run_paused_hitl",
   "fact.run_paused_provider_error",
+  "fact.run_paused_retry",
   "fact.run_resumed",
   "fact.run_cancelled",
   "fact.run_halted",
