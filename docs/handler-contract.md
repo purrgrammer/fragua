@@ -43,11 +43,20 @@ Handler finished; the executor commits a `fact.node_completed` + a `fact.node_st
 ```typescript
 return {
   kind: "transition",
-  nextNode: "next",                     // next node id, or "__end__"
+  nextNode?: "next",                    // omit to route via the 5-rule edge selector (condition → preferredLabel → suggestedNextIds → weight → lexical); set to "__end__" to terminate
+  outcomeStatus?: "success",            // matched against edge `condition="outcome=<s>"` clauses; defaults to "success"
+  preferredLabel?: "go-on",             // matched against unconditional edges' `label` attr
+  suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
   outputRef?: ArtifactRef,              // optional; executor records it
   routingDelta?: { key: value },        // merged into run_state.routing
-  tokens: 0,                            // count charged to this node
-  costUsd: 0,                           // dollars charged
+  tokens: 0,                            // total tokens charged to this node
+  costUsd: 0,                           // total dollars charged
+  inputCostUsd?: 0,                     // USD split (pi-ai usage.cost.input / .output); optional for back-compat
+  outputCostUsd?: 0,
+  inputTokens?: 0,                      // input/output/cache split; reducer defaults missing fields to 0
+  outputTokens?: 0,
+  cacheReadTokens?: 0,
+  cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
 };
 ```
@@ -72,6 +81,7 @@ return {
     { key: "A", label: "[A] Approve", to: "publish" },
     { key: "R", label: "[R] Revise",  to: "revise"  },
   ],
+  routingDelta?: { key: value },        // optional; merged into run_state.routing before the pause
 };
 ```
 
@@ -123,7 +133,7 @@ Handlers must not import `node:fs`, `node:child_process`, `node:net`, or `undici
 
 Persistent state goes through:
 
-- **`ctx.messages.append(role, content)`** — user-visible transcript (appended in order; tracked as `fact.message_appended`)
+- **`ctx.messages.append(message)`** — user-visible transcript; takes a pi-agent-core `AgentMessage` (round-trips losslessly, carries tool_use / tool_result / thinking blocks). Tracked as `fact.message_appended`
 - **`ctx.artifacts.put(key, content, mime?)`** — content-addressed blob with a per-(run, node, iteration, key) ref
 - **`ctx.http.fetch(...)`** — abort-wired HTTP
 - **`ctx.llm.call(...)`** — LLM with accounting hook
@@ -415,7 +425,7 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
         model: "claude-haiku-4-5",
         messages: [{ role: "user", content: `Greet ${name} in one sentence.` }],
       });
-      ctx.messages.append("assistant", res.content);
+      ctx.messages.append({ role: "assistant", content: res.content });
       return {
         kind: "transition",
         nextNode,

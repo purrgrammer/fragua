@@ -333,8 +333,8 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused_hitl'\|'paused_provider_error'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `nextNode` | Node succeeded |
-| `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd` | Mid-flight abort |
+| `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'` | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed |
@@ -352,7 +352,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
-| `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. <br/> > Status: in-progress — branch survival semantics still firming up; see PROPOSAL-globalize "run-isolation" |
+| `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. <br/> > Status: in-progress — provisioner + branch-on-dispose + post-terminal fact landed; branch GC, paused-run drift, and per-branch isolation in parallel are tracked in [`docs/proposals/worktree-design.md`](./proposals/worktree-design.md) |
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
@@ -456,34 +456,75 @@ export type HandlerSpec = {
   handler: Handler;
 };
 
-export type HandlerContext = Readonly<{
-  runId: string;
-  nodeId: string;
-  iteration: number;                     // per-node retry counter (§3.6); 0 on first entry
-  signal: AbortSignal;                   // AbortSignal.any([steer, timeout, shutdown])
-  routing: Readonly<Record<string, unknown>>;
-  llm: LlmClient;                        // pre-wired with signal, accounting
-  http: HttpClient;                      // pre-wired with signal, timeout
-  tools: ToolRegistry;                   // narrowed by node.attrs.allowed_tools / denied_tools before the handler sees it
-  messages: {
-    append(role: MessageRole, content: string): { ordinal: number };
+export interface HandlerContext {
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly iteration: number;                  // per-node retry counter (§3.6); 0 on first entry
+  readonly signal: AbortSignal;                // AbortSignal.any([steer, timeout, shutdown])
+  readonly routing: Readonly<Record<string, unknown>>;
+  readonly llm: LlmClient;                     // pre-wired with signal, accounting
+  readonly http: HttpClient;                   // pre-wired with signal, timeout
+  readonly tools: ToolRegistry;                // narrowed by node.attrs.allowed_tools / denied_tools before the handler sees it
+  readonly messages: {
+    append(message: AgentMessage): { ordinal: number };   // pi-agent-core AgentMessage; round-trips losslessly
     recent(n: number): Message[];
     since(ordinal: number): Message[];
   };
-  artifacts: {
-    put(key: string, content: string | Uint8Array, mime?: string): ArtifactRef;
+  readonly artifacts: {
+    put(key: string, content: string | Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
     get(key: string): Uint8Array;
     ref(key: string): ArtifactRef | null;
     getFrom(scope: ArtifactScope): Uint8Array;
   };
-  externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
+  readonly externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
+  readonly args: Readonly<Record<string, string>>;          // substitution args ($ARGUMENTS, ...)
+  readonly nodeOutputs: ReadonlyMap<string, NodeOutput>;    // prior nodes' captured outputs, dereferenced once per dispatch
+  readonly emit: (type: string, payload: Record<string, unknown>) => void;  // observability events (agent.* / llm.* / tool.* / cost.recorded / summary.*)
+  readonly hitlInput?: { selected: string; note?: string } | string;
+  readonly steering?: string;
+  readonly env?: ExecutionEnvironment;                      // per-run worktree; falls back to process cwd when unset
+  readonly budgetSnapshot?: BudgetSnapshotInput;            // cumulative cost / tokens vs configured ceilings
   // No direct fetch, filesystem, DB, or process access.
-}>;
+}
 
 export type HandlerResult =
-  | { kind: "transition"; nextNode: string; outputRef?: ArtifactRef; routingDelta?: Record<string, unknown>; tokens: number; costUsd: number }
-  | { kind: "yield_hitl"; label: string; options: Array<{ key: string; label: string; to: string }> }
-  | { kind: "halt"; reason: "budget" | "max_loops" | "error"; detail?: string };
+  | {
+      kind: "transition";
+      nextNode?: string;                                // omit to route via the 5-rule edge selector
+      outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+      preferredLabel?: string;
+      suggestedNextIds?: string[];
+      outputRef?: ArtifactRef;
+      routingDelta?: Record<string, unknown>;
+      tokens: number;
+      costUsd: number;
+      inputCostUsd?: number;
+      outputCostUsd?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      modelName?: string;
+    }
+  | {
+      kind: "yield_hitl";
+      label: string;
+      options: Array<{ key: string; label: string; to: string }>;
+      routingDelta?: Record<string, unknown>;
+    }
+  | {
+      kind: "halt";
+      reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
+      detail?: string;
+      // `abort_loop`, `schema_drift`, `aborted_exit` are also valid `fact.run_halted`
+      // reasons but the executor emits those itself — not constructible by handlers.
+    }
+  | {
+      kind: "pause_provider";                            // recoverable provider transport failure
+      httpStatus: number | null;                         // null on pre-response network failures
+      provider: string;
+      errorMessage: string;
+    };
 ```
 
 `externalCall` is the canonical helper for `side_effect: "external"` tools. It:
