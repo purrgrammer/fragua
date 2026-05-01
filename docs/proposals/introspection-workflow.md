@@ -13,13 +13,17 @@ last-reviewed: 2026-05-01
 > periodically (weekly, or before releases) to catch the kind of drift
 > the 2026-05-01 review session uncovered manually.
 >
-> **Landed:** `.swarm/workflows/introspect.dot` — four codergen nodes,
-> read-only, runnable today via `bun run swarm run introspect`.
+> **Landed:** the primitive enumeration tools the workflow needs —
+> `find` (`packages/workspace/src/find.ts`), `grep`
+> (`packages/workspace/src/grep.ts`), and `ls`
+> (`packages/workspace/src/ls.ts`) — so future node prompts won't have
+> to fall through `bash` for filesystem walks.
 >
-> **Outstanding:** `glob` / `list` primitive agent tools so node prompts
-> don't have to fall through `bash` for filesystem enumeration; an
-> archival path for the synthesised review (today the report lives in
-> the run's transcript, not in a stable file location).
+> **Outstanding:** authoring `.swarm/workflows/introspect.dot` itself
+> (the four-node shape in [Shape](#shape) below is still on paper);
+> an archival path for the synthesised review (today the proposal
+> assumes the report would live only in the run's transcript, not in
+> a stable file location).
 
 ## Shape
 
@@ -66,9 +70,10 @@ last-reviewed: 2026-05-01
    10) calibrated against the original audit baseline (8.5 / 8 / 7.5);
    top 3–5 prioritised recommendations.
 
-`allowed_tools = "read, bash"` on every node; read-only by construction.
-Once `glob` / `list` primitive tools land, the bash dependency for
-filesystem enumeration drops away.
+`allowed_tools = "read, find, grep, ls, bash"` on every node; read-only
+by construction. The `find` / `grep` / `ls` primitives now ship in
+`@swarm/workspace`, so most filesystem enumeration in the node prompts
+can skip `bash` entirely.
 
 Budget: `budget_usd = 5.00` at the graph level; per-node `max_cost_usd`
 caps each phase. Cost scales with how much the model needs to re-read.

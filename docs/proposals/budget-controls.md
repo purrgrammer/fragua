@@ -19,8 +19,12 @@ last-reviewed: 2026-05-01
 - Per-node and per-run `budget_usd` / `max_cost_usd` / `budget_policy`
   enforcement at every turn boundary
   (`packages/core/src/engine/budget-policy.ts`).
-- Auto-titler fiber with a bounded cost ceiling, so background
-  titling can't eat a project's budget.
+- Auto-titler is fire-and-forget under the daemon shutdown signal
+  (`packages/daemon/src/auto-titler.ts`); each title call's cost flows
+  into the run's ledger via `cost.recorded`, so the per-run
+  `budget_usd` cap covers it. A dedicated titler-only ceiling
+  (`autoTitler.maxCostUsdPerDay`) is part of the Outstanding shape
+  below, not landed.
 
 ## Outstanding
 
