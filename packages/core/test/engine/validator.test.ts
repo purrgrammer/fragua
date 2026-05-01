@@ -456,6 +456,58 @@ describe("goal-gate / retry-target lints (attractor §3.4)", () => {
   });
 });
 
+describe("retry-policy lints (attractor §3.6)", () => {
+  test("W008: node retry_policy is not a known preset name", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, retry_policy="paranoid"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w008 = diags.find((d) => d.code === "W008");
+    expect(w008).toBeDefined();
+    expect(w008?.severity).toBe("warning");
+    expect(w008?.nodeId).toBe("work");
+    expect(w008?.message).toMatch(/paranoid/);
+  });
+
+  test("W008 not raised for known preset names", () => {
+    for (const preset of ["none", "standard", "aggressive", "linear", "patient"]) {
+      const diags = validate(
+        parseDotSource(`
+          digraph {
+            s [shape=Mdiamond]
+            work [shape=box, retry_policy="${preset}"]
+            done [shape=Msquare]
+            s -> work -> done
+          }
+        `),
+      );
+      expect(diags.some((d) => d.code === "W008")).toBe(false);
+    }
+  });
+
+  test("W008: graph default_retry_policy not a known preset", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [default_retry_policy="quirky"]
+          s [shape=Mdiamond]
+          work [shape=box]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w008 = diags.find((d) => d.code === "W008" && d.message.includes("graph"));
+    expect(w008).toBeDefined();
+  });
+});
+
 describe("validateOrThrow", () => {
   test("ok graph does not throw", () => {
     validateOrThrow(

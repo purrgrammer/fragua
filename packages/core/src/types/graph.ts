@@ -50,6 +50,19 @@ export interface NodeAttrs {
   thread_id?: string;
   goal_gate?: boolean;
   max_retries?: number;
+  /** Named retry preset (attractor §3.6). One of "none" | "standard" |
+   * "aggressive" | "linear" | "patient". Falls back to graph
+   * `default_retry_policy`, then "none". The preset's maxAttempts maps
+   * to max_retries via max_retries = max_attempts - 1; an explicit
+   * `max_retries` on the node overrides the preset's count. */
+  retry_policy?: string;
+  /** Custom backoff overrides (attractor §3.6). When any of these is set,
+   * the resolved BackoffConfig uses the custom value in place of the
+   * preset's. */
+  retry_initial_delay_ms?: number;
+  retry_backoff_factor?: number;
+  retry_max_delay_ms?: number;
+  retry_jitter?: boolean;
   /** Per-node hard timeout. Duration-string form (e.g. "30s", "5m", "2h")
    * is parsed via `parseDurationMs`. Wins over `.swarm/config.jsonc`
    * `timeouts.<kind>` and the handler's built-in default. */
@@ -112,6 +125,9 @@ export interface GraphAttrs {
   label?: string;
   default_fidelity?: FidelityMode;
   default_max_retries?: number;
+  /** Default retry preset for nodes that omit `retry_policy`. Falls back
+   * to "none" when unset. */
+  default_retry_policy?: string;
   retry_target?: string;
   fallback_retry_target?: string;
   /** Cap how many times a failing goal gate routes back to `retry_target`.

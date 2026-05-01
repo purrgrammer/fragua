@@ -3,6 +3,7 @@
 
 import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
+import { isRetryPresetName } from "./retry-policy.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
   return !cond || cond.trim() === "";
@@ -313,6 +314,32 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E011",
         message: `graph ${key}="${target}" references undefined node`,
+      });
+    }
+  }
+
+  // W008: retry_policy / default_retry_policy value is not a known preset.
+  // Catches typos at validate-time. The runtime falls back to "none"
+  // silently otherwise.
+  for (const n of nodes) {
+    const rp = n.attrs.retry_policy;
+    if (typeof rp === "string" && rp !== "" && !isRetryPresetName(rp)) {
+      diags.push({
+        severity: "warning",
+        code: "W008",
+        message: `node "${n.id}" retry_policy="${rp}" is not a known preset (none|standard|aggressive|linear|patient)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+  {
+    const drp = graph.attrs.default_retry_policy;
+    if (typeof drp === "string" && drp !== "" && !isRetryPresetName(drp)) {
+      diags.push({
+        severity: "warning",
+        code: "W008",
+        message: `graph default_retry_policy="${drp}" is not a known preset (none|standard|aggressive|linear|patient)`,
       });
     }
   }

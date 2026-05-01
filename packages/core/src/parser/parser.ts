@@ -376,9 +376,22 @@ function toAttrPairs(attrs: Record<string, unknown>): AttrPairs {
 
 // ---- attribute coercion -----------------------------------------------
 
-const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate", "auto_status", "allow_partial", "skills_disabled"]);
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
+  "goal_gate",
+  "auto_status",
+  "allow_partial",
+  "skills_disabled",
+  "retry_jitter",
+]);
 
-const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "default_max_retries", "idle_timeout"]);
+const INT_KEYS: ReadonlySet<string> = new Set([
+  "max_retries",
+  "default_max_retries",
+  "idle_timeout",
+  "max_goal_gate_retries",
+  "retry_initial_delay_ms",
+  "retry_max_delay_ms",
+]);
 
 const NUMBER_KEYS: ReadonlySet<string> = new Set([
   "weight",
@@ -389,6 +402,8 @@ const NUMBER_KEYS: ReadonlySet<string> = new Set([
   "max_tokens",
   "budget_usd",
   "budget_tokens",
+  // Retry-policy backoff override (attractor §3.6 — float multiplier).
+  "retry_backoff_factor",
 ]);
 
 const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "context_files", "skills"]);
