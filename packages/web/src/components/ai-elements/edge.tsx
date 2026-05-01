@@ -61,7 +61,8 @@ const wideArcPath = (
   // arc and long skip-edges push further out. 100 min keeps the label
   // visibly outside a 240-wide node.
   const span = Math.abs(ty - sy);
-  const baseOffset = Math.max(100, Math.min(180, 60 + span * 0.25)) + (side === "left" ? LEFT_ARC_BASE_BOOST : 0);
+  const baseOffset =
+    Math.max(100, Math.min(180, 60 + span * 0.25)) + (side === "left" ? LEFT_ARC_BASE_BOOST : 0);
   const offset = baseOffset + Math.max(0, arcIndex) * ARC_SPREAD_STEP;
   const extreme = side === "right" ? Math.max(sx, tx) : Math.min(sx, tx);
   const cx = side === "right" ? extreme + offset : extreme - offset;
@@ -88,7 +89,10 @@ const bezierPoint = (
   const w1 = 3 * u * u * t;
   const w2 = 3 * u * t * t;
   const w3 = t * t * t;
-  return [w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0], w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1]];
+  return [
+    w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0],
+    w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1],
+  ];
 };
 
 // Small inline pill rendered at the edge's midpoint. Shows DOT edge

@@ -280,9 +280,10 @@ async function postJson<T>(
   return payload;
 }
 
-const isAcceptedId = (v: unknown): v is { id: string } =>
-  typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
-
+/** Server response shape from `appendIntent` — every `/runs/:id/*`
+ * intent endpoint (steer, pause, resume, cancel, hitl, unquarantine,
+ * priority) returns `{ seq }`, the per-run sequence number of the
+ * persisted intent event. */
 const isAcceptedSeq = (v: unknown): v is { seq: number } =>
   typeof v === "object" && v !== null && typeof (v as { seq?: unknown }).seq === "number";
 
@@ -476,26 +477,21 @@ export async function steerRun(id: string, message: string): Promise<{ seq: numb
 export async function submitHitlChoice(runId: string, selected: string, note?: string): Promise<{ seq: number }> {
   const body: { selected: string; note?: string } = { selected };
   if (note) body.note = note;
-  return postJson(
-    `/runs/${encodeURIComponent(runId)}/hitl`,
-    body,
-    (v): v is { seq: number } =>
-      typeof v === "object" && v !== null && typeof (v as Record<string, unknown>)["seq"] === "number",
-  );
+  return postJson(`/runs/${encodeURIComponent(runId)}/hitl`, body, isAcceptedSeq);
 }
 
-export async function pauseRun(id: string, reason?: string): Promise<{ id: string }> {
+export async function pauseRun(id: string, reason?: string): Promise<{ seq: number }> {
   const body = reason !== undefined ? { reason } : undefined;
-  return postJson(`/runs/${encodeURIComponent(id)}/pause`, body, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/pause`, body, isAcceptedSeq);
 }
 
-export async function resumeRun(id: string): Promise<{ id: string }> {
-  return postJson(`/runs/${encodeURIComponent(id)}/resume`, undefined, isAcceptedId);
+export async function resumeRun(id: string): Promise<{ seq: number }> {
+  return postJson(`/runs/${encodeURIComponent(id)}/resume`, undefined, isAcceptedSeq);
 }
 
-export async function cancelRun(id: string, reason?: string): Promise<{ id: string }> {
+export async function cancelRun(id: string, reason?: string): Promise<{ seq: number }> {
   const body = reason !== undefined ? { reason } : undefined;
-  return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedId);
+  return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedSeq);
 }
 
 // ── Analytics ────────────────────────────────────────────────────────

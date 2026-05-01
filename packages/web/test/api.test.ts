@@ -175,7 +175,7 @@ describe("api — control channel", () => {
     mock = installFetchMock({
       "/api/runs/run-7/pause": ({ init }) => {
         bodies.push(init?.body as string | undefined);
-        return json({ id: "p1" }, { status: 202 });
+        return json({ seq: 11 });
       },
     });
     await api.pauseRun("run-7");
@@ -188,7 +188,7 @@ describe("api — control channel", () => {
     mock = installFetchMock({
       "/api/runs/run-7/pause": ({ init }) => {
         bodies.push(init?.body as string);
-        return json({ id: "p2" }, { status: 202 });
+        return json({ seq: 12 });
       },
     });
     await api.pauseRun("run-7", "stepping out");
@@ -200,7 +200,7 @@ describe("api — control channel", () => {
     mock = installFetchMock({
       "/api/runs/run-7/resume": ({ init }) => {
         bodies.push(init?.body as string | undefined);
-        return json({ id: "r1" }, { status: 202 });
+        return json({ seq: 13 });
       },
     });
     await api.resumeRun("run-7");
@@ -213,7 +213,7 @@ describe("api — control channel", () => {
     mock = installFetchMock({
       "/api/runs/a%2Fb%20c/cancel": ({ init }) => {
         bodies.push(init?.body as string);
-        return json({ id: "c1" }, { status: 202 });
+        return json({ seq: 14 });
       },
     });
     await api.cancelRun("a/b c", "wrong branch");

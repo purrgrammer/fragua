@@ -16,7 +16,6 @@
 //     horizontal scroll or shrinking into a narrow column.
 
 import { useQuery } from "@tanstack/react-query";
-import { Play } from "lucide-react";
 import { useEffect } from "react";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -47,14 +46,12 @@ export function RunsList(): JSX.Element {
       {rows && rows.length === 0 && (
         <EmptyState
           data-testid="runs-empty"
-          icon={<Play className="size-6 text-sw-muted" aria-hidden />}
           title="No runs yet"
           description={
             <span>
               Start one with <code className="font-mono">swarm run</code>.
             </span>
           }
-          className="min-h-[120px]"
         />
       )}
       {rows && rows.length > 0 && (
