@@ -85,6 +85,8 @@ interface RunStateRow {
   dispatch_started_at: number | null;
   updated_at: number;
   title: string | null;
+  base_git_sha: string | null;
+  branch: string | null;
 }
 
 export interface SqliteStoreOpts {
@@ -1029,7 +1031,7 @@ export class SqliteStore implements IEventStore {
           `SELECT run_id, version, status, current_node, workflow_sha,
                   schema_version, routing, metrics, next_seq, last_applied_seq,
                   priority, enqueued_at, ready_at, node_started_at,
-                  dispatch_started_at, updated_at, title
+                  dispatch_started_at, updated_at, title, base_git_sha, branch
              FROM run_state
             WHERE run_id = ?`,
         )
@@ -1072,6 +1074,8 @@ export class SqliteStore implements IEventStore {
       dispatchStartedAt: row.dispatch_started_at,
       updatedAt: row.updated_at,
       title: row.title,
+      baseGitSha: row.base_git_sha,
+      branch: row.branch,
     };
   }
 
@@ -1121,7 +1125,9 @@ export class SqliteStore implements IEventStore {
            ready_at            = ?,
            node_started_at     = ?,
            dispatch_started_at = ?,
-           updated_at          = ?
+           updated_at          = ?,
+           base_git_sha        = ?,
+           branch              = ?
          WHERE run_id = ?`,
       )
       .run(
@@ -1136,6 +1142,8 @@ export class SqliteStore implements IEventStore {
         state.nodeStartedAt,
         state.dispatchStartedAt,
         state.updatedAt,
+        state.baseGitSha,
+        state.branch,
         state.runId,
       );
   }

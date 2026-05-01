@@ -81,7 +81,17 @@ export type IntentType = IntentEvent["type"];
 export type FactEvent =
   | {
       type: "fact.run_started";
-      payload: { workflowSha: string; schemaVersion: number; startNode: string };
+      payload: {
+        workflowSha: string;
+        schemaVersion: number;
+        startNode: string;
+        /** HEAD sha of the run's worktree at provision time. Set when a
+         * `WorktreeProvisioner` is configured; absent for runs with a
+         * shared `LocalEnvironment` or no provisioner. Replay reads this
+         * to reconstruct the starting tree even after the worktree dir
+         * and `swarm/runs/<runId>` branch are gone. */
+        baseGitSha?: string;
+      };
     }
   | {
       type: "fact.dispatch_started";
@@ -259,7 +269,18 @@ export type FactEvent =
       type: "fact.handler_timeout_leaked";
       payload: { nodeId: string; leakedAt: number };
     }
-  | { type: "fact.daemon_takeover"; payload: { reclaimedFrom: number; at: number } };
+  | { type: "fact.daemon_takeover"; payload: { reclaimedFrom: number; at: number } }
+  | {
+      /** Emitted by the executor's terminal-cleanup path after the
+       * worktree's dispose() preserved a branch (because the working tree
+       * had a non-empty `git status --porcelain`). Sets `run_state.branch`
+       * so `swarm gc --branches` can later join the refspace against
+       * terminated runs. Not emitted when dispose drops a clean tree
+       * (no branch was created) or when the run had no worktree
+       * provisioner. Lands AFTER the terminal status fact. */
+      type: "fact.run_branched";
+      payload: { branch: string };
+    };
 
 export type FactType = FactEvent["type"];
 
@@ -394,6 +415,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
+  "fact.run_branched",
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",

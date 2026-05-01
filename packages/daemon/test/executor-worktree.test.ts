@@ -29,9 +29,12 @@ function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEn
 
 class RecordingProvisioner implements Provisioner {
   ensureCalls: string[] = [];
-  disposeCalls: string[] = [];
+  disposeCalls: Array<{ runId: string; status?: string }> = [];
   private readonly envs = new Map<string, ExecutionEnvironment>();
-  constructor(private readonly make: (runId: string) => ExecutionEnvironment) {}
+  constructor(
+    private readonly make: (runId: string) => ExecutionEnvironment,
+    private readonly opts: { branchOnDispose?: string; baseGitSha?: string } = {},
+  ) {}
   async ensure(runId: string): Promise<ExecutionEnvironment> {
     this.ensureCalls.push(runId);
     const cached = this.envs.get(runId);
@@ -40,12 +43,16 @@ class RecordingProvisioner implements Provisioner {
     this.envs.set(runId, env);
     return env;
   }
-  async dispose(runId: string): Promise<void> {
-    this.disposeCalls.push(runId);
+  async dispose(runId: string, ctx?: { status: string }): Promise<{ branch: string | null }> {
+    this.disposeCalls.push({ runId, ...(ctx?.status != null ? { status: ctx.status } : {}) });
     this.envs.delete(runId);
+    return { branch: this.opts.branchOnDispose ?? null };
   }
   envFor(runId: string): ExecutionEnvironment | undefined {
     return this.envs.get(runId);
+  }
+  baseGitSha(_runId: string): string | null {
+    return this.opts.baseGitSha ?? null;
   }
 }
 
@@ -71,7 +78,103 @@ describe("executor + worktree provisioner", () => {
     });
 
     expect(provisioner.ensureCalls).toEqual(["run-1"]); // only once, even across multiple turns
-    expect(provisioner.disposeCalls).toEqual(["run-1"]);
+    expect(provisioner.disposeCalls).toEqual([{ runId: "run-1", status: "completed" }]);
+
+    r.store.close();
+  });
+
+  test("baseGitSha from the provisioner is stamped on fact.run_started + run_state", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    enqueue(r, "run-sha", "start");
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
+      baseGitSha: "deadbeef0123456789abcdef0123456789abcdef",
+    });
+    const ctrl = new AbortController();
+    await runOne("run-sha", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    const events = r.store.getEvents("run-sha");
+    const started = events.find((e) => e.type === "fact.run_started");
+    expect(started).toBeDefined();
+    const payload = started!.payload as { baseGitSha?: string };
+    expect(payload.baseGitSha).toBe("deadbeef0123456789abcdef0123456789abcdef");
+
+    const state = r.store.getState("run-sha");
+    expect(state?.baseGitSha).toBe("deadbeef0123456789abcdef0123456789abcdef");
+
+    r.store.close();
+  });
+
+  test("dispose returning a branch emits fact.run_branched and updates run_state.branch", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    enqueue(r, "run-br", "start");
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`), {
+      branchOnDispose: "swarm/runs/run-br",
+    });
+    const ctrl = new AbortController();
+    await runOne("run-br", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    const events = r.store.getEvents("run-br");
+    const branched = events.find((e) => e.type === "fact.run_branched");
+    expect(branched).toBeDefined();
+    expect((branched!.payload as { branch: string }).branch).toBe("swarm/runs/run-br");
+
+    const state = r.store.getState("run-br");
+    expect(state?.branch).toBe("swarm/runs/run-br");
+    // Status remains terminal — the branch fact is post-terminal metadata.
+    expect(state?.status).toBe("completed");
+
+    r.store.close();
+  });
+
+  test("dispose returning null branch emits no fact.run_branched", async () => {
+    const r = rig();
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "start");
+    enqueue(r, "run-clean", "start");
+    r.store.claimNextRun(4);
+
+    const provisioner = new RecordingProvisioner((id) => stubEnv(`/fake/${id}`));
+    const ctrl = new AbortController();
+    await runOne("run-clean", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 4,
+      shutdownSignal: ctrl.signal,
+      maxTurnsForTesting: 20,
+      provisioner,
+    });
+
+    const events = r.store.getEvents("run-clean");
+    expect(events.find((e) => e.type === "fact.run_branched")).toBeUndefined();
+    expect(r.store.getState("run-clean")?.branch).toBeNull();
 
     r.store.close();
   });
@@ -86,9 +189,14 @@ describe("executor + worktree provisioner", () => {
       async ensure() {
         throw new Error("no disk space");
       },
-      async dispose() {},
+      async dispose() {
+        return { branch: null };
+      },
       envFor() {
         return undefined;
+      },
+      baseGitSha() {
+        return null;
       },
     };
     const ctrl = new AbortController();

@@ -45,6 +45,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // The first dispatch fires implicitly with run_started — no
       // separate fact.dispatch_started precedes it.
       next.dispatchStartedAt = now;
+      if (fact.payload.baseGitSha !== undefined) {
+        next.baseGitSha = fact.payload.baseGitSha;
+      }
       return next;
     }
     case "fact.dispatch_started": {
@@ -167,6 +170,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       closeDispatchInterval(next, now);
       next.status = "quarantined";
       next.nodeStartedAt = null;
+      return next;
+    }
+    case "fact.run_branched": {
+      next.branch = fact.payload.branch;
       return next;
     }
     case "fact.run_requeued_after_crash": {

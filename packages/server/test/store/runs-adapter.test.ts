@@ -44,6 +44,8 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     dispatchStartedAt: null,
     updatedAt: 1_000_000,
     title: null,
+    baseGitSha: null,
+    branch: null,
     ...overrides,
   };
 }

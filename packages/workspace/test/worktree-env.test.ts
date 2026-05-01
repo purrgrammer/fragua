@@ -32,17 +32,73 @@ describe("WorktreeEnvironment", () => {
     await rm(repo, { recursive: true, force: true });
   });
 
-  test("init creates worktree + branch, dispose removes both", async () => {
+  test("init creates a detached worktree, captures baseGitSha, no branch yet", async () => {
     const env = new WorktreeEnvironment({ repoRoot: repo, runId: "abc" });
     await env.init();
     expect(existsSync(env.worktreePath)).toBe(true);
+
+    // No `swarm/runs/abc` branch exists at provision time — branch is lazy.
     const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branches.stdout).toContain("swarm/abc");
+    expect(branches.stdout).not.toContain("swarm/runs/abc");
+
+    // baseGitSha matches main HEAD.
+    const head = spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+    expect(env.baseGitSha).toBe(head);
 
     await env.dispose();
+  });
+
+  test("dispose on a clean worktree removes everything, branch never exists", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "clean-run" });
+    await env.init();
+
+    const result = await env.dispose();
+    expect(result.branch).toBeNull();
     expect(existsSync(env.worktreePath)).toBe(false);
-    const branchesAfter = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
-    expect(branchesAfter.stdout).not.toContain("swarm/abc");
+    const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
+    expect(branches.stdout).not.toContain("swarm/runs/clean-run");
+  });
+
+  test("dispose on a dirty worktree commits to swarm/runs/<id> and preserves the branch", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "dirty-run" });
+    await env.init();
+    await env.writeFile("agent-output.txt", "agent did this");
+    await env.writeFile("README.md", "# rewritten by agent\n");
+
+    const result = await env.dispose({
+      status: "completed",
+      workflowName: "test-flow",
+      workflowSha: "abcdef0123456789",
+    });
+    expect(result.branch).toBe("swarm/runs/dirty-run");
+    expect(existsSync(env.worktreePath)).toBe(false);
+
+    const branches = spawnSync("git", ["-C", repo, "branch"], { encoding: "utf8" });
+    expect(branches.stdout).toContain("swarm/runs/dirty-run");
+
+    // Branch points at a commit containing both the new file and the modified README.
+    const log = spawnSync("git", ["-C", repo, "log", "swarm/runs/dirty-run", "--name-only", "--pretty=%s"], {
+      encoding: "utf8",
+    });
+    expect(log.stdout).toContain("swarm: run dirty-run · completed · test-flow@abcdef01");
+    expect(log.stdout).toContain("agent-output.txt");
+    expect(log.stdout).toContain("README.md");
+  });
+
+  test("dispose preserves untracked files in the branch", async () => {
+    const env = new WorktreeEnvironment({ repoRoot: repo, runId: "untracked-only" });
+    await env.init();
+    await env.writeFile("brand-new.log", "untracked output");
+
+    const result = await env.dispose({
+      status: "halted",
+      workflowName: "smoke",
+      workflowSha: "deadbeefdeadbeef",
+    });
+    expect(result.branch).toBe("swarm/runs/untracked-only");
+
+    const tree = spawnSync("git", ["-C", repo, "show", "--stat", "swarm/runs/untracked-only"], { encoding: "utf8" });
+    expect(tree.stdout).toContain("brand-new.log");
   });
 
   test("writeFile in worktree does not touch repoRoot files", async () => {

@@ -372,6 +372,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
       if (needsStart) {
         const start = routingString(state.routing, "start_node") ?? "start";
+        const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
         const startFacts: FactEvent[] = [
           {
             type: "fact.run_started",
@@ -379,6 +380,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               workflowSha: state.workflowSha,
               schemaVersion: state.schemaVersion,
               startNode: start,
+              ...(baseGitSha != null ? { baseGitSha } : {}),
             },
           },
         ];
@@ -1062,11 +1064,46 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // survives across HITL pauses and the same worktree can be reused
     // on resume. completed / cancelled / halted / quarantined are all
     // truly terminal — the run will never execute another node.
+    //
+    // Dispose may preserve the worktree's working state on a fresh
+    // `swarm/runs/<runId>` branch. When it does, emit a follow-up
+    // `fact.run_branched` so `run_state.branch` is set and `swarm gc
+    // --branches` can later reason about the ref. The terminal fact has
+    // already landed by this point — `fact.run_branched` is post-terminal
+    // metadata, not a status transition.
     if (opts.provisioner) {
       const finalState = opts.store.getState(runId);
       const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
       if (finalState != null && terminalStatuses.has(finalState.status)) {
-        await opts.provisioner.dispose(runId);
+        const workflow = opts.store.getWorkflow(finalState.workflowSha);
+        const ctx = {
+          status: finalState.status,
+          workflowName: workflow?.name ?? "unknown",
+          workflowSha: finalState.workflowSha,
+        };
+        try {
+          const { branch } = await opts.provisioner.dispose(runId, ctx);
+          if (branch != null) {
+            // Best-effort — if the OCC retry races us, the run is
+            // already terminal and the executor is exiting, so a single
+            // append attempt is enough. Don't loop.
+            await tryAppendFact(opts.store, runId, finalState.version, [
+              { type: "fact.run_branched", payload: { branch } },
+            ]);
+          }
+        } catch (err) {
+          opts.store.appendDaemonEvent(
+            {
+              type: "daemon.worktree_provisioned",
+              payload: {
+                runId,
+                ok: false,
+                errorDetail: `dispose failed: ${err instanceof Error ? err.message : String(err)}`,
+              },
+            },
+            { runId },
+          );
+        }
       }
     }
   }

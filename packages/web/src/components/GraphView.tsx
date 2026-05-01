@@ -693,7 +693,9 @@ export function toFlowGraph(
   });
   rightArcEdgeIdxs.sort((a, b) => b.depth - a.depth || a.idx - b.idx);
   const rightArcIndexByEdge = new Map<number, number>();
-  rightArcEdgeIdxs.forEach((r, i) => rightArcIndexByEdge.set(r.idx, i));
+  rightArcEdgeIdxs.forEach((r, i) => {
+    rightArcIndexByEdge.set(r.idx, i);
+  });
 
   const flowEdges: FlowEdge[] = graph.edges.map((e, i) => {
     const sd = depthOf.get(e.from);

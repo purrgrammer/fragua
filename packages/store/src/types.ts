@@ -133,6 +133,16 @@ export interface RunState {
    * also the terminal state when summarisation is disabled or failed —
    * the UI falls back to `routing.input` ($ARGUMENTS) in that case. */
   title: string | null;
+  /** HEAD sha of the worktree at provision time. Set by the executor on
+   * `fact.run_started` when a `WorktreeProvisioner` is configured.
+   * `null` for runs without a worktree (LocalEnvironment / no provisioner). */
+  baseGitSha: string | null;
+  /** Branch preserved at dispose time when the worktree had a non-empty
+   * `git status --porcelain`. Set by `fact.run_branched`, emitted from
+   * the executor's terminal-cleanup path. `null` while the run is live,
+   * for clean-tree runs (nothing to commit), and for runs without a
+   * worktree. Convention: `swarm/runs/<run_id>`. */
+  branch: string | null;
 }
 
 /**

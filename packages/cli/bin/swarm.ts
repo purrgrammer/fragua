@@ -11,6 +11,7 @@ import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
+import { gcCommand, parseDuration } from "../src/commands/gc.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   providersAddCommand,
@@ -170,6 +171,39 @@ cli
     console.error(chalk.red(`unknown daemon action: ${action}`));
     console.error(chalk.dim("  valid actions: start | stop"));
     process.exit(1);
+  });
+
+cli
+  .command("gc", "Garbage-collect run artefacts")
+  .option("--branches", "Prune `swarm/runs/*` branches whose runs are past the retention window")
+  .option("--older-than <duration>", "Retention window (e.g. 30d, 12h, 2w). Default 30d.")
+  .option("--dry-run", "Report what would be deleted without touching anything")
+  .option("--cwd <path>", "Repo root (default process.cwd)")
+  .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    if (options["branches"] !== true) {
+      console.error(chalk.red("gc: --branches is required (no other targets supported yet)"));
+      process.exit(1);
+    }
+    let olderThanMs: number;
+    try {
+      olderThanMs = parseDuration(pick("olderThan"));
+    } catch (err) {
+      console.error(chalk.red(`gc: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+    const code = await gcCommand({
+      target: "branches",
+      olderThanMs,
+      ...(options["dryRun"] === true ? { dryRun: true } : {}),
+      ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+    });
+    process.exit(code);
   });
 
 cli

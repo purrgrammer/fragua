@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- runs (no project file). Indexed for `WHERE project_id = ?` listings
   -- and cross-project aggregation under the global daemon.
   project_id TEXT,
+  -- Git SHA of the worktree's HEAD at provision time. Replay reconstructs
+  -- the run's starting tree from this sha + the workflow's dot_source,
+  -- independent of the worktree directory or `branch` survival. NULL for
+  -- runs without a provisioner (LocalEnvironment, ephemeral stubs).
+  base_git_sha TEXT,
+  -- Branch name preserved by `dispose()` when the worktree had any working-
+  -- copy delta (tracked + untracked) at terminal time. Convention:
+  -- `swarm/runs/<run_id>`. NULL for clean runs (no work to commit) and for
+  -- runs without a worktree.
+  branch TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS

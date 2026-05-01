@@ -24,6 +24,8 @@ function blankState(): RunState {
     dispatchStartedAt: null,
     updatedAt: 0,
     title: null,
+    baseGitSha: null,
+    branch: null,
   };
 }
 

@@ -26,7 +26,13 @@
 //     branches (user may have merged + deleted them out of band).
 
 import type { ExecutionEnvironment } from "@swarm/core";
-import { type BootstrapSpec, LocalEnvironment, WorktreeEnvironment } from "@swarm/workspace";
+import {
+  type BootstrapSpec,
+  type DisposeContext,
+  type DisposeResult,
+  LocalEnvironment,
+  WorktreeEnvironment,
+} from "@swarm/workspace";
 
 export interface WorktreeProvisionerOptions {
   /** Repo root. Defaults to `process.cwd()`. */
@@ -53,8 +59,17 @@ export interface WorktreeProvisionerOptions {
 
 export interface Provisioner {
   ensure(runId: string): Promise<ExecutionEnvironment>;
-  dispose(runId: string): Promise<void>;
+  /** Tear down the run's environment. `ctx` lets the impl tag a
+   * dispose-time commit with the run's terminal status + workflow
+   * identity (worktree backends only). `branch` in the result is
+   * non-null exactly when a `swarm/runs/<runId>` ref now exists in the
+   * repo, so the executor can emit `fact.run_branched`. */
+  dispose(runId: string, ctx?: DisposeContext): Promise<DisposeResult>;
   envFor(runId: string): ExecutionEnvironment | undefined;
+  /** HEAD sha captured at provision time for runs backed by a worktree.
+   * `null` for runs the provisioner doesn't track or for non-worktree
+   * envs (LocalEnvironment). */
+  baseGitSha(runId: string): string | null;
 }
 
 export class WorktreeProvisioner implements Provisioner {
@@ -95,17 +110,24 @@ export class WorktreeProvisioner implements Provisioner {
     }
   }
 
-  async dispose(runId: string): Promise<void> {
+  async dispose(runId: string, ctx?: DisposeContext): Promise<DisposeResult> {
     const env = this.envs.get(runId);
-    if (!env) return;
+    if (!env) return { branch: null };
     this.envs.delete(runId);
     if (env instanceof WorktreeEnvironment) {
-      await env.dispose();
+      return env.dispose(ctx);
     }
+    return { branch: null };
   }
 
   envFor(runId: string): ExecutionEnvironment | undefined {
     return this.envs.get(runId);
+  }
+
+  baseGitSha(runId: string): string | null {
+    const env = this.envs.get(runId);
+    if (env instanceof WorktreeEnvironment) return env.baseGitSha;
+    return null;
   }
 
   private async create(runId: string): Promise<ExecutionEnvironment> {
@@ -142,11 +164,16 @@ export class LocalEnvironmentProvisioner implements Provisioner {
     return this.shared;
   }
 
-  async dispose(_runId: string): Promise<void> {
+  async dispose(_runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
     // no-op: LocalEnvironment is shared, not per-run.
+    return { branch: null };
   }
 
   envFor(_runId: string): ExecutionEnvironment | undefined {
     return this.shared;
+  }
+
+  baseGitSha(_runId: string): string | null {
+    return null;
   }
 }

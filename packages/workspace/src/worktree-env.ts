@@ -1,10 +1,13 @@
 // WorktreeEnvironment — ExecutionEnvironment backed by a short-lived
-// `git worktree`. Each session gets its own branch so agents don't mutate
-// the user's working copy and concurrent runs don't step on each other.
+// `git worktree`. Each session works on a detached HEAD so concurrent
+// runs don't collide on a branch and clean runs (no working-copy delta)
+// leave zero ref-space residue.
 //
 // Layout:
-//   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree
-//   branch: swarm/<run-id>                    ← tracking branch
+//   <repoRoot>/.swarm/worktrees/<run-id>/   ← the worktree (detached)
+//   branch: swarm/runs/<run-id>               ← created LAZILY at dispose
+//                                               only when there's work to
+//                                               preserve (see dispose()).
 //
 // Full isolation: untracked/ignored paths (node_modules, .env, etc.) are NOT
 // shared with the main repo. If the project needs dependencies installed,
@@ -12,6 +15,17 @@
 // (e.g. `bun install --frozen-lockfile`, `pnpm install`, `pip install -r
 // requirements.txt`). The command runs inside the fresh worktree before the
 // first node executes; a non-zero exit fails the run.
+//
+// Dispose contract (`docs/proposals/run-isolation.md`):
+//   1. `git status --porcelain` in the worktree.
+//   2. If empty → `git worktree remove --force`. Branch never existed.
+//      Return `{ branch: null }`.
+//   3. Otherwise → `git checkout -b swarm/runs/<run-id>`, `git add -A`,
+//      single `git commit` carrying the run's metadata, then
+//      `git worktree remove --force`. Branch persists. Return
+//      `{ branch: "swarm/runs/<run-id>" }`.
+// Replay reconstructs the starting tree from `baseGitSha`; the branch is
+// the audit trail for "what did the run actually change".
 
 import { spawn } from "node:child_process";
 import { access, mkdir, realpath } from "node:fs/promises";
@@ -43,13 +57,42 @@ export interface WorktreeEnvironmentOptions extends Omit<LocalEnvironmentOptions
   bootstrapTimeoutMs?: number;
 }
 
+/** Metadata folded into the dispose-time commit message so `git log`
+ * gives operators enough context to triage without cross-referencing the
+ * event log. Provided by the executor at dispose time — the worktree
+ * itself doesn't know its workflow / terminal status. */
+export interface DisposeContext {
+  /** Terminal status that triggered dispose. */
+  status: string;
+  /** Human-readable workflow name (from `workflows.name`). */
+  workflowName: string;
+  /** Workflow content sha — full hex, abbreviated to 8 chars in the
+   * commit subject. */
+  workflowSha: string;
+}
+
+/** Result of `dispose()`. `branch` is non-null exactly when the worktree
+ * had a non-empty `git status --porcelain` and dispose committed its
+ * working state to a new `swarm/runs/<runId>` branch. */
+export interface DisposeResult {
+  branch: string | null;
+}
+
 export class WorktreeEnvironment implements ExecutionEnvironment {
   private readonly repoRoot: string;
   readonly runId: string;
+  /** Branch name preserved by `dispose()`, following the
+   * `swarm/runs/<runId>` convention. The branch is created LAZILY — it
+   * does not exist in the repo until dispose commits a non-empty working
+   * tree. Read this name to know what GC will scan. */
   readonly branch: string;
   readonly worktreePath: string;
   readonly bootstrapRan: boolean = false;
   readonly bootstrapCommand: string | undefined;
+  /** HEAD sha captured immediately after `git worktree add --detach`.
+   * `null` until `init()` runs; the executor reads this to populate
+   * `fact.run_started.payload.baseGitSha`. */
+  baseGitSha: string | null = null;
   private readonly baseRef: string | undefined;
   private readonly keepAfterDispose: boolean;
   private readonly bootstrap: BootstrapSpec | undefined;
@@ -61,7 +104,7 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   constructor(opts: WorktreeEnvironmentOptions) {
     this.repoRoot = resolve(opts.repoRoot ?? process.cwd());
     this.runId = opts.runId;
-    this.branch = `swarm/${opts.runId}`;
+    this.branch = `swarm/runs/${opts.runId}`;
     const dir = opts.worktreesDir ?? ".swarm/worktrees";
     this.worktreePath = isAbsolute(dir) ? join(dir, opts.runId) : join(this.repoRoot, dir, opts.runId);
     if (opts.baseRef !== undefined) this.baseRef = opts.baseRef;
@@ -76,27 +119,31 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     });
   }
 
-  /** Create the worktree + branch and run the project's bootstrap
-   * command if configured. Idempotent across
-   * process restarts: if the target worktree directory already exists
-   * and `git worktree list` confirms it's a registered worktree for
-   * this repo, the existing one is reused (no `git worktree add`, no
+  /** Create a detached worktree at the run's HEAD ref and run the
+   * project's bootstrap command if configured. Idempotent across process
+   * restarts: if the target worktree directory already exists and
+   * `git worktree list` confirms it's a registered worktree for this
+   * repo, the existing one is reused (no `git worktree add`, no
    * re-bootstrap) so a HITL-paused run can survive a daemon restart
-   * without double-provisioning. */
+   * without double-provisioning.
+   *
+   * No branch is created here — `swarm/runs/<runId>` is born lazily in
+   * `dispose()` only when there's actual work to preserve. Captures the
+   * worktree's HEAD into `baseGitSha` so the executor can stamp it onto
+   * `fact.run_started`. */
   async init(): Promise<void> {
     if (this.initialized) return;
     await mkdir(join(this.repoRoot, ".swarm", "worktrees"), { recursive: true });
 
     const alreadyProvisioned = await this.isExistingWorktree();
     if (!alreadyProvisioned) {
-      const args = ["worktree", "add"];
-      if (this.baseRef !== undefined) {
-        args.push("-b", this.branch, this.worktreePath, this.baseRef);
-      } else {
-        args.push("-b", this.branch, this.worktreePath);
-      }
+      const args = ["worktree", "add", "--detach", this.worktreePath];
+      if (this.baseRef !== undefined) args.push(this.baseRef);
       await runGit(this.repoRoot, args);
     }
+
+    const { stdout: headStdout } = await runGitCapture(this.worktreePath, ["rev-parse", "HEAD"]);
+    this.baseGitSha = headStdout.trim();
 
     // Only bootstrap on FRESH provisioning — a resumed run's worktree
     // already has dependencies installed from the pre-crash life, and
@@ -155,20 +202,51 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     }
   }
 
-  /** Remove the worktree and its branch. No-op if keepAfterDispose or already disposed. */
-  async dispose(): Promise<void> {
-    if (this.disposed || this.keepAfterDispose) return;
+  /** Tear down the worktree, preserving any working-copy delta on the
+   * `swarm/runs/<runId>` branch as a single commit. Returns the branch
+   * name iff a branch was created.
+   *
+   * Algorithm (matches `docs/proposals/run-isolation.md`):
+   *   1. `git status --porcelain` — covers tracked AND untracked, so a
+   *      run that only scattered new files still produces a branch.
+   *   2. Empty → drop the worktree, no branch. `branch: null`.
+   *   3. Non-empty → checkout a fresh `swarm/runs/<runId>`, stage
+   *      everything (`git add -A`), commit with a metadata-rich message,
+   *      then drop the worktree. Branch survives.
+   *
+   * No-op if `keepAfterDispose` is true or `dispose()` already ran. The
+   * branch lookup tolerates a manually-deleted worktree (status check
+   * fails → fall through to remove). */
+  async dispose(ctx?: DisposeContext): Promise<DisposeResult> {
+    if (this.disposed || this.keepAfterDispose) return { branch: null };
     this.disposed = true;
+
+    let branchCreated: string | null = null;
+    try {
+      const { stdout } = await runGitCapture(this.worktreePath, ["status", "--porcelain"]);
+      if (stdout.trim().length > 0) {
+        await runGit(this.worktreePath, ["checkout", "-b", this.branch]);
+        await runGit(this.worktreePath, ["add", "-A"]);
+        await runGit(this.worktreePath, ["commit", "--no-gpg-sign", "-m", buildCommitMessage(this.runId, ctx)], {
+          GIT_AUTHOR_NAME: "swarm",
+          GIT_AUTHOR_EMAIL: "noreply@swarm.local",
+          GIT_COMMITTER_NAME: "swarm",
+          GIT_COMMITTER_EMAIL: "noreply@swarm.local",
+        });
+        branchCreated = this.branch;
+      }
+    } catch {
+      // Worktree directory may have been deleted out of band, or the
+      // repo lost the worktree registration. Don't block tear-down.
+    }
+
     try {
       await runGit(this.repoRoot, ["worktree", "remove", "--force", this.worktreePath]);
     } catch {
       // worktree may already be gone
     }
-    try {
-      await runGit(this.repoRoot, ["branch", "-D", this.branch]);
-    } catch {
-      // branch may already be gone (e.g. user checked out + merged it)
-    }
+
+    return { branch: branchCreated };
   }
 
   cwd(): string {
@@ -203,9 +281,10 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
   }
 }
 
-function runGit(cwd: string, args: string[]): Promise<void> {
+function runGit(cwd: string, args: string[], extraEnv?: Record<string, string>): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const env = extraEnv != null ? { ...process.env, ...extraEnv } : process.env;
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -216,6 +295,19 @@ function runGit(cwd: string, args: string[]): Promise<void> {
     });
     child.on("error", rejectPromise);
   });
+}
+
+function buildCommitMessage(runId: string, ctx?: DisposeContext): string {
+  if (ctx == null) return `swarm: run ${runId}`;
+  const shortSha = ctx.workflowSha.slice(0, 8);
+  return [
+    `swarm: run ${runId} · ${ctx.status} · ${ctx.workflowName}@${shortSha}`,
+    "",
+    `run-id: ${runId}`,
+    `status: ${ctx.status}`,
+    `workflow: ${ctx.workflowName}`,
+    `workflow-sha: ${ctx.workflowSha}`,
+  ].join("\n");
 }
 
 function runGitCapture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
