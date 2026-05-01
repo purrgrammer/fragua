@@ -70,6 +70,17 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         <Field label="id" value={<code className="text-sw-text">{node.id}</code>} />
         {attrs.label && <Field label="label" value={attrs.label} />}
         <Field label="handler" value={<code className="text-sw-text">{handler}</code>} />
+        {/* class drives stylesheet `.classname` matching (§8.3). Show
+         *  comma-separated when multiple classes resolve (the parsed
+         *  Node.classes carries derived classes from subgraph membership
+         *  too — that's the source of truth, not the raw `class` attr). */}
+        {node.classes.length > 0 && (
+          <Field label="class" value={<code className="text-sw-text">{node.classes.join(", ")}</code>} />
+        )}
+        {/* thread_id — shared LLM session marker. Identity rather than
+         *  model-section because it's about *which conversation* this node
+         *  joins, not what model handles it. */}
+        {attrs.thread_id && <Field label="thread" value={<code className="text-sw-text">{attrs.thread_id}</code>} />}
         {state && <Field label="state" value={<code className="text-sw-text">{state.state}</code>} />}
         {state && state.lastEventSeq > 0 && (
           <Field label="last event" value={<code className="text-sw-text">seq {state.lastEventSeq}</code>} />
@@ -91,10 +102,18 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Parallel — fan-in target is discovered via edges (attractor §4.8). */}
-      {attrs.join_policy !== undefined && (
+      {/* Parallel — fan-in target is the convergent tripleoctagon, discovered
+       *  by the runtime via edges (attractor §4.8). The `fan_in` attr is the
+       *  swarm-author convention for declaring it explicitly; show whichever
+       *  is set so authors can confirm the wiring without leaving the panel. */}
+      {(attrs.join_policy !== undefined || typeof attrs["fan_in"] === "string") && (
         <Section title="parallel">
-          <Field label="join policy" value={<code className="text-sw-text">{attrs.join_policy}</code>} />
+          {typeof attrs["fan_in"] === "string" && (attrs["fan_in"] as string).length > 0 && (
+            <Field label="fan_in" value={<code className="text-sw-text">{attrs["fan_in"] as string}</code>} />
+          )}
+          {attrs.join_policy !== undefined && (
+            <Field label="join policy" value={<code className="text-sw-text">{attrs.join_policy}</code>} />
+          )}
         </Section>
       )}
 
@@ -141,14 +160,22 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Execution */}
+      {/* Execution — retries, gates, timeouts, budget. */}
       {(attrs.max_retries !== undefined ||
+        attrs.retry_policy !== undefined ||
         attrs.timeout !== undefined ||
         attrs.idle_timeout !== undefined ||
         attrs.max_cost_usd !== undefined ||
         attrs.max_tokens !== undefined ||
-        attrs.goal_gate !== undefined) && (
+        attrs.goal_gate !== undefined ||
+        attrs.retry_target !== undefined ||
+        attrs.fallback_retry_target !== undefined ||
+        attrs.allow_partial !== undefined ||
+        attrs.auto_status !== undefined) && (
         <Section title="execution">
+          {attrs.retry_policy !== undefined && (
+            <Field label="retry policy" value={<code className="text-sw-text">{attrs.retry_policy}</code>} />
+          )}
           {attrs.max_retries !== undefined && (
             <Field label="max retries" value={<code className="text-sw-text">{attrs.max_retries}</code>} />
           )}
@@ -166,6 +193,24 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
           )}
           {attrs.goal_gate !== undefined && (
             <Field label="goal gate" value={<code className="text-sw-text">{String(attrs.goal_gate)}</code>} />
+          )}
+          {/* §3.4 retarget chain — gate-level only. Graph-level retarget
+           *  is set on the graph attrs, not the node, so we can't show it
+           *  from here without plumbing the parent in. */}
+          {typeof attrs.retry_target === "string" && attrs.retry_target.length > 0 && (
+            <Field label="retry target" value={<code className="text-sw-text">{attrs.retry_target}</code>} />
+          )}
+          {typeof attrs.fallback_retry_target === "string" && attrs.fallback_retry_target.length > 0 && (
+            <Field
+              label="fallback target"
+              value={<code className="text-sw-text">{attrs.fallback_retry_target}</code>}
+            />
+          )}
+          {attrs.allow_partial !== undefined && (
+            <Field label="allow partial" value={<code className="text-sw-text">{String(attrs.allow_partial)}</code>} />
+          )}
+          {attrs.auto_status !== undefined && (
+            <Field label="auto status" value={<code className="text-sw-text">{String(attrs.auto_status)}</code>} />
           )}
         </Section>
       )}

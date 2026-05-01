@@ -382,6 +382,11 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   "allow_partial",
   "skills_disabled",
   "retry_jitter",
+  // loop_restart edge attribute — typed for parser correctness so the
+  // UI (GraphView) can read `e.attrs["loop_restart"] === true` directly.
+  // Engine behavior is still a deliberate non-feature (docs/SPEC.md §6.5);
+  // setting it true does not actually re-launch the run.
+  "loop_restart",
 ]);
 
 const INT_KEYS: ReadonlySet<string> = new Set([

@@ -77,4 +77,49 @@ describe("NodeInspector", () => {
     expect(text).toContain("running");
     expect(text).toContain("42");
   });
+
+  it("surfaces thread_id, class (subgraph-derived), and the goal-gate retarget chain", () => {
+    const src = `digraph demo {
+      subgraph cluster_dev {
+        node [thread_id = "dev"]
+        implement [shape=box]
+        review [
+          shape = box
+          goal_gate = true
+          retry_target = "implement"
+          fallback_retry_target = "plan"
+          allow_partial = true
+          retry_policy = "standard"
+        ]
+      }
+    }`;
+    const review = parseDotSource(src).nodes["review"];
+    expect(review).toBeTruthy();
+    if (!review) return;
+    const { container } = render(<NodeInspector node={review} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("dev"); // thread_id
+    expect(text).toContain("implement"); // retry_target
+    expect(text).toContain("plan"); // fallback_retry_target
+    expect(text).toContain("standard"); // retry_policy preset
+    expect(text).toContain("allow partial"); // label rendered
+    expect(text).toContain("goal gate"); // label rendered
+    // Subgraph-derived class lands in node.classes.
+    expect(review.classes).toContain("dev");
+    expect(text).toContain("dev");
+  });
+
+  it("surfaces fan_in target + join_policy on a parallel node", () => {
+    const src = `digraph demo {
+      explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+    }`;
+    const explore = parseDotSource(src).nodes["explore"];
+    expect(explore).toBeTruthy();
+    if (!explore) return;
+    const { container } = render(<NodeInspector node={explore} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("fan_in");
+    expect(text).toContain("pick_best");
+    expect(text).toContain("wait_all");
+  });
 });

@@ -25,7 +25,16 @@
 // Node DOM contract: each rendered node carries `data-node-id="<id>"`
 // so existing tests (and any future Playwright) can target them.
 
-import { type Graph, type Edge as GraphEdge, type Node as GraphNode, handlerOf, parseDotSource } from "@swarm/core";
+import {
+  DEFAULT_MAX_GOAL_GATE_RETRIES,
+  type Graph,
+  type Edge as GraphEdge,
+  type Node as GraphNode,
+  handlerOf,
+  maxGoalGateRetries,
+  parseDotSource,
+  resolveRetargetChain,
+} from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import type { Edge as FlowEdge, Node as FlowNode, NodeProps as FlowNodeProps } from "@xyflow/react";
 import { Handle, MarkerType, Position } from "@xyflow/react";
@@ -89,6 +98,14 @@ const MARKER_FAIL = arrow("var(--sw-accent-error)");
 // their arc sits outside the main forward-flow column.
 const LOOP_HANDLE_SOURCE = "loop-source";
 const LOOP_HANDLE_TARGET = "loop-target";
+// Synthetic goal-gate retarget edges route through the OPPOSITE side
+// from regular loops — left in TB, top in LR — so the two retry channels
+// read as separate visual lanes. Operators can tell at a glance whether
+// a backward arc came from a written `verify -> verify [outcome=fail]`
+// (right side, real edge) or from the §3.4 chain on a goal_gate
+// (left side, synthetic).
+const RETARGET_HANDLE_SOURCE = "retarget-source";
+const RETARGET_HANDLE_TARGET = "retarget-target";
 
 export function GraphView(props: GraphViewProps): JSX.Element {
   const {
@@ -216,18 +233,22 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 // ── Node/edge type registrations ─────────────────────────────────────────
 
 // Left-edge colored strip that encodes node archetype. Each distinct
-// archetype gets its own hue so a glance across the graph tells you
-// the branching/HITL/loop/validation structure without reading labels:
+// archetype gets its own hue so a glance across the graph tells you the
+// branching / HITL / tool / validation structure without reading labels:
 //
-//   goal_gate     → success (green)       — "did we land it?"
+//   goal_gate     → success (green)       — "did we land it?"  (wins over handler)
 //   conditional   → warn    (orange)      — explicit decision split
 //   wait.human    → human   (steel blue)  — HITL / paused_hitl
-//   loop          → loop    (teal)        — iteration / cycling
-//   parallel*     → idle    (gray)        — structural fan-out / subtree
-//   codergen      → (no strip — neutral baseline)
+//   tool          → loop    (teal)        — deterministic shell step (no LLM)
+//   parallel*     → idle    (gray)        — structural fan-out / fan-in
+//   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence
+//   codergen      → (no strip — neutral baseline; the LLM majority)
 //
 // `goal_gate` wins over handler: a codergen node with goal_gate=true
-// acts as a validation gate, which is the more specific signal.
+// acts as a validation gate, which is the more specific signal. Tool
+// nodes keep their own hue even if some future workflow flags them as
+// gates — but goal_gate isn't currently meaningful on tool nodes, so
+// the precedence isn't load-bearing.
 function typeStripTone(handler: string, goalGate: boolean): string | null {
   if (goalGate) return "bg-sw-accent-success";
   switch (handler) {
@@ -237,6 +258,8 @@ function typeStripTone(handler: string, goalGate: boolean): string | null {
       return "bg-sw-accent-human";
     case "parallel":
     case "parallel.fan_in":
+    case "start":
+    case "exit":
       return "bg-sw-accent-idle";
     case "tool":
       return "bg-sw-accent-loop";
@@ -298,6 +321,56 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
         {d.model ? (
           <span className="truncate" title={d.model}>
             <span className="uppercase tracking-[0.06em]">model</span> <code className="text-sw-text">{d.model}</code>
+          </span>
+        ) : null}
+        {/* thread_id — flags shared-session nodes (e.g. cluster_dev). */}
+        {d.threadId ? (
+          <span className="truncate" title={`thread_id=${d.threadId}`}>
+            <span className="uppercase tracking-[0.06em]">thread</span>{" "}
+            <code className="text-sw-text">{d.threadId}</code>
+          </span>
+        ) : null}
+        {/* Tool nodes — surface the shell command directly. */}
+        {d.toolCommand ? (
+          <span className="truncate" title={d.toolCommand}>
+            <span className="uppercase tracking-[0.06em]">cmd</span>{" "}
+            <code className="text-sw-text">{d.toolCommand}</code>
+          </span>
+        ) : null}
+        {/* goal_gate retarget — names where REJECT loops back to. */}
+        {d.retryTarget ? (
+          <span className="truncate" title={`retry_target=${d.retryTarget}`}>
+            <span className="uppercase tracking-[0.06em]">retry</span>{" "}
+            <code className="text-sw-text">{d.retryTarget}</code>
+          </span>
+        ) : null}
+        {/* Parallel nodes — fan_in target (declared) + join policy. */}
+        {d.fanInTarget ? (
+          <span className="truncate" title={`fan_in=${d.fanInTarget}`}>
+            <span className="uppercase tracking-[0.06em]">fan_in</span>{" "}
+            <code className="text-sw-text">{d.fanInTarget}</code>
+          </span>
+        ) : null}
+        {d.joinPolicy ? (
+          <span className="truncate" title={`join_policy=${d.joinPolicy}`}>
+            <span className="uppercase tracking-[0.06em]">join</span>{" "}
+            <code className="text-sw-text">{d.joinPolicy}</code>
+          </span>
+        ) : null}
+        {/* parallel.fan_in — distinguish LLM-rank (has prompt) vs heuristic. */}
+        {d.fanInRank ? (
+          <span className="truncate" title={`rank=${d.fanInRank}`}>
+            <span className="uppercase tracking-[0.06em]">rank</span>{" "}
+            <code className="text-sw-text">{d.fanInRank}</code>
+          </span>
+        ) : null}
+        {/* Handler-level retry cap. Only render when explicitly set; the
+            implicit cascade (graph.default_max_retries → 0) isn't worth
+            a line of chrome on every node. */}
+        {d.maxRetries !== undefined && d.maxRetries > 0 ? (
+          <span className="truncate" title={`max_retries=${d.maxRetries}`}>
+            <span className="uppercase tracking-[0.06em]">retries</span>{" "}
+            <code className="text-sw-text">{d.maxRetries}</code>
           </span>
         ) : null}
         {d.lastEventSeq > 0 ? <span>seq {d.lastEventSeq}</span> : null}
@@ -373,6 +446,15 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
     label?: string;
     outcome?: "success" | "fail";
     dim?: boolean;
+    /** `loop_restart=true` — fresh-run restart edge (attractor §2.7).
+     *  Routes through the right-side loop handles + carries a
+     *  ` · loop_restart` suffix on its label. */
+    loopRestart?: boolean;
+    /** Synthetic edge from a `goal_gate=true` node to its §3.4 retarget.
+     *  Not present in `graph.edges` — added by `toFlowGraph`. Routes
+     *  through the LEFT-side retarget handles (opposite the back-edge
+     *  side) so the two retry channels read as separate visual lanes. */
+    isRetargetEdge?: boolean;
   };
 };
 
@@ -392,7 +474,8 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  label, so the header can suppress a title that'd just duplicate
    *  the id. */
   customLabel: string | undefined;
-  /** Semantic handler type (`codergen`, `loop`, `conditional`, …). */
+  /** Semantic handler type (`codergen`, `conditional`, `wait.human`,
+   *  `parallel`, `parallel.fan_in`, `tool`, `start`, `exit`). */
   handler: string;
   /** Whether this node carries `goal_gate=true`. Drives the green
    *  left-edge strip so operators can spot validation gates even when
@@ -400,6 +483,28 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
+  /** Shared LLM session key (DOT `thread_id`). Surfaced in the body so
+   *  cluster_dev-style shared-session designs are visible at a glance. */
+  threadId: string | undefined;
+  /** Tool-node shell command (parallelogram). Truncated for display;
+   *  full text lives in the `title` tooltip and the inspector. */
+  toolCommand: string | undefined;
+  /** §3.4 retarget for `goal_gate=true` nodes. Names where REJECT
+   *  loops back to (or undefined when retargeting falls back to the
+   *  graph-level chain). */
+  retryTarget: string | undefined;
+  /** Component-node `fan_in` attr — the declared convergence target.
+   *  Per attractor §4.8 the runtime discovers fan_in via edges, but
+   *  the attr is the swarm-author convention and worth showing. */
+  fanInTarget: string | undefined;
+  /** Component-node `join_policy` (`wait_all` | `first_success`). */
+  joinPolicy: string | undefined;
+  /** parallel.fan_in nodes only — `"prompt"` when the node has a
+   *  `prompt` (LLM-rank), `"heuristic"` when it doesn't. */
+  fanInRank: "prompt" | "heuristic" | undefined;
+  /** Handler-level retry ceiling (DOT `max_retries`). Surfaced in the
+   *  body so loop-prone nodes are visible without opening the inspector. */
+  maxRetries: number | undefined;
   state: NodeState["state"] | "waiting" | null;
   lastEventSeq: number;
   hasIncoming: boolean;
@@ -482,17 +587,35 @@ export function toFlowGraph(
   const flowNodes: FlowNode[] = [...ids].map((id) => {
     const stateEntry = stateById.get(id);
     const topo: GraphNode | undefined = graph.nodes[id];
+    const handler = topo ? handlerOf(topo) : "unknown";
     const rawState: SwarmNodeData["state"] = stateEntry ? stateEntry.state : detail ? "pending" : null;
     // When the run is paused at a HITL gate, show that node as "waiting"
     // so operators can distinguish it from an actively-running node.
     const resolvedState: SwarmNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
+    const a = topo?.attrs;
     const data: SwarmNodeData = {
       nodeId: id,
-      label: topo?.attrs.label ?? id,
-      customLabel: topo?.attrs.label,
-      handler: topo ? handlerOf(topo) : "unknown",
-      goalGate: Boolean(topo?.attrs.goal_gate),
-      model: topo?.attrs.llm_model,
+      label: a?.label ?? id,
+      customLabel: a?.label,
+      handler,
+      goalGate: Boolean(a?.goal_gate),
+      model: a?.llm_model,
+      threadId: typeof a?.thread_id === "string" ? a.thread_id : undefined,
+      toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,
+      retryTarget: typeof a?.retry_target === "string" && a.retry_target !== "" ? a.retry_target : undefined,
+      // `fan_in` is in the attr-extra catch-all; cast safely.
+      fanInTarget:
+        handler === "parallel" && typeof a?.["fan_in"] === "string" && (a["fan_in"] as string) !== ""
+          ? (a["fan_in"] as string)
+          : undefined,
+      joinPolicy: handler === "parallel" && typeof a?.join_policy === "string" ? a.join_policy : undefined,
+      fanInRank:
+        handler === "parallel.fan_in"
+          ? typeof a?.prompt === "string" && a.prompt.trim() !== ""
+            ? "prompt"
+            : "heuristic"
+          : undefined,
+      maxRetries: typeof a?.max_retries === "number" ? a.max_retries : undefined,
       state: resolvedState,
       lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),
@@ -516,14 +639,32 @@ export function toFlowGraph(
     const sd = depthOf.get(e.from);
     const td = depthOf.get(e.to);
     const isBackEdge = backEdgeKeys.has(edgeKey(e.from, e.to));
+    const isSelfLoop = e.from === e.to;
     // Skip-edge: forward edge that jumps past one or more intermediate
     // layers (e.g. `verify -> done` when update_docs/commit/merge sit
     // between them). Routing these through the side handles keeps their
     // path — and their edge label — clear of the nodes in between.
-    const isSkipEdge = !isBackEdge && sd !== undefined && td !== undefined && td - sd > 1;
-    const useSideHandles = isBackEdge || isSkipEdge;
-    const label = edgeLabelOf(e);
+    const isSkipEdge = !isBackEdge && !isSelfLoop && sd !== undefined && td !== undefined && td - sd > 1;
+    const useSideHandles = isBackEdge || isSelfLoop || isSkipEdge;
+    const baseLabel = edgeLabelOf(e);
     const outcome = outcomeOf(e);
+    // `loop_restart=true` edges terminate the current run and re-launch
+    // with a fresh log directory. Routed via the loop handles + loop
+    // marker so direction reads as "cycle" not "data flow"; the label
+    // surfaces the attribute name plainly.
+    const loopRestart = e.attrs["loop_restart"] === true;
+    // Conditional retry/loop edges (back-edges or self-loops) get a
+    // ` · cap N` suffix when the target has a handler-level `max_retries`.
+    // Forward edges with `outcome=fail` aren't loops, so a cap doesn't
+    // apply — the suffix stays gated on the loop predicate.
+    const targetMax = isBackEdge || isSelfLoop ? graph.nodes[e.to]?.attrs.max_retries : undefined;
+    let label: string | undefined = baseLabel;
+    if (typeof targetMax === "number" && targetMax > 0) {
+      label = label !== undefined ? `${label} · cap ${targetMax}` : `cap ${targetMax}`;
+    }
+    if (loopRestart) {
+      label = label !== undefined ? `${label} · loop_restart` : "loop_restart";
+    }
     // Untaken edges fade. During a run, an edge is "taken" iff it appears
     // in `detail.selectedEdges`; outside a run (workflow-detail view)
     // everything renders at full opacity.
@@ -536,7 +677,7 @@ export function toFlowGraph(
         ? MARKER_SUCCESS
         : outcome === "fail"
           ? MARKER_FAIL
-          : isBackEdge
+          : isBackEdge || isSelfLoop || loopRestart
             ? MARKER_LOOP
             : taken && !isSkipEdge
               ? MARKER_ANIMATED
@@ -548,14 +689,61 @@ export function toFlowGraph(
       type: EDGE_TYPE,
       // `animated` drives the SwarmEdge variant: Animated (solid, accent)
       // for any taken forward edge — whether or not the run is still live.
-      data: { animated: !isBackEdge && !isSkipEdge && taken, isBackEdge, isSkipEdge, label, outcome, dim },
-      sourceHandle: useSideHandles ? LOOP_HANDLE_SOURCE : undefined,
-      targetHandle: useSideHandles ? LOOP_HANDLE_TARGET : undefined,
+      data: {
+        animated: !isBackEdge && !isSelfLoop && !isSkipEdge && !loopRestart && taken,
+        isBackEdge: isBackEdge || isSelfLoop || loopRestart,
+        isSkipEdge,
+        label,
+        outcome,
+        dim,
+        loopRestart,
+      },
+      sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
+      targetHandle: useSideHandles || loopRestart ? LOOP_HANDLE_TARGET : undefined,
       markerEnd: marker,
     };
   });
 
-  return { flowNodes, flowEdges };
+  // Synthetic retarget edges. Each `goal_gate=true` node has an implicit
+  // fall-back jump per attractor §3.4: gate.retry_target →
+  // gate.fallback_retry_target → graph.retry_target →
+  // graph.fallback_retry_target. The engine doesn't emit these as real
+  // edges, but the relationship is load-bearing for understanding the
+  // workflow, so we render them as dashed back-edges with a `↩ retarget`
+  // label and the §3.4 cap. `resolveRetargetChain` returns null when no
+  // target resolves — those gates can only halt, which W007 already
+  // warns about at validate-time.
+  const goalGateCap = maxGoalGateRetries(graph.attrs);
+  const synthEdges: FlowEdge[] = [];
+  for (const node of Object.values(graph.nodes)) {
+    if (node.attrs.goal_gate !== true) continue;
+    const target = resolveRetargetChain(graph, node.id);
+    if (target === null || target === node.id) continue;
+    const capLabel = `↩ retarget · cap ${goalGateCap}${
+      goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
+    }`;
+    synthEdges.push({
+      id: `__retarget__${node.id}->${target}`,
+      source: node.id,
+      target,
+      type: EDGE_TYPE,
+      data: {
+        animated: false,
+        isBackEdge: true,
+        isSkipEdge: false,
+        label: capLabel,
+        outcome: undefined,
+        dim: hasRun, // synthetic — never "taken", so dim during a run.
+        loopRestart: false,
+        isRetargetEdge: true,
+      },
+      sourceHandle: LOOP_HANDLE_SOURCE,
+      targetHandle: LOOP_HANDLE_TARGET,
+      markerEnd: MARKER_LOOP,
+    });
+  }
+
+  return { flowNodes, flowEdges: [...flowEdges, ...synthEdges] };
 }
 
 /** Surface DOT edge `condition` / `label` attrs as the edge's pill text.
@@ -579,4 +767,11 @@ function outcomeOf(edge: GraphEdge): "success" | "fail" | undefined {
   if (/\boutcome\s*=\s*success\b/.test(src) || /\bsuccess\b/.test(src)) return "success";
   if (/\boutcome\s*=\s*fail\b/.test(src) || /\bfail(ure)?\b/.test(src)) return "fail";
   return undefined;
+}
+
+/** Compact-display helper for long values (tool commands, prompts, …).
+ *  Keeps head + ellipsis so the start of the string remains readable. */
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).trimEnd()}…`;
 }

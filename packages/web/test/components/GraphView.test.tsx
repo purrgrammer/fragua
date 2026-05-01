@@ -281,3 +281,232 @@ describe("toFlowGraph — layout + metadata", () => {
     expect(byId.get("start")?.selected).toBe(false);
   });
 });
+
+describe("toFlowGraph — handler-specific body fields", () => {
+  it("surfaces thread_id on codergen nodes (cluster_dev shared session)", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box, thread_id="dev"]
+      start -> a
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { threadId?: string }]));
+    expect(byId.get("a")?.threadId).toBe("dev");
+    expect(byId.get("start")?.threadId).toBeUndefined();
+  });
+
+  it("surfaces tool_command (truncated) only for tool nodes", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      lint [shape=parallelogram, tool_command="bun run lint"]
+      verify [shape=parallelogram, tool_command="bun run --filter='@swarm/*' typecheck && bun run lint && bun test"]
+      start -> lint -> verify
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { toolCommand?: string; handler: string }]));
+    expect(byId.get("lint")?.toolCommand).toBe("bun run lint");
+    expect(byId.get("verify")?.toolCommand?.endsWith("…")).toBe(true);
+    expect((byId.get("verify")?.toolCommand?.length ?? 0) <= 40).toBe(true);
+    expect(byId.get("start")?.toolCommand).toBeUndefined();
+  });
+
+  it("surfaces retry_target on goal_gate nodes", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      implement [shape=box]
+      review [shape=box, goal_gate=true, retry_target="implement"]
+      done [shape=Msquare]
+      start -> implement -> review -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const review = flowNodes.find((n) => n.id === "review")?.data as {
+      retryTarget?: string;
+      goalGate: boolean;
+    };
+    expect(review.goalGate).toBe(true);
+    expect(review.retryTarget).toBe("implement");
+  });
+
+  it("surfaces fan_in target + join_policy on parallel nodes", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+      a [shape=box]
+      b [shape=box]
+      pick_best [shape=tripleoctagon]
+      done [shape=Msquare]
+      start -> explore
+      explore -> a
+      explore -> b
+      a -> pick_best
+      b -> pick_best
+      pick_best -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const explore = flowNodes.find((n) => n.id === "explore")?.data as {
+      fanInTarget?: string;
+      joinPolicy?: string;
+    };
+    expect(explore.fanInTarget).toBe("pick_best");
+    expect(explore.joinPolicy).toBe("wait_all");
+  });
+
+  it("classifies parallel.fan_in as prompt-rank vs heuristic", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      explore [shape=component, fan_in=heur, join_policy="wait_all"]
+      a [shape=box]
+      b [shape=box]
+      heur [shape=tripleoctagon]
+      llm [shape=tripleoctagon, prompt="rank these by severity"]
+      done [shape=Msquare]
+      start -> explore
+      explore -> a
+      explore -> b
+      a -> heur
+      b -> heur
+      heur -> llm
+      llm -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { fanInRank?: string }]));
+    expect(byId.get("heur")?.fanInRank).toBe("heuristic");
+    expect(byId.get("llm")?.fanInRank).toBe("prompt");
+  });
+
+  it("flags loop_restart edges with a · loop_restart label suffix and routes through loop handles", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      done [shape=Msquare]
+      start -> a -> b -> done
+      b -> a [loop_restart=true, label="reset"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const restart = flowEdges.find((e) => e.source === "b" && e.target === "a");
+    expect(restart).toBeDefined();
+    const data = restart?.data as { loopRestart?: boolean; label?: string; isBackEdge?: boolean };
+    expect(data.loopRestart).toBe(true);
+    // Label preserves the user's `label="reset"` and appends the attribute name.
+    expect(data.label).toContain("reset");
+    expect(data.label).toContain("loop_restart");
+    expect(data.isBackEdge).toBe(true);
+    expect(restart?.sourceHandle).toBe("loop-source");
+  });
+
+  it("surfaces max_retries on the node data when set", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      verify [shape=box, max_retries=3]
+      done [shape=Msquare]
+      start -> verify -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const verify = flowNodes.find((n) => n.id === "verify")?.data as { maxRetries?: number };
+    expect(verify.maxRetries).toBe(3);
+    const start = flowNodes.find((n) => n.id === "start")?.data as { maxRetries?: number };
+    expect(start.maxRetries).toBeUndefined();
+  });
+
+  it("appends `· cap N` to back-edge labels when the target has max_retries", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      plan [shape=box, max_retries=2]
+      review [shape=box]
+      done [shape=Msquare]
+      start -> plan -> review -> done
+      review -> plan [condition="outcome=fail", label="rejected"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const back = flowEdges.find((e) => e.source === "review" && e.target === "plan");
+    expect(back).toBeDefined();
+    const data = back?.data as { label?: string; isBackEdge?: boolean };
+    expect(data.isBackEdge).toBe(true);
+    // Condition is "outcome=fail" — preserved, with the cap appended.
+    expect(data.label).toContain("outcome=fail");
+    expect(data.label).toContain("· cap 2");
+  });
+
+  it("appends `· cap N` to self-loop edges (the simplest retry idiom)", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      verify [shape=box, max_retries=3]
+      done [shape=Msquare]
+      start -> verify -> done
+      verify -> verify [condition="outcome=fail"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const self = flowEdges.find((e) => e.source === "verify" && e.target === "verify");
+    expect(self).toBeDefined();
+    const data = self?.data as { label?: string; isBackEdge?: boolean };
+    expect(data.isBackEdge).toBe(true); // routed as a loop
+    expect(data.label).toContain("· cap 3");
+    // Self-loops also route through the loop handles.
+    expect(self?.sourceHandle).toBe("loop-source");
+  });
+
+  it("synthesises an `↩ retarget` edge per goal_gate node with a §3.4 chain", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      implement [shape=box]
+      review [shape=box, goal_gate=true, retry_target="implement"]
+      done [shape=Msquare]
+      start -> implement -> review -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const synth = flowEdges.find(
+      (e) => e.source === "review" && e.target === "implement" && e.id.startsWith("__retarget__"),
+    );
+    expect(synth).toBeDefined();
+    const data = synth?.data as { label?: string; isRetargetEdge?: boolean; isBackEdge?: boolean };
+    expect(data.isRetargetEdge).toBe(true);
+    expect(data.isBackEdge).toBe(true);
+    expect(data.label?.startsWith("↩ retarget")).toBe(true);
+    // Default cap is 3 when graph doesn't override.
+    expect(data.label).toContain("cap 3");
+    expect(data.label).toContain("default");
+  });
+
+  it("falls back to graph-level retry_target when the gate has none", () => {
+    const src = `digraph g {
+      graph [retry_target="plan", max_goal_gate_retries=2]
+      start [shape=Mdiamond]
+      plan [shape=box]
+      review [shape=box, goal_gate=true]
+      done [shape=Msquare]
+      start -> plan -> review -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const synth = flowEdges.find((e) => e.id.startsWith("__retarget__") && e.source === "review");
+    expect(synth?.target).toBe("plan");
+    const data = synth?.data as { label?: string };
+    // Custom cap surfaces (no "(default)" tag).
+    expect(data.label).toContain("cap 2");
+    expect(data.label).not.toContain("default");
+  });
+
+  it("emits no synthetic edge when no retarget resolves anywhere in the chain", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      review [shape=box, goal_gate=true]
+      done [shape=Msquare]
+      start -> review -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const synth = flowEdges.find((e) => e.id.startsWith("__retarget__"));
+    expect(synth).toBeUndefined();
+  });
+});
