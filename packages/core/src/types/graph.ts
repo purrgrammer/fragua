@@ -83,8 +83,10 @@ export interface NodeAttrs {
   fallback_retry_target?: string;
   auto_status?: boolean;
   allow_partial?: boolean;
-  /** Parallel-node config (component shape). */
-  fan_in?: string;
+  /** Parallel-node config (component shape). Per attractor §4.8 the
+   * fan-in target is discovered structurally via edges (the converging
+   * tripleoctagon), not declared as an attribute — see
+   * `engine/parallel-discovery.ts`. */
   join_policy?: "wait_all" | "first_success";
   /** Tool-node config (parallelogram shape). Shell command executed by
    * the tool handler. Substitution is applied: $ARGUMENTS,

@@ -89,13 +89,10 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Parallel */}
-      {(attrs.fan_in !== undefined || attrs.join_policy !== undefined) && (
+      {/* Parallel — fan-in target is discovered via edges (attractor §4.8). */}
+      {attrs.join_policy !== undefined && (
         <Section title="parallel">
-          {attrs.fan_in && <Field label="fan-in" value={<code className="text-sw-text">{attrs.fan_in}</code>} />}
-          {attrs.join_policy && (
-            <Field label="join policy" value={<code className="text-sw-text">{attrs.join_policy}</code>} />
-          )}
+          <Field label="join policy" value={<code className="text-sw-text">{attrs.join_policy}</code>} />
         </Section>
       )}
 

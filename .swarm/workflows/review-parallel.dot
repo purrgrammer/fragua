@@ -32,7 +32,7 @@ digraph review_parallel {
     model = "claude-opus-4-7"
   ]
 
-  explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+  explore [shape=component, join_policy="wait_all"]
 
   approach_correctness [
     prompt = "Using $plan.output, run `git diff HEAD` and list up to 3 CORRECTNESS risks (logic bugs, off-by-one, missing null checks), one per line: `RISK: <one line> (file:line)`. No risks → `NO_RISKS`. Read-only."

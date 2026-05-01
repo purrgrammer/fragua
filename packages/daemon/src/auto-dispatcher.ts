@@ -9,8 +9,14 @@
 // `resolveChild` closures read from the specs map, and `fan_in` specs
 // that point at their paired parallel node.
 
-import type { Node, NodeAttrs } from "@swarm/core";
-import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
+import type { DiscoveryResult, Node, NodeAttrs } from "@swarm/core";
+import {
+  discoverFanInTarget,
+  findParallelParent,
+  InvalidDurationError,
+  parseDotSource,
+  parseDurationMs,
+} from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -117,32 +123,33 @@ function specsForGraph(
     );
   }
 
-  // Pass 2: parallel + fan_in, which need cross-node references.
+  // Pass 2: parallel + fan_in, which need cross-node references. Per
+  // attractor §4.8, branches are sub-executions that terminate at a
+  // converging `tripleoctagon` — discovered structurally via edges, not
+  // via a swarm-only `fan_in` attribute (dropped in PR P).
   for (const node of Object.values(graph.nodes)) {
     const kind = handlerKindOf(node.attrs);
     if (kind === "parallel") {
-      const children = outgoing.get(node.id)?.map((e) => e.to) ?? [];
-      const fanInId = typeof node.attrs.fan_in === "string" ? node.attrs.fan_in : "";
-      if (fanInId.length === 0 || children.length === 0) {
+      const discovery = discoverFanInTarget(graph, node.id);
+      if (discovery.kind !== "ok") {
         // Validator flags these at authoring; at runtime we halt with a
         // clear message rather than silently no-op into a bad state.
-        specs.set(node.id, malformedParallelSpec(node.id));
+        specs.set(node.id, malformedParallelSpec(node.id, describeDiscoveryFailure(discovery)));
         continue;
       }
       const joinPolicy = node.attrs.join_policy === "first_success" ? "first_success" : "wait_all";
       specs.set(
         node.id,
         handler.makeParallelHandler({
-          children,
-          fanInNode: fanInId,
+          children: discovery.branches,
+          fanInNode: discovery.fanInNode,
           joinPolicy,
           resolveChild: (childId) => specs.get(childId) ?? null,
           buildChildContext: (childId, parentCtx) => buildBranchContext(childId, parentCtx),
         }),
       );
     } else if (kind === "parallel.fan_in") {
-      // Find the parallel node whose fan_in attr points here.
-      const parallelNodeId = findParallelParent(graph.nodes, node.id);
+      const parallelNodeId = findParallelParent(graph, node.id);
       if (parallelNodeId == null) {
         specs.set(node.id, malformedFanInSpec(node.id));
         continue;
@@ -152,6 +159,14 @@ function specsForGraph(
   }
 
   return specs;
+}
+
+function describeDiscoveryFailure(d: DiscoveryResult): string {
+  if (d.kind === "no-branches") return "has no outgoing branches";
+  if (d.kind === "no-fan-in") return "no tripleoctagon (parallel.fan_in) reachable from any branch";
+  if (d.kind === "ambiguous-fan-in") return `multiple tripleoctagons reachable: ${d.candidates.join(", ")}`;
+  if (d.kind === "branches-diverge") return "branches converge on different tripleoctagons";
+  return "unknown discovery failure";
 }
 
 function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
@@ -188,15 +203,7 @@ function buildBranchContext(childId: string, parent: HandlerContext): HandlerCon
   };
 }
 
-function findParallelParent(nodes: Record<string, Node>, fanInNodeId: string): string | null {
-  for (const node of Object.values(nodes)) {
-    if (node.attrs.shape !== "component") continue;
-    if (node.attrs.fan_in === fanInNodeId) return node.id;
-  }
-  return null;
-}
-
-function malformedParallelSpec(nodeId: string): HandlerSpec {
+function malformedParallelSpec(nodeId: string, reason = "missing branches or fan-in"): HandlerSpec {
   return {
     kind: "parallel",
     sideEffect: "none",
@@ -204,7 +211,7 @@ function malformedParallelSpec(nodeId: string): HandlerSpec {
     handler: async () => ({
       kind: "halt",
       reason: "error",
-      detail: `parallel node "${nodeId}" missing fan_in attr or has no branches`,
+      detail: `parallel node "${nodeId}": ${reason}`,
     }),
   };
 }

@@ -4,6 +4,7 @@
 import { parseAcceleratorKey } from "../accelerator.ts";
 import type { Edge, Graph } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
+import { discoverFanInTarget } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
@@ -263,7 +264,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // E007: parallel node (component) must have a valid fan_in (explicit or inferable)
+  // E007: parallel node (component) must have branches that converge on
+  // a single tripleoctagon (parallel.fan_in). Per attractor §4.8 the
+  // fan-in target is discovered structurally via edges, not declared.
   for (const n of nodes) {
     if (n.shape !== "component") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
@@ -277,26 +280,31 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       });
       continue;
     }
-    const fanInAttr = n.attrs.fan_in;
-    if (typeof fanInAttr === "string") {
-      const fi = graph.nodes[fanInAttr];
-      if (!fi) {
-        diags.push({
-          severity: "error",
-          code: "E007",
-          message: `parallel "${n.id}" fan_in="${fanInAttr}" not found`,
-          nodeId: n.id,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      } else if (fi.shape !== "tripleoctagon") {
-        diags.push({
-          severity: "error",
-          code: "E007",
-          message: `parallel "${n.id}" fan_in="${fanInAttr}" must be tripleoctagon (got ${fi.shape})`,
-          nodeId: n.id,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      }
+    const discovery = discoverFanInTarget(graph, n.id);
+    if (discovery.kind === "no-fan-in") {
+      diags.push({
+        severity: "error",
+        code: "E007",
+        message: `parallel "${n.id}" has no reachable tripleoctagon (parallel.fan_in) from any branch`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    } else if (discovery.kind === "ambiguous-fan-in") {
+      diags.push({
+        severity: "error",
+        code: "E007",
+        message: `parallel "${n.id}" has multiple tripleoctagons reachable from all branches: ${discovery.candidates.join(", ")} (must be exactly one)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    } else if (discovery.kind === "branches-diverge") {
+      diags.push({
+        severity: "error",
+        code: "E007",
+        message: `parallel "${n.id}" branches converge on different tripleoctagons; ensure all branches reach the same fan-in node`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
     }
   }
 
