@@ -9,7 +9,7 @@ import { NodeInspector } from "../../src/components/NodeInspector.tsx";
 import { useDom } from "../setup.ts";
 
 const DOT_SOURCE = `digraph demo {
-  a [shape=box, label="Planner", model="opus-4", prompt="plan the work"]
+  a [shape=box, label="Planner", llm_model="opus-4", prompt="plan the work"]
   b [shape=hexagon, label="Review", prompt="human approval"]
   c [shape=box, label="Coder", allowed_tools="shell,ast_search", system_prompt="strict"]
   a -> b

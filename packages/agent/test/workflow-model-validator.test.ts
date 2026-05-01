@@ -22,7 +22,7 @@ describe("validateWorkflowModels", () => {
     // Anthropic direct uses hyphen IDs; OpenRouter uses dotted IDs.
     const dotAnthropic = `digraph {
       start [shape=Mdiamond];
-      impl  [shape=box, model="claude-sonnet-4-6", provider="anthropic"];
+      impl  [shape=box, llm_model="claude-sonnet-4-6", llm_provider="anthropic"];
       done  [shape=Msquare];
       start -> impl;
       impl -> done;
@@ -31,7 +31,7 @@ describe("validateWorkflowModels", () => {
 
     const dotOpenRouter = `digraph {
       start [shape=Mdiamond];
-      impl  [shape=box, model="anthropic/claude-sonnet-4.6", provider="openrouter"];
+      impl  [shape=box, llm_model="anthropic/claude-sonnet-4.6", llm_provider="openrouter"];
       done  [shape=Msquare];
       start -> impl;
       impl -> done;
@@ -40,12 +40,12 @@ describe("validateWorkflowModels", () => {
   });
 
   test("rejects a hyphen-form OpenRouter model id (the build-feature.dot bug)", () => {
-    // Reproduces 01kppc3ekjk91fr3jd: `provider="openrouter"` + hyphen
+    // Reproduces 01kppc3ekjk91fr3jd: `llm_provider="openrouter"` + hyphen
     // form resolves to a missing pi-ai entry. A workflow that declares
     // this should fail to register.
     const dot = `digraph {
       start [shape=Mdiamond];
-      impl  [shape=box, model="claude-sonnet-4-6", provider="openrouter"];
+      impl  [shape=box, llm_model="claude-sonnet-4-6", llm_provider="openrouter"];
       done  [shape=Msquare];
       start -> impl;
       impl -> done;
@@ -64,7 +64,7 @@ describe("validateWorkflowModels", () => {
   test("lenient: model without provider accepted when any known provider resolves it", () => {
     const dot = `digraph {
       start [shape=Mdiamond];
-      impl  [shape=box, model="claude-sonnet-4-6"];
+      impl  [shape=box, llm_model="claude-sonnet-4-6"];
       done  [shape=Msquare];
       start -> impl;
       impl -> done;
@@ -81,7 +81,7 @@ describe("validateWorkflowModels", () => {
   test("rejects a model that no known provider recognises", () => {
     const dot = `digraph {
       start [shape=Mdiamond];
-      impl  [shape=box, model="claude-zapp-brannigan-v9"];
+      impl  [shape=box, llm_model="claude-zapp-brannigan-v9"];
       done  [shape=Msquare];
       start -> impl;
       impl -> done;
@@ -99,8 +99,8 @@ describe("validateWorkflowModels", () => {
   test("rejects multiple offenders per workflow", () => {
     const dot = `digraph {
       start  [shape=Mdiamond];
-      impl   [shape=box, model="claude-sonnet-4-6", provider="openrouter"];
-      verify [shape=box, model="claude-zapp-brannigan-v9"];
+      impl   [shape=box, llm_model="claude-sonnet-4-6", llm_provider="openrouter"];
+      verify [shape=box, llm_model="claude-zapp-brannigan-v9"];
       done   [shape=Msquare];
       start -> impl;
       impl -> verify;
@@ -120,8 +120,8 @@ describe("validateWorkflowModels", () => {
     // parser scrubs them, and even if it didn't, we don't care — only
     // codergen nodes LLM-dispatch.
     const dot = `digraph {
-      start [shape=Mdiamond, model="claude-zapp-brannigan-v9", provider="fake"];
-      plan  [shape=box, model="claude-sonnet-4-6", provider="anthropic"];
+      start [shape=Mdiamond, llm_model="claude-zapp-brannigan-v9", llm_provider="fake"];
+      plan  [shape=box, llm_model="claude-sonnet-4-6", llm_provider="anthropic"];
       done  [shape=Msquare];
       start -> plan;
       plan -> done;
@@ -139,13 +139,13 @@ describe("validateWorkflowModels", () => {
 
   test("accepts the fixed build-feature.dot", () => {
     // Spot-check: after B in the plan, build-feature.dot uses
-    // `model="anthropic/claude-sonnet-4.6"` without a provider attr.
+    // `llm_model="anthropic/claude-sonnet-4.6"` without a provider attr.
     // OpenRouter recognises the dotted id; anthropic/direct does not
     // (it wants the hyphen form). Lenient path accepts.
     const dot = `digraph {
       start  [shape=Mdiamond];
       plan   [shape=box];
-      impl   [shape=box, model="anthropic/claude-sonnet-4.6"];
+      impl   [shape=box, llm_model="anthropic/claude-sonnet-4.6"];
       done   [shape=Msquare];
       start -> plan;
       plan -> impl;

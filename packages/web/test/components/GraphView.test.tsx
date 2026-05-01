@@ -247,7 +247,7 @@ describe("toFlowGraph — layout + metadata", () => {
   it("surfaces the model attribute in the node data", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
-      a [shape=box, model="claude-sonnet-4-5"]
+      a [shape=box, llm_model="claude-sonnet-4-5"]
       start -> a
     }`;
     const graph = parseDotSource(src);

@@ -44,8 +44,11 @@ export interface NodeAttrs {
    * still prepended. Use for reviewer / planner subagents that need a
    * different persona than the rest of the workflow. */
   system_prompt?: string;
-  model?: string;
-  provider?: string;
+  /** Provider-native LLM model id (attractor §2.6). Examples:
+   * `claude-opus-4-7`, `gpt-5.2`. */
+  llm_model?: string;
+  /** Provider key (attractor §2.6). E.g. `anthropic`, `openai`. */
+  llm_provider?: string;
   fidelity?: FidelityMode;
   thread_id?: string;
   goal_gate?: boolean;

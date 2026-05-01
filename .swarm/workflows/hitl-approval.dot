@@ -17,10 +17,10 @@ digraph hitl_approval {
   start [shape=Mdiamond]
 
   draft [
-    prompt = "Draft the artifact: $ARGUMENTS. If the reviewer left a note, address it: \"${context.human.gate.note}\". Under 200 words. End with `<promise>DRAFT_READY</promise>`."
+    prompt = "Draft the artifact: $ARGUMENTS. Under 200 words. End with `<promise>DRAFT_READY</promise>`."
     allowed_tools = "read, write, edit, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   review [
@@ -36,8 +36,8 @@ digraph hitl_approval {
   publish [
     prompt = "Publish the approved artifact. End with `PUBLISHED: <ref>`."
     allowed_tools = "read, write, edit, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]

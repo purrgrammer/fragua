@@ -365,7 +365,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             },
           },
         ];
-        const ok = await tryAppendFact(opts.store, runId, state.version, startFacts);
+        // Seed graph-level routing keys at run start so $goal substitution
+        // and `${context.graph.goal}` references resolve from turn 1
+        // onward (attractor §4.5 / §5.1). Closes the silent bug where
+        // the agent reads routing["graph.goal"] but nothing wrote it.
+        const startGraph = graphFor(state.workflowSha);
+        const startRoutingPatch: Record<string, unknown> = {};
+        if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
+          startRoutingPatch["graph.goal"] = startGraph.attrs.goal;
+        }
+        if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
+          startRoutingPatch["graph.label"] = startGraph.attrs.label;
+        }
+        const ok = await tryAppendFact(
+          opts.store,
+          runId,
+          state.version,
+          startFacts,
+          Object.keys(startRoutingPatch).length > 0 ? { routingPatch: startRoutingPatch } : undefined,
+        );
         if (!ok) continue; // OCC retry
         if (opts.autoTitler) {
           const input = routingString(state.routing, "input") ?? "";

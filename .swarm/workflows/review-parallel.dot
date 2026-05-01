@@ -28,8 +28,8 @@ digraph review_parallel {
   plan [
     prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY. End with `<promise>BRIEF_READY</promise>`."
     allowed_tools = "read, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   explore [shape=component, join_policy="wait_all"]
@@ -37,22 +37,22 @@ digraph review_parallel {
   approach_correctness [
     prompt = "Using $plan.output, run `git diff HEAD` and list up to 3 CORRECTNESS risks (logic bugs, off-by-one, missing null checks), one per line: `RISK: <one line> (file:line)`. No risks → `NO_RISKS`. Read-only."
     allowed_tools = "read, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   approach_style [
     prompt = "Using $plan.output, run `git diff HEAD` and list STYLE/consistency regressions: `STYLE: <one line> (file:line)`. None → `NO_FINDINGS`. Read-only."
     allowed_tools = "read, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   approach_security [
     prompt = "Using $plan.output, run `git diff HEAD` and list SECURITY concerns (unvalidated input, secret leaks, auth bypass, injection): `SEC: <one line> (file:line)`. None → `NO_CONCERNS`. Read-only."
     allowed_tools = "read, bash"
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   pick_best [shape=tripleoctagon]
@@ -68,8 +68,8 @@ digraph review_parallel {
 
   summarize [
     prompt = "Combine $pick_best.output and $run_tests.output into a 5-line run summary. End with `REVIEW_DONE`."
-    provider = "anthropic"
-    model = "claude-opus-4-7"
+    llm_provider = "anthropic"
+    llm_model = "claude-opus-4-7"
   ]
 
   done [shape=Msquare]

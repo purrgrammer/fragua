@@ -46,7 +46,7 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
       return { kind: "yield_hitl", label, options } satisfies HandlerResult;
     }
 
-    const { selected, note } = normaliseHitlInput(ctx.hitlInput);
+    const { selected } = normaliseHitlInput(ctx.hitlInput);
     const chosen = options.find((o) => o.key.toUpperCase() === selected.toUpperCase());
     if (chosen === undefined) {
       const valid = options.map((o) => o.key).join(", ");
@@ -57,11 +57,16 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
+    // Per attractor §4.6 the wait.human handler writes only
+    // `human.gate.selected` and `human.gate.label`. The optional `note`
+    // field on intent.hitl_input is recorded in the event payload for
+    // audit but is no longer mirrored into routing — operators who need
+    // free-text input on a running thread should use intent.steer
+    // (a swarm extension that fills that gap; see docs/SPEC.md §6.4).
     const routingDelta: Record<string, unknown> = {
       "human.gate.selected": chosen.key,
       "human.gate.label": chosen.label,
     };
-    if (note !== undefined) routingDelta["human.gate.note"] = note;
     if (inputKey !== undefined) routingDelta[inputKey] = chosen.key;
 
     return {

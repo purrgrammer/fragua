@@ -101,22 +101,19 @@ describe("wait.human handler", () => {
     }
   });
 
-  test("note propagates into human.gate.note when present", async () => {
+  test("note is NOT mirrored into routing — attractor §4.6 keys are selected + label only", async () => {
+    // Per attractor §4.6 the wait.human handler writes only
+    // `human.gate.selected` and `human.gate.label`. Free-text notes on
+    // intent.hitl_input land in the event log for audit but never
+    // reach downstream prompts via routing. Operators who need free
+    // text on a running thread use intent.steer (swarm extension).
     const spec = makeWaitHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "looks good" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.routingDelta?.["human.gate.note"]).toBe("looks good");
-      expect(result.routingDelta?.["human.gate.label"]).toBe("[A] Approve");
-    }
-  });
-
-  test("empty-string note is treated as absent (no human.gate.note key)", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "" } }));
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
       expect(result.routingDelta).not.toHaveProperty("human.gate.note");
+      expect(result.routingDelta?.["human.gate.label"]).toBe("[A] Approve");
+      expect(result.routingDelta?.["human.gate.selected"]).toBe("A");
     }
   });
 

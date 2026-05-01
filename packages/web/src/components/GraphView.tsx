@@ -492,7 +492,7 @@ export function toFlowGraph(
       customLabel: topo?.attrs.label,
       handler: topo ? handlerOf(topo) : "unknown",
       goalGate: Boolean(topo?.attrs.goal_gate),
-      model: topo?.attrs.model,
+      model: topo?.attrs.llm_model,
       state: resolvedState,
       lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),

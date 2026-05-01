@@ -5,6 +5,7 @@
 //   $<nodeId>.output.<path>   — traverse structured node output (JSON path)
 //   $<nodeId>.output          — raw node stdout/response
 //   $ARGUMENTS                — the run's input string (CLI positional / API body)
+//   $goal                     — the graph's `goal` attribute (attractor §9.2)
 //
 // Shell-safe mode wraps every substituted value in single quotes, escaping
 // embedded quotes per POSIX (close quote, escaped quote, reopen).
@@ -71,6 +72,11 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
     const v = args[key];
     out = replaceBoundary(out, tok, fmt(v ?? ""));
   }
+
+  // $goal — pulled from routing-mirrored `graph.goal`. Per attractor
+  // §9.2 this is the canonical workflow-goal substitution.
+  const goal = context["graph.goal"];
+  out = replaceBoundary(out, "$goal", fmt(toStr(goal)));
 
   return out;
 }

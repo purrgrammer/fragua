@@ -77,10 +77,12 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
       </Section>
 
       {/* Model & context */}
-      {(attrs.model || attrs.provider || attrs.context || attrs.fidelity || attrs.reasoning_effort) && (
+      {(attrs.llm_model || attrs.llm_provider || attrs.context || attrs.fidelity || attrs.reasoning_effort) && (
         <Section title="model & context">
-          {attrs.model && <Field label="model" value={<code className="text-sw-text">{attrs.model}</code>} />}
-          {attrs.provider && <Field label="provider" value={<code className="text-sw-text">{attrs.provider}</code>} />}
+          {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
+          {attrs.llm_provider && (
+            <Field label="provider" value={<code className="text-sw-text">{attrs.llm_provider}</code>} />
+          )}
           {attrs.context && <Field label="context" value={<code className="text-sw-text">{attrs.context}</code>} />}
           {attrs.fidelity && <Field label="fidelity" value={<code className="text-sw-text">{attrs.fidelity}</code>} />}
           {attrs.reasoning_effort && (
