@@ -5,7 +5,7 @@
 //          value := STRING | NUMBER | IDENT | "true" | "false" | "null"
 // See docs/SPEC.md §3.8.
 
-export type ConditionAst = AndNode | ComparisonNode;
+export type ConditionAst = AndNode | ComparisonNode | TruthyNode;
 
 export interface AndNode {
   kind: "and";
@@ -18,6 +18,14 @@ export interface ComparisonNode {
   path: string[];
   op: "=" | "!=";
   value: ConditionValue;
+}
+
+/** Bare-key truthiness clause (attractor §10.5 "Unqualified keys evaluate
+ * against context"). Resolves the path; truthy iff the resolved value is a
+ * non-empty string, a non-zero number, true, or a non-empty array/object. */
+export interface TruthyNode {
+  kind: "truthy";
+  path: string[];
 }
 
 export type ConditionValue = string | number | boolean | null;

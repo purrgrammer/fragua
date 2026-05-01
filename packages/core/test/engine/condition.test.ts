@@ -58,8 +58,10 @@ describe("parseCondition", () => {
     expect(() => parseCondition("outcome=success garbage")).toThrow(ConditionParseError);
   });
 
-  test("missing operator throws", () => {
-    expect(() => parseCondition("outcome")).toThrow(ConditionParseError);
+  test("bare key without operator → truthy clause (attractor §10.5)", () => {
+    const ast = parseCondition("context.flag");
+    expect(ast.kind).toBe("truthy");
+    if (ast.kind === "truthy") expect(ast.path).toEqual(["context", "flag"]);
   });
 
   test("missing value throws", () => {
@@ -148,10 +150,47 @@ describe("evaluateCondition", () => {
     expect(evaluateCondition(parseCondition("context.count=5"), env2)).toBe(true);
   });
 
-  test("missing key compares only equal to null", () => {
-    expect(evaluateCondition(parseCondition("context.missing=null"), env)).toBe(true);
-    expect(evaluateCondition(parseCondition("context.missing=foo"), env)).toBe(false);
-    expect(evaluateCondition(parseCondition("context.missing!=foo"), env)).toBe(true);
+  test("missing key compares as empty string (attractor §10.4)", () => {
+    // Per spec: missing context keys evaluate as empty string in `=` checks.
+    expect(evaluateCondition(parseCondition(`context.missing=""`), env)).toBe(true);
+    expect(evaluateCondition(parseCondition(`context.missing="foo"`), env)).toBe(false);
+    expect(evaluateCondition(parseCondition(`context.missing!="foo"`), env)).toBe(true);
+    // null is no longer special — empty string ≠ null.
+    expect(evaluateCondition(parseCondition("context.missing=null"), env)).toBe(false);
+  });
+
+  test("preferred_label as recognised top-level key (attractor §10.4)", () => {
+    const env2 = {
+      outcome: "success",
+      context: {} as Record<string, never>,
+      preferred_label: "approved",
+    };
+    expect(evaluateCondition(parseCondition("preferred_label=approved"), env2)).toBe(true);
+    expect(evaluateCondition(parseCondition("preferred_label=rejected"), env2)).toBe(false);
+  });
+
+  test("preferred_label defaults to empty string when env omits it", () => {
+    const env2 = { outcome: "success", context: {} as Record<string, never> };
+    expect(evaluateCondition(parseCondition(`preferred_label=""`), env2)).toBe(true);
+  });
+
+  test("bare-key truthiness — unqualified key reads from context (§10.5)", () => {
+    const env2 = {
+      outcome: "ok",
+      context: { feature_flag: true, empty_flag: "", missing_flag: undefined as never },
+    };
+    expect(evaluateCondition(parseCondition("feature_flag"), env2)).toBe(true);
+    expect(evaluateCondition(parseCondition("empty_flag"), env2)).toBe(false);
+    expect(evaluateCondition(parseCondition("missing_flag"), env2)).toBe(false);
+  });
+
+  test("bare-key truthiness — context.<path> form also accepted", () => {
+    const env2 = {
+      outcome: "ok",
+      context: { ready: 1, not_ready: 0 },
+    };
+    expect(evaluateCondition(parseCondition("context.ready"), env2)).toBe(true);
+    expect(evaluateCondition(parseCondition("context.not_ready"), env2)).toBe(false);
   });
 
   test("quoted value compare", () => {

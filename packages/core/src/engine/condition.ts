@@ -22,6 +22,7 @@ import {
   type ConditionAst,
   ConditionParseError,
   type ConditionValue,
+  type TruthyNode,
 } from "../types/condition.ts";
 import type { ContextValue } from "../types/outcome.ts";
 
@@ -139,17 +140,22 @@ function parseValue(st: LexerState): ConditionValue {
   return ident; // bareword compared as string
 }
 
-function parseTerm(st: LexerState): ComparisonNode {
+function parseTerm(st: LexerState): ComparisonNode | TruthyNode {
   skipSpace(st);
   const path = parsePath(st);
   skipSpace(st);
-  let op: "=" | "!=";
-  if (consumeLiteral(st, "!=")) op = "!=";
-  else if (consumeLiteral(st, "=")) op = "=";
-  else throw new ConditionParseError("expected `=` or `!=`", st.i, st.input);
-  skipSpace(st);
-  const value = parseValue(st);
-  return { kind: "cmp", path, op, value };
+  if (consumeLiteral(st, "!=")) {
+    skipSpace(st);
+    const value = parseValue(st);
+    return { kind: "cmp", path, op: "!=", value };
+  }
+  if (consumeLiteral(st, "=")) {
+    skipSpace(st);
+    const value = parseValue(st);
+    return { kind: "cmp", path, op: "=", value };
+  }
+  // Bare-key truthiness (attractor §10.5).
+  return { kind: "truthy", path };
 }
 
 function parseExpr(st: LexerState): ConditionAst {
@@ -178,9 +184,20 @@ export function parseCondition(source: string): ConditionAst {
 export interface ConditionEnv {
   outcome: string;
   context: Record<string, ContextValue>;
+  /** Outcome's preferred_label (attractor §10.4 — recognised top-level
+   * key alongside `outcome` and `context.<path>`). Optional; absent
+   * defaults to the empty string. */
+  preferred_label?: string;
 }
 
-/** Resolve a path against the environment. Returns `undefined` if missing. */
+/** Resolve a path against the environment. Returns `undefined` if missing.
+ * Recognised top-level keys (attractor §10.4):
+ *   - `outcome`         → env.outcome
+ *   - `preferred_label` → env.preferred_label ?? ""
+ *   - `context.<path>`  → env.context["<path>"]
+ *   - bare unqualified  → env.context[<path>] (per §10.5 "Unqualified keys
+ *                          evaluate against context")
+ */
 export function resolvePath(path: string[], env: ConditionEnv): ContextValue | undefined {
   const [first, ...rest] = path;
   if (first === undefined) return undefined;
@@ -188,17 +205,29 @@ export function resolvePath(path: string[], env: ConditionEnv): ContextValue | u
     if (rest.length === 0) return env.outcome;
     return undefined; // outcome is a flat string, no sub-paths
   }
+  if (first === "preferred_label") {
+    if (rest.length === 0) return env.preferred_label ?? "";
+    return undefined;
+  }
   if (first === "context") {
     const key = rest.join(".");
     if (key === "") return undefined;
     const v = env.context[key];
     return v === undefined ? undefined : (v as ContextValue);
   }
-  return undefined;
+  // Unqualified key — treat as context lookup per §10.5.
+  const key = path.join(".");
+  const v = env.context[key];
+  return v === undefined ? undefined : (v as ContextValue);
 }
 
 function equals(a: ContextValue | undefined, b: ConditionValue): boolean {
-  if (a === undefined) return b === null; // undefined == null comparison: only matches when rhs is null
+  // Missing key compares as empty string per attractor §10.4–§10.5.
+  if (a === undefined) {
+    if (b === null) return false;
+    if (typeof b === "string") return b === "";
+    return false;
+  }
   if (b === null) return a === null;
   if (typeof a === "boolean" || typeof b === "boolean") {
     // coerce strings "true"/"false" to booleans when compared to a boolean
@@ -219,9 +248,22 @@ function equals(a: ContextValue | undefined, b: ConditionValue): boolean {
   return a === b;
 }
 
+/** Truthiness check for bare-key clauses (attractor §10.5). */
+function isTruthy(v: ContextValue | undefined): boolean {
+  if (v === undefined || v === null) return false;
+  if (typeof v === "string") return v !== "";
+  if (typeof v === "number") return v !== 0 && !Number.isNaN(v);
+  if (typeof v === "boolean") return v;
+  if (Array.isArray(v)) return v.length > 0;
+  return Object.keys(v).length > 0;
+}
+
 export function evaluateCondition(ast: ConditionAst, env: ConditionEnv): boolean {
   if (ast.kind === "and") {
     return evaluateCondition(ast.left, env) && evaluateCondition(ast.right, env);
+  }
+  if (ast.kind === "truthy") {
+    return isTruthy(resolvePath(ast.path, env));
   }
   const lhs = resolvePath(ast.path, env);
   const eq = equals(lhs, ast.value);
