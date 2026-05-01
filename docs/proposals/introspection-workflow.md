@@ -13,17 +13,21 @@ last-reviewed: 2026-05-01
 > periodically (weekly, or before releases) to catch the kind of drift
 > the 2026-05-01 review session uncovered manually.
 >
-> **Landed:** the primitive enumeration tools the workflow needs —
-> `find` (`packages/workspace/src/find.ts`), `grep`
-> (`packages/workspace/src/grep.ts`), and `ls`
-> (`packages/workspace/src/ls.ts`) — so future node prompts won't have
-> to fall through `bash` for filesystem walks.
+> **Landed:**
+> - `.swarm/workflows/introspect.dot` — the four-node workflow ships,
+>   validates, and has run end-to-end multiple times. `bun run swarm
+>   run introspect` produces a synthesised review at $3–6/run.
+> - The primitive enumeration tools the workflow uses —
+>   `find` (`packages/workspace/src/find.ts`), `grep`
+>   (`packages/workspace/src/grep.ts`), and `ls`
+>   (`packages/workspace/src/ls.ts`) — so node prompts no longer have
+>   to fall through `bash` for filesystem walks.
 >
-> **Outstanding:** authoring `.swarm/workflows/introspect.dot` itself
-> (the four-node shape in [Shape](#shape) below is still on paper);
-> an archival path for the synthesised review (today the proposal
-> assumes the report would live only in the run's transcript, not in
-> a stable file location).
+> **Outstanding:** archival path for the synthesised review. Today
+> the report lives only in the run's transcript and SSE feed; a
+> follow-up should route the synthesise node's output through
+> `ctx.artifacts.put(...)` keyed by date so a `.swarm/analyses/`
+> folder accumulates timestamped reviews.
 
 ## Shape
 
