@@ -2,17 +2,16 @@
 //
 // Renders a compact stack of in-flight steer messages above a standard
 // AI-Elements `PromptInput`. On submit, we POST to `/steer` via
-// `steerRun`; the server replies 202 with an `id`, which we enqueue
-// into `usePendingSteers`. That hook watches the run's event stream
-// and drops the entry the moment a matching `control.requested(steer)`
-// (or legacy `steering.injected`) event arrives — at which point the
-// conversation reducer has already rendered the steer as a user
-// message inside the active turn, so the pending row gracefully
-// dissolves into the thread.
+// `steerRun`; the server replies `{ seq }` after persisting the
+// `intent.steering_requested`. `usePendingSteers` watches the run's
+// messages array and drops the local entry the moment a user-role
+// message with the steer's text shows up — at which point the daemon
+// has folded the steer into a dispatch and the agent will see it on
+// its next turn.
 //
 // On network failure, the entry flips to `"failed"` with an error
 // message and a retry / dismiss affordance. Retry re-fires `steerRun`
-// with the same text and replaces the entry with the new id.
+// with the same text under a fresh local id.
 //
 // Styling follows the Swarm design language: no shadows / gradients,
 // hairline borders, `bg-sw-surface` for the surface, state-only accents.
@@ -20,8 +19,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { nanoid } from "nanoid";
 import { type FormEvent, useId } from "react";
-import { steerRun } from "../lib/api.ts";
-import type { ReconcileEvent } from "../lib/usePendingSteers.ts";
+import { type RunMessageRow, steerRun } from "../lib/api.ts";
 import { type PendingSteer, usePendingSteers } from "../lib/usePendingSteers.ts";
 import {
   PromptInput,
@@ -32,26 +30,18 @@ import {
 
 export interface SteerInputProps {
   runId: string;
-  /** Event stream for reconciliation. Passed through to `usePendingSteers`. */
-  events: readonly ReconcileEvent[];
+  /** Run messages array — passed through to `usePendingSteers` so a
+   * user-role message with matching text drains the local entry. */
+  messages: readonly RunMessageRow[];
 }
 
-export default function SteerInput({ runId, events }: SteerInputProps): JSX.Element {
-  const { pending, enqueue, markFailed, remove } = usePendingSteers(events);
+export default function SteerInput({ runId, messages }: SteerInputProps): JSX.Element {
+  const { pending, enqueue, markFailed, remove } = usePendingSteers(messages);
   const labelId = useId();
 
   const mutation = useMutation({
     mutationFn: async (vars: { message: string; localId: string }) => {
-      const result = await steerRun(runId, vars.message);
-      return { id: result.id, localId: vars.localId, message: vars.message };
-    },
-    onSuccess: (result, vars) => {
-      // Replace the local placeholder id with the server-issued id so
-      // the event-stream reconciliation can match by id. We do this as
-      // a drop-and-enqueue rather than an in-place rename to keep the
-      // queue's API surface small.
-      remove(vars.localId);
-      enqueue(result.id, result.message);
+      await steerRun(runId, vars.message);
     },
     onError: (err, vars) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -63,8 +53,8 @@ export default function SteerInput({ runId, events }: SteerInputProps): JSX.Elem
     const text = msg.text.trim();
     if (text === "") return;
     // Enqueue with a synthetic local id immediately so the row renders
-    // before the server responds. `onSuccess` will swap it for the
-    // server-issued id; `onError` will flip it to `"failed"`.
+    // before the server responds. `onSuccess` will attach the server's
+    // seq; `onError` will flip the entry to `"failed"`.
     const localId = `local-${nanoid(8)}`;
     enqueue(localId, text);
     mutation.mutate({ message: text, localId });

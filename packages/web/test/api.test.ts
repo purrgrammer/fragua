@@ -156,16 +156,16 @@ describe("api — URL helpers are relative and /api-prefixed", () => {
 });
 
 describe("api — control channel", () => {
-  it("steerRun POSTs to /runs/:id/steer with a message body and returns { id }", async () => {
+  it("steerRun POSTs to /runs/:id/steer with a message body and returns { seq }", async () => {
     const calls: Array<{ body?: string }> = [];
     mock = installFetchMock({
       "/api/runs/run-7/steer": ({ init }) => {
         calls.push({ body: init?.body as string });
-        return json({ id: "abc-123" }, { status: 202 });
+        return json({ seq: 42 });
       },
     });
     const res = await api.steerRun("run-7", "focus on tests");
-    expect(res).toEqual({ id: "abc-123" });
+    expect(res).toEqual({ seq: 42 });
     expect(mock.calls[0]?.method).toBe("POST");
     expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ text: "focus on tests" });
   });

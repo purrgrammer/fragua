@@ -2,7 +2,7 @@
 //
 // We mock the `steerRun` API call at the `globalThis.fetch` boundary —
 // SteerInput imports `steerRun` from `lib/api.ts`, which POSTs to
-// `/api/runs/:id/steer` and expects `{ id }` back (202).
+// `/api/runs/:id/steer` and expects `{ seq }` back.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -10,14 +10,18 @@ import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 // on a controlled textarea under happy-dom.
 import { Simulate } from "react-dom/test-utils";
 import SteerInput from "../../src/components/SteerInput.tsx";
-import type { ReconcileEvent } from "../../src/lib/usePendingSteers.ts";
+import type { RunMessageRow } from "../../src/lib/api.ts";
 import { installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
 const STEER_URL = "/api/runs/run-1/steer";
 
-function controlRequested(id: string): ReconcileEvent {
-  return { type: "control.requested", data: { id, command: "steer", payload: { message: "x" } } };
+function userMsg(ordinal: number, text: string): RunMessageRow {
+  return {
+    ordinal,
+    nodeId: null,
+    content: { role: "user", content: text, timestamp: 0 },
+  };
 }
 
 describe("SteerInput", () => {
@@ -29,12 +33,12 @@ describe("SteerInput", () => {
     const { restore } = installFetchMock({
       [STEER_URL]: ({ url, method }) => {
         calls.push({ url, method });
-        return json({ id: "req-1" }, { status: 202 });
+        return json({ seq: 7 });
       },
     });
 
     try {
-      const { getByTestId, queryByTestId } = renderWithClient(<SteerInput runId="run-1" events={[]} />);
+      const { getByTestId } = renderWithClient(<SteerInput runId="run-1" messages={[]} />);
 
       const textarea = getByTestId("steer-textarea") as HTMLTextAreaElement;
       textarea.value = "please refocus";
@@ -43,33 +47,28 @@ describe("SteerInput", () => {
       const form = getByTestId("steer-form") as HTMLFormElement;
       Simulate.submit(form);
 
-      // A pending row with the message text appears immediately (local id).
       await waitFor(() => {
         expect(getByTestId("steer-pending-list")).toBeTruthy();
       });
       expect(getByTestId("steer-pending-list").textContent).toContain("please refocus");
       expect(getByTestId("steer-pending-list").textContent?.toLowerCase()).toContain("pending");
 
-      // Wait for the mutation to resolve and the post-success row to render.
       await waitFor(() => {
-        // After success the local-id row is replaced with a server-id row.
-        expect(queryByTestId("steer-pending-req-1")).toBeTruthy();
+        expect(calls).toHaveLength(1);
       });
-
-      expect(calls).toHaveLength(1);
       expect(calls[0]?.method).toBe("POST");
     } finally {
       restore();
     }
   });
 
-  it("clears the pending row when a matching control.requested arrives", async () => {
+  it("clears the pending row when a matching user message appears in the conversation", async () => {
     const { restore } = installFetchMock({
-      [STEER_URL]: () => json({ id: "req-1" }, { status: 202 }),
+      [STEER_URL]: () => json({ seq: 7 }),
     });
 
     try {
-      const { getByTestId, queryByTestId, rerender } = renderWithClient(<SteerInput runId="run-1" events={[]} />);
+      const { getByTestId, queryByTestId, rerender } = renderWithClient(<SteerInput runId="run-1" messages={[]} />);
 
       const textarea = getByTestId("steer-textarea") as HTMLTextAreaElement;
       textarea.value = "go left";
@@ -77,13 +76,12 @@ describe("SteerInput", () => {
       Simulate.submit(getByTestId("steer-form"));
 
       await waitFor(() => {
-        expect(queryByTestId("steer-pending-req-1")).toBeTruthy();
+        expect(queryByTestId("steer-pending-list")).toBeTruthy();
       });
 
-      rerender(<SteerInput runId="run-1" events={[controlRequested("req-1")]} />);
+      rerender(<SteerInput runId="run-1" messages={[userMsg(1, "go left")]} />);
 
       await waitFor(() => {
-        expect(queryByTestId("steer-pending-req-1")).toBeNull();
         expect(queryByTestId("steer-pending-list")).toBeNull();
       });
     } finally {
@@ -97,27 +95,24 @@ describe("SteerInput", () => {
       [STEER_URL]: () => {
         callCount += 1;
         if (callCount === 1) return new Response("boom", { status: 500 });
-        return json({ id: "req-retry" }, { status: 202 });
+        return json({ seq: 9 });
       },
     });
 
     try {
-      const { getByTestId, queryByTestId } = renderWithClient(<SteerInput runId="run-1" events={[]} />);
+      const { getByTestId, queryByTestId } = renderWithClient(<SteerInput runId="run-1" messages={[]} />);
 
       const textarea = getByTestId("steer-textarea") as HTMLTextAreaElement;
       textarea.value = "retry me";
       Simulate.change(textarea);
       Simulate.submit(getByTestId("steer-form"));
 
-      // Wait for the failure to register. The failed entry is keyed on
-      // the local id, which we don't know — find it via the list text.
       await waitFor(() => {
         const list = queryByTestId("steer-pending-list");
         expect(list).toBeTruthy();
         expect(list?.textContent?.toLowerCase()).toContain("failed");
       });
 
-      // Click retry — find the retry button by text since the id is synthetic.
       const list = getByTestId("steer-pending-list");
       const retryBtn = list.querySelector('[data-testid$="-retry"]') as HTMLButtonElement | null;
       expect(retryBtn).toBeTruthy();
@@ -128,9 +123,11 @@ describe("SteerInput", () => {
       await waitFor(() => {
         expect(callCount).toBe(2);
       });
-      // After the retry resolves we should see the new server id row.
+      // The retry succeeds — the queue still has a pending row keyed on
+      // a fresh local id; it'll drain when the user message arrives.
       await waitFor(() => {
-        expect(queryByTestId("steer-pending-req-retry")).toBeTruthy();
+        const text = queryByTestId("steer-pending-list")?.textContent?.toLowerCase() ?? "";
+        expect(text).toContain("pending");
       });
     } finally {
       restore();
@@ -142,12 +139,12 @@ describe("SteerInput", () => {
     const { restore } = installFetchMock({
       [STEER_URL]: ({ url }) => {
         calls.push({ url });
-        return json({ id: "req-x" }, { status: 202 });
+        return json({ seq: 1 });
       },
     });
 
     try {
-      const { getByTestId, queryByTestId } = renderWithClient(<SteerInput runId="run-1" events={[]} />);
+      const { getByTestId, queryByTestId } = renderWithClient(<SteerInput runId="run-1" messages={[]} />);
 
       const textarea = getByTestId("steer-textarea") as HTMLTextAreaElement;
 

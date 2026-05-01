@@ -283,6 +283,9 @@ async function postJson<T>(
 const isAcceptedId = (v: unknown): v is { id: string } =>
   typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string";
 
+const isAcceptedSeq = (v: unknown): v is { seq: number } =>
+  typeof v === "object" && v !== null && typeof (v as { seq?: unknown }).seq === "number";
+
 // ── URL helpers ─────────────────────────────────────────────────────
 
 /** Loose runtime shape check for a `FeedEvent`. The full discriminated
@@ -466,8 +469,8 @@ export async function enqueueJob(input: {
   );
 }
 
-export async function steerRun(id: string, message: string): Promise<{ id: string }> {
-  return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedId);
+export async function steerRun(id: string, message: string): Promise<{ seq: number }> {
+  return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedSeq);
 }
 
 export async function submitHitlChoice(runId: string, selected: string, note?: string): Promise<{ seq: number }> {

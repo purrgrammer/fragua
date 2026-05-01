@@ -83,7 +83,6 @@ export function RunDetail(): JSX.Element {
     streaming,
     status: liveStatus,
     totalEvents,
-    controlEvents,
     liveCost,
     detailOverlay,
   } = useRunLive(id || null, {
@@ -199,7 +198,7 @@ export function RunDetail(): JSX.Element {
             </TabsContent>
           </div>
 
-          {view === "conversation" && detail?.status === "running" && <SteerInput runId={id} events={controlEvents} />}
+          {view === "conversation" && detail?.status === "running" && <SteerInput runId={id} messages={messages} />}
         </Tabs>
       )}
     </section>

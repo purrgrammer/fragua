@@ -12,7 +12,6 @@
 //
 // Side channels:
 //   - `totalEvents` — monotonic counter, cheap invalidation trigger.
-//   - `controlEvents` — filtered slice for `usePendingSteers`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRunEventsUrl, getRunMessages, type RunMessageRow } from "./api.ts";
@@ -54,9 +53,6 @@ export interface UseRunLiveResult {
    * refresh). Detail-level state is folded into `detailOverlay` and
    * doesn't need this. */
   totalEvents: number;
-  /** Filtered slice of control-channel events (steering, control) for
-   * `usePendingSteers` reconciliation. */
-  controlEvents: ReadonlyArray<{ type: string; data?: Record<string, unknown> | null }>;
   /** Running cost/token aggregate over `cost.recorded` SSE frames whose
    * seq exceeds `opts.sinceSeq` — the snapshot watermark. Frames the
    * snapshot already accounts for are filtered out automatically when
@@ -95,25 +91,10 @@ export interface UseRunLiveOptions {
  * On any of these we re-fetch `?sinceOrdinal=<last>`. */
 const MESSAGE_SIGNAL_TYPES = new Set<string>(["agent.message_end", "fact.message_appended", "fact.run_started"]);
 
-/** Bound on `controlEvents` slice — `usePendingSteers` only ever cares
- * about the most recent reconcile events; an unbounded slice on a
- * long-lived page leaks memory for no UI benefit. */
-const MAX_CONTROL_EVENTS = 100;
-
-/** Narrow reconcile predicate — only events `usePendingSteers`
- * matches on. Keeping it tight bounds `controlEvents` to O(steer
- * count) instead of O(run-event count). */
-function isControlReconcileEvent(type: string, data: Record<string, unknown> | null): boolean {
-  if (type === "steering.injected") return true;
-  if (type === "control.requested") return data?.["command"] === "steer";
-  return false;
-}
-
 export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOptions = {}): UseRunLiveResult {
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
   const [totalEvents, setTotalEvents] = useState(0);
-  const [controlEvents, setControlEvents] = useState<UseRunLiveResult["controlEvents"]>([]);
   const [liveCostFrames, setLiveCostFrames] = useState<LiveCostFrame[]>([]);
   const [detailOverlay, setDetailOverlay] = useState<DetailOverlay>(EMPTY_DETAIL_OVERLAY);
 
@@ -129,7 +110,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     setMessages([]);
     setStreaming(null);
     setTotalEvents(0);
-    setControlEvents([]);
     setLiveCostFrames([]);
     setDetailOverlay(EMPTY_DETAIL_OVERLAY);
     lastOrdinalRef.current = 0;
@@ -210,14 +190,6 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         setDetailOverlay((prev) => foldDetailFrame(prev, type, payload, idNum));
       }
 
-      if (isControlReconcileEvent(type, payload)) {
-        setControlEvents((prev) => {
-          const next = [...prev, { type, data: payload }];
-          // Cap the slice so a long-lived page doesn't grow this array
-          // forever. usePendingSteers only matches recent events.
-          return next.length > MAX_CONTROL_EVENTS ? next.slice(-MAX_CONTROL_EVENTS) : next;
-        });
-      }
       if (MESSAGE_SIGNAL_TYPES.has(type)) {
         if (refetchTimerRef.current) return;
         const id = runId;
@@ -300,7 +272,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             ? "loading"
             : sseStatus;
 
-  return { messages, streaming, status, totalEvents, controlEvents, liveCost, detailOverlay };
+  return { messages, streaming, status, totalEvents, liveCost, detailOverlay };
 }
 
 /** Delta-fold: place `delta` at `index` within the streaming buffer's
