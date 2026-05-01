@@ -54,6 +54,7 @@ delta called out in the proposal body.
 | [Doc-vs-code drift CI lint](./drift-lint.md) | specified | enforce AGENTS.md rule #1 in CI; structural compare against contract files |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [Bound the OCC retry loop](./occ-retry-ceiling.md) | specified | add a ceiling on the unbounded `if (!ok) continue` retry path in `runOneInner` |
+| [Recoverable budget pause](./recoverable-budget-pause.md) | designed | new `budget_policy="pause"` (default) + `paused_budget` status; budget overruns suspend for operator decision instead of halting. Empirical motivation: the introspect workflow ate two budget halts this session, each abandoning $0.50 of upstream work |
 
 ## Deferred
 

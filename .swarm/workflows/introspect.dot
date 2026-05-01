@@ -22,7 +22,8 @@ digraph introspect {
     goal             = "Produce an honest, evidence-based assessment of swarm's architecture, doc-implementation drift, proposal hygiene, and operational health. Surface prioritised findings."
     label            = "introspect"
     default_fidelity = "compact"
-    budget_usd       = 8.00
+    budget_usd       = 12.00
+    budget_policy    = "warn"
     model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
   ]
 
