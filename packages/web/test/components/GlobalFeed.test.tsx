@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FeedEvent } from "@swarm/types";
-import { metaForEvent } from "../../src/components/GlobalFeed.tsx";
+import { isFeedRowHidden, metaForEvent } from "../../src/components/GlobalFeed.tsx";
 
 function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
   return { runId: "r", seq: 1, type, writer: "web", payload, ts: 0 } as unknown as FeedEvent;
@@ -23,5 +23,17 @@ describe("metaForEvent", () => {
 
   test("unknown event types fall back to empty verb", () => {
     expect(metaForEvent(evt("never.heard.of.it")).verb).toBe("");
+  });
+});
+
+describe("isFeedRowHidden", () => {
+  test("hides fact.run_branched (mechanical worktree noise)", () => {
+    expect(isFeedRowHidden(evt("fact.run_branched", { branch: "swarm/runs/abc" }))).toBe(true);
+  });
+
+  test("keeps user-facing run lifecycle facts visible", () => {
+    expect(isFeedRowHidden(evt("fact.run_started"))).toBe(false);
+    expect(isFeedRowHidden(evt("fact.run_completed"))).toBe(false);
+    expect(isFeedRowHidden(evt("fact.run_paused_hitl"))).toBe(false);
   });
 });

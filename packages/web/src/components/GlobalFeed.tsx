@@ -100,6 +100,20 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
+/** Event types kept in the store + stream but suppressed from the
+ *  Activity feed. `fact.run_branched` is mechanical worktree bookkeeping
+ *  (the executor's terminal-cleanup path stamping `run_state.branch` for
+ *  later `swarm gc --branches`) — operators don't act on it, so a row
+ *  with no verb just adds noise. */
+const HIDDEN_FEED_TYPES: ReadonlySet<string> = new Set(["fact.run_branched"]);
+
+/** True for events that flow through `FEED_EVENT_KINDS` (so the server
+ *  ships them) but shouldn't render as a visible row. Exported for unit
+ *  tests; the `GlobalFeed` body filters `rows` through this. */
+export function isFeedRowHidden(event: FeedEvent): boolean {
+  return HIDDEN_FEED_TYPES.has(event.type);
+}
+
 /** Resolve the row's icon + verb. For most kinds the static
  *  {@link KIND_META} is enough; `fact.run_resumed` is payload-aware so
  *  the operator can tell at a glance what kind of pause was just lifted.
@@ -120,7 +134,9 @@ export function GlobalFeed(): JSX.Element {
   const reduce = useReducedMotion() ?? false;
 
   // Render newest-first — operators glance at the top of the list.
-  const rows = useMemo(() => events.slice().reverse(), [events]);
+  // Mechanical types (e.g. `fact.run_branched`) are kept in the atom but
+  // suppressed here so the operator-facing list stays signal-only.
+  const rows = useMemo(() => events.filter((e) => !isFeedRowHidden(e)).reverse(), [events]);
 
   return (
     <section data-testid="global-feed" aria-label="Recent activity" className="flex flex-col gap-4">
