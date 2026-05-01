@@ -7,9 +7,12 @@ import {
   CircleIcon,
   ClockIcon,
   FilePlusIcon,
+  FileSearchIcon,
   FileTextIcon,
+  FolderIcon,
   type LucideIcon,
   PencilIcon,
+  SearchIcon,
   TerminalIcon,
   WrenchIcon,
   XCircleIcon,
@@ -136,6 +139,9 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   read: { icon: FileTextIcon, label: "Read file" },
   write: { icon: FilePlusIcon, label: "Write file" },
   edit: { icon: PencilIcon, label: "Edit file" },
+  grep: { icon: SearchIcon, label: "Grep" },
+  find: { icon: FileSearchIcon, label: "Find" },
+  ls: { icon: FolderIcon, label: "List directory" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare

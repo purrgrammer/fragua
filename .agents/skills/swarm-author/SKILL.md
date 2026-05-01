@@ -324,9 +324,12 @@ allowed_tools = "read, write, edit, bash"            # implement/verify nodes
 allowed_tools = "read, bash"                          # plan/review/analysis nodes (read-only)
 allowed_tools = "read"                                # pure review, no git state reads
 allowed_tools = "write"                               # summary-only writer nodes
+allowed_tools = "read, grep, find, ls"               # survey/inventory nodes (read-only enumeration)
 ```
 
 Unconstrained tools surprise operators. Read-only planners stop the agent from editing; write-only summarisers stop them from wandering.
+
+`grep` / `find` / `ls` are native walkers — no shell spawn — so they work even when `bash` is denied. They can be slow on huge repos; pass `path=` to scope the walk.
 
 ### Keep prompts short
 

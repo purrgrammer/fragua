@@ -264,18 +264,27 @@ The agent-callable tool surface is deliberately minimal:
 | `write`| Write / overwrite a file. Atomic temp+rename via the env, serialized per-path through a mutation queue so concurrent writes can't interleave. Creates parent dirs. |
 | `edit` | Multi-edit exact-text replacement with fuzzy fallback (NFKC + smart-quote / dash / NBSP normalization). Per-edit `oldText` must be unique and non-overlapping; error messages reference `edits[i]` so the model can self-correct. `prepareArguments` recovers from JSON-stringified `edits` arrays and legacy `{oldText, newText}` flat shape. |
 | `bash` | Run a shell command. Detached process group + tree kill on timeout/abort. Rolling buffer + temp-file spill keeps the full transcript recoverable when output exceeds the truncation window — the spill path appears in the truncation notice and in `data.full_output_path`. Optional `onUpdate` streams partial output during execution. Blocklist refuses dangerous commands before spawn. |
+| `grep` | Native regex search across files via `env.glob` — no shell spawn, no `rg` dependency. Skips default-ignored directories (`node_modules/`, `.git/`, `dist/`, `build/`, `.swarm/`, `.next/`, `coverage/`, `*.pyc`, `*.min.js`), binary files (null byte in first 1KB), and files larger than 1MB. 100-match limit by default; lines longer than 500 chars are truncated. Schema: `{ pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }`. |
+| `find` | Native glob enumeration via `env.glob` — no shell spawn, no `fd` dependency. Default ignores honoured. 1000-result limit by default. Schema: `{ pattern, path?, limit? }`. |
+| `ls`   | Non-recursive directory listing via `env.listDir`. Sorted alphabetical case-insensitive; directories carry a `/` suffix; dotfiles included. 500-entry limit by default. Schema: `{ path?, limit? }`. |
 
 Tool names are bare identifiers — no `local:` prefix, no namespace.
 The `ToolRegistry` enforces `^[a-z][a-z0-9_]*$` on registration.
 
-Anything an agent used to need a dedicated tool for
-(`list_dir` / `glob` / `grep` / `git_read` / `apply_patch` /
-`web_fetch` / `subagent` / `load_skill`) now goes through `bash` (or,
-for skills, through `read` against the SKILL.md `<location>` in the
-system-prompt catalog). The four tools are deliberately powerful —
-streaming output, image content, rich diffs, fuzzy edits, atomic
-writes — so an agent never has to pick between seven tools that all
-do variants of the same thing.
+Less common operations (`git_read` / `apply_patch` / `web_fetch` /
+`subagent`) still go through `bash`; for skills, an agent reads the
+SKILL.md `<location>` directly via `read` against the system-prompt
+catalog. The seven tools are deliberately powerful — streaming output,
+image content, rich diffs, fuzzy edits, atomic writes, native walks —
+so an agent never has to pick between a dozen tools that all do
+variants of the same thing.
+
+`grep` / `find` / `ls` work *without* `bash` in the allowed_tools set
+(they don't shell out), so a survey/inventory node can declare
+`allowed_tools = "read, grep, find, ls"` and stay strictly read-only —
+the env-scoping in `packages/core/src/handler/context.ts` then wraps
+`ctx.env` so even direct `env.exec` / `env.writeFile` calls throw
+`ReadOnlyEnvError`.
 
 Narrowing per-node is a hard filter, not a convention. A node's
 `allowed_tools = "read, bash"` applies at two boundaries, both built

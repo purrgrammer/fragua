@@ -50,6 +50,9 @@ import {
   restoreLineEndings,
   stripBom,
 } from "./edit-diff.ts";
+import { findTool } from "./find.ts";
+import { grepTool } from "./grep.ts";
+import { lsTool } from "./ls.ts";
 import { detectImageMimeType, resolveReadPath, withFileMutationQueue } from "./path-utils.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateTail } from "./truncate-v2.ts";
 import type { AnyTool, Tool } from "./types.ts";
@@ -455,7 +458,7 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
   },
 };
 
-export const CORE_TOOLS: AnyTool[] = [readFileTool, writeFileTool, editFileTool, bashTool];
+export const CORE_TOOLS: AnyTool[] = [readFileTool, writeFileTool, editFileTool, bashTool, grepTool, findTool, lsTool];
 
 // ─── helpers ───────────────────────────────────────────────────────
 

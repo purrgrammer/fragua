@@ -23,7 +23,7 @@ digraph fix_bug {
 
   reproduce [
     prompt = "Bug: $ARGUMENTS.\n\nABORT (`<abort>reason</abort>`) when: empty / unclear / cannot localise to a package after a reasonable read.\n\nOtherwise: locate the affected package, write a failing test next to the source (or extend an existing one), confirm it fails. Output: (1) package+file, (2) test path + `describe`/`test` name, (3) failing assertion sentence."
-    allowed_tools = "read, write, edit, bash"
+    allowed_tools = "read, write, edit, grep, find, bash"
     thread_id     = "dev"
     goal_gate     = true
     retry_target  = "reproduce"
@@ -31,7 +31,7 @@ digraph fix_bug {
 
   fix [
     prompt = "Fix per $reproduce.output. Don't modify the reproducer unless it was wrong. After each edit, re-run the reproducer first, then the full package suite. Stay inside the bug's package."
-    allowed_tools = "read, write, edit, bash"
+    allowed_tools = "read, write, edit, grep, bash"
     thread_id     = "dev"
   ]
 

@@ -34,7 +34,7 @@ digraph showcase {
 
   plan [
     prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY. End with `<promise>BRIEF_READY</promise>`."
-    allowed_tools = "read, bash"
+    allowed_tools = "read"
   ]
 
   explore [shape=component, join_policy="wait_all"]
