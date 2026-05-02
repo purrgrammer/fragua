@@ -203,8 +203,70 @@ describe("executor — edge selection", () => {
     expect(halted).not.toBeUndefined();
     const payload = halted!.payload as { reason: string; detail?: string };
     expect(payload.reason).toBe("aborted_exit");
+    // Handler returned no failureReason — falls back to the generic detail.
+    expect(payload.detail).toBe("reached done via outcome=fail");
     // No run_completed event should have fired — the run didn't succeed.
     expect(events.some((e) => e.type === "fact.run_completed")).toBe(false);
+    r.store.close();
+  });
+
+  test("aborted_exit halt detail carries the handler's failureReason verbatim", async () => {
+    // Regression for the dropped abort-reason: when an agent emits
+    // `<abort>reason</abort>`, parseAbortMarker → outcome.failure_reason →
+    // result.failureReason → fact.run_halted.detail. Used to die at the
+    // last hop because the detail was hardcoded to "reached <node> via
+    // outcome=fail".
+    const dot = `digraph {
+      start [shape=Mdiamond];
+      check [shape=box];
+      done [shape=Msquare];
+      start -> check;
+      check -> done [condition="outcome=fail"];
+      check -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "check", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "check", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        outcomeStatus: "fail",
+        failureReason: "ABORT_NOW_PLEASE: trigger token in $ARGUMENTS",
+        tokens: 1,
+        costUsd: 0,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "halt-with-reason", "start");
+    r.store.claimNextRun(1);
+    await runOne("halt-with-reason", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+    const events = r.store.getEvents("halt-with-reason");
+    const halted = events.find((e) => e.type === "fact.run_halted");
+    expect(halted).not.toBeUndefined();
+    const payload = halted!.payload as { reason: string; detail?: string };
+    expect(payload.reason).toBe("aborted_exit");
+    expect(payload.detail).toBe("ABORT_NOW_PLEASE: trigger token in $ARGUMENTS");
     r.store.close();
   });
 

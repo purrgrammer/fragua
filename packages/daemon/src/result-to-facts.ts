@@ -82,11 +82,19 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         // handler returned outcomeStatus="fail" or the edge selector
         // picked a `condition="outcome=fail"` edge that led here) ends
         // the run in a failure state, not success. Reducer maps
-        // "halted" to the UI's "fail" status.
+        // "halted" to the UI's "fail" status. The handler's
+        // `failureReason` (e.g. the agent's `<abort>reason</abort>`)
+        // surfaces verbatim as the halt detail so post-mortem readers
+        // see *why* the run failed, not just that it routed via a
+        // fail edge.
         if (result.outcomeStatus === "fail") {
+          const detail =
+            typeof result.failureReason === "string" && result.failureReason.length > 0
+              ? result.failureReason
+              : `reached ${nextNode} via outcome=fail`;
           facts.push({
             type: "fact.run_halted",
-            payload: { reason: "aborted_exit", detail: `reached ${nextNode} via outcome=fail` },
+            payload: { reason: "aborted_exit", detail },
           });
         } else {
           facts.push({

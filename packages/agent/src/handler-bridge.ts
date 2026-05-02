@@ -200,9 +200,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // — same observable end state as before, just authored through the
     // workflow graph instead of short-circuited here.
     const routingDelta = contextUpdatesToRouting(outcome.context_updates);
-    if (outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0) {
-      routingDelta["__failure_reason"] = outcome.failure_reason;
-    }
+    const failureReason =
+      outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0
+        ? outcome.failure_reason
+        : undefined;
     // Only set `nextNode` for explicit overrides — otherwise the executor's
     // edge selector picks based on the outcome fields below. `opts.nextNode`
     // stays as a legacy-compat fallback for auto-dispatcher code paths that
@@ -232,6 +233,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(outcome.preferred_label.length > 0 ? { preferredLabel: outcome.preferred_label } : {}),
       ...(outcome.suggested_next_ids.length > 0 ? { suggestedNextIds: outcome.suggested_next_ids } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
+      ...(failureReason !== undefined ? { failureReason } : {}),
       tokens,
       costUsd,
       inputCostUsd,

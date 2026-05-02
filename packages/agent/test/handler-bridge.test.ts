@@ -157,11 +157,13 @@ describe("makeCodergenHandler", () => {
     store.close();
   });
 
-  test("backend fail → transition with outcomeStatus=fail and __failure_reason in routing", async () => {
+  test("backend fail → transition with outcomeStatus=fail and a typed failureReason", async () => {
     // Was: `fail` short-circuited to halt, blocking workflows with a
     // `condition="outcome=fail"` recovery edge (build-feature: review→fix).
     // Now: bridge returns transition; executor's edge selector routes the
-    // fail outcome (or halts if no fail-edge exists).
+    // fail outcome (or halts if no fail-edge exists). The agent's
+    // `failure_reason` rides on the transition's typed `failureReason`
+    // field, which result-to-facts surfaces as `fact.run_halted.detail`.
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
     const failing: CodergenBackend = {
@@ -185,15 +187,16 @@ describe("makeCodergenHandler", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
-      expect(result.routingDelta).toMatchObject({
-        thing: "value",
-        __failure_reason: "provider unreachable",
-      });
+      expect(result.failureReason).toBe("provider unreachable");
+      // context_updates still flow through routingDelta; failureReason no
+      // longer smuggled there.
+      expect(result.routingDelta).toMatchObject({ thing: "value" });
+      expect(result.routingDelta?.["__failure_reason"]).toBeUndefined();
     }
     store.close();
   });
 
-  test("backend fail with empty failure_reason → no __failure_reason key", async () => {
+  test("backend fail with empty failure_reason → no failureReason field", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3-empty", store, "n1");
     const failing: CodergenBackend = {
@@ -217,7 +220,7 @@ describe("makeCodergenHandler", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
-      expect(result.routingDelta?.["__failure_reason"]).toBeUndefined();
+      expect(result.failureReason).toBeUndefined();
     }
     store.close();
   });

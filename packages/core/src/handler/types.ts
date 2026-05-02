@@ -216,6 +216,13 @@ export type HandlerResult =
       suggestedNextIds?: string[];
       outputRef?: ArtifactRef;
       routingDelta?: Record<string, unknown>;
+      /** Single-line reason emitted by the handler when `outcomeStatus="fail"`.
+       * Surfaces verbatim as `fact.run_halted.detail` when the fail outcome
+       * routes to a terminal node (executor's `aborted_exit` path). Optional
+       * — handlers that fail without a quotable reason (e.g. retry-policy
+       * exhaustion) leave it unset and the executor falls back to a generic
+       * detail string. Ignored on non-fail outcomes. */
+      failureReason?: string;
       tokens: number;
       costUsd: number;
       /** USD cost split between input and output tokens. Sourced from
