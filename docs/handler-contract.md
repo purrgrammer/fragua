@@ -84,6 +84,7 @@ return {
   suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
   outputRef?: ArtifactRef,              // optional; executor records it
   routingDelta?: { key: value },        // merged into run_state.routing
+  failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
   inputCostUsd?: 0,                     // USD split (pi-ai usage.cost.input / .output); optional for back-compat
@@ -95,6 +96,8 @@ return {
   modelName?: "gemini-1.5-pro",         // for per-model rollups
 };
 ```
+
+`failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
 ### `yield_hitl`
 Handler needs a human to choose one of a structured set of options. Run transitions to `paused_hitl`, the executor frees the process. The `fact.run_paused_hitl` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
@@ -129,9 +132,12 @@ return {
   reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded",
   detail?: string,
 };
-// `abort_loop`, `schema_drift`, and `aborted_exit` are also valid `fact.run_halted` reasons,
-// but the executor emits those itself (not via a handler return).
+// `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted`, and `provider_exhausted`
+// are also valid `fact.run_halted` reasons, but the executor emits those itself
+// (not via a handler return).
 ```
+
+When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/swarm-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
 
 ### `pause_provider`
 Recoverable provider transport failure (HTTP 402/429/5xx, network reset). The executor commits `fact.run_paused_provider_error`, transitions the run to `paused_provider_error`, and frees the process. An operator `intent.resume` wakes the run and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the codergen agent boundary detects provider transport errors and returns this kind on the handler's behalf.
@@ -142,8 +148,11 @@ return {
   httpStatus: number | null,            // null on pre-response network failures
   provider: "anthropic" | "openai" | ...,
   errorMessage: string,                  // raw provider string, displayed verbatim
+  retryAfterMs?: number,                 // provider-supplied Retry-After (ms); honoured exactly when set
 };
 ```
+
+`retryAfterMs` carries the provider's `Retry-After` header (or its in-body equivalent) normalised to milliseconds. When set, the daemon's auto-retry policy honours it exactly — no jitter, no exponential cap. Absent → the daemon falls back to its own full-jitter exponential schedule. Source: `packages/core/src/handler/types.ts` (the `kind: "pause_provider"` arm).
 
 ---
 
