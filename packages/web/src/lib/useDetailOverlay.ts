@@ -62,6 +62,7 @@ export function isDetailEvent(type: string): boolean {
 
 const DETAIL_TYPES = new Set<string>([
   "fact.node_started",
+  "fact.dispatch_started",
   "fact.node_completed",
   "fact.node_aborted",
   "edge.selected",
@@ -85,6 +86,11 @@ export function foldDetailFrame(
 ): DetailOverlay {
   switch (type) {
     case "fact.node_started":
+      return setNodeState(prev, payload, "running", seq);
+    // `dispatch_started` fires on every dispatch (including resume from
+    // operator-pause). Resets the node back to running even if it was
+    // optimistically marked "failed" by a prior `node_aborted`.
+    case "fact.dispatch_started":
       return setNodeState(prev, payload, "running", seq);
     case "fact.node_completed": {
       const outcome = stringField(payload, "outcomeStatus");

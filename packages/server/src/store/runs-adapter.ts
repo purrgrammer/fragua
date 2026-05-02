@@ -147,6 +147,13 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
       case "fact.node_started":
         bump(nodeId, "running", ev.seq);
         break;
+      // `dispatch_started` fires on every dispatch including resume after
+      // an operator-pause abort. Without this case the prior `node_aborted`
+      // wins as the last-counted event and the node stays "failed" until
+      // `node_completed` finally fires — long minutes for a chatty agent.
+      case "fact.dispatch_started":
+        bump(nodeId, "running", ev.seq);
+        break;
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
         bump(nodeId, outcome === "fail" ? "failed" : "completed", ev.seq);
