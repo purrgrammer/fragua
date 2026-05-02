@@ -383,42 +383,67 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 ## 4. IEventStore interface
 
 ```typescript
-// packages/store/src/types.ts
+// packages/store/src/types.ts — abridged; daemon-events / aggregations / SSE-cursor
+// helpers omitted here for readability. Source remains the canonical contract.
 
 export interface IEventStore {
   // Writes
   appendFact(runId: string, events: FactEvent[], expectedVersion: number): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
+  appendDaemonEvent(event: DaemonEvent): { seq: number };
+  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
 
   // Run lifecycle
-  enqueueRun(params: { runId: string; workflowSha: string; priority?: number }): void;
+  enqueueRun(params: EnqueueRunParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; respects concurrency
-  startupSweep(): { requeued: string[]; quarantined: string[] };
+  startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
+  setRunTitle(runId: string, title: string): void;
 
   // State reads
   getState(runId: string): RunState | null;
-  getEvents(runId: string, sinceSeq?: number, limit?: number): StoredEvent[];
+  getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
+  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
+  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
+  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
 
   // Messages
-  appendMessage(runId: string, row: Omit<Message,'ordinal'>): { ordinal: number };
-  getMessages(runId: string, opts?: { sinceOrdinal?: number; limit?: number; nodeId?: string }): Message[];
+  appendMessage(
+    runId: string,
+    row: Omit<Message, "runId" | "ordinal">,
+    opts?: { dedup?: boolean },
+  ): { ordinal: number };
+  getMessages(runId: string, opts?: GetMessagesOpts): Message[];
+  getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
+  listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
+
+  // Aggregations
+  getStepAggregates(runId: string): StepAggregateRow[];
+  getRunCostTotals(runId: string): RunCostTotalsRow;
 
   // Artifacts
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string): ArtifactRef;
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;   // replay short-circuit
+  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
   // Daemon lock
   acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
+  forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
+  runStateCounts(): { running: number; queued: number };
 
   // Workflows
   saveWorkflow(sha: string, name: string, dotSource: string): void;
   getWorkflow(sha: string): WorkflowRow | null;
+
+  // Projects (display cache; refreshed on every enqueueRun that carries projectName)
+  listProjects(): Project[];
+  getProject(id: string): Project | null;
+  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
 
   // Maintenance
   vacuum(): void;
@@ -430,10 +455,17 @@ export type ArtifactScope = { runId: string; nodeId: string; iteration: number; 
 export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string };
 
 export class ConcurrencyError extends Error {}
+export class ArtifactCollisionError extends Error {}
 export class ArtifactTooLargeError extends Error {}
 export class SchemaDriftError extends Error {}
 export class QuarantineError extends Error {}
 ```
+
+`SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`,
+`GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`,
+`RunCostTotalsRow`, `Project`, and the global-feed cursor option types
+all live in `packages/store/src/types.ts`. The drift-lint asserts every
+method name above appears verbatim in the source interface.
 
 **Implementation notes:**
 - All methods synchronous; `bun:sqlite` is sync.
@@ -687,9 +719,17 @@ app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"))
 app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
 app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
 
-app.get("/runs/:id/events", (c) => streamSSE(c, async (stream) => {
+// JSON-batch read of a run's events; pagination via ?since / ?limit.
+app.get("/runs/:id/events", (c) => {
+  const sinceSeq = Number(c.req.query("since") ?? 0);
+  const limit = Math.min(Number(c.req.query("limit") ?? 1000), 5000);
+  return c.json(store.getEvents(c.req.param("id"), { sinceSeq, limit }));
+});
+
+// SSE stream of the same events; resumable via Last-Event-ID or ?sinceSeq.
+app.get("/runs/:id/stream", (c) => streamSSE(c, async (stream) => {
   const runId = c.req.param("id");
-  let sinceSeq = Number(c.req.header("Last-Event-ID") ?? 0);
+  let sinceSeq = parseSeqCursorMax(c.req.query("sinceSeq"), c.req.header("Last-Event-ID"));
   while (!stream.aborted) {
     const events = store.getEvents(runId, { sinceSeq, limit: 500 });
     for (const e of events) {
@@ -744,11 +784,22 @@ HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in eith
 
 | Name | Value | Enforced by |
 |---|---|---|
-| `MAX_EVENT_PAYLOAD_BYTES` | 4096 | `events.payload CHECK` |
-| `MAX_ROUTING_BYTES` | 8192 | `run_state.routing CHECK` |
-| `MAX_BLOB_BYTES` | 16 * 1024 * 1024 | Store module; throws `ArtifactTooLargeError` |
-| `MAX_MESSAGE_CONTENT_BYTES` | 1024 * 1024 | `messages.content CHECK` + store pre-check throws `MessageTooLargeError` |
+| `MAX_EVENT_PAYLOAD_BYTES` | 4096 | `events.payload CHECK (length(...) < N)` + store pre-check (`s.length >= N`) |
+| `MAX_ROUTING_BYTES` | 8192 | `run_state.routing CHECK (length(...) < N)` + store pre-check |
+| `MAX_BLOB_BYTES` | 16 * 1024 * 1024 | Store module; throws `ArtifactTooLargeError` (gated on `Uint8Array.byteLength > N`) |
+| `MAX_MESSAGE_CONTENT_BYTES` | 1024 * 1024 | `messages.content CHECK (length(...) < N)` + store pre-check throws `MessageTooLargeError` |
 | `MAX_PREVIEW_CHARS` | 512 | Handler convention |
+
+**Limit semantics:** for the four `<` CHECKs, the largest value that lands
+successfully is `N - 1`; the constant is the *first rejected size*. Pre-flight
+checks use the same `>=` shape, so JS code and SQL agree on rejection
+threshold. `MAX_BLOB_BYTES` is the only inclusive cap (`> N` rejects).
+
+**Unit caveat:** JS `string.length` is UTF-16 code units; SQLite `length()`
+on TEXT is Unicode code-point count. They agree on BMP characters and diverge
+by up to 2× on surrogate-pair-heavy content. The pre-flight check is the
+binding constraint in practice — it runs first and is stricter for non-BMP
+content. `MAX_BLOB_BYTES` is the only honest-bytes constant.
 | `MAX_CONCURRENT_RUNS` | 8 (configurable) | `claimNextRun` |
 | `LOCK_TTL_MS` | 30000 | Daemon lock reclaim |
 | `HEARTBEAT_INTERVAL_MS` | 5000 | Supervisor fiber |

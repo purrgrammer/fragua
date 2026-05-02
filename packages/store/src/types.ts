@@ -363,6 +363,18 @@ export class MessageTooLargeError extends Error {
 }
 
 // ─────────────── Size bounds ───────────────
+//
+// Limit semantics: pre-flight checks reject when `s.length >= MAX_*`, and
+// the schema CHECK clauses reject when `length(col) >= MAX_*`. So the
+// largest value that lands successfully is `MAX_* - 1`. Treat the constant
+// as the *first rejected size*, not the largest accepted.
+//
+// Unit caveat: JS `string.length` is UTF-16 code units; SQLite `length()`
+// on TEXT is Unicode code-point count. They agree on BMP characters and
+// diverge by up to 2x on surrogate-pair-heavy content (emoji, supplementary
+// planes). The pre-flight check is the binding constraint in practice
+// because it runs first and is stricter for non-BMP content. `MAX_BLOB_BYTES`
+// is the only honest-bytes constant — it gates `Uint8Array.byteLength`.
 
 export const MAX_EVENT_PAYLOAD_BYTES = 4096;
 export const MAX_ROUTING_BYTES = 8192;

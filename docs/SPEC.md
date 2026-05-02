@@ -86,12 +86,13 @@ A handler is a pure async function `(ctx: HandlerContext) => Promise<HandlerResu
 See [`handler-contract.md`](./handler-contract.md).
 
 ### 3.3 Events
-Two kinds, both in the same `events` table:
+Per-run causality lives in the `events` table; daemon-process lifecycle lives in a sibling `daemon_events` table.
 
-- **Intents** (`intent.*`) — written by the web server on behalf of operators. No OCC. Always appendable.
-- **Facts** (`fact.*`) — written by the daemon as state transitions. OCC-checked against `run_state.version`.
+- **Intents** (`intent.*`, table `events`) — written by the web server on behalf of operators. No OCC. Always appendable.
+- **Facts** (`fact.*`, table `events`) — written by the daemon as state transitions. OCC-checked against `run_state.version`.
+- **Daemon events** (`daemon.*`, table `daemon_events`) — written by the daemon for process-level audit (start/stop, sweeps, blob GC, leak detection, worktree provisioning). Not run-scoped, not OCC-tracked. See `ARCHITECTURE.md` §3 for the full taxonomy.
 
-Event log is the source of truth; the `run_state` row is the materialized projection, updated in the same transaction as the event append.
+The `events` log is the source of truth for run state; the `run_state` row is the materialized projection, updated in the same transaction as the event append. `daemon_events` is an audit log — operators read it but no projection depends on it.
 
 ### 3.4 Run lifecycle
 
@@ -111,14 +112,17 @@ queued → running → {completed, paused_hitl, paused_provider_error, paused_re
 - `quarantined` — startup sweep found an orphan `side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine`
 
 ### 3.5 Control plane
-All operator actions are intent writes:
+All operator actions are intent writes. The route+body shapes are listed in
+`ARCHITECTURE.md` §7; the contract is that every endpoint validates its body
+and rejects 4xx on schema violation before any intent is appended.
 
-- `POST /runs/:id/steer` — inject text; aborts current handler so next dispatch sees the steering
-- `POST /runs/:id/pause` — abort + transition to `paused_hitl`
-- `POST /runs/:id/cancel` — abort + transition to `cancelled`
-- `POST /runs/:id/hitl` — deliver `{ selected: string, note?: string }`; wakes `paused_hitl` runs; `selected` must be an accelerator key from `fact.run_paused_hitl.options`
-- `POST /runs/:id/resume` — generic wake for any `paused_*` run (no payload required)
-- `POST /runs/:id/unquarantine` — operator decision on a quarantined run
+- `POST /runs/:id/steer` — `{ text: string }` (length > 0); injects steering text and aborts the current handler so the next dispatch sees it
+- `POST /runs/:id/pause` — empty body; abort + transition to `paused_hitl`
+- `POST /runs/:id/cancel` — `{ reason?: string }`; abort + transition to `cancelled`
+- `POST /runs/:id/hitl` — `{ selected: string, note?: string }`; wakes `paused_hitl` runs. `selected` must be an accelerator key from `fact.run_paused_hitl.options`
+- `POST /runs/:id/resume` — `{ note?: string }`; generic wake for any `paused_*` run
+- `POST /runs/:id/unquarantine` — `{ resolution: "treat_as_done" | "retry" | "cancel", note?: string }`; operator decision on a quarantined run
+- `POST /runs/:id/priority` — `{ newPriority: number, note?: string }`; bumps queue priority
 
 ### 3.6 Edge selection
 
