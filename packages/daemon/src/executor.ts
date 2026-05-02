@@ -234,6 +234,73 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // that loop without ever aborting (so ABORT_LOOP_CEILING doesn't fire)
   // halt here instead of running forever.
   let dispatches = 0;
+
+  // OCC ceiling guards the unbounded `if (!ok) continue` retry path.
+  // Each fact-append site that retries on `ConcurrencyError` increments
+  // a counter; the counter resets on the first successful append. At
+  // OCC_WARN_AT we emit one observability event per (run, node,
+  // iteration); at OCC_CEILING we halt the run with a structured
+  // `occ_exhausted` payload. The counter is in-memory, scoped to this
+  // dispatch — daemon restart re-enters with a fresh count, which is
+  // the correct semantics: the bug shape is "supervisor wedged this
+  // turn", which doesn't survive a process restart.
+  const OCC_CEILING = 3;
+  const OCC_WARN_AT = 2;
+  const OCC_BACKOFF_CAP_MS = 16;
+  let occCount = 0;
+  let occWarned = false;
+  const onOccConflict = async (
+    attemptedFactType: string,
+    nodeId: string,
+    iteration: number,
+    lastVersion: number,
+  ): Promise<{ halted: boolean }> => {
+    occCount++;
+    if (occCount >= OCC_CEILING) {
+      const fresh = opts.store.getState(runId);
+      if (fresh != null && fresh.status === "running") {
+        await tryAppendFact(opts.store, runId, fresh.version, [
+          {
+            type: "fact.run_halted",
+            payload: {
+              reason: "occ_exhausted",
+              detail: `${occCount} consecutive OCC conflicts on ${attemptedFactType} for node ${nodeId}`,
+              occContext: { count: occCount, nodeId, iteration, lastVersion, attemptedFactType },
+            },
+          },
+        ]);
+      }
+      return { halted: true };
+    }
+    if (occCount === OCC_WARN_AT && !occWarned) {
+      opts.store.appendObservabilityEvents(runId, [
+        {
+          type: "occ_conflict_warning",
+          payload: { count: occCount, ceiling: OCC_CEILING, nodeId, iteration },
+        },
+      ]);
+      occWarned = true;
+    }
+    // Exponential backoff: 1ms, 2ms, then capped at 16ms. Gives the
+    // conflicting writer's commit a chance to land so the next OCC
+    // version-read sees the advanced state.
+    const delayMs = Math.min(2 ** (occCount - 1), OCC_BACKOFF_CAP_MS);
+    await sleep(delayMs, opts.shutdownSignal);
+    return { halted: false };
+  };
+  const onOccResolved = (nodeId: string, iteration: number): void => {
+    if (occCount > 0) {
+      opts.store.appendObservabilityEvents(runId, [
+        {
+          type: "occ_conflict_resolved",
+          payload: { count: occCount, nodeId, iteration },
+        },
+      ]);
+    }
+    occCount = 0;
+    occWarned = false;
+  };
+
   let runEnv: ExecutionEnvironment | undefined;
   // Lazy per-run graph cache. Parsed once on first edge-selection need.
   // The graph is run through `prepareGraph` so transforms (stylesheet,
@@ -403,7 +470,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           startFacts,
           Object.keys(startRoutingPatch).length > 0 ? { routingPatch: startRoutingPatch } : undefined,
         );
-        if (!ok) continue; // OCC retry
+        if (!ok) {
+          const { halted } = await onOccConflict("fact.run_started", start, 0, state.version);
+          if (halted) return;
+          continue;
+        }
+        onOccResolved(start, 0);
         if (opts.autoTitler) {
           const input = routingString(state.routing, "input") ?? "";
           const goal = graphFor(state.workflowSha)?.attrs.goal;
@@ -443,20 +515,29 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // only emit here when the projection's dispatchStartedAt was
       // reset by a prior terminal/pause fact.
       if (state.dispatchStartedAt == null) {
+        const dispatchIteration = nodeRetryCount(state.routing);
         const ok = await tryAppendFact(opts.store, runId, state.version, [
           {
             type: "fact.dispatch_started",
             payload: {
               nodeId: currentNode,
-              iteration: nodeRetryCount(state.routing),
+              iteration: dispatchIteration,
               resumeOf: deriveResumeOf(opts.store, runId),
             },
           },
         ]);
         if (!ok) {
           dispatches--;
+          const { halted } = await onOccConflict(
+            "fact.dispatch_started",
+            currentNode,
+            dispatchIteration,
+            state.version,
+          );
+          if (halted) return;
           continue;
         }
+        onOccResolved(currentNode, dispatchIteration);
         continue;
       }
 
@@ -1056,7 +1137,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (routingPatch !== undefined) appendOpts.routingPatch = routingPatch;
       if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
       const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, appendOpts);
-      if (!ok) continue; // OCC retry — rebuild from fresh state
+      if (!ok) {
+        const turnIteration = nodeRetryCount(state.routing);
+        const turnFactType = facts[0]?.type ?? "fact.unknown";
+        const { halted } = await onOccConflict(turnFactType, currentNode, turnIteration, recorder.version());
+        if (halted) return;
+        continue; // OCC retry — rebuild from fresh state
+      }
+      onOccResolved(currentNode, nodeRetryCount(state.routing));
     }
   } finally {
     // Dispose the worktree env when the run reaches a hard-terminal

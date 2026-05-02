@@ -36,7 +36,8 @@ export type HaltReason =
   | "error"
   | "aborted_exit"
   | "goal_gate_unsatisfied"
-  | "max_retries_exceeded";
+  | "max_retries_exceeded"
+  | "occ_exhausted";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -245,7 +246,23 @@ export type FactEvent =
   | { type: "fact.run_completed"; payload: { finalNode: string } }
   | {
       type: "fact.run_halted";
-      payload: { reason: HaltReason; detail?: string };
+      payload: {
+        reason: HaltReason;
+        detail?: string;
+        /** Set when `reason="occ_exhausted"`. Carries the OCC retry
+         * context — count of consecutive `ConcurrencyError` failures,
+         * the node + iteration where the storm hit, the last observed
+         * `run_state.version`, and the type of fact whose append
+         * couldn't land. Operators read this for post-mortem instead
+         * of grepping the string detail. */
+        occContext?: {
+          count: number;
+          nodeId: string;
+          iteration: number;
+          lastVersion: number;
+          attemptedFactType: string;
+        };
+      };
     }
   | { type: "fact.run_cancelled"; payload: { intentSeq: number } }
   | {

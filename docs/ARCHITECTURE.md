@@ -346,7 +346,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Handler returned `outcomeStatus="retry"`; concurrency slot released for the backoff window. Wake-pending sweeper re-queues at `resumeAt` |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'\|'goal_gate_unsatisfied'\|'max_retries_exceeded'`, `detail?` | Terminal failure |
+| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'\|'goal_gate_unsatisfied'\|'max_retries_exceeded'\|'occ_exhausted'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
 | `fact.run_quarantined` | `reason: 'orphan_side_effect'\|'other'`, `orphanedIntents?: seq[]` | Awaiting operator |
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |
@@ -549,8 +549,9 @@ export type HandlerResult =
       kind: "halt";
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
-      // `abort_loop`, `schema_drift`, `aborted_exit` are also valid `fact.run_halted`
-      // reasons but the executor emits those itself — not constructible by handlers.
+      // `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted` are also valid
+      // `fact.run_halted` reasons but the executor emits those itself — not
+      // constructible by handlers.
     }
   | {
       kind: "pause_provider";                            // recoverable provider transport failure
