@@ -23,6 +23,7 @@ import { type RunMessageRow, steerRun } from "../lib/api.ts";
 import { type PendingSteer, usePendingSteers } from "../lib/usePendingSteers.ts";
 import {
   PromptInput,
+  PromptInputFooter,
   type PromptInputMessage,
   PromptInputSubmit,
   PromptInputTextarea,
@@ -92,7 +93,9 @@ export default function SteerInput({ runId, messages }: SteerInputProps): JSX.El
           data-testid="steer-textarea"
           aria-label="Steering message"
         />
-        <PromptInputSubmit data-testid="steer-submit" />
+        <PromptInputFooter>
+          <PromptInputSubmit data-testid="steer-submit" />
+        </PromptInputFooter>
       </PromptInput>
     </div>
   );
