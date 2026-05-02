@@ -1,7 +1,7 @@
 // Route-level tests for RunDetail.
 
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
-import { act, cleanup, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RunDetail as RunDetailT } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
@@ -540,5 +540,152 @@ describe("RunDetail", () => {
     } finally {
       mock.restore();
     }
+  });
+
+  describe("RunControls — operator pause/resume/cancel", () => {
+    it("shows Pause and Cancel for a running run", async () => {
+      const detail: RunDetailT = {
+        runId: "run-running",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        runStatus: "running",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepare("run-running", detail);
+      try {
+        const { container } = mount(client, "/runs/run-running");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-controls")).toBeTruthy();
+        });
+        expect(q.getByTestId("run-controls-pause")).toBeTruthy();
+        expect(q.getByTestId("run-controls-cancel")).toBeTruthy();
+        expect(q.queryByTestId("run-controls-resume")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("shows Resume and Cancel for an operator-paused run", async () => {
+      const detail: RunDetailT = {
+        runId: "run-paused-op",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "paused",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepare("run-paused-op", detail);
+      try {
+        const { container } = mount(client, "/runs/run-paused-op");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-controls")).toBeTruthy();
+        });
+        expect(q.getByTestId("run-controls-resume")).toBeTruthy();
+        expect(q.getByTestId("run-controls-cancel")).toBeTruthy();
+        expect(q.queryByTestId("run-controls-pause")).toBeNull();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("hides Resume when status is paused_hitl (HitlChoice owns it)", async () => {
+      const detail: RunDetailT = {
+        runId: "run-hitl",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "paused",
+        runStatus: "paused_hitl",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        hitlNodeId: "gate",
+        hitlLabel: "Approve?",
+        hitlOptions: [
+          { key: "a", label: "Approve", to: "next" },
+          { key: "r", label: "Reject", to: "halt" },
+        ],
+      };
+      const { client, mock } = prepare("run-hitl", detail);
+      try {
+        const { container } = mount(client, "/runs/run-hitl");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-controls")).toBeTruthy();
+        });
+        expect(q.queryByTestId("run-controls-resume")).toBeNull();
+        expect(q.getByTestId("run-controls-cancel")).toBeTruthy();
+      } finally {
+        mock.restore();
+      }
+    });
+
+    it("requires a second click within the confirmation window before cancelling", async () => {
+      const detail: RunDetailT = {
+        runId: "run-cancel-confirm",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        runStatus: "running",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail("run-cancel-confirm").queryKey, detail);
+      const mock = installFetchMock(
+        {
+          "/api/runs/run-cancel-confirm/events.json": () => json([]),
+          "/api/runs/run-cancel-confirm/messages": () => json([]),
+          "/api/runs/run-cancel-confirm/steps": () => json([]),
+          "/api/runs/run-cancel-confirm": () => json(detail),
+          "/api/runs/run-cancel-confirm/cancel": () => json({ seq: 42 }),
+        },
+        () => json([]),
+      );
+      try {
+        const { container } = mount(client, "/runs/run-cancel-confirm");
+        const q = within(container);
+        await waitFor(() => {
+          expect(q.getByTestId("run-controls-cancel")).toBeTruthy();
+        });
+
+        const countCancelPosts = (): number =>
+          mock.calls.filter((c) => c.method === "POST" && c.url.endsWith("/cancel")).length;
+
+        // First click: arms the confirm step. No POST should fire.
+        await act(async () => {
+          fireEvent.click(q.getByTestId("run-controls-cancel"));
+        });
+        expect(countCancelPosts()).toBe(0);
+
+        // Confirm control should now be visible; original Cancel hidden.
+        const confirmBtn = await waitFor(() => q.getByTestId("run-controls-cancel-confirm"));
+        expect(q.queryByTestId("run-controls-cancel")).toBeNull();
+
+        // Second click within the 3s window: fires exactly one POST.
+        await act(async () => {
+          fireEvent.click(confirmBtn);
+        });
+        await waitFor(() => {
+          expect(countCancelPosts()).toBe(1);
+        });
+      } finally {
+        mock.restore();
+      }
+    });
   });
 });

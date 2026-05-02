@@ -22,6 +22,7 @@ import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { HitlChoice } from "../components/HitlChoice.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
+import { RunControls } from "../components/RunControls.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
@@ -140,6 +141,7 @@ export function RunDetail(): JSX.Element {
       {detail?.runStatus === "paused_hitl" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
+      {detail && <RunControls runId={id} status={detail.status} runStatus={detail.runStatus} />}
 
       {isError && !detail ? (
         <EmptyState
