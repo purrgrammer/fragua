@@ -32,6 +32,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - Auto-titler runs once per run (cost-bounded summariser)
 - Daemon-events audit log (process lifecycle, sweeps, GC, leak detection, worktree provisioning)
 - Doc-vs-code drift CI lint enforces AGENTS.md rule #1 — `bun run lint:docs` cross-checks `schema.sql` / `swarm-events.ts` / `handler/types.ts` / proposal index against `docs/`
+- Bounded OCC retry loop with structured occ_exhausted halt — fact-append contention storms halt cleanly with a structured `occContext` payload instead of spinning, with 1–16 ms exponential backoff between retries
 - Self-review workflow (`bun run swarm run introspect`) — read-only periodic audit of architecture, doc-vs-code drift, proposal hygiene, and operational health; see [`docs/proposals/introspection-workflow.md`](docs/proposals/introspection-workflow.md)
 
 ## What swarm does not deliver today

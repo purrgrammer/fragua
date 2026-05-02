@@ -19,6 +19,7 @@ delta called out in the proposal body.
 |---|---|---|
 | [Project config file](./project-config.md) | specified | `<project>/.swarm/config.jsonc` |
 | [Doc-vs-code drift CI lint](./drift-lint.md) | specified | `bun run lint:docs` in CI |
+| [Bound the OCC retry loop](./occ-retry-ceiling.md) | specified | ceiling=3 with exponential backoff; structured `occ_exhausted` halt |
 
 ## In progress
 
@@ -53,8 +54,8 @@ delta called out in the proposal body.
 | [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §14 risk #3; nominal capacity claims have no measurement behind them |
 | [Auto-retry for transient LLM provider errors](./provider-auto-retry.md) | designed | backoff for 429 / 5xx / network reset, manual escape preserved. Brainstorm 2026-05-02 surfaced 9 open corners — see proposal §Open questions before implementation |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
-| [Bound the OCC retry loop](./occ-retry-ceiling.md) | designed | add a ceiling on the unbounded `if (!ok) continue` retry path in `runOneInner`. Brainstorm 2026-05-02 surfaced 5 open corners — see proposal §Open questions |
 | [Recoverable budget pause](./recoverable-budget-pause.md) | designed | new `budget_policy="pause"` (default) + `paused_budget` status; budget overruns suspend for operator decision instead of halting. Empirical motivation: the introspect workflow ate two budget halts this session, each abandoning $0.50 of upstream work |
+| [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
 
 ## Deferred
 

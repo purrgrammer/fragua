@@ -1,7 +1,8 @@
 ---
 title: Bound the OCC retry loop
-status: proposed
-maturity: designed
+summary: "Bounded OCC retry loop with structured occ_exhausted halt"
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-02
 ---
 
@@ -29,19 +30,17 @@ Real bugs in concurrency-control machinery look like infinite loops in productio
 
 The fix is < 30 lines: an integer counter, a comparison, an additive halt reason. The proposal is to land it before someone hits the bug rather than after.
 
-## Open questions
+## Resolved decisions (shipped 2026-05-02 in `fed248e`)
 
-These surfaced in the 2026-05-02 brainstorm and are unresolved.
+The 5 brainstorm questions all settled in implementation:
 
-- **What counts as "a turn" for the counter?** The Shape section says "50 OCC conflicts per turn" but `runOneInner`'s `if (!ok) continue` re-runs the whole inner block on every conflict. Three candidates: (a) reset on successful append (per-attempt-batch — matches the bug shape "the inner loop is spinning on the same fact append"), (b) reset on new node entry (per-node-iteration), or (c) cumulative across the run. Pick before implementation.
+- **Counter scope:** per-attempt-batch — resets on the first successful `appendFact`, so "consecutive ConcurrencyError" means "this append is being held off right now," not "this run has ever seen contention."
+- **Counter state:** in-memory in `runOneInner`'s closure. Daemon restart re-enters with a fresh count; matches the bug shape since a wedged supervisor doesn't survive a process restart.
+- **`tryAppendFact` failure modes:** confirmed `ok=false` is exclusively `ConcurrencyError`. Every other failure throws and propagates to `runOne`'s safety net, which writes its own `fact.run_halted { reason: "error" }`. The OCC counter only attributes to OCC.
+- **Halt detail:** structured. `fact.run_halted` gained an optional `occContext: { count, nodeId, iteration, lastVersion, attemptedFactType }` field, populated when `reason === "occ_exhausted"`.
+- **Warning-event scope:** per-`(runId, nodeId, iteration)` via the in-memory `occWarned` flag. Reset alongside the counter on first success.
 
-- **Counter state — in-memory or in `routing`?** In-memory (executor closure) keeps the contention surface clean and the bug shape ("supervisor wedged this turn") doesn't survive a daemon restart anyway. Persisting in `routing.internal.occ_count.<nodeId>` would survive restart but adds a write to the surface that's already broken. Lean in-memory; pin it.
-
-- **Audit `tryAppendFact` failure modes.** The proposal assumes `ok=false` is exclusively `ConcurrencyError` (version-mismatch). Need to verify that `SQLITE_BUSY`, CHECK-constraint trips, and schema-drift errors don't also surface as `ok=false` — otherwise we'd halt non-OCC failures with `reason:"occ_exhausted"`, mis-attributing the cause. Plan-time audit, before implementation.
-
-- **Halt detail shape.** `detail: "<N> consecutive OCC conflicts on node <id>"` is a string. For post-mortem we want at least `{ count, nodeId, iteration, lastVersion, attemptedFactType }` — structured and queryable. Mirror the shape `fact.run_quarantined { orphanedIntents }` already uses for structured halt-detail.
-
-- **Warning-event scope.** `occ_conflict_warning` fires once at 80% of the ceiling (40 conflicts). Per what scope key — `(runId, nodeId, iteration)`? If a turn flirts with 40, succeeds, then a later turn conflicts again — fire twice (per-iteration) or once-per-run? Per-`(runId, nodeId, iteration)` is the only sane key but worth pinning.
+Tighter than the original 50: **ceiling=3, warn-at=2**, with exponential backoff (1ms → 2ms → cap 16ms) between retries. Real bugs halt in milliseconds; legit transient contention resolves on the first retry without firing the warn. Three new observability events fire on the path: `occ_conflict_warning` (at 80% of ceiling), `occ_conflict_resolved` (on success after retries — operators can `WHERE type='occ_conflict_resolved'` for near-miss analytics), and the structured `fact.run_halted { reason: "occ_exhausted" }` at the ceiling.
 
 ## What this does not commit to
 
