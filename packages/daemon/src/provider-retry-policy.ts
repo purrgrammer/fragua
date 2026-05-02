@@ -133,11 +133,7 @@ export function decideProviderRetry(opts: DecideProviderRetryOpts): ProviderRetr
  *     desynchronises racing daemons even though we're single-daemon
  *     today; the property generalises.
  */
-export function computeBackoffMs(opts: {
-  retryAfterMs?: number;
-  attempt: number;
-  random: () => number;
-}): number {
+export function computeBackoffMs(opts: { retryAfterMs?: number; attempt: number; random: () => number }): number {
   if (opts.retryAfterMs !== undefined) return opts.retryAfterMs;
   const exponentialMs = Math.min(
     PROVIDER_RETRY_BASE_BACKOFF_MS * 2 ** (opts.attempt - 1),

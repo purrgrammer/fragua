@@ -105,7 +105,9 @@ export function RunControls({
   // on a timer; manual Resume short-circuits the wait.
   const isOperatorHitlPause = runStatus === "paused_hitl" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
-    status === "paused" && runStatus !== "paused_provider_error" && (runStatus !== "paused_hitl" || isOperatorHitlPause);
+    status === "paused" &&
+    runStatus !== "paused_provider_error" &&
+    (runStatus !== "paused_hitl" || isOperatorHitlPause);
   // Cancel is available everywhere non-terminal. RunPausedNotice
   // already exposes a Cancel for paused_provider_error — hide ours
   // there to avoid two adjacent Cancel buttons.

@@ -56,4 +56,21 @@ describe("PromptInput submit positioning", () => {
 
     expect(horizontal, `horizontal inset (${horizontal}) must equal bottom inset (${pb})`).toBe(pb);
   });
+
+  it("submit aligns to the right when it is the only footer child (no PromptInputTools)", () => {
+    const { container } = render(
+      <PromptInput onSubmit={() => {}} data-testid="form">
+        <PromptInputTextarea aria-label="Message" />
+        <PromptInputFooter data-testid="footer">
+          <PromptInputSubmit data-testid="submit" />
+        </PromptInputFooter>
+      </PromptInput>,
+    );
+
+    const submit = within(container).getByTestId("submit");
+
+    // ml-auto on the submit pushes it to the footer's right edge under flex,
+    // independent of whether a PromptInputTools spacer sits to its left.
+    expect(submit.className).toMatch(/(?:^|\s)ml-auto(?:\s|$)/);
+  });
 });

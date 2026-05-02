@@ -9,6 +9,7 @@
 // No files, no sockets, no IPC. Just the store.
 
 import {
+  AUTO_RESUME_AT_KEY,
   type EdgeSelection,
   type ExecutionEnvironment,
   evaluateBudget,
@@ -22,7 +23,6 @@ import {
   parseDotSource,
   prepareGraph,
   RETRY_PRESETS,
-  AUTO_RESUME_AT_KEY,
   type RetryPresetName,
   readGateOutcomes,
   readGoalGateRetries,
@@ -42,12 +42,12 @@ import {
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
-import { CommittingRecorder } from "./recorder.ts";
 import {
   decideProviderRetry,
   PROVIDER_RETRY_ATTEMPT_KEY,
   type ProviderRetryDecision,
 } from "./provider-retry-policy.ts";
+import { CommittingRecorder } from "./recorder.ts";
 import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
 import { wakePending } from "./wake-pending.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
