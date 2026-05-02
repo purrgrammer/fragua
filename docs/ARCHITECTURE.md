@@ -177,7 +177,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','paused_provider_error','paused_retry',
+    'queued','running','paused_hitl','paused_provider_error','paused_provider_retry','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -331,7 +331,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
-| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused_hitl'\|'paused_provider_error'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
+| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused_hitl'\|'paused_provider_error'\|'paused_provider_retry'\|'paused_retry'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
 | `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'` | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
@@ -342,11 +342,12 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
 | `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input; `options` mirrors the outgoing edge set with parsed accelerator keys |
-| `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage` | LLM provider returned a transport error mid-stream; transcript intact |
+| `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage`, `policy?: 'manual'\|'auto-retry'`, `attempt?`, `resumeAt?` | LLM provider returned a transport error mid-stream; transcript intact. `policy="auto-retry"` projects status to `paused_provider_retry` and wake-pending sweeper auto-resumes at `resumeAt`; absent or `"manual"` → `paused_provider_error` (operator must `intent.resume`) |
+| `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Handler returned `outcomeStatus="retry"`; concurrency slot released for the backoff window. Wake-pending sweeper re-queues at `resumeAt` |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
 | `fact.run_completed` | `finalNode` | Terminal success |
-| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'\|'goal_gate_unsatisfied'\|'max_retries_exceeded'\|'occ_exhausted'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure |
+| `fact.run_halted` | `reason: 'budget'\|'max_loops'\|'abort_loop'\|'schema_drift'\|'error'\|'aborted_exit'\|'goal_gate_unsatisfied'\|'max_retries_exceeded'\|'occ_exhausted'\|'provider_exhausted'`, `detail?`, `occContext?` (set when reason="occ_exhausted") | Terminal failure |
 | `fact.run_cancelled` | `intentSeq` | Terminal cancel |
 | `fact.run_quarantined` | `reason: 'orphan_side_effect'\|'other'`, `orphanedIntents?: seq[]` | Awaiting operator |
 | `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep requeued. `lastAliveAt` is the dying daemon's last heartbeat — reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs` |

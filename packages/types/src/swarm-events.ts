@@ -18,6 +18,7 @@ export type RunStatus =
   | "running"
   | "paused_hitl"
   | "paused_provider_error"
+  | "paused_provider_retry"
   | "paused_retry"
   | "completed"
   | "cancelled"
@@ -37,7 +38,8 @@ export type HaltReason =
   | "aborted_exit"
   | "goal_gate_unsatisfied"
   | "max_retries_exceeded"
-  | "occ_exhausted";
+  | "occ_exhausted"
+  | "provider_exhausted";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -103,7 +105,14 @@ export type FactEvent =
          * run; the others = resuming from the named prior state. Lets
          * analytics distinguish "ran straight through" from "had to be
          * woken up after X". */
-        resumeOf: "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "quarantined";
+        resumeOf:
+          | "fresh"
+          | "crash"
+          | "paused_hitl"
+          | "paused_provider_error"
+          | "paused_provider_retry"
+          | "paused_retry"
+          | "quarantined";
       };
     }
   | { type: "fact.node_started"; payload: { nodeId: string; iteration: number } }
@@ -217,6 +226,29 @@ export type FactEvent =
         httpStatus: number | null;
         provider: string;
         errorMessage: string;
+        /** When set to "auto-retry", the executor scheduled a backoff
+         * window (resumeAt) and the run is in status `paused_provider_retry`
+         * — the wake-pending sweeper auto-resumes once `now >= resumeAt`.
+         * When absent or "manual", the run is in `paused_provider_error`
+         * and waits on `intent.resume`. */
+        policy?: "manual" | "auto-retry";
+        attempt?: number;
+        resumeAt?: number;
+      };
+    }
+  | {
+      /** Emitted on every auto-retry attempt that fires after a
+       * `paused_provider_retry` wake. One fact per attempt — folding
+       * into a mutable chain on the pause fact would violate fact
+       * immutability (I3). Operators query `WHERE
+       * type='fact.provider_retry_attempted' AND run_id=X ORDER BY seq`
+       * to see the retry chain. */
+      type: "fact.provider_retry_attempted";
+      payload: {
+        nodeId: string;
+        attempt: number;
+        httpStatus: number | null;
+        delayMs: number;
       };
     }
   | {
@@ -426,6 +458,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_completed",
   "fact.run_paused_hitl",
   "fact.run_paused_provider_error",
+  "fact.provider_retry_attempted",
   "fact.run_paused_retry",
   "fact.run_resumed",
   "fact.run_cancelled",

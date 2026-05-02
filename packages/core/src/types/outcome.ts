@@ -43,6 +43,10 @@ export const OutcomeSchema = Type.Object(
         httpStatus: Type.Union([Type.Number(), Type.Null()]),
         provider: Type.String(),
         errorMessage: Type.String(),
+        /** Provider-supplied `Retry-After` (ms). Forwarded to the daemon
+         * via the pause_provider HandlerResult; absent → daemon falls
+         * back to its own backoff. */
+        retryAfterMs: Type.Optional(Type.Number()),
       }),
     ),
   },
@@ -83,7 +87,10 @@ export function fail(failure_reason: string, partial: Partial<Outcome> = {}): Ou
  * the normal halt path. Status stays "fail" so any downstream code that
  * checks status alone still treats this as not-success.
  */
-export function failProvider(errorMessage: string, detail: { httpStatus: number | null; provider: string }): Outcome {
+export function failProvider(
+  errorMessage: string,
+  detail: { httpStatus: number | null; provider: string; retryAfterMs?: number },
+): Outcome {
   return {
     status: "fail",
     context_updates: {},
@@ -96,6 +103,7 @@ export function failProvider(errorMessage: string, detail: { httpStatus: number 
       httpStatus: detail.httpStatus,
       provider: detail.provider,
       errorMessage,
+      ...(detail.retryAfterMs !== undefined ? { retryAfterMs: detail.retryAfterMs } : {}),
     },
   };
 }

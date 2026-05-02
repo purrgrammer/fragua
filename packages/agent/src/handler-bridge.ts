@@ -178,12 +178,16 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // boundary attaches `provider_error` when classifying a failed
     // stream; handlers never construct it themselves.
     if (outcome.provider_error != null) {
-      return {
+      const result: Extract<HandlerResult, { kind: "pause_provider" }> = {
         kind: "pause_provider",
         httpStatus: outcome.provider_error.httpStatus,
         provider: outcome.provider_error.provider,
         errorMessage: outcome.provider_error.errorMessage,
-      } satisfies HandlerResult;
+      };
+      if (outcome.provider_error.retryAfterMs !== undefined) {
+        result.retryAfterMs = outcome.provider_error.retryAfterMs;
+      }
+      return result satisfies HandlerResult;
     }
 
     // retry / partial_success now flow through as transitions. The executor

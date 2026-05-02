@@ -46,7 +46,7 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
   const cancelled = wakeCancel(store);
   const hitlWoken = wakeHitl(store);
   const resumed = wakeResume(store);
-  const retryResumed = wakeRetryDelays(store, now);
+  const retryResumed = wakeAutoResume(store, now);
   const unquarantined = wakeUnquarantine(store);
   return { cancelled, hitlWoken, resumed, retryResumed, unquarantined };
 }
@@ -156,7 +156,7 @@ function wakeResume(store: IEventStore): string[] {
     .query<DbRow & { status: string }, []>(
       `SELECT run_id, version, last_applied_seq, status
          FROM run_state
-        WHERE status IN ('paused_hitl', 'paused_provider_error')`,
+        WHERE status IN ('paused_hitl', 'paused_provider_error', 'paused_provider_retry')`,
     )
     .all();
 
@@ -195,28 +195,32 @@ function wakeResume(store: IEventStore): string[] {
 }
 
 /**
- * Wake `paused_retry` runs whose backoff window has elapsed
- * (attractor §3.5 / §3.6). The executor stamped
- * `routing.internal.retry_resume_at` (ms epoch) when emitting
- * fact.run_paused_retry; once `now()` has caught up we emit
- * fact.run_resumed { fromStatus: "paused_retry" } and the run goes
- * back to queued for re-claim. The same node re-dispatches because
- * fact.node_completed already pointed nextNode at the retrying node.
+ * Wake any auto-resumable paused state whose timer has elapsed —
+ * `paused_retry` (engine retry-policy backoff) and
+ * `paused_provider_retry` (provider transport-error auto-retry). Both
+ * write `routing.internal.auto_resume_at` (ms epoch); once `now()`
+ * catches up we emit `fact.run_resumed { fromStatus: <status> }` and
+ * the run goes back to queued for re-claim. The same node re-dispatches
+ * because `fact.node_completed` already pointed nextNode at the
+ * retrying node (paused_retry) or the executor still has the run on
+ * its current node (paused_provider_retry). Manual-only pause states
+ * (`paused_hitl`, `paused_provider_error`, `paused_budget`) ignore
+ * this routing key — they wake on `intent.resume` only.
  */
-function wakeRetryDelays(store: IEventStore, now: () => number): string[] {
+function wakeAutoResume(store: IEventStore, now: () => number): string[] {
   const out: string[] = [];
   const db = dbOf(store);
   if (db == null) return [];
 
   const nowMs = now();
   const rows = db
-    .query<DbRow & { resume_at: number | null }, [number]>(
-      `SELECT run_id, version, last_applied_seq,
-              CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) AS resume_at
+    .query<DbRow & { resume_at: number | null; status: string }, [number]>(
+      `SELECT run_id, version, last_applied_seq, status,
+              CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) AS resume_at
          FROM run_state
-        WHERE status = 'paused_retry'
-          AND CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) IS NOT NULL
-          AND CAST(json_extract(routing, '$."internal.retry_resume_at"') AS INTEGER) <= ?`,
+        WHERE status IN ('paused_retry', 'paused_provider_retry')
+          AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) IS NOT NULL
+          AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) <= ?`,
     )
     .all(nowMs);
 
@@ -227,7 +231,7 @@ function wakeRetryDelays(store: IEventStore, now: () => number): string[] {
         [
           {
             type: "fact.run_resumed",
-            payload: { fromStatus: "paused_retry" },
+            payload: { fromStatus: row.status as "paused_retry" | "paused_provider_retry" },
           },
         ],
         row.version,

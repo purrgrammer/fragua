@@ -268,4 +268,8 @@ export type HandlerResult =
       httpStatus: number | null;
       provider: string;
       errorMessage: string;
+      /** Provider-supplied `Retry-After` (ms). When set, the daemon honours
+       * it exactly — no jitter, no exponential cap. Absent → daemon falls
+       * back to its own full-jitter exponential schedule. */
+      retryAfterMs?: number;
     };

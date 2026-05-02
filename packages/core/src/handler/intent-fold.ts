@@ -108,7 +108,10 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
   // executor before this point — but we accept them here defensively so
   // the fold is a total function over RunStatus.
   const isDispatching = runStatus === "queued" || runStatus === "running";
-  const isPaused = runStatus === "paused_hitl" || runStatus === "paused_provider_error";
+  const isPaused =
+    runStatus === "paused_hitl" ||
+    runStatus === "paused_provider_error" ||
+    runStatus === "paused_provider_retry";
 
   for (const ev of intents) {
     applied.push(ev.seq);

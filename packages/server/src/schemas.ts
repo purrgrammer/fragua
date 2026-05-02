@@ -31,6 +31,7 @@ const RawRunStatus = Type.Union([
   Type.Literal("running"),
   Type.Literal("paused_hitl"),
   Type.Literal("paused_provider_error"),
+  Type.Literal("paused_provider_retry"),
   Type.Literal("paused_retry"),
   Type.Literal("completed"),
   Type.Literal("cancelled"),

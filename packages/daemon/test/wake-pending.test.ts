@@ -311,3 +311,66 @@ describe("wakePending — resume on paused_provider_error", () => {
     r.store.close();
   });
 });
+
+describe("wakePending — paused_provider_retry auto-resume", () => {
+  function pauseProviderAutoRetry(r: ReturnType<typeof rig>, runId: string, resumeAt: number): void {
+    const s = r.store.getState(runId)!;
+    r.store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_paused_provider_error",
+          payload: {
+            nodeId: "start",
+            httpStatus: 429,
+            provider: "stub",
+            errorMessage: "rate limited",
+            policy: "auto-retry",
+            attempt: 1,
+            resumeAt,
+          },
+        },
+      ],
+      s.version,
+      { routingPatch: { "internal.auto_resume_at": resumeAt } },
+    );
+  }
+
+  test("auto_resume_at in the past → fact.run_resumed, status=queued, fromStatus=paused_provider_retry", async () => {
+    const r = rig();
+    startRun(r, "rpa1");
+    pauseProviderAutoRetry(r, "rpa1", Date.now() - 1000);
+    expect(r.store.getState("rpa1")!.status).toBe("paused_provider_retry");
+    const result = wakePending(r.store);
+    expect(result.retryResumed).toContain("rpa1");
+    expect(r.store.getState("rpa1")!.status).toBe("queued");
+    const lastFact = r.store
+      .getEvents("rpa1")
+      .filter((e) => e.type === "fact.run_resumed")
+      .pop();
+    expect(lastFact).toBeDefined();
+    expect((lastFact!.payload as { fromStatus: string }).fromStatus).toBe("paused_provider_retry");
+    r.store.close();
+  });
+
+  test("auto_resume_at in the future → no resume yet", async () => {
+    const r = rig();
+    startRun(r, "rpa2");
+    pauseProviderAutoRetry(r, "rpa2", Date.now() + 60_000);
+    const result = wakePending(r.store);
+    expect(result.retryResumed).not.toContain("rpa2");
+    expect(r.store.getState("rpa2")!.status).toBe("paused_provider_retry");
+    r.store.close();
+  });
+
+  test("intent.resume on paused_provider_retry also wakes (manual escape hatch)", async () => {
+    const r = rig();
+    startRun(r, "rpa3");
+    pauseProviderAutoRetry(r, "rpa3", Date.now() + 60_000);
+    r.store.appendIntent("rpa3", { type: "intent.resume", payload: {} });
+    const result = wakePending(r.store);
+    expect(result.resumed).toContain("rpa3");
+    expect(r.store.getState("rpa3")!.status).toBe("queued");
+    r.store.close();
+  });
+});

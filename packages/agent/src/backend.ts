@@ -336,8 +336,10 @@ export class PiCodergenBackend implements CodergenBackend {
     // / 5xx) versus a content/tool failure, and route the run to
     // `paused_provider_error` instead of an unrecoverable halt.
     let lastHttpStatus: number | null = null;
-    const captureResponse = (response: { status: number }) => {
+    let lastRetryAfterMs: number | undefined;
+    const captureResponse = (response: { status: number; headers: Record<string, string> }) => {
       lastHttpStatus = response.status;
+      lastRetryAfterMs = parseRetryAfterMs(response.headers);
     };
 
     const agent = new Agent({
@@ -469,6 +471,7 @@ export class PiCodergenBackend implements CodergenBackend {
       return failProvider("provider returned no response", {
         httpStatus: lastHttpStatus,
         provider,
+        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
       });
     }
 
@@ -483,6 +486,7 @@ export class PiCodergenBackend implements CodergenBackend {
           return failProvider(last.errorMessage ?? `provider stream error (HTTP ${lastHttpStatus ?? "n/a"})`, {
             httpStatus: lastHttpStatus,
             provider,
+            ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
           });
         }
       }
@@ -500,6 +504,7 @@ export class PiCodergenBackend implements CodergenBackend {
       return failProvider("provider returned an empty response", {
         httpStatus: lastHttpStatus,
         provider,
+        ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
       });
     }
 
@@ -554,6 +559,32 @@ export class PiCodergenBackend implements CodergenBackend {
 
 function sessionKey(runId: string, threadId: string): string {
   return `${runId}::${threadId}`;
+}
+
+/** Parse `Retry-After` from a response-headers map. RFC 7231 allows two
+ * formats: integer seconds OR an HTTP-date. We honour seconds (the
+ * common provider convention) and ignore HTTP-date (rare in LLM APIs).
+ * Returns `undefined` when absent or malformed so the daemon falls back
+ * to its full-jitter exponential schedule. */
+function parseRetryAfterMs(headers: Record<string, string>): number | undefined {
+  // Header names are case-insensitive per RFC 9110; pi-ai surfaces them
+  // verbatim. Probe the common spellings first, then fall back to a
+  // case-insensitive scan so a provider that capitalises differently
+  // still works.
+  const direct = headers["retry-after"] ?? headers["Retry-After"] ?? headers["RETRY-AFTER"];
+  let raw = direct;
+  if (raw === undefined) {
+    for (const [k, v] of Object.entries(headers)) {
+      if (k.toLowerCase() === "retry-after") {
+        raw = v;
+        break;
+      }
+    }
+  }
+  if (raw === undefined) return undefined;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.floor(seconds * 1000);
 }
 
 /** Structurally derive a `RunEnvironment` from the execution env when

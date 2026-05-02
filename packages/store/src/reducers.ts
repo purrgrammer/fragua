@@ -122,7 +122,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.run_paused_provider_error": {
       closeDispatchInterval(next, now);
-      next.status = "paused_provider_error";
+      // policy="auto-retry" → paused_provider_retry (wake-pending sweep
+      // auto-resumes once `auto_resume_at` is reached). Manual / absent
+      // policy → paused_provider_error (operator must intent.resume).
+      next.status = fact.payload.policy === "auto-retry" ? "paused_provider_retry" : "paused_provider_error";
       next.nodeStartedAt = null;
       return next;
     }
@@ -204,6 +207,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.message_appended":
     case "fact.handler_timeout_leaked":
     case "fact.daemon_takeover":
+    case "fact.provider_retry_attempted":
       return next;
   }
 }

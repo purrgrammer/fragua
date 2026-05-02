@@ -22,7 +22,7 @@ import {
   parseDotSource,
   prepareGraph,
   RETRY_PRESETS,
-  RETRY_RESUME_AT_KEY,
+  AUTO_RESUME_AT_KEY,
   type RetryPresetName,
   readGateOutcomes,
   readGoalGateRetries,
@@ -43,6 +43,11 @@ import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { CommittingRecorder } from "./recorder.ts";
+import {
+  decideProviderRetry,
+  PROVIDER_RETRY_ATTEMPT_KEY,
+  type ProviderRetryDecision,
+} from "./provider-retry-policy.ts";
 import { abortResultToFacts, cancelToFacts, resultToFacts } from "./result-to-facts.ts";
 import { wakePending } from "./wake-pending.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
@@ -335,6 +340,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         state.status === "halted" ||
         state.status === "paused_hitl" ||
         state.status === "paused_provider_error" ||
+        state.status === "paused_provider_retry" ||
         state.status === "paused_retry" ||
         state.status === "quarantined"
       ) {
@@ -1043,6 +1049,31 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
+      // Provider auto-retry: when a codergen turn returns pause_provider,
+      // consult the policy module to decide whether this is auto-retry
+      // (transient transport error, schedule a backoff), manual (operator
+      // must intervene — auth/billing/schema), or halt-exhausted (chain
+      // cap exceeded). The decision drives fact mutation + routing patches
+      // below; manual is the existing behaviour and needs no further work.
+      // The exhausted branch emits a `provider_exhausted` halt fact
+      // directly — that reason is executor-only (not in the handler-side
+      // HaltReason union) so we don't go through resultToFacts.
+      let providerRetryDecision: ProviderRetryDecision | undefined;
+      let providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined;
+      if (result.kind === "pause_provider") {
+        providerRetryDecision = decideProviderRetry({
+          httpStatus: result.httpStatus,
+          ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
+          priorAttempt: readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]),
+          now: clock(),
+          cumulativeDelayMs: 0,
+        });
+        if (providerRetryDecision.kind === "exhausted") {
+          providerExhausted = { attempt: providerRetryDecision.attempt, reason: providerRetryDecision.reason };
+          providerRetryDecision = undefined;
+        }
+      }
+
       // Tail-drain: the handler may have streamed most of its deltas
       // mid-flight via the timer, but `edge.selected` and any post-handler
       // observability (e.g. budget warnings above) still need to flush
@@ -1091,6 +1122,45 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
       }
 
+      // Provider exhausted: swap fact.run_paused_provider_error for a
+      // terminal halt with reason="provider_exhausted". Carry the attempt
+      // count + cap-reason in detail for post-mortem.
+      if (providerExhausted !== undefined) {
+        facts = facts.filter((f) => f.type !== "fact.run_paused_provider_error");
+        facts.push({
+          type: "fact.run_halted",
+          payload: {
+            reason: "provider_exhausted",
+            detail: `provider retry chain exhausted after ${providerExhausted.attempt} attempts (${providerExhausted.reason})`,
+          },
+        });
+      }
+
+      // Provider auto-retry: extend the existing fact.run_paused_provider_error
+      // payload with policy + attempt + resumeAt so the reducer projects
+      // status to `paused_provider_retry` and the wake-pending sweeper
+      // auto-resumes once `resumeAt` has elapsed. The chain is recorded
+      // separately via fact.provider_retry_attempted (one per attempt).
+      if (providerRetryDecision?.kind === "auto-retry") {
+        for (const f of facts) {
+          if (f.type === "fact.run_paused_provider_error") {
+            f.payload.policy = "auto-retry";
+            f.payload.attempt = providerRetryDecision.attempt;
+            f.payload.resumeAt = providerRetryDecision.resumeAt;
+            break;
+          }
+        }
+        facts.push({
+          type: "fact.provider_retry_attempted",
+          payload: {
+            nodeId: state.currentNode ?? "",
+            attempt: providerRetryDecision.attempt,
+            httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
+            delayMs: providerRetryDecision.delayMs,
+          },
+        });
+      }
+
       let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
       if (budgetWarnedTags.length > 0) {
         const prior = readBudgetWarned(state.routing);
@@ -1107,7 +1177,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Retry pause: stamp the wake-eligibility timestamp so wake-pending
       // can re-queue this run when the backoff has elapsed.
       if (retryPause !== undefined) {
-        routingPatch = { ...(routingPatch ?? {}), [RETRY_RESUME_AT_KEY]: retryPause.resumeAt };
+        routingPatch = { ...(routingPatch ?? {}), [AUTO_RESUME_AT_KEY]: retryPause.resumeAt };
+      }
+      // Provider auto-retry: same shape, plus persist the attempt counter
+      // so the next pause_provider in the chain reads it and the cap
+      // bounds the run even across manual `intent.resume` interruptions.
+      if (providerRetryDecision?.kind === "auto-retry") {
+        routingPatch = {
+          ...(routingPatch ?? {}),
+          [AUTO_RESUME_AT_KEY]: providerRetryDecision.resumeAt,
+          [PROVIDER_RETRY_ATTEMPT_KEY]: providerRetryDecision.attempt,
+        };
+      }
+      // Clear the provider-retry chain counter on any successful turn
+      // so future failures in this run start a fresh chain. Keep the
+      // counter on `transition` outcomes regardless of outcomeStatus —
+      // a `fail` outcome from the agent (not a transport error) means
+      // the call landed; the chain-counter doesn't apply.
+      if (result.kind === "transition" && readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]) > 0) {
+        routingPatch = { ...(routingPatch ?? {}), [PROVIDER_RETRY_ATTEMPT_KEY]: 0 };
       }
       // Goal-gate routing keys: record the completed gate's outcome and
       // (when goalGateStep retargeted) the bumped retry counter. These keys
@@ -1289,7 +1377,14 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-type ResumeOf = "fresh" | "crash" | "paused_hitl" | "paused_provider_error" | "quarantined";
+type ResumeOf =
+  | "fresh"
+  | "crash"
+  | "paused_hitl"
+  | "paused_provider_error"
+  | "paused_provider_retry"
+  | "paused_retry"
+  | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
  * resumeOf field. Walks recent facts looking for the one that flipped
@@ -1310,7 +1405,14 @@ function deriveResumeOf(
     if (e == null) continue;
     if (e.type === "fact.run_resumed") {
       const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;
-      if (fs === "paused_hitl" || fs === "paused_provider_error" || fs === "quarantined") return fs;
+      if (
+        fs === "paused_hitl" ||
+        fs === "paused_provider_error" ||
+        fs === "paused_provider_retry" ||
+        fs === "paused_retry" ||
+        fs === "quarantined"
+      )
+        return fs;
       return "fresh";
     }
     if (e.type === "fact.run_requeued_after_crash") return "crash";
