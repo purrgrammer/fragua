@@ -363,9 +363,13 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!body || (body.resolution !== "treat_as_done" && body.resolution !== "retry" && body.resolution !== "cancel")) {
       return c.json({ error: "resolution required" }, 400);
     }
+    const payload: { resolution: "treat_as_done" | "retry" | "cancel"; note?: string } = {
+      resolution: body.resolution,
+    };
+    if (typeof body.note === "string") payload.note = body.note;
     return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.unquarantine",
-      payload: { resolution: body.resolution, note: body.note ?? "" },
+      payload,
     });
   });
 
@@ -374,9 +378,11 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (!body || typeof body.newPriority !== "number") {
       return c.json({ error: "newPriority required" }, 400);
     }
+    const payload: { newPriority: number; note?: string } = { newPriority: body.newPriority };
+    if (typeof body.note === "string") payload.note = body.note;
     return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.priority_adjusted",
-      payload: { newPriority: body.newPriority, note: body.note ?? "" },
+      payload,
     });
   });
 
@@ -394,16 +400,6 @@ export function createRoutes(deps: ServerDeps): Hono {
       limit,
     });
     return c.json(events);
-  });
-
-  app.get("/runs/:id/messages", (c) => {
-    const since = Number(c.req.query("since") ?? 0);
-    const limit = Math.min(Number(c.req.query("limit") ?? 1000), 5000);
-    const msgs = deps.store.getMessages(c.req.param("id"), {
-      sinceOrdinal: since,
-      limit,
-    });
-    return c.json(msgs);
   });
 
   // ─── SSE stream ─────────────────────────────────────────────

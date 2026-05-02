@@ -74,7 +74,7 @@ export type IntentType = IntentEvent["type"];
  * an `artifacts` row and reference by sha or `(node, iteration, key)`.
  *
  * Operator-supplied intents (`intent.steering_requested.text`,
- * `intent.hitl_input.input`, etc.) flow through the cap too; the
+ * `intent.hitl_input.selected`, etc.) flow through the cap too; the
  * server translates `PayloadTooLargeError` to a 413 so callers see a
  * typed `code: "payload_too_large"` instead of a 500.
  */
