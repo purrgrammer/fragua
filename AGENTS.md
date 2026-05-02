@@ -72,11 +72,16 @@ Skills (domain context loaded on demand): `.agents/skills/` — `frontend`, `des
    | If you touch | Update in the same PR |
    |---|---|
    | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
-   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed |
+   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` §8 if halt/quarantine reason changed |
    | `packages/core/src/handler/types.ts` | `handler-contract.md` |
    | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
+   | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/swarm-author/SKILL.md` validator-codes table |
+   | `packages/server/src/store/routes.ts` / `runs-routes.ts` — operator endpoint shapes | `.agents/skills/swarm-run/SKILL.md` cheat sheet; `ARCHITECTURE.md` §7 |
+   | `packages/store/src/schema.sql` — blobs / artifacts layout | `.agents/skills/swarm-debug/SKILL.md` §7 (artifact read path) |
 
    Half-baked is fine — mark it (`> Status: in-progress` or `> Status: sketch`). An honest known-rough section beats silence; we revisit as the design firms up.
+
+   **Enum-literal consumers.** Adding or removing a literal in a contract union (`RunStatus`, `HaltReason`, `IntentEvent['type']`, `FactEvent['type']`, etc.) requires a grep across `packages/` for every consumer — many use string-literal sets (`Set<RunStatus>`, hardcoded `WHERE status IN (…)` SQL, label maps in `web/src/lib/humanize.ts`, allowed-status arrays in `server/src/store/runs-routes.ts:VALID_STATUSES`) that don't trip TypeScript exhaustiveness checks. The typecheck pass is necessary but not sufficient — when in doubt, `rg '"<old-literal>"' packages/` and update each.
 2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.
 3. **No silent deps.** Every runtime dep through `package.json` with an exact pin and a one-line rationale in the commit message.
 4. **One coordination surface.** `@swarm/store` is the only place state transitions land. No filesystem coordination (JSONL, checkpoint files, `fs.watch`, unix sockets).
