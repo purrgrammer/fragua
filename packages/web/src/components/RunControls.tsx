@@ -23,6 +23,12 @@ export interface RunControlsProps {
   runId: string;
   status: RunDetail["status"];
   runStatus: RunDetail["runStatus"];
+  /** When the run is `paused_hitl` with non-empty options, HitlChoice
+   * owns the action surface (operator picks one of the option buttons).
+   * When options are empty, the pause was operator-driven (`POST /pause`)
+   * and Resume becomes the right affordance. RunDetail passes the count;
+   * 0 / undefined → operator-pause; > 0 → workflow HITL. */
+  hitlOptionsCount?: number;
   /** Compact mode: drops the card wrapper, shrinks the buttons to icon-only
    * with a tooltip-style title, sized to match the status badge so the
    * controls can sit inline alongside the badge in a header row. The
@@ -37,7 +43,13 @@ async function refreshAfterControl(qc: ReturnType<typeof useQueryClient>, runId:
   await qc.invalidateQueries({ queryKey: ["run-paused-events", runId] });
 }
 
-export function RunControls({ runId, status, runStatus, compact = false }: RunControlsProps): JSX.Element | null {
+export function RunControls({
+  runId,
+  status,
+  runStatus,
+  hitlOptionsCount,
+  compact = false,
+}: RunControlsProps): JSX.Element | null {
   const qc = useQueryClient();
 
   const pauseM = useMutation({
@@ -84,10 +96,16 @@ export function RunControls({ runId, status, runStatus, compact = false }: RunCo
   };
 
   const canPause = status === "running";
-  // Resume is the *generic operator-pause* path only. Specialized
-  // substatuses route Resume through their own banner so we don't
-  // double up the action surface.
-  const canResume = status === "paused" && runStatus !== "paused_hitl" && runStatus !== "paused_provider_error";
+  // Resume is the generic operator-pause path. The specialized
+  // substatuses handle their own surface:
+  //   - paused_provider_error → RunPausedNotice (Resume + Cancel)
+  //   - paused_hitl with options → HitlChoice (option buttons)
+  // paused_hitl with NO options is operator-driven (POST /pause) and
+  // owns Resume here. paused_provider_retry / paused_retry auto-resume
+  // on a timer; manual Resume short-circuits the wait.
+  const isOperatorHitlPause = runStatus === "paused_hitl" && (hitlOptionsCount ?? 0) === 0;
+  const canResume =
+    status === "paused" && runStatus !== "paused_provider_error" && (runStatus !== "paused_hitl" || isOperatorHitlPause);
   // Cancel is available everywhere non-terminal. RunPausedNotice
   // already exposes a Cancel for paused_provider_error — hide ours
   // there to avoid two adjacent Cancel buttons.

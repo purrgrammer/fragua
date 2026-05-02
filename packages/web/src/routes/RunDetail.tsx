@@ -299,7 +299,13 @@ const DetailHeader = memo(function DetailHeader({
           )}
           {detail && (
             <div className="ml-auto">
-              <RunControls runId={runId} status={detail.status} runStatus={detail.runStatus} compact />
+              <RunControls
+                runId={runId}
+                status={detail.status}
+                runStatus={detail.runStatus}
+                hitlOptionsCount={detail.hitlOptions?.length ?? 0}
+                compact
+              />
             </div>
           )}
         </div>

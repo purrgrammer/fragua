@@ -115,8 +115,14 @@ export function foldDetailFrame(
       const options = Array.isArray(rawOptions)
         ? (rawOptions as Array<{ key: string; label: string; to: string }>)
         : null;
+      // Reset the paused node back to "running" — the prior fact.node_aborted
+      // (in the operator-pause path) optimistically flipped it to "failed",
+      // but a paused node will re-dispatch on resume. Workflow-driven
+      // wait.human nodes don't emit a preceding node_aborted but a
+      // running-set is harmless.
+      const nextOverlay = nodeId != null ? setNodeState(prev, { nodeId }, "running", seq) : prev;
       return {
-        ...prev,
+        ...nextOverlay,
         status: "paused",
         runStatus: "paused_hitl",
         hitlNodeId: nodeId ?? null,
