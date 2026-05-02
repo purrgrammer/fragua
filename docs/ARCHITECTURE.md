@@ -390,7 +390,8 @@ export interface IEventStore {
   // Writes
   appendFact(runId: string, events: FactEvent[], expectedVersion: number): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
-  appendDaemonEvent(event: DaemonEvent): { seq: number };
+  appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
+  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
   getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
 
   // Run lifecycle

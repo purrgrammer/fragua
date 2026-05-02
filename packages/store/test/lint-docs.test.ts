@@ -19,11 +19,13 @@ import { join } from "node:path";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const SCHEMA_SQL = join(REPO_ROOT, "packages", "store", "src", "schema.sql");
+const STORE_TYPES_TS = join(REPO_ROOT, "packages", "store", "src", "types.ts");
 const SWARM_EVENTS_TS = join(REPO_ROOT, "packages", "types", "src", "swarm-events.ts");
 const HANDLER_TYPES_TS = join(REPO_ROOT, "packages", "core", "src", "handler", "types.ts");
 const ARCH_MD = join(REPO_ROOT, "docs", "ARCHITECTURE.md");
 const HANDLER_CONTRACT_MD = join(REPO_ROOT, "docs", "handler-contract.md");
 const PROPOSALS_DIR = join(REPO_ROOT, "docs", "proposals");
+const SERVER_SRC_DIR = join(REPO_ROOT, "packages", "server", "src");
 const FIXTURES_DIR = join(__dirname, "fixtures", "drift-lint");
 
 // ───────────────────────── types ─────────────────────────
@@ -670,6 +672,161 @@ export function auditCapabilityClaims(opts: {
   return findings;
 }
 
+// ──────────────── IEventStore interface lint ────────────────
+
+/**
+ * Extract the method names declared inside `export interface <name> {...}`.
+ * Properties typed as plain values (`foo: string`) and function-typed
+ * properties (`foo: () => void`) are skipped — only declarations of the
+ * shape `name(...)` or `name<T>(...)` count as methods.
+ */
+export function extractInterfaceMethodNames(src: string, name: string): string[] {
+  const startRe = new RegExp(`export\\s+interface\\s+${name}\\s*\\{`);
+  const m = startRe.exec(src);
+  if (!m) return [];
+  let i = m.index + m[0].length;
+  let depth = 1;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+    i++;
+  }
+  const body = src.slice(m.index + m[0].length, i);
+  // Strip block comments; strip line comments line-by-line.
+  const stripped = body
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((l) => l.replace(/\/\/.*$/, ""))
+    .join("\n");
+  // Match `<methodName>(` or `<methodName><Generics>(` at line start (after WS).
+  const methodRe = /^\s*([a-zA-Z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm;
+  const out = new Set<string>();
+  for (const m of stripped.matchAll(methodRe)) out.add(m[1] ?? "");
+  return [...out];
+}
+
+export function auditIEventStoreInterface(opts: { typesPath: string; archPath: string }): Finding[] {
+  const ts = readFileSync(opts.typesPath, "utf8");
+  const md = readFileSync(opts.archPath, "utf8");
+  const section = sliceSection(md, /^## 4\. /, 2);
+  if (section == null) {
+    return [
+      {
+        token: "## 4. IEventStore interface",
+        doc: opts.archPath,
+        section: "(missing)",
+        source: "auditIEventStoreInterface",
+      },
+    ];
+  }
+  const methods = extractInterfaceMethodNames(ts, "IEventStore");
+  const findings: Finding[] = [];
+  for (const name of methods) {
+    if (!section.includes(name)) {
+      findings.push({
+        token: name,
+        doc: opts.archPath,
+        section: "## 4. IEventStore interface",
+        source: `IEventStore.${name}`,
+      });
+    }
+  }
+  return findings;
+}
+
+// ──────────────── documented-routes lint ────────────────
+
+interface RouteRef {
+  method: string;
+  path: string;
+}
+
+/**
+ * Extract `app.<method>(<path>, ...)` calls from a TS source. Recognises
+ * GET/POST/PUT/PATCH/DELETE; matches paths in `"…"`, `'…'`, or template
+ * literals without `${…}` substitution. Stripped of comments first.
+ */
+export function extractAppRoutes(src: string): RouteRef[] {
+  const stripped = src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((l) => l.replace(/\/\/.*$/, ""))
+    .join("\n");
+  const re = /\bapp\.(get|post|put|patch|delete)\s*\(\s*["'`]([^"'`\n$]+)["'`]/g;
+  const routes: RouteRef[] = [];
+  for (const m of stripped.matchAll(re)) routes.push({ method: m[1] ?? "", path: m[2] ?? "" });
+  return routes;
+}
+
+/**
+ * Walk every `.ts` file (excluding `.test.ts`) under `dir` and collect
+ * `app.<method>(<path>, …)` calls.
+ */
+function readSourceRoutes(dir: string): RouteRef[] {
+  const seen = new Set<string>();
+  const visit = (d: string): void => {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) {
+        visit(full);
+      } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+        const src = readFileSync(full, "utf8");
+        for (const r of extractAppRoutes(src)) seen.add(`${r.method} ${r.path}`);
+      }
+    }
+  };
+  visit(dir);
+  return [...seen].map((s) => {
+    const idx = s.indexOf(" ");
+    return { method: s.slice(0, idx), path: s.slice(idx + 1) };
+  });
+}
+
+/**
+ * Pull TS code blocks (```typescript ... ```) out of a markdown slice.
+ */
+function extractTsCodeBlocks(md: string): string {
+  const re = /```(?:typescript|ts)?\n([\s\S]*?)```/g;
+  let out = "";
+  for (const m of md.matchAll(re)) out += `${m[1] ?? ""}\n`;
+  return out;
+}
+
+export function auditDocumentedRoutes(opts: { archPath: string; archSection: string; serverDir: string }): Finding[] {
+  const md = readFileSync(opts.archPath, "utf8");
+  const escaped = opts.archSection.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const section = sliceSection(md, new RegExp(`^## ${escaped}\\b`), 2);
+  if (section == null) {
+    return [
+      {
+        token: opts.archSection,
+        doc: opts.archPath,
+        section: "(missing)",
+        source: "auditDocumentedRoutes",
+      },
+    ];
+  }
+  const docRoutes = extractAppRoutes(extractTsCodeBlocks(section));
+  const sourceRoutes = new Set(readSourceRoutes(opts.serverDir).map((r) => `${r.method} ${r.path}`));
+  const findings: Finding[] = [];
+  for (const r of docRoutes) {
+    const key = `${r.method} ${r.path}`;
+    if (!sourceRoutes.has(key)) {
+      findings.push({
+        token: `app.${r.method}("${r.path}")`,
+        doc: opts.archPath,
+        section: `## ${opts.archSection}`,
+        source: `documented but not registered in ${opts.serverDir}`,
+      });
+    }
+  }
+  return findings;
+}
+
 // ───────────────────────── tests ─────────────────────────
 
 describe("drift-lint — live repo", () => {
@@ -712,6 +869,26 @@ describe("drift-lint — live repo", () => {
     });
     if (findings.length > 0) {
       throw new Error(`drift-lint findings (handler contract):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+
+  test("every IEventStore method appears in ARCHITECTURE.md §4", () => {
+    const findings = auditIEventStoreInterface({ typesPath: STORE_TYPES_TS, archPath: ARCH_MD });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (IEventStore vs §4):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+
+  test("every route documented in ARCHITECTURE.md §7 is registered in packages/server/src", () => {
+    const findings = auditDocumentedRoutes({
+      archPath: ARCH_MD,
+      archSection: "7. Web server",
+      serverDir: SERVER_SRC_DIR,
+    });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (routes vs §7):\n${formatFindings(findings)}`);
     }
     expect(findings).toEqual([]);
   });
@@ -912,5 +1089,118 @@ describe("drift-lint — ignore annotation", () => {
     expect(map.get("alpha")).toBe(false);
     expect(map.get("beta_internal")).toBe(true);
     expect(map.get("gamma")).toBe(false);
+  });
+});
+
+describe("drift-lint — interface and route extractors", () => {
+  test("extractInterfaceMethodNames pulls method declarations and skips properties", () => {
+    const src = [
+      "export interface Foo {",
+      "  // a method with comment",
+      "  doThing(arg: number): void;",
+      "  generic<T>(t: T): T;",
+      "  // a property — must NOT be picked up",
+      "  bar: string;",
+      "  // function-typed property — must NOT be picked up",
+      "  baz: (x: number) => string;",
+      "  multi(",
+      "    longArg: number,",
+      "    other: string,",
+      "  ): void;",
+      "}",
+      "",
+    ].join("\n");
+    const methods = extractInterfaceMethodNames(src, "Foo");
+    expect(methods).toContain("doThing");
+    expect(methods).toContain("generic");
+    expect(methods).toContain("multi");
+    expect(methods).not.toContain("bar");
+    expect(methods).not.toContain("baz");
+  });
+
+  test("extractAppRoutes pulls method+path pairs from app.<verb>(...) calls", () => {
+    const src = [
+      'app.get("/runs/:id/events", (c) => c.json([]));',
+      "// dead route below",
+      '// app.post("/dead", noop);',
+      "app.post('/runs', async (c) => c.json({}));",
+      "app.delete(`/runs/:id`, fn);",
+    ].join("\n");
+    const routes = extractAppRoutes(src);
+    const keys = routes.map((r) => `${r.method} ${r.path}`);
+    expect(keys).toContain("get /runs/:id/events");
+    expect(keys).toContain("post /runs");
+    expect(keys).toContain("delete /runs/:id");
+    expect(keys).not.toContain("post /dead");
+  });
+
+  test("auditIEventStoreInterface flags a method that's missing from §4", () => {
+    const tmpTs = join(FIXTURES_DIR, "_tmp-iface.ts");
+    const tmpMd = join(FIXTURES_DIR, "_tmp-iface.md");
+    mkdirSync(FIXTURES_DIR, { recursive: true });
+    writeFileSync(
+      tmpTs,
+      ["export interface IEventStore {", "  appendFact(): void;", "  newlyAddedMethod(): void;", "}"].join("\n"),
+    );
+    writeFileSync(
+      tmpMd,
+      [
+        "# Test",
+        "",
+        "## 4. IEventStore interface",
+        "",
+        "appendFact ships; the doc forgot to mention the new one.",
+        "",
+        "## 5. End",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const findings = auditIEventStoreInterface({ typesPath: tmpTs, archPath: tmpMd });
+      const tokens = findings.map((f) => f.token);
+      expect(tokens).toContain("newlyAddedMethod");
+      expect(tokens).not.toContain("appendFact");
+    } finally {
+      rmSync(tmpTs, { force: true });
+      rmSync(tmpMd, { force: true });
+    }
+  });
+
+  test("auditDocumentedRoutes flags a route example that's not registered in source", () => {
+    const tmpMd = join(FIXTURES_DIR, "_tmp-routes.md");
+    const tmpDir = join(FIXTURES_DIR, "_tmp-server");
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(
+      join(tmpDir, "routes.ts"),
+      ["export const routes = (app) => {", '  app.get("/runs/:id/stream", noop);', "};"].join("\n"),
+    );
+    writeFileSync(
+      tmpMd,
+      [
+        "# Test",
+        "",
+        "## 7. Web server",
+        "",
+        "```typescript",
+        "// Stale: the doc says /events for SSE; source actually mounts /stream.",
+        'app.get("/runs/:id/events", (c) => streamSSE(c, async () => {}));',
+        "```",
+        "",
+        "## 8. End",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const findings = auditDocumentedRoutes({
+        archPath: tmpMd,
+        archSection: "7. Web server",
+        serverDir: tmpDir,
+      });
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings[0]?.token).toContain("/runs/:id/events");
+    } finally {
+      rmSync(tmpMd, { force: true });
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
