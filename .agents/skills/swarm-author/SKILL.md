@@ -1,6 +1,6 @@
 ---
 name: swarm-author
-description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file in `workflows/` or `examples/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, `<promise>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics E001–E015 / W001–W010, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file in `workflows/` or `examples/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics E001–E015 / W001–W010, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
 version: 0.1.0
 ---
 
@@ -45,7 +45,7 @@ digraph my_thing {
   graph [goal = "one-sentence purpose", label = "my-thing"]
 
   start [shape=Mdiamond]
-  work  [prompt = "do the thing for $ARGUMENTS. End with `<promise>DONE</promise>`."]
+  work  [prompt = "do the thing for $ARGUMENTS."]
   done  [shape=Msquare]
 
   start -> work -> done
@@ -305,15 +305,9 @@ A node that decides the run can't proceed emits `<abort>reason</abort>` in its f
 If the task needs more than the workflow can handle (multi-package refactor, contract change), emit `<abort>task too large, split into <suggested>: <reason></abort>`.
 ```
 
-### Promise sentinels
+### Promise markers (prose only — not an engine signal)
 
-Consistent end-of-phase tokens make downstream nodes' parsing trivial and give humans a visible success marker:
-
-```
-Emit `<promise>PLAN_READY</promise>` when done.
-```
-
-Downstream nodes can reference `$plan.output` — the full text — without fragile regex parsing.
+Earlier prompt versions used `<promise>X_READY</promise>` as an end-of-phase token. Per `docs/handler-contract.md`, those were prose convention only — never engine signals — and have been removed from `.swarm/workflows/*.dot`. Don't reintroduce them: downstream nodes already read the full prior output via `$nodeId.output` substitution, no sentinel required.
 
 ### Explicit tool whitelist
 
@@ -339,7 +333,7 @@ Long prompts mean the agent spends tokens re-parsing your essay. `change.dot`'s 
 
 ## 12. Wait.human (HITL nodes)
 
-`hexagon`-shaped nodes pause the run and ask the operator a question. The payload of `fact.run_paused_hitl` carries the node's `prompt` and the **edge labels** as the operator's options. The operator resumes with `POST /runs/:id/hitl { input }`; the structured handler picks the outgoing edge whose label matches the operator's selection by accelerator key.
+`hexagon`-shaped nodes pause the run and ask the operator a question. The payload of `fact.run_paused_hitl` carries the node's `prompt` and the **edge labels** as the operator's options. The operator resumes with `POST /runs/:id/hitl { selected: string, note?: string }` (server validates `selected` is a non-empty string and returns 400 otherwise); the structured handler picks the outgoing edge whose label matches `selected` by accelerator key.
 
 ```dot
 signoff [
@@ -529,6 +523,7 @@ The `change.dot` daily driver uses this to put `implement` + `review` in a share
 | W003 | warn  | Node has only conditional edges, no `outcome=fail` catch-all. |
 | W004 | warn  | Hexagon outgoing edge uses legacy `context.hitl.*` condition; structured HITL routes by `[K] Label` accelerators (§12). |
 | W005 | warn  | Duplicate edge. |
+| W006 | —     | Reserved / unused (no validator emits this code). |
 | W007 | warn  | `goal_gate=true` node has no retarget at any level — failure can only halt. |
 | W008 | warn  | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
 | W009 | warn  | Codergen (`box`) node has empty `prompt` and empty `label` — the agent has nothing to act on. |
@@ -564,7 +559,7 @@ If you have the budget, run it twice — once cold, once with the prior run's ar
 - **Don't pack two jobs into one node.** A node has one prompt, one thread, one model, one set of tools. If the prompt is "do A, then B, then C" — three nodes.
 - **Don't leave `model=` unset in a shipped workflow.** The daemon default is fine for drafts; explicit pins make cost and quality predictable across machines.
 - **Don't `context_files = "docs/SPEC.md, docs/ARCHITECTURE.md, README.md"`.** You'll blow the event payload cap and bury the real rules. One file with the hard constraints, usually `AGENTS.md`.
-- **Don't re-invent `<abort>` / `<promise>`.** Downstream nodes already know how to read them. A custom sentinel requires a parser; a standard one just works.
+- **Don't re-invent `<abort>`.** Downstream nodes already know how to read it. A custom sentinel requires a parser; the standard one just works. (Note: `<promise>` is *not* a counterpart — it was prose convention only, never an engine signal, and has been removed from shipped workflows.)
 - **Don't conditionally route on `outcome=error`.** The states are `success` and `fail`. `fact.run_halted { reason:"error" }` is a terminal event, not an edge-eligible outcome.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Your edit applies only to *future* runs.
 - **Don't put HITL inside a parallel branch.** Not supported (§13.1); it coerces to fail.
@@ -592,7 +587,7 @@ digraph NAME {
 
   # Codergen — one LLM turn.
   plan [
-    prompt        = "… $ARGUMENTS. End with `<promise>PLAN_READY</promise>`."
+    prompt        = "… $ARGUMENTS."
     allowed_tools = "read, bash"
     context_files = "AGENTS.md"
   ]

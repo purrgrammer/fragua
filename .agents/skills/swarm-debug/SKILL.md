@@ -189,6 +189,8 @@ Column layout: `content` is the JSON-serialized `AgentMessage` (validated by `CH
 curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, nodeId, iteration}'
 curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, blocks: (.content.content // []) | map(.type)}'
 curl -fsS "$URL/runs/$RUN/messages?nodeId=plan" | jq '.'
+# Paging: ?sinceOrdinal=N returns rows with ordinal > N; ?limit=N caps the page.
+curl -fsS "$URL/runs/$RUN/messages?sinceOrdinal=42&limit=50" | jq '.'
 
 # SQLite — use json_extract for shape probes, or just pretty-print.
 sqlite3 -readonly .swarm/swarm.db <<SQL
@@ -252,11 +254,15 @@ SQL
 Pull the body (text artifact) with:
 
 ```sh
-sqlite3 -readonly .swarm/swarm.db \
-  "SELECT content FROM blobs WHERE sha256=(
-     SELECT blob_sha FROM artifacts
-     WHERE run_id='<RUN>' AND node_id='<NODE>' AND key='<KEY>' AND iteration=<N>);" \
-  | sed 's/^content = //'
+# 1. Resolve the blob sha for the artifact.
+SHA=$(sqlite3 -readonly .swarm/swarm.db \
+  "SELECT blob_sha FROM artifacts
+   WHERE run_id='<RUN>' AND node_id='<NODE>' AND key='<KEY>' AND iteration=<N>;")
+
+# 2. Bytes live on disk, not in the `blobs` table — that table holds only
+#    metadata (sha256, size_bytes, created_at). Default layout:
+#    <dirname(db)>/blobs/<sha[0:2]>/<sha>  (configurable via SqliteStoreOpts.blobsDir).
+cat ".swarm/blobs/${SHA:0:2}/$SHA"
 ```
 
 Binary artifacts (mime ≠ text/*) — copy to disk and inspect externally; don't `cat` them in-terminal.
@@ -355,6 +361,7 @@ curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-50:]'
 # Messages — content is AgentMessage JSON
 curl -fsS "$URL/runs/$RUN/messages" | jq '.[] | {ordinal, role: .content.role, nodeId, iteration}'
 curl -fsS "$URL/runs/$RUN/messages?nodeId=<NODE>" | jq
+curl -fsS "$URL/runs/$RUN/messages?sinceOrdinal=<LAST>&limit=50" | jq
 
 # Step snapshots (prompts, models, tokens, cost)
 curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
