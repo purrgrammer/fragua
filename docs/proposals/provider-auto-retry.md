@@ -1,7 +1,8 @@
 ---
 title: Auto-retry for transient LLM provider errors
-status: proposed
-maturity: designed
+summary: "Auto-retry for transient LLM provider errors"
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-02
 ---
 
@@ -44,28 +45,30 @@ Backoff: exponential with jitter. Cap at 5 attempts or 5 minutes total, whicheve
 
 Operationally the current state is "every 429 halts the batch." For unattended use — the obvious target for a CLI like swarm — this is non-viable. The fact / intent shapes already support it (per ARCH §1.10); only the executor's branching needs to change.
 
-## Open questions
+## Resolved decisions (shipped 2026-05-02 in `666de77`)
 
-The 2026-05-02 brainstorm surfaced new corners alongside the original three;
-consolidated below.
+The 2026-05-02 brainstorm settled the design; what shipped:
 
-- **State persistence across daemon restart.** `nextAttemptAt` and `attempt` need to survive a daemon restart mid-backoff so the wake-pending sweeper can read them. Means the values live on the persisted fact payload (`fact.run_paused_provider_error { policy, attempt, nextAttemptAt }`), not in executor memory. Same shape as `paused_retry`'s `routing.internal.retry_resume_at`. Confirm this is the right home.
+- **State persistence:** `routing.internal.provider_retry.attempt` survives daemon restart and manual `intent.resume`. Wake timer lives on `routing.internal.auto_resume_at` — shared with `paused_retry` via a single sweep in `wake-pending.ts`.
+- **Attempt counter on manual resume:** continue-chain. The cap (5 attempts, 5 cumulative minutes) bounds the run even across operator interventions; resets only on successful turn append.
+- **4xx classification:** auto-retry on 408 / 429 / 500–504 / 529 / pre-response network; manual on 400 / 401 / 402 / 403 / 404 / 413 / 422.
+- **`Retry-After` honoured exactly:** no cap, no jitter when present. Provider knows their state better than we do.
+- **Backoff without `Retry-After`:** full-jitter exponential, base 1s, capped at 32s per attempt; 5 attempts / 5 cumulative minutes total.
+- **Cardinality:** one `fact.provider_retry_attempted` per attempt (preserves I3 fact immutability).
+- **Status taxonomy:** new `paused_provider_retry` status mirrors `paused_retry` so operators can filter auto-retrying runs cheaply by status alone.
+- **Recoverable-pause unification:** consolidated `routing.internal.retry_resume_at` → `routing.internal.auto_resume_at` so both auto-resumable statuses share one sweep loop and one routing key.
 
-- **Manual-resume attempt counter.** If the operator resumes manually after auto-retry attempt 3, then the next 429 hits — is that attempt 4 (continuing the chain) or attempt 1 (manual reset)? Manual resume signals the operator believes the underlying issue is transient, which argues for reset. Open until the first real workload surfaces a preference.
+## Open questions (deferred follow-ups)
 
-- **4xx enumeration.** The Shape table covers 402 / 429 / 5xx / network. Silent on 401 / 403 / 404 / 408 / 422. Provisional reads: 401 / 403 / 404 / 422 stay manual (auth/perm rotated, model gone, schema mismatch — none auto-retryable); 408 (request timeout) gets auto-retry like network reset. Lock these down before queueing.
+These are remaining items from the brainstorm that didn't ship and earn their own slice when the appetite arrives.
 
-- **`Retry-After` longer than the cap.** Provider says `Retry-After: 3600`; cap says 5 min total. Three options: (a) cap wins, halt with `provider_exhausted`; (b) header wins, pause longer than the cap allows; (c) honour the header but past the cap fall through to manual `paused_provider_error`. (c) feels right — operator decision past the documented limit — but pin it.
+- **402 default tightness.** Stays manual today. An explicit `--auto-retry-402` opt-in might earn its place once we see real workloads where billing-race transients are common enough to justify the risk of burning money on a busted account.
 
-- **Interaction with `paused_budget`.** Once [`recoverable-budget-pause`](./recoverable-budget-pause.md) ships: a run is over per-run cost cap AND just got a 429. Budget is checked at turn boundary; the 429 happens during the turn. So 429 → auto-retry pause → next attempt fires → turn boundary → budget pause. Cleanly composes; one-line note in the Shape section once both ship.
+- **Provider-specific `Retry-After` quirks.** OpenAI sometimes uses `x-ratelimit-reset-after` instead of `Retry-After`, and the value is sometimes wildly conservative. Today we parse only `Retry-After` (case-insensitive); the rest fall through to our exponential backoff. Worth revisiting if a provider-specific issue bites.
 
-- **Cardinality of `provider_retry_attempted` facts.** 5 retries × N paused runs × M providers = many fact rows. Two shapes: (a) one fact per attempt — simple, queryable, transparent; (b) fold into `fact.run_paused_provider_error.attempts[]` — denser but mutates payload, violating fact immutability. (a) is the only consistent answer; flagged here so it doesn't drift.
+- **Web UI retry-chain display.** A `paused_provider_retry` run currently shows up as "paused" in RunDetail. Operators see the chain only by reading the events. A small UI affordance (read the latest `fact.provider_retry_attempted`, render "auto-retrying, attempt 3 of 5, next try in 4s") would close the visibility gap.
 
-- **Tightness of the manual default for 402.** A 402 *can* be transient (provider quota race conditions). Default stays manual to avoid burning money on real billing failures, but an explicit `--auto-retry-402` opt-in might earn its place once we see real workloads.
-
-- **Provider-specific `Retry-After` quirks.** OpenAI's `Retry-After` is sometimes wildly conservative; some providers don't send it at all; Anthropic uses `retry-after`; OpenAI sometimes uses `x-ratelimit-reset-after` instead. Honour the standard header when present, fall back to our backoff when absent — but the parser needs care.
-
-- **Test fixture shape.** Mock pi-ai's transport layer to inject 429 / 5xx / network reset deterministically, or run against a fake HTTP server? Plan agent should propose; the answer affects how flaky the suite ends up.
+- **Cost-attribution comment in code.** Auto-retry that fails before getting a response → no `cost.recorded` fires (cost-recording is response-driven). Worth a code comment in `provider-retry-policy.ts` so a future pi-ai upgrade doesn't break the invariant by accident.
 
 ## What this does not commit to
 
