@@ -24,10 +24,7 @@
 // intent and an unquarantine / hitl_input ends up cancelled (fold rule
 // R1: cancel beats everything).
 
-import type { Database } from "bun:sqlite";
-import { ConcurrencyError, type FactEvent, type IEventStore } from "@swarm/store";
-
-type DbRow = { run_id: string; version: number; last_applied_seq: number };
+import { ConcurrencyError, type FactEvent, type IEventStore, type OrphanSideEffectRow } from "@swarm/store";
 
 export interface WakePendingResult {
   cancelled: string[];
@@ -57,33 +54,17 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
  */
 function wakeCancel(store: IEventStore): string[] {
   const out: string[] = [];
-  const db = dbOf(store);
-  if (db == null) return [];
-
-  const rows = db
-    .query<DbRow, []>(
-      `SELECT run_id, version, last_applied_seq
-         FROM run_state
-        WHERE status IN ('paused_hitl', 'paused_provider_error', 'quarantined')`,
-    )
-    .all();
-
-  for (const row of rows) {
-    const cancel = db
-      .query<{ seq: number }, [string, number]>(
-        `SELECT seq FROM events
-          WHERE run_id = ? AND seq > ? AND type = 'intent.cancel_requested'
-          ORDER BY seq ASC
-          LIMIT 1`,
-      )
-      .get(row.run_id, row.last_applied_seq);
+  const candidates = store.getWakeCandidates({
+    statuses: ["paused_hitl", "paused_provider_error", "quarantined"],
+  });
+  for (const row of candidates) {
+    const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
     if (cancel == null) continue;
-
     try {
-      store.appendFact(row.run_id, [{ type: "fact.run_cancelled", payload: { intentSeq: cancel.seq } }], row.version, {
+      store.appendFact(row.runId, [{ type: "fact.run_cancelled", payload: { intentSeq: cancel.seq } }], row.version, {
         advanceAppliedTo: cancel.seq,
       });
-      out.push(row.run_id);
+      out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
     }
@@ -99,29 +80,13 @@ function wakeCancel(store: IEventStore): string[] {
  */
 function wakeHitl(store: IEventStore): string[] {
   const out: string[] = [];
-  const db = dbOf(store);
-  if (db == null) return [];
-
-  const rows = db
-    .query<DbRow, []>(
-      `SELECT run_id, version, last_applied_seq
-         FROM run_state WHERE status = 'paused_hitl'`,
-    )
-    .all();
-
-  for (const row of rows) {
-    const hasHitl = db
-      .query<{ seq: number }, [string, number]>(
-        `SELECT seq FROM events
-          WHERE run_id = ? AND seq > ? AND type = 'intent.hitl_input'
-          LIMIT 1`,
-      )
-      .get(row.run_id, row.last_applied_seq);
+  const candidates = store.getWakeCandidates({ statuses: ["paused_hitl"] });
+  for (const row of candidates) {
+    const hasHitl = store.getNextPendingIntent(row.runId, "intent.hitl_input", row.lastAppliedSeq);
     if (hasHitl == null) continue;
-
     try {
       store.appendFact(
-        row.run_id,
+        row.runId,
         [
           {
             type: "fact.run_resumed",
@@ -130,7 +95,7 @@ function wakeHitl(store: IEventStore): string[] {
         ],
         row.version,
       );
-      out.push(row.run_id);
+      out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
     }
@@ -149,31 +114,15 @@ function wakeHitl(store: IEventStore): string[] {
  */
 function wakeResume(store: IEventStore): string[] {
   const out: string[] = [];
-  const db = dbOf(store);
-  if (db == null) return [];
-
-  const rows = db
-    .query<DbRow & { status: string }, []>(
-      `SELECT run_id, version, last_applied_seq, status
-         FROM run_state
-        WHERE status IN ('paused_hitl', 'paused_provider_error', 'paused_provider_retry')`,
-    )
-    .all();
-
-  for (const row of rows) {
-    const intent = db
-      .query<{ seq: number }, [string, number]>(
-        `SELECT seq FROM events
-          WHERE run_id = ? AND seq > ? AND type = 'intent.resume'
-          ORDER BY seq ASC
-          LIMIT 1`,
-      )
-      .get(row.run_id, row.last_applied_seq);
+  const candidates = store.getWakeCandidates({
+    statuses: ["paused_hitl", "paused_provider_error", "paused_provider_retry"],
+  });
+  for (const row of candidates) {
+    const intent = store.getNextPendingIntent(row.runId, "intent.resume", row.lastAppliedSeq);
     if (intent == null) continue;
-
     try {
       store.appendFact(
-        row.run_id,
+        row.runId,
         [
           {
             type: "fact.run_resumed",
@@ -186,7 +135,7 @@ function wakeResume(store: IEventStore): string[] {
         row.version,
         { advanceAppliedTo: intent.seq },
       );
-      out.push(row.run_id);
+      out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
     }
@@ -209,25 +158,14 @@ function wakeResume(store: IEventStore): string[] {
  */
 function wakeAutoResume(store: IEventStore, now: () => number): string[] {
   const out: string[] = [];
-  const db = dbOf(store);
-  if (db == null) return [];
-
-  const nowMs = now();
-  const rows = db
-    .query<DbRow & { resume_at: number | null; status: string }, [number]>(
-      `SELECT run_id, version, last_applied_seq, status,
-              CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) AS resume_at
-         FROM run_state
-        WHERE status IN ('paused_retry', 'paused_provider_retry')
-          AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) IS NOT NULL
-          AND CAST(json_extract(routing, '$."internal.auto_resume_at"') AS INTEGER) <= ?`,
-    )
-    .all(nowMs);
-
-  for (const row of rows) {
+  const candidates = store.getWakeCandidates({
+    statuses: ["paused_retry", "paused_provider_retry"],
+    autoResumeBefore: now(),
+  });
+  for (const row of candidates) {
     try {
       store.appendFact(
-        row.run_id,
+        row.runId,
         [
           {
             type: "fact.run_resumed",
@@ -236,7 +174,7 @@ function wakeAutoResume(store: IEventStore, now: () => number): string[] {
         ],
         row.version,
       );
-      out.push(row.run_id);
+      out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
     }
@@ -264,34 +202,13 @@ function wakeAutoResume(store: IEventStore, now: () => number): string[] {
  */
 function wakeUnquarantine(store: IEventStore): string[] {
   const out: string[] = [];
-  const db = dbOf(store);
-  if (db == null) return [];
-
-  const rows = db
-    .query<DbRow, []>(
-      `SELECT run_id, version, last_applied_seq
-         FROM run_state WHERE status = 'quarantined'`,
-    )
-    .all();
-
-  for (const row of rows) {
-    const intent = db
-      .query<{ seq: number; payload: string }, [string, number]>(
-        `SELECT seq, payload FROM events
-          WHERE run_id = ? AND seq > ? AND type = 'intent.unquarantine'
-          ORDER BY seq ASC
-          LIMIT 1`,
-      )
-      .get(row.run_id, row.last_applied_seq);
+  const candidates = store.getWakeCandidates({ statuses: ["quarantined"] });
+  for (const row of candidates) {
+    const intent = store.getNextPendingIntent(row.runId, "intent.unquarantine", row.lastAppliedSeq);
     if (intent == null) continue;
 
-    let payload: { resolution?: string };
-    try {
-      payload = JSON.parse(intent.payload) as { resolution?: string };
-    } catch {
-      continue;
-    }
-    const resolution = payload.resolution;
+    const payload = intent.payload as { resolution?: string } | null;
+    const resolution = payload?.resolution;
     if (resolution !== "cancel" && resolution !== "retry" && resolution !== "treat_as_done") {
       continue;
     }
@@ -301,7 +218,7 @@ function wakeUnquarantine(store: IEventStore): string[] {
       facts.push({ type: "fact.run_cancelled", payload: { intentSeq: intent.seq } });
     } else {
       if (resolution === "treat_as_done") {
-        facts.push(...synthesisedDoneFacts(db, row.run_id));
+        facts.push(...synthesisedDoneFacts(store.findOrphanSideEffects(row.runId)));
       }
       facts.push({
         type: "fact.run_resumed",
@@ -310,8 +227,8 @@ function wakeUnquarantine(store: IEventStore): string[] {
     }
 
     try {
-      store.appendFact(row.run_id, facts, row.version, { advanceAppliedTo: intent.seq });
-      out.push(row.run_id);
+      store.appendFact(row.runId, facts, row.version, { advanceAppliedTo: intent.seq });
+      out.push(row.runId);
     } catch (err) {
       if (!(err instanceof ConcurrencyError)) throw err;
     }
@@ -319,40 +236,12 @@ function wakeUnquarantine(store: IEventStore): string[] {
   return out;
 }
 
-/**
- * For every orphaned `fact.side_effect_intent` on `runId` (no matching
- * done/failed keyed by idempotencyKey), produce a synthetic
- * `fact.side_effect_done`. Same JOIN shape as `startupSweep` so the two
- * stay coherent.
- */
-function synthesisedDoneFacts(db: Database, runId: string): FactEvent[] {
-  const orphans = db
-    .query<{ idempotency_key: string; tool_name: string; node_id: string }, [string]>(
-      `SELECT json_extract(i.payload, '$.idempotencyKey') AS idempotency_key,
-              json_extract(i.payload, '$.toolName')       AS tool_name,
-              json_extract(i.payload, '$.nodeId')         AS node_id
-         FROM events i
-         LEFT JOIN events d
-                ON d.run_id = i.run_id
-               AND d.type IN ('fact.side_effect_done','fact.side_effect_failed')
-               AND json_extract(d.payload, '$.idempotencyKey') =
-                   json_extract(i.payload, '$.idempotencyKey')
-        WHERE i.run_id = ?
-          AND i.type = 'fact.side_effect_intent'
-          AND d.seq IS NULL`,
-    )
-    .all(runId);
-
+function synthesisedDoneFacts(orphans: OrphanSideEffectRow[]): FactEvent[] {
   return orphans.map((o) => ({
     type: "fact.side_effect_done",
     payload: {
-      idempotencyKey: o.idempotency_key,
-      artifactKey: `__synth_treat_as_done__:${o.node_id ?? ""}:${o.tool_name ?? ""}`,
+      idempotencyKey: o.idempotencyKey,
+      artifactKey: `__synth_treat_as_done__:${o.nodeId ?? ""}:${o.toolName ?? ""}`,
     },
   }));
-}
-
-function dbOf(store: IEventStore): Database | null {
-  const db = (store as unknown as { db?: Database }).db;
-  return db ?? null;
 }

@@ -7,19 +7,7 @@
 // depending on wall-clock.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
-import {
-  decodeCursor,
-  encodeCursor,
-  getDrilldownPage,
-  getHaltDistribution,
-  getKpiTotals,
-  getModelDistribution,
-  getRunsByBucket,
-  getSpendByBucket,
-  getTokensByBucket,
-  getTopWorkflows,
-} from "../../src/store/analytics-queries.ts";
+import { decodeCursor, encodeCursor, SqliteStore } from "@swarm/store";
 
 let store: SqliteStore;
 let nowMs: number;
@@ -85,7 +73,7 @@ let nextRunId = 0;
 
 describe("getKpiTotals", () => {
   test("empty window returns zeros", () => {
-    const totals = getKpiTotals((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const totals = store.getKpiTotals({
       fromMs: 0,
       toMs: nowMs,
     });
@@ -102,7 +90,7 @@ describe("getKpiTotals", () => {
   test("sums runs + cost + tokens within the window", () => {
     seedRun({ enqueuedAtMs: nowMs, costUsd: 1.5, inputTokens: 100, outputTokens: 50, cacheReadTokens: 10 });
     seedRun({ enqueuedAtMs: nowMs + 60_000, costUsd: 2.5, inputTokens: 200, outputTokens: 75 });
-    const totals = getKpiTotals((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const totals = store.getKpiTotals({
       fromMs: nowMs - 1,
       toMs: nowMs + 120_000,
     });
@@ -116,7 +104,7 @@ describe("getKpiTotals", () => {
   test("excludes runs outside the window", () => {
     seedRun({ enqueuedAtMs: nowMs - 86_400_000, costUsd: 99 }); // yesterday
     seedRun({ enqueuedAtMs: nowMs, costUsd: 1 });
-    const totals = getKpiTotals((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const totals = store.getKpiTotals({
       fromMs: nowMs - 1,
       toMs: nowMs + 1,
     });
@@ -127,7 +115,7 @@ describe("getKpiTotals", () => {
 
 describe("getRunsByBucket", () => {
   test("empty input → empty array", () => {
-    const rows = getRunsByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const rows = store.getRunsByBucket({
       fromMs: 0,
       toMs: nowMs,
       bucket: "hour",
@@ -142,7 +130,7 @@ describe("getRunsByBucket", () => {
     seedRun({ enqueuedAtMs: Date.UTC(2026, 3, 28, 12, 30), status: "completed" });
     seedRun({ enqueuedAtMs: Date.UTC(2026, 3, 28, 13, 10), status: "halted" });
 
-    const rows = getRunsByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const rows = store.getRunsByBucket({
       fromMs: Date.UTC(2026, 3, 28, 0),
       toMs: Date.UTC(2026, 3, 29, 0),
       bucket: "hour",
@@ -183,7 +171,7 @@ describe("getRunsByBucket", () => {
     seedRun({ enqueuedAtMs: Date.UTC(2026, 3, 28, 4) });
     seedRun({ enqueuedAtMs: Date.UTC(2026, 3, 28, 12) });
 
-    const rows = getRunsByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const rows = store.getRunsByBucket({
       fromMs: 0,
       toMs: Date.UTC(2026, 3, 30),
       bucket: "day",
@@ -208,7 +196,7 @@ describe("getSpendByBucket / getTokensByBucket", () => {
       bucket: "hour" as const,
       tzOffsetMinutes: 0,
     };
-    const spend = getSpendByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, w);
+    const spend = store.getSpendByBucket(w);
     // The fallback ladder: when metrics has no recorded input/output
     // cost split (these seeds don't set one), the SQL splits each
     // run's `total_cost_usd` by the input/output token ratio. Sums
@@ -225,7 +213,7 @@ describe("getSpendByBucket / getTokensByBucket", () => {
     expect(spend[1]?.inputCostUsd).toBeCloseTo(2.0 * (200 / 300), 5);
     expect(spend[1]?.outputCostUsd).toBeCloseTo(2.0 * (100 / 300), 5);
 
-    const tokens = getTokensByBucket((store as unknown as { db: import("bun:sqlite").Database }).db, w);
+    const tokens = store.getTokensByBucket(w);
     expect(tokens).toEqual([
       { bucket: Date.UTC(2026, 3, 28, 10), inputTokens: 150, outputTokens: 50 },
       { bucket: Date.UTC(2026, 3, 28, 11), inputTokens: 200, outputTokens: 100 },
@@ -238,7 +226,7 @@ describe("getHaltDistribution", () => {
     seedRun({ enqueuedAtMs: nowMs, status: "completed" });
     seedRun({ enqueuedAtMs: nowMs, status: "completed" });
     seedRun({ enqueuedAtMs: nowMs, status: "halted" });
-    const rows = getHaltDistribution((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const rows = store.getHaltDistribution({
       fromMs: nowMs - 1,
       toMs: nowMs + 1,
     });
@@ -264,7 +252,7 @@ describe("getModelDistribution", () => {
         "claude-opus-4-7": { tokens: 200, costUsd: 0.4 },
       },
     });
-    const rows = getModelDistribution((store as unknown as { db: import("bun:sqlite").Database }).db, {
+    const rows = store.getModelDistribution({
       fromMs: nowMs - 1,
       toMs: nowMs + 1,
     });
@@ -285,8 +273,7 @@ describe("getTopWorkflows", () => {
     seedRun({ workflowSha: "wf1", enqueuedAtMs: nowMs, status: "halted", costUsd: 0.5 });
     seedRun({ workflowSha: "wf2", enqueuedAtMs: nowMs, status: "completed" });
 
-    const rows = getTopWorkflows(
-      (store as unknown as { db: import("bun:sqlite").Database }).db,
+    const rows = store.getTopWorkflows(
       {
         fromMs: nowMs - 1,
         toMs: nowMs + 1,
@@ -311,21 +298,17 @@ describe("getDrilldownPage", () => {
     for (let i = 0; i < 5; i++) {
       ids.push(seedRun({ enqueuedAtMs: nowMs + i * 1000, status: "completed" }));
     }
-    const db = (store as unknown as { db: import("bun:sqlite").Database }).db;
-
-    const page1 = getDrilldownPage(db, { fromMs: nowMs - 1, toMs: nowMs + 10_000 }, { limit: 2 });
+    const page1 = store.getDrilldownPage({ fromMs: nowMs - 1, toMs: nowMs + 10_000 }, { limit: 2 });
     expect(page1.runIds).toEqual([ids[4]!, ids[3]!]);
     expect(page1.nextCursor).not.toBeNull();
 
-    const page2 = getDrilldownPage(
-      db,
+    const page2 = store.getDrilldownPage(
       { fromMs: nowMs - 1, toMs: nowMs + 10_000 },
       { limit: 2, cursor: page1.nextCursor! },
     );
     expect(page2.runIds).toEqual([ids[2]!, ids[1]!]);
 
-    const page3 = getDrilldownPage(
-      db,
+    const page3 = store.getDrilldownPage(
       { fromMs: nowMs - 1, toMs: nowMs + 10_000 },
       { limit: 2, cursor: page2.nextCursor! },
     );
@@ -337,13 +320,11 @@ describe("getDrilldownPage", () => {
     seedRun({ workflowSha: "wf1", enqueuedAtMs: nowMs, status: "completed" });
     seedRun({ workflowSha: "wf1", enqueuedAtMs: nowMs, status: "halted" });
     const wf2id = seedRun({ workflowSha: "wf2", enqueuedAtMs: nowMs, status: "completed" });
-    const db = (store as unknown as { db: import("bun:sqlite").Database }).db;
 
-    const onlyWf2 = getDrilldownPage(db, { fromMs: nowMs - 1, toMs: nowMs + 1, workflowSha: "wf2" }, { limit: 10 });
+    const onlyWf2 = store.getDrilldownPage({ fromMs: nowMs - 1, toMs: nowMs + 1, workflowSha: "wf2" }, { limit: 10 });
     expect(onlyWf2.runIds).toEqual([wf2id]);
 
-    const onlyHalted = getDrilldownPage(
-      db,
+    const onlyHalted = store.getDrilldownPage(
       { fromMs: nowMs - 1, toMs: nowMs + 1, haltCategory: "failure" },
       { limit: 10 },
     );
@@ -359,10 +340,7 @@ describe("getDrilldownPage", () => {
       enqueuedAtMs: nowMs,
       models: { "claude-haiku-4-5": { tokens: 100, costUsd: 0.05 } },
     });
-    const db = (store as unknown as { db: import("bun:sqlite").Database }).db;
-
-    const onlyOpus = getDrilldownPage(
-      db,
+    const onlyOpus = store.getDrilldownPage(
       { fromMs: nowMs - 1, toMs: nowMs + 1, model: "claude-opus-4-7" },
       { limit: 10 },
     );

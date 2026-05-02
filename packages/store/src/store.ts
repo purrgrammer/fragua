@@ -2,25 +2,101 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { BlobFS } from "./blob-fs.ts";
-import { Metrics, type MetricsSnapshot } from "./metrics.ts";
-import { migrate } from "./migrations.ts";
-import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import {
-  getRunCostTotals as queryRunCostTotals,
-  getStepAggregates as queryStepAggregates,
+  type AnalyticsWindow,
+  type BucketedWindow,
+  type CacheByBucketRow,
+  type DrilldownFilters,
+  type DrilldownPage,
+  type HaltDistributionRow,
+  type KpiTotalsRow,
+  type ModelDistributionRow,
+  getCacheByBucket as queryCacheByBucket,
+  getDrilldownPage as queryDrilldownPage,
+  getHaltDistribution as queryHaltDistribution,
+  getKpiTotals as queryKpiTotals,
+  getModelDistribution as queryModelDistribution,
+  getRunsByBucket as queryRunsByBucket,
+  getSpendByBucket as querySpendByBucket,
+  getTokensByBucket as queryTokensByBucket,
+  getTopWorkflows as queryTopWorkflows,
+  type RunsByBucketRow,
+  type SpendByBucketRow,
+  type TokensByBucketRow,
+  type TopWorkflowRow,
+} from "./analytics-queries.ts";
+import {
+  blobRowExists,
+  deleteOrphanBlobs,
+  insertBlobIfAbsent,
+  type NodeOutputRefRow,
+  selectArtifactRef as querySelectArtifactRef,
+  selectNodeOutputRefs,
+  upsertArtifact,
+} from "./artifact-queries.ts";
+import { BlobFS } from "./blob-fs.ts";
+import {
+  deleteDaemonLock,
+  insertDaemonEvent,
+  insertDaemonLock,
+  selectDaemonEvents,
+  selectDaemonEventsByRun,
+  selectDaemonLock,
+  updateDaemonLockHeartbeat,
+  upsertDaemonLock,
+} from "./daemon-queries.ts";
+import {
+  insertEventDaemon,
+  insertEventRunEnqueued,
+  insertEventWeb,
+  type OrphanSideEffectRow,
+  type PendingIntentRow,
   selectEvents,
+  selectFactSideEffectDone,
+  selectFactSideEffectIntent,
   selectGlobalEventsAtFloor,
   selectGlobalEventsForward,
   selectGlobalEventsLatest,
+  selectNextPendingIntent,
+  selectOrphanSideEffects,
+  selectUnappliedIntents,
+} from "./event-queries.ts";
+import {
+  insertMessage,
+  selectActiveThreads,
+  selectMaxMessageOrdinal,
+  selectMessageByDedup,
   selectMessages,
   selectMessagesNarrow,
-  selectNodeOutputRefs,
-  selectProjectById,
-  selectProjects,
-  UPSERT_PROJECT_SQL,
-} from "./queries.ts";
+} from "./message-queries.ts";
+import { Metrics, type MetricsSnapshot } from "./metrics.ts";
+import { migrate } from "./migrations.ts";
+import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
+import {
+  bumpRunSeq,
+  claimQueuedRun,
+  countQueuedRuns,
+  countRunningRuns,
+  type GlobalMetricsTotalsRow,
+  type GlobalModelBreakdownRow,
+  insertRunState,
+  type ListRunIdsOpts,
+  getRunCostTotals as queryRunCostTotals,
+  getStepAggregates as queryStepAggregates,
+  type RunCostTotalsRow,
+  type RunStateRow,
+  type StepAggregateRow,
+  selectGlobalMetricsTotals,
+  selectGlobalModelBreakdown,
+  selectNextQueuedRun,
+  selectRunIds,
+  selectRunStateRow,
+  selectWakeCandidates,
+  updateRunStateTitle,
+  type WakeCandidateRow,
+  writeRunStateProjection,
+} from "./run-state-queries.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -47,6 +123,7 @@ import {
   type IEventStore,
   type IntentAppendResult,
   type IntentEvent,
+  type IntentType,
   MAX_BLOB_BYTES,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_MESSAGE_CONTENT_BYTES,
@@ -57,46 +134,20 @@ import {
   type ObservabilityEvent,
   PayloadTooLargeError,
   type Project,
-  type RunCostTotalsRow,
   type RunMetrics,
   type RunState,
-  type RunStatus,
-  type StepAggregateRow,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
 } from "./types.ts";
-
-interface RunStateRow {
-  run_id: string;
-  version: number;
-  status: RunStatus;
-  current_node: string | null;
-  workflow_sha: string;
-  schema_version: number;
-  routing: string;
-  metrics: string;
-  next_seq: number;
-  last_applied_seq: number;
-  priority: number;
-  enqueued_at: number;
-  ready_at: number;
-  node_started_at: number | null;
-  dispatch_started_at: number | null;
-  updated_at: number;
-  title: string | null;
-  base_git_sha: string | null;
-  branch: string | null;
-}
-
-export interface SqliteStoreOpts {
-  path?: string;
-  /** Directory for content-addressed blob files. Defaults to
-   * `<dirname(path)>/blobs` for file-backed DBs; for `:memory:` a fresh
-   * tmpdir is created and torn down on `close()`. */
-  blobsDir?: string;
-  now?: () => number;
-}
+import {
+  insertWorkflowIfAbsent,
+  upsertProject as queryUpsertProject,
+  selectProjectById,
+  selectProjects,
+  selectWorkflow,
+  workflowExists,
+} from "./workflow-queries.ts";
 
 /** EventRow → StoredEvent. Shared across getEvents / getGlobalEvents*
  * so the projection (column rename, payload parse, writer cast) lives
@@ -117,6 +168,71 @@ function rowToStoredEvent(r: {
     payload: JSON.parse(r.payload),
     ts: r.ts,
   };
+}
+
+function rowToMessage(r: {
+  run_id: string;
+  ordinal: number;
+  content: string;
+  node_id: string | null;
+  iteration: number;
+}): Message {
+  return {
+    runId: r.run_id,
+    ordinal: r.ordinal,
+    content: JSON.parse(r.content),
+    nodeId: r.node_id,
+    iteration: r.iteration,
+  };
+}
+
+function rowToRunState(row: RunStateRow): RunState {
+  const parsedMetrics = JSON.parse(row.metrics) as Partial<RunMetrics>;
+  const metrics: RunMetrics = {
+    billedTokens: parsedMetrics.billedTokens ?? 0,
+    totalCostUsd: parsedMetrics.totalCostUsd ?? 0,
+    totalInputCostUsd: parsedMetrics.totalInputCostUsd ?? 0,
+    totalOutputCostUsd: parsedMetrics.totalOutputCostUsd ?? 0,
+    totalInputTokens: parsedMetrics.totalInputTokens ?? 0,
+    totalOutputTokens: parsedMetrics.totalOutputTokens ?? 0,
+    totalCacheReadTokens: parsedMetrics.totalCacheReadTokens ?? 0,
+    totalCacheWriteTokens: parsedMetrics.totalCacheWriteTokens ?? 0,
+    loopCounts: parsedMetrics.loopCounts ?? {},
+    models: parsedMetrics.models ?? {},
+    nodeCosts: parsedMetrics.nodeCosts ?? {},
+    activeMs: parsedMetrics.activeMs ?? 0,
+  };
+  const routing = JSON.parse(row.routing) as Record<string, unknown>;
+  return {
+    runId: row.run_id,
+    version: row.version,
+    status: row.status,
+    currentNode: row.current_node,
+    workflowSha: row.workflow_sha,
+    schemaVersion: row.schema_version,
+    routing,
+    metrics,
+    nextSeq: row.next_seq,
+    lastAppliedSeq: row.last_applied_seq,
+    priority: row.priority,
+    enqueuedAt: row.enqueued_at,
+    readyAt: row.ready_at,
+    nodeStartedAt: row.node_started_at,
+    dispatchStartedAt: row.dispatch_started_at,
+    updatedAt: row.updated_at,
+    title: row.title,
+    baseGitSha: row.base_git_sha,
+    branch: row.branch,
+  };
+}
+
+export interface SqliteStoreOpts {
+  path?: string;
+  /** Directory for content-addressed blob files. Defaults to
+   * `<dirname(path)>/blobs` for file-backed DBs; for `:memory:` a fresh
+   * tmpdir is created and torn down on `close()`. */
+  blobsDir?: string;
+  now?: () => number;
 }
 
 export class SqliteStore implements IEventStore {
@@ -166,21 +282,19 @@ export class SqliteStore implements IEventStore {
 
     try {
       this.writeTxn(() => {
-        const row = this.selectRunRow(runId);
+        const row = selectRunStateRow(this.db, runId);
         if (row == null) throw new Error(`unknown run ${runId}`);
         if (row.version !== expectedVersion) {
           throw new ConcurrencyError(expectedVersion, row.version);
         }
 
-        let state = this.rowToState(row);
+        let state = rowToRunState(row);
 
         for (const event of events) {
           const payload = this.validatePayload(event.payload);
-          const seq = this.bumpSeq(runId);
+          const seq = bumpRunSeq(this.db, runId);
           seqs.push(seq);
-          this.db
-            .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'daemon', ?, ?)")
-            .run(runId, seq, event.type, payload, ts);
+          insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
           state = applyFact(state, event, ts);
         }
 
@@ -216,12 +330,10 @@ export class SqliteStore implements IEventStore {
     const startAt = performance.now();
 
     this.writeTxn(() => {
-      const row = this.selectRunRow(runId);
+      const row = selectRunStateRow(this.db, runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
-      seq = this.bumpSeq(runId);
-      this.db
-        .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'web', ?, ?)")
-        .run(runId, seq, event.type, payload, ts);
+      seq = bumpRunSeq(this.db, runId);
+      insertEventWeb(this.db, runId, seq, event.type, payload, ts);
     });
     this.metrics.recordWrite(performance.now() - startAt, "intent");
 
@@ -236,7 +348,7 @@ export class SqliteStore implements IEventStore {
 
     const truncated: { type: string; bytes: number }[] = [];
     this.writeTxn(() => {
-      const row = this.selectRunRow(runId);
+      const row = selectRunStateRow(this.db, runId);
       if (row == null) throw new Error(`unknown run ${runId}`);
       for (const event of events) {
         if (typeof event.type !== "string" || event.type.length === 0) {
@@ -254,11 +366,9 @@ export class SqliteStore implements IEventStore {
           truncated.push({ type: event.type, bytes: err.sizeBytes });
           payload = this.validatePayload(truncationMarker(event.payload, err.sizeBytes));
         }
-        const seq = this.bumpSeq(runId);
+        const seq = bumpRunSeq(this.db, runId);
         seqs.push(seq);
-        this.db
-          .query("INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, ?, 'daemon', ?, ?)")
-          .run(runId, seq, event.type, payload, ts);
+        insertEventDaemon(this.db, runId, seq, event.type, payload, ts);
       }
     });
     if (truncated.length > 0) {
@@ -281,46 +391,19 @@ export class SqliteStore implements IEventStore {
     const ts = this.now();
     const runId = opts?.runId ?? null;
     let seq = 0;
-
     this.writeTxn(() => {
-      const row = this.db
-        .query<{ seq: number }, [string, string, number, string | null]>(
-          `INSERT INTO daemon_events (type, payload, ts, run_id)
-                VALUES (?, ?, ?, ?)
-              RETURNING seq`,
-        )
-        .get(event.type, payload, ts, runId);
-      if (row == null) throw new Error("daemon_events insert returned no row");
-      seq = row.seq;
+      seq = insertDaemonEvent(this.db, event.type, payload, ts, runId);
     });
-
     return { seq, ts };
   }
 
   getDaemonEvents(opts: GetDaemonEventsOpts = {}): DaemonEventRow[] {
     const sinceSeq = opts.sinceSeq ?? 0;
     const limit = opts.limit ?? -1;
-    type Row = { seq: number; type: string; payload: string; ts: number; run_id: string | null };
-    const rows: Row[] =
+    const rows =
       opts.runId != null
-        ? this.db
-            .query<Row, [string, number, number]>(
-              `SELECT seq, type, payload, ts, run_id
-                 FROM daemon_events
-                WHERE run_id = ? AND seq > ?
-                ORDER BY seq ASC
-                LIMIT ?`,
-            )
-            .all(opts.runId, sinceSeq, limit)
-        : this.db
-            .query<Row, [number, number]>(
-              `SELECT seq, type, payload, ts, run_id
-                 FROM daemon_events
-                WHERE seq > ?
-                ORDER BY seq ASC
-                LIMIT ?`,
-            )
-            .all(sinceSeq, limit);
+        ? selectDaemonEventsByRun(this.db, opts.runId, sinceSeq, limit)
+        : selectDaemonEvents(this.db, sinceSeq, limit);
     return rows.map((r) => ({
       seq: r.seq,
       type: r.type,
@@ -341,57 +424,51 @@ export class SqliteStore implements IEventStore {
     const metrics = JSON.stringify(emptyMetrics());
 
     this.writeTxn(() => {
-      const workflow = this.db
-        .query<{ sha: string }, [string]>("SELECT sha FROM workflows WHERE sha = ?")
-        .get(params.workflowSha);
-      if (workflow == null) {
+      if (!workflowExists(this.db, params.workflowSha)) {
         throw new Error(`unknown workflow sha ${params.workflowSha}`);
       }
 
-      this.db
-        .query(
-          `INSERT INTO run_state (
-             run_id, version, status, current_node, workflow_sha, schema_version,
-             routing, metrics, next_seq, last_applied_seq, priority,
-             enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-             project_id
-           ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?)`,
-        )
-        .run(
-          params.runId,
-          params.workflowSha,
-          CURRENT_SCHEMA_VERSION,
-          routing,
-          metrics,
-          params.priority ?? 0,
-          now,
-          now,
-          now,
-          params.projectId ?? null,
-        );
+      insertRunState(this.db, {
+        runId: params.runId,
+        workflowSha: params.workflowSha,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        routing,
+        metrics,
+        priority: params.priority ?? 0,
+        enqueuedAt: now,
+        readyAt: now,
+        updatedAt: now,
+        projectId: params.projectId ?? null,
+      });
 
       // Refresh the projects display cache. Same txn as the run insert
       // so a successful enqueue always carries a labelable row; a failed
       // enqueue rolls the projects update back together with the run.
       if (params.projectId != null && params.projectName != null) {
-        this.db.query(UPSERT_PROJECT_SQL).run(params.projectId, params.projectName, params.projectRoot ?? null, now);
+        queryUpsertProject(this.db, {
+          id: params.projectId,
+          name: params.projectName,
+          rootPath: params.projectRoot ?? null,
+          now,
+        });
       }
 
-      const seq = this.bumpSeq(params.runId);
-      this.db
-        .query(
-          "INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES (?, ?, 'intent.run_enqueued', 'web', ?, ?)",
-        )
-        .run(
-          params.runId,
-          seq,
-          JSON.stringify({
-            workflowSha: params.workflowSha,
-            priority: params.priority ?? 0,
-          }),
-          now,
-        );
+      const seq = bumpRunSeq(this.db, params.runId);
+      insertEventRunEnqueued(
+        this.db,
+        params.runId,
+        seq,
+        JSON.stringify({
+          workflowSha: params.workflowSha,
+          priority: params.priority ?? 0,
+        }),
+        now,
+      );
     });
+  }
+
+  listRunIds(opts: ListRunIdsOpts = {}): string[] {
+    return selectRunIds(this.db, opts);
   }
 
   claimNextRun(maxInFlight: number): { runId: string } | null {
@@ -399,34 +476,12 @@ export class SqliteStore implements IEventStore {
     let claimed: string | null = null;
 
     this.writeTxn(() => {
-      const running = this.db
-        .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'")
-        .get();
-      if ((running?.n ?? 0) >= maxInFlight) return;
+      if (countRunningRuns(this.db) >= maxInFlight) return;
 
-      const row = this.db
-        .query<{ run_id: string; version: number }, []>(
-          `SELECT run_id, version FROM run_state
-            WHERE status = 'queued'
-            ORDER BY priority DESC, ready_at ASC, run_id ASC
-            LIMIT 1`,
-        )
-        .get();
+      const row = selectNextQueuedRun(this.db);
       if (row == null) return;
 
-      const res = this.db
-        .query<{ run_id: string }, [number, number, string, number]>(
-          `UPDATE run_state
-              SET status = 'running',
-                  node_started_at = ?,
-                  version = version + 1,
-                  updated_at = ?
-            WHERE run_id = ? AND version = ? AND status = 'queued'
-          RETURNING run_id`,
-        )
-        .get(now, now, row.run_id, row.version);
-
-      if (res != null) claimed = res.run_id;
+      claimed = claimQueuedRun(this.db, { runId: row.run_id, expectedVersion: row.version, now });
     });
 
     return claimed != null ? { runId: claimed } : null;
@@ -440,15 +495,15 @@ export class SqliteStore implements IEventStore {
     const clipped = title.length > 200 ? title.slice(0, 200) : title;
     const now = this.now();
     this.writeTxn(() => {
-      this.db.query("UPDATE run_state SET title = ?, updated_at = ? WHERE run_id = ?").run(clipped, now, runId);
+      updateRunStateTitle(this.db, runId, clipped, now);
     });
   }
 
   // ─────────────── State reads ───────────────
 
   getState(runId: string): RunState | null {
-    const row = this.selectRunRow(runId);
-    return row == null ? null : this.rowToState(row);
+    const row = selectRunStateRow(this.db, runId);
+    return row == null ? null : rowToRunState(row);
   }
 
   getEvents(runId: string, opts: GetEventsOpts = {}): StoredEvent[] {
@@ -476,34 +531,21 @@ export class SqliteStore implements IEventStore {
   }
 
   getUnappliedIntents(runId: string): StoredEvent[] {
-    const state = this.selectRunRow(runId);
+    const state = selectRunStateRow(this.db, runId);
     if (state == null) return [];
-    const rows = this.db
-      .query<
-        {
-          run_id: string;
-          seq: number;
-          type: string;
-          writer: EventWriter;
-          payload: string;
-          ts: number;
-        },
-        [string, number]
-      >(
-        `SELECT run_id, seq, type, writer, payload, ts
-           FROM events
-          WHERE run_id = ? AND seq > ? AND writer = 'web'
-          ORDER BY seq ASC`,
-      )
-      .all(runId, state.last_applied_seq);
-    return rows.map((r) => ({
-      runId: r.run_id,
-      seq: r.seq,
-      type: r.type as StoredEvent["type"],
-      writer: r.writer,
-      payload: JSON.parse(r.payload),
-      ts: r.ts,
-    }));
+    return selectUnappliedIntents(this.db, runId, state.last_applied_seq).map(rowToStoredEvent);
+  }
+
+  getWakeCandidates(opts: { statuses: readonly RunState["status"][]; autoResumeBefore?: number }): WakeCandidateRow[] {
+    return selectWakeCandidates(this.db, opts);
+  }
+
+  getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null {
+    return selectNextPendingIntent(this.db, runId, type, sinceSeq);
+  }
+
+  findOrphanSideEffects(runId: string): OrphanSideEffectRow[] {
+    return selectOrphanSideEffects(this.db, runId);
   }
 
   // ─────────────── Messages ───────────────
@@ -538,64 +580,27 @@ export class SqliteStore implements IEventStore {
       // falsely allow them depending on timing. Handler-level
       // idempotency is the correct contract for those messages.
       if (dedup) {
-        const existing = this.db
-          .query<{ ordinal: number }, [string, string, number, string]>(
-            `SELECT ordinal FROM messages
-              WHERE run_id = ? AND node_id = ? AND iteration = ? AND content_hash = ?
-              LIMIT 1`,
-          )
-          .get(runId, row.nodeId as string, iteration, contentHash);
+        const existing = selectMessageByDedup(this.db, runId, row.nodeId as string, iteration, contentHash);
         if (existing != null) {
           ordinal = existing.ordinal;
           return;
         }
       }
-      const max = this.db
-        .query<{ m: number | null }, [string]>("SELECT MAX(ordinal) AS m FROM messages WHERE run_id = ?")
-        .get(runId);
-      ordinal = (max?.m ?? 0) + 1;
-      this.db
-        .query(
-          `INSERT INTO messages (run_id, ordinal, content, node_id, iteration, content_hash)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(runId, ordinal, serialized, row.nodeId, iteration, contentHash);
+      ordinal = selectMaxMessageOrdinal(this.db, runId) + 1;
+      insertMessage(this.db, {
+        runId,
+        ordinal,
+        content: serialized,
+        nodeId: row.nodeId,
+        iteration,
+        contentHash,
+      });
     });
     return { ordinal };
   }
 
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }> {
-    type Row = { run_id: string; thread_id: string };
-    const fromMessages = this.db
-      .query<Row, []>(
-        `SELECT DISTINCT m.run_id AS run_id, m.node_id AS thread_id
-           FROM messages m
-           JOIN run_state r ON r.run_id = m.run_id
-          WHERE m.node_id IS NOT NULL
-            AND r.status IN ('queued','running','paused_hitl','paused_provider_error')`,
-      )
-      .all();
-    const fromEvents = this.db
-      .query<Row, []>(
-        `SELECT DISTINCT e.run_id AS run_id,
-                         CAST(json_extract(e.payload, '$.thread_id') AS TEXT) AS thread_id
-           FROM events e
-           JOIN run_state r ON r.run_id = e.run_id
-          WHERE e.type = 'llm.start'
-            AND json_extract(e.payload, '$.thread_id') IS NOT NULL
-            AND r.status IN ('queued','running','paused_hitl','paused_provider_error')`,
-      )
-      .all();
-    const seen = new Set<string>();
-    const out: Array<{ runId: string; threadId: string }> = [];
-    for (const row of [...fromMessages, ...fromEvents]) {
-      if (row.thread_id == null || row.thread_id === "") continue;
-      const key = `${row.run_id}\x00${row.thread_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ runId: row.run_id, threadId: row.thread_id });
-    }
-    return out;
+    return selectActiveThreads(this.db);
   }
 
   getMessages(runId: string, opts: GetMessagesOpts = {}): Message[] {
@@ -607,7 +612,7 @@ export class SqliteStore implements IEventStore {
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
       ...(opts.nodeId != null ? { nodeId: opts.nodeId } : {}),
     };
-    return selectMessages(this.db, runId, queryOpts).map(this.rowToMessage);
+    return selectMessages(this.db, runId, queryOpts).map(rowToMessage);
   }
 
   getMessagesNarrow(runId: string, opts: GetMessagesOpts = {}): NarrowMessage[] {
@@ -631,6 +636,50 @@ export class SqliteStore implements IEventStore {
 
   getRunCostTotals(runId: string): RunCostTotalsRow {
     return queryRunCostTotals(this.db, runId);
+  }
+
+  getKpiTotals(window: AnalyticsWindow): KpiTotalsRow {
+    return queryKpiTotals(this.db, window);
+  }
+
+  getRunsByBucket(window: BucketedWindow): RunsByBucketRow[] {
+    return queryRunsByBucket(this.db, window);
+  }
+
+  getSpendByBucket(window: BucketedWindow): SpendByBucketRow[] {
+    return querySpendByBucket(this.db, window);
+  }
+
+  getTokensByBucket(window: BucketedWindow): TokensByBucketRow[] {
+    return queryTokensByBucket(this.db, window);
+  }
+
+  getCacheByBucket(window: BucketedWindow): CacheByBucketRow[] {
+    return queryCacheByBucket(this.db, window);
+  }
+
+  getHaltDistribution(window: AnalyticsWindow): HaltDistributionRow[] {
+    return queryHaltDistribution(this.db, window);
+  }
+
+  getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[] {
+    return queryModelDistribution(this.db, window);
+  }
+
+  getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[] {
+    return queryTopWorkflows(this.db, window, limit);
+  }
+
+  getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage {
+    return queryDrilldownPage(this.db, filters, opts);
+  }
+
+  getGlobalMetricsTotals(opts: { sinceMs: number }): GlobalMetricsTotalsRow {
+    return selectGlobalMetricsTotals(this.db, opts.sinceMs);
+  }
+
+  getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[] {
+    return selectGlobalModelBreakdown(this.db, opts.sinceMs);
   }
 
   // ─────────────── Artifacts ───────────────
@@ -669,23 +718,16 @@ export class SqliteStore implements IEventStore {
     this.blobs.put(sha, content);
 
     this.writeTxn(() => {
-      this.db
-        .query(
-          `INSERT OR IGNORE INTO blobs (sha256, size_bytes, created_at)
-           VALUES (?, ?, ?)`,
-        )
-        .run(sha, bytes, now);
-      this.db
-        .query(
-          `INSERT INTO artifacts
-             (run_id, node_id, iteration, key, blob_sha, mime, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(run_id, node_id, iteration, key) DO UPDATE SET
-             blob_sha = excluded.blob_sha,
-             mime     = excluded.mime,
-             created_at = excluded.created_at`,
-        )
-        .run(scope.runId, scope.nodeId, scope.iteration, scope.key, sha, mime ?? null, now);
+      insertBlobIfAbsent(this.db, sha, bytes, now);
+      upsertArtifact(this.db, {
+        runId: scope.runId,
+        nodeId: scope.nodeId,
+        iteration: scope.iteration,
+        key: scope.key,
+        blobSha: sha,
+        mime: mime ?? null,
+        now,
+      });
     });
 
     return {
@@ -708,21 +750,7 @@ export class SqliteStore implements IEventStore {
   }
 
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null {
-    const row = this.db
-      .query<
-        {
-          blob_sha: string;
-          mime: string | null;
-          size_bytes: number;
-        },
-        [string, string, number, string]
-      >(
-        `SELECT a.blob_sha, a.mime, b.size_bytes
-           FROM artifacts a
-           JOIN blobs b ON b.sha256 = a.blob_sha
-          WHERE a.run_id = ? AND a.node_id = ? AND a.iteration = ? AND a.key = ?`,
-      )
-      .get(scope.runId, scope.nodeId, scope.iteration, scope.key);
+    const row = querySelectArtifactRef(this.db, scope);
     if (row == null) return null;
     return {
       ...scope,
@@ -733,7 +761,7 @@ export class SqliteStore implements IEventStore {
   }
 
   getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }> {
-    const refs = selectNodeOutputRefs(this.db, runId);
+    const refs: NodeOutputRefRow[] = selectNodeOutputRefs(this.db, runId);
     const out = new Map<string, { output: string; success: boolean; timestamp: number }>();
     const decoder = new TextDecoder();
     // Refs come back ordered by seq ASC, so a later iteration of the same
@@ -771,28 +799,14 @@ export class SqliteStore implements IEventStore {
   }
 
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null {
-    const done = this.db
-      .query<{ seq: number; payload: string }, [string, string]>(
-        `SELECT seq, payload FROM events
-          WHERE run_id = ? AND type = 'fact.side_effect_done'
-            AND json_extract(payload, '$.idempotencyKey') = ?
-          LIMIT 1`,
-      )
-      .get(runId, idempotencyKey);
+    const done = selectFactSideEffectDone(this.db, runId, idempotencyKey);
     if (done == null) return null;
     const parsed = JSON.parse(done.payload) as {
       idempotencyKey: string;
       artifactKey: string;
     };
 
-    const intent = this.db
-      .query<{ payload: string }, [string, string]>(
-        `SELECT payload FROM events
-          WHERE run_id = ? AND type = 'fact.side_effect_intent'
-            AND json_extract(payload, '$.idempotencyKey') = ?
-          LIMIT 1`,
-      )
-      .get(runId, idempotencyKey);
+    const intent = selectFactSideEffectIntent(this.db, runId, idempotencyKey);
     if (intent == null) return null;
     const intentPayload = JSON.parse(intent.payload) as {
       nodeId: string;
@@ -818,12 +832,7 @@ export class SqliteStore implements IEventStore {
         result = { acquired: false, current: existing };
         return;
       }
-      this.db
-        .query(
-          `INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at)
-           VALUES (1, ?, ?, ?, ?)`,
-        )
-        .run(pid, hostname, now, now);
+      insertDaemonLock(this.db, pid, hostname, now);
       result = {
         acquired: true,
         current: { pid, hostname, startedAt: now, heartbeatAt: now },
@@ -836,17 +845,7 @@ export class SqliteStore implements IEventStore {
     const now = this.now();
     let current!: DaemonLockRow;
     this.writeTxn(() => {
-      this.db
-        .query(
-          `INSERT INTO daemon_lock (id, pid, hostname, started_at, heartbeat_at)
-             VALUES (1, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             pid = excluded.pid,
-             hostname = excluded.hostname,
-             started_at = excluded.started_at,
-             heartbeat_at = excluded.heartbeat_at`,
-        )
-        .run(pid, hostname, now, now);
+      upsertDaemonLock(this.db, pid, hostname, now);
       current = { pid, hostname, startedAt: now, heartbeatAt: now };
     });
     return { acquired: true, current };
@@ -855,38 +854,22 @@ export class SqliteStore implements IEventStore {
   heartbeatDaemonLock(pid: number): void {
     const now = this.now();
     this.writeTxn(() => {
-      this.db.query("UPDATE daemon_lock SET heartbeat_at = ? WHERE id = 1 AND pid = ?").run(now, pid);
+      updateDaemonLockHeartbeat(this.db, pid, now);
     });
   }
 
   releaseDaemonLock(pid: number): void {
     this.writeTxn(() => {
-      this.db.query("DELETE FROM daemon_lock WHERE id = 1 AND pid = ?").run(pid);
+      deleteDaemonLock(this.db, pid);
     });
   }
 
   runStateCounts(): { running: number; queued: number } {
-    const running = this.db
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'running'")
-      .get();
-    const queued = this.db
-      .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_state WHERE status = 'queued'")
-      .get();
-    return { running: running?.n ?? 0, queued: queued?.n ?? 0 };
+    return { running: countRunningRuns(this.db), queued: countQueuedRuns(this.db) };
   }
 
   currentDaemonLock(): DaemonLockRow | null {
-    const row = this.db
-      .query<
-        {
-          pid: number;
-          hostname: string;
-          started_at: number;
-          heartbeat_at: number;
-        },
-        []
-      >("SELECT pid, hostname, started_at, heartbeat_at FROM daemon_lock WHERE id = 1")
-      .get();
+    const row = selectDaemonLock(this.db);
     if (row == null) return null;
     return {
       pid: row.pid,
@@ -901,28 +884,12 @@ export class SqliteStore implements IEventStore {
   saveWorkflow(sha: string, name: string, dotSource: string): void {
     const now = this.now();
     this.writeTxn(() => {
-      this.db
-        .query(
-          `INSERT INTO workflows (sha, name, dot_source, created_at)
-             VALUES (?, ?, ?, ?)
-           ON CONFLICT(sha) DO NOTHING`,
-        )
-        .run(sha, name, dotSource, now);
+      insertWorkflowIfAbsent(this.db, sha, name, dotSource, now);
     });
   }
 
   getWorkflow(sha: string): WorkflowRow | null {
-    const row = this.db
-      .query<
-        {
-          sha: string;
-          name: string;
-          dot_source: string;
-          created_at: number;
-        },
-        [string]
-      >("SELECT sha, name, dot_source, created_at FROM workflows WHERE sha = ?")
-      .get(sha);
+    const row = selectWorkflow(this.db, sha);
     if (row == null) return null;
     return {
       sha: row.sha,
@@ -945,7 +912,12 @@ export class SqliteStore implements IEventStore {
   upsertProject(args: { id: string; name: string; rootPath?: string | null }): void {
     const now = this.now();
     this.writeTxn(() => {
-      this.db.query(UPSERT_PROJECT_SQL).run(args.id, args.name, args.rootPath ?? null, now);
+      queryUpsertProject(this.db, {
+        id: args.id,
+        name: args.name,
+        rootPath: args.rootPath ?? null,
+        now,
+      });
     });
   }
 
@@ -959,41 +931,27 @@ export class SqliteStore implements IEventStore {
     const limit = maxRows ?? 1000;
     // Pass 1: drop `blobs` rows with no artifact referent. RETURNING feeds
     // the file-delete pass so row-without-file is impossible mid-sweep.
-    const orphans = this.db
-      .query<{ sha256: string }, [number]>(
-        `WITH orphans AS (
-           SELECT b.sha256
-             FROM blobs b
-             LEFT JOIN artifacts a ON a.blob_sha = b.sha256
-            WHERE a.blob_sha IS NULL
-            LIMIT ?
-         )
-         DELETE FROM blobs
-          WHERE sha256 IN (SELECT sha256 FROM orphans)
-        RETURNING sha256`,
-      )
-      .all(limit);
-    for (const row of orphans) this.blobs.delete(row.sha256);
+    const orphanShas = deleteOrphanBlobs(this.db, limit);
+    for (const sha of orphanShas) this.blobs.delete(sha);
 
     // Pass 2: remove blob files with no matching row. Catches files left
     // behind when a row was deleted directly (cascade) or when a crash
     // between put() and INSERT orphaned the file. Bounded by the same
     // per-sweep limit to keep tail latency predictable.
     let extraDeleted = 0;
-    const budget = limit - orphans.length;
+    const budget = limit - orphanShas.length;
     if (budget > 0) {
       const shas = this.blobs.listAllShas();
       for (const sha of shas) {
         if (extraDeleted >= budget) break;
-        const row = this.db.query<{ sha256: string }, [string]>("SELECT sha256 FROM blobs WHERE sha256 = ?").get(sha);
-        if (row == null) {
+        if (!blobRowExists(this.db, sha)) {
           this.blobs.delete(sha);
           extraDeleted++;
         }
       }
     }
 
-    return { deleted: orphans.length + extraDeleted };
+    return { deleted: orphanShas.length + extraDeleted };
   }
 
   close(): void {
@@ -1024,128 +982,28 @@ export class SqliteStore implements IEventStore {
     }
   }
 
-  private selectRunRow(runId: string): RunStateRow | null {
-    return (
-      this.db
-        .query<RunStateRow, [string]>(
-          `SELECT run_id, version, status, current_node, workflow_sha,
-                  schema_version, routing, metrics, next_seq, last_applied_seq,
-                  priority, enqueued_at, ready_at, node_started_at,
-                  dispatch_started_at, updated_at, title, base_git_sha, branch
-             FROM run_state
-            WHERE run_id = ?`,
-        )
-        .get(runId) ?? null
-    );
-  }
-
-  private rowToState(row: RunStateRow): RunState {
-    const parsedMetrics = JSON.parse(row.metrics) as Partial<RunMetrics>;
-    const metrics: RunMetrics = {
-      billedTokens: parsedMetrics.billedTokens ?? 0,
-      totalCostUsd: parsedMetrics.totalCostUsd ?? 0,
-      totalInputCostUsd: parsedMetrics.totalInputCostUsd ?? 0,
-      totalOutputCostUsd: parsedMetrics.totalOutputCostUsd ?? 0,
-      totalInputTokens: parsedMetrics.totalInputTokens ?? 0,
-      totalOutputTokens: parsedMetrics.totalOutputTokens ?? 0,
-      totalCacheReadTokens: parsedMetrics.totalCacheReadTokens ?? 0,
-      totalCacheWriteTokens: parsedMetrics.totalCacheWriteTokens ?? 0,
-      loopCounts: parsedMetrics.loopCounts ?? {},
-      models: parsedMetrics.models ?? {},
-      nodeCosts: parsedMetrics.nodeCosts ?? {},
-      activeMs: parsedMetrics.activeMs ?? 0,
-    };
-    const routing = JSON.parse(row.routing) as Record<string, unknown>;
-    return {
-      runId: row.run_id,
-      version: row.version,
-      status: row.status,
-      currentNode: row.current_node,
-      workflowSha: row.workflow_sha,
-      schemaVersion: row.schema_version,
-      routing,
-      metrics,
-      nextSeq: row.next_seq,
-      lastAppliedSeq: row.last_applied_seq,
-      priority: row.priority,
-      enqueuedAt: row.enqueued_at,
-      readyAt: row.ready_at,
-      nodeStartedAt: row.node_started_at,
-      dispatchStartedAt: row.dispatch_started_at,
-      updatedAt: row.updated_at,
-      title: row.title,
-      baseGitSha: row.base_git_sha,
-      branch: row.branch,
-    };
-  }
-
-  private rowToMessage = (r: {
-    run_id: string;
-    ordinal: number;
-    content: string;
-    node_id: string | null;
-    iteration: number;
-  }): Message => ({
-    runId: r.run_id,
-    ordinal: r.ordinal,
-    content: JSON.parse(r.content),
-    nodeId: r.node_id,
-    iteration: r.iteration,
-  });
-
-  private bumpSeq(runId: string): number {
-    const row = this.db
-      .query<{ seq: number }, [string]>(
-        `UPDATE run_state
-            SET next_seq = next_seq + 1
-          WHERE run_id = ?
-         RETURNING next_seq - 1 AS seq`,
-      )
-      .get(runId);
-    if (row == null) throw new Error(`run_state missing for ${runId}`);
-    return row.seq;
-  }
-
   private writeProjection(state: RunState): void {
     const routing = JSON.stringify(state.routing);
     if (routing.length >= MAX_ROUTING_BYTES) {
       throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
     }
     const metrics = JSON.stringify(state.metrics);
-    this.db
-      .query(
-        `UPDATE run_state SET
-           version             = ?,
-           status              = ?,
-           current_node        = ?,
-           routing             = ?,
-           metrics             = ?,
-           last_applied_seq    = ?,
-           priority            = ?,
-           ready_at            = ?,
-           node_started_at     = ?,
-           dispatch_started_at = ?,
-           updated_at          = ?,
-           base_git_sha        = ?,
-           branch              = ?
-         WHERE run_id = ?`,
-      )
-      .run(
-        state.version,
-        state.status,
-        state.currentNode,
-        routing,
-        metrics,
-        state.lastAppliedSeq,
-        state.priority,
-        state.readyAt,
-        state.nodeStartedAt,
-        state.dispatchStartedAt,
-        state.updatedAt,
-        state.baseGitSha,
-        state.branch,
-        state.runId,
-      );
+    writeRunStateProjection(this.db, {
+      runId: state.runId,
+      version: state.version,
+      status: state.status,
+      currentNode: state.currentNode,
+      routingJson: routing,
+      metricsJson: metrics,
+      lastAppliedSeq: state.lastAppliedSeq,
+      priority: state.priority,
+      readyAt: state.readyAt,
+      nodeStartedAt: state.nodeStartedAt,
+      dispatchStartedAt: state.dispatchStartedAt,
+      updatedAt: state.updatedAt,
+      baseGitSha: state.baseGitSha,
+      branch: state.branch,
+    });
   }
 
   private validatePayload(payload: unknown): string {

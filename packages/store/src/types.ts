@@ -21,7 +21,29 @@ import type {
   QuarantineReason as QuarantineReasonFromTypes,
   RunStatus as RunStatusFromTypes,
 } from "@swarm/types";
-import type { RunCostTotalsRow, StepAggregateRow } from "./queries.ts";
+import type {
+  AnalyticsWindow,
+  BucketedWindow,
+  CacheByBucketRow,
+  DrilldownFilters,
+  DrilldownPage,
+  HaltDistributionRow,
+  KpiTotalsRow,
+  ModelDistributionRow,
+  RunsByBucketRow,
+  SpendByBucketRow,
+  TokensByBucketRow,
+  TopWorkflowRow,
+} from "./analytics-queries.ts";
+import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
+import type {
+  GlobalMetricsTotalsRow,
+  GlobalModelBreakdownRow,
+  ListRunIdsOpts,
+  RunCostTotalsRow,
+  StepAggregateRow,
+  WakeCandidateRow,
+} from "./run-state-queries.ts";
 
 export type {
   AnyEvent,
@@ -44,7 +66,31 @@ export type {
   RunStatus,
 } from "@swarm/types";
 export { ALL_DAEMON_EVENT_TYPES } from "@swarm/types";
-export type { RunCostTotalsRow, StepAggregateRow };
+export type {
+  AnalyticsWindow,
+  BucketedWindow,
+  BucketKind,
+  CacheByBucketRow,
+  DrilldownFilters,
+  DrilldownPage,
+  HaltDistributionRow,
+  KpiTotalsRow,
+  ModelDistributionRow,
+  RunsByBucketRow,
+  SpendByBucketRow,
+  TokensByBucketRow,
+  TopWorkflowRow,
+} from "./analytics-queries.ts";
+export { decodeCursor, encodeCursor } from "./analytics-queries.ts";
+export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
+export type {
+  GlobalMetricsTotalsRow,
+  GlobalModelBreakdownRow,
+  ListRunIdsOpts,
+  RunCostTotalsRow,
+  StepAggregateRow,
+  WakeCandidateRow,
+} from "./run-state-queries.ts";
 
 // Local aliases below let us narrow the re-exported unions in places
 // that previously referenced these names directly. Equivalent to the
@@ -467,8 +513,31 @@ export interface GetDaemonEventsOpts {
   runId?: string;
 }
 
-export interface IEventStore {
-  // ─── Writes
+// ─── Segregated store interfaces ───
+//
+// `IEventStore` was a god interface; the surface is now split into four
+// concerns that map onto the actual SQL boundaries:
+//
+//   IEventWriter        — every method that mutates run-level state
+//                         (events, run_state, messages, artifacts,
+//                         workflows, projects). One transaction surface;
+//                         shares the writer connection.
+//   IEventReader        — read-only run-level reads (state, events,
+//                         messages, artifacts, workflows, aggregates).
+//   IAnalyticsReader    — dashboard aggregations. Distinct from
+//                         IEventReader because analytics queries warrant
+//                         dedicated tuning (cache_size, multi-query
+//                         consistent snapshots).
+//   IDaemonCoordinator  — the daemon_events / daemon_lock surface. Truly
+//                         orthogonal: no transactional overlap with
+//                         run_state, no OCC, separate tables.
+//
+// `IEventStore` is preserved as a type-alias intersection so existing
+// callers don't break. `SqliteStore` implements all four sub-interfaces
+// in one class today; nothing prevents future implementations from
+// composing them out of separate connections / backends.
+
+export interface IEventWriter {
   appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
   /**
@@ -481,23 +550,7 @@ export interface IEventStore {
    */
   appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
 
-  /**
-   * Append a daemon-level event to the dedicated `daemon_events` table.
-   * Disjoint from the per-run event log: no OCC, no reducer, no
-   * `run_state.version` bump. Use for process lifecycle (started /
-   * stopped / reaper takeover), sweep summaries, GC summaries, leak
-   * detection, worktree provisioning. Set `opts.runId` for run-scoped
-   * events; leave undefined for global lifecycle.
-   */
-  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
-  /**
-   * Read daemon events ordered by `seq ASC`. Filters apply at the SQL
-   * layer via indexed reads. When `opts.runId` is set, only rows whose
-   * `run_id` matches qualify (NULL run_ids excluded).
-   */
-  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
-
-  // ─── Run lifecycle
+  // ─── Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;
   /**
@@ -517,8 +570,56 @@ export interface IEventStore {
    */
   setRunTitle(runId: string, title: string): void;
 
-  // ─── State reads
+  // ─── Messages (write)
+  /**
+   * Append a message under `(run, node, iteration)`. Returns the assigned
+   * ordinal. Pass `opts.dedup: true` to enable replay-safe dedup: a
+   * subsequent call with byte-identical content at the same scope returns
+   * the existing ordinal instead of minting a duplicate row. Default OFF
+   * because agent transcripts carry per-call timestamps that differ even
+   * when the semantic message is the same; opting in is the caller's job.
+   */
+  appendMessage(
+    runId: string,
+    row: Omit<Message, "runId" | "ordinal">,
+    opts?: { dedup?: boolean },
+  ): {
+    ordinal: number;
+  };
+
+  // ─── Artifacts (write)
+  /**
+   * Write an artifact at the given scope. Replay-safe by default:
+   *  - Identical content at the same scope → returns the existing ref (no-op).
+   *  - Different content + `replace: false` (default) → throws `ArtifactCollisionError`.
+   *  - Different content + `replace: true` → overwrites.
+   */
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
+
+  // ─── Workflow / project catalog (write)
+  saveWorkflow(sha: string, name: string, dotSource: string): void;
+  /** Insert or refresh a project row outside the enqueue path
+   * (e.g. `swarm projects rename`). Inside `enqueueRun` the same
+   * UPSERT runs in the run-insert txn — no extra call needed. */
+  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
+
+  // ─── Maintenance
+  vacuum(): void;
+  gcBlobs(maxRows?: number): { deleted: number };
+  close(): void;
+}
+
+export interface IEventReader {
+  // ─── Run state + enumeration
   getState(runId: string): RunState | null;
+  /** Enumerate run ids with status filter, ordering, and limit pushed
+   * into SQL. Powers the web `/runs` list and the analytics drilldown
+   * re-hydration loop. */
+  listRunIds(opts?: ListRunIdsOpts): string[];
+  /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
+  runStateCounts(): { running: number; queued: number };
+
+  // ─── Event log
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   /**
    * Forward direction of the global SSE feed: cross-run, ascending
@@ -542,23 +643,32 @@ export interface IEventStore {
    */
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
-
-  // ─── Messages
   /**
-   * Append a message under `(run, node, iteration)`. Returns the assigned
-   * ordinal. Pass `opts.dedup: true` to enable replay-safe dedup: a
-   * subsequent call with byte-identical content at the same scope returns
-   * the existing ordinal instead of minting a duplicate row. Default OFF
-   * because agent transcripts carry per-call timestamps that differ even
-   * when the semantic message is the same; opting in is the caller's job.
+   * Run rows in the requested statuses, optionally narrowed to those
+   * whose `routing.internal.auto_resume_at` is at or before the given
+   * cutoff (used by the daemon's wake-pending sweep for paused_retry /
+   * paused_provider_retry timer wake). Returns `{ runId, version,
+   * lastAppliedSeq, status }` so the caller can attempt OCC-protected
+   * fact appends without a second per-run round-trip. SQL filter — the
+   * daemon reaching for `db` directly was the historical alternative.
    */
-  appendMessage(
-    runId: string,
-    row: Omit<Message, "runId" | "ordinal">,
-    opts?: { dedup?: boolean },
-  ): {
-    ordinal: number;
-  };
+  getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
+  /**
+   * The next unapplied intent of the given `type` strictly after
+   * `sinceSeq`, or `null`. Payload is parsed JSON. Used by the daemon's
+   * wake-pending sweep (cancel / hitl_input / resume / unquarantine).
+   */
+  getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
+  /**
+   * `fact.side_effect_intent` rows on a run whose `idempotencyKey` has
+   * no matching `fact.side_effect_done` / `_failed`. The
+   * `intent.unquarantine { resolution: "treat_as_done" }` path
+   * synthesises one `fact.side_effect_done` per orphan to clear the
+   * startup-sweep flag on subsequent restarts.
+   */
+  findOrphanSideEffects(runId: string): OrphanSideEffectRow[];
+
+  // ─── Messages (read)
   getMessages(runId: string, opts?: GetMessagesOpts): Message[];
   /**
    * Same as `getMessages` but with a narrower SQL projection — only
@@ -586,7 +696,7 @@ export interface IEventStore {
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 
-  // ─── Aggregations
+  // ─── Per-run aggregates
   /**
    * Per-`llm.start` window summed cost / token totals plus the matching
    * last `llm.done` (endedAt + stopReason). The window is
@@ -606,14 +716,7 @@ export interface IEventStore {
    */
   getRunCostTotals(runId: string): RunCostTotalsRow;
 
-  // ─── Artifacts
-  /**
-   * Write an artifact at the given scope. Replay-safe by default:
-   *  - Identical content at the same scope → returns the existing ref (no-op).
-   *  - Different content + `replace: false` (default) → throws `ArtifactCollisionError`.
-   *  - Different content + `replace: true` → overwrites.
-   */
-  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
+  // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
@@ -631,30 +734,78 @@ export interface IEventStore {
    */
   getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
+  // ─── Workflow / project catalog (read)
+  getWorkflow(sha: string): WorkflowRow | null;
+  listProjects(): Project[];
+  getProject(id: string): Project | null;
+}
+
+export interface IAnalyticsReader {
+  /**
+   * KPI totals for the analytics dashboard window: run count + total
+   * cost + token sums (input / output / cache read / cache write).
+   * `enqueued_at`-anchored — a run that started yesterday and finished
+   * today bucket-counts as yesterday.
+   */
+  getKpiTotals(window: AnalyticsWindow): KpiTotalsRow;
+  /** Per-bucket run counts split by lifecycle status. One column per
+   *  status so the chart stacks without client-side re-derivation. */
+  getRunsByBucket(window: BucketedWindow): RunsByBucketRow[];
+  /** Per-bucket spend with input / output cost split. Falls back to a
+   *  token-ratio split for runs predating the cost-split metrics; 50/50
+   *  as a last resort. */
+  getSpendByBucket(window: BucketedWindow): SpendByBucketRow[];
+  /** Per-bucket fresh-token totals (input + output, excludes cache). */
+  getTokensByBucket(window: BucketedWindow): TokensByBucketRow[];
+  /** Per-bucket cache-token totals (read hits + write priming). */
+  getCacheByBucket(window: BucketedWindow): CacheByBucketRow[];
+  /** Outcomes donut: status → count over the window. */
+  getHaltDistribution(window: AnalyticsWindow): HaltDistributionRow[];
+  /** Per-model spend pivot. `metrics.models` is keyed by model name with
+   *  `{ tokens, costUsd }` entries; SQL pivots inline via `json_each`. */
+  getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
+  /** Most-run workflows in the window joined to `workflows.name`. */
+  getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
+  /** Newest-first paginated run-id scan matching the analytics filters
+   *  (workflow / halt category / model). Cursor encodes `(enqueued_at,
+   *  run_id)` for stable pagination across same-ms inserts. */
+  getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage;
+  /** Cross-status totals for the `/metrics/global` route. `sinceMs`
+   *  filters by `run_state.updated_at`. Cheap (covered by index). */
+  getGlobalMetricsTotals(opts: { sinceMs: number }): GlobalMetricsTotalsRow;
+  /** Per-model breakdown over the same window. */
+  getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];
+}
+
+export interface IDaemonCoordinator {
+  /**
+   * Append a daemon-level event to the dedicated `daemon_events` table.
+   * Disjoint from the per-run event log: no OCC, no reducer, no
+   * `run_state.version` bump. Use for process lifecycle (started /
+   * stopped / reaper takeover), sweep summaries, GC summaries, leak
+   * detection, worktree provisioning. Set `opts.runId` for run-scoped
+   * events; leave undefined for global lifecycle.
+   */
+  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
+  /**
+   * Read daemon events ordered by `seq ASC`. Filters apply at the SQL
+   * layer via indexed reads. When `opts.runId` is set, only rows whose
+   * `run_id` matches qualify (NULL run_ids excluded).
+   */
+  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
+
   // ─── Daemon lock
   acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
-  /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
-  runStateCounts(): { running: number; queued: number };
-
-  // ─── Workflows
-  saveWorkflow(sha: string, name: string, dotSource: string): void;
-  getWorkflow(sha: string): WorkflowRow | null;
-
-  // ─── Projects (display cache; refreshed on every enqueueRun that
-  // carries projectName)
-  listProjects(): Project[];
-  getProject(id: string): Project | null;
-  /** Insert or refresh a project row outside the enqueue path
-   * (e.g. `swarm projects rename`). Inside `enqueueRun` the same
-   * UPSERT runs in the run-insert txn — no extra call needed. */
-  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
-
-  // ─── Maintenance
-  vacuum(): void;
-  gcBlobs(maxRows?: number): { deleted: number };
-  close(): void;
 }
+
+/**
+ * Composite store contract — backward-compatible alias for the original
+ * `IEventStore` shape. New code should depend on the narrowest sub-
+ * interface that fits its needs (e.g. analytics routes only need
+ * `IAnalyticsReader`, the daemon supervisor only needs `IDaemonCoordinator`).
+ */
+export type IEventStore = IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator;

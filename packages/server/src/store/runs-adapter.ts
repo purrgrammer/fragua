@@ -4,8 +4,7 @@
 // module projects a RunState + its event tail into the shapes the
 // `/runs` REST endpoints hand to the web UI.
 
-import type { Database } from "bun:sqlite";
-import type { IEventStore, RunState, RunStatus, StoredEvent } from "@swarm/store";
+import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, StoredEvent } from "@swarm/store";
 import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
@@ -216,38 +215,10 @@ function nodeIdOf(event: StoredEvent): string | null {
 
 export { deriveNodeStates, deriveSelectedEdges };
 
-export interface ListRunsOpts {
-  /** Narrow to specific lifecycle statuses (`WHERE status IN (…)`). An
-   * empty array yields zero rows; `undefined` returns every run. */
-  statuses?: RunStatus[];
-  /** "newest" → most-recently-updated first (default, matches the
-   * archive view on /runs). "oldest" → smallest `enqueued_at` first
-   * (the Inbox metaphor — neglect surfaces). */
-  order?: "newest" | "oldest";
-  /** SQL `LIMIT` cap. Omitted = unbounded. */
-  limit?: number;
-}
+export type ListRunsOpts = ListRunIdsOpts;
 
-/**
- * Enumerate run ids with optional filtering, ordering, and limit. All
- * three are pushed into SQL — the read path does no client-side
- * sort/slice. Raw SQL escape hatch since the web UI's needs (small
- * filtered slices) aren't yet worth a method on `IEventStore`.
- */
+/** Wire to `IEventStore.listRunIds` — kept for callers that already
+ *  imported `listRuns`. SQL pushdown lives in the store. */
 export function listRuns(store: IEventStore, opts: ListRunsOpts = {}): string[] {
-  const db = (store as unknown as { db?: Database }).db;
-  if (db == null) return [];
-  const { statuses, order = "newest", limit } = opts;
-  if (statuses !== undefined && statuses.length === 0) return [];
-
-  const where = statuses ? `WHERE status IN (${statuses.map(() => "?").join(",")})` : "";
-  // "newest" → updated_at (archive view); "oldest" → enqueued_at (Inbox).
-  const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
-  const limitClause = limit !== undefined ? "LIMIT ?" : "";
-  const sql = `SELECT run_id FROM run_state ${where} ORDER BY ${orderBy} ${limitClause}`;
-  const args: (RunStatus | number)[] = [...(statuses ?? []), ...(limit !== undefined ? [limit] : [])];
-  return db
-    .query<{ run_id: string }, (RunStatus | number)[]>(sql)
-    .all(...args)
-    .map((r) => r.run_id);
+  return store.listRunIds(opts);
 }

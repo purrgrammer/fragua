@@ -381,70 +381,56 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 
 ---
 
-## 4. IEventStore interface
+## 4. Store interfaces
+
+The store contract is segregated into four sub-interfaces along the
+fault lines that actually matter (write vs read, run-state vs analytics
+vs daemon coordination). `IEventStore` is preserved as a composite
+type alias so existing callers don't break, but new code should depend
+on the narrowest interface that fits its needs — analytics routes need
+`IAnalyticsReader`, the supervisor needs `IDaemonCoordinator`, the
+daemon executor needs the full set.
+
+`SqliteStore` implements all four in a single class today. Splitting
+them by surface lets a future implementation back the reader interface
+with a Postgres replica or the analytics one with DuckDB without
+disturbing the writer.
 
 ```typescript
-// packages/store/src/types.ts — abridged; daemon-events / aggregations / SSE-cursor
-// helpers omitted here for readability. Source remains the canonical contract.
+// packages/store/src/types.ts — composite alias, preserved for back-compat.
+export type IEventStore = IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator;
+```
 
-export interface IEventStore {
-  // Writes
-  appendFact(runId: string, events: FactEvent[], expectedVersion: number): FactAppendResult;
+### 4.1 IEventWriter
+
+Every method that mutates run-level state. Single-transaction surface:
+shares the SQLite writer connection, runs under `BEGIN IMMEDIATE`.
+
+```typescript
+export interface IEventWriter {
+  // Event log
+  appendFact(runId: string, events: FactEvent[], expectedVersion: number, opts?: AppendFactOpts): FactAppendResult;
   appendIntent(runId: string, event: IntentEvent): IntentAppendResult;
   appendObservabilityEvents(runId: string, events: ObservabilityEvent[]): { seqs: number[] };
-  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
-  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
 
-  // Run lifecycle
+  // Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
-  claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; respects concurrency
+  claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; OCC-protected
   startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
   setRunTitle(runId: string, title: string): void;
 
-  // State reads
-  getState(runId: string): RunState | null;
-  getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
-  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
-  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
-  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
-  getUnappliedIntents(runId: string): StoredEvent[];
-
-  // Messages
+  // Messages (write)
   appendMessage(
     runId: string,
     row: Omit<Message, "runId" | "ordinal">,
     opts?: { dedup?: boolean },
   ): { ordinal: number };
-  getMessages(runId: string, opts?: GetMessagesOpts): Message[];
-  getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
-  listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 
-  // Aggregations
-  getStepAggregates(runId: string): StepAggregateRow[];
-  getRunCostTotals(runId: string): RunCostTotalsRow;
-
-  // Artifacts
+  // Artifacts (write)
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
-  getArtifact(scope: ArtifactScope): Uint8Array;
-  getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
-  findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;   // replay short-circuit
-  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
-  // Daemon lock
-  acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
-  forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
-  heartbeatDaemonLock(pid: number): void;
-  releaseDaemonLock(pid: number): void;
-  currentDaemonLock(): DaemonLockRow | null;
-  runStateCounts(): { running: number; queued: number };
-
-  // Workflows
+  // Workflow / project catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
-  getWorkflow(sha: string): WorkflowRow | null;
-
-  // Projects (display cache; refreshed on every enqueueRun that carries projectName)
-  listProjects(): Project[];
-  getProject(id: string): Project | null;
   upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
 
   // Maintenance
@@ -452,7 +438,105 @@ export interface IEventStore {
   gcBlobs(maxRows?: number): { deleted: number };
   close(): void;
 }
+```
 
+### 4.2 IEventReader
+
+Read-only run-level reads — state, events, messages, artifacts,
+workflows, per-run aggregates. Includes the daemon's wake-pending
+sweep helpers (`getWakeCandidates`, `getNextPendingIntent`,
+`findOrphanSideEffects`) so the daemon never reaches for `db` directly.
+
+```typescript
+export interface IEventReader {
+  // Run state + enumeration
+  getState(runId: string): RunState | null;
+  listRunIds(opts?: ListRunIdsOpts): string[];
+  runStateCounts(): { running: number; queued: number };
+
+  // Event log
+  getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
+  getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
+  getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
+  getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
+  getUnappliedIntents(runId: string): StoredEvent[];
+  getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
+  getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
+  findOrphanSideEffects(runId: string): OrphanSideEffectRow[];
+
+  // Messages (read)
+  getMessages(runId: string, opts?: GetMessagesOpts): Message[];
+  getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
+  listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
+
+  // Per-run aggregates
+  getStepAggregates(runId: string): StepAggregateRow[];
+  getRunCostTotals(runId: string): RunCostTotalsRow;
+
+  // Artifacts (read)
+  getArtifact(scope: ArtifactScope): Uint8Array;
+  getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
+  findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
+  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
+
+  // Workflow / project catalog (read)
+  getWorkflow(sha: string): WorkflowRow | null;
+  listProjects(): Project[];
+  getProject(id: string): Project | null;
+}
+```
+
+### 4.3 IAnalyticsReader
+
+Dashboard aggregations — `enqueued_at`-anchored windows, bucketed time
+series, distributions, drilldown. Distinct from `IEventReader` because
+the queries are more expensive (window functions, `json_each` pivots,
+multi-row aggregations) and warrant their own connection tuning when
+we eventually split workloads — a fat `cache_size` and consistent-read
+transactions are appropriate here in a way they aren't on the hot
+event-log path.
+
+```typescript
+export interface IAnalyticsReader {
+  getKpiTotals(window: AnalyticsWindow): KpiTotalsRow;
+  getRunsByBucket(window: BucketedWindow): RunsByBucketRow[];
+  getSpendByBucket(window: BucketedWindow): SpendByBucketRow[];
+  getTokensByBucket(window: BucketedWindow): TokensByBucketRow[];
+  getCacheByBucket(window: BucketedWindow): CacheByBucketRow[];
+  getHaltDistribution(window: AnalyticsWindow): HaltDistributionRow[];
+  getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
+  getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
+  getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage;
+  getGlobalMetricsTotals(opts: { sinceMs: number }): GlobalMetricsTotalsRow;
+  getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];
+}
+```
+
+### 4.4 IDaemonCoordinator
+
+The `daemon_events` and `daemon_lock` surface — orthogonal to the rest
+because no transaction overlaps with run state; the tables are
+independent. This is the cleanest interface to extract first if you
+ever want a separate process holding the daemon lock.
+
+```typescript
+export interface IDaemonCoordinator {
+  // daemon_events
+  appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number };
+  getDaemonEvents(opts?: GetDaemonEventsOpts): DaemonEventRow[];
+
+  // daemon_lock
+  acquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
+  forceAcquireDaemonLock(pid: number, hostname: string): DaemonLockResult;
+  heartbeatDaemonLock(pid: number): void;
+  releaseDaemonLock(pid: number): void;
+  currentDaemonLock(): DaemonLockRow | null;
+}
+```
+
+### 4.5 Errors and shared types
+
+```typescript
 export type ArtifactScope = { runId: string; nodeId: string; iteration: number; key: string };
 export type ArtifactRef = ArtifactScope & { sha256: string; sizeBytes: number; mime: string };
 
@@ -465,13 +549,20 @@ export class QuarantineError extends Error {}
 
 `SweepResult`, `EnqueueRunParams`, `GetEventsOpts`, `GetMessagesOpts`,
 `GetDaemonEventsOpts`, `NarrowMessage`, `StepAggregateRow`,
-`RunCostTotalsRow`, `Project`, and the global-feed cursor option types
-all live in `packages/store/src/types.ts`. The drift-lint asserts every
-method name above appears verbatim in the source interface.
+`RunCostTotalsRow`, `Project`, the analytics row types, and the
+global-feed cursor option types all live in
+`packages/store/src/types.ts`. SQL strings are split per-table across
+`event-queries.ts`, `run-state-queries.ts`, `message-queries.ts`,
+`artifact-queries.ts`, `workflow-queries.ts`, `daemon-queries.ts`, and
+`analytics-queries.ts` — each file owns its table's reads + writes.
+The drift-lint asserts every method declared above appears verbatim in
+the corresponding source interface.
 
 **Implementation notes:**
 - All methods synchronous; `bun:sqlite` is sync.
-- Every write wraps in `WriteQueue.enqueue(() => db.transaction(() => ...)())`. `BEGIN IMMEDIATE` for all txns.
+- Every write wraps in `db.transaction(() => ...)()` or the
+  equivalent `BEGIN IMMEDIATE` / `COMMIT` pair. `BEGIN IMMEDIATE` grabs
+  the write lock up front; busy_timeout handles contention.
 - No in-process commit-listener API. Same-process daemons could subscribe but the only consumer that would benefit (the supervisor) lives in the same process as the writer for `appendFact` and a different process for `appendIntent` (web → daemon), so an in-process listener can't cross the boundary that matters. The 50ms supervisor poll covers both directions uniformly. SSE consumers poll `events WHERE seq > ?` directly.
 
 ---

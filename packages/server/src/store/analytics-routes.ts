@@ -14,25 +14,16 @@
 //                          renders these with the same RunRow component
 //                          the /runs page uses.
 
-import type { Database } from "bun:sqlite";
-import type { IEventStore } from "@swarm/store";
-import { Hono } from "hono";
-import type { WorkflowReader } from "../ports.ts";
 import {
   type AnalyticsWindow,
   type BucketedWindow,
   type BucketKind,
+  type DrilldownFilters,
   decodeCursor,
-  getCacheByBucket,
-  getDrilldownPage,
-  getHaltDistribution,
-  getKpiTotals,
-  getModelDistribution,
-  getRunsByBucket,
-  getSpendByBucket,
-  getTokensByBucket,
-  getTopWorkflows,
-} from "./analytics-queries.ts";
+  type IEventStore,
+} from "@swarm/store";
+import { Hono } from "hono";
+import type { WorkflowReader } from "../ports.ts";
 import { runStateToSummary } from "./runs-adapter.ts";
 
 export interface AnalyticsRoutesOpts {
@@ -50,9 +41,6 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
   const { store } = opts;
 
   app.get("/analytics", (c) => {
-    const db = unsafeDb(store);
-    if (db == null) return c.json({ error: "analytics unavailable", code: "no_db" }, 503);
-
     const params = parseAnalyticsParams(c.req.query());
     if (!params.ok) return c.json({ error: params.error, code: "bad_request" }, 400);
 
@@ -60,8 +48,8 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     const bucketed: BucketedWindow = { ...current, bucket, tzOffsetMinutes };
 
     const totals = {
-      current: getKpiTotals(db, current),
-      previous: previous ? getKpiTotals(db, previous) : null,
+      current: store.getKpiTotals(current),
+      previous: previous ? store.getKpiTotals(previous) : null,
     };
 
     return c.json({
@@ -73,20 +61,17 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
       // a quiet stretch shows as a missing tick rather than a 0-height
       // bar. Drill-down still works since each row carries its own
       // bucket-ms.
-      runsByBucket: getRunsByBucket(db, bucketed),
-      spendByBucket: getSpendByBucket(db, bucketed),
-      tokensByBucket: getTokensByBucket(db, bucketed),
-      cacheByBucket: getCacheByBucket(db, bucketed),
-      haltDistribution: getHaltDistribution(db, current),
-      modelDistribution: getModelDistribution(db, current),
-      topWorkflows: getTopWorkflows(db, current, TOP_WORKFLOWS_LIMIT),
+      runsByBucket: store.getRunsByBucket(bucketed),
+      spendByBucket: store.getSpendByBucket(bucketed),
+      tokensByBucket: store.getTokensByBucket(bucketed),
+      cacheByBucket: store.getCacheByBucket(bucketed),
+      haltDistribution: store.getHaltDistribution(current),
+      modelDistribution: store.getModelDistribution(current),
+      topWorkflows: store.getTopWorkflows(current, TOP_WORKFLOWS_LIMIT),
     });
   });
 
   app.get("/analytics/runs", async (c) => {
-    const db = unsafeDb(store);
-    if (db == null) return c.json({ error: "analytics unavailable", code: "no_db" }, 503);
-
     const window = parseWindow(c.req.query());
     if (!window.ok) return c.json({ error: window.error, code: "bad_request" }, 400);
 
@@ -96,7 +81,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     const haltCategory = c.req.query("halt");
     const model = c.req.query("model");
 
-    const filterArgs: Parameters<typeof getDrilldownPage>[1] = {
+    const filterArgs: DrilldownFilters = {
       fromMs: window.fromMs,
       toMs: window.toMs,
     };
@@ -104,10 +89,10 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     if (haltCategory) filterArgs.haltCategory = haltCategory;
     if (model) filterArgs.model = model;
 
-    const pageOpts: Parameters<typeof getDrilldownPage>[2] = { limit };
+    const pageOpts: { limit: number; cursor?: string } = { limit };
     if (cursor && decodeCursor(cursor) !== null) pageOpts.cursor = cursor;
 
-    const page = getDrilldownPage(db, filterArgs, pageOpts);
+    const page = store.getDrilldownPage(filterArgs, pageOpts);
 
     // Hydrate RunSummary[] for the wire. Mirrors what `/runs` does so the
     // drawer can render with the same RunRow primitive. The events fetch
@@ -204,9 +189,4 @@ function clampDrilldownLimit(raw: string | undefined): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DRILLDOWN_DEFAULT_LIMIT;
   return Math.min(Math.floor(n), DRILLDOWN_MAX_LIMIT);
-}
-
-function unsafeDb(store: IEventStore): Database | null {
-  const raw = (store as unknown as { db?: Database }).db;
-  return raw ?? null;
 }

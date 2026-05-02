@@ -709,30 +709,64 @@ export function extractInterfaceMethodNames(src: string, name: string): string[]
   return [...out];
 }
 
+/** Each sub-interface's methods must appear verbatim in its named §4
+ *  subsection. The composite `IEventStore` is a type alias today (no
+ *  body) — methods are declared per sub-interface, so the audit walks
+ *  the four of them. */
+const STORE_SUB_INTERFACES: ReadonlyArray<{ name: string; subsection: string }> = [
+  { name: "IEventWriter", subsection: "### 4.1 IEventWriter" },
+  { name: "IEventReader", subsection: "### 4.2 IEventReader" },
+  { name: "IAnalyticsReader", subsection: "### 4.3 IAnalyticsReader" },
+  { name: "IDaemonCoordinator", subsection: "### 4.4 IDaemonCoordinator" },
+];
+
 export function auditIEventStoreInterface(opts: { typesPath: string; archPath: string }): Finding[] {
   const ts = readFileSync(opts.typesPath, "utf8");
   const md = readFileSync(opts.archPath, "utf8");
-  const section = sliceSection(md, /^## 4\. /, 2);
-  if (section == null) {
+  const section4 = sliceSection(md, /^## 4\. /, 2);
+  if (section4 == null) {
     return [
       {
-        token: "## 4. IEventStore interface",
+        token: "## 4. Store interfaces",
         doc: opts.archPath,
         section: "(missing)",
         source: "auditIEventStoreInterface",
       },
     ];
   }
-  const methods = extractInterfaceMethodNames(ts, "IEventStore");
+
   const findings: Finding[] = [];
-  for (const name of methods) {
-    if (!section.includes(name)) {
+  for (const iface of STORE_SUB_INTERFACES) {
+    const escaped = iface.subsection.slice(4).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const subsection = sliceSection(section4, new RegExp(`^### ${escaped}\\b`), 3);
+    if (subsection == null) {
       findings.push({
-        token: name,
+        token: iface.subsection,
         doc: opts.archPath,
-        section: "## 4. IEventStore interface",
-        source: `IEventStore.${name}`,
+        section: "## 4. Store interfaces",
+        source: `auditIEventStoreInterface: missing subsection for ${iface.name}`,
       });
+      continue;
+    }
+    const methods = extractInterfaceMethodNames(ts, iface.name);
+    if (methods.length === 0) {
+      findings.push({
+        token: iface.name,
+        doc: opts.typesPath,
+        section: "(declaration not found)",
+        source: `extractor: ${iface.name}`,
+      });
+      continue;
+    }
+    for (const method of methods) {
+      if (!subsection.includes(method)) {
+        findings.push({
+          token: method,
+          doc: opts.archPath,
+          section: iface.subsection,
+          source: `${iface.name}.${method}`,
+        });
+      }
     }
   }
   return findings;
@@ -1134,22 +1168,46 @@ describe("drift-lint — interface and route extractors", () => {
     expect(keys).not.toContain("post /dead");
   });
 
-  test("auditIEventStoreInterface flags a method that's missing from §4", () => {
+  test("auditIEventStoreInterface flags a method that's missing from its sub-interface subsection", () => {
     const tmpTs = join(FIXTURES_DIR, "_tmp-iface.ts");
     const tmpMd = join(FIXTURES_DIR, "_tmp-iface.md");
     mkdirSync(FIXTURES_DIR, { recursive: true });
+    // All four sub-interfaces must exist or the audit short-circuits.
+    // Only IEventWriter has the drift; the others are documented faithfully.
     writeFileSync(
       tmpTs,
-      ["export interface IEventStore {", "  appendFact(): void;", "  newlyAddedMethod(): void;", "}"].join("\n"),
+      [
+        "export interface IEventWriter {",
+        "  appendFact(): void;",
+        "  newlyAddedMethod(): void;",
+        "}",
+        "export interface IEventReader { getState(): void; }",
+        "export interface IAnalyticsReader { getKpiTotals(): void; }",
+        "export interface IDaemonCoordinator { acquireDaemonLock(): void; }",
+      ].join("\n"),
     );
     writeFileSync(
       tmpMd,
       [
         "# Test",
         "",
-        "## 4. IEventStore interface",
+        "## 4. Store interfaces",
+        "",
+        "### 4.1 IEventWriter",
         "",
         "appendFact ships; the doc forgot to mention the new one.",
+        "",
+        "### 4.2 IEventReader",
+        "",
+        "getState",
+        "",
+        "### 4.3 IAnalyticsReader",
+        "",
+        "getKpiTotals",
+        "",
+        "### 4.4 IDaemonCoordinator",
+        "",
+        "acquireDaemonLock",
         "",
         "## 5. End",
         "",
@@ -1160,6 +1218,9 @@ describe("drift-lint — interface and route extractors", () => {
       const tokens = findings.map((f) => f.token);
       expect(tokens).toContain("newlyAddedMethod");
       expect(tokens).not.toContain("appendFact");
+      expect(tokens).not.toContain("getState");
+      expect(tokens).not.toContain("getKpiTotals");
+      expect(tokens).not.toContain("acquireDaemonLock");
     } finally {
       rmSync(tmpTs, { force: true });
       rmSync(tmpMd, { force: true });

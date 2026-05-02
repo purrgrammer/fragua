@@ -1,5 +1,10 @@
 // Named SQL aggregations powering the /analytics dashboard.
 //
+// Module-internal: invoked by SqliteStore via the `getKpiTotals` /
+// `getRunsByBucket` / etc. methods on `IEventStore`. The Hono routes
+// hit those methods, never these helpers directly — the Database
+// handle stays inside the store package.
+//
 // The contract: every numeric on the wire is summed in SQLite, never
 // folded in TypeScript. Each function takes a Database handle plus
 // the analytics window and returns shaped, typed rows.

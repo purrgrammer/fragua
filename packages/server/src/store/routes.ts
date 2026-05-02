@@ -4,7 +4,6 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import type { Database } from "bun:sqlite";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
@@ -482,73 +481,11 @@ export function createRoutes(deps: ServerDeps): Hono {
   app.get("/metrics/global", (c) => {
     const windowHours = Number(c.req.query("windowHours") ?? 24 * 30);
     const cutoffMs = (deps.now?.() ?? Date.now()) - windowHours * 3_600_000;
-    const db = unsafeDb(deps.store);
-    if (db == null) return c.json({ error: "metrics unavailable" }, 503);
 
-    const global = db
-      .query<
-        {
-          total_runs: number;
-          total_usd: number | null;
-          fresh_tokens: number | null;
-          billed_tokens: number | null;
-          successful: number;
-          halted: number;
-          running: number;
-          queued: number;
-          paused: number;
-          quarantined: number;
-        },
-        [number]
-      >(
-        `SELECT
-           COUNT(*) AS total_runs,
-           SUM(total_cost_usd) AS total_usd,
-           SUM(
-             COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS INTEGER), 0) +
-             COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS INTEGER), 0)
-           )                  AS fresh_tokens,
-           SUM(billed_tokens) AS billed_tokens,
-           SUM(CASE WHEN status = 'completed'  THEN 1 ELSE 0 END) AS successful,
-           SUM(CASE WHEN status = 'halted'     THEN 1 ELSE 0 END) AS halted,
-           SUM(CASE WHEN status = 'running'    THEN 1 ELSE 0 END) AS running,
-           SUM(CASE WHEN status = 'queued'     THEN 1 ELSE 0 END) AS queued,
-           SUM(CASE WHEN status = 'paused_hitl' THEN 1 ELSE 0 END) AS paused,
-           SUM(CASE WHEN status = 'quarantined' THEN 1 ELSE 0 END) AS quarantined
-         FROM run_state
-         WHERE updated_at >= ?`,
-      )
-      .get(cutoffMs) ?? {
-      total_runs: 0,
-      total_usd: 0,
-      fresh_tokens: 0,
-      billed_tokens: 0,
-      successful: 0,
-      halted: 0,
-      running: 0,
-      queued: 0,
-      paused: 0,
-      quarantined: 0,
-    };
+    const totals = deps.store.getGlobalMetricsTotals({ sinceMs: cutoffMs });
+    const breakdownByModel = deps.store.getGlobalModelBreakdown({ sinceMs: cutoffMs });
 
-    // Per-model breakdown via json_each pivot.
-    const models = db
-      .query<{ model_name: string; tokens: number; cost_usd: number }, [number]>(
-        `SELECT
-           kv.key  AS model_name,
-           SUM(CAST(json_extract(kv.value, '$.tokens') AS INTEGER))  AS tokens,
-           SUM(CAST(json_extract(kv.value, '$.costUsd') AS REAL))    AS cost_usd
-         FROM run_state, json_each(run_state.metrics, '$.models') AS kv
-         WHERE updated_at >= ?
-         GROUP BY kv.key
-         ORDER BY cost_usd DESC`,
-      )
-      .all(cutoffMs);
-
-    return c.json({
-      ...global,
-      breakdownByModel: models,
-    });
+    return c.json({ ...totals, breakdownByModel });
   });
 
   return app;
@@ -567,9 +504,4 @@ function clampLimit(raw: string | undefined, fallback: number, max: number): num
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(Math.floor(parsed), max);
-}
-
-function unsafeDb(store: IEventStore): Database | null {
-  const raw = (store as unknown as { db?: Database }).db;
-  return raw ?? null;
 }
