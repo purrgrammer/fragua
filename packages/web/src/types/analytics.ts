@@ -22,6 +22,8 @@ export interface RunsBucketRow {
   running: number;
   paused_hitl: number;
   paused_provider_error: number;
+  paused_provider_retry: number;
+  paused_retry: number;
   cancelled: number;
   halted: number;
   quarantined: number;
@@ -37,6 +39,8 @@ export const RUN_STATUS_KEYS = [
   "running",
   "paused_hitl",
   "paused_provider_error",
+  "paused_provider_retry",
+  "paused_retry",
   "cancelled",
   "halted",
   "quarantined",

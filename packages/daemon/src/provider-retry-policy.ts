@@ -12,6 +12,14 @@
 // attempt 3 and the next call 429s, that's attempt 4. The chain resets
 // only on a successful turn append (the executor clears
 // `routing.internal.provider_retry.attempt` in the same transaction).
+//
+// Cost attribution under retries: `cost.recorded` only fires when a
+// stream lands a successful AssistantMessage (see
+// packages/agent/src/backend.ts). A retry that fails before any
+// response → no cost.recorded → no double-charge in our ledger. If a
+// future pi-ai change started emitting cost on transport failures,
+// that invariant breaks; this comment exists so the next reader
+// notices before it ships.
 
 /** Routing key for the persisted attempt counter. Survives manual
  * resume so the chain cap still bounds the run. */

@@ -125,6 +125,8 @@ export interface RunsByBucketRow {
   running: number;
   paused_hitl: number;
   paused_provider_error: number;
+  paused_provider_retry: number;
+  paused_retry: number;
   cancelled: number;
   halted: number;
   quarantined: number;
@@ -145,6 +147,8 @@ export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRo
       SUM(CASE WHEN status = 'running'               THEN 1 ELSE 0 END) AS running,
       SUM(CASE WHEN status = 'paused_hitl'           THEN 1 ELSE 0 END) AS paused_hitl,
       SUM(CASE WHEN status = 'paused_provider_error' THEN 1 ELSE 0 END) AS paused_provider_error,
+      SUM(CASE WHEN status = 'paused_provider_retry' THEN 1 ELSE 0 END) AS paused_provider_retry,
+      SUM(CASE WHEN status = 'paused_retry'          THEN 1 ELSE 0 END) AS paused_retry,
       SUM(CASE WHEN status = 'cancelled'             THEN 1 ELSE 0 END) AS cancelled,
       SUM(CASE WHEN status = 'halted'                THEN 1 ELSE 0 END) AS halted,
       SUM(CASE WHEN status = 'quarantined'           THEN 1 ELSE 0 END) AS quarantined

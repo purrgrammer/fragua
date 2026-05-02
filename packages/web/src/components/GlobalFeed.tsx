@@ -22,6 +22,7 @@ import {
   AlertOctagon,
   AlertTriangle,
   Check,
+  Clock,
   Inbox,
   Pause,
   Play,
@@ -89,6 +90,13 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
     iconClass: "text-sw-accent-error",
     attention: true,
   },
+  // Auto-retry chain: emitted once per scheduled retry attempt. Operators
+  // see the chain in the feed without needing a separate UI surface.
+  "fact.provider_retry_attempted": {
+    Icon: Clock,
+    verb: "auto-retry queued",
+    iconClass: "text-sw-accent-warn",
+  },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
   "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
@@ -124,6 +132,8 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed (HITL)" };
     if (fromStatus === "paused_provider_error") return { ...base, verb: "resumed (retry)" };
+    if (fromStatus === "paused_provider_retry") return { ...base, verb: "auto-retry fired" };
+    if (fromStatus === "paused_retry") return { ...base, verb: "retry fired" };
   }
   return base;
 }
