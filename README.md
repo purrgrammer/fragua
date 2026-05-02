@@ -41,7 +41,6 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - **Multi-machine deployment** — single SQLite is the coordination surface; no story for multiple daemons across machines
 - **Global harness** (one daemon per machine across projects) — currently one daemon per project directory; in design ([`harness`](docs/proposals/harness.md))
 - **Per-branch worktrees in `parallel`** — branches share the run's single worktree, so they're read-only "deliberation only"; tracked in [`PENDING.md`](docs/PENDING.md) and [`worktree-design`](docs/proposals/worktree-design.md)
-- **Auto-retry on transient LLM provider errors** — every 402/429/5xx pauses the run for `intent.resume`; auto-retry tracked in [`PENDING.md`](docs/PENDING.md)
 - **Postgres or non-SQLite backing** — `IEventStore` is synchronous; not a drop-in port
 - **Workflow hot-reload for in-flight runs** — `workflow_sha` is pinned at enqueue time
 - **Schema auto-migration across breaking bumps** — runs pin `schema_version`; out-of-range pins halt with `reason: "schema_drift"` rather than upgrading
