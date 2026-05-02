@@ -617,37 +617,38 @@ function fullAssistantText(message: { role: string; content?: unknown }): string
 
 /**
  * Parse the final assistant text for a self-abort marker. The agent signals
- * "I cannot proceed" by emitting `<abort>reason</abort>` in the final
- * non-whitespace position of its last message. Mid-text occurrences (e.g.
- * `<abort>` quoted as documentation inside a fenced code block) do NOT
- * trigger a live abort — that matches the documented contract in
- * `docs/handler-contract.md` §11 ("emit `<abort>reason</abort>` in its
- * final text") and avoids the self-referential failure mode where an
- * agent describing the abort contract halts itself.
+ * "I cannot proceed" by emitting `<abort>reason</abort>` as the entire last
+ * non-empty line of its final message — no prose before `<abort>` on that
+ * line, nothing after `</abort>` on the message. Mid-text occurrences (e.g.
+ * `<abort>` quoted as documentation inside a fenced code block) and
+ * trailing prose epilogues both fail to match, which (a) prevents the
+ * self-referential mode where an agent describing the contract halts
+ * itself and (b) catches the failure mode where the agent emits a clean
+ * marker but then keeps generating after it.
  *
- * The reason is trimmed and clamped to a single line so it can be
- * surfaced as a `failure_reason` without dragging in kilobytes of
- * reasoning. Returns `null` when no trailing marker is present.
+ * The contract itself is taught in the system prompt's `<protocol>` block
+ * (see `system-prompt.ts:renderProtocol`) and documented in
+ * `docs/handler-contract.md` § "Codergen self-abort". Workflow node
+ * prompts do not restate the syntax — they declare when to abort, the
+ * system prompt covers how.
+ *
+ * The reason is trimmed and clamped so it can be surfaced as a
+ * `failure_reason` without dragging in kilobytes of reasoning. Returns
+ * `null` when no own-line marker is present.
  *
  * Exported so workflows (and tests) can rely on the exact contract
  * without reimplementing matching.
  */
 export function parseAbortMarker(text: string): { reason: string } | null {
   if (!text) return null;
-  const trimmed = text.trimEnd();
-  // Trailing close tag is the necessary condition; bail early if absent.
-  if (!/<\/abort>$/i.test(trimmed)) return null;
-  // Find the LAST opening before the trailing close. lastIndexOf needs
-  // exact case, so we scan a lowercased mirror — string lengths line up
-  // for ASCII tags so the offsets transfer back to the original.
-  const lower = trimmed.toLowerCase();
-  const closeIdx = lower.lastIndexOf("</abort>");
-  const openIdx = lower.lastIndexOf("<abort>", closeIdx);
-  if (openIdx === -1) return null;
-  const raw = trimmed.slice(openIdx + "<abort>".length, closeIdx).trim();
-  // Collapse any internal newlines; cap length.
-  const oneLine = raw.replace(/\s+/g, " ").slice(0, 400);
-  return { reason: oneLine.length > 0 ? oneLine : "agent aborted without a reason" };
+  const lines = text.split(/\r?\n/);
+  let lastIdx = lines.length - 1;
+  while (lastIdx >= 0 && lines[lastIdx]!.trim().length === 0) lastIdx--;
+  if (lastIdx < 0) return null;
+  const match = /^\s*<abort>(.*?)<\/abort>\s*$/i.exec(lines[lastIdx]!);
+  if (!match) return null;
+  const raw = match[1]!.replace(/\s+/g, " ").trim().slice(0, 400);
+  return { reason: raw.length > 0 ? raw : "agent aborted without a reason" };
 }
 
 function sha256Hex(value: string): string {

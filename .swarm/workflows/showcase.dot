@@ -33,7 +33,7 @@ digraph showcase {
   start [shape=Mdiamond]
 
   plan [
-    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY. End with `<promise>BRIEF_READY</promise>`."
+    prompt = "Summarise $ARGUMENTS as a 3-line brief: WHAT changed, WHERE (package/path), WHY."
     allowed_tools = "read"
   ]
 

@@ -147,6 +147,27 @@ export interface BuildSystemPromptInput {
   runEnv?: RunEnvironment | undefined;
 }
 
+/** The `<protocol>` block — the universal contract every codergen call
+ * sees. Today it teaches a single emit marker, `<abort>reason</abort>`.
+ * The text is a constant so it composes into the cache key without
+ * variation per node, per run, or per provider. Workflow authors do not
+ * restate this contract in node prompts. */
+const PROTOCOL_BLOCK = [
+  "<protocol>",
+  "If you cannot proceed (missing target, contradictory constraints, external blocker),",
+  "end your final message with `<abort>reason</abort>` as the entire last non-empty line —",
+  "no prose before `<abort>` on the line, nothing after `</abort>` on the message. The",
+  "reason is one short sentence; it is surfaced as the run's failure reason.",
+  "Otherwise just produce your output.",
+  "</protocol>",
+].join("\n");
+
+/** Returned for parity with `renderRunEnvironment` — pure string, no
+ * dependencies, suitable for assertion in tests. */
+export function renderProtocol(): string {
+  return PROTOCOL_BLOCK;
+}
+
 /** Assemble the final system prompt for a single agent call. Isolated from
  * the backend so tests can round-trip the combinator without standing up
  * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
@@ -160,13 +181,16 @@ export function buildSystemPrompt({
 }: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
   const catalog = skillsCatalog ?? "";
-  // Prepend order: run-env (first, so the model knows WHERE it is),
-  // then skills (what tools are available), then project-conventions
-  // (repo rules), then the base persona prompt. Each non-empty block is
-  // joined with a blank line.
+  // Prepend order (top → bottom of the assembled prompt):
+  //   <environment>   — where the agent is running
+  //   <protocol>      — the abort emit contract; constant per call
+  //   skills catalog  — what tools are available
+  //   project conv.   — AGENTS.md and friends
+  //   base persona    — the per-node or global system prompt
   let out = base;
   out = mergeSystemPrompt(out, contextBlock);
   out = mergeSystemPrompt(out, catalog);
+  out = mergeSystemPrompt(out, PROTOCOL_BLOCK);
   if (runEnv !== undefined) {
     out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
   }

@@ -22,7 +22,7 @@ digraph fix_bug {
   start [shape=Mdiamond]
 
   reproduce [
-    prompt = "Bug: $ARGUMENTS.\n\nABORT (`<abort>reason</abort>`) when: empty / unclear / cannot localise to a package after a reasonable read.\n\nOtherwise: locate the affected package, write a failing test next to the source (or extend an existing one), confirm it fails. Output: (1) package+file, (2) test path + `describe`/`test` name, (3) failing assertion sentence."
+    prompt = "Bug: $ARGUMENTS.\n\nAbort when: empty / unclear / cannot localise to a package after a reasonable read.\n\nOtherwise: locate the affected package, write a failing test next to the source (or extend an existing one), confirm it fails. Output: (1) package+file, (2) test path + `describe`/`test` name, (3) failing assertion sentence."
     allowed_tools = "read, write, edit, grep, find, bash"
     thread_id     = "dev"
     goal_gate     = true
@@ -37,7 +37,7 @@ digraph fix_bug {
 
   verify [
     class         = "verify"
-    prompt        = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds — then `<abort>CI unstable: <last failure signature></abort>`. Emit `CI_GREEN` when all pass."
+    prompt        = "Run `bun run ci`. Fix failures, iterate. Cap: 5 rounds — then abort with reason `CI unstable: <last failure signature>`. Emit `CI_GREEN` when all pass."
     allowed_tools = "read, write, edit, bash"
     thread_id     = "dev"
     max_cost_usd  = 0.30

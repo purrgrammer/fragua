@@ -383,6 +383,40 @@ with no LLM in the loop. See `.swarm/workflows/ci-gate.dot` for a pure-tool
 example and `.swarm/workflows/showcase.dot` for a tool node alongside
 parallel / fan_in / wait.human.
 
+## Codergen self-abort (`<abort>`)
+
+A codergen agent signals "I cannot proceed" by emitting
+`<abort>reason</abort>` as the **entire last non-empty line** of its
+final assistant message — no prose before `<abort>` on the line,
+nothing after `</abort>` on the message. The codergen handler's
+`parseAbortMarker` (`packages/agent/src/backend.ts`) translates a
+matching trailing-line marker into `outcome.status="fail"` with the
+reason as `failure_reason`; workflows route via
+`condition="outcome=fail"` edges.
+
+The contract is taught **once**, in the system prompt's `<protocol>`
+block (`packages/agent/src/system-prompt.ts:renderProtocol`). The
+block is constant per call, so it composes into the cache key without
+variation. Workflow node prompts do not restate the syntax; they
+declare *when* to abort, in their own task-specific terms (e.g.
+"abort with reason `typecheck blocked: <top error>` after 5 fix
+cycles"). The system prompt covers the rest.
+
+The strict own-line rule is what makes the parser robust:
+
+- Mid-prose `<abort>` quotations (e.g. "the LLM emits `<abort>reason</abort>`
+  to halt") do not match — the line has prose around the tag.
+- A clean marker followed by a trailing epilogue ("…actually wait, one
+  more thing…") does not match either — `</abort>` is no longer the
+  last non-empty line.
+- Multi-line abort tags do not match — the closing `</abort>` would be
+  alone on its line. Reasons must fit on one line; whitespace runs
+  inside the marker collapse to single spaces.
+
+Stray `<promise>X_READY</promise>` markers in earlier prompt versions
+were prose convention only — never engine signals. They have been
+removed from `.swarm/workflows/*.dot` and should not be reintroduced.
+
 ## Loops
 
 Graph-level only, via backward conditional edges (attractor §3.6 / §5.2).

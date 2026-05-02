@@ -5,6 +5,7 @@ import {
   CONTEXT_FILES_MAX_BYTES,
   loadContextFiles,
   mergeSystemPrompt,
+  renderProtocol,
   renderRunEnvironment,
 } from "../src/system-prompt.ts";
 
@@ -186,8 +187,22 @@ describe("renderRunEnvironment", () => {
   });
 });
 
+describe("renderProtocol", () => {
+  test("teaches the <abort> own-line contract", () => {
+    const block = renderProtocol();
+    expect(block).toContain("<protocol>");
+    expect(block).toContain("</protocol>");
+    expect(block).toContain("<abort>reason</abort>");
+    expect(block).toContain("entire last non-empty line");
+  });
+
+  test("is a constant — same bytes on every call (cache-key invariant)", () => {
+    expect(renderProtocol()).toBe(renderProtocol());
+  });
+});
+
 describe("buildSystemPrompt with runEnv", () => {
-  test("prepends <environment> before every other block", () => {
+  test("prepends <environment> then <protocol> before every other block", () => {
     const out = buildSystemPrompt({
       global: "you are the agent",
       perNode: undefined,
@@ -195,20 +210,24 @@ describe("buildSystemPrompt with runEnv", () => {
       runEnv: { worktreePath: "/wt/abc", runId: "abc" },
     });
     const envIdx = out.indexOf("<environment>");
+    const protocolIdx = out.indexOf("<protocol>");
     const conventionsIdx = out.indexOf("<project-conventions>");
     const baseIdx = out.indexOf("you are the agent");
     expect(envIdx).toBeGreaterThanOrEqual(0);
-    expect(envIdx).toBeLessThan(conventionsIdx);
+    expect(protocolIdx).toBeGreaterThan(envIdx);
+    expect(protocolIdx).toBeLessThan(conventionsIdx);
     expect(conventionsIdx).toBeLessThan(baseIdx);
   });
 
-  test("omits <environment> entirely when runEnv is undefined", () => {
+  test("omits <environment> entirely when runEnv is undefined, but always includes <protocol>", () => {
     const out = buildSystemPrompt({
       global: "base",
       perNode: undefined,
       contextBlock: "",
     });
     expect(out).not.toContain("<environment>");
-    expect(out).toBe("base");
+    expect(out).toContain("<protocol>");
+    expect(out).toContain("<abort>reason</abort>");
+    expect(out.endsWith("base")).toBe(true);
   });
 });
