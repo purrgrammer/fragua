@@ -97,16 +97,17 @@ The `events` log is the source of truth for run state; the `run_state` row is th
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused_hitl, paused_provider_error, paused_retry, halted, cancelled, quarantined}
+queued → running → {completed, paused_hitl, paused_provider_error, paused_provider_retry, paused_retry, halted, cancelled, quarantined}
           ▲            │
           └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
-                              or wake-pending timer for paused_retry)
+                              or wake-pending timer for paused_provider_retry / paused_retry)
 ```
 
 - `queued` — enqueued; ready to be claimed
 - `running` — a daemon has claimed it and is dispatching handlers
 - `paused_hitl` — a `wait.human` node yielded; `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`
 - `paused_provider_error` — an LLM provider returned a transport error (402, 429, 5xx, network); awaits `intent.resume`. Re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript
+- `paused_provider_retry` — an LLM provider returned an auto-retryable transport error (408 / 429 / 5xx / 529 / network) and the daemon scheduled an auto-retry timer (`routing.internal.auto_resume_at`), releasing the concurrency slot. Carried by `fact.run_paused_provider_error` with `policy: "auto-retry"`. The wake-pending sweeper emits `fact.run_resumed` once `now >= resumeAt`; the run goes back to `queued` and the same `(nodeId, iteration)` re-dispatches. Operators can short-circuit the wait with `intent.resume`.
 - `paused_retry` — a node returned `outcomeStatus="retry"` and the engine scheduled a backoff window per attractor §3.5/§3.6; `fact.run_paused_retry` carries `{ nodeId, attempt, delayMs, resumeAt, maxRetries }`. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_retry" }` once `resumeAt` has elapsed; the run goes back to `queued` and the same node re-dispatches. **The slot is released during the wait — other queued runs can claim while this one sleeps.**
 - `completed` / `halted` / `cancelled` — terminal
 - `quarantined` — startup sweep found an orphan `side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine`

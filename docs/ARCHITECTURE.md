@@ -717,7 +717,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
   while (!shutdownSignal.aborted) {
     const state = store.getState(runId);
-    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "paused_provider_error" || state.status === "quarantined") return;
+    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "paused_provider_error" || state.status === "paused_provider_retry" || state.status === "paused_retry" || state.status === "quarantined") return;
 
     if (state.schema_version !== CURRENT_SCHEMA_VERSION) {
       store.appendFact(runId, [haltFact("schema_drift")], state.version);
@@ -983,7 +983,7 @@ packages/
       dispatch.ts                      ← node-kind → handler
       auto-dispatcher.ts               ← shape → HandlerSpec fallback
       result-to-facts.ts               ← HandlerResult → FactEvent[]
-      wake-hitl.ts                     ← pending HITL scan
+      wake-pending.ts                  ← pending HITL + cancel + unquarantine + auto-resume sweeps
       auto-titler.ts                   ← run.title_generated summariser
       worktree-provisioner.ts          ← per-run WorktreeEnvironment map
       entrypoint.ts                    ← startDaemon
