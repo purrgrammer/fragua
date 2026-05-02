@@ -135,13 +135,12 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} />
+      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
       {detail?.runStatus === "paused_provider_error" && <RunPausedNotice runId={id} />}
       {detail?.runStatus === "paused_hitl" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
-      {detail && <RunControls runId={id} status={detail.status} runStatus={detail.runStatus} />}
 
       {isError && !detail ? (
         <EmptyState
@@ -221,11 +220,13 @@ const DetailHeader = memo(function DetailHeader({
   id,
   isLive,
   liveCost,
+  runId,
 }: {
   detail: RunDetailT | null;
   id: string;
   isLive: boolean;
   liveCost: CostAggregate;
+  runId: string;
 }): JSX.Element {
   const showLive = isLive && detail?.status === "running";
   const nodes = detail?.nodes ?? [];
@@ -295,6 +296,11 @@ const DetailHeader = memo(function DetailHeader({
             >
               {currentLabel}
             </span>
+          )}
+          {detail && (
+            <div className="ml-auto">
+              <RunControls runId={runId} status={detail.status} runStatus={detail.runStatus} compact />
+            </div>
           )}
         </div>
       </div>

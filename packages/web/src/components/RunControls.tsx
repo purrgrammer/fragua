@@ -23,6 +23,11 @@ export interface RunControlsProps {
   runId: string;
   status: RunDetail["status"];
   runStatus: RunDetail["runStatus"];
+  /** Compact mode: drops the card wrapper, shrinks the buttons to icon-only
+   * with a tooltip-style title, sized to match the status badge so the
+   * controls can sit inline alongside the badge in a header row. The
+   * confirm-cancel textarea + error messages still render below. */
+  compact?: boolean;
 }
 
 const CONFIRM_WINDOW_MS = 3_000;
@@ -32,7 +37,7 @@ async function refreshAfterControl(qc: ReturnType<typeof useQueryClient>, runId:
   await qc.invalidateQueries({ queryKey: ["run-paused-events", runId] });
 }
 
-export function RunControls({ runId, status, runStatus }: RunControlsProps): JSX.Element | null {
+export function RunControls({ runId, status, runStatus, compact = false }: RunControlsProps): JSX.Element | null {
   const qc = useQueryClient();
 
   const pauseM = useMutation({
@@ -101,58 +106,73 @@ export function RunControls({ runId, status, runStatus }: RunControlsProps): JSX
           ? pauseM.error.message
           : null;
 
+  // Compact: icon-only buttons sized to the status-badge row
+  // (`text-[0.65rem] px-1.5 py-0.5` per RunDetail). Drop the card
+  // wrapper so the buttons sit inline alongside the badge.
+  const buttonSize = compact ? "xs" : "sm";
+  const compactBtn = "h-5 px-1.5 text-[0.65rem] gap-1 [&_svg]:size-3";
+  const compactClass = compact ? compactBtn : "";
+  const wrapperClass = compact
+    ? "flex flex-col gap-1 text-sw-text"
+    : "flex flex-col gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-text";
+
   return (
-    <div
-      className="flex flex-col gap-2 rounded-sw-card border border-sw-border bg-sw-surface px-3 py-2 text-sw-text"
-      data-testid="run-controls"
-    >
-      <div className="flex flex-wrap items-center gap-2">
+    <div className={wrapperClass} data-testid="run-controls">
+      <div className="flex flex-wrap items-center gap-1">
         {canPause && (
           <Button
             variant="outline"
-            size="sm"
+            size={buttonSize}
             disabled={busy}
             onClick={() => pauseM.mutate()}
             data-testid="run-controls-pause"
+            title="Pause"
+            className={compactClass}
           >
             <Pause />
-            Pause
+            {!compact && "Pause"}
           </Button>
         )}
         {canResume && (
           <Button
             variant="outline"
-            size="sm"
+            size={buttonSize}
             disabled={busy}
             onClick={() => resumeM.mutate()}
             data-testid="run-controls-resume"
+            title="Resume"
+            className={compactClass}
           >
             <Play />
-            Resume
+            {!compact && "Resume"}
           </Button>
         )}
         {canCancel &&
           (confirmingCancel ? (
             <Button
               variant="destructive"
-              size="sm"
+              size={buttonSize}
               disabled={busy}
               onClick={fireCancel}
               data-testid="run-controls-cancel-confirm"
+              title="Confirm cancel"
+              className={compactClass}
             >
               <X />
-              Confirm cancel
+              {compact ? "Confirm" : "Confirm cancel"}
             </Button>
           ) : (
             <Button
               variant="destructive"
-              size="sm"
+              size={buttonSize}
               disabled={busy}
               onClick={armConfirm}
               data-testid="run-controls-cancel"
+              title="Cancel"
+              className={compactClass}
             >
               <X />
-              Cancel
+              {!compact && "Cancel"}
             </Button>
           ))}
       </div>
