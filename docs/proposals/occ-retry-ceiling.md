@@ -1,8 +1,8 @@
 ---
 title: Bound the OCC retry loop
 status: proposed
-maturity: specified
-last-reviewed: 2026-05-01
+maturity: designed
+last-reviewed: 2026-05-02
 ---
 
 # Bound the OCC retry loop
@@ -28,6 +28,20 @@ Defaults are conservative: 50 is several orders of magnitude above any normal co
 Real bugs in concurrency-control machinery look like infinite loops in production. The current code can spin forever on a degenerate input; the leak budget catches handler-side wedges but not store-side ones. A small ceiling closes the gap.
 
 The fix is < 30 lines: an integer counter, a comparison, an additive halt reason. The proposal is to land it before someone hits the bug rather than after.
+
+## Open questions
+
+These surfaced in the 2026-05-02 brainstorm and are unresolved.
+
+- **What counts as "a turn" for the counter?** The Shape section says "50 OCC conflicts per turn" but `runOneInner`'s `if (!ok) continue` re-runs the whole inner block on every conflict. Three candidates: (a) reset on successful append (per-attempt-batch — matches the bug shape "the inner loop is spinning on the same fact append"), (b) reset on new node entry (per-node-iteration), or (c) cumulative across the run. Pick before implementation.
+
+- **Counter state — in-memory or in `routing`?** In-memory (executor closure) keeps the contention surface clean and the bug shape ("supervisor wedged this turn") doesn't survive a daemon restart anyway. Persisting in `routing.internal.occ_count.<nodeId>` would survive restart but adds a write to the surface that's already broken. Lean in-memory; pin it.
+
+- **Audit `tryAppendFact` failure modes.** The proposal assumes `ok=false` is exclusively `ConcurrencyError` (version-mismatch). Need to verify that `SQLITE_BUSY`, CHECK-constraint trips, and schema-drift errors don't also surface as `ok=false` — otherwise we'd halt non-OCC failures with `reason:"occ_exhausted"`, mis-attributing the cause. Plan-time audit, before implementation.
+
+- **Halt detail shape.** `detail: "<N> consecutive OCC conflicts on node <id>"` is a string. For post-mortem we want at least `{ count, nodeId, iteration, lastVersion, attemptedFactType }` — structured and queryable. Mirror the shape `fact.run_quarantined { orphanedIntents }` already uses for structured halt-detail.
+
+- **Warning-event scope.** `occ_conflict_warning` fires once at 80% of the ceiling (40 conflicts). Per what scope key — `(runId, nodeId, iteration)`? If a turn flirts with 40, succeeds, then a later turn conflicts again — fire twice (per-iteration) or once-per-run? Per-`(runId, nodeId, iteration)` is the only sane key but worth pinning.
 
 ## What this does not commit to
 
