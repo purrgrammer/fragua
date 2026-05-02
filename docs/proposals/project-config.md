@@ -1,5 +1,6 @@
 ---
 title: Project config file
+summary: "<project>/.swarm/config.jsonc"
 status: shipped
 maturity: specified
 last-reviewed: 2026-05-01

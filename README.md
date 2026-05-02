@@ -14,6 +14,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - Event store with intent/fact split, OCC on facts, content-addressed blobs on disk
 - 8 node kinds: `start`, `exit`, `codergen` (LLM agent), `conditional`, `wait.human`, `tool` (graph-level shell), `parallel`, `parallel.fan_in`
 - Replayable **control plane** (state machine, edge selection, intent fold). LLM bodies are best-effort and depend on provider determinism
+- Project config + identity in `<project>/.swarm/config.jsonc` — JSONC, UUIDv7 id, TypeBox-validated; `swarm init` mints it
 
 **Agents**
 
@@ -30,6 +31,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - HITL via `wait.human` nodes returning `yield_hitl { label, options[] }`
 - Auto-titler runs once per run (cost-bounded summariser)
 - Daemon-events audit log (process lifecycle, sweeps, GC, leak detection, worktree provisioning)
+- Doc-vs-code drift CI lint enforces AGENTS.md rule #1 — `bun run lint:docs` cross-checks `schema.sql` / `swarm-events.ts` / `handler/types.ts` / proposal index against `docs/`
 - Self-review workflow (`bun run swarm run introspect`) — read-only periodic audit of architecture, doc-vs-code drift, proposal hygiene, and operational health; see [`docs/proposals/introspection-workflow.md`](docs/proposals/introspection-workflow.md)
 
 ## What swarm does not deliver today

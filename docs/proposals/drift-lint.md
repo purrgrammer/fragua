@@ -1,6 +1,7 @@
 ---
 title: Doc-vs-code drift CI lint
-status: proposed
+summary: "Doc-vs-code drift CI lint"
+status: shipped
 maturity: specified
 last-reviewed: 2026-05-01
 ---
@@ -21,7 +22,7 @@ A `bun run lint:docs` target wired into `bun run ci`:
 2. **Event taxonomy lint.** Parse `packages/types/src/swarm-events.ts`. Assert every `IntentEvent` / `FactEvent` / `DaemonEvent` type, every `HaltReason` / `QuarantineReason` / `RunStatus` value, appears in `docs/ARCHITECTURE.md` §3.
 3. **Handler-contract lint.** Parse `packages/core/src/handler/types.ts`. Assert the `HandlerResult` halt-reason enum matches `docs/handler-contract.md`.
 4. **Proposal-index lint.** Cross-check `docs/proposals/README.md` index against actual `docs/proposals/*.md` files: each file present in index; index entry's status / maturity matches file front-matter.
-5. **(Stretch) Capability claim lint.** For each `status: shipped` proposal, verify the README "What swarm delivers today" section claims a capability whose phrasing matches the proposal's title or front-matter `summary`.
+5. **Capability claim lint.** For each `status: shipped` proposal, verify the README "What swarm delivers today" section claims a capability whose phrasing matches the proposal's front-matter `summary` (preferred) or `title`.
 
 Failures print a unified diff between the discovered surface and the documented one.
 
@@ -46,3 +47,5 @@ This proposal pairs with [`introspection-workflow`](./introspection-workflow.md)
 ## Implementation notes
 
 Landed as `bun run lint:docs` (driven by `packages/store/test/lint-docs.test.ts`) and woven into `bun run ci` between `lint` and `typecheck`. Suppression is line-based: a `-- drift-lint: ignore` line in `schema.sql` directly above a column declaration, or a `// drift-lint: ignore` line in a TS contract file directly above a union member, exempts the next declaration from the audit. No AST. The fixture pair under `packages/store/test/fixtures/drift-lint/` proves the lint catches real drift — a parameterised self-test asserts the drifted fixture surfaces the missing column by name and the clean fixture yields zero findings.
+
+The capability-claim audit (item 5 in the original shape) ships in the same gate: `auditCapabilityClaims` walks every `status: shipped` proposal and asserts the README "What swarm delivers today" section contains its front-matter `summary` (falling back to `title`). Suppression for the capability audit is `// drift-lint: ignore <basename>.md` on its own line within the README section.

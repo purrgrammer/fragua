@@ -12,7 +12,7 @@
 // the bottom prove the lint actually catches drift.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ───────────────────────── paths ─────────────────────────
@@ -485,16 +485,34 @@ const SECTION_TO_STATUS: Record<string, string> = {
   Discarded: "discarded",
 };
 
-function parseFrontMatterStatus(md: string): string | null {
+function parseFrontMatterField(md: string, field: string): string | null {
   const m = /^---\n([\s\S]*?)\n---/.exec(md);
   if (!m) return null;
   const block = m[1] ?? "";
   for (const line of block.split("\n")) {
     const km = /^(\w+):\s*(.+?)\s*$/.exec(line);
     if (!km) continue;
-    if (km[1] === "status") return km[2] ?? null;
+    if (km[1] === field) {
+      let value = km[2] ?? "";
+      if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+        value = value.slice(1, -1);
+      }
+      return value;
+    }
   }
   return null;
+}
+
+export function parseFrontMatterStatus(md: string): string | null {
+  return parseFrontMatterField(md, "status");
+}
+
+export function parseFrontMatterSummary(md: string): string | null {
+  return parseFrontMatterField(md, "summary");
+}
+
+export function parseFrontMatterTitle(md: string): string | null {
+  return parseFrontMatterField(md, "title");
 }
 
 interface IndexEntry {
@@ -587,6 +605,71 @@ export function auditProposalIndex(opts: { proposalsDir: string }): Finding[] {
   return findings;
 }
 
+// ────────────────── capability-claim lint ─────────────────
+
+// For every status: shipped proposal, the README "What swarm delivers today"
+// section must contain a substring match for the proposal's front-matter
+// `summary` (preferred) or `title`. Suppression is a `// drift-lint: ignore
+// <basename>.md` line anywhere in the section — placed adjacent to a bullet
+// for human readers; the audit matches by basename for robustness against
+// reformatting.
+
+export function auditCapabilityClaims(opts: {
+  proposalsDir: string;
+  readmePath: string;
+  readmeSection: string;
+}): Finding[] {
+  const findings: Finding[] = [];
+  const readmeMd = readFileSync(opts.readmePath, "utf8");
+  const escaped = opts.readmeSection.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const section = sliceSection(readmeMd, new RegExp(`^## ${escaped}\\b`), 2);
+  if (section == null) {
+    findings.push({
+      token: opts.readmeSection,
+      doc: opts.readmePath,
+      section: "(missing)",
+      source: "auditCapabilityClaims",
+    });
+    return findings;
+  }
+
+  const suppressed = new Set<string>();
+  const ignoreRe = /^\s*\/\/\s*drift-lint:\s*ignore\s+(\S+\.md)\s*$/;
+  for (const line of section.split("\n")) {
+    const m = ignoreRe.exec(line);
+    if (m) suppressed.add(m[1] ?? "");
+  }
+
+  const onDisk = readdirSync(opts.proposalsDir).filter((f) => f.endsWith(".md") && f !== "README.md");
+  for (const f of onDisk) {
+    const proposalPath = join(opts.proposalsDir, f);
+    const md = readFileSync(proposalPath, "utf8");
+    if (parseFrontMatterStatus(md) !== "shipped") continue;
+    if (suppressed.has(f)) continue;
+    const summary = parseFrontMatterSummary(md);
+    const title = parseFrontMatterTitle(md);
+    const phrase = summary ?? title;
+    if (phrase == null || phrase.length === 0) {
+      findings.push({
+        token: "front-matter summary or title",
+        doc: proposalPath,
+        section: "(YAML front-matter)",
+        source: f,
+      });
+      continue;
+    }
+    if (!section.includes(phrase)) {
+      findings.push({
+        token: phrase,
+        doc: opts.readmePath,
+        section: `## ${opts.readmeSection}`,
+        source: f,
+      });
+    }
+  }
+  return findings;
+}
+
 // ───────────────────────── tests ─────────────────────────
 
 describe("drift-lint — live repo", () => {
@@ -651,6 +734,101 @@ describe("drift-lint — live repo", () => {
       throw new Error(`drift-lint findings (proposal status):\n${formatFindings(findings)}`);
     }
     expect(findings).toEqual([]);
+  });
+
+  test("every shipped proposal has a matching capability claim in README", () => {
+    const findings = auditCapabilityClaims({
+      proposalsDir: PROPOSALS_DIR,
+      readmePath: join(REPO_ROOT, "README.md"),
+      readmeSection: "What swarm delivers today",
+    });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (capability claims):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("drift-lint — capability-claim audit", () => {
+  const TMP_DIR = join(FIXTURES_DIR, "_tmp-cap-proposals");
+  const TMP_README = join(FIXTURES_DIR, "_tmp-cap-readme.md");
+
+  function setup(opts: { readmeBody: string }): { proposalBasename: string } {
+    rmSync(TMP_DIR, { recursive: true, force: true });
+    mkdirSync(TMP_DIR, { recursive: true });
+    const basename = "phantom-feature.md";
+    const frontMatter = [
+      "---",
+      'title: "Phantom feature"',
+      'summary: "absent-capability-xyzzy"',
+      "status: shipped",
+      "maturity: specified",
+      "---",
+      "",
+      "# Phantom feature",
+      "",
+    ].join("\n");
+    writeFileSync(join(TMP_DIR, basename), frontMatter);
+    writeFileSync(TMP_README, opts.readmeBody);
+    return { proposalBasename: basename };
+  }
+
+  function teardown(): void {
+    rmSync(TMP_DIR, { recursive: true, force: true });
+    rmSync(TMP_README, { force: true });
+  }
+
+  test("flags a shipped proposal whose summary is absent from the README section", () => {
+    const readme = [
+      "# fixture",
+      "",
+      "## What swarm delivers today",
+      "",
+      "- something else entirely",
+      "",
+      "## Next",
+      "",
+    ].join("\n");
+    const { proposalBasename } = setup({ readmeBody: readme });
+    try {
+      const findings = auditCapabilityClaims({
+        proposalsDir: TMP_DIR,
+        readmePath: TMP_README,
+        readmeSection: "What swarm delivers today",
+      });
+      expect(findings.length).toBe(1);
+      const finding = findings[0];
+      if (!finding) throw new Error("expected one finding");
+      expect(finding.token).toBe("absent-capability-xyzzy");
+      expect(finding.source).toBe(proposalBasename);
+    } finally {
+      teardown();
+    }
+  });
+
+  test("// drift-lint: ignore exempts a flagged proposal", () => {
+    const readme = [
+      "# fixture",
+      "",
+      "## What swarm delivers today",
+      "",
+      "// drift-lint: ignore phantom-feature.md",
+      "- something else entirely",
+      "",
+      "## Next",
+      "",
+    ].join("\n");
+    setup({ readmeBody: readme });
+    try {
+      const findings = auditCapabilityClaims({
+        proposalsDir: TMP_DIR,
+        readmePath: TMP_README,
+        readmeSection: "What swarm delivers today",
+      });
+      expect(findings).toEqual([]);
+    } finally {
+      teardown();
+    }
   });
 });
 
