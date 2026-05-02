@@ -1,23 +1,22 @@
-// Pause + fail-route — see the bug repro from run 01kqn91nzxfrjgwvgh.
+// Mid-dispatch pause — operator clicks Pause while a codergen handler
+// is mid-stream. The supervisor trips the abort signal; the agent
+// rethrows AbortError instead of converting to a fail outcome (see
+// packages/agent/src/backend.ts). The executor's existing wasAborted
+// path then writes fact.node_aborted only — the run stays running —
+// and the next dispatch's fold consumes the pause intent through the
+// normal R4 path, producing fact.run_paused_hitl.
 //
-// When the operator hits Pause while a codergen is mid-stream, pi-ai
-// returns `stopReason="aborted"` and the agent boundary converts that
-// to a normal `fail` outcome (not a thrown AbortError). Without the
-// fact.run_halted entry in the pause-after-dispatch swap set, the run
-// halted with reason="aborted_exit" instead of pausing.
-//
-// This test registers a node that returns outcomeStatus="fail" routing
-// to the start node's only outgoing edge (which lands on `__end__`),
-// folds an unapplied `intent.pause_requested` into the dispatch, and
-// asserts the run lands in `paused_hitl` — not halted.
+// This test stubs the codergen with a hand-rolled handler that throws
+// AbortError when its signal is tripped. It does NOT exercise the
+// pi-ai integration directly; that's covered by the agent unit suite.
 
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
 import { runOne } from "../src/executor.ts";
-import { enqueue, rig } from "./helpers.ts";
+import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
-describe("executor — pause swaps a fail-routed halt for paused_hitl", () => {
-  test("fail outcome + folded pause intent → paused_hitl, not halted", async () => {
+describe("executor — pause mid-dispatch routes through abort-throw + next-fold", () => {
+  test("handler throws AbortError when signal trips → run_paused_hitl, not halted", async () => {
     const r = rig({
       dot: `digraph {
         start [shape=Mdiamond];
@@ -37,36 +36,42 @@ describe("executor — pause swaps a fail-routed halt for paused_hitl", () => {
       kind: "codergen",
       sideEffect: "external",
       maxMs: 100,
-      // Mimic the pi-ai-aborted-mid-stream → fail outcome path: handler
-      // returns a normal transition with outcomeStatus="fail" and
-      // failureReason="Request was aborted." (the pi-ai message).
-      handler: async () => ({
-        kind: "transition",
-        outcomeStatus: "fail",
-        failureReason: "Request was aborted.",
-        tokens: 0,
-        costUsd: 0,
-      }),
+      handler: async (ctx) => {
+        // Mirror the agent boundary: append the pause intent inside the
+        // handler (same race shape as the supervisor tripping mid-stream),
+        // wait briefly for it to land, then throw AbortError if the
+        // executor's abort plumbing fires. Otherwise return success — the
+        // test asserts the abort path was taken, not the success path.
+        const dbHandle = (r.store as unknown as { db: { query: (sql: string) => { all: () => { run_id: string }[] } } })
+          .db;
+        const runs = dbHandle.query("SELECT run_id FROM run_state WHERE status='running'").all();
+        const runId = runs[0]?.run_id;
+        if (runId) r.store.appendIntent(runId, { type: "intent.pause_requested", payload: {} });
+        // Wait one tick so a real supervisor would pick up the intent.
+        // Without a real supervisor, simulate the trip directly via the
+        // registry so the executor's wasAborted path runs.
+        await new Promise((res) => setTimeout(res, 0));
+        if (ctx.signal.aborted) {
+          const err = new Error("signal aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        return { kind: "transition", outcomeStatus: "fail", tokens: 0, costUsd: 0 };
+      },
     });
-    r.dispatcher.register(r.workflowSha, "done", {
-      kind: "exit",
-      sideEffect: "none",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
-    });
+    registerTerminalEcho(r.dispatcher, r.workflowSha, "done");
 
-    enqueue(r, "pause-fail", "start");
+    enqueue(r, "mid-pause", "start");
     r.store.claimNextRun(1);
 
-    // Append a pause intent BEFORE runOne so the fold sees it on the
-    // codergen's dispatch. Mirrors what supervisor.ts does when the
-    // operator clicks Pause during a running turn.
-    r.store.appendIntent("pause-fail", { type: "intent.pause_requested", payload: {} });
+    // Trip the run's controller a few ms in — same shape as the supervisor.
+    const reg = new AbortRegistry();
+    setTimeout(() => reg.trip("mid-pause"), 1);
 
-    await runOne("pause-fail", {
+    await runOne("mid-pause", {
       store: r.store,
       dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
+      registry: reg,
       tools: r.tools,
       llmCall: r.llmCall,
       maxConcurrentRuns: 1,
@@ -74,12 +79,12 @@ describe("executor — pause swaps a fail-routed halt for paused_hitl", () => {
       shutdownSignal: new AbortController().signal,
     });
 
-    const events = r.store.getEvents("pause-fail");
-    const halts = events.filter((e) => e.type === "fact.run_halted");
-    expect(halts.length).toBe(0);
-    const paused = events.filter((e) => e.type === "fact.run_paused_hitl");
-    expect(paused.length).toBe(1);
-    const state = r.store.getState("pause-fail");
-    expect(state?.status).toBe("paused_hitl");
+    const events = r.store.getEvents("mid-pause");
+    // The abort path emits fact.node_aborted; the next dispatch's fold
+    // turns the pending pause intent into fact.run_paused_hitl.
+    expect(events.some((e) => e.type === "fact.node_aborted")).toBe(true);
+    expect(events.filter((e) => e.type === "fact.run_paused_hitl").length).toBe(1);
+    expect(events.filter((e) => e.type === "fact.run_halted").length).toBe(0);
+    expect(r.store.getState("mid-pause")?.status).toBe("paused_hitl");
   });
 });

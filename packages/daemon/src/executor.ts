@@ -1091,19 +1091,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // R3 — pause defers when paired with steer/hitl: keep the
       // node_completed accounting, then pause instead of advancing to
       // the next node. wakePending will rouse the run on the next
-      // intent.hitl_input. Three swap targets: success continuations
-      // (`fact.node_started` / `fact.run_completed`) AND the
-      // `fact.run_halted` that result-to-facts emits when an
-      // outcome=fail routes through `__end__`. The codergen agent
-      // converts a pause-mid-stream into a regular `fail` outcome
-      // (pi-ai's `stopReason="aborted"` isn't routed through the
-      // executor's abort-error catch); without the halt swap, pausing
-      // a codergen mid-turn halts the run with `reason="aborted_exit"`
-      // instead of pausing it. Genuine `<abort>...</abort>` self-aborts
-      // produce the same fact shape but never coincide with an unapplied
-      // pause intent in the same fold, so the swap can't capture them.
+      // intent.hitl_input. Terminal halts (run_halted) beat pause; we
+      // only swap the success continuations (node_started / run_completed).
+      // Mid-dispatch pause races (intent arrives AFTER the fold but
+      // BEFORE the handler returned) flow through the abort-throw path:
+      // the codergen agent rethrows on signal-tripped + aborted-stream
+      // so the executor's catch block writes fact.node_aborted, leaves
+      // the run running, and the next dispatch's fold consumes the
+      // pause intent normally.
       if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
-        const swapTypes = new Set(["fact.node_started", "fact.run_completed", "fact.run_halted"]);
+        const swapTypes = new Set(["fact.node_started", "fact.run_completed"]);
         const swapped = facts.some((f) => swapTypes.has(f.type));
         if (swapped) {
           facts = facts.filter((f) => !swapTypes.has(f.type));

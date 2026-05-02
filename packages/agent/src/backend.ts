@@ -476,9 +476,6 @@ export class PiCodergenBackend implements CodergenBackend {
     }
 
     if (last.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
-      // Cancel/timeout (`aborted`) is an executor-side decision, not a
-      // provider problem — keep it routed as fail so cancel actually
-      // terminates the run.
       if (last.stopReason === "error") {
         const httpIs4xx5xx = lastHttpStatus !== null && lastHttpStatus >= 400 && lastHttpStatus < 600;
         const noContent = !Array.isArray(last.content) || last.content.length === 0;
@@ -489,6 +486,22 @@ export class PiCodergenBackend implements CodergenBackend {
             ...(lastRetryAfterMs !== undefined ? { retryAfterMs: lastRetryAfterMs } : {}),
           });
         }
+      }
+      // Signal-driven abort (operator pause/cancel, supervisor timeout,
+      // shutdown drain): pi-ai stops gracefully and surfaces
+      // stopReason="aborted", but to the executor this is the same
+      // class as a tool handler throwing AbortError — the dispatch
+      // didn't choose to fail, an external signal stopped it. Rethrow
+      // so the executor's `wasAborted` path runs: emit
+      // `fact.node_aborted` (not a node_completed-into-terminal halt),
+      // leave the run running, and let the next dispatch's fold consume
+      // the pending pause/cancel intent through the normal R1/R4 rules.
+      // Without this rethrow, an operator-paused codergen turn halts
+      // with `reason="aborted_exit"` instead of pausing.
+      if (last.stopReason === "aborted" && input.signal?.aborted) {
+        const err = new Error(last.errorMessage ?? "stream aborted");
+        err.name = "AbortError";
+        throw err;
       }
       return fail(last.errorMessage ?? `agent stopped: ${last.stopReason}`, {
         notes: summarizeMessage(last),
