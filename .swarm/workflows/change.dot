@@ -41,7 +41,7 @@ digraph change {
     ]
 
     review [
-      prompt = "Judge the diff. Inputs: $plan.output, $implement.output, `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every plan §2 test is realised (file exists, name matches, assertion matches).\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files outside the plan OR shared contracts not listed.\n\nReply EXACTLY one of:\n  `APPROVE: <one line>`\n  `<abort>REJECT: <one line>. fixes: <numbered list, 1-5 items></abort>`\n\nBe strict. Implement re-runs automatically on REJECT (capped at 2 cycles)."
+      prompt = "Judge the diff. Inputs: $plan.output, $implement.output, `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every plan §2 test is realised (file exists, name matches, assertion matches).\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files outside the plan OR shared contracts not listed.\n  (e) Doc-state claims match reality. Any prose edit that asserts shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`, don't trust the words on the page. Reality wins. If the diff says something is 'still outstanding' that already exists on disk, REJECT.\n\nReply EXACTLY one of:\n  `APPROVE: <one line>`\n  `<abort>REJECT: <one line>. fixes: <numbered list, 1-5 items></abort>`\n\nBe strict. Implement re-runs automatically on REJECT (capped at 2 cycles)."
       allowed_tools = "read, grep, bash"
       thread_id     = "dev"
       goal_gate     = true
