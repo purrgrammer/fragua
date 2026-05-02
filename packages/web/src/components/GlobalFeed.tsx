@@ -130,7 +130,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
   const base = KIND_META[event.type] ?? FALLBACK_META;
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
-    if (fromStatus === "paused_hitl") return { ...base, verb: "resumed (HITL)" };
+    if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
     if (fromStatus === "paused_provider_error") return { ...base, verb: "resumed (retry)" };
     if (fromStatus === "paused_provider_retry") return { ...base, verb: "auto-retry fired" };
     if (fromStatus === "paused_retry") return { ...base, verb: "retry fired" };

@@ -9,8 +9,8 @@ function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
 }
 
 describe("metaForEvent", () => {
-  test("fact.run_resumed distinguishes HITL vs provider-error vs unknown", () => {
-    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_hitl" })).verb).toBe("resumed (HITL)");
+  test("fact.run_resumed verb varies by fromStatus", () => {
+    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_hitl" })).verb).toBe("resumed");
     expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_provider_error" })).verb).toBe("resumed (retry)");
     expect(metaForEvent(evt("fact.run_resumed", {})).verb).toBe("resumed");
   });
