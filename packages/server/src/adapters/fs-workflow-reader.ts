@@ -56,7 +56,7 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
       return out;
     },
 
-    async read(name: string): Promise<WorkflowDetail | undefined> {
+    async read(name: string, _opts?: { cwd?: string }): Promise<WorkflowDetail | undefined> {
       // Defence-in-depth: the route pattern already constrains `:name`,
       // but rejecting path separators + traversal here keeps this
       // adapter safe in isolation (unit tests call `read` directly).

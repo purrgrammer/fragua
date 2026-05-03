@@ -18,7 +18,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { GraphView } from "../components/GraphView.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -41,9 +41,21 @@ const DRAWER_MOTION = cn(
 
 export function WorkflowDetail(): JSX.Element {
   const { name = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  // `?cwd=` pins lookup to a specific source. Empty string is meaningful
+  // (explicit global pin); `null` (param absent) lets the server use the
+  // default precedence (global → projects in recency order).
+  const cwdParam = searchParams.get("cwd");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  const { data: detail, isPending, error } = useQuery({ ...queries.workflows.detail(name), enabled: !!name });
+  const {
+    data: detail,
+    isPending,
+    error,
+  } = useQuery({
+    ...queries.workflows.detail(name, cwdParam ?? undefined),
+    enabled: !!name,
+  });
 
   const graph = useMemo(() => {
     if (!detail?.source) return null;
@@ -139,6 +151,10 @@ export function WorkflowDetail(): JSX.Element {
             name: <code className="text-sw-text">{detail.name}</code>
           </span>
           <span>·</span>
+          <span title={detail.cwd ?? "~/.swarm/workflows"}>
+            source: <code className="text-sw-text">{detail.cwd ? basename(detail.cwd) : "global"}</code>
+          </span>
+          <span>·</span>
           <span title={detail.path}>
             path: <code className="text-sw-text">{detail.path}</code>
           </span>
@@ -200,4 +216,10 @@ export function WorkflowDetail(): JSX.Element {
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
+}
+
+function basename(p: string): string {
+  const trimmed = p.replace(/[/\\]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }

@@ -35,7 +35,7 @@ import {
 import { SqliteStore } from "@swarm/store";
 import { CORE_TOOLS, discoverSkills, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
-import { loadConfig, resolveTimeouts } from "../config.ts";
+import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
 
 /**
  * Poll interval for `swarm daemon stop` — how often we check whether
@@ -317,16 +317,38 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   // Worktree provisioner — every run gets a `git worktree` with its
   // own branch so agents never mutate the user's working copy and
-  // concurrent runs don't stomp on each other. `bootstrap` from
-  // config.jsonc runs once per fresh worktree (e.g. `bun install
-  // --frozen-lockfile`). Falls back to a shared LocalEnvironment if
-  // the cwd isn't inside a git repo — tests + demo paths shouldn't
-  // require a worktree to get off the ground.
+  // concurrent runs don't stomp on each other. Bootstrap is
+  // **resolved per run** against the run's project root via
+  // `loadProjectConfig(<run.cwd>)` — so one daemon can serve runs
+  // from many projects, each picking up its own
+  // `.swarm/config.jsonc` `bootstrap` field. No global / no
+  // daemon-startup-cwd fallback: a project that doesn't declare a
+  // bootstrap gets no bootstrap (the previous behaviour silently
+  // leaked the daemon's startup-cwd config to every project, which
+  // broke as soon as a second project entered the picture).
+  // Falls back to a shared LocalEnvironment if the cwd isn't inside
+  // a git repo — tests + demo paths shouldn't require a worktree to
+  // get off the ground.
+  const resolveRunBootstrap = async (runCwd: string) => {
+    const projectCfg = await loadProjectConfig(runCwd);
+    const projectTimeouts = resolveTimeouts(projectCfg);
+    const out: { bootstrap?: string; bootstrapTimeoutMs?: number } = {};
+    if (projectCfg.bootstrap !== undefined) out.bootstrap = projectCfg.bootstrap;
+    // Top-level `bootstrapTimeoutMs` wins over nested `timeouts.bootstrap`
+    // when both are set — the top-level form is more explicit about
+    // pairing with `bootstrap`. `timeouts.bootstrap` stays supported for
+    // back-compat and for users who prefer duration strings ("10m").
+    if (projectCfg.bootstrapTimeoutMs !== undefined) {
+      out.bootstrapTimeoutMs = projectCfg.bootstrapTimeoutMs;
+    } else if (projectTimeouts.bootstrap !== undefined) {
+      out.bootstrapTimeoutMs = projectTimeouts.bootstrap;
+    }
+    return out;
+  };
   const provisioner: Provisioner = (await isGitRepo(cwd))
     ? new WorktreeProvisioner({
         repoRoot: cwd,
-        ...(config.bootstrap ? { bootstrap: config.bootstrap } : {}),
-        ...(timeouts.bootstrap !== undefined ? { bootstrapTimeoutMs: timeouts.bootstrap } : {}),
+        resolveRunBootstrap,
         ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
       })
     : new LocalEnvironmentProvisioner(
@@ -335,7 +357,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       );
   const provisionerLabel =
     provisioner instanceof WorktreeProvisioner
-      ? `worktree (.swarm/worktrees/<run-id>${config.bootstrap ? `, bootstrap: "${config.bootstrap}"` : ""})`
+      ? `worktree (.swarm/worktrees/<run-id>, bootstrap: per-run from <project>/.swarm/config.jsonc)`
       : `local (cwd=${cwd}, no git repo detected)`;
 
   console.log(chalk.green(`swarm daemon running`));

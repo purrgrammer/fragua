@@ -125,6 +125,56 @@ describe("WorktreeProvisioner", () => {
   });
 });
 
+describe("WorktreeProvisioner — bootstrap resolution", () => {
+  test("no resolver, no constructor bootstrap → empty pair", async () => {
+    const p = new WorktreeProvisioner();
+    expect(await p.resolveBootstrapFor("/any/cwd")).toEqual({});
+  });
+
+  test("no resolver → constructor values pass through", async () => {
+    const p = new WorktreeProvisioner({
+      bootstrap: "default-cmd",
+      bootstrapTimeoutMs: 1234,
+    });
+    expect(await p.resolveBootstrapFor("/any/cwd")).toEqual({
+      bootstrap: "default-cmd",
+      bootstrapTimeoutMs: 1234,
+    });
+  });
+
+  test("resolver is authoritative — no fallback to constructor bootstrap", async () => {
+    // Constructor sets defaults; resolver returns empty. The empty
+    // resolver result must win, not the constructor — that's the
+    // "local or nothing" guarantee that prevents the daemon's
+    // startup-cwd bootstrap from leaking into other projects.
+    const p = new WorktreeProvisioner({
+      bootstrap: "should-not-leak",
+      bootstrapTimeoutMs: 999,
+      resolveRunBootstrap: async () => ({}),
+    });
+    expect(await p.resolveBootstrapFor("/project/a")).toEqual({});
+  });
+
+  test("resolver receives the run cwd and its return is used verbatim", async () => {
+    const seen: string[] = [];
+    const p = new WorktreeProvisioner({
+      resolveRunBootstrap: async (cwd) => {
+        seen.push(cwd);
+        if (cwd === "/project/a") return { bootstrap: "cmd-a", bootstrapTimeoutMs: 100 };
+        if (cwd === "/project/b") return { bootstrap: "cmd-b" };
+        return {};
+      },
+    });
+    expect(await p.resolveBootstrapFor("/project/a")).toEqual({
+      bootstrap: "cmd-a",
+      bootstrapTimeoutMs: 100,
+    });
+    expect(await p.resolveBootstrapFor("/project/b")).toEqual({ bootstrap: "cmd-b" });
+    expect(await p.resolveBootstrapFor("/project/c")).toEqual({});
+    expect(seen).toEqual(["/project/a", "/project/b", "/project/c"]);
+  });
+});
+
 describe("LocalEnvironmentProvisioner — fallback", () => {
   test("ensure returns the same shared LocalEnvironment for every run", async () => {
     const p = new LocalEnvironmentProvisioner(process.cwd());

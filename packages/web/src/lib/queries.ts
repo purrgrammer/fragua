@@ -74,10 +74,12 @@ export const queries = {
         queryKey: [...queries.workflows.all(), "list"] as const,
         queryFn: api.listWorkflows,
       }),
-    detail: (name: string) =>
+    detail: (name: string, cwd?: string) =>
       queryOptions({
-        queryKey: [...queries.workflows.all(), "detail", name] as const,
-        queryFn: () => api.getWorkflow(name),
+        // Per-source key: a name can point at different sources across
+        // projects, so the cache must split on `cwd`.
+        queryKey: [...queries.workflows.all(), "detail", name, cwd ?? "__global__"] as const,
+        queryFn: () => api.getWorkflow(name, cwd !== undefined ? { cwd } : undefined),
       }),
   },
 

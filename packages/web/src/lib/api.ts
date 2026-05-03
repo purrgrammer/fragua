@@ -138,6 +138,9 @@ export interface RunDetail {
   hitlNodeId?: string;
   hitlLabel?: string;
   hitlOptions?: Array<{ key: string; label: string; to: string }>;
+  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
+   * Absent for ephemeral runs (CI primitives, tests). */
+  cwd?: string;
 }
 
 export interface WorkflowSummary {
@@ -145,6 +148,12 @@ export interface WorkflowSummary {
   path: string;
   sha: string;
   label?: string;
+  /** Project root that owns this workflow. `undefined` means the global
+   *  source (`~/.swarm/workflows/`); a string is the absolute cwd of a
+   *  project shown by `/projects`. Names may collide across sources, so
+   *  the listing surface must show the cwd to disambiguate and the
+   *  detail link must thread `?cwd=` through. */
+  cwd?: string;
 }
 
 /** Full workflow, including the raw DOT source. Fetched on demand by
@@ -392,8 +401,12 @@ export async function listWorkflows(): Promise<WorkflowSummary[]> {
   return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
 }
 
-export async function getWorkflow(name: string): Promise<WorkflowDetail> {
-  return getJson(`/workflows/${encodeURIComponent(name)}`, isWorkflowDetail);
+export async function getWorkflow(name: string, opts?: { cwd?: string }): Promise<WorkflowDetail> {
+  // `cwd` is forwarded as a query string — empty string is meaningful
+  // (pin to the global source) and must round-trip, so we encode it
+  // explicitly rather than skipping when falsy.
+  const qs = opts?.cwd !== undefined ? `?cwd=${encodeURIComponent(opts.cwd)}` : "";
+  return getJson(`/workflows/${encodeURIComponent(name)}${qs}`, isWorkflowDetail);
 }
 
 export async function listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]> {
@@ -755,6 +768,7 @@ function isRunDetail(v: unknown): v is RunDetail {
     cacheReadTokens?: unknown;
     cacheWriteTokens?: unknown;
     durationMs?: unknown;
+    cwd?: unknown;
   };
   return (
     typeof o.runId === "string" &&
@@ -769,7 +783,8 @@ function isRunDetail(v: unknown): v is RunDetail {
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
     (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
-    (o.durationMs === undefined || typeof o.durationMs === "number")
+    (o.durationMs === undefined || typeof o.durationMs === "number") &&
+    (o.cwd === undefined || typeof o.cwd === "string")
   );
 }
 
@@ -786,12 +801,13 @@ function isProjectSummary(v: unknown): v is ProjectSummary {
 
 function isWorkflowSummary(v: unknown): v is WorkflowSummary {
   if (typeof v !== "object" || v === null) return false;
-  const o = v as { name?: unknown; path?: unknown; sha?: unknown; label?: unknown };
+  const o = v as { name?: unknown; path?: unknown; sha?: unknown; label?: unknown; cwd?: unknown };
   return (
     typeof o.name === "string" &&
     typeof o.path === "string" &&
     typeof o.sha === "string" &&
-    (o.label === undefined || typeof o.label === "string")
+    (o.label === undefined || typeof o.label === "string") &&
+    (o.cwd === undefined || typeof o.cwd === "string")
   );
 }
 

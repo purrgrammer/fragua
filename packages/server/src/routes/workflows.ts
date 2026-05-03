@@ -36,6 +36,11 @@ export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {
 
   app.get("/workflows/:name", async (c) => {
     const name = c.req.param("name");
+    // Optional source pin: `?cwd=` is the project root that the listing
+    // surface tagged the workflow with. Empty string is meaningful — it
+    // pins the lookup to the global source, which lets a caller pick the
+    // global `change` over a project that defines the same name.
+    const cwdParam = c.req.query("cwd");
 
     // ── sha-based lookup ───────────────────────────────────────────────
     // When the caller supplies a 64-char hex sha (e.g. a workflowSha
@@ -60,7 +65,7 @@ export function workflowsRoutes(opts: WorkflowsRouteOptions): Hono {
     }
 
     // ── name-based lookup (existing behaviour) ────────────────────────
-    const detail = await opts.workflowReader.read(name);
+    const detail = await opts.workflowReader.read(name, cwdParam !== undefined ? { cwd: cwdParam } : undefined);
     if (!detail) return c.json({ error: "not_found", name }, 404);
     return c.json(detail);
   });

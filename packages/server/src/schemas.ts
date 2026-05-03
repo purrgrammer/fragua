@@ -109,6 +109,9 @@ export const RunDetail = Type.Object({
   hitlNodeId: Type.Optional(Type.String()),
   hitlLabel: Type.Optional(Type.String()),
   hitlOptions: Type.Optional(Type.Array(HitlOption)),
+  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
+   * Absent for ephemeral runs (CI primitives, tests). */
+  cwd: Type.Optional(Type.String()),
 });
 export type RunDetail = Static<typeof RunDetail>;
 

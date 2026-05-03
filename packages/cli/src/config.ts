@@ -89,6 +89,14 @@ export const SwarmConfigSchema = Type.Object(
     // Schema version. Currently always 1; bumped when the on-disk shape
     // changes in a way readers must opt into.
     version: Type.Optional(Type.Literal(1)),
+    // UUIDv7 stable project identity, minted by `swarm init`. Optional
+    // here so hand-rolled configs (e.g. `swarm init` predates the field)
+    // don't fail validation. Routing keys on the daemon's internal
+    // project mapping, not this; treat `id` as advisory metadata.
+    id: Type.Optional(Type.String()),
+    // Display name for the project — surfaced in UI listings and the
+    // run dashboard. Optional and advisory.
+    name: Type.Optional(Type.String()),
     // Shell command run inside each fresh worktree before the first node
     // fires. Use whatever the project's stack needs — `bun install
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
@@ -96,6 +104,15 @@ export const SwarmConfigSchema = Type.Object(
     // Non-zero exit fails the run. Project-specific by nature; lives in
     // `<project>/.swarm/config.jsonc`, not the global config.
     bootstrap: Type.Optional(Type.String()),
+    // Per-bootstrap timeout in milliseconds. Pairs with `bootstrap` —
+    // ergonomically grouped at top level so a project that pins both
+    // doesn't have to split across `bootstrap` + `timeouts.bootstrap`.
+    // When both this and `timeouts.bootstrap` are set, this top-level
+    // value wins (it's more explicit about belonging to bootstrap).
+    // `timeouts.bootstrap` stays supported for back-compat and accepts
+    // duration strings like `"10m"` — use that form when you'd rather
+    // express "10 minutes" than "600000".
+    bootstrapTimeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     defaults: Type.Optional(Defaults),
     // Auto-generated run titles from $ARGUMENTS. true (default) kicks off
     // a fire-and-forget summariser call at run start. false disables.
@@ -228,4 +245,14 @@ export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): 
   const projectPath = resolve(cwd, ".swarm/config.jsonc");
   const [global, project] = await Promise.all([loadConfigFile(globalPath), loadConfigFile(projectPath)]);
   return mergeConfig(global, project);
+}
+
+/** Load *only* `<cwd>/.swarm/config.jsonc` — no global cascade. Used
+ * for keys that must be strictly project-scoped (e.g. `bootstrap`,
+ * which is per-project tooling and would silently leak between
+ * projects if the global layer was allowed to supply a default).
+ * Returns `{}` when the project file is absent. */
+export async function loadProjectConfig(cwd: string): Promise<SwarmConfig> {
+  const projectPath = resolve(cwd, ".swarm/config.jsonc");
+  return loadConfigFile(projectPath);
 }

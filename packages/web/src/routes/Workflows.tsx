@@ -2,11 +2,14 @@
 // server's `GET /workflows`. Read-only for now; launching a workflow
 // is owned by P5.14.
 //
-// Columns: Name / Path / Short SHA. The path is shown in `<code>` so
-// operators can spot it at a glance and the SHA stays short to avoid
-// hijacking the row. Long paths truncate inside the cell rather than
+// Columns: Name / Source / Path / Short SHA. `Source` resolves a
+// workflow's owning cwd: the global source (`~/.swarm/workflows/`) shows
+// `global`; a project source shows the project's basename with the full
+// cwd in `title=`. Long paths truncate inside the cell rather than
 // wrapping or pushing the table wider than its container — the
-// `table-fixed` layout + `min-w-0` wrapper enforce this.
+// `table-fixed` layout + `min-w-0` wrapper enforce this. Names may
+// collide across sources, so the row key + detail link both include
+// `cwd` to avoid pointing two rows at the same URL.
 
 import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
@@ -14,6 +17,7 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
+import { encodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 
 export function Workflows(): JSX.Element {
@@ -59,34 +63,54 @@ export function Workflows(): JSX.Element {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-56">Name</TableHead>
+                <TableHead className="w-40">Source</TableHead>
                 <TableHead>Path</TableHead>
                 <TableHead className="w-24">SHA</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.path} data-testid={`workflow-row-${row.name}`}>
-                  <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
-                    <Link
-                      to={`/workflows/${encodeURIComponent(row.name)}`}
-                      className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
-                      data-testid={`workflow-link-${row.name}`}
-                    >
-                      {row.label ?? row.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="max-w-0">
-                    <code className="block truncate font-mono text-xs text-sw-muted" title={row.path}>
-                      {row.path}
-                    </code>
-                  </TableCell>
-                  <TableCell>
-                    <code className="font-mono text-xs" title={row.sha}>
-                      {shortSha(row.sha)}
-                    </code>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {rows.map((row) => {
+                const sourceLabel = row.cwd ? basename(row.cwd) : "global";
+                const sourceTitle = row.cwd ?? "~/.swarm/workflows";
+                const linkQs = row.cwd !== undefined ? `?cwd=${encodeURIComponent(row.cwd)}` : "";
+                const rowKey = `${row.cwd ?? ""}::${row.path}`;
+                return (
+                  <TableRow key={rowKey} data-testid={`workflow-row-${row.name}`}>
+                    <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
+                      <Link
+                        to={`/workflows/${encodeURIComponent(row.name)}${linkQs}`}
+                        className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
+                        data-testid={`workflow-link-${row.name}`}
+                      >
+                        {row.label ?? row.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="max-w-0 truncate" title={sourceTitle}>
+                      {row.cwd ? (
+                        <Link
+                          to={`/projects/${encodeProjectId(row.cwd)}`}
+                          className="font-mono text-xs text-sw-muted transition-colors duration-[var(--sw-duration-hover)] hover:text-sw-text hover:underline"
+                          data-testid={`workflow-source-link-${row.name}`}
+                        >
+                          {sourceLabel}
+                        </Link>
+                      ) : (
+                        <code className="font-mono text-xs text-sw-muted">{sourceLabel}</code>
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-0">
+                      <code className="block truncate font-mono text-xs text-sw-muted" title={row.path}>
+                        {row.path}
+                      </code>
+                    </TableCell>
+                    <TableCell>
+                      <code className="font-mono text-xs" title={row.sha}>
+                        {shortSha(row.sha)}
+                      </code>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -97,4 +121,10 @@ export function Workflows(): JSX.Element {
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
+}
+
+function basename(p: string): string {
+  const trimmed = p.replace(/[/\\]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }

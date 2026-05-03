@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
-import { loadConfig, resolveTimeouts } from "../src/config.ts";
+import { loadConfig, loadProjectConfig, resolveTimeouts } from "../src/config.ts";
 
 describe("loadConfig", () => {
   let scratch: string;
@@ -153,6 +153,58 @@ describe("loadConfig", () => {
   test("rejects out-of-range web.port", async () => {
     await writeGlobal(`{ "web": { "port": 70000 } }`);
     await expect(load()).rejects.toThrow(/validation failed/);
+  });
+});
+
+describe("loadProjectConfig", () => {
+  let scratch: string;
+  let scratchHome: string;
+
+  beforeEach(async () => {
+    scratch = await mkdtemp(join(tmpdir(), "swarm-projectconfig-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "swarm-projectconfig-home-"));
+  });
+
+  afterEach(async () => {
+    await rm(scratch, { recursive: true, force: true });
+    await rm(scratchHome, { recursive: true, force: true });
+  });
+
+  test("returns {} when the project config is absent", async () => {
+    expect(await loadProjectConfig(scratch)).toEqual({});
+  });
+
+  test("ignores the global config — local-only by design", async () => {
+    // bootstrap is per-project tooling: a global default would silently
+    // leak into projects that didn't opt in. loadProjectConfig must not
+    // see the global layer at all.
+    await mkdir(join(scratchHome, ".swarm"), { recursive: true });
+    await writeFile(
+      join(scratchHome, ".swarm/config.jsonc"),
+      `{ "bootstrap": "global-cmd" }`,
+      "utf8",
+    );
+    // Note: loadProjectConfig doesn't take a homeDir override because
+    // it never reads the home dir. The presence of the file in the
+    // user's real ~/.swarm/ would be irrelevant either way.
+    expect(await loadProjectConfig(scratch)).toEqual({});
+  });
+
+  test("reads <cwd>/.swarm/config.jsonc verbatim", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(
+      join(scratch, ".swarm/config.jsonc"),
+      `{ "bootstrap": "pnpm install --frozen-lockfile" }`,
+      "utf8",
+    );
+    const cfg = await loadProjectConfig(scratch);
+    expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
+  });
+
+  test("propagates parse + validation errors (no silent fallback)", async () => {
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": 123 }`, "utf8");
+    await expect(loadProjectConfig(scratch)).rejects.toThrow(/validation failed/);
   });
 });
 

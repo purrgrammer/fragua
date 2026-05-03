@@ -34,11 +34,25 @@ import {
   WorktreeEnvironment,
 } from "@swarm/workspace";
 
+/** Bootstrap pair resolved for a single run against its project root.
+ * Used to honour `<run.cwd>/.swarm/config.jsonc` when a single daemon
+ * serves runs from many projects. */
+export interface ResolvedRunBootstrap {
+  bootstrap?: BootstrapSpec;
+  bootstrapTimeoutMs?: number;
+}
+
 export interface WorktreeProvisionerOptions {
   /** Repo root. Defaults to `process.cwd()`. */
   repoRoot?: string;
   /** Shell command (or callback) run inside each fresh worktree before
-   * the first node fires. Missing = no-op. */
+   * the first node fires. Missing = no-op.
+   *
+   * Used only when no `resolveRunBootstrap` is supplied (e.g. tests
+   * bypassing the CLI wiring). The CLI path passes a resolver and
+   * leaves this unset — bootstrap is then **project-local or
+   * nothing**: read from `<run.cwd>/.swarm/config.jsonc` for each
+   * fresh worktree, with no daemon-startup-cwd fallback. */
   bootstrap?: BootstrapSpec;
   /** Directory under `repoRoot` where worktrees live. Default
    * `.swarm/worktrees`. Each run gets a `<worktreesDir>/<run-id>` dir. */
@@ -49,12 +63,22 @@ export interface WorktreeProvisionerOptions {
   /** Override factory for tests — produces an `ExecutionEnvironment`
    * given a runId. Short-circuits the real git-worktree path. */
   factory?: (runId: string) => Promise<ExecutionEnvironment>;
-  /** Forward into each fresh worktree as `bootstrapTimeoutMs`. */
+  /** Forward into each fresh worktree as `bootstrapTimeoutMs`. Used
+   * only when no `resolveRunBootstrap` is supplied — same back-compat
+   * caveat as `bootstrap`. */
   bootstrapTimeoutMs?: number;
   /** Forward into each fresh worktree's LocalEnvironment as
    * `defaultTimeoutMs` — used when a handler's shell call doesn't
    * pass its own `timeoutMs`. */
   defaultShellTimeoutMs?: number;
+  /** Resolve per-run bootstrap config against the run's project root.
+   * Called once per fresh worktree right before `WorktreeEnvironment`
+   * is constructed. Authoritative when set: its return value is used
+   * verbatim, with no fallback to the constructor `bootstrap` /
+   * `bootstrapTimeoutMs`. Returning `{}` means "no bootstrap" for
+   * this run. Lets one daemon honour `<project>/.swarm/config.jsonc`
+   * for runs from many projects, with no global default leaking in. */
+  resolveRunBootstrap?: (cwd: string) => Promise<ResolvedRunBootstrap>;
 }
 
 export interface ProvisionOpts {
@@ -88,6 +112,9 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly factory: ((runId: string) => Promise<ExecutionEnvironment>) | undefined;
   private readonly bootstrapTimeoutMs: number | undefined;
   private readonly defaultShellTimeoutMs: number | undefined;
+  private readonly resolveRunBootstrap:
+    | ((cwd: string) => Promise<ResolvedRunBootstrap>)
+    | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
 
@@ -99,6 +126,23 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.factory !== undefined) this.factory = opts.factory;
     if (opts.bootstrapTimeoutMs !== undefined) this.bootstrapTimeoutMs = opts.bootstrapTimeoutMs;
     if (opts.defaultShellTimeoutMs !== undefined) this.defaultShellTimeoutMs = opts.defaultShellTimeoutMs;
+    if (opts.resolveRunBootstrap !== undefined) this.resolveRunBootstrap = opts.resolveRunBootstrap;
+  }
+
+  /** Resolve the bootstrap pair for a fresh worktree at `cwd`. When
+   * `resolveRunBootstrap` is set its return is authoritative — no
+   * fallback to constructor `bootstrap` / `bootstrapTimeoutMs`, so
+   * a project with no `.swarm/config.jsonc` bootstrap field gets
+   * **no** bootstrap (not the daemon-startup-cwd's default). When
+   * unset, the constructor values are returned. Exposed for tests. */
+  async resolveBootstrapFor(cwd: string): Promise<ResolvedRunBootstrap> {
+    if (this.resolveRunBootstrap !== undefined) {
+      return await this.resolveRunBootstrap(cwd);
+    }
+    const out: ResolvedRunBootstrap = {};
+    if (this.bootstrap !== undefined) out.bootstrap = this.bootstrap;
+    if (this.bootstrapTimeoutMs !== undefined) out.bootstrapTimeoutMs = this.bootstrapTimeoutMs;
+    return out;
   }
 
   async ensure(runId: string, opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
@@ -141,14 +185,15 @@ export class WorktreeProvisioner implements Provisioner {
   private async create(runId: string, provisionOpts: ProvisionOpts): Promise<ExecutionEnvironment> {
     if (this.factory) return this.factory(runId);
     const repoRoot = provisionOpts.cwd ?? this.repoRoot;
+    const { bootstrap, bootstrapTimeoutMs } = await this.resolveBootstrapFor(repoRoot);
     const opts: ConstructorParameters<typeof WorktreeEnvironment>[0] = {
       runId,
       repoRoot,
       worktreesDir: this.worktreesDir,
       keepAfterDispose: this.keepAfterDispose,
     };
-    if (this.bootstrap !== undefined) opts.bootstrap = this.bootstrap;
-    if (this.bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = this.bootstrapTimeoutMs;
+    if (bootstrap !== undefined) opts.bootstrap = bootstrap;
+    if (bootstrapTimeoutMs !== undefined) opts.bootstrapTimeoutMs = bootstrapTimeoutMs;
     if (this.defaultShellTimeoutMs !== undefined) opts.defaultTimeoutMs = this.defaultShellTimeoutMs;
     const env = new WorktreeEnvironment(opts);
     await env.init();

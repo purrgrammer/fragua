@@ -5,11 +5,13 @@
 // for the Workflows page.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type { AuthStorage, ModelRegistry } from "@swarm/agent";
 import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
+import { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
 import type { ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { providersRoutes } from "./routes/providers.ts";
@@ -21,11 +23,21 @@ import { storeRunsRoutes } from "./store/runs-routes.ts";
 export interface ServerOptions {
   /** SQLite event store — the backbone for all reads and intent writes. */
   store: IEventStore;
-  /** Directory with `*.dot` workflow sources listed by `GET /workflows`.
-   * Defaults to `<cwd>/.swarm/workflows`. */
+  /** Global workflows directory listed by `GET /workflows` alongside every
+   * project root the store has ever seen. Defaults to
+   * `~/.swarm/workflows`. The single-source `workflowsDir` option below
+   * overrides this aggregation entirely (one directory, no projects);
+   * leave it unset to get the multi-source view the web UI expects. */
+  globalWorkflowsDir?: string;
+  /** Legacy single-directory override. When set, the server scans only
+   * this path and ignores the project list — kept for the CI-primitive
+   * `swarm serve --workflows-dir` shape and tests. New deployments
+   * should leave it unset and let `globalWorkflowsDir` + the store-fed
+   * project enumeration drive the listing. */
   workflowsDir?: string;
-  /** Project root. Defaults to `process.cwd()`. Used as the base for
-   * `workflowsDir` when none is provided. */
+  /** Project root. Defaults to `process.cwd()`. Always added to the
+   * project enumeration so a freshly-started harness shows its own
+   * cwd workflows even before the first run lands in `listCwds()`. */
   cwd?: string;
   /** Optional port overrides. Any omitted port falls back to defaults. */
   ports?: ServerPorts;
@@ -58,8 +70,8 @@ export interface ServerOptions {
 
 function buildApiApp(opts: ServerOptions): Hono {
   const ports = opts.ports ?? {};
-  const workflowsDir = opts.workflowsDir ?? resolve(opts.cwd ?? process.cwd(), ".swarm/workflows");
-  const workflowReader: WorkflowReader = ports.workflowReader ?? createFsWorkflowReader({ workflowsDir });
+  const cwd = opts.cwd ?? process.cwd();
+  const workflowReader: WorkflowReader = ports.workflowReader ?? defaultWorkflowReader(opts, cwd);
 
   const api = new Hono();
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
@@ -163,7 +175,25 @@ export function createServer(opts: ServerOptions): Hono {
   return app;
 }
 
+function defaultWorkflowReader(opts: ServerOptions, cwd: string): WorkflowReader {
+  // Legacy single-source override: tests + the CI-primitive `swarm serve
+  // --workflows-dir <dir>` shape pin one directory and skip the project
+  // enumeration entirely. Also covers anyone who was previously relying
+  // on the old `<cwd>/.swarm/workflows`-only behaviour by setting the
+  // option explicitly.
+  if (opts.workflowsDir !== undefined) {
+    return createFsWorkflowReader({ workflowsDir: opts.workflowsDir });
+  }
+  const globalDir = opts.globalWorkflowsDir ?? resolve(homedir(), ".swarm/workflows");
+  return createMultiSourceWorkflowReader({
+    store: opts.store,
+    globalDir,
+    extraCwds: [resolve(cwd)],
+  });
+}
+
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
+export { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
 export type {
   ServerPorts,
   WorkflowDetail,

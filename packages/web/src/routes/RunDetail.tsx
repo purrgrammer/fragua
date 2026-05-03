@@ -34,6 +34,7 @@ import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
+import { encodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
@@ -257,6 +258,19 @@ const DetailHeader = memo(function DetailHeader({
               title={detail.workflow}
             >
               {detail.workflowName}
+            </Link>
+          </>
+        )}
+        {detail?.cwd && (
+          <>
+            <span className="text-xs text-sw-muted/40">·</span>
+            <Link
+              to={`/projects/${encodeProjectId(detail.cwd)}`}
+              className="truncate text-xs text-sw-muted hover:text-sw-text hover:underline"
+              title={detail.cwd}
+              data-testid="detail-project-link"
+            >
+              {projectBasename(detail.cwd)}
             </Link>
           </>
         )}
@@ -510,4 +524,10 @@ function headingTitle(detail: RunDetailT): string {
     return single.length > 80 ? `${single.slice(0, 79)}…` : single;
   }
   return detail.runId;
+}
+
+function projectBasename(p: string): string {
+  const trimmed = p.replace(/[/\\]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }
