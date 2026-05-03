@@ -91,8 +91,8 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   }
 
   console.log("");
-  console.log(chalk.green(`swarm harness ready — ${chalk.bold.underline(serverHandle.origin)}`));
-  console.log(chalk.dim(`  api:  ${serverHandle.url}`));
+  console.log(chalk.green(`swarm harness ready — ${chalk.bold.underline(hyperlink(serverHandle.origin))}`));
+  console.log(chalk.dim(`  api:  ${hyperlink(serverHandle.url)}`));
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
   // 5. Block until shutdown.
@@ -113,6 +113,13 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
 }
 
 const HARNESS_VERSION = "0.0.0"; // TODO: read from package.json when discovery clients care
+
+/** OSC 8 terminal hyperlink. Modern terminals (iTerm2, macOS Terminal,
+ *  kitty, wezterm, alacritty, vscode) render it as a click-target;
+ *  older terminals strip the escapes and show the bare URL. */
+function hyperlink(url: string, label?: string): string {
+  return `\x1b]8;;${url}\x1b\\${label ?? url}\x1b]8;;\x1b\\`;
+}
 
 async function waitForLock(store: SqliteStore): Promise<boolean> {
   const deadline = Date.now() + LOCK_WAIT_MS;
