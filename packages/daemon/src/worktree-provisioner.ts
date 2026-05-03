@@ -57,8 +57,16 @@ export interface WorktreeProvisionerOptions {
   defaultShellTimeoutMs?: number;
 }
 
+export interface ProvisionOpts {
+  /** Project root the run was enqueued from. Overrides the
+   * provisioner's default repoRoot. Required for runs from cwds
+   * outside the daemon's home repo (multi-project model). When
+   * omitted, the provisioner uses its constructor default. */
+  cwd?: string;
+}
+
 export interface Provisioner {
-  ensure(runId: string): Promise<ExecutionEnvironment>;
+  ensure(runId: string, opts?: ProvisionOpts): Promise<ExecutionEnvironment>;
   /** Tear down the run's environment. `ctx` lets the impl tag a
    * dispose-time commit with the run's terminal status + workflow
    * identity (worktree backends only). `branch` in the result is
@@ -93,13 +101,13 @@ export class WorktreeProvisioner implements Provisioner {
     if (opts.defaultShellTimeoutMs !== undefined) this.defaultShellTimeoutMs = opts.defaultShellTimeoutMs;
   }
 
-  async ensure(runId: string): Promise<ExecutionEnvironment> {
+  async ensure(runId: string, opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
     const cached = this.envs.get(runId);
     if (cached) return cached;
     const pending = this.inflight.get(runId);
     if (pending) return pending;
 
-    const promise = this.create(runId);
+    const promise = this.create(runId, opts);
     this.inflight.set(runId, promise);
     try {
       const env = await promise;
@@ -130,11 +138,12 @@ export class WorktreeProvisioner implements Provisioner {
     return null;
   }
 
-  private async create(runId: string): Promise<ExecutionEnvironment> {
+  private async create(runId: string, provisionOpts: ProvisionOpts): Promise<ExecutionEnvironment> {
     if (this.factory) return this.factory(runId);
+    const repoRoot = provisionOpts.cwd ?? this.repoRoot;
     const opts: ConstructorParameters<typeof WorktreeEnvironment>[0] = {
       runId,
-      repoRoot: this.repoRoot,
+      repoRoot,
       worktreesDir: this.worktreesDir,
       keepAfterDispose: this.keepAfterDispose,
     };
@@ -147,30 +156,36 @@ export class WorktreeProvisioner implements Provisioner {
   }
 }
 
-/** Fallback provisioner that always hands back a shared LocalEnvironment
- * rooted at `process.cwd()`. Useful for tests + daemons that don't
- * want isolation (ephemeral stub runs, legacy workflows). `dispose`
- * is a no-op because there's no per-run state to tear down. */
+/** Fallback provisioner that hands back a per-run LocalEnvironment
+ * rooted at the run's cwd (or the constructor default). Useful for
+ * tests + daemons that don't want isolation. `dispose` is a no-op. */
 export class LocalEnvironmentProvisioner implements Provisioner {
-  private readonly shared: ExecutionEnvironment;
+  private readonly defaultCwd: string;
+  private readonly defaultTimeoutMs: number | undefined;
+  private readonly envs = new Map<string, ExecutionEnvironment>();
 
   constructor(cwd: string = process.cwd(), opts: { defaultShellTimeoutMs?: number } = {}) {
-    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd };
-    if (opts.defaultShellTimeoutMs !== undefined) envOpts.defaultTimeoutMs = opts.defaultShellTimeoutMs;
-    this.shared = new LocalEnvironment(envOpts);
+    this.defaultCwd = cwd;
+    if (opts.defaultShellTimeoutMs !== undefined) this.defaultTimeoutMs = opts.defaultShellTimeoutMs;
   }
 
-  async ensure(_runId: string): Promise<ExecutionEnvironment> {
-    return this.shared;
+  async ensure(runId: string, opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
+    const cached = this.envs.get(runId);
+    if (cached) return cached;
+    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: opts.cwd ?? this.defaultCwd };
+    if (this.defaultTimeoutMs !== undefined) envOpts.defaultTimeoutMs = this.defaultTimeoutMs;
+    const env = new LocalEnvironment(envOpts);
+    this.envs.set(runId, env);
+    return env;
   }
 
-  async dispose(_runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
-    // no-op: LocalEnvironment is shared, not per-run.
+  async dispose(runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
+    this.envs.delete(runId);
     return { branch: null };
   }
 
-  envFor(_runId: string): ExecutionEnvironment | undefined {
-    return this.shared;
+  envFor(runId: string): ExecutionEnvironment | undefined {
+    return this.envs.get(runId);
   }
 
   baseGitSha(_runId: string): string | null {

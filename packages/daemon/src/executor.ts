@@ -418,7 +418,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // idempotent but we avoid the extra lookup.
       if (opts.provisioner && runEnv === undefined) {
         try {
-          runEnv = await opts.provisioner.ensure(runId);
+          runEnv = await opts.provisioner.ensure(runId, state.cwd != null ? { cwd: state.cwd } : {});
           opts.store.appendDaemonEvent(
             { type: "daemon.worktree_provisioned", payload: { runId, ok: true } },
             { runId },
