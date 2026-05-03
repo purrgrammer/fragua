@@ -42,7 +42,7 @@ export interface RunStateRow {
   title: string | null;
   cwd: string | null;
   workflow_name: string | null;
-  workflow_scope: "global" | "path" | "ephemeral" | null;
+  workflow_scope: "global" | "local" | "path" | "ephemeral" | null;
   workflow_path: string | null;
   base_git_sha: string | null;
   branch: string | null;
@@ -179,7 +179,7 @@ export function insertRunState(
     updatedAt: number;
     cwd: string | null;
     workflowName: string | null;
-    workflowScope: "global" | "path" | "ephemeral" | null;
+    workflowScope: "global" | "local" | "path" | "ephemeral" | null;
     workflowPath: string | null;
   },
 ): void {

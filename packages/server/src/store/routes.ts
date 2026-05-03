@@ -227,7 +227,7 @@ export function createRoutes(deps: ServerDeps): Hono {
        * Surfaced on `run_state.workflow_name`. */
       workflowName?: string;
       /** How the workflow argument resolved. */
-      workflowScope?: "global" | "path" | "ephemeral";
+      workflowScope?: "global" | "local" | "path" | "ephemeral";
       /** Filesystem path of the .dot file at resolution time. */
       workflowPath?: string;
     }>(c);
@@ -266,7 +266,10 @@ export function createRoutes(deps: ServerDeps): Hono {
         ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
         ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
         ...(typeof body.workflowName === "string" ? { workflowName: body.workflowName } : {}),
-        ...(body.workflowScope === "global" || body.workflowScope === "path" || body.workflowScope === "ephemeral"
+        ...(body.workflowScope === "global" ||
+        body.workflowScope === "local" ||
+        body.workflowScope === "path" ||
+        body.workflowScope === "ephemeral"
           ? { workflowScope: body.workflowScope }
           : {}),
         ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),

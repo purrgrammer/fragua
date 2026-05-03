@@ -194,11 +194,13 @@ export interface RunState {
   /** Resolved workflow name when the caller passed a bare name; `null`
    * for path-based or ephemeral runs. */
   workflowName: string | null;
-  /** How the workflow argument resolved. `'global'` → matched a file
-   * under `~/.swarm/workflows/`. `'path'` → resolved as a filesystem
-   * path. `'ephemeral'` → enqueued via the API without filesystem
-   * context. `null` on legacy rows pre-globalization. */
-  workflowScope: "global" | "path" | "ephemeral" | null;
+  /** How the workflow argument resolved. `'global'` → matched
+   * `~/.swarm/workflows/<name>.dot`. `'local'` → matched
+   * `<cwd>/.swarm/workflows/<name>.dot` (fallback when global misses).
+   * `'path'` → caller passed an explicit path. `'ephemeral'` →
+   * enqueued via the API without filesystem context. `null` on legacy
+   * rows pre-globalization. */
+  workflowScope: "global" | "local" | "path" | "ephemeral" | null;
   /** Filesystem path of the .dot file at resolution time. Diagnostic
    * only — replay keys on `workflowSha`. */
   workflowPath: string | null;
@@ -461,11 +463,12 @@ export interface EnqueueRunParams {
   /** Resolved workflow name when the caller passed a bare name. Surfaced
    * on `run_state.workflow_name`. Omitted for path-based runs. */
   workflowName?: string;
-  /** How the workflow argument resolved. `'global'` for bare names that
-   * matched `~/.swarm/workflows/<name>.dot`, `'path'` for explicit paths,
+  /** How the workflow argument resolved. `'global'` matched
+   * `~/.swarm/workflows/<name>.dot`; `'local'` fell back to
+   * `<cwd>/.swarm/workflows/<name>.dot`; `'path'` for explicit paths;
    * `'ephemeral'` for runs enqueued via the API without filesystem
    * context. */
-  workflowScope?: "global" | "path" | "ephemeral";
+  workflowScope?: "global" | "local" | "path" | "ephemeral";
   /** Filesystem path of the .dot file at resolution time. Diagnostic
    * only; replay still keys on `workflowSha`. */
   workflowPath?: string;

@@ -1,19 +1,21 @@
 // Workflow argument resolution shared by `swarm run` and `swarm validate`.
 //
-// Bare names (no slash, no `.dot` suffix) resolve under the global
-// workflows directory at `~/.swarm/workflows/<name>.dot`. Anything with
-// a path separator or a `.dot` suffix is treated as a literal path so
-// callers can still point at scratch files anywhere on disk.
+// Bare names (no slash, no `.dot` suffix) resolve in two stages:
+//   1. `~/.swarm/workflows/<name>.dot` — global. Generic workflows live
+//      here so they're available from any cwd.
+//   2. `<cwd>/.swarm/workflows/<name>.dot` — project-local fallback.
+//      Project-internal workflows (this repo's introspect, ci-gate, …)
+//      stay near the codebase that owns them.
 //
-// Per-project workflows (`<project>/.swarm/workflows/`) are deferred
-// behind project-config extensions; until then, by-name resolution is
-// global only.
+// Anything with a path separator or a `.dot` suffix is treated as a
+// literal path so callers can still point at scratch files anywhere
+// on disk.
 
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-export type WorkflowScope = "global" | "path";
+export type WorkflowScope = "global" | "local" | "path";
 
 export interface ResolvedWorkflow {
   /** Absolute path to the `.dot` file. */
@@ -22,21 +24,36 @@ export interface ResolvedWorkflow {
    * lookups this is the input verbatim; for path lookups it's the file
    * basename without extension. */
   name: string;
-  /** How the argument resolved. `global` for bare names matched under
-   * `~/.swarm/workflows/`, `path` for explicit paths. */
+  /** How the argument resolved. `global` matched `~/.swarm/workflows/`,
+   * `local` fell back to `<cwd>/.swarm/workflows/`, `path` resolved
+   * as an explicit filesystem path. */
   scope: WorkflowScope;
 }
 
-export function globalWorkflowsDir(): string {
-  return resolve(homedir(), ".swarm/workflows");
+export function globalWorkflowsDir(home?: string): string {
+  return resolve(home ?? homedir(), ".swarm/workflows");
 }
 
-export async function resolveWorkflow(cwd: string, arg: string): Promise<ResolvedWorkflow | null> {
+export function projectWorkflowsDir(cwd: string): string {
+  return resolve(cwd, ".swarm/workflows");
+}
+
+/** Resolve a workflow argument. `opts.homeDir` overrides the home base
+ * for global lookups (used by tests). */
+export async function resolveWorkflow(
+  cwd: string,
+  arg: string,
+  opts: { homeDir?: string } = {},
+): Promise<ResolvedWorkflow | null> {
   const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".dot");
   if (!looksLikePath) {
-    const candidate = resolve(globalWorkflowsDir(), `${arg}.dot`);
-    if (await fileExists(candidate)) {
-      return { dotPath: candidate, name: arg, scope: "global" };
+    const globalCandidate = resolve(globalWorkflowsDir(opts.homeDir), `${arg}.dot`);
+    if (await fileExists(globalCandidate)) {
+      return { dotPath: globalCandidate, name: arg, scope: "global" };
+    }
+    const localCandidate = resolve(projectWorkflowsDir(cwd), `${arg}.dot`);
+    if (await fileExists(localCandidate)) {
+      return { dotPath: localCandidate, name: arg, scope: "local" };
     }
     return null;
   }

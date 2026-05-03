@@ -33,7 +33,7 @@ runs stay NULL on the new columns.
 ALTER TABLE run_state ADD COLUMN cwd TEXT;
 ALTER TABLE run_state ADD COLUMN workflow_name TEXT;
 ALTER TABLE run_state ADD COLUMN workflow_scope TEXT
-  CHECK (workflow_scope IN ('global','path','ephemeral'));
+  CHECK (workflow_scope IN ('global','local','path','ephemeral'));
 ALTER TABLE run_state ADD COLUMN workflow_path TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);

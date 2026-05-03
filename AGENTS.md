@@ -57,7 +57,7 @@ Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs
 
 Runtime state: `.swarm/swarm.db` (the store), `.swarm/daemon/daemon.json` (daemon HTTP port + PID), `.swarm/serve.json` (serve URL, read by `swarm run` for discovery).
 
-Skills (domain context loaded on demand): `.agents/skills/` — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`, `ai-elements`, `shadcn`. Load before touching any file in a skill's domain.
+Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 
 ## Commit conventions
 

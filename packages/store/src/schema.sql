@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 3
+-- swarm event store schema — Revision 4
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- v1 → v2: pause unification. `paused_provider_error` collapses into the
@@ -8,6 +8,9 @@
 -- gains URL columns so CLIs discover the harness via the DB. `run_state`
 -- gains `workflow_name` / `_scope` / `_path` so resolution metadata
 -- survives the daemon contract.
+-- v3 → v4: `workflow_scope` enum widens to include 'local' so bare-name
+-- resolution can fall back to <cwd>/.swarm/workflows/<name>.dot when
+-- the global directory misses.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -56,7 +59,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- Resolved workflow name when bare-name resolution succeeded; NULL
   -- when the caller passed a path.
   workflow_name TEXT,
-  workflow_scope TEXT CHECK (workflow_scope IN ('global','path','ephemeral')),
+  workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
   -- Filesystem path of the .dot file at resolution time. Diagnostic
   -- only; the daemon contract still keys on `workflow_sha`.
   workflow_path TEXT,

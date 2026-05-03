@@ -22,6 +22,7 @@ const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
 const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [2, MIGRATION_002_PAUSE_UNIFICATION()],
   [3, MIGRATION_003_HARNESS_BY_DEFAULT()],
+  [4, MIGRATION_004_LOCAL_WORKFLOW_SCOPE()],
 ]);
 
 /**
@@ -328,5 +329,82 @@ function MIGRATION_003_HARNESS_BY_DEFAULT(): string {
     CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
 
     DROP TABLE projects;
+  `;
+}
+
+/**
+ * v3 → v4: widen `workflow_scope` CHECK to include 'local'.
+ *
+ * SQLite has no `ALTER TABLE … DROP CONSTRAINT`, so the CHECK update
+ * goes through a table rebuild. `migrate()` toggles `foreign_keys =
+ * OFF` around each step and runs `foreign_key_check` after commit.
+ *
+ * No data changes — existing rows already match the new CHECK
+ * (which is a strict superset of the v3 enum).
+ */
+function MIGRATION_004_LOCAL_WORKFLOW_SCOPE(): string {
+  return `
+    CREATE TABLE run_state_v4 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v4 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha, branch
+    )
+    SELECT
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha, branch
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v4 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
   `;
 }

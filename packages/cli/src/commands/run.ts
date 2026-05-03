@@ -17,7 +17,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import chalk from "chalk";
-import { globalWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
+import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
 async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
   try {
@@ -72,10 +72,13 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     if (looksLikePath) {
       console.error(chalk.red(`run: workflow not found: ${opts.workflow} (resolved as path)`));
     } else {
+      console.error(chalk.red(`run: workflow not found: ${opts.workflow}`));
       console.error(
-        chalk.red(`run: workflow not found: ${opts.workflow} (looked in ${globalWorkflowsDir()}/${opts.workflow}.dot)`),
+        chalk.dim(
+          `  looked in ${globalWorkflowsDir()}/${opts.workflow}.dot, then ${projectWorkflowsDir(cwd)}/${opts.workflow}.dot`,
+        ),
       );
-      console.error(chalk.dim(`  drop a .dot file there or pass a path explicitly`));
+      console.error(chalk.dim(`  drop a .dot file in either location, or pass a path explicitly`));
     }
     return 1;
   }
@@ -107,7 +110,7 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     workflowScope: scope,
     workflowPath: dotPath,
   };
-  if (scope === "global") enqueueBody["workflowName"] = name;
+  if (scope === "global" || scope === "local") enqueueBody["workflowName"] = name;
   if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
   if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
   if (opts.input !== undefined) enqueueBody["input"] = opts.input;

@@ -196,7 +196,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   title TEXT,                                     -- auto-titler output; NULL until generated
   cwd TEXT,                                       -- absolute project root the run was enqueued from; NULL for ephemeral
   workflow_name TEXT,                             -- resolved name when caller passed a bare name; NULL for path runs
-  workflow_scope TEXT CHECK (workflow_scope IN ('global','path','ephemeral')),
+  workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
   workflow_path TEXT,                             -- .dot file path at resolution time; diagnostic
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
   branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
