@@ -401,7 +401,6 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
             <code className="text-sw-text">{d.maxRetries}</code>
           </span>
         ) : null}
-        {d.lastEventSeq > 0 ? <span>seq {d.lastEventSeq}</span> : null}
       </NodeContent>
     </AiNode>
   );
@@ -559,7 +558,6 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  body so loop-prone nodes are visible without opening the inspector. */
   maxRetries: number | undefined;
   state: NodeState["state"] | "waiting" | null;
-  lastEventSeq: number;
   hasIncoming: boolean;
   hasOutgoing: boolean;
   active: boolean;
@@ -672,7 +670,6 @@ export function toFlowGraph(
           : undefined,
       maxRetries: typeof a?.max_retries === "number" ? a.max_retries : undefined,
       state: resolvedState,
-      lastEventSeq: stateEntry?.lastEventSeq ?? 0,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
       active: activeNodeId === id,
