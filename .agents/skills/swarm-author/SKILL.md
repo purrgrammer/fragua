@@ -1,23 +1,29 @@
 ---
 name: swarm-author
-description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file in `workflows/` or `examples/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics E001–E015 / W001–W010, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
-version: 0.1.0
+description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+version: 0.2.0
 ---
 
 # swarm-author — writing DOT workflows that run
 
-The goal is a small, legible `.dot` file that encodes a clear plan the runtime can execute deterministically. Start from a similar workflow in `workflows/`, keep nodes few, let edges carry the control flow, and validate before you run.
+The goal is a small, legible `.dot` file that encodes a clear plan the runtime can execute deterministically. Start from a similar workflow, keep nodes few, let edges carry the control flow, and validate before you run.
 
-Authoritative references: `docs/SPEC.md` §3 (primitives), §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §13.1 (declared-but-not-wired). Attribute grammar lives in `packages/core/src/types/graph.ts`. Validator codes in `packages/core/src/engine/validator.ts`.
+Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §13.1 (declared-but-not-wired). Attribute grammar: `packages/core/src/types/graph.ts`. Validator: `packages/core/src/engine/validator.ts`.
+
+For the validator code lookup table, see `references/validator-codes.md`. For retry-policy presets, model stylesheets, and subgraphs, see `references/advanced-attrs.md`.
 
 ---
 
 ## Fast path
 
-1. **Find a template.** `.swarm/workflows/change.dot` (daily driver: plan/implement/review/verify/commit, with goal-gated review that retargets `implement` on REJECT), `.swarm/workflows/fix-bug.dot` (reproduce → fix → verify with shared `dev` thread), `.swarm/workflows/merge.dot` (single-stage rebase + CAS-fast-forward), `.swarm/workflows/showcase.dot` (every shape — parallel + fan_in + HITL + tool + diamond), `.swarm/workflows/ci-gate.dot` (all-tool, no LLM). Pick the shape that matches your problem and edit from there.
-2. **Sketch the shape, not the prose.** Nodes + edges first. Name the nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow — `implement -> verify -> commit`. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
-3. **Validate.** `bun run swarm validate .swarm/workflows/my-thing.dot`. Fix every error; warnings are strong hints.
-4. **Smoke-run.** `bun run swarm run my-thing --input="<realistic task>"` against a cheap model first (see §9) before wiring to Opus / Sonnet.
+1. **Find a template.** Workflows live in two places:
+   - `~/.swarm/workflows/` (global, generic) — `change.dot` (daily driver: plan/implement/review/verify/commit), `fix-bug.dot` (reproduce → fix → verify), `merge.dot` (rebase + CAS-fast-forward).
+   - `<project>/.swarm/workflows/` (local, project-internal) — e.g. this repo's `introspect.dot`, `ci-gate.dot`, `analyze.dot`, `showcase.dot`, `abort-test.dot`.
+2. **Sketch the shape, not the prose.** Nodes + edges first. Name nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
+3. **Validate.** `bun run swarm validate path/to/my-thing.dot`. Fix every error; warnings are strong hints.
+4. **Smoke-run** with a cheap model first (§9) before wiring to Opus / Sonnet.
+
+`swarm run my-thing` resolves the bare name against `~/.swarm/workflows/my-thing.dot` first, then `<cwd>/.swarm/workflows/my-thing.dot`. Drop new global workflows in `~/.swarm/workflows/` so they're reachable from any cwd.
 
 ---
 
@@ -31,12 +37,12 @@ Each node has a Graphviz shape; the shape picks the handler. There is no `kind=`
 | `Msquare` | `exit` | Lifecycle marker. At least one. | — |
 | `box` (default) | `codergen` | One LLM turn with tools. The default when no `shape=` is set. | `prompt=` |
 | `diamond` | `conditional` | Pure edge-routing. No LLM, no prompt. Edge `condition=`s do the work. | — |
-| `hexagon` | `wait.human` | Pauses the run with `fact.run_paused_hitl`. | `prompt=` (what to ask) |
+| `hexagon` | `wait.human` | Pauses with `fact.run_paused_hitl`. | `prompt=` (what to ask) |
 | `parallelogram` | `tool` | Deterministic shell step. | `tool_command=` |
 | `component` | `parallel` | Fan-out branch spawner. Outgoing edges are the branches. | `fan_in=<id>` |
 | `tripleoctagon` | `parallel.fan_in` | Joins branches. Optional `prompt=` reduces branch outputs. | — |
 
-Loops and "wait" are *not* primitives. Loops are backward conditional edges (see §7). Waits are `wait.human` nodes. Don't look for a `loop` shape; it doesn't exist.
+Loops and "wait" are *not* primitives. Loops are backward conditional edges (§7). Waits are `wait.human` nodes. Don't look for a `loop` shape; it doesn't exist.
 
 ### Minimal skeleton
 
@@ -58,30 +64,30 @@ This parses, validates, and runs. Build up from here.
 
 ## 2. Node attributes (codergen)
 
-`box`-shaped nodes are LLM calls. The common attrs, in decreasing order of how often you'll touch them:
+`box`-shaped nodes are LLM calls. Common attrs, in decreasing order of how often you'll touch them:
 
 | Attribute | Type | Why |
 |---|---|---|
-| `prompt` | string | The user-message content. Substitution is applied (§4). |
+| `prompt` | string | The user-message content. Substitution applies (§4). |
 | `allowed_tools` | string[] (CSV) | Whitelist. If absent, tools are unconstrained — usually wrong; name them. |
-| `model` | string | Pi-ai model id (e.g. `claude-sonnet-4-6`, `claude-opus-4-7`). Must be registered (see §9). |
+| `model` | string | Pi-ai model id (e.g. `claude-sonnet-4-6`). Must be registered (§9). |
 | `provider` | string | Pi-ai provider (e.g. `anthropic`, `google`, `openai`). Defaults to the daemon's default. |
 | `thread_id` | string | Shares the LLM thread across nodes that set the same `thread_id` (§5). |
-| `context_files` | string[] (CSV) | Files from the target project root prepended to the system prompt as `<project-conventions>` blocks. `context_files = "AGENTS.md"` is the usual one. |
-| `fidelity` | enum | `full | truncate | compact | summary:low | summary:medium | summary:high`. Default `compact`. See §10. |
-| `max_retries` | int | Cap on backward-conditional-edge loops that target this node. See §7. |
+| `context_files` | string[] (CSV) | Files from the project root prepended to the system prompt as `<project-conventions>` blocks. `context_files = "AGENTS.md"` is the usual one. |
+| `fidelity` | enum | `full | truncate | compact | summary:low | summary:medium | summary:high`. Default `compact`. |
+| `max_retries` | int | Cap on backward-conditional-edge loops targeting this node (§7). |
 | `reasoning_effort` | `low|medium|high` | Forwarded to providers that support it (Anthropic extended thinking, OpenAI o-series). |
 | `system_prompt` | string | Override the backend's global system prompt. Useful for reviewer / planner subagents. |
 | `skills` | string[] (CSV) | Scope `<available_skills>` to this list. Absent = all discovered. |
 | `skills_disabled` | bool | Hard opt-out — no skills catalog in the system prompt for this node. |
 
-Values with commas or spaces should be quoted per DOT rules: `prompt = "with, commas, ok"`. String arrays in DOT are comma-separated inside a string: `allowed_tools = "read, write, edit, bash"`.
+Quote values with commas or spaces per DOT rules: `prompt = "with, commas, ok"`. String arrays are comma-separated inside a string: `allowed_tools = "read, write, edit, bash"`.
 
 ---
 
 ## 3. Tool nodes (parallelogram)
 
-Deterministic shell steps. Exit 0 → `outcome=success`; non-zero → `outcome=fail`. stdout/stderr are captured as artifacts (keys `<nodeId>:stdout`, `<nodeId>:stderr`).
+Deterministic shell steps. Exit 0 → `outcome=success`; non-zero → `outcome=fail`. stdout/stderr capture as artifacts (keys `<nodeId>:stdout`, `<nodeId>:stderr`).
 
 ```dot
 lint [shape=parallelogram, tool_command="bun run lint"]
@@ -89,13 +95,13 @@ lint [shape=parallelogram, tool_command="bun run lint"]
 
 Substitution applies to `tool_command` (§4). Use tool nodes for CI gates, environment probes, idempotent side-effect commands. Don't use them for LLM prompts that happen to shell out — let the codergen node's `bash` tool do that.
 
-Validator E008 will reject a parallelogram with an empty `tool_command` — it has nothing to dispatch.
+E008 rejects a parallelogram with empty `tool_command`.
 
 ---
 
 ## 4. Substitution tokens
 
-Applied to `prompt`, `tool_command`, and any string attr. Order of longest-prefix-match; shell-safe mode single-quotes values.
+Applied to `prompt`, `tool_command`, and any string attr. Order is longest-prefix-match; shell-safe mode single-quotes values.
 
 | Token | Meaning |
 |---|---|
@@ -103,11 +109,11 @@ Applied to `prompt`, `tool_command`, and any string attr. Order of longest-prefi
 | `$<nodeId>.output` | Raw text output of a prior node (codergen last turn's text, or tool stdout). |
 | `$<nodeId>.output.<path>` | JSON-path dive into structured output; returns `""` if absent. |
 | `${context.<key>}` | Read from run context KV. |
-| `$goal` | The graph's `goal` attribute (mirrored into `routing["graph.goal"]` at run start). |
+| `$goal` | The graph's `goal` attribute. |
 
-That's the full set — see `packages/core/src/engine/substitution.ts`. Tokens like `$RUN_ID`, `$WORKTREE_PATH`, `$ARTIFACTS_DIR`, `$LOG_DIR`, `$1`…`$9`, `$LOOP_USER_INPUT`, `$REJECTION_REASON` are not implemented; they appear literally if you write them.
+That's the full set — see `packages/core/src/engine/substitution.ts`. Tokens like `$RUN_ID`, `$WORKTREE_PATH`, `$ARTIFACTS_DIR`, `$1`…`$9` are not implemented; they appear literally if you write them.
 
-Validator E005 flags `$foo.output` when `foo` isn't a node id — typos surface at parse time, not at run.
+E005 flags `$<id>.output` when `<id>` isn't a node id — typos surface at parse time, not at run.
 
 Reference an upstream node by *id*, not by `label`. `$implement.output` reads the `implement` node's output regardless of its label.
 
@@ -117,18 +123,18 @@ Reference an upstream node by *id*, not by `label`. `$implement.output` reads th
 
 Codergen nodes default to **fresh threads** — each LLM call is `priorMessages = []` + the prompt. Set `thread_id="something"` to share the message thread across nodes that declare the same thread id. Idiomatic uses:
 
-- **`thread_id="dev"`** on `implement` + `verify` + (sometimes) `fix` — the verifier remembers what the implementer did, so "run CI and fix failures" doesn't re-read the tree from scratch.
+- **`thread_id="dev"`** on `implement` + `verify` + (sometimes) `fix` — the verifier remembers what the implementer did.
 - **No thread_id** on `plan`, `review`, `commit`, `merge` — each reads state via git, forming its own opinion. Fresh threads prevent context-poisoning from a flawed earlier turn.
 
-Sharing a thread means sharing cost: every call sees all prior messages (modulo `fidelity=`). Use it where context *adds* value, not by default.
+Sharing a thread shares cost: every call sees all prior messages (modulo `fidelity=`). Use it where context *adds* value, not by default.
 
 ---
 
 ## 6. Edges and conditions
 
-An edge with no `condition=` fires unconditionally when the source node completes. Edges with conditions are evaluated in source order; the first matching wins. Unconditional edges run only if nothing matched.
+An edge with no `condition=` fires unconditionally when the source node completes. Edges with conditions evaluate in source order; first match wins. Unconditional edges run only if nothing matched.
 
-Condition grammar (see `packages/core/src/engine/condition.ts`):
+Condition grammar (`packages/core/src/engine/condition.ts`):
 
 ```
 expr := term ("&&" term)*
@@ -138,18 +144,16 @@ path := "outcome" | "context.<key>" | "context.<key>.<sub>" | …
 val  := STRING | NUMBER | IDENT | true | false | null
 ```
 
-- `outcome=success` / `outcome=fail` — set by the handler on completion. Codergen outcome=fail on `<abort>…</abort>`; tool outcome from exit code.
-- `context.foo=bar` — reads run context KV. HITL payloads live at `context.hitl.<nodeId>`.
+- `outcome=success | fail` — set by the handler. Codergen `outcome=fail` on `<abort>…</abort>`; tool outcome from exit code.
+- `context.foo=bar` — reads run context KV.
 - `&&` conjunction only; no `||`. Split into two edges if you need disjunction.
 
-Idioms:
-
 ```dot
-# Branch on success, unconditional fallback to done on anything else.
+# Branch on success, unconditional fallback.
 verify -> commit [condition="outcome=success"]
 verify -> done   [condition="outcome=fail"]
 
-# HITL approval — structured: route by edge label accelerator (§12).
+# HITL — structured, route by edge label accelerator (§12).
 signoff -> publish [label="[A] Approve"]
 signoff -> draft   [label="[R] Revise"]
 
@@ -157,7 +161,7 @@ signoff -> draft   [label="[R] Revise"]
 gate -> escalate [condition="outcome=fail && context.severity=high"]
 ```
 
-Validator W003 warns when a node has only conditional edges and no `outcome=fail` catch-all — a flaky handler could then silently terminate the run.
+W003 warns when a node has only conditional edges and no `outcome=fail` catch-all — a flaky handler can silently terminate the run.
 
 ---
 
@@ -171,45 +175,52 @@ verify -> verify [condition="outcome=fail"]
 verify -> commit [condition="outcome=success"]
 ```
 
-`max_retries=3` means up to 3 backward-edge firings before the runtime halts with `reason=max_retries_exceeded`. Counting resets when the node is re-entered from a *different* source.
-
-Review-loops (reject → re-plan → re-review) are the same idiom:
-
-```dot
-plan    -> review
-review  -> implement [condition="outcome=success"]
-review  -> plan      [condition="outcome=fail", label="rejected"]
-plan    [max_retries = 2]   # cap re-plans
-```
+`max_retries=3` allows up to 3 backward-edge firings before the runtime halts with `reason=max_retries_exceeded`. Counting resets when re-entered from a *different* source.
 
 Don't chain four nodes into a loop when a single `max_retries`-capped self-edge does the job.
 
-### Fixable-reject salvage (REJECT_FIXABLE pattern)
-
-Full `plan → implement → review → plan` re-loops are expensive. Most rejections are narrow: a missing test, a forgotten import, a typo. For those, a separate `fix` node is cheaper than re-planning:
-
-```dot
-review  -> fix    [condition="outcome=fail", label="rejected"]
-review  -> verify
-fix     -> verify
-fix     -> done   [condition="outcome=fail"]
-```
-
-The reviewer emits one of three markers; the fix node branches on them:
-
-```
-APPROVE: <one line>
-<abort>REJECT_FIXABLE: <one line>. fixes: <numbered list, 1-3 mechanical items></abort>
-<abort>REJECT: <one line — architecture / scope / contract violation></abort>
-```
-
-Fix aborts when `$review.output` starts with `REJECT:` (not fixable), when a fix strays outside the plan's file list, or when the numbered list exceeds 5 items. Hard rejects still terminate via the single `review -> fix` fail edge — `fix` itself aborts fast on them, which routes to `done`.
-
-For workflows where most rejects are non-mechanical, prefer the `goal_gate` retarget pattern (see §13b) over a `fix` salvage node — the engine retargets to `retry_target` automatically, capped by `max_goal_gate_retries`. `.swarm/workflows/change.dot` uses this pattern: `review` is goal-gated with `retry_target="implement"`, so REJECT loops back without an explicit `review -> implement` edge.
+For workflows where most rejects are non-mechanical (review-after-implement, etc.), prefer the `goal_gate` retarget pattern (§8) over an explicit fail-edge loop — the engine retargets to `retry_target` automatically, capped by `max_goal_gate_retries`. `change.dot` uses this: `review` is goal-gated with `retry_target="implement"`, so REJECT loops back without an explicit `review -> implement` edge.
 
 ---
 
-## 8. Parallel (component + fan_in)
+## 8. Goal gates and retargets
+
+A **goal gate** is a node that *must* succeed before the pipeline can exit. Mark it with `goal_gate=true`. When the run reaches a terminal (`Msquare`) node, the engine checks every visited gate's outcome — if any is non-success, it retargets to `retry_target` (or the fallback chain) instead of completing.
+
+The chain (SPEC §3.4), in priority order:
+
+1. failed gate's `retry_target`
+2. failed gate's `fallback_retry_target`
+3. graph-level `retry_target`
+4. graph-level `fallback_retry_target`
+5. halt with `fact.run_halted { reason: "goal_gate_unsatisfied" }`
+
+Bounded by `max_goal_gate_retries` (graph attr, default 3). Once exhausted, the run halts even if the chain has more steps.
+
+Idiomatic pattern (`change.dot`):
+
+```dot
+graph [ retry_target = "implement", max_goal_gate_retries = 2 ]
+
+review [
+  prompt       = "Judge the diff. Reply APPROVE or <abort>REJECT: …</abort>."
+  goal_gate    = true
+  retry_target = "implement"
+]
+
+review -> done   [condition="outcome=fail"]   # fast-fail to terminal …
+review -> verify                                # … on success, advance.
+```
+
+REJECT routes via the fail edge to `done`; the goal-gate enforcement at `done` sees `review` unsatisfied and retargets to `implement`. After `max_goal_gate_retries` failed cycles, the run halts.
+
+**Distinct from `max_retries`.** `max_retries` is *handler*-level (retry the same node N times on RETRY/transient failure within one workflow pass). `goal_gate` retargets are *workflow*-level (jump backwards through the graph and re-run upstream nodes). A node can use both: handler-level retries first, then if the final outcome is still bad, the gate retargets.
+
+W007 fires on a `goal_gate=true` node with no retarget at any level — failure can only halt with no recovery path.
+
+---
+
+## 9. Parallel (component + fan_in)
 
 `component`-shaped nodes fan out: each outgoing edge becomes a concurrent branch. Branches must rejoin at a `tripleoctagon` named by `fan_in=`.
 
@@ -230,62 +241,58 @@ approach_style       -> pick_best
 approach_security    -> pick_best
 ```
 
-- `join_policy="wait_all"` (default) — fan_in fires when every branch completed.
-- `join_policy="first_success"` — fan_in fires as soon as any branch returns success; others are aborted.
+- `join_policy="wait_all"` (default) — fan_in fires when every branch completes.
+- `join_policy="first_success"` — fan_in fires as soon as any branch returns success; others abort.
 - `fan_in`'s `prompt` (if present) reduces the branches; if omitted, a heuristic concatenates branch outputs.
 
-Validator E007 catches missing/wrong `fan_in` targets.
-
-HITL inside a parallel branch is **not supported** in v1 (§13.1) — a `yield_hitl` inside a component coerces to `fail`. Put HITL outside the fan-out.
+E007 catches missing/wrong `fan_in` targets. HITL inside a parallel branch is **not supported** in v1 (a `yield_hitl` inside a component coerces to `fail`) — put HITL outside the fan-out.
 
 ---
 
-## 9. Models, providers, validation
+## 10. Models, providers, validation
 
-`POST /workflows` enforces model validity at registration time. Offenders get `code="model_unresolved"` with a list of `{provider, model, reason}`. This happens *before* enqueue — a bad `model=` fails fast.
+`POST /workflows` enforces model validity at registration time. Bad `model=` fails with `code="model_unresolved"` listing offenders — *before* enqueue.
 
 Rules of thumb:
 
-- Use `model="claude-sonnet-4-6"` for mid-tier nodes (implement, verify, commit, merge). Fast, cheap, good enough.
-- Reserve `model="claude-opus-4-7"` (or equivalent) for `plan` / `review` nodes where reasoning matters.
+- `claude-sonnet-4-6` for mid-tier nodes (implement, verify, commit, merge). Fast, cheap, good enough.
+- `claude-opus-4-7` (or equivalent) for `plan` / `review` where reasoning matters.
 - Tool nodes don't take `model=`.
-- Unset means the daemon's default — fine for quick drafts, explicit is better for committed workflows.
-
-Check what's available:
+- Unset = daemon default. Fine for drafts; explicit pins make cost + quality predictable.
 
 ```sh
-bun run swarm providers ls                               # which providers are credentialed
-bun run swarm providers test anthropic claude-sonnet-4-6 # 1-token smoke call
+bun run swarm providers ls                                 # which providers are credentialed
+bun run swarm providers test anthropic claude-sonnet-4-6   # 1-token smoke call
 ```
 
-Registering a custom model (e.g. a local Ollama) goes through `~/.swarm/models.json`. Not this skill's territory — see `docs/providers.md`.
+For graph-wide model defaults (CSS-like rules per shape / class / id), see `references/advanced-attrs.md`.
 
 ---
 
-## 10. Fidelity and context_files
+## 11. Fidelity and context_files
 
 ### Fidelity (`fidelity=`)
 
 Controls how prior messages are folded into the next call:
 
 - `full` — every prior message verbatim. Most expensive; rarely needed.
-- `truncate` — pi-agent-core's default truncation. Good for long threads where tail matters.
+- `truncate` — pi-agent-core's default truncation. Good for long threads where the tail matters.
 - `compact` — summary of head + recent tail (swarm default).
 - `summary:low|medium|high` — pre-digest via a summariser; `summary:high` is the cheapest and the blurriest.
 
-Default on codergen is `compact`. Override per-node (`fidelity="summary:medium"`) or per-graph (`default_fidelity="truncate"`).
+Override per-node (`fidelity="summary:medium"`) or per-graph (`default_fidelity="truncate"`).
 
 ### context_files
 
-Comma-separated list of paths relative to the target project root. Contents prepend to the system prompt as `<project-conventions>` blocks. `context_files = "AGENTS.md"` is the common case — give the agent the rules before asking it to write code.
+Comma-separated paths relative to the project root. Contents prepend to the system prompt as `<project-conventions>` blocks. `context_files = "AGENTS.md"` is the common case — give the agent the rules before asking it to write code.
 
-Don't stuff `docs/*.md` in wholesale; the system prompt is under the 4KB `llm.start` event cap and evictions degrade the signal. One file with the hard rules is worth three with general background.
+Don't stuff `docs/*.md` in wholesale; the system prompt is under the 4KB `llm.start` event cap and evictions degrade the signal. One file with the hard rules beats three with general background.
 
 ---
 
-## 11. Prompts that behave
+## 12. Prompts that behave
 
-The prompt is the contract between you and the agent. A few patterns that work:
+The prompt is the contract between you and the agent.
 
 ### Authoritative task
 
@@ -302,38 +309,33 @@ emit `<abort>missing or blocked target</abort>`. Do NOT retarget silently.
 A node that decides the run can't proceed emits `<abort>reason</abort>` in its final text. The runtime reads this, records `outcome=fail`, writes `fact.node_aborted { cause:"aborted_exit" }`, and the run halts with `reason:"aborted_exit"` unless a downstream edge routes on it.
 
 ```
-If the task needs more than the workflow can handle (multi-package refactor, contract change), emit `<abort>task too large, split into <suggested>: <reason></abort>`.
+If the task needs more than the workflow can handle (multi-package refactor, contract change),
+emit `<abort>task too large, split into <suggested>: <reason></abort>`.
 ```
-
-### Promise markers (prose only — not an engine signal)
-
-Earlier prompt versions used `<promise>X_READY</promise>` as an end-of-phase token. Per `docs/handler-contract.md`, those were prose convention only — never engine signals — and have been removed from `.swarm/workflows/*.dot`. Don't reintroduce them: downstream nodes already read the full prior output via `$nodeId.output` substitution, no sentinel required.
 
 ### Explicit tool whitelist
 
 Always name the tools:
 
 ```
-allowed_tools = "read, write, edit, bash"            # implement/verify nodes
-allowed_tools = "read, bash"                          # plan/review/analysis nodes (read-only)
-allowed_tools = "read"                                # pure review, no git state reads
-allowed_tools = "write"                               # summary-only writer nodes
-allowed_tools = "read, grep, find, ls"               # survey/inventory nodes (read-only enumeration)
+allowed_tools = "read, write, edit, bash"   # implement/verify nodes
+allowed_tools = "read, bash"                # plan/review/analysis (read-only)
+allowed_tools = "read"                      # pure review, no git state reads
+allowed_tools = "write"                     # summary-only writer nodes
+allowed_tools = "read, grep, find, ls"      # survey/inventory (read-only enumeration)
 ```
 
-Unconstrained tools surprise operators. Read-only planners stop the agent from editing; write-only summarisers stop them from wandering.
-
-`grep` / `find` / `ls` are native walkers — no shell spawn — so they work even when `bash` is denied. They can be slow on huge repos; pass `path=` to scope the walk.
+Unconstrained tools surprise operators. `grep` / `find` / `ls` are native walkers (no shell spawn) so they work even when `bash` is denied; pass `path=` to scope on huge repos.
 
 ### Keep prompts short
 
-Long prompts mean the agent spends tokens re-parsing your essay. `change.dot`'s `plan` prompt is ~150 words — that's a reasonable upper end for a production node. If you're over 300 words, either split the node or move rules to `context_files`.
+Long prompts mean the agent spends tokens re-parsing your essay. `change.dot`'s `plan` is ~150 words — that's a reasonable upper end. Over 300 words: split the node, or move rules to `context_files`.
 
 ---
 
-## 12. Wait.human (HITL nodes)
+## 13. Wait.human (HITL nodes)
 
-`hexagon`-shaped nodes pause the run and ask the operator a question. The payload of `fact.run_paused_hitl` carries the node's `prompt` and the **edge labels** as the operator's options. The operator resumes with `POST /runs/:id/hitl { selected: string, note?: string }` (server validates `selected` is a non-empty string and returns 400 otherwise); the structured handler picks the outgoing edge whose label matches `selected` by accelerator key.
+`hexagon`-shaped nodes pause the run and ask the operator a question. The payload of `fact.run_paused_hitl` carries the node's `prompt` and the **edge labels** as the operator's options. The operator resumes with `POST /runs/:id/hitl { selected: string, note?: string }`; the structured handler picks the outgoing edge whose label matches `selected` by accelerator key.
 
 ```dot
 signoff [
@@ -345,29 +347,29 @@ signoff -> publish [label="[A] Approve"]
 signoff -> draft   [label="[R] Reject"]
 ```
 
-The node's `prompt=` attribute is what the *DOT* attribute is called, but on the wire it fills the `label` field of `fact.run_paused_hitl.payload` (`{nodeId, label, options[]}` per `packages/types/src/swarm-events.ts`) — there is no separate `prompt` field on the payload. The accelerator key (the `K` in `[K] Label`) becomes the operator-facing button identifier and the routing key. Keys must be unique across the hexagon's outgoing edges (E010); structured HITL routes by accelerator-normalised match.
+The node's `prompt=` attribute fills the `label` field of `fact.run_paused_hitl.payload` (`{nodeId, label, options[]}` per `packages/types/src/swarm-events.ts`) — there is no separate `prompt` field on the payload. The accelerator key (the `K` in `[K] Label`) becomes the operator-facing button identifier and the routing key. Keys must be unique across the hexagon's outgoing edges (E010).
 
-**Don't** put `condition="context.hitl.<nodeId>=…"` on hexagon outgoing edges — that's the legacy codergen-driven path, and the structured handler doesn't write `context.hitl.*` for label-routed gates. W004 flags it. The input the operator submitted is still recorded for audit (visible in events), but routing comes from the label.
+**Don't** put `condition="context.hitl.<nodeId>=…"` on hexagon outgoing edges — that's the legacy codergen-driven path, and the structured handler doesn't write `context.hitl.*` for label-routed gates. W004 flags it.
 
 Keep the prompt to one sentence + the option set the labels imply. Open-ended free-text gates need a downstream codergen node to parse the answer; for those, omit edge labels and let the codergen read the input via substitution.
 
-See swarm-run §5 for the resume mechanics.
+See swarm-run §5 for resume mechanics.
 
 ---
 
-## 13. Graph-level attrs
+## 14. Graph-level attrs
 
 ```dot
 graph [
-  goal                  = "one-sentence purpose; shown in the UI and summarisers"
+  goal                  = "one-sentence purpose"
   label                 = "my-thing"
   default_fidelity      = "compact"
   default_max_retries   = 2
-  default_retry_policy  = "standard"      # preset name (§13b)
-  retry_target          = "implement"     # graph-level §3.4 retarget (§13a)
+  default_retry_policy  = "standard"      # see references/advanced-attrs.md
+  retry_target          = "implement"     # graph-level §3.4 retarget (§8)
   fallback_retry_target = ""
   max_goal_gate_retries = 2               # cap on §3.4 retargets (default 3)
-  model_stylesheet      = "* { … }"       # CSS-for-models (§13c)
+  model_stylesheet      = "* { … }"       # see references/advanced-attrs.md
   budget_usd            = 5.00            # halts at cumulative ≥ ceiling
   budget_tokens         = 200000          # same
   budget_policy         = "stop"          # "stop" (default) | "warn" (non-blocking)
@@ -375,196 +377,61 @@ graph [
 ```
 
 - `goal` — keep it short. Summarisers read this when deciding what matters in the run.
-- `default_fidelity`, `default_max_retries`, `default_retry_policy` — defaults cascade into nodes unless overridden. `default_max_retry` (singular) is accepted as a legacy alias of `default_max_retries`.
-- `budget_*` — **wired** as of §3.7. `budget-policy.ts` evaluates `cumulative >= ceiling` at every turn boundary; `budget_policy="stop"` halts the run with `fact.run_halted { reason: "budget" }`, `budget_policy="warn"` emits `budget.warn` / `budget.stop` events without halting. Same semantics for node-level `max_cost_usd` / `max_tokens`. Use these for real caps, not just documentation.
-- `retry_target`, `fallback_retry_target`, `max_goal_gate_retries` — see §13a.
-- `model_stylesheet` — see §13c.
+- Defaults (`default_*`) cascade into nodes unless overridden. `default_max_retry` (singular) is accepted as a legacy alias of `default_max_retries`.
+- `budget_*` — wired. `budget-policy.ts` evaluates `cumulative >= ceiling` at every turn boundary. `budget_policy="stop"` halts with `fact.run_halted { reason: "budget" }`; `budget_policy="warn"` emits `budget.warn` / `budget.stop` events without halting. Same semantics for node-level `max_cost_usd` / `max_tokens`.
+
+For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_<name>` semantics, see `references/advanced-attrs.md`.
 
 ---
 
-## 13a. Goal gates and retargets
+## 15. Validation
 
-A **goal gate** is a node that *must* succeed before the pipeline can exit. Mark it with `goal_gate=true`. When the run reaches a terminal (`Msquare`) node, the engine checks every visited gate's outcome — if any is non-success, it retargets to the `retry_target` on that gate (or the fallback chain) instead of completing.
+`bun run swarm validate path/to/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
 
-The §3.4 chain, in priority order:
+Error codes range from E001 (no start node) through E015 (model_stylesheet syntax). Warning codes from W001 (orphan node) through W010 (unknown fidelity value). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
 
-1. failed gate's `retry_target`
-2. failed gate's `fallback_retry_target`
-3. graph-level `retry_target`
-4. graph-level `fallback_retry_target`
-5. halt with `fact.run_halted { reason: "goal_gate_unsatisfied", gate: "<id>" }`
+The most common ones to know without looking up:
 
-Bounded by `max_goal_gate_retries` (graph attr, default 3). Once that's exhausted, the run halts even if the chain has more steps. This is swarm-local — attractor §3.4 step 4 is unbounded; we cap to keep a misconfigured retry target from burning the run forever.
-
-Idiomatic pattern (`change.dot`):
-
-```dot
-graph [ retry_target = "implement", max_goal_gate_retries = 2 ]
-
-review [
-  prompt       = "Judge the diff. Reply APPROVE or <abort>REJECT: …</abort>."
-  goal_gate    = true
-  retry_target = "implement"
-]
-
-review -> done   [condition="outcome=fail"]   # fast-fail to terminal …
-review -> verify                                # … on success, advance.
-```
-
-REJECT routes via the fail edge to `done`; the goal-gate enforcement at `done` sees `review` unsatisfied and retargets to `implement`. After `max_goal_gate_retries` failed cycles, the run halts. No `review -> implement [condition="outcome=fail"]` edge needed.
-
-**Distinct from `max_retries`.** `max_retries` is the *handler*-level retry count (the engine retries the same node N times on RETRY/transient failure within one workflow pass). `goal_gate` retargets are *workflow*-level retries (the engine jumps backwards through the graph and re-runs upstream nodes). A node can use both: handler-level retries first, then if the final outcome is still bad, the gate retargets.
-
-W007 fires on a `goal_gate=true` node with no retarget at any level — failure can only halt with no recovery path. Almost always an authoring oversight; either set a target or drop the gate.
+- **E004** — edge references a non-existent node id (typo).
+- **E005** — `$<id>.output` references an unknown node id.
+- **E007** — `component` node missing or pointing at the wrong `fan_in` target.
+- **W003** — only conditional edges, no `outcome=fail` catch-all.
+- **W004** — hexagon edge using legacy `context.hitl.*` (use `[K] Label`).
+- **W007** — `goal_gate=true` with no retarget chain.
 
 ---
 
-## 13b. Retry policy presets
+## 16. Smoke-test recipe
 
-`retry_policy` (node) and `default_retry_policy` (graph) pick a backoff preset for handler-level retries. Combined with `max_retries`, they govern how the executor retries a single node when its outcome is RETRY (or it throws a retryable exception).
-
-| Preset | maxAttempts | initial | factor | maxDelay | Use for |
-|---|---|---|---|---|---|
-| `none` (default) | 1 | 0 | 1.0 | 0 | Fail immediately. |
-| `standard` | 5 | 200ms | 2.0 | 60s | General-purpose flake. |
-| `aggressive` | 5 | 500ms | 2.0 | 60s | Unreliable upstreams. |
-| `linear` | 3 | 500ms | 1.0 | 500ms | Fixed-delay polling. |
-| `patient` | 3 | 2000ms | 3.0 | 60s | Long-running ops. |
-
-Two outcome flags interact with retries:
-
-- **`non_retryable`** (Outcome flag set by the handler) — short-circuits retries. Use for auth errors, 4xx, validation: don't retry, just fail.
-- **`allow_partial`** (node attr, boolean) — converts retry-counter exhaustion into `PARTIAL_SUCCESS` instead of `FAIL`. The run continues forward as if it succeeded, with a note. Use when "best-effort" is acceptable.
-
-Backoff happens *outside the executor slot* as of the recent `paused_retry` rework: a retrying run transitions to status `paused_retry`, frees its concurrency slot, and the wake-pending sweeper re-queues it once the backoff timer elapses. This means heavy backoff doesn't starve other runs.
-
-W008 catches typos in preset names — the runtime falls back to `none` silently otherwise.
-
----
-
-## 13c. Model stylesheet
-
-The `model_stylesheet` graph attr provides CSS-like rules for `llm_model`, `llm_provider`, and `reasoning_effort` defaults across nodes. Saves you from per-node `model="…"` pins on every codergen.
-
-```dot
-graph [
-  model_stylesheet = "
-    *           { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
-    .review     { llm_model: claude-opus-4-7; reasoning_effort: high; }
-    #pick_best  { llm_model: claude-opus-4-7; }
-  "
-]
-```
-
-**Selectors** (specificity 0 → 3):
-
-| Selector | Matches | Specificity |
-|---|---|---|
-| `*` | All nodes | 0 |
-| `box` (or any shape name) | Nodes with that shape | 1 |
-| `.classname` | Nodes whose `class` attr or subgraph-derived class includes `classname` | 2 |
-| `#nodeId` | Specific node by id | 3 |
-
-Properties: `llm_model`, `llm_provider`, `reasoning_effort` (low/medium/high). Recognised set is closed; `parseStylesheet` rejects others (E015).
-
-**Resolution order** (highest precedence first):
-
-1. Explicit node attr (`model = "…"`, `provider = "…"`)
-2. Stylesheet rule (by specificity, later-wins on tie)
-3. Daemon default
-
-Apply once at the graph level, not per-node — that's the whole point. E015 fires on parse errors at validate-time so you don't ship a broken stylesheet.
-
----
-
-## 13d. Subgraphs (scope + class derivation)
-
-`subgraph cluster_<name> { … }` does two useful things:
-
-1. **Scopes default attrs** to the contained nodes. A `node [thread_id="dev"]` block inside a subgraph applies that default to nodes declared inside, without leaking to siblings.
-2. **Derives a class** named `<name>` (the part after `cluster_`) on every node inside, available to stylesheet `.classname` selectors and the node's `classes` array.
-
-```dot
-subgraph cluster_dev {
-  node [thread_id = "dev"]                  // scope-local default
-
-  implement [ prompt = "…" ]                // gets thread_id="dev" + class "dev"
-  review    [ prompt = "…", goal_gate=true, retry_target = "implement" ]
-}
-```
-
-The `change.dot` daily driver uses this to put `implement` + `review` in a shared `dev` thread automatically. Future stylesheet rules on `.dev` will pick up both. A subgraph without the `cluster_` prefix uses its id as the derived class name.
-
----
-
-## 14. Validation
-
-`bun run swarm validate .swarm/workflows/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
-
-| Code | Severity | What it means |
-|---|---|---|
-| E001 | error | No start node (missing `shape=Mdiamond`). |
-| E002 | error | Multiple start nodes — pick one. |
-| E003 | error | No exit node (`shape=Msquare`). |
-| E004 | error | Edge references a node id that doesn't exist. Typo in source or target. |
-| E005 | error | `$foo.output` references an unknown node id. |
-| E006 | error | Cycle with no reachable exit — the run can't terminate. |
-| E007 | error | `component` node without valid `fan_in=` (missing or wrong shape). |
-| E008 | error | `parallelogram` node without `tool_command=`. |
-| E009 | error | `hexagon` node has no outgoing edges — operator's selection has nowhere to route. |
-| E010 | error | `hexagon` outgoing edges produce duplicate accelerator keys (e.g. two `[A] …` edges). |
-| E011 | error | `retry_target` / `fallback_retry_target` references an undefined node (gate or graph level). |
-| E012 | error | Start node has incoming edges (attractor §11.2). |
-| E013 | error | Exit node has outgoing edges (attractor §11.2). |
-| E014 | error | Edge `condition` failed to parse — most often a literal containing whitespace (`condition="preferred_label=RANK: clean"` won't parse; quote the literal or use an underscored sentinel like `RANK_CLEAN`). |
-| E015 | error | `model_stylesheet` syntax error — surfaces parse failures at validate-time. |
-| W001 | warn  | Orphan node (no in-edges, not start). Usually a copy/paste leftover. |
-| W002 | warn  | Node unreachable from start. Dead code. |
-| W003 | warn  | Node has only conditional edges, no `outcome=fail` catch-all. |
-| W004 | warn  | Hexagon outgoing edge uses legacy `context.hitl.*` condition; structured HITL routes by `[K] Label` accelerators (§12). |
-| W005 | warn  | Duplicate edge. |
-| W006 | —     | Reserved / unused (no validator emits this code). |
-| W007 | warn  | `goal_gate=true` node has no retarget at any level — failure can only halt. |
-| W008 | warn  | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
-| W009 | warn  | Codergen (`box`) node has empty `prompt` and empty `label` — the agent has nothing to act on. |
-| W010 | warn  | `fidelity` value not recognised — runtime falls back to `compact`; surfaces typos like `compcat`. |
-
-Pass `--strict` if you want warnings to fail the command; none of the CLI flags expose that yet, but the API (`validate(graph, {strict:true})`) supports it.
-
----
-
-## 15. Smoke-test recipe
-
-Between "it validates" and "it runs with your production model", there's this:
+Between "it validates" and "it runs with your production model":
 
 ```sh
-# 1. Parse+lint.
-bun run swarm validate .swarm/workflows/my-thing.dot
+bun run swarm validate path/to/my-thing.dot
 
-# 2. Dry-enqueue with a cheap model. Override in the .dot if every node
-#    pins a model — `provider` / `model` at node level is the only way.
+# Dry-enqueue with a cheap model. Override in the .dot if every node
+# pins a model — `provider`/`model` at node level is the only way.
 bun run swarm run my-thing --input="a realistic sample task"
 
-# 3. Watch. Expect to see fact.run_started → fact.node_started (per node)
-#    → intermittent llm.text_delta → fact.node_completed → ... → terminal.
+# Watch. Expect fact.run_started → fact.node_started (per node)
+# → intermittent llm.text_delta → fact.node_completed → … → terminal.
 ```
 
-If you have the budget, run it twice — once cold, once with the prior run's artifacts removed. Prompts that only work the second time (e.g. because they silently relied on a cached file) are a trap in production.
+If you have the budget, run it twice — once cold, once with the prior run's artifacts removed. Prompts that only work the second time (e.g. silently relied on a cached file) are a trap in production.
 
 ---
 
-## 16. Anti-patterns
+## 17. Anti-patterns
 
 - **Don't write a `loop` node.** Backward conditional edges are the pattern. If you find yourself wanting three nodes to form a loop, you probably want one node + a self-edge.
-- **Don't pack two jobs into one node.** A node has one prompt, one thread, one model, one set of tools. If the prompt is "do A, then B, then C" — three nodes.
-- **Don't leave `model=` unset in a shipped workflow.** The daemon default is fine for drafts; explicit pins make cost and quality predictable across machines.
+- **Don't pack two jobs into one node.** A node has one prompt, one thread, one model, one set of tools. "Do A, then B, then C" — three nodes.
+- **Don't leave `model=` unset in a shipped workflow.** Daemon default is fine for drafts; explicit pins make cost + quality predictable across machines.
 - **Don't `context_files = "docs/SPEC.md, docs/ARCHITECTURE.md, README.md"`.** You'll blow the event payload cap and bury the real rules. One file with the hard constraints, usually `AGENTS.md`.
-- **Don't re-invent `<abort>`.** Downstream nodes already know how to read it. A custom sentinel requires a parser; the standard one just works. (Note: `<promise>` is *not* a counterpart — it was prose convention only, never an engine signal, and has been removed from shipped workflows.)
+- **Don't re-invent `<abort>`.** Downstream nodes already know how to read it. A custom sentinel requires a parser; the standard one just works.
 - **Don't conditionally route on `outcome=error`.** The states are `success` and `fail`. `fact.run_halted { reason:"error" }` is a terminal event, not an edge-eligible outcome.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Your edit applies only to *future* runs.
-- **Don't put HITL inside a parallel branch.** Not supported (§13.1); it coerces to fail.
-- **Don't use `[condition="context.hitl.<id>=…"]` on hexagon edges.** That's the legacy codergen-driven HITL path. The structured HITL handler routes via edge labels: `signoff -> run_tests [label="[A] Approve"]`. W004 flags it.
-- **Don't pair `goal_gate=true` with no retarget.** W007. A gate that can only halt isn't a gate — it's a foot-gun. Either give it a `retry_target` or drop the flag.
+- **Don't put HITL inside a parallel branch.** Not supported; coerces to fail.
+- **Don't use `condition="context.hitl.<id>=…"` on hexagon edges.** That's the legacy codergen-driven path. W004 flags it. Use `[K] Label` accelerators.
+- **Don't pair `goal_gate=true` with no retarget.** W007. Either give it a `retry_target` or drop the flag.
 
 ---
 
@@ -577,10 +444,6 @@ digraph NAME {
     label                 = "NAME"
     default_fidelity      = "compact"
     max_goal_gate_retries = 2
-    model_stylesheet      = "
-      *       { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
-      .review { llm_model: claude-opus-4-7; reasoning_effort: high; }
-    "
   ]
 
   start [shape=Mdiamond]
@@ -592,7 +455,7 @@ digraph NAME {
     context_files = "AGENTS.md"
   ]
 
-  # Subgraph: shared thread + derived class for stylesheet.
+  # Subgraph: shared thread + derived class for stylesheet (see references/advanced-attrs.md).
   subgraph cluster_review {
     implement [
       prompt        = "Implement $plan.output. …"
@@ -601,7 +464,7 @@ digraph NAME {
     ]
     review [
       prompt       = "Judge the diff. APPROVE or <abort>REJECT: …</abort>."
-      goal_gate    = true                 # workflow-level retry §13a
+      goal_gate    = true                 # workflow-level retry §8
       retry_target = "implement"
     ]
   }
@@ -609,15 +472,8 @@ digraph NAME {
   # Tool — shell step.
   verify [shape=parallelogram, tool_command="bun run ci"]
 
-  # Conditional — edge-only routing.
-  gate [shape=diamond]
-
   # Wait.human — structured HITL: route by edge label.
   signoff [shape=hexagon, prompt="Approve to ship, or reject."]
-
-  # Parallel fan-out + fan-in.
-  explore   [shape=component, fan_in=pick_best, join_policy="wait_all"]
-  pick_best [shape=tripleoctagon]
 
   done [shape=Msquare]
 
@@ -626,18 +482,16 @@ digraph NAME {
   review -> done   [condition="outcome=fail"]    # goal-gate retargets to implement
   review -> verify
 
-  verify -> gate    [condition="outcome=success"]
+  verify -> signoff [condition="outcome=success"]
   verify -> done    [condition="outcome=fail"]
-  gate    -> signoff
   signoff -> done   [label="[A] Approve"]
   signoff -> done   [label="[R] Reject"]
 }
 ```
 
 ```sh
-# Iterate.
-bun run swarm validate .swarm/workflows/my-thing.dot
-bun run swarm run      my-thing --input="…"   # bare-name resolves under .swarm/workflows/
+bun run swarm validate path/to/my-thing.dot
+bun run swarm run      my-thing --input="…"   # bare-name resolves global, then <cwd>/.swarm/workflows/
 ```
 
 When a workflow misbehaves, switch to swarm-debug to post-mortem the run. When a run needs steering or pausing mid-flight, switch to swarm-run.

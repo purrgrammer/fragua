@@ -1,178 +1,165 @@
 ---
 name: swarm-run
-description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue ci-gate", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's swarm-debug). Teaches pre-flight (daemon + server + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
-version: 0.1.0
+description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue ci-gate", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's swarm-debug). Teaches pre-flight (harness liveness + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
+version: 0.2.0
 ---
 
 # swarm-run — enqueue, watch, and control a live run
 
-The goal is to go from a workflow (`workflows/*.dot` or an ad-hoc path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
+The goal is to go from a workflow (a name resolvable under `~/.swarm/workflows/` or `<cwd>/.swarm/workflows/`, or a literal `.dot` path) to a running, observable run that you can steer safely. Prefer the CLI for interactive runs; reach for the HTTP surface when you need priority / routing / no-follow / scripting.
 
 Authoritative references: `docs/SPEC.md` §3 (primitives + control plane), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §7 (web server), `AGENTS.md` (commands).
 
 ---
 
-## Fast path (do this first)
+## Fast path
 
 ```sh
-# 0. Pre-flight — all three must be true.
-ls .swarm/ && cat .swarm/serve.json | jq .url          # store + server URL
-sqlite3 -readonly .swarm/swarm.db "SELECT pid, (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS age FROM daemon_lock;"
-bun run swarm providers ls                             # at least the default provider shows ✓
+# Pre-flight — both must be true.
+sqlite3 -readonly ~/.swarm/swarm.db \
+  "SELECT pid, http_url, (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS age_s
+     FROM daemon_lock;"      # row present + http_url non-null + age < 30s
+bun run swarm providers ls   # at least one provider shows ✓
 
-# 1. Run. Trailing args become $ARGUMENTS; use --input to be explicit.
+# Run. Trailing args become $ARGUMENTS; --input wins.
 bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
-The CLI does three things for you: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), then `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts are `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused_retry | fact.run_quarantined`; the CLI exits non-zero on halt / cancel. `paused_retry` and `paused_hitl` are *suspensive* — the CLI exits 0 there, the run will resume on its own (retry timer or operator HITL response).
+The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused_retry | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
 
-If the fast path works, nothing below matters. Everything after is for when it doesn't — or when you need to drive a run that's already in flight.
+If the fast path works, nothing else here matters.
 
 ---
 
 ## 1. Pre-flight
 
-Three processes, one store. Enqueue fails quietly (or loudly) if any are missing. Run each check before asking the user why nothing is happening.
+The harness owns the daemon + HTTP server in one foreground process. Discovery rides on `daemon_lock` in the DB — no JSON files in the default install.
 
 ```sh
-# Store present
-test -f .swarm/swarm.db || echo "not a swarm cwd — ask the user"
-
-# Server up (serve.json is written by `swarm serve`)
-URL=$(jq -r .url .swarm/serve.json 2>/dev/null)
-[ -n "$URL" ] && curl -fsS --max-time 2 "$URL/health" | jq .
-
-# Daemon alive. LOCK_TTL_MS=30s; anything older is presumed dead.
-sqlite3 -readonly .swarm/swarm.db <<'SQL'
+# Default DB (harness layout)
+sqlite3 -readonly ~/.swarm/swarm.db <<'SQL'
 .mode column
-SELECT pid, hostname,
+SELECT pid, hostname, http_url, http_port,
        datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
        (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS seconds_ago
 FROM daemon_lock;
 SQL
 
-# Provider usable for the model the workflow pins
+# `http_url` populated → harness running. Hit /health to confirm.
+URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+[ -n "$URL" ] && curl -fsS --max-time 2 "$URL/health" | jq .
+
+# Provider credential
 bun run swarm providers ls
-# If a specific model is pinned, test it:
-bun run swarm providers test anthropic claude-sonnet-4-6
 ```
 
 Common failures:
 
-- **No `serve.json`** — nothing's serving HTTP. Start it: `bun run swarm serve`.
-- **Heartbeat > 30s old** — daemon is dead. Runs stay `queued` until a new daemon claims the lock. Start: `bun run swarm daemon start`.
+- **No `daemon_lock` row** — no daemon running. Start: `bun run swarm harness` (default) or `bun run swarm daemon start --db <path>` (CI primitive).
+- **Heartbeat > 30s old** — daemon dead. Runs stay `queued` until a new one claims the lock. Restart the harness.
+- **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`swarm daemon` + `swarm serve` separately) — in that case, fall back to `<cwd>/.swarm/serve.json` for discovery.
 - **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `swarm providers add <provider>` or `swarm providers login <provider>`.
-- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`, listing offenders. Either register the model (via `~/.swarm/models.json`) or switch the workflow's `model=` attr.
+- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model (`~/.swarm/models.json`) or switch the workflow's `model=` attr.
 
-All four are recoverable without editing the workflow. The user should do this — don't `swarm daemon start` on their behalf without asking; the daemon attaches to the current shell.
+The user should run `swarm harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
 
 ---
 
 ## 2. Entry points
 
-Two equivalent surfaces. Use the CLI unless the task requires scripting / non-interactive enqueue.
+Two equivalent surfaces. Use the CLI unless the task requires scripting.
 
 ### CLI (`swarm run`)
 
 ```sh
-bun run swarm run <workflow.dot> [trailing positional args]  \
+bun run swarm run <workflow> [trailing positional args]  \
   [--input "…"]          # explicit $ARGUMENTS; wins over trailing args
-  [--priority 10]        # higher runs first (tie-breaker in the queue)
-  [--no-follow]          # enqueue and exit, print only the run id
-  [--url http://…]       # override serve.json discovery
+  [--priority 10]        # higher runs first (queue tie-breaker)
+  [--no-follow]          # enqueue and exit; print only the run id
+  [--url http://…]       # override DB-based discovery
   [--db path/to/db]      # pairs with `swarm serve --db` for parallel swarms
 ```
 
-Ergonomics: trailing positional args are joined with spaces into `$ARGUMENTS`. `--input` always wins. The run id prints immediately; terminal facts print colorised as they stream.
+`<workflow>` resolves: bare name → `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot`. Anything containing `/` or ending `.dot` resolves as a literal path.
 
-### HTTP (POST /workflows then POST /runs)
+Trailing positional args are joined with spaces into `$ARGUMENTS`. `--input` always wins. The run id prints immediately; terminal facts print colorised as they stream.
 
-Use when you need arbitrary `routing`, scripted enqueue, or multiple runs in flight. The CLI is just a thin client over this.
+### HTTP (`POST /workflows`, then `POST /runs`)
+
+The CLI is a thin client over this. Use directly when you need arbitrary `routing`, scripted enqueue, or multiple runs in flight.
 
 ```sh
-URL=$(jq -r .url .swarm/serve.json)
+URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
 
-# 1. Upload (idempotent — sha is content-addressed).
+# 1. Upload (idempotent; sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg n change --rawfile s .swarm/workflows/change.dot \
+  -d "$(jq -n --arg n change --rawfile s ~/.swarm/workflows/change.dot \
         '{name:$n, dotSource:$s}')" | jq -r .sha)
 
 # 2. Enqueue. `input` lands in routing.input → substituted as $ARGUMENTS.
 RUN=$(curl -fsS -X POST "$URL/runs" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg sha "$SHA" --arg in "rename foo() to bar()" \
-        '{workflowSha:$sha, priority:5, input:$in}')" | jq -r .runId)
-echo "$RUN"
+  -d "$(jq -n --arg sha "$SHA" --arg in "rename foo() to bar()" --arg cwd "$PWD" \
+        '{workflowSha:$sha, priority:5, input:$in, cwd:$cwd}')" | jq -r .runId)
 
-# 3. Tail. `Last-Event-ID` resumes from a known seq on reconnect.
+# 3. Tail. Last-Event-ID resumes on reconnect.
 curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 ```
 
-`workflowSha` is a sha256 of the DOT source — uploading the same source twice returns the same sha, so re-enqueue is cheap. `runId` is a ULID when omitted; pass `runId` in the body to use your own (duplicate → 400).
+`workflowSha` is sha256 of the DOT source — same source twice → same sha → cheap re-enqueue. `runId` is a ULID when omitted. `cwd` becomes the run's project root (worktree base, project listing key); omit for ephemeral CI runs.
 
 ---
 
 ## 3. Watch a run
 
-Three surfaces, picked by what you're watching for:
-
-| Surface | Use when | Cost |
-|---|---|---|
-| `GET /runs/:id/stream` (SSE) | You need *live* progress. Terminates on disconnect. | long-lived socket |
-| `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing with a prior snapshot. | one request |
-| `GET /runs/:id/steps` | You want per-LLM-call snapshots (prompt, model, tokens, cost). | one request, reducer fold |
-| `GET /runs/:id` | Projection summary (status, current node, totals). Cheap status poll. | one request |
-
-Live tail example:
+| Surface | Use when |
+|---|---|
+| `GET /runs/:id/stream` (SSE) | Live progress. Terminates on disconnect. |
+| `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing. |
+| `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost). |
+| `GET /runs/:id` | Projection summary (status, current node, totals). Cheap status poll. |
 
 ```sh
-curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream' \
-  | awk '/^event:/{e=$2} /^data:/{print e" "$0}'   # rough decoder; swap for jq if needed
-```
-
-Point-in-time:
-
-```sh
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode: .currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
+curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})'
 curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
 ```
 
-For running-but-silent runs: if the last event is `fact.node_started` with no follow-up in `maxMs`, the supervisor's watchdog should have fired — if it hasn't, the daemon is wedged. Jump to swarm-debug.
+For running-but-silent runs: if the last event is `fact.node_started` with no follow-up after the node's `maxMs`, the supervisor watchdog should have fired — if it hasn't, the daemon is wedged. Jump to swarm-debug.
 
-**Lifecycle states you'll see beyond `running`/`completed`:**
+**Lifecycle states beyond `running` / `completed`:**
 
 - `queued` — waiting for a daemon dispatch slot.
 - `paused_hitl` — `wait.human` gate yielded. Resume with `POST /runs/:id/hitl`.
-- `paused` — operator-resumable. Reason on the latest `fact.run_paused.payload.reason`: `operator` (operator hit Pause), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
-- `paused_retry` — a node returned `outcome=retry` and the executor scheduled a backoff. The run *frees its concurrency slot* during the wait so other runs aren't blocked. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action needed unless the resume timer never fires (then check daemon heartbeat).
-- `paused_provider_retry` — same shape as `paused_retry` but driven by an auto-retryable provider transport error (408/429/5xx/529/network). Same wake key.
+- `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
+- `paused_retry` — node returned `outcome=retry`; executor scheduled a backoff. The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat).
+- `paused_provider_retry` — same shape, driven by an auto-retryable provider transport error (408/429/5xx/529/network).
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
-- `halted` / `cancelled` — terminal. See swarm-debug §8 for `reason` codes.
+- `halted` / `cancelled` — terminal. swarm-debug §8 has the `reason` codes.
 
 ---
 
 ## 4. Control plane — the intent vocabulary
 
-Every operator action is an HTTP POST that appends an `intent.*` event. No OCC: intents are **always appendable** (SPEC §3.5). The daemon picks them up on the next supervisor tick (~50ms).
+Every operator action is an HTTP POST that appends an `intent.*` event. No OCC: intents are **always appendable** (SPEC §3.5). Daemon picks them up on the next supervisor tick (~50ms).
 
-All seven endpoints return `{ seq }` — the sequence number assigned to the intent. Quote it in any follow-up so the user can find the action in the event stream.
+All endpoints return `{ seq }` — quote it in any follow-up so the user can find the action in the event stream.
 
-| POST | Body | Written intent | Post-condition | When to use |
-|---|---|---|---|---|
-| `/runs/:id/steer` | `{text: "…"}` | `intent.steering_requested` | Handler aborts with `cause:"steer"`; next dispatch sees the steering in the thread. | Push a redirection into a running codergen node without cancelling the run. |
-| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts with `cause:"pause"`; run transitions to `paused` with `reason:"operator"`. | Stop forward progress without losing the run. Resume with `/resume` (use `/hitl` only if a `wait.human` gate is what paused it). |
-| `/runs/:id/cancel` | `{reason?: "…"}` | `intent.cancel_requested` | Handler aborts with `cause:"cancel"`; terminal `fact.run_cancelled`. | Kill the run. Unrecoverable. |
-| `/runs/:id/hitl` | `{selected: string, note?: string}` | `intent.hitl_input` | Server 400s if `selected` is missing or empty. For a `wait.human` gate: the daemon wakes the run and routes to the outgoing edge whose `[K] Label` accelerator key matches `selected`. | Answer a structured `wait.human` gate (one of the option keys from `fact.run_paused_hitl.payload.options[].key`). |
-| `/runs/:id/resume` | `{note?: string}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued` on the next tick. | Resume an operator-paused run, or wake a `paused_retry` early — when no HITL selection is being supplied. |
-| `/runs/:id/unquarantine` | `{resolution: "treat_as_done"\|"retry"\|"cancel", note?: "…"}` | `intent.unquarantine` | Daemon's next sweep resolves the orphan side effect per `resolution`. | Only when `status='quarantined'`. Decision has external-world consequences — see §6. |
-| `/runs/:id/priority` | `{newPriority: N, note?: "…"}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. | Jump a queued run ahead of the line. |
-| `/runs/:id/budget` | `{scope: "node"\|"run", metric: "cost"\|"tokens", newLimit: N, note?: "…"}` | `intent.budget_adjusted` | Override stored at `routing.budget_override.<scope>.<metric>`; next turn-boundary check uses the new ceiling. Doesn't wake the run on its own — follow up with `/resume`. | Operator raises a budget cap on a `paused{reason:"budget"}` run. The web UI bundles `/budget` + `/resume` in one "Raise & Resume" click. |
+| POST | Body | Written intent | Post-condition |
+|---|---|---|---|
+| `/runs/:id/steer` | `{text}` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the steering text in the thread. |
+| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); status → `paused` (`reason:"operator"`). |
+| `/runs/:id/cancel` | `{reason?}` | `intent.cancel_requested` | Handler aborts (`cause:"cancel"`); terminal `fact.run_cancelled`. |
+| `/runs/:id/hitl` | `{selected, note?}` | `intent.hitl_input` | For `wait.human`: routes to the outgoing edge whose `[K] Label` accelerator matches `selected`. 400 if missing/empty. |
+| `/runs/:id/resume` | `{note?}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued`. |
+| `/runs/:id/unquarantine` | `{resolution, note?}` | `intent.unquarantine` | Resolves the orphan side effect per `resolution` ∈ `treat_as_done | retry | cancel`. |
+| `/runs/:id/priority` | `{newPriority, note?}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. |
+| `/runs/:id/budget` | `{scope, metric, newLimit, note?}` | `intent.budget_adjusted` | Override stored at `routing.budget_override.<scope>.<metric>`; next turn-boundary check uses the new ceiling. Doesn't wake on its own — pair with `/resume`. |
 
 ### Steering
 
-Steering injects text that the next LLM call sees in the prior-messages thread. The current handler is aborted (lossless — pi-agent-core keeps what it had) and re-dispatched. Use small, specific nudges — "the plan should also cover `packages/web`", "don't edit docs this round". Long essays are usually the wrong tool; prefer `cancel` + a new run with better `$ARGUMENTS`.
+Steering injects text into the next LLM call's prior-messages thread. The current handler aborts (lossless — pi-agent-core keeps what it had) and re-dispatches. Use small, specific nudges. Long essays are usually the wrong tool; prefer `cancel` + a fresh run with better `$ARGUMENTS`.
 
 ```sh
 curl -fsS -X POST "$URL/runs/$RUN/steer" \
@@ -180,47 +167,29 @@ curl -fsS -X POST "$URL/runs/$RUN/steer" \
   -d '{"text":"skip the migration step; the schema is already at head"}' | jq .seq
 ```
 
-Post-condition to wait for: `fact.node_aborted { cause: "steer", intentSeq: <the seq you got back> }` → `fact.node_started` for the same node (same `nodeId`, `iteration` bumped).
+Wait for `fact.node_aborted { cause:"steer", intentSeq: <returned seq> }` → `fact.node_started` for the same node (same `nodeId`, `iteration` bumped).
 
 ### Pause + resume
 
-Pause is steer-without-text: abort the current handler and flip the run to `paused_hitl`. The user (or you, on their behalf) resumes with `/resume`. `/hitl` is reserved for `wait.human` (structured) gates and requires a `selected` accelerator key matching one of the gate's options — sending it to an operator-paused run is the wrong shape.
-
-```sh
-curl -fsS -X POST "$URL/runs/$RUN/pause"  -H 'content-type: application/json' -d '{}'
-# … user thinks …
-curl -fsS -X POST "$URL/runs/$RUN/resume" -H 'content-type: application/json' \
-  -d '{"note":"verified the config at packages/web/vite.config.ts is correct"}'
-```
+Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/hitl` is for `wait.human` (structured) gates only; sending it to an operator-paused run is the wrong shape.
 
 ### Cancel
 
-Cancel is final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide later if you're unsure.
+Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide later if unsure.
 
-### HITL inputs (wait.human nodes)
+### HITL inputs
 
-Workflows can also pause themselves via a `hexagon`-shaped `wait.human` node (see swarm-author §12). Resume with `/hitl`, supplying `selected` matching one of the option keys advertised in the pause payload.
+For `wait.human` (hexagon) gates. `selected` must match one of `fact.run_paused_hitl.payload.options[].key`. See §5 + swarm-author §12.
 
-```sh
-# After `fact.run_paused_hitl { nodeId: "review", label: "Approve to ship, or reject.",
-#                                options: [{key:"a", label:"Approve", to:"publish"},
-#                                          {key:"r", label:"Reject",  to:"draft"}] }`:
-curl -fsS -X POST "$URL/runs/$RUN/hitl" \
-  -H 'content-type: application/json' \
-  -d '{"selected":"a"}'
-```
+### Priority + budget
 
-Routing happens by edge label accelerator key — see swarm-author §12 for the structured-HITL pattern.
-
-### Priority
-
-Higher = earlier. Ties break by enqueue time. Running runs don't re-sort. Use for queue-management, not for mid-run steering.
+`priority` re-orders the queue (running runs unaffected). `budget` raises a cap on a `paused{reason:"budget"}` run; the web UI bundles `/budget` + `/resume` in one click.
 
 ---
 
 ## 5. HITL resume protocol
 
-Runs sit in `paused_hitl` until you feed them. The payload of `fact.run_paused_hitl` tells you what the node wanted:
+Runs sit in `paused_hitl` until you feed them. Read what they want:
 
 ```sh
 curl -fsS "$URL/runs/$RUN/events.json" \
@@ -228,7 +197,7 @@ curl -fsS "$URL/runs/$RUN/events.json" \
 # { seq, type, payload: { nodeId, label, options: [{key, label, to}, …] }, … }
 ```
 
-`selected` must equal one of `options[].key`. Structured HITL is the only supported routing path — see swarm-author §12. The legacy `context.hitl.<nodeId>=…` edge condition now raises validator W004.
+`selected` must equal one of `options[].key`. Structured HITL is the only supported routing path (legacy `context.hitl.<nodeId>=…` raises validator W004 and isn't recognised by the structured handler).
 
 Present the decision to the user — don't answer HITL on their behalf unless they've explicitly delegated it.
 
@@ -236,110 +205,63 @@ Present the decision to the user — don't answer HITL on their behalf unless th
 
 ## 6. Quarantine resolution
 
-A run lands in `quarantined` when the startup sweep finds `fact.side_effect_intent` without a matching `_done`/`_failed`. The external effect may have succeeded, failed, or never reached the provider — swarm can't tell from the crash. Operator decides.
+A run lands in `quarantined` when the startup sweep finds `fact.side_effect_intent` without a matching `_done`/`_failed`. The external effect may have succeeded, failed, or never reached the provider — swarm can't tell. Operator decides.
 
 ```sh
-# Identify the orphan intents:
+# The orphans:
 curl -fsS "$URL/runs/$RUN/events.json" \
   | jq '[.[] | select(.type=="fact.run_quarantined")] | last | .payload.orphanedIntents'
-# Walk each orphan by seq to see what it was:
-curl -fsS "$URL/runs/$RUN/events.json" \
-  | jq --argjson seqs '[<paste seqs>]' '.[] | select(.seq == $seqs[])'
-```
 
-Resolutions:
-
-- `treat_as_done` — assume the effect completed. Use when provider idempotency is strong and the orphan's `idempotencyKey` matches a known success externally.
-- `retry` — replay the effect. Use when the provider is idempotent *and* you've verified the external state is consistent with a re-try.
-- `cancel` — stop the run. Use when the blast radius is unclear or the user wants to intervene manually.
-
-```sh
+# Resolutions:
+#   treat_as_done — assume effect completed (use when provider idempotency is strong)
+#   retry         — replay (use when verified external state matches a re-try)
+#   cancel        — stop the run (use when blast radius is unclear)
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine" \
   -H 'content-type: application/json' \
-  -d '{"resolution":"cancel","note":"verified the external effect via <evidence>; human will retry by hand"}'
+  -d '{"resolution":"cancel","note":"verified the external effect via <evidence>"}'
 ```
 
-Present the options and evidence to the user. Let them pick. Never auto-choose.
+Present options + evidence to the user. Never auto-choose.
 
 ---
 
-## 7. Parallel / scripted operations
+## 7. Anti-patterns
 
-Multiple runs in flight is the normal case; the daemon has concurrency (`--concurrency N`, default 8). A few idioms:
-
-```sh
-# Enqueue a batch of no-LLM runs to exercise executor concurrency.
-for _ in 1 2 3 4 5; do
-  bun run swarm run ci-gate --no-follow
-done
-
-# Watch all currently-running runs' status:
-curl -fsS "$URL/runs?status=running" | jq '.[] | {runId, currentNode, updated: .updatedAt}'
-
-# Multi-run streaming — tail each in its own subshell.
-for R in run_a run_b; do
-  curl -N "$URL/runs/$R/stream" &
-done
-wait
-```
-
-For long-running batches, prefer `--no-follow` + polling `/runs/:id` over N open SSE streams.
-
----
-
-## 8. Running against a non-default store
-
-`swarm serve --db /path/to/other.db` writes `serve.json` next to that DB. The CLI discovers it via `--db`:
-
-```sh
-bun run swarm serve  --db /tmp/other.swarm/swarm.db &
-bun run swarm daemon start --db /tmp/other.swarm/swarm.db &
-bun run swarm run ci-gate --db /tmp/other.swarm/swarm.db
-```
-
-This is how parallel swarms coexist on one machine. Always pass `--db` consistently; mixing a CLI invocation with the default db against a non-default daemon will silently target the wrong store.
-
----
-
-## 9. Anti-patterns
-
-- **Don't spam steer.** 5 steering intents in 30s usually means `cancel` + re-enqueue with a better prompt is the right answer. After 5 consecutive aborts without forward progress, the runtime halts with `reason:"abort_loop"` anyway.
-- **Don't tail SSE forever.** The CLI terminates on terminal facts; custom `curl -N` loops must too. Open streams keep the server's goroutine budget busy.
-- **Don't write intents the user didn't ask for.** Steering, pausing, cancelling, or unquarantining without an explicit go-ahead risks losing work or changing external state. Present evidence, let the user decide.
-- **Don't assume a run's store.** If multiple `serve.json` files exist on the machine, confirm which URL you're hitting before writing intents. `curl -fsS "$URL/health" | jq .storePath` echoes the path.
-- **Don't edit `serve.json` by hand.** It's server-owned; the server rewrites it on start. Edit → next start overwrites.
-- **Don't treat `queued` as broken.** No daemon = no dispatch. Check the heartbeat first (§1).
+- **Don't spam steer.** 5 steering intents in 30s usually means `cancel` + re-enqueue with a better prompt. The runtime halts with `reason:"abort_loop"` after 5 consecutive aborts without progress anyway.
+- **Don't tail SSE forever.** Open streams keep the server's goroutine budget busy; the CLI terminates on terminal facts.
+- **Don't write intents the user didn't ask for.** Steering / pausing / cancelling / unquarantining without explicit go-ahead risks losing work or changing external state. Present evidence, let the user decide.
+- **Don't assume one daemon.** Parallel swarms (different `--db`) coexist. `curl -fsS "$URL/health" | jq .storePath` echoes the path you're hitting.
+- **Don't treat `queued` as broken.** No daemon = no dispatch. Check the heartbeat first.
 
 ---
 
 ## Cheat sheet
 
 ```sh
-# Pre-flight
-URL=$(jq -r .url .swarm/serve.json); curl -fsS "$URL/health" | jq .
-sqlite3 -readonly .swarm/swarm.db "SELECT (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS age FROM daemon_lock;"
-bun run swarm providers ls
+# Discover
+URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+curl -fsS "$URL/health" | jq .
 
 # Enqueue + watch
 bun run swarm run change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n change --rawfile s .swarm/workflows/change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
+   -d "$(jq -n --arg n change --rawfile s ~/.swarm/workflows/change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
-   -d "$(jq -n --arg sha "$SHA" --arg in "…" '{workflowSha:$sha, input:$in}')" | jq -r .runId)
+   -d "$(jq -n --arg sha "$SHA" --arg in "…" --arg cwd "$PWD" '{workflowSha:$sha, input:$in, cwd:$cwd}')" | jq -r .runId)
 
 # Status
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
+curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd}'
 
-# Intents
-curl -fsS -X POST "$URL/runs/$RUN/steer"         -d '{"text":"…"}'       -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/pause"         -d '{}'                  -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/cancel"        -d '{"reason":"…"}'      -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/hitl"          -d '{"selected":"a"}'      -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/resume"        -d '{}'                  -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/unquarantine"  -d '{"resolution":"cancel","note":"…"}' -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/priority"      -d '{"newPriority":10}'  -H 'content-type: application/json'
+# Intents (each returns {seq})
+curl -fsS -X POST "$URL/runs/$RUN/steer"        -d '{"text":"…"}'                                  -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/pause"        -d '{}'                                            -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/cancel"       -d '{"reason":"…"}'                                -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/hitl"         -d '{"selected":"a"}'                              -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                                            -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'
 ```
 
 For diagnosis after terminal state, switch to swarm-debug. This skill drives runs forward; that one looks backward.

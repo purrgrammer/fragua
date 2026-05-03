@@ -1,0 +1,40 @@
+# Validator codes
+
+Errors fail validation; warnings are strong hints. Source: `packages/core/src/engine/validator.ts`.
+
+## Errors
+
+| Code | What it means |
+|---|---|
+| E001 | No start node (missing `shape=Mdiamond`). |
+| E002 | Multiple start nodes — pick one. |
+| E003 | No exit node (`shape=Msquare`). |
+| E004 | Edge references a node id that doesn't exist. Typo in source or target. |
+| E005 | `$<id>.output` references an unknown node id. |
+| E006 | Cycle with no reachable exit — the run can't terminate. |
+| E007 | `component` node without valid `fan_in=` (missing or wrong shape). |
+| E008 | `parallelogram` node without `tool_command=`. |
+| E009 | `hexagon` node has no outgoing edges — operator's selection has nowhere to route. |
+| E010 | `hexagon` outgoing edges produce duplicate accelerator keys (e.g. two `[A] …`). |
+| E011 | `retry_target` / `fallback_retry_target` references an undefined node. |
+| E012 | Start node has incoming edges (attractor §11.2). |
+| E013 | Exit node has outgoing edges (attractor §11.2). |
+| E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
+| E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
+
+## Warnings
+
+| Code | What it means |
+|---|---|
+| W001 | Orphan node (no in-edges, not start). Usually a copy/paste leftover. |
+| W002 | Node unreachable from start. Dead code. |
+| W003 | Node has only conditional edges, no `outcome=fail` catch-all. |
+| W004 | Hexagon outgoing edge uses legacy `context.hitl.*` condition. Structured HITL routes by `[K] Label` accelerator (see SKILL §12). |
+| W005 | Duplicate edge. |
+| W006 | Reserved / unused. |
+| W007 | `goal_gate=true` node has no retarget at any level — failure can only halt. |
+| W008 | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
+| W009 | Codergen (`box`) node has empty `prompt` and empty `label`. |
+| W010 | `fidelity` value not recognised — runtime falls back to `compact`; surfaces typos like `compcat`. |
+
+`--strict` makes warnings fail the command. The CLI doesn't expose it yet; the API (`validate(graph, {strict:true})`) does.
