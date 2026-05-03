@@ -55,7 +55,6 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     console.error(chalk.red(`harness: failed to bind HTTP — ${(err as Error).message}`));
     return 1;
   }
-  console.log(chalk.dim(`  http:  ${serverHandle.origin}`));
 
   // 2. Daemon subprocess. `swarm daemon start --db <path>` does its own
   //    setup; we just spawn + monitor.
@@ -85,7 +84,9 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
     lockStore.close();
   }
 
-  console.log(chalk.green(`swarm harness ready`));
+  console.log("");
+  console.log(chalk.green(`swarm harness ready — ${chalk.bold.underline(serverHandle.origin)}`));
+  console.log(chalk.dim(`  api:  ${serverHandle.url}`));
   console.log(chalk.dim("  press Ctrl-C to stop"));
 
   // 5. Block until shutdown.
