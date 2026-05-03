@@ -1,6 +1,6 @@
 // RunPausedNotice — renders a destructive Alert when the run's events
-// carry a `fact.run_paused_provider_error` and the run's status is
-// "paused". Resume/Cancel buttons POST `intent.resume` / `intent.cancel_requested`.
+// carry a `fact.run_paused` and dispatches body / actions on the
+// payload's `reason`.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -11,18 +11,20 @@ import { useDom } from "../setup.ts";
 const EVENTS_URL = "/api/runs/run-1/events.json";
 const RESUME_URL = "/api/runs/run-1/resume";
 const CANCEL_URL = "/api/runs/run-1/cancel";
+const BUDGET_URL = "/api/runs/run-1/budget";
 
 const PROVIDER_ERROR_EVENTS = [
   { seq: 1, type: "fact.run_started", payload: {} },
   { seq: 2, type: "fact.node_started", payload: { nodeId: "implement", iteration: 0 } },
   {
     seq: 3,
-    type: "fact.run_paused_provider_error",
+    type: "fact.run_paused",
     payload: {
+      reason: "provider_error",
       nodeId: "implement",
-      httpStatus: 402,
+      httpStatus: 500,
       provider: "anthropic",
-      errorMessage: "Insufficient balance",
+      errorMessage: "Internal Server Error",
     },
   },
 ];
@@ -38,7 +40,7 @@ describe("RunPausedNotice", () => {
     try {
       const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
       const message = await findByTestId("run-paused-message");
-      expect(message.textContent).toBe("anthropic returned 402 (Insufficient balance)");
+      expect(message.textContent).toBe("anthropic returned 500 (Internal Server Error)");
     } finally {
       restore();
     }
@@ -50,12 +52,13 @@ describe("RunPausedNotice", () => {
         json([
           {
             seq: 1,
-            type: "fact.run_paused_provider_error",
+            type: "fact.run_paused",
             payload: {
+              reason: "provider_error",
               nodeId: "implement",
               httpStatus: null,
               provider: "ppq",
-              errorMessage: '402 "Payment Required"',
+              errorMessage: '503 "Service Unavailable"',
             },
           },
         ]),
@@ -63,7 +66,7 @@ describe("RunPausedNotice", () => {
     try {
       const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
       const message = await findByTestId("run-paused-message");
-      expect(message.textContent).toBe("ppq returned 402 (Payment Required)");
+      expect(message.textContent).toBe("ppq returned 503 (Service Unavailable)");
     } finally {
       restore();
     }
@@ -74,7 +77,7 @@ describe("RunPausedNotice", () => {
       [EVENTS_URL]: () =>
         json([
           ...PROVIDER_ERROR_EVENTS,
-          { seq: 4, type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } },
+          { seq: 4, type: "fact.run_resumed", payload: { fromStatus: "paused" } },
           { seq: 5, type: "fact.run_cancelled", payload: { intentSeq: 4 } },
         ]),
     });
@@ -88,7 +91,7 @@ describe("RunPausedNotice", () => {
     }
   });
 
-  it("renders nothing when no provider-error fact is present (e.g., paused_hitl-only)", async () => {
+  it("renders nothing when no fact.run_paused is present (e.g., paused_hitl-only)", async () => {
     const { restore } = installFetchMock({
       [EVENTS_URL]: () =>
         json([
@@ -112,8 +115,9 @@ describe("RunPausedNotice", () => {
         json([
           {
             seq: 1,
-            type: "fact.run_paused_provider_error",
+            type: "fact.run_paused",
             payload: {
+              reason: "provider_error",
               nodeId: "n",
               httpStatus: null,
               provider: "openai",
@@ -126,6 +130,97 @@ describe("RunPausedNotice", () => {
       const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
       const message = await findByTestId("run-paused-message");
       expect(message.textContent).toBe("openai network error: ECONNRESET");
+    } finally {
+      restore();
+    }
+  });
+
+  it("payment_required reason renders the top-up prompt", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "payment_required",
+              nodeId: "implement",
+              provider: "anthropic",
+              errorMessage: '402 "Payment Required"',
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("anthropic");
+      expect(message.textContent).toContain("payment required");
+    } finally {
+      restore();
+    }
+  });
+
+  it("operator reason renders the operator-pause body", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "operator", nodeId: "implement" },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("operator");
+    } finally {
+      restore();
+    }
+  });
+
+  it("budget reason exposes the Raise & Resume action", async () => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "budget",
+              nodeId: "implement",
+              scope: "run",
+              metric: "cost",
+              limit: 1.0,
+              actual: 1.5,
+            },
+          },
+        ]),
+      [BUDGET_URL]: ({ url, method, init }) => {
+        calls.push({ url, method, body: init?.body });
+        return json({ seq: 4 }, { status: 202 });
+      },
+      [RESUME_URL]: ({ url, method }) => {
+        calls.push({ url, method, body: undefined });
+        return json({ seq: 5 }, { status: 202 });
+      },
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const input = (await findByTestId("run-paused-budget-input")) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "2.5" } });
+      const raiseBtn = (await findByTestId("run-paused-raise-resume")) as HTMLButtonElement;
+      await waitFor(() => {
+        expect(raiseBtn.disabled).toBe(false);
+      });
+      fireEvent.click(raiseBtn);
+      await waitFor(() => {
+        expect(calls.some((c) => c.url === BUDGET_URL && c.method === "POST")).toBe(true);
+        expect(calls.some((c) => c.url === RESUME_URL && c.method === "POST")).toBe(true);
+      });
     } finally {
       restore();
     }

@@ -181,7 +181,7 @@ const SELECT_THREADS_FROM_MESSAGES_SQL = `
     FROM messages m
     JOIN run_state r ON r.run_id = m.run_id
    WHERE m.node_id IS NOT NULL
-     AND r.status IN ('queued','running','paused_hitl','paused_provider_error')
+     AND r.status IN ('queued','running','paused_hitl','paused')
 `;
 
 const SELECT_THREADS_FROM_EVENTS_SQL = `
@@ -191,7 +191,7 @@ const SELECT_THREADS_FROM_EVENTS_SQL = `
     JOIN run_state r ON r.run_id = e.run_id
    WHERE e.type = 'llm.start'
      AND json_extract(e.payload, '$.thread_id') IS NOT NULL
-     AND r.status IN ('queued','running','paused_hitl','paused_provider_error')
+     AND r.status IN ('queued','running','paused_hitl','paused')
 `;
 
 interface ThreadRow {

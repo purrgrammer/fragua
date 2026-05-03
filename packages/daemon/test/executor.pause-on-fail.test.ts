@@ -4,7 +4,7 @@
 // packages/agent/src/backend.ts). The executor's existing wasAborted
 // path then writes fact.node_aborted only — the run stays running —
 // and the next dispatch's fold consumes the pause intent through the
-// normal R4 path, producing fact.run_paused_hitl.
+// normal R4 path, producing fact.run_paused with reason=operator.
 //
 // This test stubs the codergen with a hand-rolled handler that throws
 // AbortError when its signal is tripped. It does NOT exercise the
@@ -16,7 +16,7 @@ import { runOne } from "../src/executor.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("executor — pause mid-dispatch routes through abort-throw + next-fold", () => {
-  test("handler throws AbortError when signal trips → run_paused_hitl, not halted", async () => {
+  test("handler throws AbortError when signal trips → run_paused (operator), not halted", async () => {
     const r = rig({
       dot: `digraph {
         start [shape=Mdiamond];
@@ -81,10 +81,12 @@ describe("executor — pause mid-dispatch routes through abort-throw + next-fold
 
     const events = r.store.getEvents("mid-pause");
     // The abort path emits fact.node_aborted; the next dispatch's fold
-    // turns the pending pause intent into fact.run_paused_hitl.
+    // turns the pending pause intent into fact.run_paused with reason=operator.
     expect(events.some((e) => e.type === "fact.node_aborted")).toBe(true);
-    expect(events.filter((e) => e.type === "fact.run_paused_hitl").length).toBe(1);
+    const pauseFacts = events.filter((e) => e.type === "fact.run_paused");
+    expect(pauseFacts.length).toBe(1);
+    expect((pauseFacts[0]!.payload as { reason: string }).reason).toBe("operator");
     expect(events.filter((e) => e.type === "fact.run_halted").length).toBe(0);
-    expect(r.store.getState("mid-pause")?.status).toBe("paused_hitl");
+    expect(r.store.getState("mid-pause")?.status).toBe("paused");
   });
 });

@@ -404,8 +404,9 @@ describe("GET /runs?status= filter", () => {
       "ppr-1",
       [
         {
-          type: "fact.run_paused_provider_error",
+          type: "fact.run_paused",
           payload: {
+            reason: "provider_error",
             nodeId: "n1",
             httpStatus: 503,
             provider: "anthropic",

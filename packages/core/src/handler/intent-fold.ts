@@ -108,8 +108,7 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
   // executor before this point — but we accept them here defensively so
   // the fold is a total function over RunStatus.
   const isDispatching = runStatus === "queued" || runStatus === "running";
-  const isPaused =
-    runStatus === "paused_hitl" || runStatus === "paused_provider_error" || runStatus === "paused_provider_retry";
+  const isPaused = runStatus === "paused_hitl" || runStatus === "paused" || runStatus === "paused_provider_retry";
 
   for (const ev of intents) {
     applied.push(ev.seq);
@@ -155,6 +154,24 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
       case "intent.priority_adjusted": {
         const p = ev.payload as { newPriority: number };
         priorityEvents.push({ seq: ev.seq, newPriority: p.newPriority });
+        break;
+      }
+      case "intent.budget_adjusted": {
+        // Operator raises a budget ceiling on a paused-budget run. Lands
+        // in `routing.budget_override.<scope>.<metric>`; the next turn-
+        // boundary check in budget-policy.ts reads it before the
+        // graph/node attr.
+        const p = ev.payload as { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number };
+        if (
+          (p.scope === "node" || p.scope === "run") &&
+          (p.metric === "cost" || p.metric === "tokens") &&
+          typeof p.newLimit === "number" &&
+          p.newLimit > 0
+        ) {
+          routingDelta[`budget_override.${p.scope}.${p.metric}`] = p.newLimit;
+        } else {
+          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
+        }
         break;
       }
       case "intent.run_enqueued":

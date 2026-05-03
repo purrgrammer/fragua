@@ -97,10 +97,12 @@ export interface NodeAttrs {
   tool_command?: string;
   /** Per-node cumulative cost ceiling in USD. Cumulative across all
    * iterations of this node within the run. When crossed at a turn
-   * boundary, `budget.stop` fires and the run halts with
-   * `reason: "budget"` (unless `graph.attrs.budget_policy = "warn"`).
-   * Soft `budget.warn` fires once per run when cumulative reaches 80 %
-   * of the ceiling. */
+   * boundary, `budget.stop` fires and one of three things happens:
+   * `"pause"` (default) emits `fact.run_paused{reason:"budget"}` and
+   * waits for `intent.budget_adjusted` + `intent.resume`; `"stop"`
+   * halts with `reason:"budget"`; `"warn"` keeps firing the events
+   * but never halts/pauses. Soft `budget.warn` fires once per run
+   * when cumulative reaches 80 % of the ceiling. */
   max_cost_usd?: number;
   /** Per-node cumulative token ceiling (across input + output + cache).
    * Same enforcement shape as `max_cost_usd`. */
@@ -142,17 +144,23 @@ export interface GraphAttrs {
   model_stylesheet?: string;
   thread_id?: string;
   /** Per-run cost ceiling in USD. Once the run's cumulative cost crosses
-   * this, `budget.stop` fires and the run halts with `reason: "budget"`
-   * (unless `budget_policy = "warn"`). Soft `budget.warn` at 80 % of the
+   * this, `budget.stop` fires and the run pauses (default), halts, or
+   * just warns — see `budget_policy`. Soft `budget.warn` at 80 % of the
    * ceiling, once per run. */
   budget_usd?: number;
   /** Per-run total-token ceiling (input + output + cache). Same
    * enforcement shape as `budget_usd`. */
   budget_tokens?: number;
-  /** Policy when a budget threshold is crossed. `"stop"` (default when
-   * any budget is set) hard-fails the run on first breach; `"warn"`
-   * keeps firing `budget.warn` / `budget.stop` events but never halts. */
-  budget_policy?: "warn" | "stop";
+  /** Policy when a budget threshold is crossed:
+   * - `"pause"` (default): emit `fact.run_paused{reason:"budget"}` and
+   *   wait for the operator to raise the cap (`intent.budget_adjusted`)
+   *   and `intent.resume`. The run's accumulated work is preserved.
+   * - `"stop"`: hard-fail the run on first breach with
+   *   `fact.run_halted{reason:"budget"}`. Use for CI gates that must
+   *   never overspend.
+   * - `"warn"`: keep firing `budget.warn` / `budget.stop` events but
+   *   never halt or pause. */
+  budget_policy?: "warn" | "stop" | "pause";
   [extra: string]: AttrScalar | undefined;
 }
 

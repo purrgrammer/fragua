@@ -144,8 +144,10 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 **Lifecycle states you'll see beyond `running`/`completed`:**
 
 - `queued` — waiting for a daemon dispatch slot.
-- `paused_hitl` — `wait.human` (or operator pause). Resume with `POST /runs/:id/hitl`.
-- `paused_retry` — a node returned `outcome=retry` and the executor scheduled a backoff. The run *frees its concurrency slot* during the wait so other runs aren't blocked. Wake-pending re-queues it once `routing.internal.retry_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action needed unless the resume timer never fires (then check daemon heartbeat).
+- `paused_hitl` — `wait.human` gate yielded. Resume with `POST /runs/:id/hitl`.
+- `paused` — operator-resumable. Reason on the latest `fact.run_paused.payload.reason`: `operator` (operator hit Pause), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
+- `paused_retry` — a node returned `outcome=retry` and the executor scheduled a backoff. The run *frees its concurrency slot* during the wait so other runs aren't blocked. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action needed unless the resume timer never fires (then check daemon heartbeat).
+- `paused_provider_retry` — same shape as `paused_retry` but driven by an auto-retryable provider transport error (408/429/5xx/529/network). Same wake key.
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
 - `halted` / `cancelled` — terminal. See swarm-debug §8 for `reason` codes.
 
@@ -160,12 +162,13 @@ All seven endpoints return `{ seq }` — the sequence number assigned to the int
 | POST | Body | Written intent | Post-condition | When to use |
 |---|---|---|---|---|
 | `/runs/:id/steer` | `{text: "…"}` | `intent.steering_requested` | Handler aborts with `cause:"steer"`; next dispatch sees the steering in the thread. | Push a redirection into a running codergen node without cancelling the run. |
-| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts with `cause:"pause"`; run transitions to `paused_hitl`. | Stop forward progress without losing the run. Resume with `/resume` (use `/hitl` only if a `wait.human` gate is what paused it). |
+| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts with `cause:"pause"`; run transitions to `paused` with `reason:"operator"`. | Stop forward progress without losing the run. Resume with `/resume` (use `/hitl` only if a `wait.human` gate is what paused it). |
 | `/runs/:id/cancel` | `{reason?: "…"}` | `intent.cancel_requested` | Handler aborts with `cause:"cancel"`; terminal `fact.run_cancelled`. | Kill the run. Unrecoverable. |
 | `/runs/:id/hitl` | `{selected: string, note?: string}` | `intent.hitl_input` | Server 400s if `selected` is missing or empty. For a `wait.human` gate: the daemon wakes the run and routes to the outgoing edge whose `[K] Label` accelerator key matches `selected`. | Answer a structured `wait.human` gate (one of the option keys from `fact.run_paused_hitl.payload.options[].key`). |
 | `/runs/:id/resume` | `{note?: string}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued` on the next tick. | Resume an operator-paused run, or wake a `paused_retry` early — when no HITL selection is being supplied. |
 | `/runs/:id/unquarantine` | `{resolution: "treat_as_done"\|"retry"\|"cancel", note?: "…"}` | `intent.unquarantine` | Daemon's next sweep resolves the orphan side effect per `resolution`. | Only when `status='quarantined'`. Decision has external-world consequences — see §6. |
 | `/runs/:id/priority` | `{newPriority: N, note?: "…"}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. | Jump a queued run ahead of the line. |
+| `/runs/:id/budget` | `{scope: "node"\|"run", metric: "cost"\|"tokens", newLimit: N, note?: "…"}` | `intent.budget_adjusted` | Override stored at `routing.budget_override.<scope>.<metric>`; next turn-boundary check uses the new ceiling. Doesn't wake the run on its own — follow up with `/resume`. | Operator raises a budget cap on a `paused{reason:"budget"}` run. The web UI bundles `/budget` + `/resume` in one "Raise & Resume" click. |
 
 ### Steering
 

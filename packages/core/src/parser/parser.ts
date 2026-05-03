@@ -417,7 +417,9 @@ const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied
  * Keys whose value must be one of a closed set of strings. Anything else
  * fails parsing — workflows fail at `POST /workflows` rather than mid-run.
  */
-const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([["budget_policy", new Set(["warn", "stop"])]]);
+const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["budget_policy", new Set(["warn", "stop", "pause"])],
+]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {
   if (BOOLEAN_KEYS.has(key)) {

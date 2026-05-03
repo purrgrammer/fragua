@@ -29,7 +29,7 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   "fact.run_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
-  "fact.run_paused_provider_error",
+  "fact.run_paused",
   "fact.run_resumed",
   "fact.run_cancelled",
   "fact.run_halted",

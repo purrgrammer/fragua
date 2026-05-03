@@ -53,14 +53,14 @@ export interface RunSummary {
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   /** Raw lifecycle status from the store. Used by Inbox and other
    * fine-grained filters that need to distinguish e.g. `paused_hitl`
-   * from `paused_provider_error`. The coarse `status` above is what
-   * the badge renders. Optional because older server builds may omit
-   * it — mirrors the soft-validate pattern below. */
+   * from `paused`. The coarse `status` above is what the badge
+   * renders. Optional because older server builds may omit it —
+   * mirrors the soft-validate pattern below. */
   runStatus?:
     | "queued"
     | "running"
+    | "paused"
     | "paused_hitl"
-    | "paused_provider_error"
     | "paused_provider_retry"
     | "paused_retry"
     | "completed"
@@ -106,14 +106,14 @@ export interface RunDetail {
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   /** Raw lifecycle status from the store. Used by Inbox and other
    * fine-grained filters that need to distinguish e.g. `paused_hitl`
-   * from `paused_provider_error`. The coarse `status` above is what
-   * the badge renders. Optional because older server builds may omit
-   * it — mirrors the soft-validate pattern below. */
+   * from `paused`. The coarse `status` above is what the badge
+   * renders. Optional because older server builds may omit it —
+   * mirrors the soft-validate pattern below. */
   runStatus?:
     | "queued"
     | "running"
+    | "paused"
     | "paused_hitl"
-    | "paused_provider_error"
     | "paused_provider_retry"
     | "paused_retry"
     | "completed"
@@ -496,6 +496,26 @@ export async function resumeRun(id: string): Promise<{ seq: number }> {
 export async function cancelRun(id: string, reason?: string): Promise<{ seq: number }> {
   const body = reason !== undefined ? { reason } : undefined;
   return postJson(`/runs/${encodeURIComponent(id)}/cancel`, body, isAcceptedSeq);
+}
+
+/** Operator raises a budget ceiling on a `paused{reason:"budget"}` run.
+ *  Caller typically follows with `resumeRun(id)` to bundle "Raise & Resume"
+ *  into one click — the protocol keeps the two intents separate so
+ *  `intent.resume` stays naked across all pause reasons. */
+export async function adjustBudget(
+  id: string,
+  scope: "node" | "run",
+  metric: "cost" | "tokens",
+  newLimit: number,
+  note?: string,
+): Promise<{ seq: number }> {
+  const body: { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number; note?: string } = {
+    scope,
+    metric,
+    newLimit,
+  };
+  if (note !== undefined) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/budget`, body, isAcceptedSeq);
 }
 
 // ── Analytics ────────────────────────────────────────────────────────

@@ -174,7 +174,7 @@ describe("SqliteStore — appendFact", () => {
     store.close();
   });
 
-  test("fact.run_paused_provider_error transitions status; fact.run_resumed wakes back to queued", async () => {
+  test("fact.run_paused (payment_required) transitions status; fact.run_resumed wakes back to queued", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const s0 = store.getState(runId)!;
@@ -193,10 +193,10 @@ describe("SqliteStore — appendFact", () => {
       runId,
       [
         {
-          type: "fact.run_paused_provider_error",
+          type: "fact.run_paused",
           payload: {
+            reason: "payment_required",
             nodeId: "a",
-            httpStatus: 402,
             provider: "anthropic",
             errorMessage: "Insufficient balance",
           },
@@ -205,20 +205,16 @@ describe("SqliteStore — appendFact", () => {
       s1.version,
     );
     const paused = store.getState(runId)!;
-    expect(paused.status).toBe("paused_provider_error");
+    expect(paused.status).toBe("paused");
     expect(paused.nodeStartedAt).toBeNull();
 
-    store.appendFact(
-      runId,
-      [{ type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } }],
-      paused.version,
-    );
+    store.appendFact(runId, [{ type: "fact.run_resumed", payload: { fromStatus: "paused" } }], paused.version);
     const resumed = store.getState(runId)!;
     expect(resumed.status).toBe("queued");
     store.close();
   });
 
-  test("fact.run_paused_provider_error accepts httpStatus=null for network errors", async () => {
+  test("fact.run_paused (provider_error) accepts httpStatus=null for network errors", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const s0 = store.getState(runId)!;
@@ -237,13 +233,19 @@ describe("SqliteStore — appendFact", () => {
       runId,
       [
         {
-          type: "fact.run_paused_provider_error",
-          payload: { nodeId: "a", httpStatus: null, provider: "anthropic", errorMessage: "ECONNRESET" },
+          type: "fact.run_paused",
+          payload: {
+            reason: "provider_error",
+            nodeId: "a",
+            httpStatus: null,
+            provider: "anthropic",
+            errorMessage: "ECONNRESET",
+          },
         },
       ],
       s1.version,
     );
-    expect(store.getState(runId)!.status).toBe("paused_provider_error");
+    expect(store.getState(runId)!.status).toBe("paused");
     store.close();
   });
 
@@ -826,7 +828,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     store.close();
   });
 
-  test("paused_provider_error runs are included (resumable thread)", async () => {
+  test("paused (payment_required) runs are included (resumable thread)", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
@@ -847,13 +849,18 @@ describe("SqliteStore — listThreadsWithMessages", () => {
       runId,
       [
         {
-          type: "fact.run_paused_provider_error",
-          payload: { nodeId: "a", httpStatus: 402, provider: "anthropic", errorMessage: "Insufficient balance" },
+          type: "fact.run_paused",
+          payload: {
+            reason: "payment_required",
+            nodeId: "a",
+            provider: "anthropic",
+            errorMessage: "Insufficient balance",
+          },
         },
       ],
       s1.version,
     );
-    expect(store.getState(runId)!.status).toBe("paused_provider_error");
+    expect(store.getState(runId)!.status).toBe("paused");
     const rows = store.listThreadsWithMessages();
     expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);
     store.close();

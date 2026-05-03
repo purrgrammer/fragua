@@ -385,6 +385,41 @@ export function createRoutes(deps: ServerDeps): Hono {
     });
   });
 
+  // Operator raises a budget ceiling on a `paused{reason:"budget"}` run.
+  // Folded into `routing.budget_override.<scope>.<metric>` so the next
+  // turn-boundary check uses the new ceiling. Web bundles a follow-up
+  // `intent.resume` (the "Raise & Resume" click); intents stay separate
+  // at the protocol level so resume is naked across all pause reasons.
+  app.post("/runs/:id/budget", async (c) => {
+    const body = await readJson<{
+      scope?: "node" | "run";
+      metric?: "cost" | "tokens";
+      newLimit?: number;
+      note?: string;
+    }>(c);
+    if (
+      !body ||
+      (body.scope !== "node" && body.scope !== "run") ||
+      (body.metric !== "cost" && body.metric !== "tokens") ||
+      typeof body.newLimit !== "number" ||
+      !Number.isFinite(body.newLimit) ||
+      body.newLimit <= 0
+    ) {
+      return c.json({ error: "scope ∈ {node,run}, metric ∈ {cost,tokens}, newLimit > 0 required" }, 400);
+    }
+    const payload: {
+      scope: "node" | "run";
+      metric: "cost" | "tokens";
+      newLimit: number;
+      note?: string;
+    } = { scope: body.scope, metric: body.metric, newLimit: body.newLimit };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.budget_adjusted",
+      payload,
+    });
+  });
+
   // ─── Reads ──────────────────────────────────────────────────
   //
   // `GET /runs/:id` is served by `storeRunsRoutes` (RunDetail shape).

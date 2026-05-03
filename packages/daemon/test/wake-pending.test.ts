@@ -243,15 +243,20 @@ describe("wakePending — precedence", () => {
   });
 });
 
-describe("wakePending — resume on paused_provider_error", () => {
+describe("wakePending — resume on paused (payment_required)", () => {
   function pauseProvider(r: ReturnType<typeof rig>, runId: string): void {
     const s = r.store.getState(runId)!;
     r.store.appendFact(
       runId,
       [
         {
-          type: "fact.run_paused_provider_error",
-          payload: { nodeId: "start", httpStatus: 402, provider: "anthropic", errorMessage: "Insufficient balance" },
+          type: "fact.run_paused",
+          payload: {
+            reason: "payment_required",
+            nodeId: "start",
+            provider: "anthropic",
+            errorMessage: "Insufficient balance",
+          },
         },
       ],
       s.version,
@@ -262,7 +267,7 @@ describe("wakePending — resume on paused_provider_error", () => {
     const r = rig();
     startRun(r, "rr1");
     pauseProvider(r, "rr1");
-    expect(r.store.getState("rr1")!.status).toBe("paused_provider_error");
+    expect(r.store.getState("rr1")!.status).toBe("paused");
     r.store.appendIntent("rr1", { type: "intent.resume", payload: {} });
     const result = wakePending(r.store);
     expect(result.resumed).toContain("rr1");
@@ -273,7 +278,7 @@ describe("wakePending — resume on paused_provider_error", () => {
       .pop();
     expect(lastFact).toBeDefined();
     const p = lastFact!.payload as { fromStatus: string };
-    expect(p.fromStatus).toBe("paused_provider_error");
+    expect(p.fromStatus).toBe("paused");
     r.store.close();
   });
 
@@ -288,7 +293,7 @@ describe("wakePending — resume on paused_provider_error", () => {
     r.store.close();
   });
 
-  test("intent.cancel_requested on paused_provider_error → cancelled (cancel beats resume)", async () => {
+  test("intent.cancel_requested on paused → cancelled (cancel beats resume)", async () => {
     const r = rig();
     startRun(r, "rr3");
     pauseProvider(r, "rr3");
@@ -319,8 +324,9 @@ describe("wakePending — paused_provider_retry auto-resume", () => {
       runId,
       [
         {
-          type: "fact.run_paused_provider_error",
+          type: "fact.run_paused",
           payload: {
+            reason: "provider_error",
             nodeId: "start",
             httpStatus: 429,
             provider: "stub",

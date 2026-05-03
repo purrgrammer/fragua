@@ -9,21 +9,40 @@
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-/** Lifecycle states for a run. The `paused_provider_error` and
- * `quarantined` states are operator-actionable; the rest are
- * automatic. Mirrored by `run_state.status` (CHECK constraint in
- * schema.sql) and the daemon's intent fold. */
+/** Lifecycle states for a run. `paused`, `paused_hitl`, and
+ * `quarantined` are operator-actionable; the rest are automatic.
+ * Mirrored by `run_state.status` (CHECK constraint in schema.sql)
+ * and the daemon's intent fold.
+ *
+ * `paused` is the unified operator-resumable state. Reason lives on
+ * `fact.run_paused.payload.reason` — see {@link PauseReason}. */
 export type RunStatus =
   | "queued"
   | "running"
+  | "paused"
   | "paused_hitl"
-  | "paused_provider_error"
   | "paused_provider_retry"
   | "paused_retry"
   | "completed"
   | "cancelled"
   | "halted"
   | "quarantined";
+
+/** Reason discriminator on `fact.run_paused`. Each maps to a different
+ * operator action shape:
+ *
+ * - `operator` — operator hit pause from the UI/CLI; resume to continue.
+ * - `provider_error` — non-payment provider HTTP failure (400/401/403/
+ *   404/413/422 manual; 408/429/5xx/network with `policy:"auto-retry"`).
+ *   Operator rotates creds / fixes request; resume retries.
+ * - `payment_required` — 402 from the provider; operator tops up
+ *   off-ledger and resumes.
+ * - `budget` — local cap (`graph.budget_*` / `node.max_*`) hit; operator
+ *   raises the cap via `intent.budget_adjusted` and resumes.
+ *
+ * Adding a new reason (e.g. `max_retries`, `max_loops`, `goal_gate`)
+ * is a one-line addition here plus a UI body branch — no new status. */
+export type PauseReason = "operator" | "provider_error" | "payment_required" | "budget";
 
 /** Who appended the event. Web writes intents (operator actions);
  * daemon writes facts (run lifecycle, observability). */
@@ -62,6 +81,21 @@ export type IntentEvent =
   | {
       type: "intent.priority_adjusted";
       payload: { newPriority: number; note?: string };
+    }
+  | {
+      /** Operator raises a budget ceiling on a `paused{reason:"budget"}`
+       * run. Recorded in `routing.budget_override.<scope>.<metric>` so
+       * the next turn-boundary check sees the new ceiling. Web bundles
+       * `intent.budget_adjusted` followed by `intent.resume` into one
+       * "Raise & Resume" click; intents stay separate at the protocol
+       * level so `intent.resume` remains naked across all pause reasons. */
+      type: "intent.budget_adjusted";
+      payload: {
+        scope: "node" | "run";
+        metric: "cost" | "tokens";
+        newLimit: number;
+        note?: string;
+      };
     };
 
 export type IntentType = IntentEvent["type"];
@@ -108,8 +142,8 @@ export type FactEvent =
         resumeOf:
           | "fresh"
           | "crash"
+          | "paused"
           | "paused_hitl"
-          | "paused_provider_error"
           | "paused_provider_retry"
           | "paused_retry"
           | "quarantined";
@@ -220,21 +254,46 @@ export type FactEvent =
       };
     }
   | {
-      type: "fact.run_paused_provider_error";
-      payload: {
-        nodeId: string;
-        httpStatus: number | null;
-        provider: string;
-        errorMessage: string;
-        /** When set to "auto-retry", the executor scheduled a backoff
-         * window (resumeAt) and the run is in status `paused_provider_retry`
-         * — the wake-pending sweeper auto-resumes once `now >= resumeAt`.
-         * When absent or "manual", the run is in `paused_provider_error`
-         * and waits on `intent.resume`. */
-        policy?: "manual" | "auto-retry";
-        attempt?: number;
-        resumeAt?: number;
-      };
+      /** Unified operator-resumable pause. `payload.reason` discriminates
+       * the operator-action shape; the reducer projects status to
+       * `paused` (manual) or `paused_provider_retry` (only when reason
+       * is `provider_error` and `policy === "auto-retry"`).
+       *
+       * 402 routes to `reason:"payment_required"`; everything else in
+       * the manual provider-error class routes to `reason:"provider_error"`.
+       * Local budget overruns route here when `budget_policy="pause"`
+       * (default); `budget_policy="stop"` keeps terminal halt semantics. */
+      type: "fact.run_paused";
+      payload:
+        | { reason: "operator"; nodeId: string }
+        | {
+            reason: "provider_error";
+            nodeId: string;
+            httpStatus: number | null;
+            provider: string;
+            errorMessage: string;
+            /** When set to "auto-retry", the executor scheduled a backoff
+             * window (resumeAt) and the reducer projects status to
+             * `paused_provider_retry`; wake-pending auto-resumes once
+             * `now >= resumeAt`. Absent / "manual" → `paused`. */
+            policy?: "manual" | "auto-retry";
+            attempt?: number;
+            resumeAt?: number;
+          }
+        | {
+            reason: "payment_required";
+            nodeId: string;
+            provider: string;
+            errorMessage: string;
+          }
+        | {
+            reason: "budget";
+            nodeId: string;
+            scope: "node" | "run";
+            metric: "cost" | "tokens";
+            limit: number;
+            actual: number;
+          };
     }
   | {
       /** Emitted on every auto-retry attempt that fires after a
@@ -457,7 +516,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
-  "fact.run_paused_provider_error",
+  "fact.run_paused",
   "fact.provider_retry_attempted",
   "fact.run_paused_retry",
   "fact.run_resumed",

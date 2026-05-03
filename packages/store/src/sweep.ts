@@ -23,8 +23,8 @@ interface OrphanRow {
  *      idempotencyKey) are transitioned to 'quarantined' with a
  *      fact.run_quarantined event.
  *
- * paused_hitl, paused_provider_error, and quarantined runs are not
- * touched; they are preserved exactly. (A paused_* run with an orphan
+ * paused, paused_hitl, and quarantined runs are not touched; they are
+ * preserved exactly. (A paused_* run with an orphan
  * side-effect intent does flip to quarantined — quarantine takes
  * precedence over pause.)
  */

@@ -333,8 +333,9 @@ export class PiCodergenBackend implements CodergenBackend {
     // Pi-agent-core wires `onResponse` through to its `streamFn`, which in
     // turn forwards to pi-ai's `StreamOptions.onResponse`. The status lets
     // us classify a `stopReason="error"` end as a transport failure (4xx
-    // / 5xx) versus a content/tool failure, and route the run to
-    // `paused_provider_error` instead of an unrecoverable halt.
+    // / 5xx) versus a content/tool failure, and route the run to `paused`
+    // (with reason `provider_error` or `payment_required` for 402) instead
+    // of an unrecoverable halt.
     let lastHttpStatus: number | null = null;
     let lastRetryAfterMs: number | undefined;
     const captureResponse = (response: { status: number; headers: Record<string, string> }) => {

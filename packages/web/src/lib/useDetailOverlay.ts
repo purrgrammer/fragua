@@ -28,7 +28,7 @@ export interface DetailOverlay {
   /** Latest run-level status from `fact.run_*` events; null when no
    * status-changing event has arrived since mount. */
   status: UiStatus | null;
-  /** Raw run status, for distinguishing paused_hitl vs paused_provider_error. */
+  /** Raw run status, for distinguishing paused_hitl vs paused. */
   runStatus: RunDetail["runStatus"] | null;
   /** Node id of the active HITL gate (from fact.run_paused_hitl). */
   hitlNodeId: string | null;
@@ -72,7 +72,7 @@ const DETAIL_TYPES = new Set<string>([
   "fact.run_cancelled",
   "fact.run_quarantined",
   "fact.run_paused_hitl",
-  "fact.run_paused_provider_error",
+  "fact.run_paused",
   "fact.run_resumed",
 ]);
 
@@ -136,8 +136,15 @@ export function foldDetailFrame(
         hitlOptions: options,
       };
     }
-    case "fact.run_paused_provider_error":
-      return { ...prev, status: "paused", runStatus: "paused_provider_error" };
+    case "fact.run_paused": {
+      // Reason carries on the payload; status is `paused` at the wire
+      // level (the reducer projects auto-retry-policy provider errors
+      // to `paused_provider_retry`, but those don't ride this overlay
+      // path — they go through the auto-resume sweep). Operator-driven
+      // pauses (reason:"operator") and budget pauses arrive here too,
+      // so we can't unconditionally route to `paused_hitl`.
+      return { ...prev, status: "paused", runStatus: "paused" };
+    }
     case "fact.run_resumed":
       return { ...prev, status: "running", runStatus: "running", hitlNodeId: null, hitlLabel: null, hitlOptions: null };
     default:

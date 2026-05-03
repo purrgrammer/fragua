@@ -97,7 +97,7 @@ The `events` log is the source of truth for run state; the `run_state` row is th
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused_hitl, paused_provider_error, paused_provider_retry, paused_retry, halted, cancelled, quarantined}
+queued → running → {completed, paused, paused_hitl, paused_provider_retry, paused_retry, halted, cancelled, quarantined}
           ▲            │
           └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
                               or wake-pending timer for paused_provider_retry / paused_retry)
@@ -106,8 +106,8 @@ queued → running → {completed, paused_hitl, paused_provider_error, paused_pr
 - `queued` — enqueued; ready to be claimed
 - `running` — a daemon has claimed it and is dispatching handlers
 - `paused_hitl` — a `wait.human` node yielded; `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`
-- `paused_provider_error` — an LLM provider returned a transport error (402, 429, 5xx, network); awaits `intent.resume`. Re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript
-- `paused_provider_retry` — an LLM provider returned an auto-retryable transport error (408 / 429 / 5xx / 529 / network) and the daemon scheduled an auto-retry timer (`routing.internal.auto_resume_at`), releasing the concurrency slot. Carried by `fact.run_paused_provider_error` with `policy: "auto-retry"`. The wake-pending sweeper emits `fact.run_resumed` once `now >= resumeAt`; the run goes back to `queued` and the same `(nodeId, iteration)` re-dispatches. Operators can short-circuit the wait with `intent.resume`.
+- `paused` — operator-resumable pause carrying a typed `reason` on `fact.run_paused.payload`: `"operator"` (operator hit Pause), `"provider_error"` (400/401/403/404/413/422 from the LLM provider — fix creds/request, then resume), `"payment_required"` (402 — top up off-ledger, then resume), `"budget"` (local cap hit — operator raises via `intent.budget_adjusted`, then resumes). All wake on `intent.resume`; budget pauses optionally consume an `intent.budget_adjusted { scope, metric, newLimit }` first. Re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript.
+- `paused_provider_retry` — an LLM provider returned an auto-retryable transport error (408 / 429 / 5xx / 529 / network) and the daemon scheduled an auto-retry timer (`routing.internal.auto_resume_at`), releasing the concurrency slot. Carried by `fact.run_paused` with `reason: "provider_error", policy: "auto-retry"`. The wake-pending sweeper emits `fact.run_resumed` once `now >= resumeAt`; the run goes back to `queued` and the same `(nodeId, iteration)` re-dispatches. Operators can short-circuit the wait with `intent.resume`.
 - `paused_retry` — a node returned `outcomeStatus="retry"` and the engine scheduled a backoff window per attractor §3.5/§3.6; `fact.run_paused_retry` carries `{ nodeId, attempt, delayMs, resumeAt, maxRetries }`. The wake-pending sweeper emits `fact.run_resumed { fromStatus: "paused_retry" }` once `resumeAt` has elapsed; the run goes back to `queued` and the same node re-dispatches. **The slot is released during the wait — other queued runs can claim while this one sleeps.**
 - `completed` / `halted` / `cancelled` — terminal
 - `quarantined` — startup sweep found an orphan `side_effect_intent` without a matching `done`/`failed`; awaits `intent.unquarantine`
@@ -179,7 +179,7 @@ swarm is *inspired by* the attractor specification (`attractor-spec.md`) — its
 
 ### 6.2 Lifecycle & operator control
 
-- **`paused_provider_error`** (extends attractor §3.1). Attractor models provider transport failures as either retryable-by-policy or terminal FAIL. Real operators need a third state: pause the run with the transcript intact, fix the API key / quota, then `intent.resume`. This state is first-class in swarm.
+- **`paused`** (extends attractor §3.1). Attractor models provider transport failures and budget overruns as either retryable-by-policy or terminal FAIL. Real operators need a recoverable state: pause the run with the transcript intact, fix the API key / quota / budget cap, then `intent.resume`. swarm collapses this into one operator-resumable status with a typed `reason` on `fact.run_paused` (`operator` / `provider_error` / `payment_required` / `budget`). Adding a new operator-fixable failure mode (e.g. future `max_retries`, `max_loops`, `goal_gate`) is one new reason — no schema or status churn.
 - **`quarantined`** (extends attractor §3.1). Attractor handwaves at-most-once for external side effects. swarm emits `side_effect_intent` before any external call and `side_effect_done|failed` after; the startup sweep quarantines runs whose intent has no terminal pair, awaiting `intent.unquarantine`.
 - **`should_retry` shape** (attractor §3.6 underspecified → `non_retryable: boolean` on `Outcome`). Attractor's predicate is described in prose with no interface signature. swarm answers concretely: handlers set `non_retryable=true` on auth/4xx/validation errors at the boundary where the error class is known; the reducer treats it as terminal regardless of status.
 - **Intent / fact dual taxonomy + OCC** (attractor §9.6 → I3). Attractor's observability is observer-only; it has no model of operator interventions. swarm splits `intent.*` (operator-initiated, always-appendable) from `fact.*` (engine-initiated, OCC-checked against `run_state.version`). `steer_requested` / `pause_requested` / `cancel_requested` / `hitl_input` / `unquarantine` / `resume` / `priority_changed` are all intents.

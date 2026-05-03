@@ -33,10 +33,11 @@ export const OutcomeSchema = Type.Object(
     /**
      * Set by the codergen agent boundary when an LLM provider returns a
      * transport error mid-stream (HTTP 402/429/5xx, pre-response network
-     * reset). Routes the run to `paused_provider_error` instead of the
-     * normal fail → halt path, so the operator can `intent.resume` after
-     * fixing the underlying issue. `httpStatus` is `null` for failures
-     * that never reached the provider's response (DNS/TCP).
+     * reset). Routes the run to `paused` (with `fact.run_paused` reason
+     * `provider_error` or `payment_required`) instead of the normal
+     * fail → halt path, so the operator can `intent.resume` after fixing
+     * the underlying issue. `httpStatus` is `null` for failures that
+     * never reached the provider's response (DNS/TCP).
      */
     provider_error: Type.Optional(
       Type.Object({

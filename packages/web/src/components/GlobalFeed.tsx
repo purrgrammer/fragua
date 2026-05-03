@@ -84,10 +84,10 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
   "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
-  "fact.run_paused_provider_error": {
+  "fact.run_paused": {
     Icon: AlertTriangle,
-    verb: "provider error",
-    iconClass: "text-sw-accent-error",
+    verb: "paused — needs operator",
+    iconClass: "text-sw-accent-warn",
     attention: true,
   },
   // Auto-retry chain: emitted once per scheduled retry attempt. Operators
@@ -131,7 +131,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
-    if (fromStatus === "paused_provider_error") return { ...base, verb: "resumed (retry)" };
+    if (fromStatus === "paused") return { ...base, verb: "resumed (retry)" };
     if (fromStatus === "paused_provider_retry") return { ...base, verb: "auto-retry fired" };
     if (fromStatus === "paused_retry") return { ...base, verb: "retry fired" };
   }

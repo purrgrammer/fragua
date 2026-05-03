@@ -691,8 +691,8 @@ export interface IEventReader {
    *    any node id).
    * Terminal runs (completed/cancelled/halted/quarantined) are excluded
    * — their threads will never be dispatched again. Non-terminal pause
-   * states (paused_hitl, paused_provider_error) are included since they
-   * resume to the same thread on `intent.resume`/`intent.hitl_input`.
+   * states (paused, paused_hitl) are included since they resume to the
+   * same thread on `intent.resume`/`intent.hitl_input`.
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 

@@ -1,17 +1,16 @@
 // Wake non-dispatching runs that have actionable pending intents.
 //
-// `paused_hitl`, `paused_provider_error`, and `quarantined` runs are
-// skipped by the executor's dispatch loop, so the normal fold never
-// runs for them. Without this sweep four operator intents would be
-// silently lost:
+// `paused`, `paused_hitl`, and `quarantined` runs are skipped by the
+// executor's dispatch loop, so the normal fold never runs for them.
+// Without this sweep four operator intents would be silently lost:
 //
 //   - `intent.cancel_requested` on any paused or quarantined run:
 //     the run sits forever even though the operator asked to kill it.
 //   - `intent.hitl_input` on `paused_hitl` runs: the run never wakes
 //     to deliver the answer.
-//   - `intent.resume` on `paused_provider_error` (or `paused_hitl`)
-//     runs: the operator asked to retry the dispatch but no fact
-//     transitions the run back to `queued`.
+//   - `intent.resume` on `paused` (any reason) or `paused_hitl` runs:
+//     the operator asked to retry the dispatch but no fact transitions
+//     the run back to `queued`.
 //   - `intent.unquarantine { resolution }` on quarantined runs:
 //     persisted by the server (`POST /runs/:id/unquarantine`) but no
 //     daemon code consumes it.
@@ -55,7 +54,7 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
 function wakeCancel(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused_hitl", "paused_provider_error", "quarantined"],
+    statuses: ["paused", "paused_hitl", "quarantined"],
   });
   for (const row of candidates) {
     const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
@@ -115,7 +114,7 @@ function wakeHitl(store: IEventStore): string[] {
 function wakeResume(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused_hitl", "paused_provider_error", "paused_provider_retry"],
+    statuses: ["paused", "paused_hitl", "paused_provider_retry"],
   });
   for (const row of candidates) {
     const intent = store.getNextPendingIntent(row.runId, "intent.resume", row.lastAppliedSeq);
@@ -153,8 +152,8 @@ function wakeResume(store: IEventStore): string[] {
  * because `fact.node_completed` already pointed nextNode at the
  * retrying node (paused_retry) or the executor still has the run on
  * its current node (paused_provider_retry). Manual-only pause states
- * (`paused_hitl`, `paused_provider_error`, `paused_budget`) ignore
- * this routing key — they wake on `intent.resume` only.
+ * (`paused`, `paused_hitl`) ignore this routing key — they wake on
+ * `intent.resume` only.
  */
 function wakeAutoResume(store: IEventStore, now: () => number): string[] {
   const out: string[] = [];

@@ -4,8 +4,8 @@
 // a configurable httpStatus, drives `runOne`, and asserts the daemon
 // classified the failure correctly: 429/5xx → paused_provider_retry +
 // fact.provider_retry_attempted + auto_resume_at routing patch; 401/422
-// → paused_provider_error (existing manual path); chain past the cap →
-// fact.run_halted with reason="provider_exhausted".
+// → paused (manual path, fact.run_paused with reason="provider_error");
+// chain past the cap → fact.run_halted with reason="provider_exhausted".
 
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -70,7 +70,7 @@ describe("provider auto-retry — pause classification", () => {
     });
 
     const events = r.store.getEvents("auto-429");
-    const pause = events.find((e) => e.type === "fact.run_paused_provider_error");
+    const pause = events.find((e) => e.type === "fact.run_paused");
     expect(pause).toBeDefined();
     const pp = pause!.payload as {
       policy?: string;
@@ -93,7 +93,7 @@ describe("provider auto-retry — pause classification", () => {
     expect(state?.routing["internal.provider_retry.attempt"]).toBe(1);
   });
 
-  test("401 → paused_provider_error (manual; no auto-retry)", async () => {
+  test("401 → paused with reason=provider_error (manual; no auto-retry)", async () => {
     const r = rig({
       dot: `digraph {
         start [shape=Mdiamond];
@@ -120,7 +120,7 @@ describe("provider auto-retry — pause classification", () => {
     });
 
     const events = r.store.getEvents("manual-401");
-    const pause = events.find((e) => e.type === "fact.run_paused_provider_error");
+    const pause = events.find((e) => e.type === "fact.run_paused");
     expect(pause).toBeDefined();
     const pp = pause!.payload as { policy?: string };
     expect(pp.policy).toBeUndefined();
@@ -128,7 +128,7 @@ describe("provider auto-retry — pause classification", () => {
     const attempted = events.filter((e) => e.type === "fact.provider_retry_attempted");
     expect(attempted.length).toBe(0);
 
-    expect(r.store.getState("manual-401")?.status).toBe("paused_provider_error");
+    expect(r.store.getState("manual-401")?.status).toBe("paused");
   });
 
   test("Retry-After header is honoured exactly in the resumeAt timestamp", async () => {
@@ -159,7 +159,7 @@ describe("provider auto-retry — pause classification", () => {
     });
 
     const events = r.store.getEvents("retry-after");
-    const pause = events.find((e) => e.type === "fact.run_paused_provider_error")!;
+    const pause = events.find((e) => e.type === "fact.run_paused")!;
     const resumeAt = (pause.payload as { resumeAt: number }).resumeAt;
     expect(resumeAt - beforeMs).toBeGreaterThanOrEqual(60_000);
     expect(resumeAt - beforeMs).toBeLessThan(60_500); // tight upper bound — provider's exact value

@@ -179,8 +179,8 @@ describe("foldIntents", () => {
     }
   });
 
-  test("steer on paused_provider_error is buffered (treated like paused_hitl)", () => {
-    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_provider_error");
+  test("steer on paused is buffered (treated like paused_hitl)", () => {
+    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.steering).toBe("hint");

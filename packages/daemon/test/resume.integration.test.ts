@@ -378,19 +378,19 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     enqueue(r, "multi");
 
     // intent.pause_requested filed BEFORE the executor starts → the
-    // very first foldIntents pass turns it into fact.run_paused_hitl
-    // before any dispatch runs. activeMs stays at 0 (nothing was
-    // dispatched yet); proves the pause-before-start path doesn't
-    // accidentally accumulate.
+    // very first foldIntents pass turns it into
+    // fact.run_paused{reason:"operator"} before any dispatch runs.
+    // activeMs stays at 0 (nothing was dispatched yet); proves the
+    // pause-before-start path doesn't accidentally accumulate.
     r.store.appendIntent("multi", { type: "intent.pause_requested", payload: {} });
     await runUntilSettled(r.store, r.dispatcher, "multi");
 
     let s = r.store.getState("multi")!;
-    expect(s.status).toBe("paused_hitl");
+    expect(s.status).toBe("paused");
     expect(s.metrics.activeMs).toBe(0);
 
-    // Resume via HITL input — now both nodes actually dispatch.
-    r.store.appendIntent("multi", { type: "intent.hitl_input", payload: { selected: "go" } });
+    // Resume via intent.resume — now both nodes actually dispatch.
+    r.store.appendIntent("multi", { type: "intent.resume", payload: {} });
     wakePending(r.store);
     await runUntilSettled(r.store, r.dispatcher, "multi");
 
@@ -421,7 +421,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     // The pause provenance is preserved on fact.run_resumed.
     const resumed = r.store.getEvents("multi").find((e) => e.type === "fact.run_resumed");
     expect(resumed).not.toBeUndefined();
-    expect((resumed!.payload as { fromStatus: string }).fromStatus).toBe("paused_hitl");
+    expect((resumed!.payload as { fromStatus: string }).fromStatus).toBe("paused");
     r.cleanup();
   });
 

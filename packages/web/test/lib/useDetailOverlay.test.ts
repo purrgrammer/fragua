@@ -131,12 +131,18 @@ describe("foldDetailFrame", () => {
       // provider-error pause must leave hitlOptions null.
       const out = fold(
         EMPTY_DETAIL_OVERLAY,
-        "fact.run_paused_provider_error",
-        { nodeId: "review", provider: "anthropic", httpStatus: 429, errorMessage: "rate limit" },
+        "fact.run_paused",
+        {
+          reason: "provider_error",
+          nodeId: "review",
+          provider: "anthropic",
+          httpStatus: 429,
+          errorMessage: "rate limit",
+        },
         12,
       );
       expect(out.status).toBe("paused");
-      expect(out.runStatus).toBe("paused_provider_error");
+      expect(out.runStatus).toBe("paused");
       expect(out.hitlNodeId).toBeNull();
       expect(out.hitlLabel).toBeNull();
       expect(out.hitlOptions).toBeNull();

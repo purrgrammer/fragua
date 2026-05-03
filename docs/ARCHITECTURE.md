@@ -93,7 +93,7 @@ UPDATE run_state
 -- For each returned run_id, append fact.run_requeued_after_crash
 
 -- (b) Quarantine orphans (see 1.1)
--- (c) paused_hitl, paused_provider_error, and quarantined runs are NOT touched
+-- (c) paused, paused_hitl, and quarantined runs are NOT touched
 ```
 
 Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
@@ -127,16 +127,16 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 
 **Resolution.**
 1. **HTTP-status capture.** `PiCodergenBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
-2. **Handler-result kind `pause_provider`.** The handler-bridge translates the provider-error outcome to `HandlerResult.kind = "pause_provider"` carrying `{ httpStatus, provider, errorMessage }`. The executor commits `fact.run_paused_provider_error { nodeId, httpStatus, provider, errorMessage }` and transitions the run to `paused_provider_error`.
+2. **Handler-result kind `pause_provider`.** The handler-bridge translates the provider-error outcome to `HandlerResult.kind = "pause_provider"` carrying `{ httpStatus, provider, errorMessage }`. The executor commits `fact.run_paused` with `reason: "payment_required"` for 402 (top-up off-ledger) or `reason: "provider_error"` otherwise, and transitions the run to `paused`.
 3. **Generic resume intent.** Operator writes `intent.resume`. The daemon wakes the run back to `queued` and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript loaded as `priorMessages`. Worktree, branch, and message ordering all survive — same path as `paused_hitl` rehydration.
-4. **All transport errors are manual.** Even retryable codes (429, 503) pause; an automatic retry storm against a busted account is worse than waiting for a human. Auto-retry can be added later without changing the fact/intent shape.
+4. **Manual + auto classes.** 408 / 429 / 5xx / 529 / network errors carry `policy: "auto-retry"` on the same fact and project to `paused_provider_retry` for timer-driven wake. 400 / 401 / 402 / 403 / 404 / 413 / 422 stay manual (`paused`); auto-retry against a busted account would burn money.
 
 ### 1.11 Remaining concerns
 - **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]` and halts only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Additive bumps (new column with safe default, new event type, new optional payload field, new status enum value) move CURRENT only — long-paused HITL runs survive the deploy. Breaking bumps move both constants together. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 3`, `CURRENT_SCHEMA_VERSION = 4` (v4 adds `paused_provider_error` status, `fact.run_paused_provider_error`, `intent.resume`). See `packages/store/src/pragmas.ts` for the policy.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 2` (v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -177,7 +177,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','paused_provider_error','paused_provider_retry','paused_retry',
+    'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -331,7 +331,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
-| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused_hitl'\|'paused_provider_error'\|'paused_provider_retry'\|'paused_retry'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
+| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_hitl'\|'paused_provider_retry'\|'paused_retry'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
 | `fact.node_completed` | `nodeId`, `iteration`, `outputRef?`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'` | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
@@ -341,8 +341,8 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
-| `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input; `options` mirrors the outgoing edge set with parsed accelerator keys |
-| `fact.run_paused_provider_error` | `nodeId`, `httpStatus: number\|null`, `provider`, `errorMessage`, `policy?: 'manual'\|'auto-retry'`, `attempt?`, `resumeAt?` | LLM provider returned a transport error mid-stream; transcript intact. `policy="auto-retry"` projects status to `paused_provider_retry` and wake-pending sweeper auto-resumes at `resumeAt`; absent or `"manual"` → `paused_provider_error` (operator must `intent.resume`) |
+| `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input on a workflow `wait.human` node; `options` mirrors the outgoing edge set with parsed accelerator keys |
+| `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'`, `nodeId`, plus reason-specific fields. `provider_error`: `httpStatus`, `provider`, `errorMessage`, `policy?`, `attempt?`, `resumeAt?`. `payment_required`: `provider`, `errorMessage`. `budget`: `scope`, `metric`, `limit`, `actual`. | Unified operator-resumable pause. `reason="provider_error"` with `policy="auto-retry"` projects status to `paused_provider_retry` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, or `intent.budget_adjusted` + `intent.resume` for budget reason) |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Handler returned `outcomeStatus="retry"`; concurrency slot released for the backoff window. Wake-pending sweeper re-queues at `resumeAt` |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
@@ -717,7 +717,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
   while (!shutdownSignal.aborted) {
     const state = store.getState(runId);
-    if (!state || isTerminal(state.status) || state.status === "paused_hitl" || state.status === "paused_provider_error" || state.status === "paused_provider_retry" || state.status === "paused_retry" || state.status === "quarantined") return;
+    if (!state || isTerminal(state.status) || state.status === "paused" || state.status === "paused_hitl" || state.status === "paused_provider_retry" || state.status === "paused_retry" || state.status === "quarantined") return;
 
     if (state.schema_version !== CURRENT_SCHEMA_VERSION) {
       store.appendFact(runId, [haltFact("schema_drift")], state.version);

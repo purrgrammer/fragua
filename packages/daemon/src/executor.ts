@@ -338,8 +338,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         state.status === "completed" ||
         state.status === "cancelled" ||
         state.status === "halted" ||
+        state.status === "paused" ||
         state.status === "paused_hitl" ||
-        state.status === "paused_provider_error" ||
         state.status === "paused_provider_retry" ||
         state.status === "paused_retry" ||
         state.status === "quarantined"
@@ -388,11 +388,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           state.version,
           [
             {
-              type: "fact.run_paused_hitl",
+              type: "fact.run_paused",
               payload: {
+                reason: "operator",
                 nodeId: state.currentNode ?? "",
-                label: "Paused by operator",
-                options: [],
               },
             },
           ],
@@ -876,6 +875,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // On warn-only, prepend the warn event(s) to observability and let
       // the transition continue.
       let budgetWarnedTags: readonly string[] = [];
+      let budgetPause: { scope: "node" | "run"; metric: "cost" | "tokens"; limit: number; actual: number } | undefined;
       if (result.kind === "transition") {
         const graph = graphFor(state.workflowSha);
         const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
@@ -884,6 +884,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
         const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
         const alreadyWarned = readBudgetWarned(state.routing);
+        const overrides = readBudgetOverrides(state.routing);
         const decisionBudget = evaluateBudget({
           graphAttrs: graph?.attrs ?? {},
           ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
@@ -893,6 +894,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           nodeCumulativeCostUsd: priorNodeBucket.costUsd + turnCost,
           nodeCumulativeTokens: priorNodeBucket.tokens + turnFresh,
           alreadyWarned,
+          ...(overrides !== undefined ? { overrides } : {}),
         });
         for (const ev of decisionBudget.events) {
           observability.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
@@ -904,6 +906,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             reason: "budget",
             ...(decisionBudget.haltReason !== undefined ? { detail: decisionBudget.haltReason } : {}),
           };
+        } else if (decisionBudget.pauseBreach !== undefined) {
+          budgetPause = decisionBudget.pauseBreach;
         }
       }
 
@@ -1105,11 +1109,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         if (swapped) {
           facts = facts.filter((f) => !swapTypes.has(f.type));
           facts.push({
-            type: "fact.run_paused_hitl",
+            type: "fact.run_paused",
             payload: {
+              reason: "operator",
               nodeId: state.currentNode ?? "",
-              label: "Paused by operator",
-              options: [],
             },
           });
         }
@@ -1128,11 +1131,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
       }
 
-      // Provider exhausted: swap fact.run_paused_provider_error for a
-      // terminal halt with reason="provider_exhausted". Carry the attempt
-      // count + cap-reason in detail for post-mortem.
+      // Provider exhausted: swap fact.run_paused for a terminal halt with
+      // reason="provider_exhausted". Carry the attempt count + cap-reason
+      // in detail for post-mortem.
       if (providerExhausted !== undefined) {
-        facts = facts.filter((f) => f.type !== "fact.run_paused_provider_error");
+        facts = facts.filter((f) => f.type !== "fact.run_paused");
         facts.push({
           type: "fact.run_halted",
           payload: {
@@ -1142,14 +1145,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
       }
 
-      // Provider auto-retry: extend the existing fact.run_paused_provider_error
-      // payload with policy + attempt + resumeAt so the reducer projects
-      // status to `paused_provider_retry` and the wake-pending sweeper
-      // auto-resumes once `resumeAt` has elapsed. The chain is recorded
-      // separately via fact.provider_retry_attempted (one per attempt).
+      // Provider auto-retry: extend the existing fact.run_paused payload
+      // (which carries reason="provider_error") with policy + attempt +
+      // resumeAt so the reducer projects status to `paused_provider_retry`
+      // and the wake-pending sweeper auto-resumes once `resumeAt` has
+      // elapsed. The chain is recorded separately via
+      // fact.provider_retry_attempted (one per attempt).
       if (providerRetryDecision?.kind === "auto-retry") {
         for (const f of facts) {
-          if (f.type === "fact.run_paused_provider_error") {
+          if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
             f.payload.policy = "auto-retry";
             f.payload.attempt = providerRetryDecision.attempt;
             f.payload.resumeAt = providerRetryDecision.resumeAt;
@@ -1163,6 +1167,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             attempt: providerRetryDecision.attempt,
             httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
             delayMs: providerRetryDecision.delayMs,
+          },
+        });
+      }
+
+      // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"}
+      // so the run releases its slot and waits for `intent.budget_adjusted`
+      // + `intent.resume`. node_completed is preserved (metrics + the
+      // nextNode routing fact).
+      if (budgetPause !== undefined) {
+        facts = facts.filter((f) => f.type !== "fact.node_started");
+        facts.push({
+          type: "fact.run_paused",
+          payload: {
+            reason: "budget",
+            nodeId: state.currentNode ?? "",
+            scope: budgetPause.scope,
+            metric: budgetPause.metric,
+            limit: budgetPause.limit,
+            actual: budgetPause.actual,
           },
         });
       }
@@ -1383,14 +1406,7 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-type ResumeOf =
-  | "fresh"
-  | "crash"
-  | "paused_hitl"
-  | "paused_provider_error"
-  | "paused_provider_retry"
-  | "paused_retry"
-  | "quarantined";
+type ResumeOf = "fresh" | "crash" | "paused" | "paused_hitl" | "paused_provider_retry" | "paused_retry" | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
  * resumeOf field. Walks recent facts looking for the one that flipped
@@ -1412,8 +1428,8 @@ function deriveResumeOf(
     if (e.type === "fact.run_resumed") {
       const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;
       if (
+        fs === "paused" ||
         fs === "paused_hitl" ||
-        fs === "paused_provider_error" ||
         fs === "paused_provider_retry" ||
         fs === "paused_retry" ||
         fs === "quarantined"
@@ -1438,6 +1454,33 @@ function readBudgetWarned(routing: Record<string, unknown>): ReadonlySet<string>
   if (!Array.isArray(v)) return new Set();
   const out = new Set<string>();
   for (const item of v) if (typeof item === "string") out.add(item);
+  return out;
+}
+
+/** Read operator-supplied budget overrides from `routing.budget_override.<scope>.<metric>`
+ * (folded by intent-fold from `intent.budget_adjusted`). Returns undefined when
+ * no overrides are set; the budget policy falls back to graph/node attrs. */
+function readBudgetOverrides(routing: Record<string, unknown>):
+  | {
+      run?: { cost?: number; tokens?: number };
+      node?: { cost?: number; tokens?: number };
+    }
+  | undefined {
+  const run: { cost?: number; tokens?: number } = {};
+  const node: { cost?: number; tokens?: number } = {};
+  for (const [k, v] of Object.entries(routing)) {
+    if (typeof v !== "number") continue;
+    if (k === "budget_override.run.cost") run.cost = v;
+    else if (k === "budget_override.run.tokens") run.tokens = v;
+    else if (k === "budget_override.node.cost") node.cost = v;
+    else if (k === "budget_override.node.tokens") node.tokens = v;
+  }
+  const hasRun = run.cost !== undefined || run.tokens !== undefined;
+  const hasNode = node.cost !== undefined || node.tokens !== undefined;
+  if (!hasRun && !hasNode) return undefined;
+  const out: { run?: { cost?: number; tokens?: number }; node?: { cost?: number; tokens?: number } } = {};
+  if (hasRun) out.run = run;
+  if (hasNode) out.node = node;
   return out;
 }
 

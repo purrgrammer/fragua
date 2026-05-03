@@ -62,7 +62,7 @@ describe("evaluateBudget", () => {
     expect(d.newlyWarned).toEqual([]);
   });
 
-  test("ceiling crossed with default policy → stop event + halt", () => {
+  test("ceiling crossed with default policy='pause' → stop event + pauseBreach", () => {
     const d = evaluateBudget(
       input({
         graphAttrs: { budget_usd: 1.0 } as GraphAttrs,
@@ -71,8 +71,22 @@ describe("evaluateBudget", () => {
     );
     expect(d.events).toHaveLength(1);
     expect(d.events[0]?.type).toBe("budget.stop");
+    expect(d.shouldHalt).toBe(false);
+    expect(d.pauseBreach).toEqual({ scope: "run", metric: "cost", limit: 1.0, actual: 1.5 });
+  });
+
+  test("ceiling crossed with explicit policy='stop' → stop event + halt", () => {
+    const d = evaluateBudget(
+      input({
+        graphAttrs: { budget_usd: 1.0, budget_policy: "stop" } as GraphAttrs,
+        cumulativeCostUsd: 1.5,
+      }),
+    );
+    expect(d.events).toHaveLength(1);
+    expect(d.events[0]?.type).toBe("budget.stop");
     expect(d.shouldHalt).toBe(true);
     expect(d.haltReason).toMatch(/run cost budget exhausted/);
+    expect(d.pauseBreach).toBeUndefined();
   });
 
   test("ceiling crossed with policy='warn' → stop event but no halt", () => {
@@ -97,7 +111,7 @@ describe("evaluateBudget", () => {
     expect(d.events).toHaveLength(0);
   });
 
-  test("per-node cost breach → stop with caller_node_id", () => {
+  test("per-node cost breach → stop with caller_node_id (default policy pauses)", () => {
     const d = evaluateBudget(
       input({
         completedNodeId: "expensive-node",
@@ -109,10 +123,11 @@ describe("evaluateBudget", () => {
     expect(d.events[0]?.type).toBe("budget.stop");
     expect((d.events[0]?.payload as { scope: string }).scope).toBe("node");
     expect((d.events[0]?.payload as { caller_node_id: string }).caller_node_id).toBe("expensive-node");
-    expect(d.shouldHalt).toBe(true);
+    expect(d.shouldHalt).toBe(false);
+    expect(d.pauseBreach).toEqual({ scope: "node", metric: "cost", limit: 0.5, actual: 0.6 });
   });
 
-  test("per-node tokens breach", () => {
+  test("per-node tokens breach (default policy pauses)", () => {
     const d = evaluateBudget(
       input({
         completedNodeAttrs: { max_tokens: 1000 } as NodeAttrs,
@@ -121,7 +136,8 @@ describe("evaluateBudget", () => {
     );
     expect(d.events).toHaveLength(1);
     expect((d.events[0]?.payload as { scope: string; metric: string }).metric).toBe("tokens");
-    expect(d.shouldHalt).toBe(true);
+    expect(d.shouldHalt).toBe(false);
+    expect(d.pauseBreach).toEqual({ scope: "node", metric: "tokens", limit: 1000, actual: 1500 });
   });
 
   test("run-level cost breach takes precedence over node-level token breach", () => {

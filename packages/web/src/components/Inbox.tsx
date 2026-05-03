@@ -1,9 +1,10 @@
 // Inbox — runs that need operator attention.
 //
-// "Attention" is anything in `paused_hitl` (awaiting human input),
-// `paused_provider_error` (provider failed mid-run, retry/skip needed),
-// or `quarantined` (sweep marked the run unreachable). `halted` is
-// terminal, `requeued_after_crash` self-heals; both belong in Feed only.
+// "Attention" is anything in `paused_hitl` (awaiting input on a
+// wait.human gate), `paused` (operator-resumable: provider error,
+// payment required, budget hit, or operator pause), or `quarantined`
+// (sweep marked the run unreachable). `halted` is terminal,
+// `requeued_after_crash` self-heals; both belong in Feed only.
 //
 // Sort: oldest-first. The metaphor is an inbox — we want neglect to
 // surface to the top, not recency.
@@ -34,7 +35,7 @@ import { Skeleton } from "./ui/skeleton.tsx";
  * queryKey reference stays stable across renders. */
 const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
   "paused_hitl",
-  "paused_provider_error",
+  "paused",
   "quarantined",
 ];
 
@@ -54,11 +55,11 @@ const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | und
     iconClass: "text-sw-accent-human",
     borderVar: "var(--sw-accent-human)",
   },
-  paused_provider_error: {
+  paused: {
     Icon: AlertTriangle,
-    label: "provider error",
-    iconClass: "text-sw-accent-error",
-    borderVar: "var(--sw-accent-error)",
+    label: "needs operator",
+    iconClass: "text-sw-accent-warn",
+    borderVar: "var(--sw-accent-warn)",
   },
   quarantined: {
     Icon: ShieldAlert,
@@ -71,7 +72,7 @@ const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | und
   // compile-time decision here. paused_provider_retry and paused_retry
   // are auto-resuming on a timer (no operator action needed); the
   // operator only sees them in the inbox if the auto-retry chain
-  // exhausts and transitions to halted/paused_provider_error.
+  // exhausts and transitions to halted/paused.
   queued: undefined,
   running: undefined,
   completed: undefined,

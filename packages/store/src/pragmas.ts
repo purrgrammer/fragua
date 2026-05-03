@@ -1,12 +1,12 @@
 import type { Database } from "bun:sqlite";
 
 /** Schema version this code emits for new DBs and pins on new runs. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /**
- * Lowest schema version this daemon can resume. Pre-release: fresh DB
- * only. No resumability across breaking changes — bump both constants
- * together and delete `.swarm/swarm.db` on deploy.
+ * Lowest schema version `migrate()` knows how to walk forward from.
+ * Step-deltas live in `migrations.ts` keyed by target version. Bump
+ * this only if older versions are dropped from the migration map.
  */
 export const MIN_COMPATIBLE_SCHEMA_VERSION = 1;
 

@@ -120,12 +120,14 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.nodeStartedAt = null;
       return next;
     }
-    case "fact.run_paused_provider_error": {
+    case "fact.run_paused": {
       closeDispatchInterval(next, now);
-      // policy="auto-retry" → paused_provider_retry (wake-pending sweep
-      // auto-resumes once `auto_resume_at` is reached). Manual / absent
-      // policy → paused_provider_error (operator must intent.resume).
-      next.status = fact.payload.policy === "auto-retry" ? "paused_provider_retry" : "paused_provider_error";
+      // Only `provider_error` carries `policy`. Auto-retry policy →
+      // paused_provider_retry (wake-pending auto-resumes once
+      // `auto_resume_at` elapses). Everything else → paused (operator
+      // must intent.resume).
+      const policy = fact.payload.reason === "provider_error" ? fact.payload.policy : undefined;
+      next.status = policy === "auto-retry" ? "paused_provider_retry" : "paused";
       next.nodeStartedAt = null;
       return next;
     }
@@ -139,12 +141,13 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_resumed": {
-      // Resumed from paused_hitl, paused_provider_error, or quarantined.
-      // Go back to queued so the executor's claim loop picks the run up
-      // and re-dispatches the same node — paused_provider_error preserves
-      // the same iteration since the prior LLM call never produced output.
-      // dispatchStartedAt is already null (cleared by the prior pause); the
-      // next fact.dispatch_started will set it fresh.
+      // Resumed from paused, paused_hitl, or quarantined. Go back to
+      // queued so the executor's claim loop picks the run up and
+      // re-dispatches the same node — `paused` (provider-error /
+      // payment-required reasons) preserves the same iteration since
+      // the prior LLM call never produced output. `dispatchStartedAt`
+      // is already null (cleared by the prior pause); the next
+      // fact.dispatch_started will set it fresh.
       next.status = "queued";
       next.nodeStartedAt = null;
       next.readyAt = now;

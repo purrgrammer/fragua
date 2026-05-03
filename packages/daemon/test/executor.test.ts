@@ -937,15 +937,15 @@ describe("executor — provider pause and resume", () => {
 
     // First drain: paused on s3.
     const pausedState = r.store.getState("ms-1")!;
-    expect(pausedState.status).toBe("paused_provider_error");
+    expect(pausedState.status).toBe("paused");
     expect(pausedState.currentNode).toBe("s3");
 
     const events = r.store.getEvents("ms-1");
-    const pausedFact = events.find((e) => e.type === "fact.run_paused_provider_error");
+    const pausedFact = events.find((e) => e.type === "fact.run_paused");
     expect(pausedFact).toBeDefined();
-    const p = pausedFact!.payload as { nodeId: string; httpStatus: number; provider: string; errorMessage: string };
+    const p = pausedFact!.payload as { reason: string; nodeId: string; provider: string; errorMessage: string };
+    expect(p.reason).toBe("payment_required");
     expect(p.nodeId).toBe("s3");
-    expect(p.httpStatus).toBe(402);
     expect(p.provider).toBe("anthropic");
     expect(p.errorMessage).toBe("Insufficient balance");
 
@@ -963,7 +963,7 @@ describe("executor — provider pause and resume", () => {
     const resumedFact = r.store.getEvents("ms-1").find((e) => e.type === "fact.run_resumed");
     expect(resumedFact).toBeDefined();
     const rf = resumedFact!.payload as { fromStatus: string };
-    expect(rf.fromStatus).toBe("paused_provider_error");
+    expect(rf.fromStatus).toBe("paused");
 
     // Drain again: re-dispatches s3 (only), completes.
     await drain(r, "ms-1");
@@ -1080,7 +1080,7 @@ describe("executor — provider pause and resume", () => {
 
     enqueue(r, "ms-2", "start");
     await drain(r, "ms-2");
-    expect(r.store.getState("ms-2")!.status).toBe("paused_provider_error");
+    expect(r.store.getState("ms-2")!.status).toBe("paused");
 
     // Snapshot messages at pause time. Both s1 and s2 wrote one each;
     // s3 wrote zero (it paused before producing anything).

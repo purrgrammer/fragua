@@ -165,8 +165,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
 const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "queued",
   "running",
+  "paused",
   "paused_hitl",
-  "paused_provider_error",
   "paused_provider_retry",
   "paused_retry",
   "completed",

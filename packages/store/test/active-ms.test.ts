@@ -34,10 +34,7 @@ const RUN_STARTED: FactEvent = {
   payload: { workflowSha: "wf", schemaVersion: 1, startNode: "a" },
 };
 
-function dispatchStarted(
-  now: number,
-  resumeOf: "fresh" | "crash" | "paused_hitl" | "paused_provider_error",
-): FactEvent {
+function dispatchStarted(now: number, resumeOf: "fresh" | "crash" | "paused_hitl" | "paused"): FactEvent {
   // `now` is a label only — the reducer reads its own `now` arg. Kept
   // here so call sites read like the timeline.
   void now;
@@ -166,7 +163,7 @@ describe("dispatch interval bookkeeping", () => {
     //   t=1000  dispatch_started                  (span 2 begins)
     //   t=1500  requeued_after_crash @1490        (+490 → activeMs=690)
     //   t=2000  dispatch_started                  (span 3 begins)
-    //   t=2200  paused_provider_error             (+200 → activeMs=890)
+    //   t=2200  paused (provider_error)           (+200 → activeMs=890)
     //   t=2900  resumed
     //   t=3000  dispatch_started                  (span 4 begins)
     //   t=3500  requeued_after_crash @3490        (+490 → activeMs=1380)
@@ -186,15 +183,15 @@ describe("dispatch interval bookkeeping", () => {
     s = applyFact(
       s,
       {
-        type: "fact.run_paused_provider_error",
-        payload: { nodeId: "a", httpStatus: 500, provider: "p", errorMessage: "" },
+        type: "fact.run_paused",
+        payload: { reason: "provider_error", nodeId: "a", httpStatus: 500, provider: "p", errorMessage: "" },
       },
       2200,
     );
     expect(s.metrics.activeMs).toBe(890);
 
-    s = applyFact(s, { type: "fact.run_resumed", payload: { fromStatus: "paused_provider_error" } }, 2900);
-    s = applyFact(s, dispatchStarted(3000, "paused_provider_error"), 3000);
+    s = applyFact(s, { type: "fact.run_resumed", payload: { fromStatus: "paused" } }, 2900);
+    s = applyFact(s, dispatchStarted(3000, "paused"), 3000);
     s = applyFact(s, runRequeued(3490), 3500);
     expect(s.metrics.activeMs).toBe(1380);
 

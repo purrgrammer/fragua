@@ -21,8 +21,8 @@ export function mapStatus(status: RunStatus): UiStatus {
       return "running";
     case "queued":
       return "queued";
+    case "paused":
     case "paused_hitl":
-    case "paused_provider_error":
     case "paused_provider_retry":
     case "paused_retry":
       return "paused";

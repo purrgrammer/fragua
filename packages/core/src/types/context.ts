@@ -23,8 +23,8 @@ export function retryCountKey(nodeId: string): string {
  * run with auto-resume becomes wake-eligible. Used by both engine
  * `paused_retry` (set when emitting `fact.run_paused_retry`) and
  * provider auto-retry `paused_provider_retry` (set when emitting
- * `fact.run_paused_provider_error` with `policy: "auto-retry"`). Read
- * by `wakeAutoResume` (daemon wake-pending). Cleared implicitly when
- * the run leaves an auto-paused state — the routing key persists but
- * is ignored once status moves on. */
+ * `fact.run_paused` with `reason: "provider_error", policy: "auto-retry"`).
+ * Read by `wakeAutoResume` (daemon wake-pending). Cleared implicitly
+ * when the run leaves an auto-paused state — the routing key persists
+ * but is ignored once status moves on. */
 export const AUTO_RESUME_AT_KEY = "internal.auto_resume_at";

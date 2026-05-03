@@ -1,6 +1,9 @@
--- swarm event store schema — Revision 1
+-- swarm event store schema — Revision 2
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
+-- v1 → v2: pause unification. `paused_provider_error` collapses into the
+-- generic `paused` status; reason lives on `fact.run_paused.payload.reason`.
+-- See `migrations.ts` MIGRATION_002 for the in-place rewrite.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -25,7 +28,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused_hitl','paused_provider_error','paused_provider_retry','paused_retry',
+    'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,

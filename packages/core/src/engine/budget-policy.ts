@@ -14,8 +14,11 @@
 // per turn. Warns can stack (one per (scope, metric) per run, then
 // silenced via the `__budget_warned` routing tag).
 //
-// `budget_policy = "warn"` on the graph attrs makes stops non-blocking:
-// the breach still emits `budget.stop` but `shouldHalt` is false.
+// `budget_policy` decides what happens on first breach:
+//   "pause" (default) — `shouldPause` set; executor emits
+//     `fact.run_paused{reason:"budget", scope, metric, limit, actual}`.
+//   "stop"            — `shouldHalt` set; executor emits the budget halt.
+//   "warn"            — non-blocking; just the events fire.
 
 import type { ObservabilityEvent } from "@swarm/store";
 import type { GraphAttrs, NodeAttrs } from "../types/graph.ts";
@@ -39,15 +42,35 @@ export interface BudgetInput {
   /** Tags from `run_state.routing.__budget_warned`. Used to suppress
    * repeat warns for the same (scope, metric). */
   alreadyWarned: ReadonlySet<string>;
+  /** Operator-supplied ceiling overrides folded from `intent.budget_adjusted`,
+   * read from `run_state.routing.budget_override.<scope>.<metric>`. When
+   * set for a (scope, metric), replaces the corresponding `graph.attrs.budget_*`
+   * / `node.attrs.max_*` ceiling for this turn's evaluation. */
+  overrides?: {
+    run?: { cost?: number; tokens?: number };
+    node?: { cost?: number; tokens?: number };
+  };
 }
 
 export interface BudgetDecision {
   /** Observability events to emit (`budget.warn` and/or `budget.stop`). */
   events: ObservabilityEvent[];
-  /** Halt the run with reason="budget" when true. */
+  /** Halt the run with reason="budget" when true. Set only when
+   * `budget_policy="stop"` and a breach fired. */
   shouldHalt: boolean;
   /** Populates `fact.run_halted.detail`. */
   haltReason?: string;
+  /** Pause the run with `fact.run_paused{reason:"budget"}` when set.
+   * Mutually exclusive with `shouldHalt` — `budget_policy="pause"` (the
+   * default) breaches go here; `budget_policy="stop"` breaches go to
+   * `shouldHalt`. The payload is the breach detail the executor needs
+   * to construct the fact. */
+  pauseBreach?: {
+    scope: "run" | "node";
+    metric: "cost" | "tokens";
+    limit: number;
+    actual: number;
+  };
   /** Tags to merge into `routing.__budget_warned` so the same warn doesn't
    * fire twice on later turns. Empty when nothing fired. */
   newlyWarned: string[];
@@ -71,15 +94,16 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
     return { events: [], shouldHalt: false, newlyWarned: [] };
   }
 
-  const policy = input.graphAttrs.budget_policy ?? "stop";
+  const policy = input.graphAttrs.budget_policy ?? "pause";
   const events: ObservabilityEvent[] = [];
   const newlyWarned: string[] = [];
   let stopFired = false;
   let haltReason: string | undefined;
+  let firstBreach: Check | undefined;
 
   for (const c of checks) {
     if (c.cumulative >= c.ceiling) {
-      // Stop: first breach wins for the halt; later breaches don't pile on.
+      // Stop: first breach wins; later breaches don't pile on.
       if (stopFired) continue;
       events.push({
         type: "budget.stop",
@@ -95,6 +119,7 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
         },
       });
       stopFired = true;
+      firstBreach = c;
       haltReason = stopReason(c, input.completedNodeId);
     } else if (c.cumulative >= c.ceiling * BUDGET_WARN_RATIO && !input.alreadyWarned.has(c.tag)) {
       // Warn: once per (scope, metric) per run.
@@ -116,54 +141,69 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
     }
   }
 
-  const shouldHalt = stopFired && policy !== "warn";
+  const shouldHalt = stopFired && policy === "stop";
+  const shouldPause = stopFired && policy === "pause";
   const decision: BudgetDecision = {
     events,
     shouldHalt,
     newlyWarned,
   };
   if (shouldHalt && haltReason !== undefined) decision.haltReason = haltReason;
+  if (shouldPause && firstBreach !== undefined) {
+    decision.pauseBreach = {
+      scope: firstBreach.scope,
+      metric: firstBreach.metric,
+      limit: firstBreach.ceiling,
+      actual: firstBreach.cumulative,
+    };
+  }
   return decision;
 }
 
 function collectChecks(input: BudgetInput): Check[] {
   const out: Check[] = [];
-  // Run-level (priority 1, 2)
-  if (typeof input.graphAttrs.budget_usd === "number") {
+  const ovRun = input.overrides?.run;
+  const ovNode = input.overrides?.node;
+  // Run-level (priority 1, 2). Override wins over graph.attrs.
+  const runCostCeiling = ovRun?.cost ?? input.graphAttrs.budget_usd;
+  if (typeof runCostCeiling === "number") {
     out.push({
       scope: "run",
       metric: "cost",
       cumulative: input.cumulativeCostUsd,
-      ceiling: input.graphAttrs.budget_usd,
+      ceiling: runCostCeiling,
       tag: "run:cost",
     });
   }
-  if (typeof input.graphAttrs.budget_tokens === "number") {
+  const runTokensCeiling = ovRun?.tokens ?? input.graphAttrs.budget_tokens;
+  if (typeof runTokensCeiling === "number") {
     out.push({
       scope: "run",
       metric: "tokens",
       cumulative: input.cumulativeTokens,
-      ceiling: input.graphAttrs.budget_tokens,
+      ceiling: runTokensCeiling,
       tag: "run:tokens",
     });
   }
-  // Node-level (priority 3, 4)
+  // Node-level (priority 3, 4). Override wins over node.attrs.
   const nodeAttrs = input.completedNodeAttrs;
-  if (nodeAttrs && typeof nodeAttrs.max_cost_usd === "number") {
+  const nodeCostCeiling = ovNode?.cost ?? nodeAttrs?.max_cost_usd;
+  if (typeof nodeCostCeiling === "number") {
     out.push({
       scope: "node",
       metric: "cost",
       cumulative: input.nodeCumulativeCostUsd,
-      ceiling: nodeAttrs.max_cost_usd,
+      ceiling: nodeCostCeiling,
       tag: `node:${input.completedNodeId}:cost`,
     });
   }
-  if (nodeAttrs && typeof nodeAttrs.max_tokens === "number") {
+  const nodeTokensCeiling = ovNode?.tokens ?? nodeAttrs?.max_tokens;
+  if (typeof nodeTokensCeiling === "number") {
     out.push({
       scope: "node",
       metric: "tokens",
       cumulative: input.nodeCumulativeTokens,
-      ceiling: nodeAttrs.max_tokens,
+      ceiling: nodeTokensCeiling,
       tag: `node:${input.completedNodeId}:tokens`,
     });
   }

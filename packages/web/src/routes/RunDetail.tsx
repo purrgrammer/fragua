@@ -137,7 +137,7 @@ export function RunDetail(): JSX.Element {
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
-      {detail?.runStatus === "paused_provider_error" && <RunPausedNotice runId={id} />}
+      {detail?.runStatus === "paused" && <RunPausedNotice runId={id} />}
       {detail?.runStatus === "paused_hitl" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}

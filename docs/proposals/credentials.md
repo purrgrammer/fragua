@@ -1,8 +1,8 @@
 ---
 title: Credentials in DB
-status: proposed
+status: deferred
 maturity: designed
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-03
 ---
 
 # Credentials in DB

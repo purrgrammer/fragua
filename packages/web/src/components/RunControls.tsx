@@ -1,7 +1,7 @@
 // RunControls — operator-driven Pause / Resume / Cancel for a run.
 //
 // Specialized banners own the action for their substatus:
-//   - paused_provider_error → RunPausedNotice (Resume + Cancel)
+//   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
 //   - paused_hitl           → HitlChoice (option buttons)
 // RunControls handles the "everything else" surface: generic operator
 // pause, resume of an operator-paused run, and cancel-from-anywhere on
@@ -98,21 +98,19 @@ export function RunControls({
   const canPause = status === "running";
   // Resume is the generic operator-pause path. The specialized
   // substatuses handle their own surface:
-  //   - paused_provider_error → RunPausedNotice (Resume + Cancel)
+  //   - paused                  → RunPausedNotice (Resume + Cancel)
   //   - paused_hitl with options → HitlChoice (option buttons)
-  // paused_hitl with NO options is operator-driven (POST /pause) and
-  // owns Resume here. paused_provider_retry / paused_retry auto-resume
-  // on a timer; manual Resume short-circuits the wait.
+  // paused_hitl with NO options is the workflow-authored wait.human
+  // resume case (operator pauses route to `paused` now).
+  // paused_provider_retry / paused_retry auto-resume on a timer;
+  // manual Resume short-circuits the wait.
   const isOperatorHitlPause = runStatus === "paused_hitl" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
-    status === "paused" &&
-    runStatus !== "paused_provider_error" &&
-    (runStatus !== "paused_hitl" || isOperatorHitlPause);
+    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_hitl" || isOperatorHitlPause);
   // Cancel is available everywhere non-terminal. RunPausedNotice
-  // already exposes a Cancel for paused_provider_error — hide ours
-  // there to avoid two adjacent Cancel buttons.
-  const canCancel =
-    (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused_provider_error";
+  // already exposes a Cancel for `paused` — hide ours there to avoid
+  // two adjacent Cancel buttons.
+  const canCancel = (status === "running" || status === "queued" || status === "paused") && runStatus !== "paused";
 
   if (!canPause && !canResume && !canCancel) return null;
 

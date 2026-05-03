@@ -1,7 +1,7 @@
 // Budget enforcement — end-to-end through the executor.
-// Drives a real run with a configured ceiling and a handler that overspends;
-// asserts the run halts with reason="budget" and the fact stream contains
-// `budget.stop` before `fact.run_halted`.
+// Default budget_policy is "pause": breach pauses for operator decision.
+// Explicit budget_policy="stop" keeps the terminal-on-overspend behavior
+// for CI gates. budget_policy="warn" never blocks.
 
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";
@@ -9,7 +9,7 @@ import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — budget enforcement", () => {
-  test("graph budget_usd=1.0; handler costs 1.5 → status=halted, reason=budget", async () => {
+  test("graph budget_usd=1.0 (default policy=pause); handler costs 1.5 → paused, reason=budget", async () => {
     const dot = `digraph G {
       graph [budget_usd=1.0];
       start [shape=Mdiamond];
@@ -56,11 +56,79 @@ describe("executor — budget enforcement", () => {
     });
 
     const state = r.store.getState("rb1")!;
-    expect(state.status).toBe("halted");
+    expect(state.status).toBe("paused");
 
     const events = r.store.getEvents("rb1");
     const types = events.map((e) => e.type);
-    // Causal order: budget.stop emitted as observability before fact.run_halted commits.
+    const stopIdx = types.indexOf("budget.stop");
+    const pauseIdx = types.indexOf("fact.run_paused");
+    expect(stopIdx).toBeGreaterThanOrEqual(0);
+    expect(pauseIdx).toBeGreaterThanOrEqual(0);
+    expect(stopIdx).toBeLessThan(pauseIdx);
+
+    const pause = events[pauseIdx]!;
+    const p = pause.payload as { reason: string; scope: string; metric: string; limit: number; actual: number };
+    expect(p.reason).toBe("budget");
+    expect(p.scope).toBe("run");
+    expect(p.metric).toBe("cost");
+    expect(p.limit).toBe(1.0);
+    expect(p.actual).toBeGreaterThanOrEqual(1.5);
+    expect(types).not.toContain("fact.run_halted");
+
+    r.store.close();
+  });
+
+  test("budget_policy=stop; handler costs 1.5 → status=halted, reason=budget", async () => {
+    const dot = `digraph G {
+      graph [budget_usd=1.0, budget_policy="stop"];
+      start [shape=Mdiamond];
+      spend [shape=box];
+      done [shape=Msquare];
+      start -> spend;
+      spend -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "spend", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({
+        kind: "transition",
+        nextNode: "done",
+        tokens: 100,
+        costUsd: 1.5,
+      }),
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rb-stop", "start");
+    r.store.claimNextRun(1);
+    await runOne("rb-stop", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const state = r.store.getState("rb-stop")!;
+    expect(state.status).toBe("halted");
+
+    const events = r.store.getEvents("rb-stop");
+    const types = events.map((e) => e.type);
     const stopIdx = types.indexOf("budget.stop");
     const haltIdx = types.indexOf("fact.run_halted");
     expect(stopIdx).toBeGreaterThanOrEqual(0);
