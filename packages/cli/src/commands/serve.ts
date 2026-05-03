@@ -20,6 +20,14 @@ import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts 
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
+import { ensureWebBundle } from "../web-build.ts";
+
+/** TCP port used when neither `--port` nor `web.port` (in
+ * `~/.swarm/config.jsonc`) is set. Picked once and stable so the user
+ * can bookmark `http://localhost:6767/` across harness restarts. When
+ * 6767 is occupied, `startServer` walks up one port at a time (see
+ * `portRetries` below) so a stray collision doesn't kill startup. */
+export const DEFAULT_WEB_PORT = 6767;
 
 /**
  * Locate the built web bundle by walking up from this file.
@@ -34,7 +42,11 @@ function findWebDistDir(): string | undefined {
 }
 
 export interface ServeCommandOptions {
-  /** TCP port to bind. Default 3000. Pass 0 to get an ephemeral port. */
+  /** TCP port to bind. When omitted, falls back to `web.port` from the
+   * merged config, then to `DEFAULT_WEB_PORT` (6767). Pass 0 to get an
+   * ephemeral port. The CLI bin layer threads `--port` here directly
+   * without supplying a default, so this stays the single source of
+   * truth for port resolution. */
   port?: number;
   /** Working directory. Default `process.cwd()`. */
   cwd?: string;
@@ -48,10 +60,19 @@ export interface ServeCommandOptions {
   ports?: ServerPorts;
   /**
    * When the starting port is in use, try the next N ports before failing.
-   * Applies only to non-zero ports. Default 20 when `port` is omitted (the
-   * CLI default-3000 path), 0 when `port` is explicitly set.
+   * Applies only to non-zero ports. Default 20 when `port` is omitted
+   * (the auto-bump path that lets a second harness quietly take 6768),
+   * 0 when `port` is explicitly set (a forced port should hard-fail on
+   * collision so the operator notices).
    */
   portRetries?: number;
+  /**
+   * Explicit web bundle directory. When set, overrides the walk-up
+   * discovery — pass the directory `ensureWebBundle()` resolved (or
+   * `undefined` to force API-only mode without scanning). Tests omit
+   * this and rely on the discovery so they don't pay a vite build.
+   */
+  webDistDir?: string | undefined;
 }
 
 export interface ServerHandle {
@@ -85,7 +106,10 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   mkdirSync(dirname(storePath), { recursive: true });
   const discoveryPath = resolve(dirname(storePath), "serve.json");
   const store = new SqliteStore({ path: storePath });
-  const webDistDir = findWebDistDir();
+  // Caller (CLI commands) supplies an explicit `webDistDir` after running
+  // `ensureWebBundle()` so a fresh build is mounted; tests omit it and
+  // fall back to the no-build discovery walk so they don't spawn vite.
+  const webDistDir = "webDistDir" in opts ? opts.webDistDir : findWebDistDir();
   // Default daemon detection: read the daemon_lock row (and runStateCounts)
   // from the shared store on every /health request. Caller-provided
   // `opts.ports.daemonInfo` wins (lets tests inject fixtures).
@@ -124,8 +148,18 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // regardless of which address family an existing listener is using, so the
   // printed `http://localhost:<port>` URL is actually the one we own.
   const hostname = opts.hostname ?? "::";
-  const startPort = opts.port ?? 3000;
-  const retries = opts.portRetries ?? 0;
+  const portExplicit = opts.port !== undefined;
+  // Resolution: explicit caller arg > config.web.port > DEFAULT_WEB_PORT.
+  // Keeping this here (not in the bin layer) means `swarm serve`,
+  // `swarm harness`, and any future programmatic caller share one
+  // resolution path — config-without-flag works the same everywhere.
+  const startPort = portExplicit ? (opts.port as number) : (cfg.web?.port ?? DEFAULT_WEB_PORT);
+  // Auto-bump on collision when the port came from config-or-default —
+  // a second harness on the same box quietly takes 6768, 6769, … and
+  // operators don't have to wrangle ports manually. When the caller
+  // typed an explicit `--port`, respect it: a hard fail is the right
+  // signal that THAT port is busy.
+  const retries = opts.portRetries ?? (portExplicit ? 0 : 20);
   let server: ReturnType<typeof Bun.serve>;
   let lastErr: unknown;
   const maxAttempts = startPort === 0 ? 1 : retries + 1;
@@ -182,20 +216,26 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
  * 1 on bind failure).
  */
 export async function serveCommand(opts: ServeCommandOptions = {}): Promise<number> {
+  // Build / refresh the web bundle before binding so the moment the URL
+  // prints, the latest UI is what gets served. Caller-supplied
+  // `webDistDir` (including the explicit `undefined` for API-only) wins
+  // — that's how tests skip the vite spawn.
+  const startOpts: ServeCommandOptions =
+    "webDistDir" in opts ? opts : { ...opts, webDistDir: (await ensureWebBundle()).distDir };
   let handle: ServerHandle;
   try {
-    handle = await startServer(opts);
+    handle = await startServer(startOpts);
   } catch (err) {
     const e = err as { code?: string; message?: string };
     if (e.code === "EADDRINUSE") {
-      const start = opts.port ?? 3000;
-      const retries = opts.portRetries ?? 0;
-      if (retries > 0) {
-        console.error(chalk.red(`serve: no free port in ${start}..${start + retries - 1}`));
-      } else {
-        console.error(chalk.red(`serve: port ${start} is already in use`));
-      }
-      console.error(chalk.dim("  hint: pick another with `swarm serve --port <n>`"));
+      // The port that hard-failed is whatever the caller forced via
+      // `--port` — startServer auto-bumps in the unset path so this
+      // branch only fires for an explicit collision.
+      const start = opts.port ?? DEFAULT_WEB_PORT;
+      console.error(chalk.red(`serve: port ${start} is already in use`));
+      console.error(
+        chalk.dim("  hint: pick another with `swarm serve --port <n>`, or set web.port in ~/.swarm/config.jsonc"),
+      );
     } else {
       console.error(chalk.red(`serve: failed to start — ${e.message ?? String(err)}`));
     }

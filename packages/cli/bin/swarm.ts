@@ -98,7 +98,7 @@ cli
 
 cli
   .command("harness", "Supervise the daemon + HTTP server as a foreground process (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port for HTTP (default 0 = ephemeral)")
+  .option("--port <n>", "TCP port for HTTP (default 6767, configurable via web.port in ~/.swarm/config.jsonc)")
   .option("--db <path>", "Store path (default ~/.swarm/swarm.db)")
   .action(async (options: Record<string, unknown>) => {
     const pick = (key: string): string | undefined => {
@@ -117,7 +117,7 @@ cli
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
-  .option("--port <n>", "TCP port to bind (default 0 = ephemeral; writes <db-dir>/serve.json)")
+  .option("--port <n>", "TCP port to bind (default 6767, configurable via web.port; writes <db-dir>/serve.json)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db); enables parallel swarms")
   .action(async (options: Record<string, unknown>) => {
@@ -130,9 +130,10 @@ cli
       typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
     const portExplicit = portNum !== undefined && Number.isFinite(portNum);
     const code = await serveCommand({
-      // Default to 0 (ephemeral) — the URL is published to <db-dir>/serve.json
-      // so `swarm run` and friends discover it automatically.
-      port: portExplicit ? portNum! : 0,
+      // `port` left undefined when the user didn't pass `--port`, so
+      // startServer resolves it via config.web.port → DEFAULT_WEB_PORT.
+      // The URL is also published to <db-dir>/serve.json for discovery.
+      ...(portExplicit ? { port: portNum! } : {}),
       ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
       ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
     });

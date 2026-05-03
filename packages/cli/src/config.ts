@@ -73,6 +73,17 @@ const Timeouts = Type.Object(
   { additionalProperties: false },
 );
 
+const Web = Type.Object(
+  {
+    // Default TCP port for the harness / serve HTTP. CLI `--port` wins
+    // when supplied; absent here falls through to DEFAULT_WEB_PORT
+    // (6767). When the resolved port is in use, the server bumps to the
+    // next free port so a stray collision doesn't kill startup.
+    port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
+  },
+  { additionalProperties: false },
+);
+
 export const SwarmConfigSchema = Type.Object(
   {
     // Schema version. Currently always 1; bumped when the on-disk shape
@@ -112,6 +123,7 @@ export const SwarmConfigSchema = Type.Object(
     blobGc: Type.Optional(BlobGc),
     skills: Type.Optional(Skills),
     timeouts: Type.Optional(Timeouts),
+    web: Type.Optional(Web),
   },
   { additionalProperties: false },
 );

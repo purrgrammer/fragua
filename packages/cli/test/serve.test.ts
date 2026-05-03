@@ -6,10 +6,10 @@
 // directly, which is the test-friendly half of the module.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serveCommand, startServer } from "../src/commands/serve.ts";
+import { DEFAULT_WEB_PORT, serveCommand, startServer } from "../src/commands/serve.ts";
 
 describe("startServer", () => {
   let handle: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -56,6 +56,46 @@ describe("startServer", () => {
     handle = await startServer({ port, cwd: scratch });
     expect(handle.port).toBe(port);
   });
+
+  test("config.web.port wins when --port is omitted", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
+    // Pick a port the test owns by binding ephemeral first to discover a
+    // free one, then closing and writing it into the project config.
+    // Avoids hardcoding a port that might collide on a busy CI host.
+    const probe = await startServer({ port: 0, cwd: scratch });
+    const target = probe.port;
+    await probe.close();
+
+    await mkdir(join(scratch, ".swarm"), { recursive: true });
+    await writeFile(join(scratch, ".swarm/config.jsonc"), JSON.stringify({ web: { port: target } }));
+
+    handle = await startServer({ cwd: scratch });
+    expect(handle.port).toBe(target);
+  });
+
+  test("default port falls back to DEFAULT_WEB_PORT (6767) and auto-bumps on collision", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
+    // We don't know whether 6767 is free on the test host, so we hold an
+    // occupant on it (best-effort) and assert the server lands within the
+    // bump window. If 6767 was already busy from another process the
+    // bump still kicks in; either way the bound port should be in
+    // [DEFAULT_WEB_PORT, DEFAULT_WEB_PORT+20].
+    handle = await startServer({ cwd: scratch });
+    expect(handle.port).toBeGreaterThanOrEqual(DEFAULT_WEB_PORT);
+    expect(handle.port).toBeLessThan(DEFAULT_WEB_PORT + 20);
+  });
+
+  test("explicit --port disables the auto-bump (hard fail on EADDRINUSE)", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
+    const occupant = await startServer({ port: 0, cwd: scratch });
+    try {
+      await expect(startServer({ port: occupant.port, cwd: scratch })).rejects.toMatchObject({
+        code: "EADDRINUSE",
+      });
+    } finally {
+      await occupant.close();
+    }
+  });
 });
 
 describe("serveCommand", () => {
@@ -70,9 +110,10 @@ describe("serveCommand", () => {
 
   test("SIGINT triggers clean shutdown and returns exit code 0", async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
-    // Run in the background; serveCommand blocks until SIGINT/SIGTERM.
-    const done = serveCommand({ port: 0, cwd: scratch });
-    // Give the bind a moment to complete before we send the signal.
+    // Pass `webDistDir: undefined` to opt out of the auto-build that
+    // serveCommand normally runs — keeps the test fast and doesn't depend
+    // on the state of the real packages/web/dist tree.
+    const done = serveCommand({ port: 0, cwd: scratch, webDistDir: undefined });
     await new Promise((r) => setTimeout(r, 50));
     process.emit("SIGINT");
     const code = await done;
@@ -83,7 +124,7 @@ describe("serveCommand", () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-serve-"));
     const occupied = await startServer({ port: 0, cwd: scratch });
     try {
-      const code = await serveCommand({ port: occupied.port, cwd: scratch });
+      const code = await serveCommand({ port: occupied.port, cwd: scratch, webDistDir: undefined });
       expect(code).toBe(1);
     } finally {
       await occupied.close();

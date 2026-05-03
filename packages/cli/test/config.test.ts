@@ -143,6 +143,17 @@ describe("loadConfig", () => {
     expect(cfg.autoTitle).toBe(false);
     expect(cfg.concurrency).toBe(2);
   });
+
+  test("parses web.port from the global config", async () => {
+    await writeGlobal(`{ "web": { "port": 9999 } }`);
+    const cfg = await load();
+    expect(cfg.web?.port).toBe(9999);
+  });
+
+  test("rejects out-of-range web.port", async () => {
+    await writeGlobal(`{ "web": { "port": 70000 } }`);
+    await expect(load()).rejects.toThrow(/validation failed/);
+  });
 });
 
 describe("resolveTimeouts", () => {
