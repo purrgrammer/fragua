@@ -214,7 +214,7 @@ describe("GraphView — rendering", () => {
     expect(clicks).toEqual(["start"]);
   });
 
-  it("renders model/provider/effort rows when attrs present", async () => {
+  it("renders model row with provider logo + effort row when attrs present", async () => {
     const src = `digraph styled {
       graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: high; }"]
       start [shape=Mdiamond, label="start"]
@@ -229,10 +229,11 @@ describe("GraphView — rendering", () => {
     expect(middle).toBeTruthy();
     const w = within(middle as HTMLElement);
     expect(w.getByText("model")).toBeTruthy();
-    expect(w.getByText("provider")).toBeTruthy();
-    expect(w.getByText("effort")).toBeTruthy();
     expect(w.getByText("opus")).toBeTruthy();
-    expect(w.getByText("anthropic")).toBeTruthy();
+    // Provider renders as a logo image inside the model row, not as a separate text row.
+    expect(w.getByAltText("anthropic logo")).toBeTruthy();
+    expect(w.queryByText("provider")).toBeNull();
+    expect(w.getByText("effort")).toBeTruthy();
     expect(w.getByText("high")).toBeTruthy();
   });
 
@@ -243,8 +244,8 @@ describe("GraphView — rendering", () => {
     expect(middle).toBeTruthy();
     const w = within(middle as HTMLElement);
     expect(w.queryByText("model")).toBeNull();
-    expect(w.queryByText("provider")).toBeNull();
     expect(w.queryByText("effort")).toBeNull();
+    expect(w.queryByAltText(/logo$/)).toBeNull();
   });
 });
 

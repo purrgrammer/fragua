@@ -46,6 +46,7 @@ import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
 import { Edge as AiEdge } from "./ai-elements/edge.tsx";
+import { ModelSelectorLogo } from "./ai-elements/model-selector.tsx";
 import { Node as AiNode, NodeContent, NodeHeader, NodeTitle } from "./ai-elements/node.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 
@@ -335,14 +336,10 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
           <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
         </span>
         {d.model ? (
-          <span className="truncate" title={d.model}>
-            <span className="uppercase tracking-[0.06em]">model</span> <code className="text-sw-text">{d.model}</code>
-          </span>
-        ) : null}
-        {d.provider ? (
-          <span className="truncate" title={d.provider}>
-            <span className="uppercase tracking-[0.06em]">provider</span>{" "}
-            <code className="text-sw-text">{d.provider}</code>
+          <span className="flex items-center gap-1" title={d.provider ? `${d.provider} · ${d.model}` : d.model}>
+            <span className="uppercase tracking-[0.06em]">model</span>
+            {d.provider ? <ModelSelectorLogo className="shrink-0" provider={d.provider} /> : null}
+            <code className="truncate text-sw-text">{d.model}</code>
           </span>
         ) : null}
         {d.reasoningEffort ? (

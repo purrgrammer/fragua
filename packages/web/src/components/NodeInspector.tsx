@@ -19,6 +19,7 @@
 import { type Node as GraphNode, handlerOf } from "@swarm/core";
 import type { NodeState } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { ModelSelectorLogo } from "./ai-elements/model-selector.tsx";
 
 export interface NodeInspectorProps {
   /** Parsed workflow node to inspect. `null` renders the empty hint. */
@@ -92,7 +93,15 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         <Section title="model & context">
           {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
           {attrs.llm_provider && (
-            <Field label="provider" value={<code className="text-sw-text">{attrs.llm_provider}</code>} />
+            <Field
+              label="provider"
+              value={
+                <span className="inline-flex items-center gap-1.5">
+                  <ModelSelectorLogo provider={attrs.llm_provider} />
+                  <code className="text-sw-text">{attrs.llm_provider}</code>
+                </span>
+              }
+            />
           )}
           {attrs.context && <Field label="context" value={<code className="text-sw-text">{attrs.context}</code>} />}
           {attrs.fidelity && <Field label="fidelity" value={<code className="text-sw-text">{attrs.fidelity}</code>} />}
