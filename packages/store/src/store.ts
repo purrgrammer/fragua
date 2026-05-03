@@ -43,6 +43,7 @@ import {
   selectDaemonEventsByRun,
   selectDaemonLock,
   updateDaemonLockHeartbeat,
+  updateDaemonLockHttp,
   upsertDaemonLock,
 } from "./daemon-queries.ts";
 import {
@@ -133,21 +134,13 @@ import {
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
-  type Project,
   type RunMetrics,
   type RunState,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
 } from "./types.ts";
-import {
-  insertWorkflowIfAbsent,
-  upsertProject as queryUpsertProject,
-  selectProjectById,
-  selectProjects,
-  selectWorkflow,
-  workflowExists,
-} from "./workflow-queries.ts";
+import { insertWorkflowIfAbsent, selectWorkflow, workflowExists } from "./workflow-queries.ts";
 
 /** EventRow → StoredEvent. Shared across getEvents / getGlobalEvents*
  * so the projection (column rename, payload parse, writer cast) lives
@@ -223,6 +216,10 @@ function rowToRunState(row: RunStateRow): RunState {
     title: row.title,
     baseGitSha: row.base_git_sha,
     branch: row.branch,
+    cwd: row.cwd,
+    workflowName: row.workflow_name,
+    workflowScope: row.workflow_scope,
+    workflowPath: row.workflow_path,
   };
 }
 
@@ -438,20 +435,11 @@ export class SqliteStore implements IEventStore {
         enqueuedAt: now,
         readyAt: now,
         updatedAt: now,
-        projectId: params.projectId ?? null,
+        cwd: params.cwd ?? null,
+        workflowName: params.workflowName ?? null,
+        workflowScope: params.workflowScope ?? null,
+        workflowPath: params.workflowPath ?? null,
       });
-
-      // Refresh the projects display cache. Same txn as the run insert
-      // so a successful enqueue always carries a labelable row; a failed
-      // enqueue rolls the projects update back together with the run.
-      if (params.projectId != null && params.projectName != null) {
-        queryUpsertProject(this.db, {
-          id: params.projectId,
-          name: params.projectName,
-          rootPath: params.projectRoot ?? null,
-          now,
-        });
-      }
 
       const seq = bumpRunSeq(this.db, params.runId);
       insertEventRunEnqueued(
@@ -835,7 +823,15 @@ export class SqliteStore implements IEventStore {
       insertDaemonLock(this.db, pid, hostname, now);
       result = {
         acquired: true,
-        current: { pid, hostname, startedAt: now, heartbeatAt: now },
+        current: {
+          pid,
+          hostname,
+          startedAt: now,
+          heartbeatAt: now,
+          httpUrl: null,
+          httpPort: null,
+          harnessVersion: null,
+        },
       };
     });
     return result!;
@@ -846,7 +842,15 @@ export class SqliteStore implements IEventStore {
     let current!: DaemonLockRow;
     this.writeTxn(() => {
       upsertDaemonLock(this.db, pid, hostname, now);
-      current = { pid, hostname, startedAt: now, heartbeatAt: now };
+      current = {
+        pid,
+        hostname,
+        startedAt: now,
+        heartbeatAt: now,
+        httpUrl: null,
+        httpPort: null,
+        harnessVersion: null,
+      };
     });
     return { acquired: true, current };
   }
@@ -876,7 +880,18 @@ export class SqliteStore implements IEventStore {
       hostname: row.hostname,
       startedAt: row.started_at,
       heartbeatAt: row.heartbeat_at,
+      httpUrl: row.http_url,
+      httpPort: row.http_port,
+      harnessVersion: row.harness_version,
     };
+  }
+
+  /** Publish the harness/serve HTTP discovery info onto the lock row.
+   *  Called by `swarm harness` / `swarm serve` after the listener binds. */
+  setDaemonLockHttp(args: { pid: number; url: string | null; port: number | null; version: string | null }): void {
+    this.writeTxn(() => {
+      updateDaemonLockHttp(this.db, args.pid, args.url, args.port, args.version);
+    });
   }
 
   // ─────────────── Workflows ───────────────
@@ -899,26 +914,18 @@ export class SqliteStore implements IEventStore {
     };
   }
 
-  // ─────────────── Projects ───────────────
+  // ─────────────── Cwd listing ───────────────
 
-  listProjects(): Project[] {
-    return selectProjects(this.db);
-  }
-
-  getProject(id: string): Project | null {
-    return selectProjectById(this.db, id);
-  }
-
-  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void {
-    const now = this.now();
-    this.writeTxn(() => {
-      queryUpsertProject(this.db, {
-        id: args.id,
-        name: args.name,
-        rootPath: args.rootPath ?? null,
-        now,
-      });
-    });
+  listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }> {
+    return this.db
+      .query<{ cwd: string; lastUpdatedAt: number; runCount: number }, []>(
+        `SELECT cwd, MAX(updated_at) AS lastUpdatedAt, COUNT(*) AS runCount
+           FROM run_state
+          WHERE cwd IS NOT NULL
+          GROUP BY cwd
+          ORDER BY lastUpdatedAt DESC, cwd ASC`,
+      )
+      .all();
   }
 
   // ─────────────── Maintenance ───────────────

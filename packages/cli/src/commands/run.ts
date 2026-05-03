@@ -2,26 +2,22 @@
 //
 // `<workflow>` resolves in two flavours:
 //   - bare name (no slash, no `.dot` suffix): looks up
-//     `<cwd>/.swarm/workflows/<name>.dot`. Misses surface as
-//     "workflow not found" with the directory path.
+//     `~/.swarm/workflows/<name>.dot`. Misses surface as "workflow not
+//     found" with a hint to either drop a file there or pass a path.
 //   - path (relative or absolute, with slash or `.dot` suffix): read
-//     directly. Backwards-compatible with the original API.
+//     directly.
 //
 // Then:
 //   1. Read the DOT file.
 //   2. POST /workflows to register it and receive the sha.
-//   3. POST /runs with that sha (+ any routing/priority/projectId).
+//   3. POST /runs with that sha + cwd + workflow metadata.
 //   4. Stream /runs/:id/stream (SSE) to stdout until the run reaches a
 //      terminal state or the user hits Ctrl-C.
-//
-// Assumes a daemon is already serving the HTTP surface — start it with
-// `swarm daemon` + `swarm serve`.
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import chalk from "chalk";
-import { loadConfig } from "../config.ts";
-import { resolveWorkflow } from "../workflow-path.ts";
+import { globalWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
 async function discoverServerUrl(searchPath: string): Promise<string | undefined> {
   try {
@@ -72,14 +68,18 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
   const resolved = await resolveWorkflow(cwd, opts.workflow);
   if (resolved == null) {
-    console.error(
-      chalk.red(
-        `run: workflow not found: ${opts.workflow} (looked in .swarm/workflows/${opts.workflow}.dot, then as a path)`,
-      ),
-    );
+    const looksLikePath = opts.workflow.includes("/") || opts.workflow.endsWith(".dot");
+    if (looksLikePath) {
+      console.error(chalk.red(`run: workflow not found: ${opts.workflow} (resolved as path)`));
+    } else {
+      console.error(
+        chalk.red(`run: workflow not found: ${opts.workflow} (looked in ${globalWorkflowsDir()}/${opts.workflow}.dot)`),
+      );
+      console.error(chalk.dim(`  drop a .dot file there or pass a path explicitly`));
+    }
     return 1;
   }
-  const { dotPath, name } = resolved;
+  const { dotPath, name, scope } = resolved;
 
   let dotSource: string;
   try {
@@ -88,15 +88,6 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
     console.error(chalk.red(`run: cannot read ${dotPath}: ${(err as Error).message}`));
     return 1;
   }
-
-  // Project identity from .swarm/config.jsonc — null when not initialised.
-  // Server falls back to project_id NULL on the run row (ephemeral).
-  // Name + root ride along so the daemon's projects cache stays fresh
-  // (last-runner wins) without round-tripping the config.jsonc itself.
-  const cfg = await loadConfig(cwd).catch(() => ({}) as Awaited<ReturnType<typeof loadConfig>>);
-  const projectId = cfg.id;
-  const projectName = projectId !== undefined ? (cfg.name ?? basename(resolve(cwd))) : undefined;
-  const projectRoot = projectId !== undefined ? resolve(cwd) : undefined;
 
   // 1. Upload workflow
   const uploadRes = await postJson(`${baseUrl}/workflows`, {
@@ -110,15 +101,16 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
   console.log(chalk.dim(`workflow ${name} -> ${sha.slice(0, 12)}`));
 
   // 2. Enqueue run
-  const enqueueBody: Record<string, unknown> = { workflowSha: sha };
+  const enqueueBody: Record<string, unknown> = {
+    workflowSha: sha,
+    cwd: resolve(cwd),
+    workflowScope: scope,
+    workflowPath: dotPath,
+  };
+  if (scope === "global") enqueueBody["workflowName"] = name;
   if (opts.priority !== undefined) enqueueBody["priority"] = opts.priority;
   if (opts.routing !== undefined) enqueueBody["routing"] = opts.routing;
   if (opts.input !== undefined) enqueueBody["input"] = opts.input;
-  if (projectId !== undefined) {
-    enqueueBody["projectId"] = projectId;
-    enqueueBody["projectName"] = projectName;
-    enqueueBody["projectRoot"] = projectRoot;
-  }
   const enqueueRes = await postJson(`${baseUrl}/runs`, enqueueBody);
   if (!enqueueRes.ok) {
     return fail(`enqueue failed (${enqueueRes.status})`, enqueueRes);

@@ -2,75 +2,95 @@
 title: Schema additions for project-aware runs
 status: in-progress
 maturity: specified
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-03
 ---
 
 # Schema additions for project-aware runs
 
-> Pure additive migration; foundation for every other globalization
-> subproject.
+> Pure additive migration; foundation for the harness-by-default
+> globalization plan.
 >
-> **Landed:** `run_state.{project_id, base_git_sha, branch}` — note
-> that the proposal's `worktree_branch` shipped as `branch` (the
-> `worktree_` prefix was redundant; the column always refers to the
-> run's worktree).
+> **Staying:** `run_state.{base_git_sha, branch}` are shipped and
+> load-bearing — note that the proposal's `worktree_branch` shipped
+> as `branch` (the `worktree_` prefix was redundant; the column
+> always refers to the run's worktree).
 >
-> **Outstanding:** `workflow_name` / `_scope` / `_path`,
-> `project_context_sha`, `parent_run_id`, plus `events.project_id`
-> (the denormalised cross-project query column).
+> **Outstanding:** `run_state.cwd`, `run_state.workflow_name` /
+> `_scope` / `_path`, plus the `daemon_lock` URL columns the
+> harness uses for discovery.
+>
+> **Removing:** `run_state.project_id` and the `projects` table.
+> Projects are emergent paths in the harness-by-default model; see
+> [project-config extensions](./project-config-extensions.md).
 
 ## What lands
 
 `run_state` gains the columns below. All NULL-able to keep existing
-rows valid; backfill is one-shot at migration time.
+rows valid; new writes populate them. No backfill — pre-globalization
+runs stay NULL on the new columns.
 
 ```sql
-ALTER TABLE run_state ADD COLUMN project_id TEXT;
+ALTER TABLE run_state ADD COLUMN cwd TEXT;
 ALTER TABLE run_state ADD COLUMN workflow_name TEXT;
 ALTER TABLE run_state ADD COLUMN workflow_scope TEXT
-  CHECK (workflow_scope IN ('global','local','path','ephemeral'));
+  CHECK (workflow_scope IN ('global','path','ephemeral'));
 ALTER TABLE run_state ADD COLUMN workflow_path TEXT;
-ALTER TABLE run_state ADD COLUMN base_git_sha TEXT;
-ALTER TABLE run_state ADD COLUMN project_context_sha TEXT;
-ALTER TABLE run_state ADD COLUMN parent_run_id TEXT;
-ALTER TABLE run_state ADD COLUMN branch TEXT;          -- shipped (was `worktree_branch` in the original proposal)
 
-CREATE INDEX IF NOT EXISTS idx_run_state_project ON run_state(project_id);
-CREATE INDEX IF NOT EXISTS idx_run_state_parent  ON run_state(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
 ```
 
-`events` gains a denormalized `project_id` column (populated from
-`run_state.project_id` on append, indexed) so cross-project queries
-do not require a join through `run_state`:
+`cwd` is the absolute project root the run was enqueued from — the
+only project identifier in the harness-by-default model. See
+[project-config extensions](./project-config-extensions.md) for the
+emergent-paths reasoning.
+
+`run_state.project_id` and the `projects` display cache are
+removed in the same migration:
 
 ```sql
-ALTER TABLE events ADD COLUMN project_id TEXT;
-CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
+ALTER TABLE run_state DROP COLUMN project_id;
+DROP TABLE projects;
 ```
 
-## Why now
+UI / CLI surfaces that previously listed projects via the
+`projects` table compute the listing as `SELECT DISTINCT cwd FROM
+run_state` (cheap, indexed via `idx_run_state_cwd`). The display
+name for a project is `basename(cwd)`.
 
-`project_context_sha` is the load-bearing column. Once project tools
-exist ([project extensions](./project-extensions.md)), `workflow_sha`
-alone no longer makes replay deterministic — the project's
-tools+hooks+skills tree must be hashed at run start. That column is
-**impossible to retrofit** for runs already recorded; cheap to add now
-and populate as NULL until the writers exist.
+`daemon_lock` gains URL columns so CLIs can discover the harness's
+HTTP without a JSON file:
 
-`parent_run_id` is reserved for multi-project parent/child runs
-(deferred non-goal). Always NULL today; declaring it now means no
-second migration when it lands.
+```sql
+ALTER TABLE daemon_lock ADD COLUMN http_url TEXT;
+ALTER TABLE daemon_lock ADD COLUMN http_port INTEGER;
+ALTER TABLE daemon_lock ADD COLUMN harness_version TEXT;
+```
 
-`project_id` on `events` is denormalized intentionally. Cross-project
-queries are the obvious shape (`WHERE project_id = ? ORDER BY ts`); a
-join through `run_state` for every event read is not.
+See [harness](./harness.md) for the discovery flow.
 
-## Invariants preserved
+## Why no `events.project_id`
 
-I1 (transactional writes): all column additions are written in the same
-transaction as the event append, same as today. Nothing else changes.
+Cross-project queries (`WHERE cwd = ?`) join through `run_state` —
+two indexed steps instead of one. The earlier shape of this proposal
+denormalised `project_id` onto `events`; the harness-by-default
+model uses paths, which are longer strings, and the join is fast
+enough that denormalising costs more than it saves. If the join
+shows up as a real bottleneck, denormalise then.
 
 ## What this does not commit to
 
-Writing project IDs, capturing base SHAs, populating context shas — none
-of those land here. This subproject is the *space* for them.
+`project_context_sha` and `parent_run_id` are out of this round.
+
+- `project_context_sha` lands when
+  [project-extensions](./project-extensions.md) ships and project
+  tools / hooks / skills become a real determinism input. Pre-tools
+  runs replay against zero project tools; the column is opt-in by
+  definition.
+- `parent_run_id` was reserved for multi-project parent/child runs;
+  not happening for v0. Add when sub-run support shows up.
+
+## Invariants preserved
+
+I1 (transactional writes): all column additions are written in the
+same transaction as the event append, same as today. Nothing else
+changes.

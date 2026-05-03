@@ -46,6 +46,10 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     title: null,
     baseGitSha: null,
     branch: null,
+    cwd: null,
+    workflowName: null,
+    workflowScope: null,
+    workflowPath: null,
     ...overrides,
   };
 }

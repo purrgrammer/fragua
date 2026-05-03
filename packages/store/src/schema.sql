@@ -1,9 +1,13 @@
--- swarm event store schema — Revision 2
+-- swarm event store schema — Revision 3
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- v1 → v2: pause unification. `paused_provider_error` collapses into the
 -- generic `paused` status; reason lives on `fact.run_paused.payload.reason`.
--- See `migrations.ts` MIGRATION_002 for the in-place rewrite.
+-- v2 → v3: harness-by-default. `run_state.project_id` and the `projects`
+-- table are gone — `cwd` is the only project identifier. `daemon_lock`
+-- gains URL columns so CLIs discover the harness via the DB. `run_state`
+-- gains `workflow_name` / `_scope` / `_path` so resolution metadata
+-- survives the daemon contract.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -45,10 +49,17 @@ CREATE TABLE IF NOT EXISTS run_state (
   dispatch_started_at INTEGER,
   updated_at INTEGER NOT NULL,
   title TEXT,
-  -- UUIDv7 from `<project>/.swarm/config.jsonc` `id`. NULL for ephemeral
-  -- runs (no project file). Indexed for `WHERE project_id = ?` listings
-  -- and cross-project aggregation under the global daemon.
-  project_id TEXT,
+  -- Absolute project root the run was enqueued from. Only project
+  -- identifier in the harness-by-default model. NULL for runs without
+  -- a filesystem context (CI, integration tests).
+  cwd TEXT,
+  -- Resolved workflow name when bare-name resolution succeeded; NULL
+  -- when the caller passed a path.
+  workflow_name TEXT,
+  workflow_scope TEXT CHECK (workflow_scope IN ('global','path','ephemeral')),
+  -- Filesystem path of the .dot file at resolution time. Diagnostic
+  -- only; the daemon contract still keys on `workflow_sha`.
+  workflow_path TEXT,
   -- Git SHA of the worktree's HEAD at provision time. Replay reconstructs
   -- the run's starting tree from this sha + the workflow's dot_source,
   -- independent of the worktree directory or `branch` survival. NULL for
@@ -72,21 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_run_state_queue
 CREATE INDEX IF NOT EXISTS idx_run_state_status ON run_state(status);
 CREATE INDEX IF NOT EXISTS idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX IF NOT EXISTS idx_run_state_updated ON run_state(updated_at);
-CREATE INDEX IF NOT EXISTS idx_run_state_project ON run_state(project_id);
-
--- Display cache for project ids. Source of truth is each project's
--- `<root>/.swarm/config.jsonc` `name`; this table is a denormalized
--- copy so the UI can label runs without filesystem access (the daemon
--- may not have it under the eventual harness model). Refreshed on
--- every `POST /runs`: last-runner wins, so an active project is always
--- current. Rows persist after the project's directory is gone so
--- historical run listings keep their labels.
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  root_path TEXT,
-  updated_at INTEGER NOT NULL
-) STRICT;
+CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
 
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -157,12 +154,20 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_blob ON artifacts(blob_sha);
 
+-- Daemon coordination. `http_url` / `http_port` / `harness_version` let
+-- CLIs discover the running daemon (or harness) via the DB itself —
+-- the only filesystem rendezvous is the DB path. NULL on rows written
+-- by `swarm daemon --db <path>` directly (CI primitives don't expose
+-- HTTP unless paired with `swarm serve`).
 CREATE TABLE IF NOT EXISTS daemon_lock (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   pid INTEGER NOT NULL,
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL
+  heartbeat_at INTEGER NOT NULL,
+  http_url TEXT,
+  http_port INTEGER,
+  harness_version TEXT
 ) STRICT;
 
 -- Daemon-level audit log for process lifecycle, sweep activity,

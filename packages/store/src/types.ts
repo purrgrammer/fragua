@@ -17,7 +17,6 @@ import type {
   IntentEvent as IntentEventFromTypes,
   IntentType as IntentTypeFromTypes,
   MessageRole as MessageRoleFromTypes,
-  Project,
   QuarantineReason as QuarantineReasonFromTypes,
   RunStatus as RunStatusFromTypes,
 } from "@swarm/types";
@@ -60,7 +59,6 @@ export type {
   IntentEvent,
   IntentType,
   MessageRole,
-  Project,
   QuarantineReason,
   RawEvent,
   RunStatus,
@@ -189,6 +187,21 @@ export interface RunState {
    * for clean-tree runs (nothing to commit), and for runs without a
    * worktree. Convention: `swarm/runs/<run_id>`. */
   branch: string | null;
+  /** Absolute project root the run was enqueued from. Only project
+   * identifier in the harness-by-default model. `null` for runs
+   * enqueued without filesystem context (CI, tests). */
+  cwd: string | null;
+  /** Resolved workflow name when the caller passed a bare name; `null`
+   * for path-based or ephemeral runs. */
+  workflowName: string | null;
+  /** How the workflow argument resolved. `'global'` → matched a file
+   * under `~/.swarm/workflows/`. `'path'` → resolved as a filesystem
+   * path. `'ephemeral'` → enqueued via the API without filesystem
+   * context. `null` on legacy rows pre-globalization. */
+  workflowScope: "global" | "path" | "ephemeral" | null;
+  /** Filesystem path of the .dot file at resolution time. Diagnostic
+   * only — replay keys on `workflowSha`. */
+  workflowPath: string | null;
 }
 
 /**
@@ -287,6 +300,11 @@ export interface DaemonLockRow {
   hostname: string;
   startedAt: number;
   heartbeatAt: number;
+  /** HTTP URL the harness or `swarm serve` is listening on. `null` for
+   * `swarm daemon --db <path>` runs that don't expose HTTP. */
+  httpUrl: string | null;
+  httpPort: number | null;
+  harnessVersion: string | null;
 }
 
 export interface DaemonLockResult {
@@ -435,18 +453,22 @@ export interface EnqueueRunParams {
   workflowSha: string;
   priority?: number;
   initialRouting?: Record<string, unknown>;
-  /** UUIDv7 from the project's `.swarm/config.jsonc`. NULL when the
-   * caller has no project context (ephemeral runs, integration tests). */
-  projectId?: string;
-  /** Human-readable project name (from `config.jsonc` `name`, falling
-   * back to `basename(cwd)`). UPSERTed into `projects` so UI filters
-   * can label by name instead of UUID. Ignored when `projectId` is
-   * absent. */
-  projectName?: string;
-  /** Project root absolute path at enqueue time. Stored on `projects`
-   * for UI navigation; nullable since some callers (CI, mocks) don't
-   * have one. Multi-clone is last-writer-wins. */
-  projectRoot?: string;
+  /** Absolute project root the run was enqueued from. Surfaced on
+   * `run_state.cwd` and used as the project identifier in the
+   * harness-by-default model. Omitted for callers with no filesystem
+   * context (CI, integration tests). */
+  cwd?: string;
+  /** Resolved workflow name when the caller passed a bare name. Surfaced
+   * on `run_state.workflow_name`. Omitted for path-based runs. */
+  workflowName?: string;
+  /** How the workflow argument resolved. `'global'` for bare names that
+   * matched `~/.swarm/workflows/<name>.dot`, `'path'` for explicit paths,
+   * `'ephemeral'` for runs enqueued via the API without filesystem
+   * context. */
+  workflowScope?: "global" | "path" | "ephemeral";
+  /** Filesystem path of the .dot file at resolution time. Diagnostic
+   * only; replay still keys on `workflowSha`. */
+  workflowPath?: string;
 }
 
 export interface GetEventsOpts {
@@ -596,12 +618,8 @@ export interface IEventWriter {
    */
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
-  // ─── Workflow / project catalog (write)
+  // ─── Workflow catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
-  /** Insert or refresh a project row outside the enqueue path
-   * (e.g. `swarm projects rename`). Inside `enqueueRun` the same
-   * UPSERT runs in the run-insert txn — no extra call needed. */
-  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
 
   // ─── Maintenance
   vacuum(): void;
@@ -734,10 +752,13 @@ export interface IEventReader {
    */
   getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
-  // ─── Workflow / project catalog (read)
+  // ─── Workflow catalog (read)
   getWorkflow(sha: string): WorkflowRow | null;
-  listProjects(): Project[];
-  getProject(id: string): Project | null;
+  /** Distinct `cwd` values across `run_state` ordered by most-recent
+   * activity. Powers UI project listings under the harness-by-default
+   * model where projects are emergent paths. NULL `cwd` rows are
+   * excluded. */
+  listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
 }
 
 export interface IAnalyticsReader {

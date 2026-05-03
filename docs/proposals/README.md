@@ -44,8 +44,7 @@ delta called out in the proposal body.
 | Proposal | Maturity | Notes |
 |---|---|---|
 | [Harness](./harness.md) | designed | architectural commitment point; everything below depends on it |
-| [Credentials in DB](./credentials.md) | designed | threat model resolves before project-extensions ship |
-| [Migration tool](./migration.md) | designed | blocked on harness + global DB |
+| [One-off migration](./migration.md) | designed | one-shot script for this repo's pre-harness DB; new installs start global |
 | [Project tools, hooks, skills](./project-extensions.md) | sketch | trust-boundary risk — biggest open question |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
@@ -63,6 +62,9 @@ delta called out in the proposal body.
 |---|---|---|
 | [Rate-limit fairness](./rate-limit-fairness.md) | sketch | budget cap covers single-project case |
 | [Git-object file server](./file-server.md) | sketch | path-walking reads are fine pre-multi-project |
+| [Token auth for the harness API](./token-auth.md) | sketch | localhost-no-auth is the v0 default; revisit for shared/remote/browser-hostile cases |
+| [Project config extensions](./project-config-extensions.md) | sketch | projects are emergent paths; per-project knobs return when path-keyed config hits a real constraint |
+| [Credentials in DB](./credentials.md) | designed | `~/.swarm/auth.json` (already global) is enough for single-user; revisit when extension code can read other projects' state |
 
 ## Discarded
 

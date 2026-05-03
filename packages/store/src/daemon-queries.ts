@@ -81,14 +81,37 @@ interface DaemonLockDbRow {
   hostname: string;
   started_at: number;
   heartbeat_at: number;
+  http_url: string | null;
+  http_port: number | null;
+  harness_version: string | null;
 }
 
 const SELECT_DAEMON_LOCK_SQL = `
-  SELECT pid, hostname, started_at, heartbeat_at FROM daemon_lock WHERE id = 1
+  SELECT pid, hostname, started_at, heartbeat_at,
+         http_url, http_port, harness_version
+    FROM daemon_lock WHERE id = 1
 `;
 
 export function selectDaemonLock(db: Database): DaemonLockDbRow | null {
   return db.query<DaemonLockDbRow, []>(SELECT_DAEMON_LOCK_SQL).get() ?? null;
+}
+
+const UPDATE_DAEMON_LOCK_HTTP_SQL = `
+  UPDATE daemon_lock
+     SET http_url = ?, http_port = ?, harness_version = ?
+   WHERE id = 1 AND pid = ?
+`;
+
+/** Publish the harness/serve HTTP discovery info onto the lock row.
+ *  Called by `swarm harness` / `swarm serve` after the listener binds. */
+export function updateDaemonLockHttp(
+  db: Database,
+  pid: number,
+  url: string | null,
+  port: number | null,
+  version: string | null,
+): void {
+  db.query(UPDATE_DAEMON_LOCK_HTTP_SQL).run(url, port, version, pid);
 }
 
 const INSERT_DAEMON_LOCK_SQL = `

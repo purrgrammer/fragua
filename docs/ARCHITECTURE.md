@@ -143,7 +143,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 
 ## 2. Schema
 
-All tables are `STRICT`. The append-mostly per-run tables (`events`, `messages`, `blobs`, `artifacts`) additionally use `WITHOUT ROWID` for compact PK-clustered storage; the lifecycle and singleton tables (`schema_version`, `workflows`, `run_state`, `projects`, `daemon_lock`, `daemon_events`) use the default rowid layout (`daemon_events` in particular relies on `INTEGER PRIMARY KEY AUTOINCREMENT`, which is incompatible with `WITHOUT ROWID`). Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
+All tables are `STRICT`. The append-mostly per-run tables (`events`, `messages`, `blobs`, `artifacts`) additionally use `WITHOUT ROWID` for compact PK-clustered storage; the lifecycle and singleton tables (`schema_version`, `workflows`, `run_state`, `daemon_lock`, `daemon_events`) use the default rowid layout (`daemon_events` in particular relies on `INTEGER PRIMARY KEY AUTOINCREMENT`, which is incompatible with `WITHOUT ROWID`). Every table is narrow — the only "big" data (artifact content) lives on the filesystem under `blobsDir`, keyed by sha256. Per-run tables cascade on run deletion.
 
 ```sql
 -- Pragmas applied on every connection open
@@ -194,7 +194,10 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   dispatch_started_at INTEGER,                    -- when the current dispatch began (activeMs accounting)
   updated_at INTEGER NOT NULL,
   title TEXT,                                     -- auto-titler output; NULL until generated
-  project_id TEXT,                                -- UUIDv7 from <project>/.swarm/config.jsonc; NULL for ephemeral runs
+  cwd TEXT,                                       -- absolute project root the run was enqueued from; NULL for ephemeral
+  workflow_name TEXT,                             -- resolved name when caller passed a bare name; NULL for path runs
+  workflow_scope TEXT CHECK (workflow_scope IN ('global','path','ephemeral')),
+  workflow_path TEXT,                             -- .dot file path at resolution time; diagnostic
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
   branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
   total_cost_usd REAL GENERATED ALWAYS AS
@@ -211,7 +214,7 @@ CREATE INDEX idx_run_state_queue
 CREATE INDEX idx_run_state_status   ON run_state(status);
 CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
-CREATE INDEX idx_run_state_project  ON run_state(project_id);
+CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
 
 CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -272,19 +275,10 @@ CREATE TABLE daemon_lock (
   pid INTEGER NOT NULL,
   hostname TEXT NOT NULL,
   started_at INTEGER NOT NULL,
-  heartbeat_at INTEGER NOT NULL
-) STRICT;
-
--- Display cache for project ids. Source of truth is each project's
--- <root>/.swarm/config.jsonc; this table is denormalised so the UI can
--- label runs without filesystem access. Refreshed on every `POST /runs`
--- (last-runner wins). Rows persist after the project's directory is gone
--- so historical run listings keep their labels.
-CREATE TABLE projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  root_path TEXT,
-  updated_at INTEGER NOT NULL
+  heartbeat_at INTEGER NOT NULL,
+  http_url TEXT,                                  -- harness/serve listener URL; NULL for `swarm daemon --db <path>` only
+  http_port INTEGER,
+  harness_version TEXT
 ) STRICT;
 
 -- Daemon-level audit log: process lifecycle, sweep activity, reaper
@@ -429,9 +423,8 @@ export interface IEventWriter {
   // Artifacts (write)
   putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
 
-  // Workflow / project catalog (write)
+  // Workflow catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
-  upsertProject(args: { id: string; name: string; rootPath?: string | null }): void;
 
   // Maintenance
   vacuum(): void;
@@ -479,10 +472,9 @@ export interface IEventReader {
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
   getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
 
-  // Workflow / project catalog (read)
+  // Workflow catalog (read) + emergent-paths project listing
   getWorkflow(sha: string): WorkflowRow | null;
-  listProjects(): Project[];
-  getProject(id: string): Project | null;
+  listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
 }
 ```
 

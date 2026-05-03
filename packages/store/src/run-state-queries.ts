@@ -40,6 +40,10 @@ export interface RunStateRow {
   dispatch_started_at: number | null;
   updated_at: number;
   title: string | null;
+  cwd: string | null;
+  workflow_name: string | null;
+  workflow_scope: "global" | "path" | "ephemeral" | null;
+  workflow_path: string | null;
   base_git_sha: string | null;
   branch: string | null;
 }
@@ -62,7 +66,9 @@ const SELECT_RUN_STATE_FULL_SQL = `
   SELECT run_id, version, status, current_node, workflow_sha,
          schema_version, routing, metrics, next_seq, last_applied_seq,
          priority, enqueued_at, ready_at, node_started_at,
-         dispatch_started_at, updated_at, title, base_git_sha, branch
+         dispatch_started_at, updated_at, title,
+         cwd, workflow_name, workflow_scope, workflow_path,
+         base_git_sha, branch
     FROM run_state
    WHERE run_id = ?
 `;
@@ -155,8 +161,8 @@ const INSERT_RUN_STATE_SQL = `
     run_id, version, status, current_node, workflow_sha, schema_version,
     routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    project_id
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?)
+    cwd, workflow_name, workflow_scope, workflow_path
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -171,7 +177,10 @@ export function insertRunState(
     enqueuedAt: number;
     readyAt: number;
     updatedAt: number;
-    projectId: string | null;
+    cwd: string | null;
+    workflowName: string | null;
+    workflowScope: "global" | "path" | "ephemeral" | null;
+    workflowPath: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -184,7 +193,10 @@ export function insertRunState(
     args.enqueuedAt,
     args.readyAt,
     args.updatedAt,
-    args.projectId,
+    args.cwd,
+    args.workflowName,
+    args.workflowScope,
+    args.workflowPath,
   );
 }
 

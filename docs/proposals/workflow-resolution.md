@@ -2,35 +2,41 @@
 title: Workflow resolution by name
 status: accepted
 maturity: specified
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-03
 ---
 
 # Workflow resolution by name
 
-> Local resolution is designed and ready. Global resolution
-> (`@global/<name>`) is part of the [harness](./harness.md) subproject.
+> Bare-name resolution targets the global workflows directory.
+> Per-project workflows (`<project>/.swarm/workflows/`) are deferred
+> behind [project-config extensions](./project-config-extensions.md);
+> there's no `@local` / `@global` syntax until then.
 
 ## What lands
 
-CLI/API boundary resolves a workflow argument to a `.dot` file. Daemon
-contract is unchanged: it still receives `workflow_sha`.
+CLI/API boundary resolves a workflow argument to a `.dot` file. The
+daemon contract is unchanged: it still receives `workflow_sha`.
 
 ```
-swarm run build-feature                # @local/build-feature
-swarm run @local/build-feature         # explicit local (error if missing)
+swarm run build-feature                # ~/.swarm/workflows/build-feature.dot
 swarm run ./path/to/foo.dot            # path (anonymous)
+swarm run /abs/path/to/foo.dot         # path (anonymous)
 ```
 
 Resolution order:
 
 ```
-@local/<name>   → <project>/.swarm/workflows/<name>.dot
-<name>          → @local first, else error
-<path>          → <path>
+<name>          → ~/.swarm/workflows/<name>.dot   (no `/`, no `.dot` suffix)
+<path>          → <path>                          (contains `/` or ends in `.dot`)
 ```
 
-Reserved prefixes: `@global`, `@local`. Anything else with `@` parses
-as an error today, reserved for future scopes.
+A bare-name miss surfaces as `workflow not found in
+~/.swarm/workflows/<name>.dot`, with a hint to either drop a file
+there or pass a path explicitly.
+
+`@local` / `@global` syntax is not parsed today. When per-project
+workflows return, the resolver gains a project layer that wins by
+name; until then, the bare name is global.
 
 ## Run metadata
 
@@ -39,30 +45,18 @@ Every run records how the workflow was resolved:
 | Run column | Source | Notes |
 |---|---|---|
 | `workflow_sha` | content hash | what executes; replay key |
-| `workflow_name` | resolved logical name | NULL for path/ephemeral |
-| `workflow_scope` | `'local' \| 'path' \| 'ephemeral'` | enum; `'global'` lands with the harness |
+| `workflow_name` | resolved logical name | NULL for path runs |
+| `workflow_scope` | `'global' \| 'path' \| 'ephemeral'` | enum |
 | `workflow_path` | filesystem path at resolution time | for debug |
 
 Columns ship with [schema additions](./schema-additions.md); writers
 land here.
 
-## Silent-shadow concern
-
-When global resolution lands, `swarm run foo` will resolve `@local/foo`
-before `@global/foo`. This is the npm-resolution bug class: a project
-that accidentally creates `.swarm/workflows/foo.dot` shadows the global
-one without warning.
-
-`swarm workflows ls` (ships with this subproject) shows scopes
-side-by-side once global exists. **Additionally**: log a warning at
-resolution time when a local entry shadows a global one of the same
-name. Silent-wins is too easy to miss.
-
-This concern only manifests after global resolution lands. Flagging
-here so it doesn't drift.
-
 ## What this does not commit to
 
-- `~/.swarm/workflows/` (global workflows directory).
-- `pinned_global` policy. Document the rule; enforcement comes when a
-  third scope ships.
+- `<project>/.swarm/workflows/` (per-project workflows). Returns with
+  [project-config extensions](./project-config-extensions.md).
+- `pinned_global` policy. Document the rule when a second scope ships.
+- Search across multiple global directories
+  (`~/.swarm/workflows/<scope>/<name>.dot`). One flat directory until
+  a real use case forces hierarchy.

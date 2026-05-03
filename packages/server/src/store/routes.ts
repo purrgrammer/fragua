@@ -219,17 +219,17 @@ export function createRoutes(deps: ServerDeps): Hono {
       /** Positional input — lands in `routing.input`, where the
        * executor's buildSubstitutionArgs() picks it up as $ARGUMENTS. */
       input?: string;
-      /** UUIDv7 of the calling project, from its `.swarm/config.jsonc`.
-       * Persisted on `run_state.project_id` so cross-project listings
-       * group correctly under a global daemon. */
-      projectId?: string;
-      /** Human-readable name (from `config.jsonc` `name`, falling back
-       * to `basename(cwd)`). UPSERTed into the projects display cache
-       * so UI filters can label by name. */
-      projectName?: string;
-      /** Project root absolute path at enqueue time. Stored on
-       * projects for UI navigation. */
-      projectRoot?: string;
+      /** Absolute project root the run was enqueued from. Surfaced on
+       * `run_state.cwd`; the only project identifier in the
+       * harness-by-default model. Omit for ephemeral runs (CI, tests). */
+      cwd?: string;
+      /** Resolved workflow name when the caller passed a bare name.
+       * Surfaced on `run_state.workflow_name`. */
+      workflowName?: string;
+      /** How the workflow argument resolved. */
+      workflowScope?: "global" | "path" | "ephemeral";
+      /** Filesystem path of the .dot file at resolution time. */
+      workflowPath?: string;
     }>(c);
     if (!body || typeof body.workflowSha !== "string") {
       return c.json({ error: "workflowSha required" }, 400);
@@ -264,9 +264,12 @@ export function createRoutes(deps: ServerDeps): Hono {
         workflowSha: body.workflowSha,
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
-        ...(typeof body.projectId === "string" ? { projectId: body.projectId } : {}),
-        ...(typeof body.projectName === "string" ? { projectName: body.projectName } : {}),
-        ...(typeof body.projectRoot === "string" ? { projectRoot: body.projectRoot } : {}),
+        ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
+        ...(typeof body.workflowName === "string" ? { workflowName: body.workflowName } : {}),
+        ...(body.workflowScope === "global" || body.workflowScope === "path" || body.workflowScope === "ephemeral"
+          ? { workflowScope: body.workflowScope }
+          : {}),
+        ...(typeof body.workflowPath === "string" ? { workflowPath: body.workflowPath } : {}),
       });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);

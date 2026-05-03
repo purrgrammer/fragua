@@ -26,6 +26,10 @@ function blankState(): RunState {
     title: null,
     baseGitSha: null,
     branch: null,
+    cwd: null,
+    workflowName: null,
+    workflowScope: null,
+    workflowPath: null,
   };
 }
 
