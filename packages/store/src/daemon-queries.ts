@@ -99,19 +99,20 @@ export function selectDaemonLock(db: Database): DaemonLockDbRow | null {
 const UPDATE_DAEMON_LOCK_HTTP_SQL = `
   UPDATE daemon_lock
      SET http_url = ?, http_port = ?, harness_version = ?
-   WHERE id = 1 AND pid = ?
+   WHERE id = 1
 `;
 
 /** Publish the harness/serve HTTP discovery info onto the lock row.
- *  Called by `swarm harness` / `swarm serve` after the listener binds. */
+ *  Called by `swarm harness` after the listener binds — the harness
+ *  is the supervisor, so it owns the URL columns regardless of which
+ *  pid currently holds the daemon role. */
 export function updateDaemonLockHttp(
   db: Database,
-  pid: number,
   url: string | null,
   port: number | null,
   version: string | null,
 ): void {
-  db.query(UPDATE_DAEMON_LOCK_HTTP_SQL).run(url, port, version, pid);
+  db.query(UPDATE_DAEMON_LOCK_HTTP_SQL).run(url, port, version);
 }
 
 const INSERT_DAEMON_LOCK_SQL = `

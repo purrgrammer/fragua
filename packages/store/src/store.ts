@@ -886,11 +886,12 @@ export class SqliteStore implements IEventStore {
     };
   }
 
-  /** Publish the harness/serve HTTP discovery info onto the lock row.
-   *  Called by `swarm harness` / `swarm serve` after the listener binds. */
-  setDaemonLockHttp(args: { pid: number; url: string | null; port: number | null; version: string | null }): void {
+  /** Publish the harness HTTP discovery info onto the lock row. The
+   *  harness is the supervisor, so it owns the URL columns
+   *  regardless of which pid currently holds the daemon role. */
+  setDaemonLockHttp(args: { url: string | null; port: number | null; version: string | null }): void {
     this.writeTxn(() => {
-      updateDaemonLockHttp(this.db, args.pid, args.url, args.port, args.version);
+      updateDaemonLockHttp(this.db, args.url, args.port, args.version);
     });
   }
 

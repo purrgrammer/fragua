@@ -14,8 +14,11 @@
 //   4. Stream /runs/:id/stream (SSE) to stdout until the run reaches a
 //      terminal state or the user hits Ctrl-C.
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 import { globalWorkflowsDir, projectWorkflowsDir, resolveWorkflow } from "../workflow-path.ts";
 
@@ -24,6 +27,25 @@ async function discoverServerUrl(searchPath: string): Promise<string | undefined
     const raw = await readFile(searchPath, "utf8");
     const parsed = JSON.parse(raw) as { url?: unknown };
     return typeof parsed.url === "string" ? parsed.url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read the harness URL from `~/.swarm/swarm.db` daemon_lock. Returns
+ * undefined if the file is missing, the lock row is absent, or the
+ * URL hasn't been published yet. Opens read-only-by-convention: we
+ * only SELECT, no writes. */
+function discoverHarnessUrl(dbPath: string): string | undefined {
+  if (!existsSync(dbPath)) return undefined;
+  try {
+    const store = new SqliteStore({ path: dbPath });
+    try {
+      const lock = store.currentDaemonLock();
+      return lock?.httpUrl ?? undefined;
+    } finally {
+      store.close();
+    }
   } catch {
     return undefined;
   }
@@ -60,10 +82,21 @@ const TERMINAL_TYPES = new Set<string>([
 
 export async function runCommand(opts: RunCommandOptions): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const discoveryPath = opts.dbPath
+  // Discovery cascade:
+  //   1. --url flag (explicit)
+  //   2. <cwd>/.swarm/serve.json (or <db-dir>/serve.json when --db is set)
+  //      — written by `swarm serve --db <path>` (CI primitive)
+  //   3. ~/.swarm/swarm.db daemon_lock.http_url — written by `swarm harness`
+  //   4. http://localhost:3000 (last-resort default)
+  const serveJsonPath = opts.dbPath
     ? resolve(dirname(resolve(opts.dbPath)), "serve.json")
     : resolve(cwd, ".swarm/serve.json");
-  const resolvedUrl = opts.url ?? (await discoverServerUrl(discoveryPath)) ?? "http://localhost:3000";
+  const harnessDbPath = resolve(homedir(), ".swarm/swarm.db");
+  const resolvedUrl =
+    opts.url ??
+    (await discoverServerUrl(serveJsonPath)) ??
+    discoverHarnessUrl(harnessDbPath) ??
+    "http://localhost:3000";
   const baseUrl = resolvedUrl.replace(/\/$/, "");
 
   const resolved = await resolveWorkflow(cwd, opts.workflow);

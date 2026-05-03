@@ -12,6 +12,7 @@ import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
 import { dbCommand } from "../src/commands/db.ts";
 import { gcCommand, parseDuration } from "../src/commands/gc.ts";
+import { harnessCommand } from "../src/commands/harness.ts";
 import { initCommand } from "../src/commands/init.ts";
 import {
   providersAddCommand,
@@ -94,6 +95,25 @@ cli
       }
     },
   );
+
+cli
+  .command("harness", "Supervise the daemon + HTTP server as a foreground process (Ctrl-C to stop)")
+  .option("--port <n>", "TCP port for HTTP (default 0 = ephemeral)")
+  .option("--db <path>", "Store path (default ~/.swarm/swarm.db)")
+  .action(async (options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    const portRaw = options["port"];
+    const portNum =
+      typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number.parseInt(portRaw, 10) : undefined;
+    const code = await harnessCommand({
+      ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+      ...(portNum !== undefined && Number.isFinite(portNum) ? { port: portNum } : {}),
+    });
+    process.exit(code);
+  });
 
 cli
   .command("serve", "Start the HTTP + SSE server in the foreground (Ctrl-C to stop)")
