@@ -16,7 +16,6 @@
 //   - `selectedNodeId` is local state; the graph shows it as a neutral
 //     ring, and the drawer reads the matching `Graph.nodes[id]`.
 
-import { parseDotSource } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -26,6 +25,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 
 // Side drawer crossing ~28rem reads as rushed at the system's default
@@ -48,7 +48,7 @@ export function WorkflowDetail(): JSX.Element {
   const graph = useMemo(() => {
     if (!detail?.source) return null;
     try {
-      return parseDotSource(detail.source);
+      return parseAndPrepare(detail.source);
     } catch {
       return null;
     }

@@ -33,6 +33,7 @@ import { parseDotSource } from "@swarm/core";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
+import { parseAndPrepare } from "../../src/lib/parse-workflow.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -211,6 +212,79 @@ describe("GraphView — rendering", () => {
     expect(startNode).toBeTruthy();
     fireEvent.click(startNode as Element);
     expect(clicks).toEqual(["start"]);
+  });
+
+  it("renders model/provider/effort rows when attrs present", async () => {
+    const src = `digraph styled {
+      graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: high; }"]
+      start [shape=Mdiamond, label="start"]
+      middle [shape=box, label="middle"]
+      done [shape=Msquare, label="done"]
+      start -> middle -> done
+    }`;
+    const detail: RunDetail = { ...makeDetail(), workflowSource: src };
+    const { container } = render(<GraphView detail={detail} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const middle = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
+    expect(middle).toBeTruthy();
+    const w = within(middle as HTMLElement);
+    expect(w.getByText("model")).toBeTruthy();
+    expect(w.getByText("provider")).toBeTruthy();
+    expect(w.getByText("effort")).toBeTruthy();
+    expect(w.getByText("opus")).toBeTruthy();
+    expect(w.getByText("anthropic")).toBeTruthy();
+    expect(w.getByText("high")).toBeTruthy();
+  });
+
+  it("hides model/provider/effort rows when attrs absent", async () => {
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const middle = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
+    expect(middle).toBeTruthy();
+    const w = within(middle as HTMLElement);
+    expect(w.queryByText("model")).toBeNull();
+    expect(w.queryByText("provider")).toBeNull();
+    expect(w.queryByText("effort")).toBeNull();
+  });
+});
+
+describe("toFlowGraph — model_stylesheet cascade surfaces in node data", () => {
+  it("wildcard rule populates model + provider + reasoningEffort on every node", () => {
+    const src = `digraph styled {
+      graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: medium; }"]
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      done [shape=Msquare]
+      start -> a -> b -> done
+    }`;
+    const graph = parseAndPrepare(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    for (const n of flowNodes) {
+      const d = n.data as { model?: string; provider?: string; reasoningEffort?: string };
+      expect(d.model).toBe("opus");
+      expect(d.provider).toBe("anthropic");
+      expect(d.reasoningEffort).toBe("medium");
+    }
+  });
+
+  it("nodes without matching rules leave the fields undefined", () => {
+    const src = `digraph plain {
+      start [shape=Mdiamond]
+      a [shape=box]
+      done [shape=Msquare]
+      start -> a -> done
+    }`;
+    const graph = parseAndPrepare(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const a = flowNodes.find((n) => n.id === "a")?.data as {
+      model?: string;
+      provider?: string;
+      reasoningEffort?: string;
+    };
+    expect(a.model).toBeUndefined();
+    expect(a.provider).toBeUndefined();
+    expect(a.reasoningEffort).toBeUndefined();
   });
 });
 

@@ -32,7 +32,6 @@ import {
   type Node as GraphNode,
   handlerOf,
   maxGoalGateRetries,
-  parseDotSource,
   resolveRetargetChain,
 } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
@@ -42,6 +41,7 @@ import { useCallback, useMemo } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
+import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
@@ -142,7 +142,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     if (graphProp) return graphProp;
     if (!readyDetail?.workflowSource) return null;
     try {
-      return parseDotSource(readyDetail.workflowSource);
+      return parseAndPrepare(readyDetail.workflowSource);
     } catch (err) {
       console.warn(
         "[GraphView] failed to parse workflow DOT for",
@@ -339,6 +339,18 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
             <span className="uppercase tracking-[0.06em]">model</span> <code className="text-sw-text">{d.model}</code>
           </span>
         ) : null}
+        {d.provider ? (
+          <span className="truncate" title={d.provider}>
+            <span className="uppercase tracking-[0.06em]">provider</span>{" "}
+            <code className="text-sw-text">{d.provider}</code>
+          </span>
+        ) : null}
+        {d.reasoningEffort ? (
+          <span className="truncate" title={`reasoning_effort=${d.reasoningEffort}`}>
+            <span className="uppercase tracking-[0.06em]">effort</span>{" "}
+            <code className="text-sw-text">{d.reasoningEffort}</code>
+          </span>
+        ) : null}
         {/* thread_id — flags shared-session nodes (e.g. cluster_dev). */}
         {d.threadId ? (
           <span className="truncate" title={`thread_id=${d.threadId}`}>
@@ -517,6 +529,13 @@ interface SwarmNodeData extends Record<string, unknown> {
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
+  /** DOT `llm_provider` attribute. Surfaced alongside model so
+   *  multi-provider workflows (anthropic + openai cascades via
+   *  `model_stylesheet`) read at a glance which backend a node will hit. */
+  provider: string | undefined;
+  /** DOT `reasoning_effort` (low | medium | high). Cascade target of the
+   *  per-class stylesheet — invisible without surfacing it on the card. */
+  reasoningEffort: "low" | "medium" | "high" | undefined;
   /** Shared LLM session key (DOT `thread_id`). Surfaced in the body so
    *  cluster_dev-style shared-session designs are visible at a glance. */
   threadId: string | undefined;
@@ -634,6 +653,8 @@ export function toFlowGraph(
       handler,
       goalGate: Boolean(a?.goal_gate),
       model: a?.llm_model,
+      provider: a?.llm_provider,
+      reasoningEffort: a?.reasoning_effort,
       threadId: typeof a?.thread_id === "string" ? a.thread_id : undefined,
       toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,
       retryTarget: typeof a?.retry_target === "string" && a.retry_target !== "" ? a.retry_target : undefined,

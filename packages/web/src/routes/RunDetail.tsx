@@ -13,7 +13,6 @@
 // design language as Home's dashboard. The mix of stats is picked for
 // a run's essentials: status, duration, cost, tokens, current node.
 
-import { parseDotSource } from "@swarm/core";
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
@@ -34,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.
 import type { RunDetail as RunDetailT } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
@@ -437,7 +437,7 @@ const RunGraphTab = memo(function RunGraphTab({
   const graph = useMemo(() => {
     if (!detail?.workflowSource) return null;
     try {
-      return parseDotSource(detail.workflowSource);
+      return parseAndPrepare(detail.workflowSource);
     } catch {
       return null;
     }
