@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ObservabilityEvent } from "../src/index.ts";
-import { freshStore, seedRun } from "./helpers.ts";
+import { freshStore, seedRun, seedWorkflow } from "./helpers.ts";
 
 function startEv(nodeId: string, extras: Record<string, unknown> = {}): ObservabilityEvent {
   return { type: "llm.start", payload: { nodeId, iteration: 0, prompt: "p", ...extras } };
@@ -404,6 +404,49 @@ describe("getRunCostTotals", () => {
     expect(totals.inputTokens).toBe(6);
     expect(totals.outputTokens).toBe(6);
     expect(totals.eventCount).toBe(3);
+    store.close();
+  });
+});
+
+describe("listRunIds + listCwds — cwd surface", () => {
+  test("listRunIds({cwd}) narrows to one project root", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    store.enqueueRun({ runId: "a1", workflowSha: wf, cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "a2", workflowSha: wf, cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "b1", workflowSha: wf, cwd: "/repos/beta" });
+    store.enqueueRun({ runId: "n1", workflowSha: wf });
+
+    expect(new Set(store.listRunIds({ cwd: "/repos/alpha" }))).toEqual(new Set(["a1", "a2"]));
+    expect(store.listRunIds({ cwd: "/repos/beta" })).toEqual(["b1"]);
+    expect(store.listRunIds({ cwd: "/nope" })).toEqual([]);
+    expect(store.listRunIds().length).toBe(4);
+    store.close();
+  });
+
+  test("listRunIds combines cwd + statuses", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    store.enqueueRun({ runId: "a1", workflowSha: wf, cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "a2", workflowSha: wf, cwd: "/repos/alpha" });
+    expect(store.listRunIds({ cwd: "/repos/alpha", statuses: ["queued"] })).toHaveLength(2);
+    expect(store.listRunIds({ cwd: "/repos/alpha", statuses: ["completed"] })).toHaveLength(0);
+    store.close();
+  });
+
+  test("listCwds groups runs by cwd, omits NULL, orders by recency", async () => {
+    const store = freshStore();
+    const wf = await seedWorkflow(store);
+    store.enqueueRun({ runId: "a1", workflowSha: wf, cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "b1", workflowSha: wf, cwd: "/repos/beta" });
+    store.enqueueRun({ runId: "a2", workflowSha: wf, cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "n1", workflowSha: wf });
+
+    const rows = store.listCwds();
+    expect(rows.map((r) => r.cwd)).toEqual(["/repos/alpha", "/repos/beta"]);
+    const alpha = rows.find((r) => r.cwd === "/repos/alpha");
+    expect(alpha?.runCount).toBe(2);
+    expect(rows[0]?.cwd).toBe("/repos/alpha");
     store.close();
   });
 });

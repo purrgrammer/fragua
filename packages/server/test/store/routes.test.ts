@@ -1135,3 +1135,39 @@ describe("global event feed (cross-run)", () => {
     // terminal — exactly the contract we want.
   });
 });
+
+describe("GET /projects + GET /runs?cwd= — project surface", () => {
+  test("/projects returns one row per distinct cwd, with basename + counts", async () => {
+    store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/repos/beta" });
+    store.enqueueRun({ runId: "n1", workflowSha: "wf" }); // no cwd → excluded
+    const res = await req("GET", "/projects");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ cwd: string; name: string; runCount: number }>;
+    expect(body.map((r) => r.cwd).sort()).toEqual(["/repos/alpha", "/repos/beta"]);
+    const alpha = body.find((r) => r.cwd === "/repos/alpha");
+    expect(alpha?.name).toBe("alpha");
+    expect(alpha?.runCount).toBe(2);
+  });
+
+  test("/projects strips trailing slash for the basename", async () => {
+    store.enqueueRun({ runId: "x1", workflowSha: "wf", cwd: "/repos/gamma/" });
+    const res = await req("GET", "/projects");
+    const body = (await res.json()) as Array<{ name: string }>;
+    expect(body[0]?.name).toBe("gamma");
+  });
+
+  test("/runs?cwd=… filters to that project root (served by storeRunsRoutes)", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    store.enqueueRun({ runId: "a1", workflowSha: "wf", cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "a2", workflowSha: "wf", cwd: "/repos/alpha" });
+    store.enqueueRun({ runId: "b1", workflowSha: "wf", cwd: "/repos/beta" });
+    const res = await app.request("/runs?cwd=%2Frepos%2Falpha");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ runId: string; cwd?: string }>;
+    expect(body.map((r) => r.runId).sort()).toEqual(["a1", "a2"]);
+    expect(body.every((r) => r.cwd === "/repos/alpha")).toBe(true);
+  });
+});

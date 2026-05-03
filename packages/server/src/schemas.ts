@@ -56,6 +56,10 @@ export const RunSummary = Type.Object({
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   title: Type.Optional(Type.String()),
   input: Type.Optional(Type.String()),
+  /** Project root the run was enqueued from. Mirrors `run_state.cwd` —
+   * the only project identifier in the harness-by-default model. Absent
+   * for ephemeral runs (CI primitives, tests). */
+  cwd: Type.Optional(Type.String()),
 });
 export type RunSummary = Static<typeof RunSummary>;
 
@@ -135,6 +139,21 @@ export const ModelBreakdownRow = Type.Object({
   cost_usd: Type.Number({ minimum: 0 }),
 });
 export type ModelBreakdownRow = Static<typeof ModelBreakdownRow>;
+
+/**
+ * One row in `GET /projects`. A "project" is just a distinct
+ * `run_state.cwd` — no separate registration table. `cwd` is the wire
+ * identity (full absolute path); `name` is `basename(cwd)`, surfaced
+ * server-side so the web doesn't reimplement path parsing. Two
+ * checkouts of the same repo at different paths are distinct projects.
+ */
+export const ProjectSummary = Type.Object({
+  cwd: Type.String(),
+  name: Type.String(),
+  lastUpdatedAt: Type.Integer({ minimum: 0 }),
+  runCount: Type.Integer({ minimum: 0 }),
+});
+export type ProjectSummary = Static<typeof ProjectSummary>;
 
 export const GlobalMetricsPayload = Type.Object({
   total_runs: Type.Integer({ minimum: 0 }),

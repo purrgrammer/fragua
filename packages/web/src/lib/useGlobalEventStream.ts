@@ -132,6 +132,9 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // invalidate.
         void qc.invalidateQueries({ queryKey: queries.runs.lists() });
         void qc.invalidateQueries({ queryKey: queries.runs.detail(evt.runId).queryKey });
+        // Project list rolls up `lastUpdatedAt` / `runCount` per cwd —
+        // any run lifecycle change shifts at least one of those.
+        void qc.invalidateQueries({ queryKey: queries.projects.all() });
       }
     },
     [appendFeed, qc],

@@ -8,6 +8,8 @@ import { AppShell } from "../components/AppShell.tsx";
 import { Analytics } from "../routes/Analytics.tsx";
 import { Home } from "../routes/Home.tsx";
 import { InboxPage } from "../routes/Inbox.tsx";
+import { ProjectDetail } from "../routes/ProjectDetail.tsx";
+import { Projects } from "../routes/Projects.tsx";
 import { ProviderDetail } from "../routes/ProviderDetail.tsx";
 import { Providers } from "../routes/Providers.tsx";
 import { RunDetail } from "../routes/RunDetail.tsx";
@@ -26,6 +28,8 @@ export function createRoutes(): RouteObject[] {
         { path: "inbox", element: <InboxPage /> },
         { path: "workflows", element: <Workflows /> },
         { path: "workflows/:name", element: <WorkflowDetail /> },
+        { path: "projects", element: <Projects /> },
+        { path: "projects/:cwdEnc", element: <ProjectDetail /> },
         { path: "providers", element: <Providers /> },
         { path: "providers/:name", element: <ProviderDetail /> },
         { path: "runs", element: <RunsList /> },

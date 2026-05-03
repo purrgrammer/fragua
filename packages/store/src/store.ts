@@ -76,6 +76,7 @@ import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pr
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
   bumpRunSeq,
+  type CwdSummaryRow,
   claimQueuedRun,
   countQueuedRuns,
   countRunningRuns,
@@ -88,6 +89,7 @@ import {
   type RunCostTotalsRow,
   type RunStateRow,
   type StepAggregateRow,
+  selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
   selectNextQueuedRun,
@@ -917,16 +919,8 @@ export class SqliteStore implements IEventStore {
 
   // ─────────────── Cwd listing ───────────────
 
-  listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }> {
-    return this.db
-      .query<{ cwd: string; lastUpdatedAt: number; runCount: number }, []>(
-        `SELECT cwd, MAX(updated_at) AS lastUpdatedAt, COUNT(*) AS runCount
-           FROM run_state
-          WHERE cwd IS NOT NULL
-          GROUP BY cwd
-          ORDER BY lastUpdatedAt DESC, cwd ASC`,
-      )
-      .all();
+  listCwds(): CwdSummaryRow[] {
+    return selectCwds(this.db);
   }
 
   // ─────────────── Maintenance ───────────────

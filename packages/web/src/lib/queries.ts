@@ -10,6 +10,7 @@ function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null 
   if (filter.status?.length) out.status = [...filter.status].sort();
   if (filter.order && filter.order !== "newest") out.order = filter.order;
   if (filter.limit !== undefined) out.limit = filter.limit;
+  if (filter.cwd && filter.cwd.length > 0) out.cwd = filter.cwd;
   return Object.keys(out).length === 0 ? null : out;
 }
 
@@ -77,6 +78,18 @@ export const queries = {
       queryOptions({
         queryKey: [...queries.workflows.all(), "detail", name] as const,
         queryFn: () => api.getWorkflow(name),
+      }),
+  },
+
+  projects: {
+    all: () => ["projects"] as const,
+    list: () =>
+      queryOptions({
+        queryKey: [...queries.projects.all(), "list"] as const,
+        queryFn: api.listProjects,
+        // No polling — `useGlobalEventStream` invalidates on run-lifecycle
+        // SSE frames, which is what shifts a project's lastUpdatedAt /
+        // runCount. Same SSE-driven freshness as the runs list.
       }),
   },
 

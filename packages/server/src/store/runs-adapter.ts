@@ -62,6 +62,7 @@ export function runStateToSummary(
   if (title !== undefined) summary.title = title;
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;
+  if (state.cwd != null) summary.cwd = state.cwd;
   return summary;
 }
 

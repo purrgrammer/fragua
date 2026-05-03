@@ -184,6 +184,7 @@ export { providersRoutes } from "./routes/providers.ts";
 export {
   ErrorBody,
   NodeState,
+  ProjectSummary,
   RunDetail,
   RunSummary,
 } from "./schemas.ts";

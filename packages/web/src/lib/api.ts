@@ -76,6 +76,9 @@ export interface RunSummary {
   durationMs?: number;
   title?: string;
   input?: string;
+  /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
+   * Absent for ephemeral runs (CI primitives, tests). */
+  cwd?: string;
 }
 
 export interface NodeState {
@@ -349,6 +352,8 @@ export interface ListRunsFilter {
   order?: "newest" | "oldest";
   /** SQL `LIMIT`. Server clamps to a sane max. */
   limit?: number;
+  /** Narrow to a single project root (exact `run_state.cwd` match). */
+  cwd?: string;
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -359,9 +364,24 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   }
   if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
   if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
   const qs = params.toString();
   const path = qs ? `/runs?${qs}` : "/runs";
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
+}
+
+/** Project = distinct `run_state.cwd`. `name` is `basename(cwd)` (server
+ * computes it so paths with mixed separators don't drift across clients).
+ * The wire identity is `cwd`. */
+export interface ProjectSummary {
+  cwd: string;
+  name: string;
+  lastUpdatedAt: number;
+  runCount: number;
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  return getJson("/projects", (v): v is ProjectSummary[] => Array.isArray(v) && v.every(isProjectSummary));
 }
 
 export async function getRun(id: string): Promise<RunDetail> {
@@ -702,6 +722,7 @@ function isRunSummary(v: unknown): v is RunSummary {
     cacheReadTokens?: unknown;
     cacheWriteTokens?: unknown;
     durationMs?: unknown;
+    cwd?: unknown;
   };
   return (
     typeof o.runId === "string" &&
@@ -713,7 +734,8 @@ function isRunSummary(v: unknown): v is RunSummary {
     (o.outputTokens === undefined || typeof o.outputTokens === "number") &&
     (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
-    (o.durationMs === undefined || typeof o.durationMs === "number")
+    (o.durationMs === undefined || typeof o.durationMs === "number") &&
+    (o.cwd === undefined || typeof o.cwd === "string")
   );
 }
 
@@ -748,6 +770,17 @@ function isRunDetail(v: unknown): v is RunDetail {
     (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number")
+  );
+}
+
+function isProjectSummary(v: unknown): v is ProjectSummary {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { cwd?: unknown; name?: unknown; lastUpdatedAt?: unknown; runCount?: unknown };
+  return (
+    typeof o.cwd === "string" &&
+    typeof o.name === "string" &&
+    typeof o.lastUpdatedAt === "number" &&
+    typeof o.runCount === "number"
   );
 }
 

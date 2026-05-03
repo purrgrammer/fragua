@@ -34,6 +34,9 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   app.get("/runs", async (c) => {
     // Query params (all optional, all enforced server-side):
     //   ?status=a,b,c — narrow to specific lifecycle statuses.
+    //   ?cwd=<path>   — narrow to a single project root (exact match
+    //                    against `run_state.cwd`). Powers per-project
+    //                    views; absent runs (NULL cwd) are unreachable.
     //   ?order=oldest — surface longest-waiting first (Inbox semantics).
     //                    Default is newest-first by updated_at.
     //   ?limit=N      — cap the result. Clamped to [1, 200] so a
@@ -42,10 +45,12 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // list endpoint that older clients hit on every page load.
     const statusParam = c.req.query("status");
     const statuses = statusParam !== undefined ? parseStatusList(statusParam) : undefined;
+    const cwdParam = c.req.query("cwd");
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
     const opts: Parameters<typeof listRuns>[1] = { order };
     if (statuses !== undefined) opts.statuses = statuses;
+    if (cwdParam !== undefined && cwdParam.length > 0) opts.cwd = cwdParam;
     if (limit !== undefined) opts.limit = limit;
     const ids = listRuns(store, opts);
     const summaries = [];

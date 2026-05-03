@@ -101,6 +101,12 @@ export interface ListRunIdsOpts {
   /** `WHERE status IN (…)`. Empty array yields zero rows; `undefined`
    *  returns every run. */
   statuses?: RunStatus[];
+  /** Narrow to a single project root. Exact match against `run_state.cwd`
+   *  (the only project identifier in the harness-by-default model);
+   *  `undefined` returns every cwd. NULL `cwd` rows are unreachable from
+   *  this filter — by design, since they're ephemeral runs without a
+   *  filesystem context. Backed by `idx_run_state_cwd`. */
+  cwd?: string;
   /** "newest" → most-recently-updated first (archive view). "oldest" →
    *  smallest enqueued_at first (Inbox metaphor — neglect surfaces). */
   order?: "newest" | "oldest";
@@ -111,17 +117,53 @@ export interface ListRunIdsOpts {
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
  *  Returns `[]` for `statuses: []` without hitting the DB. */
 export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] {
-  const { statuses, order = "newest", limit } = opts;
+  const { statuses, cwd, order = "newest", limit } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
-  const where = statuses ? `WHERE status IN (${statuses.map(() => "?").join(",")})` : "";
+  const clauses: string[] = [];
+  const args: (RunStatus | string | number)[] = [];
+  if (statuses) {
+    clauses.push(`status IN (${statuses.map(() => "?").join(",")})`);
+    args.push(...statuses);
+  }
+  if (cwd !== undefined) {
+    clauses.push("cwd = ?");
+    args.push(cwd);
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
   const limitClause = limit !== undefined ? "LIMIT ?" : "";
+  if (limit !== undefined) args.push(limit);
   const sql = `SELECT run_id FROM run_state ${where} ORDER BY ${orderBy} ${limitClause}`;
-  const args: (RunStatus | number)[] = [...(statuses ?? []), ...(limit !== undefined ? [limit] : [])];
   return db
-    .query<{ run_id: string }, (RunStatus | number)[]>(sql)
+    .query<{ run_id: string }, (RunStatus | string | number)[]>(sql)
     .all(...args)
     .map((r) => r.run_id);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Reads — project (cwd) enumeration
+// ─────────────────────────────────────────────────────────────────────
+
+export interface CwdSummaryRow {
+  cwd: string;
+  lastUpdatedAt: number;
+  runCount: number;
+}
+
+const SELECT_CWDS_SQL = `
+  SELECT cwd, MAX(updated_at) AS lastUpdatedAt, COUNT(*) AS runCount
+    FROM run_state
+   WHERE cwd IS NOT NULL
+   GROUP BY cwd
+   ORDER BY lastUpdatedAt DESC, cwd ASC
+`;
+
+/** Distinct `cwd` values across `run_state`, ordered by most-recent
+ *  activity. NULL `cwd` rows are excluded — they're runs without a
+ *  filesystem context (CI, integration tests) and have no project to
+ *  belong to. */
+export function selectCwds(db: Database): CwdSummaryRow[] {
+  return db.query<CwdSummaryRow, []>(SELECT_CWDS_SQL).all();
 }
 
 const SELECT_WAKE_CANDIDATES_BASE_SQL = `
