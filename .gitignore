@@ -3,9 +3,7 @@
 /.swarm/worktrees/
 /.swarm/daemon/
 /.swarm/blobs/
-/.swarm/swarm.db
-/.swarm/swarm.db-shm
-/.swarm/swarm.db-wal
+/.swarm/swarm.db*
 /.swarm/serve.json
 
 # Node / Bun
