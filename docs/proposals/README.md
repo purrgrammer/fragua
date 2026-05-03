@@ -54,7 +54,7 @@ delta called out in the proposal body.
 | [Handler discipline rails for extension code](./handler-discipline-extensions.md) | sketch | extend the in-tree lint to user-supplied handlers / tools and the agent backend |
 | [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §14 risk #3; nominal capacity claims have no measurement behind them |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
-| [Recoverable budget pause](./recoverable-budget-pause.md) | designed | new `budget_policy="pause"` (default) + `paused_budget` status; budget overruns suspend for operator decision instead of halting. Empirical motivation: the introspect workflow ate two budget halts this session, each abandoning $0.50 of upstream work |
+| [Recoverable pause unification](./recoverable-budget-pause.md) | designed | collapse operator-resumable family to one `paused` status + one reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`). Default `budget_policy` flips `stop`→`pause`; budget overruns become recoverable. Absorbs `paused_provider_error`, routes 402 to `payment_required`, leaves `paused_hitl` / `paused_*_retry` / `quarantined` untouched |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
 
 ## Deferred
