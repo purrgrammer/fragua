@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
+import { ensureWebBundle } from "../web-build.ts";
 import { startServer } from "./serve.ts";
 
 const LOCK_WAIT_MS = 5_000;
@@ -46,11 +47,16 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   console.log(chalk.green("swarm harness starting"));
   console.log(chalk.dim(`  store: ${dbPath}`));
 
+  // Build / refresh the web bundle before binding so the moment the URL
+  // prints, the latest UI is what gets served. Skipped automatically for
+  // production installs (no src/) and SWARM_NO_WEB_BUILD=1.
+  const web = await ensureWebBundle();
+
   // 1. HTTP server (in-process). Binds before the daemon spawns so the
   //    URL is ready to publish the moment the daemon takes the lock.
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
-    serverHandle = await startServer({ dbPath, port: opts.port ?? 0 });
+    serverHandle = await startServer({ dbPath, port: opts.port ?? 0, webDistDir: web.distDir });
   } catch (err) {
     console.error(chalk.red(`harness: failed to bind HTTP — ${(err as Error).message}`));
     return 1;
