@@ -13,9 +13,9 @@
 // workflow produces the narrative review (prose suitable for
 // release-readiness sign-off); the lint produces the pass/fail signal.
 //
-// Models: sonnet for enumeration / pattern-matching (collect, health);
-// opus + reasoning_effort:high for the genuine reasoning work (drift,
-// synthesize) — applied via stylesheet `.heavy` class.
+// Models: haiku for mechanical inventory + sqlite spot-checks (collect,
+// health); opus + reasoning_effort:high for the genuine reasoning work
+// (drift, synthesize) — applied via stylesheet `.heavy` class.
 
 digraph introspect {
   graph [
@@ -24,7 +24,7 @@ digraph introspect {
     default_fidelity = "compact"
     budget_usd       = 12.00
     budget_policy    = "warn"
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #collect { llm_model: claude-haiku-4-6; } #health { llm_model: claude-haiku-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
   ]
 
   start [shape=Mdiamond]
@@ -32,7 +32,6 @@ digraph introspect {
   collect [
     prompt = "Inventory swarm's current state. Read-only.\n\n$ARGUMENTS\n\nRead in full:\n- packages/store/src/schema.sql\n- packages/types/src/swarm-events.ts\n- packages/core/src/handler/types.ts\n- packages/core/src/handler/intent-fold.ts\n- docs/SPEC.md, docs/ARCHITECTURE.md, docs/handler-contract.md, docs/intent-fold.md, docs/PENDING.md\n- README.md, docs/proposals/README.md\n- every docs/proposals/*.md (front-matter plus first section is enough)\n- .agents/skills/swarm-author/SKILL.md, .agents/skills/swarm-run/SKILL.md, .agents/skills/swarm-debug/SKILL.md\n\nRun via bash:\n- git log -30 --oneline\n- git log -50 --format='%h %s' on the four contract files above\n- ls docs/proposals/\n\nOutput one structured snapshot:\n1. Authoritative surfaces — line count + sha256 first 12 chars per contract file\n2. Status enum, intent types, fact types, halt reasons, quarantine reasons (verbatim)\n3. Schema tables and columns (verbatim from schema.sql)\n4. README 'What swarm delivers today' bullets (verbatim)\n5. Proposal index — every file with title/status/maturity from front-matter\n6. Recent commits touching contract files\n7. Swarm-* skill files — line count + sha256 first 12 + the version-sensitive sections each cites (validator codes, DOT shape table, HTTP routes, event taxonomy references)\n\nDo not analyse. Do not recommend. Inventory only."
     allowed_tools    = "read, ls, find, bash"
-    reasoning_effort = "medium"
     max_cost_usd     = 1.50
   ]
 
@@ -46,7 +45,6 @@ digraph introspect {
   health [
     prompt = "Operational health spot checks. Read-only sqlite3 queries against .swarm/swarm.db.\n\nFor each metric below, compose a sqlite3 query, run it via bash, and report the result. Stay in the last 7 days unless noted.\n\n- run-status distribution from run_state\n- halt-reason distribution from fact.run_halted events\n- event payload size: max + average + count >= 80% of 4 KB cap (3276 bytes)\n- routing size on run_state: max + average + count >= 80% of 8 KB cap (6553 bytes)\n- count of fact.handler_timeout_leaked events\n- count of fact.run_quarantined events\n- daemon_events counts by type (use the daemon_events table, not events)\n\nFor each result label OK / WATCH / ALERT. WATCH = any cap-near-miss > 0. ALERT = cap-hit-rate > 1%, quarantines > 0, or recent reaper takeover.\n\nIf .swarm/swarm.db does not exist or has no rows, report 'no operational data' and stop."
     allowed_tools    = "read, bash"
-    reasoning_effort = "low"
     max_cost_usd     = 1.00
   ]
 

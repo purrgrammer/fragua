@@ -17,7 +17,7 @@ digraph change {
     model_stylesheet      = "
       *           { llm_provider: anthropic; llm_model: claude-opus-4-7; }
       .verify     { llm_model: claude-sonnet-4-6; }
-      .commit     { llm_model: claude-sonnet-4-6; }
+      .commit     { llm_model: claude-haiku-4-6; }
       #review     { llm_model: claude-sonnet-4-6; }
     "
   ]

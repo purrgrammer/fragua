@@ -14,7 +14,7 @@ digraph merge {
     goal             = "Rebase the target branch onto main, resolve conflicts deterministically, CAS-fast-forward main."
     label            = "merge"
     default_fidelity = "compact"
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #preflight { llm_model: claude-haiku-4-6; }"
   ]
 
   start [shape=Mdiamond]

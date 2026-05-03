@@ -19,7 +19,7 @@ digraph abort_test {
     label            = "abort-test"
     default_fidelity = "compact"
     budget_usd       = 0.10
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-haiku-4-5; }"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-haiku-4-6; }"
   ]
 
   start [shape=Mdiamond]
