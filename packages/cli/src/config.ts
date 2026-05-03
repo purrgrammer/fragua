@@ -1,12 +1,22 @@
-// Load `.swarm/config.jsonc` from the project root. The file is the
-// project's identity (`id`, `name`) and a *user preference* layer:
-// CLI flags beat config, config beats hard-coded defaults.
+// User-preference config for swarm. Two-layer cascade:
+//   global   ~/.swarm/config.jsonc   — generic preferences (LLM defaults,
+//                                       autoTitle, blocklist, concurrency,
+//                                       timeouts, blob GC, skills paths, …)
+//   project  <cwd>/.swarm/config.jsonc — project-specific knobs only
+//                                       (today: `bootstrap`). Overlays
+//                                       global; project keys win.
 //
-// Missing file → `{}` (first-run UX). Malformed file or schema-invalid
+// Top-level keys merge shallowly between the two layers. Nested objects
+// (`defaults`, `blobGc`, `skills`, `timeouts`) merge one level deep so a
+// project config can override `defaults.llm_model` without losing the
+// global `defaults.summariser` block.
+//
+// Missing files → `{}` (first-run UX). Malformed file or schema-invalid
 // content → throw with a caller-friendly message; silent fallback would
 // hide typos that would otherwise mis-route runs.
 
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -68,19 +78,12 @@ export const SwarmConfigSchema = Type.Object(
     // Schema version. Currently always 1; bumped when the on-disk shape
     // changes in a way readers must opt into.
     version: Type.Optional(Type.Literal(1)),
-    // Project identity (UUIDv7) — set by `swarm init`, committed to git.
-    // Two clones of the same repo see the same id; runs join on it.
-    id: Type.Optional(
-      Type.String({ pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }),
-    ),
-    // Display name. Advisory only — never key on this; rename-safe routing
-    // uses `id`.
-    name: Type.Optional(Type.String()),
     // Shell command run inside each fresh worktree before the first node
     // fires. Use whatever the project's stack needs — `bun install
     // --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
     // `./scripts/bootstrap.sh`, etc. Omit for source-only projects.
-    // Non-zero exit fails the run.
+    // Non-zero exit fails the run. Project-specific by nature; lives in
+    // `<project>/.swarm/config.jsonc`, not the global config.
     bootstrap: Type.Optional(Type.String()),
     defaults: Type.Optional(Defaults),
     // Auto-generated run titles from $ARGUMENTS. true (default) kicks off
@@ -159,11 +162,10 @@ function formatValidationErrors(errors: Iterable<{ path: string; message: string
   return list.map((e) => `${e.path || "<root>"}: ${e.message}`).join("; ");
 }
 
-/** Load and parse `<cwd>/.swarm/config.jsonc`. Returns `{}` if the file
- * is missing — config is always optional. Throws on parse or schema
- * errors so typos surface immediately. */
-export async function loadConfig(cwd: string): Promise<SwarmConfig> {
-  const path = resolve(cwd, ".swarm/config.jsonc");
+/** Parse and validate one config file. Returns `{}` if the file is
+ * missing. Throws on parse or schema errors so typos surface
+ * immediately. */
+async function loadConfigFile(path: string): Promise<SwarmConfig> {
   let body: string;
   try {
     body = await readFile(path, "utf8");
@@ -183,4 +185,35 @@ export async function loadConfig(cwd: string): Promise<SwarmConfig> {
     throw new Error(`config: validation failed in ${path}: ${msg}`);
   }
   return parsed;
+}
+
+/** One-level deep merge: top-level scalars from `overlay` win; nested
+ * objects merge field-by-field. Arrays replace wholesale. */
+function mergeConfig(base: SwarmConfig, overlay: SwarmConfig): SwarmConfig {
+  const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) continue;
+    const existing = (base as Record<string, unknown>)[key];
+    const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v);
+    if (isPlainObject(value) && isPlainObject(existing)) {
+      out[key] = { ...existing, ...value };
+    } else {
+      out[key] = value;
+    }
+  }
+  return out as SwarmConfig;
+}
+
+/** Load the merged user config: `~/.swarm/config.jsonc` (global) overlaid
+ * by `<cwd>/.swarm/config.jsonc` (project). Either layer may be absent.
+ * Project keys win on collisions; nested objects merge one level deep.
+ *
+ * `opts.homeDir` overrides the global path's base — used by tests to
+ * isolate from the user's real `~/.swarm/`. Production callers omit it. */
+export async function loadConfig(cwd: string, opts: { homeDir?: string } = {}): Promise<SwarmConfig> {
+  const globalPath = resolve(opts.homeDir ?? homedir(), ".swarm/config.jsonc");
+  const projectPath = resolve(cwd, ".swarm/config.jsonc");
+  const [global, project] = await Promise.all([loadConfigFile(globalPath), loadConfigFile(projectPath)]);
+  return mergeConfig(global, project);
 }

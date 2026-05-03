@@ -1,66 +1,13 @@
 {
-  // swarm project config — see docs/proposals/project-config.md.
-  // `id` and `name` are committed; runtime state under .swarm/
-  // (runs, worktrees, db, daemon lock) is gitignored.
+  // swarm project config — <project>/.swarm/config.jsonc.
+  // Project-specific knobs only. Generic preferences live in
+  // ~/.swarm/config.jsonc and cascade under this file.
 
   "version": 1,
-  "id": "019de01e-5ccd-7010-9184-defb237e74db",
-  "name": "swarm",
 
   // Stack-agnostic bootstrap. Runs inside each fresh worktree before
-  // the first node fires, after `git worktree add`. Non-zero exit fails
-  // the run. Leave unset for projects that don't need a per-worktree
-  // install.
-  "bootstrap": "bun install --frozen-lockfile",
-
-  "defaults": {
-    // Multi-provider: swap to any provider pi-ai supports — see
-    // `swarm providers`. Examples:
-    //   anthropic   | ANTHROPIC_API_KEY
-    //   openai      | OPENAI_API_KEY
-    //   openrouter  | OPENROUTER_API_KEY   (300+ models, one key)
-    //   google      | GEMINI_API_KEY
-    //   groq        | GROQ_API_KEY
-    "llm_provider": "anthropic",
-    "llm_model": "claude-sonnet-4.7",
-
-    // Tool permission mode. Phase 2 supports unsafe only. Phase 6 will
-    // add classifier + interactive.
-    "permissions": "unsafe",
-
-    // Weak-model summariser. Powers:
-    //   - async run-title generation from $ARGUMENTS (see `autoTitle`)
-    //   - fidelity=summary:medium|high compression of prior node
-    //     transcripts
-    // Always cheaper than the primary coding model. Leave unset to
-    // disable all summarisation — title generation silently skips;
-    // fidelity=summary:* falls back to the deterministic
-    // `summary:low` template with a warning.
-    "summariser": {
-      "llm_provider": "anthropic",
-      "llm_model": "claude-haiku-4.6"
-    }
-  },
-
-  // Auto-generated run titles from $ARGUMENTS. true (default) kicks
-  // off a fire-and-forget summariser call at run start and emits
-  // run.title_generated when it resolves. false disables. CLI flag
-  // --no-auto-title wins over this.
-  "autoTitle": true,
-
-  // Command blocklist applied even in unsafe mode. Matched as literal
-  // substrings against the shell command. Zero-cost safety floor.
-  "blocklist": [
-    "rm -rf /",
-    "rm -rf ~",
-    "rm -rf .",
-    "rm -rf ..",
-    "sudo ",
-    "curl | sh",
-    "curl|sh",
-    "wget | sh",
-    "wget|sh",
-    "git push --force origin main",
-    "git push --force origin master"
-  ]
+  // the first node fires, after `git worktree add`. Non-zero exit
+  // fails the run. Project-specific because the command depends on
+  // the project's stack (bun / pnpm / pip / cargo / …).
+  "bootstrap": "bun install --frozen-lockfile"
 }

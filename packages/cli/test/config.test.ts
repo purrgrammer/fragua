@@ -11,13 +11,16 @@ import { loadConfig, resolveTimeouts } from "../src/config.ts";
 
 describe("loadConfig", () => {
   let scratch: string;
+  let scratchHome: string;
 
   beforeEach(async () => {
     scratch = await mkdtemp(join(tmpdir(), "swarm-config-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "swarm-home-"));
   });
 
   afterEach(async () => {
     await rm(scratch, { recursive: true, force: true });
+    await rm(scratchHome, { recursive: true, force: true });
   });
 
   async function write(body: string): Promise<void> {
@@ -25,9 +28,17 @@ describe("loadConfig", () => {
     await writeFile(join(scratch, ".swarm/config.jsonc"), body, "utf8");
   }
 
-  test("returns {} when .swarm/config.jsonc is missing", async () => {
-    const cfg = await loadConfig(scratch);
-    expect(cfg).toEqual({});
+  async function writeGlobal(body: string): Promise<void> {
+    await mkdir(join(scratchHome, ".swarm"), { recursive: true });
+    await writeFile(join(scratchHome, ".swarm/config.jsonc"), body, "utf8");
+  }
+
+  function load(): Promise<ReturnType<typeof loadConfig> extends Promise<infer T> ? T : never> {
+    return loadConfig(scratch, { homeDir: scratchHome });
+  }
+
+  test("returns {} when both layers are missing", async () => {
+    expect(await load()).toEqual({});
   });
 
   test("parses defaults.provider and defaults.model", async () => {
@@ -37,7 +48,7 @@ describe("loadConfig", () => {
         "llm_model": "anthropic/claude-opus-4.7"
       }
     }`);
-    const cfg = await loadConfig(scratch);
+    const cfg = await load();
     expect(cfg.defaults?.llm_provider).toBe("openrouter");
     expect(cfg.defaults?.llm_model).toBe("anthropic/claude-opus-4.7");
   });
@@ -50,28 +61,27 @@ describe("loadConfig", () => {
         "llm_model": "claude-sonnet-4.6",
       },
     }`);
-    const cfg = await loadConfig(scratch);
-    expect(cfg.defaults?.llm_provider).toBe("ppq");
+    expect((await load()).defaults?.llm_provider).toBe("ppq");
   });
 
   test("throws on malformed JSONC (no silent fallback)", async () => {
     await write("{ this is not json }");
-    await expect(loadConfig(scratch)).rejects.toThrow(/parse error/);
+    await expect(load()).rejects.toThrow(/parse error/);
   });
 
   test("throws when the root is not an object", async () => {
     await write(`"just-a-string"`);
-    await expect(loadConfig(scratch)).rejects.toThrow(/must be a JSON object/);
+    await expect(load()).rejects.toThrow(/must be a JSON object/);
   });
 
   test("throws on schema violation (typo'd key)", async () => {
     await write(`{ "autoTitler": true }`);
-    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
+    await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("throws on snake_case key from the legacy YAML schema", async () => {
     await write(`{ "auto_title": true }`);
-    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
+    await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("parses runtime ceilings: maxQueuedRuns, abortLoopCeiling, maxLeakedHandlers", async () => {
@@ -80,7 +90,7 @@ describe("loadConfig", () => {
       "abortLoopCeiling": 8,
       "maxLeakedHandlers": 2
     }`);
-    const cfg = await loadConfig(scratch);
+    const cfg = await load();
     expect(cfg.maxQueuedRuns).toBe(500);
     expect(cfg.abortLoopCeiling).toBe(8);
     expect(cfg.maxLeakedHandlers).toBe(2);
@@ -96,7 +106,7 @@ describe("loadConfig", () => {
         "shutdownDrain": "30s"
       }
     }`);
-    const cfg = await loadConfig(scratch);
+    const cfg = await load();
     expect(cfg.timeouts?.codergen).toBe("30m");
     expect(cfg.timeouts?.tool).toBe("5m");
     expect(cfg.timeouts?.http).toBe("30s");
@@ -104,20 +114,34 @@ describe("loadConfig", () => {
     expect(cfg.timeouts?.shutdownDrain).toBe("30s");
   });
 
-  test("parses identity (id + name) when present", async () => {
-    await write(`{
-      "version": 1,
-      "id": "019de01e-5ccd-7010-9184-defb237e74db",
-      "name": "demo"
+  test("global → project cascade: project keys win, nested objects merge one level deep", async () => {
+    await writeGlobal(`{
+      "defaults": {
+        "llm_provider": "anthropic",
+        "llm_model": "claude-sonnet-4.7",
+        "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4.6" }
+      },
+      "autoTitle": true,
+      "blocklist": ["sudo "]
     }`);
-    const cfg = await loadConfig(scratch);
-    expect(cfg.id).toBe("019de01e-5ccd-7010-9184-defb237e74db");
-    expect(cfg.name).toBe("demo");
+    await write(`{
+      "bootstrap": "bun install --frozen-lockfile",
+      "defaults": { "llm_model": "claude-opus-4.7" }
+    }`);
+    const cfg = await load();
+    expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
+    expect(cfg.defaults?.llm_provider).toBe("anthropic"); // from global
+    expect(cfg.defaults?.llm_model).toBe("claude-opus-4.7"); // project override
+    expect(cfg.defaults?.summariser?.llm_model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
+    expect(cfg.autoTitle).toBe(true); // global only
+    expect(cfg.blocklist).toEqual(["sudo "]); // global only
   });
 
-  test("rejects ids that are not UUIDv7", async () => {
-    await write(`{ "id": "00000000-0000-4000-8000-000000000000" }`);
-    await expect(loadConfig(scratch)).rejects.toThrow(/validation failed/);
+  test("global only: project file absent, global config flows through", async () => {
+    await writeGlobal(`{ "autoTitle": false, "concurrency": 2 }`);
+    const cfg = await load();
+    expect(cfg.autoTitle).toBe(false);
+    expect(cfg.concurrency).toBe(2);
   });
 });
 

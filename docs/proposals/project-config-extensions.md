@@ -17,10 +17,26 @@ last-reviewed: 2026-05-03
 > readable for repos that already initialised one (notably the swarm
 > repo itself). It just isn't extended.
 
+## What's project-local today
+
+- `config.bootstrap` — the per-worktree shell command (`bun install
+  --frozen-lockfile`, `pnpm install`, `pip install -r requirements.txt`,
+  …). Project-specific by nature: the command depends on the project's
+  stack. Stays in `<project>/.swarm/config.jsonc`.
+
+## What's global
+
+`~/.swarm/config.jsonc` is the user-preference layer. Project config
+overlays it; project keys win, nested objects merge one level deep.
+
+- `defaults.{llm_provider, llm_model, permissions, summariser}` — LLM
+  + permission preferences.
+- `autoTitle`, `blocklist`, `concurrency`, `maxLoops`,
+  `maxQueuedRuns`, `abortLoopCeiling`, `maxLeakedHandlers`.
+- `blobGc`, `skills`, `timeouts` — daemon behavior.
+
 ## What's NOT happening for now
 
-- Per-project bootstrap command (today: `config.bootstrap` runs in
-  `WorktreeProvisioner`). Goes global on `~/.swarm/config.jsonc`.
 - Per-project LLM defaults (`defaults.llm_provider` /
   `defaults.llm_model`). Global-only.
 - Per-project summariser config. Global-only.
@@ -29,8 +45,6 @@ last-reviewed: 2026-05-03
 - Per-project concurrency. Global-only.
 - Per-project workflows directory (`<project>/.swarm/workflows/`).
   See [workflow-resolution](./workflow-resolution.md).
-
-All of the above honor `~/.swarm/config.jsonc` only.
 
 ## When this becomes load-bearing
 

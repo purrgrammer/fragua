@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import chalk from "chalk";
 
 const GITIGNORE_BLOCK = `# swarm runtime — never commit these
@@ -50,24 +50,23 @@ export async function initCommand(opts: InitCommandOptions = {}): Promise<number
     return 1;
   }
 
-  const name = basename(resolve(cwd));
-  const body = renderConfig({ name });
-
   await mkdir(resolve(cwd, ".swarm/workflows"), { recursive: true });
-  await writeFile(configPath, body, "utf8");
+  await writeFile(configPath, renderConfig(), "utf8");
   await mergeGitignore(cwd);
 
   console.log(chalk.green(`✓ wrote ${configPath}`));
-  console.log(chalk.dim(`  name: ${name}`));
   console.log(chalk.dim("  workflows: .swarm/workflows/ (empty)"));
   return 0;
 }
 
-function renderConfig(args: { name: string }): string {
+function renderConfig(): string {
   return `{
-  // swarm project config — see docs/proposals/project-config.md.
-  "version": 1,
-  "name": ${JSON.stringify(args.name)}
+  // swarm project config — project-specific knobs only. Generic
+  // preferences live in ~/.swarm/config.jsonc.
+  "version": 1
+
+  // Uncomment if the project needs a per-worktree bootstrap command:
+  // "bootstrap": "bun install --frozen-lockfile"
 }
 `;
 }
