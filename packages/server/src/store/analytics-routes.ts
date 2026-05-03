@@ -6,13 +6,14 @@
 //                          window), bucketed time series (runs, spend,
 //                          tokens, cache), and three distributions
 //                          (halt-reason, model, top workflows). One round
-//                          trip per refresh tick.
+//                          trip per refresh tick. Optional `?cwd=<abs>`
+//                          scopes everything to one project root.
 //   GET /analytics/runs  — drill-down. Returns a paginated list of
 //                          RunSummary objects matching the same window +
-//                          chart-element filters (workflow, halt, model).
-//                          Reuses the runs-adapter projection so the UI
-//                          renders these with the same RunRow component
-//                          the /runs page uses.
+//                          chart-element filters (workflow, halt, model,
+//                          cwd). Reuses the runs-adapter projection so
+//                          the UI renders these with the same RunRow
+//                          component the /runs page uses.
 
 import {
   type AnalyticsWindow,
@@ -46,6 +47,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
 
     const { current, previous, bucket, tzOffsetMinutes } = params;
     const bucketed: BucketedWindow = { ...current, bucket, tzOffsetMinutes };
+    if (current.cwd !== undefined) bucketed.cwd = current.cwd;
 
     const totals = {
       current: store.getKpiTotals(current),
@@ -80,6 +82,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     const workflowSha = c.req.query("workflow");
     const haltCategory = c.req.query("halt");
     const model = c.req.query("model");
+    const cwd = c.req.query("cwd");
 
     const filterArgs: DrilldownFilters = {
       fromMs: window.fromMs,
@@ -88,6 +91,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     if (workflowSha) filterArgs.workflowSha = workflowSha;
     if (haltCategory) filterArgs.haltCategory = haltCategory;
     if (model) filterArgs.model = model;
+    if (cwd) filterArgs.cwd = cwd;
 
     const pageOpts: { limit: number; cursor?: string } = { limit };
     if (cursor && decodeCursor(cursor) !== null) pageOpts.cursor = cursor;
@@ -124,6 +128,14 @@ interface AnalyticsParamsOk {
   tzOffsetMinutes: number;
 }
 
+// Empty-string `cwd` would silently filter everything out (no row has
+// `cwd = ''`), so treat it identically to absent. Anything non-empty is
+// applied verbatim — the predicate is exact-match.
+function parseCwd(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.length === 0) return undefined;
+  return raw;
+}
+
 interface ParseError {
   ok: false;
   error: string;
@@ -147,6 +159,11 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
     return { ok: false, error: "tzOffsetMinutes must be a number" };
   }
 
+  const cwd = parseCwd(q["cwd"]);
+
+  const current: AnalyticsWindow = { fromMs, toMs };
+  if (cwd !== undefined) current.cwd = cwd;
+
   const compareFromRaw = q["compareFrom"];
   const compareToRaw = q["compareTo"];
   let previous: AnalyticsWindow | null = null;
@@ -157,11 +174,12 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
       return { ok: false, error: "compareFrom/compareTo malformed" };
     }
     previous = { fromMs: compareFromMs, toMs: compareToMs };
+    if (cwd !== undefined) previous.cwd = cwd;
   }
 
   return {
     ok: true,
-    current: { fromMs, toMs },
+    current,
     previous,
     bucket: bucketRaw as BucketKind,
     tzOffsetMinutes,

@@ -112,9 +112,7 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly factory: ((runId: string) => Promise<ExecutionEnvironment>) | undefined;
   private readonly bootstrapTimeoutMs: number | undefined;
   private readonly defaultShellTimeoutMs: number | undefined;
-  private readonly resolveRunBootstrap:
-    | ((cwd: string) => Promise<ResolvedRunBootstrap>)
-    | undefined;
+  private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
 
@@ -206,31 +204,25 @@ export class WorktreeProvisioner implements Provisioner {
  * tests + daemons that don't want isolation. `dispose` is a no-op. */
 export class LocalEnvironmentProvisioner implements Provisioner {
   private readonly defaultCwd: string;
-  private readonly defaultTimeoutMs: number | undefined;
-  private readonly envs = new Map<string, ExecutionEnvironment>();
+  private readonly shared: LocalEnvironment;
 
   constructor(cwd: string = process.cwd(), opts: { defaultShellTimeoutMs?: number } = {}) {
     this.defaultCwd = cwd;
-    if (opts.defaultShellTimeoutMs !== undefined) this.defaultTimeoutMs = opts.defaultShellTimeoutMs;
+    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: this.defaultCwd };
+    if (opts.defaultShellTimeoutMs !== undefined) envOpts.defaultTimeoutMs = opts.defaultShellTimeoutMs;
+    this.shared = new LocalEnvironment(envOpts);
   }
 
-  async ensure(runId: string, opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
-    const cached = this.envs.get(runId);
-    if (cached) return cached;
-    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: opts.cwd ?? this.defaultCwd };
-    if (this.defaultTimeoutMs !== undefined) envOpts.defaultTimeoutMs = this.defaultTimeoutMs;
-    const env = new LocalEnvironment(envOpts);
-    this.envs.set(runId, env);
-    return env;
+  async ensure(_runId: string, _opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
+    return this.shared;
   }
 
-  async dispose(runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
-    this.envs.delete(runId);
+  async dispose(_runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
     return { branch: null };
   }
 
-  envFor(runId: string): ExecutionEnvironment | undefined {
-    return this.envs.get(runId);
+  envFor(_runId: string): ExecutionEnvironment | undefined {
+    return this.shared;
   }
 
   baseGitSha(_runId: string): string | null {

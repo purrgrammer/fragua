@@ -560,6 +560,10 @@ export interface AnalyticsRequest {
   tzOffsetMinutes: number;
   compareFromMs?: number | null;
   compareToMs?: number | null;
+  /** Optional project filter — exact `run_state.cwd` match. Absent =
+   *  every project. The query-key includes this field so toggling the
+   *  project selector re-fetches without a stale-cache flash. */
+  cwd?: string;
 }
 
 export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayload> {
@@ -573,6 +577,7 @@ export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayl
     params.set("compareFrom", String(req.compareFromMs));
     params.set("compareTo", String(req.compareToMs));
   }
+  if (req.cwd) params.set("cwd", req.cwd);
   return getJson(`/analytics?${params.toString()}`, isAnalyticsPayload);
 }
 
@@ -582,6 +587,9 @@ export interface AnalyticsRunsRequest {
   workflowSha?: string | undefined;
   haltCategory?: string | undefined;
   model?: string | undefined;
+  /** Same shape + semantics as `AnalyticsRequest.cwd`; lets the
+   *  drill-down drawer stay scoped to the project the user picked. */
+  cwd?: string | undefined;
   limit?: number;
   cursor?: string | null | undefined;
 }
@@ -594,6 +602,7 @@ export async function getAnalyticsRuns(req: AnalyticsRunsRequest): Promise<Analy
   if (req.workflowSha) params.set("workflow", req.workflowSha);
   if (req.haltCategory) params.set("halt", req.haltCategory);
   if (req.model) params.set("model", req.model);
+  if (req.cwd) params.set("cwd", req.cwd);
   if (req.limit !== undefined) params.set("limit", String(req.limit));
   if (req.cursor) params.set("cursor", req.cursor);
   return getJson(`/analytics/runs?${params.toString()}`, isAnalyticsRunsPage);

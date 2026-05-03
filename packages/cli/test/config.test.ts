@@ -179,11 +179,7 @@ describe("loadProjectConfig", () => {
     // leak into projects that didn't opt in. loadProjectConfig must not
     // see the global layer at all.
     await mkdir(join(scratchHome, ".swarm"), { recursive: true });
-    await writeFile(
-      join(scratchHome, ".swarm/config.jsonc"),
-      `{ "bootstrap": "global-cmd" }`,
-      "utf8",
-    );
+    await writeFile(join(scratchHome, ".swarm/config.jsonc"), `{ "bootstrap": "global-cmd" }`, "utf8");
     // Note: loadProjectConfig doesn't take a homeDir override because
     // it never reads the home dir. The presence of the file in the
     // user's real ~/.swarm/ would be irrelevant either way.
@@ -192,11 +188,7 @@ describe("loadProjectConfig", () => {
 
   test("reads <cwd>/.swarm/config.jsonc verbatim", async () => {
     await mkdir(join(scratch, ".swarm"), { recursive: true });
-    await writeFile(
-      join(scratch, ".swarm/config.jsonc"),
-      `{ "bootstrap": "pnpm install --frozen-lockfile" }`,
-      "utf8",
-    );
+    await writeFile(join(scratch, ".swarm/config.jsonc"), `{ "bootstrap": "pnpm install --frozen-lockfile" }`, "utf8");
     const cfg = await loadProjectConfig(scratch);
     expect(cfg.bootstrap).toBe("pnpm install --frozen-lockfile");
   });

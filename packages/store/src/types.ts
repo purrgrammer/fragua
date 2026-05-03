@@ -769,7 +769,9 @@ export interface IAnalyticsReader {
    * KPI totals for the analytics dashboard window: run count + total
    * cost + token sums (input / output / cache read / cache write).
    * `enqueued_at`-anchored — a run that started yesterday and finished
-   * today bucket-counts as yesterday.
+   * today bucket-counts as yesterday. Pass `window.cwd` to scope every
+   * helper on this reader to one project root (exact `run_state.cwd`
+   * match); omit it to aggregate across every project.
    */
   getKpiTotals(window: AnalyticsWindow): KpiTotalsRow;
   /** Per-bucket run counts split by lifecycle status. One column per

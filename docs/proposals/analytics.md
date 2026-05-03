@@ -59,16 +59,19 @@ provider mapping (the model id has a stable provider prefix in most
 cases, or look it up via the registry). Pricing differs across
 providers so this is a different decision-making angle than model.
 
-## Filters (the trade-off we made for drill-down)
+## Filters
 
-### Workflow filter
-The original "filters or drill-down" call went drill-down. If a clear
-need shows up, add a workflow `<Select>` next to the window selector
-and thread `workflowSha` into the analytics query (already a filter
-on `/analytics/runs`).
+**Per-project filter — shipped.** A project `<Select>` sits next to the
+window selector and threads `cwd` through `/analytics` and
+`/analytics/runs` (and the drill-down drawer) so every chart + slice
+stays scoped to one project root. Empty selection ("All projects")
+aggregates across every cwd, matching the historical behaviour.
 
-### Provider / model filter
-Same shape; only worth doing once the workflow filter is proven.
+### Workflow / provider / model filter
+Still cut. The original "filters or drill-down" call went drill-down
+and that's held up. Revisit per-dimension filters only if a clear need
+shows up; the wire shape on `/analytics/runs` already accepts
+`workflow` / `halt` / `model` so the work would be UI-side.
 
 ## Open design call
 

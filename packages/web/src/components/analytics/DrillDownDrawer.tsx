@@ -99,6 +99,7 @@ function DrillPage({ slice, cursor, onAdvance, isLastPage }: DrillPageProps): JS
   if (slice.workflowSha) requestArgs.workflowSha = slice.workflowSha;
   if (slice.haltCategory) requestArgs.haltCategory = slice.haltCategory;
   if (slice.model) requestArgs.model = slice.model;
+  if (slice.cwd) requestArgs.cwd = slice.cwd;
   if (cursor) requestArgs.cursor = cursor;
   const { data, isPending, isError } = useQuery(queries.analytics.drilldown(requestArgs));
 

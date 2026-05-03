@@ -33,6 +33,27 @@ export interface AnalyticsWindow {
   fromMs: number;
   /** Exclusive upper bound on `enqueued_at` (unix ms). */
   toMs: number;
+  /** Optional project filter — exact `run_state.cwd` match. Absent =
+   *  aggregate across every project. */
+  cwd?: string;
+}
+
+/** Predicate fragment + bind tuple for `(fromMs, toMs[, cwd])`. The
+ *  fragment is splatted into a `WHERE` clause; the params go into
+ *  `db.query(...).all(...params)`. Column reference is parameterised so
+ *  callers using `run_state` directly and callers using an alias
+ *  (`rs.cwd`) can both reuse it. */
+function windowPredicate(w: AnalyticsWindow, cwdCol: string): { sql: string; params: (number | string)[] } {
+  if (w.cwd !== undefined) {
+    return {
+      sql: `enqueued_at >= ? AND enqueued_at < ? AND ${cwdCol} = ?`,
+      params: [w.fromMs, w.toMs, w.cwd],
+    };
+  }
+  return {
+    sql: `enqueued_at >= ? AND enqueued_at < ?`,
+    params: [w.fromMs, w.toMs],
+  };
 }
 
 export interface BucketedWindow extends AnalyticsWindow {
@@ -95,20 +116,20 @@ export interface KpiTotalsRow {
   cacheWriteTokens: number;
 }
 
-const KPI_TOTALS_SQL = `
-  SELECT
-    COUNT(*)                                                                              AS runs,
-    COALESCE(SUM(total_cost_usd), 0)                                                      AS costUsd,
-    COALESCE(SUM(CAST(json_extract(metrics, '$.totalInputTokens')      AS INTEGER)), 0)   AS inputTokens,
-    COALESCE(SUM(CAST(json_extract(metrics, '$.totalOutputTokens')     AS INTEGER)), 0)   AS outputTokens,
-    COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS INTEGER)), 0)   AS cacheReadTokens,
-    COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS INTEGER)), 0)   AS cacheWriteTokens
-  FROM run_state
-  WHERE enqueued_at >= ?1 AND enqueued_at < ?2
-`;
-
 export function getKpiTotals(db: Database, w: AnalyticsWindow): KpiTotalsRow {
-  const row = db.query<KpiTotalsRow, [number, number]>(KPI_TOTALS_SQL).get(w.fromMs, w.toMs);
+  const pred = windowPredicate(w, "cwd");
+  const sql = `
+    SELECT
+      COUNT(*)                                                                              AS runs,
+      COALESCE(SUM(total_cost_usd), 0)                                                      AS costUsd,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalInputTokens')      AS INTEGER)), 0)   AS inputTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalOutputTokens')     AS INTEGER)), 0)   AS outputTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS INTEGER)), 0)   AS cacheReadTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS INTEGER)), 0)   AS cacheWriteTokens
+    FROM run_state
+    WHERE ${pred.sql}
+  `;
+  const row = db.query<KpiTotalsRow, (number | string)[]>(sql).get(...pred.params);
   return (
     row ?? {
       runs: 0,
@@ -144,6 +165,7 @@ export interface RunsByBucketRow {
  *  label from `humanizeHaltReason` / `haltReasonAccentVar`. */
 export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
+  const pred = windowPredicate(w, "cwd");
   const sql = `
     SELECT
       ${bucketExpr} AS bucket,
@@ -158,11 +180,11 @@ export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRo
       SUM(CASE WHEN status = 'halted'                THEN 1 ELSE 0 END) AS halted,
       SUM(CASE WHEN status = 'quarantined'           THEN 1 ELSE 0 END) AS quarantined
     FROM run_state
-    WHERE enqueued_at >= ?1 AND enqueued_at < ?2
+    WHERE ${pred.sql}
     GROUP BY bucket
     ORDER BY bucket
   `;
-  return db.query<RunsByBucketRow, [number, number]>(sql).all(w.fromMs, w.toMs);
+  return db.query<RunsByBucketRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 export interface SpendByBucketRow {
@@ -214,6 +236,7 @@ export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucket
       ELSE total_cost_usd * 0.5
     END
   `;
+  const pred = windowPredicate(w, "cwd");
   const sql = `
     SELECT
       ${bucketExpr}                       AS bucket,
@@ -221,11 +244,11 @@ export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucket
       COALESCE(SUM(${inputCost}),  0)     AS inputCostUsd,
       COALESCE(SUM(${outputCost}), 0)     AS outputCostUsd
     FROM run_state
-    WHERE enqueued_at >= ?1 AND enqueued_at < ?2
+    WHERE ${pred.sql}
     GROUP BY bucket
     ORDER BY bucket
   `;
-  return db.query<SpendByBucketRow, [number, number]>(sql).all(w.fromMs, w.toMs);
+  return db.query<SpendByBucketRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 export interface TokensByBucketRow {
@@ -236,17 +259,18 @@ export interface TokensByBucketRow {
 
 export function getTokensByBucket(db: Database, w: BucketedWindow): TokensByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
+  const pred = windowPredicate(w, "cwd");
   const sql = `
     SELECT
       ${bucketExpr}                                                                          AS bucket,
       COALESCE(SUM(CAST(json_extract(metrics, '$.totalInputTokens')  AS INTEGER)), 0)        AS inputTokens,
       COALESCE(SUM(CAST(json_extract(metrics, '$.totalOutputTokens') AS INTEGER)), 0)        AS outputTokens
     FROM run_state
-    WHERE enqueued_at >= ?1 AND enqueued_at < ?2
+    WHERE ${pred.sql}
     GROUP BY bucket
     ORDER BY bucket
   `;
-  return db.query<TokensByBucketRow, [number, number]>(sql).all(w.fromMs, w.toMs);
+  return db.query<TokensByBucketRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 export interface CacheByBucketRow {
@@ -257,17 +281,18 @@ export interface CacheByBucketRow {
 
 export function getCacheByBucket(db: Database, w: BucketedWindow): CacheByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
+  const pred = windowPredicate(w, "cwd");
   const sql = `
     SELECT
       ${bucketExpr}                                                                          AS bucket,
       COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS INTEGER)), 0)    AS cacheReadTokens,
       COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS INTEGER)), 0)    AS cacheWriteTokens
     FROM run_state
-    WHERE enqueued_at >= ?1 AND enqueued_at < ?2
+    WHERE ${pred.sql}
     GROUP BY bucket
     ORDER BY bucket
   `;
-  return db.query<CacheByBucketRow, [number, number]>(sql).all(w.fromMs, w.toMs);
+  return db.query<CacheByBucketRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 // ── Distributions ──────────────────────────────────────────────────────
@@ -277,16 +302,16 @@ export interface HaltDistributionRow {
   count: number;
 }
 
-const HALT_DISTRIBUTION_SQL = `
-  SELECT status, COUNT(*) AS count
-  FROM run_state
-  WHERE enqueued_at >= ?1 AND enqueued_at < ?2
-  GROUP BY status
-  ORDER BY count DESC
-`;
-
 export function getHaltDistribution(db: Database, w: AnalyticsWindow): HaltDistributionRow[] {
-  return db.query<HaltDistributionRow, [number, number]>(HALT_DISTRIBUTION_SQL).all(w.fromMs, w.toMs);
+  const pred = windowPredicate(w, "cwd");
+  const sql = `
+    SELECT status, COUNT(*) AS count
+    FROM run_state
+    WHERE ${pred.sql}
+    GROUP BY status
+    ORDER BY count DESC
+  `;
+  return db.query<HaltDistributionRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 export interface ModelDistributionRow {
@@ -299,19 +324,19 @@ export interface ModelDistributionRow {
  *  the agent layer maintains — keyed by model name, each value carries
  *  `{ tokens, costUsd }`. `json_each` over that object pivots inline so
  *  no per-row TS reduction is needed. */
-const MODEL_DISTRIBUTION_SQL = `
-  SELECT
-    kv.key                                                            AS model,
-    COALESCE(SUM(CAST(json_extract(kv.value, '$.costUsd') AS REAL)), 0) AS costUsd,
-    COALESCE(SUM(CAST(json_extract(kv.value, '$.tokens')  AS INTEGER)), 0) AS tokens
-  FROM run_state, json_each(run_state.metrics, '$.models') AS kv
-  WHERE enqueued_at >= ?1 AND enqueued_at < ?2
-  GROUP BY kv.key
-  ORDER BY costUsd DESC
-`;
-
 export function getModelDistribution(db: Database, w: AnalyticsWindow): ModelDistributionRow[] {
-  return db.query<ModelDistributionRow, [number, number]>(MODEL_DISTRIBUTION_SQL).all(w.fromMs, w.toMs);
+  const pred = windowPredicate(w, "run_state.cwd");
+  const sql = `
+    SELECT
+      kv.key                                                            AS model,
+      COALESCE(SUM(CAST(json_extract(kv.value, '$.costUsd') AS REAL)), 0) AS costUsd,
+      COALESCE(SUM(CAST(json_extract(kv.value, '$.tokens')  AS INTEGER)), 0) AS tokens
+    FROM run_state, json_each(run_state.metrics, '$.models') AS kv
+    WHERE ${pred.sql}
+    GROUP BY kv.key
+    ORDER BY costUsd DESC
+  `;
+  return db.query<ModelDistributionRow, (number | string)[]>(sql).all(...pred.params);
 }
 
 export interface TopWorkflowRow {
@@ -325,24 +350,24 @@ export interface TopWorkflowRow {
 
 /** Most-run workflows in the window, joined to `workflows.name` so the
  *  client doesn't need a second round-trip to look names up. */
-const TOP_WORKFLOWS_SQL = `
-  SELECT
-    rs.workflow_sha                                                       AS workflowSha,
-    w.name                                                                AS workflowName,
-    COUNT(*)                                                              AS runs,
-    SUM(CASE WHEN rs.status = 'completed'               THEN 1 ELSE 0 END) AS success,
-    SUM(CASE WHEN rs.status IN ('halted','quarantined') THEN 1 ELSE 0 END) AS fail,
-    COALESCE(SUM(rs.total_cost_usd), 0)                                   AS costUsd
-  FROM run_state rs
-  LEFT JOIN workflows w ON w.sha = rs.workflow_sha
-  WHERE rs.enqueued_at >= ?1 AND rs.enqueued_at < ?2
-  GROUP BY rs.workflow_sha, w.name
-  ORDER BY runs DESC, costUsd DESC
-  LIMIT ?3
-`;
-
 export function getTopWorkflows(db: Database, w: AnalyticsWindow, limit: number): TopWorkflowRow[] {
-  return db.query<TopWorkflowRow, [number, number, number]>(TOP_WORKFLOWS_SQL).all(w.fromMs, w.toMs, limit);
+  const pred = windowPredicate(w, "rs.cwd");
+  const sql = `
+    SELECT
+      rs.workflow_sha                                                       AS workflowSha,
+      w.name                                                                AS workflowName,
+      COUNT(*)                                                              AS runs,
+      SUM(CASE WHEN rs.status = 'completed'               THEN 1 ELSE 0 END) AS success,
+      SUM(CASE WHEN rs.status IN ('halted','quarantined') THEN 1 ELSE 0 END) AS fail,
+      COALESCE(SUM(rs.total_cost_usd), 0)                                   AS costUsd
+    FROM run_state rs
+    LEFT JOIN workflows w ON w.sha = rs.workflow_sha
+    WHERE ${pred.sql.replace(/enqueued_at/g, "rs.enqueued_at")}
+    GROUP BY rs.workflow_sha, w.name
+    ORDER BY runs DESC, costUsd DESC
+    LIMIT ?
+  `;
+  return db.query<TopWorkflowRow, (number | string)[]>(sql).all(...pred.params, limit);
 }
 
 // ── Drill-down: paginated run-id list ──────────────────────────────────
@@ -350,6 +375,8 @@ export function getTopWorkflows(db: Database, w: AnalyticsWindow, limit: number)
 export interface DrilldownFilters extends AnalyticsWindow {
   /** Filter to one workflow_sha. */
   workflowSha?: string;
+  // `cwd` inherits from AnalyticsWindow — exact `run_state.cwd` match,
+  // applied alongside the other dimensional filters.
   /** Filter to runs whose lifecycle status matches. Coarse buckets
    *  mirror the four-category collapse the Runs / Outcomes charts
    *  surface: `'success'` → completed; `'failure'` → halted ∪
@@ -402,6 +429,10 @@ export function getDrilldownPage(
   const where: string[] = ["rs.enqueued_at >= ?", "rs.enqueued_at < ?"];
   const params: (number | string)[] = [filters.fromMs, filters.toMs];
 
+  if (filters.cwd !== undefined) {
+    where.push("rs.cwd = ?");
+    params.push(filters.cwd);
+  }
   if (filters.workflowSha) {
     where.push("rs.workflow_sha = ?");
     params.push(filters.workflowSha);

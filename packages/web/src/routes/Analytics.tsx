@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
+import { ProjectSelector } from "../components/analytics/ProjectSelector.tsx";
 // Hidden pending revisit — see commented JSX below.
 // import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
 // import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
@@ -29,6 +30,7 @@ import { TokensChart } from "../components/analytics/TokensChart.tsx";
 // import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
 import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
 import { resolveWindow, type WindowKey } from "../lib/analytics.ts";
+import type { AnalyticsRequest } from "../lib/api.ts";
 import { categoryLabel, formatBucketTooltip } from "../lib/humanize.ts";
 import { useLocale } from "../lib/locale.ts";
 import { queries } from "../lib/queries.ts";
@@ -37,6 +39,7 @@ import type { AnalyticsTotals, DrillSlice } from "../types/analytics.ts";
 
 export function Analytics(): JSX.Element {
   const [windowKey, setWindowKey] = useState<WindowKey>("today");
+  const [cwd, setCwd] = useState<string | null>(null);
   // Recompute the resolved window every minute so "Today" naturally
   // grows toward midnight without forcing a refetch on every render.
   // The actual chart refresh is driven by the 30s `refetchInterval`
@@ -44,16 +47,16 @@ export function Analytics(): JSX.Element {
   const now = useNow(60_000, true);
   const resolved = useMemo(() => resolveWindow(windowKey, new Date(now)), [windowKey, now]);
 
-  const { data, isPending } = useQuery(
-    queries.analytics.summary({
-      fromMs: resolved.fromMs,
-      toMs: resolved.toMs,
-      bucket: resolved.bucket,
-      tzOffsetMinutes: resolved.tzOffsetMinutes,
-      compareFromMs: resolved.compareFromMs,
-      compareToMs: resolved.compareToMs,
-    }),
-  );
+  const summaryReq: AnalyticsRequest = {
+    fromMs: resolved.fromMs,
+    toMs: resolved.toMs,
+    bucket: resolved.bucket,
+    tzOffsetMinutes: resolved.tzOffsetMinutes,
+    compareFromMs: resolved.compareFromMs,
+    compareToMs: resolved.compareToMs,
+  };
+  if (cwd) summaryReq.cwd = cwd;
+  const { data, isPending } = useQuery(queries.analytics.summary(summaryReq));
 
   const [slice, setSlice] = useState<DrillSlice | null>(null);
   const locale = useLocale();
@@ -76,16 +79,19 @@ export function Analytics(): JSX.Element {
   // semantics.
   function openBucketSlice(bucketMs: number, label: string) {
     const next = nextBucketStart(bucketMs, resolved.bucket);
-    setSlice({
+    const slice: DrillSlice = {
       fromMs: bucketMs,
       toMs: Math.min(next, resolved.toMs),
       title: `${label} · ${formatBucketTooltip(bucketMs, resolved.bucket, locale)}`,
-    });
+    };
+    if (cwd) slice.cwd = cwd;
+    setSlice(slice);
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <ProjectSelector value={cwd} onChange={setCwd} />
         <WindowSelector value={windowKey} onChange={setWindowKey} />
       </div>
 
@@ -96,13 +102,15 @@ export function Analytics(): JSX.Element {
           loading={isPending}
           onSelectSlice={(b, category) => {
             const next = nextBucketStart(b, resolved.bucket);
-            setSlice({
+            const slice: DrillSlice = {
               fromMs: b,
               toMs: Math.min(next, resolved.toMs),
               haltCategory: category,
               haltLabel: categoryLabel(category),
               title: `Runs · ${categoryLabel(category)} · ${formatBucketTooltip(b, resolved.bucket, locale)}`,
-            });
+            };
+            if (cwd) slice.cwd = cwd;
+            setSlice(slice);
           }}
           total={runsTotal}
         />

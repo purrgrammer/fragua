@@ -45,6 +45,9 @@ function seedRun(opts: {
   outputTokens?: number;
   cacheReadTokens?: number;
   models?: Record<string, { tokens: number; costUsd: number }>;
+  /** Optional project root — patched onto `run_state.cwd` so the cwd
+   *  filter tests can pin runs to specific projects. */
+  cwd?: string;
 }): string {
   const sha = opts.workflowSha ?? "wf1";
   nextRunId++;
@@ -60,10 +63,11 @@ function seedRun(opts: {
     billedTokens: (opts.inputTokens ?? 0) + (opts.outputTokens ?? 0) + (opts.cacheReadTokens ?? 0),
     models: opts.models ?? {},
   });
-  db.query(`UPDATE run_state SET enqueued_at = ?, metrics = ?, status = ? WHERE run_id = ?`).run(
+  db.query(`UPDATE run_state SET enqueued_at = ?, metrics = ?, status = ?, cwd = ? WHERE run_id = ?`).run(
     opts.enqueuedAtMs,
     metrics,
     opts.status ?? "completed",
+    opts.cwd ?? null,
     runId,
   );
   return runId;
@@ -345,6 +349,49 @@ describe("getDrilldownPage", () => {
       { limit: 10 },
     );
     expect(onlyOpus.runIds).toEqual([opusRunId]);
+  });
+});
+
+describe("cwd filter", () => {
+  test("getKpiTotals scopes to the cwd when set", () => {
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 1, cwd: "/proj/a" });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 2, cwd: "/proj/a" });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 5, cwd: "/proj/b" });
+
+    const projA = store.getKpiTotals({ fromMs: nowMs - 1, toMs: nowMs + 1, cwd: "/proj/a" });
+    expect(projA.runs).toBe(2);
+    expect(projA.costUsd).toBeCloseTo(3, 5);
+
+    const projB = store.getKpiTotals({ fromMs: nowMs - 1, toMs: nowMs + 1, cwd: "/proj/b" });
+    expect(projB.runs).toBe(1);
+    expect(projB.costUsd).toBeCloseTo(5, 5);
+  });
+
+  test("getRunsByBucket / getSpendByBucket / getDrilldownPage respect cwd", () => {
+    const aId = seedRun({ enqueuedAtMs: nowMs, costUsd: 1, inputTokens: 100, outputTokens: 100, cwd: "/proj/a" });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 7, inputTokens: 50, outputTokens: 50, cwd: "/proj/b" });
+
+    const w = { fromMs: nowMs - 1, toMs: nowMs + 1, bucket: "hour" as const, tzOffsetMinutes: 0, cwd: "/proj/a" };
+    const runs = store.getRunsByBucket(w);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.completed).toBe(1);
+
+    const spend = store.getSpendByBucket(w);
+    expect(spend).toHaveLength(1);
+    expect(spend[0]?.costUsd).toBeCloseTo(1, 5);
+
+    const page = store.getDrilldownPage({ fromMs: nowMs - 1, toMs: nowMs + 1, cwd: "/proj/a" }, { limit: 10 });
+    expect(page.runIds).toEqual([aId]);
+  });
+
+  test("absent cwd returns all runs (back-compat)", () => {
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 1, cwd: "/proj/a" });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 2, cwd: "/proj/b" });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 4 }); // no cwd at all
+
+    const totals = store.getKpiTotals({ fromMs: nowMs - 1, toMs: nowMs + 1 });
+    expect(totals.runs).toBe(3);
+    expect(totals.costUsd).toBeCloseTo(7, 5);
   });
 });
 

@@ -17,7 +17,7 @@
 // activity first); first hit wins.
 
 import type { IEventStore } from "@swarm/store";
-import type { WorkflowDetail, WorkflowReadOptions, WorkflowReader, WorkflowSummary } from "../ports.ts";
+import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../ports.ts";
 import { createFsWorkflowReader } from "./fs-workflow-reader.ts";
 
 export interface MultiSourceWorkflowReaderOptions {

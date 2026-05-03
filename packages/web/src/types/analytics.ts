@@ -124,6 +124,10 @@ export interface DrillSlice {
   haltCategory?: string;
   haltLabel?: string;
   model?: string;
+  /** Project filter inherited from the page-level `<ProjectSelector>`,
+   *  threaded through so drill-down stays scoped to the same cwd the
+   *  user picked when they clicked the chart slice. */
+  cwd?: string;
   /** Caption shown in the drawer header. */
   title: string;
 }
