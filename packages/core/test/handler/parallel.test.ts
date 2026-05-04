@@ -44,6 +44,9 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): MutableHandlerContext
     args: {},
     nodeOutputs: new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
+    withScope: () => {
+      throw new Error("stubCtx: withScope not implemented for this test");
+    },
   };
   return Object.assign({ ...base, ...overrides }, { __emitted: emitted });
 }

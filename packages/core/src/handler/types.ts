@@ -184,6 +184,35 @@ export interface HandlerContext {
    * surface "X of Y used" on `llm.start.budget`. Undefined when no
    * ceiling is configured for this run. */
   readonly budgetSnapshot?: BudgetSnapshotInput;
+  /**
+   * Return a new HandlerContext with the same run-level resources
+   * (store, llm, http, recorder, signal, routing, args, nodeOutputs,
+   * emitObservability, env) but rebuilt scope-sensitive surfaces:
+   * `artifacts`, `messages`, `externalCall`, `emit`, `tools` (re-narrowed
+   * by `allowedTools` / `deniedTools`), and `env` (re-wrapped read-only
+   * when the new toolset has no mutator). Used by the auto-dispatcher
+   * to hand each parallel branch a context that carries its own
+   * `(nodeId, iteration)` instead of leaking the parent's via closure
+   * capture. Omitted fields in `override` fall through to the current
+   * scope's values. See `ScopeOverrides`.
+   */
+  readonly withScope: (override: ScopeOverrides) => HandlerContext;
+}
+
+/** Inputs to `HandlerContext.withScope`. Required `nodeId` and `iteration`
+ * are the two non-negotiable scope axes; the rest mirror the
+ * scope-sensitive subset of `BuildContextOpts`. Run-level resources
+ * (store / llm / http / signal / routing / recorder / args / nodeOutputs
+ * / emitObservability / env) are deliberately omitted — they're captured
+ * once at top-level construction and reused across all `withScope` calls. */
+export interface ScopeOverrides {
+  nodeId: string;
+  iteration: number;
+  allowedTools?: readonly string[];
+  deniedTools?: readonly string[];
+  hitlInput?: { selected: string; note?: string } | string;
+  steering?: string;
+  budgetSnapshot?: BudgetSnapshotInput;
 }
 
 /** Subset of `BudgetSnapshot` populated by the executor and threaded

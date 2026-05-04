@@ -22,7 +22,6 @@ import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
 
-type HandlerContext = handler.HandlerContext;
 type HandlerSpec = handler.HandlerSpec;
 
 export interface AutoDispatcherOpts {
@@ -76,7 +75,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs, opts.store);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -87,7 +86,6 @@ function specsForGraph(
   dotSource: string,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
-  store?: IEventStore,
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   // Apply transforms (stylesheet, …) so node.attrs reflect the resolved
@@ -151,7 +149,18 @@ function specsForGraph(
           fanInNode: discovery.fanInNode,
           joinPolicy,
           resolveChild: (childId) => specs.get(childId) ?? null,
-          buildChildContext: (childId, parentCtx) => buildBranchContext(childId, parentCtx, store),
+          buildChildContext: (childId, parentCtx) => {
+            // Single structural rescoping: rebuilds artifacts / messages /
+            // externalCall / emit / tools / env against the branch's own
+            // (nodeId, iteration=0) and per-branch tool narrowing. Run-level
+            // resources (store, llm, http, recorder, signal, routing) are
+            // reused unchanged.
+            const childAttrs = graph.nodes[childId]?.attrs;
+            const override: handler.ScopeOverrides = { nodeId: childId, iteration: 0 };
+            if (Array.isArray(childAttrs?.allowed_tools)) override.allowedTools = childAttrs.allowed_tools;
+            if (Array.isArray(childAttrs?.denied_tools)) override.deniedTools = childAttrs.denied_tools;
+            return parentCtx.withScope(override);
+          },
         }),
       );
     } else if (kind === "parallel.fan_in") {
@@ -186,68 +195,6 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
       detail: `node "${nodeId}": ${message}`,
     }),
   };
-}
-
-/**
- * Child HandlerContext used when a parallel branch is dispatched. The
- * child sees the parent's shared resources (store-backed artifacts /
- * messages / tools / llm / externalCall) but with its own nodeId, a
- * deep-cloned routing snapshot, and iteration reset to 0.
- *
- * The parent's AbortSignal is reused so steers / shutdown propagate.
- * Branch-level events still emit through the parent's `emit`; the
- * executor stamps `nodeId` from the parent ctx, so branch-scoped
- * observability events carry the branch id via the handler writing
- * it into the payload.
- */
-export function buildBranchContext(childId: string, parent: HandlerContext, store?: IEventStore): HandlerContext {
-  // The parent's `emit` closure stamps payloads with the parent's nodeId /
-  // iteration before forwarding to the executor's observability sink (see
-  // packages/daemon/src/executor.ts emitObservability). Spreading the parent
-  // ctx inherits that closure, so any `llm.start` / `agent.*` / `cost.*` /
-  // `tool.*` event a branch emits would land with `nodeId: <parent>` —
-  // breaking the steps endpoint's per-branch tracking, the conversation /
-  // graph branch UI, and any operator query that scopes by nodeId. Inject
-  // the branch identity into payloads before forwarding so the executor's
-  // own stamp (which is overridden by anything in payload) reflects the
-  // branch. Same closure-capture pattern as `artifacts` below.
-  const branchEmit: HandlerContext["emit"] = (type, payload) =>
-    parent.emit(type, { ...payload, nodeId: childId, iteration: 0 });
-  const base: HandlerContext = {
-    ...parent,
-    nodeId: childId,
-    iteration: 0,
-    routing: structuredClone(parent.routing as Record<string, unknown>),
-    emit: branchEmit,
-  };
-  // Without a store handle we can't rebuild the artifacts closure; fall back
-  // to inherited (parent-scoped) artifacts. Tests that stub the parallel
-  // handler without a store still type-check; production paths always pass
-  // it via specsForGraph -> opts.store.
-  if (store == null) return base;
-  // The parent's `artifacts` API closes over (parent.nodeId, parent.iteration)
-  // at construction time — spreading the parent inherits that closure, so any
-  // `ctx.artifacts.put("output", …)` inside a branch lands at the PARENT's
-  // scope. Rebuild against (childId, 0) so each branch's output artifact
-  // lives at its own scope and `$<branchId>.output` substitution can
-  // dereference it downstream.
-  const childScope = (key: string) => ({ runId: parent.runId, nodeId: childId, iteration: 0, key });
-  const artifacts: handler.ArtifactsApi = {
-    put(key, content, mime, opts) {
-      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
-      return store.putArtifact(childScope(key), bytes, mime, opts);
-    },
-    get(key) {
-      return store.getArtifact(childScope(key));
-    },
-    ref(key) {
-      return store.getArtifactRef(childScope(key));
-    },
-    getFrom(scope) {
-      return store.getArtifact(scope);
-    },
-  };
-  return { ...base, artifacts };
 }
 
 function malformedParallelSpec(nodeId: string, reason = "missing branches or fan-in"): HandlerSpec {

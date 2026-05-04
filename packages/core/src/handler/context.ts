@@ -12,6 +12,7 @@ import type {
   HttpClient,
   LlmClient,
   MessagesApi,
+  ScopeOverrides,
   SideEffectRecorder,
   ToolRegistry,
 } from "./types.ts";
@@ -58,17 +59,74 @@ export interface BuildContextOpts {
   budgetSnapshot?: BudgetSnapshotInput;
 }
 
+const EMPTY_NODE_OUTPUTS: ReadonlyMap<string, NodeOutput> = new Map();
+
+/** Run-level resources captured once at top-level context construction
+ * and reused across every `withScope` rescoping. Anything keyed off
+ * `(nodeId, iteration)` or per-node policy lives on `ScopeOverrides`,
+ * NOT here. */
+interface CtxUpstream {
+  runId: string;
+  signal: AbortSignal;
+  routing: Readonly<Record<string, unknown>>;
+  store: IEventStore;
+  llm: LlmClient;
+  http: HttpClient;
+  /** Un-narrowed root registry. Per-scope `allowedTools` / `deniedTools`
+   * are applied via `tools.select(...)` inside `buildScopedContext`. */
+  tools: ToolRegistry;
+  recorder: SideEffectRecorder;
+  args: Readonly<Record<string, string>>;
+  nodeOutputs: ReadonlyMap<string, NodeOutput>;
+  emitObservability: (type: string, payload: Record<string, unknown>) => void;
+  /** Un-wrapped env. The read-only proxy is reapplied per scope based
+   * on the scope's tool narrowing. */
+  env?: ExecutionEnvironment;
+}
+
 /**
  * Wire a HandlerContext to a concrete store + runtime clients.
  *
- * The messages/artifacts APIs delegate to the store; the externalCall helper
- * computes idempotency keys and reports into the recorder (which the
- * executor translates into fact events inside its write transaction).
+ * Construction is two-layered: a `CtxUpstream` captures the run-level
+ * resources once; `buildScopedContext` builds the six scope-sensitive
+ * surfaces (artifacts / messages / externalCall / emit / tools / env)
+ * for a given `(nodeId, iteration, allowedTools, deniedTools, ...)`.
+ * The returned context exposes `withScope` so a parallel branch can
+ * rebuild those six surfaces against its own scope without touching
+ * upstream resources.
  */
-const EMPTY_NODE_OUTPUTS: ReadonlyMap<string, NodeOutput> = new Map();
-
 export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
-  const { runId, nodeId, iteration, store } = opts;
+  const upstream: CtxUpstream = {
+    runId: opts.runId,
+    signal: opts.signal,
+    routing: opts.routing,
+    store: opts.store,
+    llm: opts.llm,
+    http: opts.http,
+    tools: opts.tools,
+    recorder: opts.recorder,
+    args: opts.args ?? {},
+    nodeOutputs: opts.nodeOutputs ?? EMPTY_NODE_OUTPUTS,
+    emitObservability: opts.emitObservability ?? (() => {}),
+    ...(opts.env !== undefined ? { env: opts.env } : {}),
+  };
+
+  const scope: ScopeOverrides = {
+    nodeId: opts.nodeId,
+    iteration: opts.iteration,
+    ...(opts.allowedTools !== undefined ? { allowedTools: opts.allowedTools } : {}),
+    ...(opts.deniedTools !== undefined ? { deniedTools: opts.deniedTools } : {}),
+    ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
+    ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
+    ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
+  };
+
+  return buildScopedContext(upstream, scope);
+}
+
+function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): HandlerContext {
+  const { runId, store } = upstream;
+  const { nodeId, iteration } = scope;
 
   const messages: MessagesApi = {
     append(message: AgentMessage) {
@@ -105,8 +163,8 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     ref(key) {
       return store.getArtifactRef({ runId, nodeId, iteration, key });
     },
-    getFrom(scope: ArtifactScope) {
-      return store.getArtifact(scope);
+    getFrom(s: ArtifactScope) {
+      return store.getArtifact(s);
     },
   };
 
@@ -114,22 +172,29 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     runId,
     nodeId,
     iteration,
-    recorder: opts.recorder,
+    recorder: upstream.recorder,
   });
 
-  const emitObs = opts.emitObservability ?? (() => {});
+  // Always inject the SCOPE's nodeId / iteration into observability
+  // payloads. At top-level the executor's own stamp at
+  // executor.emitObservability also writes nodeId/iteration, but its
+  // ordering puts payload-keys last so our values win — both consistent
+  // with the top-level scope and a hard override for branches whose
+  // upstream stamp would otherwise carry the parent's nodeId.
   const emit = (type: string, payload: Record<string, unknown>): void => {
-    emitObs(type, payload);
+    upstream.emitObservability(type, { ...payload, nodeId, iteration });
   };
 
   const narrowOpts: { allow?: readonly string[]; deny?: readonly string[] } = {};
-  if (opts.allowedTools !== undefined) narrowOpts.allow = opts.allowedTools;
-  if (opts.deniedTools !== undefined) narrowOpts.deny = opts.deniedTools;
+  if (scope.allowedTools !== undefined) narrowOpts.allow = scope.allowedTools;
+  if (scope.deniedTools !== undefined) narrowOpts.deny = scope.deniedTools;
   const scopedTools =
-    opts.allowedTools !== undefined || opts.deniedTools !== undefined ? opts.tools.select(narrowOpts) : opts.tools;
+    scope.allowedTools !== undefined || scope.deniedTools !== undefined
+      ? upstream.tools.select(narrowOpts)
+      : upstream.tools;
 
-  // Align the ExecutionEnvironment with the operator-declared toolset. If
-  // the node's allowed_tools / denied_tools rules out every mutator
+  // Align ExecutionEnvironment with the operator-declared toolset. If
+  // the scope's allowed_tools / denied_tools rules out every mutator
   // (bash / write / edit), wrap env so writeFile / exec throw — a handler
   // that loses its write *tools* also loses the raw env path that would
   // otherwise bypass them. Parallel branches rely on this to guarantee
@@ -140,33 +205,37 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
   // sentinel) and querying an empty registry would falsely wrap every
   // node's env.
   const isMutatorAllowed = (name: string): boolean => {
-    if (opts.allowedTools !== undefined && !opts.allowedTools.includes(name)) return false;
-    if (opts.deniedTools?.includes(name)) return false;
+    if (scope.allowedTools !== undefined && !scope.allowedTools.includes(name)) return false;
+    if (scope.deniedTools?.includes(name)) return false;
     return true;
   };
-  const hasNarrowing = opts.allowedTools !== undefined || opts.deniedTools !== undefined;
+  const hasNarrowing = scope.allowedTools !== undefined || scope.deniedTools !== undefined;
   const envCanMutate = !hasNarrowing || ENV_MUTATOR_TOOLS.some(isMutatorAllowed);
-  const effectiveEnv = opts.env !== undefined && !envCanMutate ? makeReadOnlyEnv(opts.env) : opts.env;
+  const effectiveEnv = upstream.env !== undefined && !envCanMutate ? makeReadOnlyEnv(upstream.env) : upstream.env;
+
+  const withScope = (override: ScopeOverrides): HandlerContext =>
+    buildScopedContext(upstream, { ...scope, ...override });
 
   const ctx: HandlerContext = {
     runId,
     nodeId,
     iteration,
-    signal: opts.signal,
-    routing: opts.routing,
-    llm: opts.llm,
-    http: opts.http,
+    signal: upstream.signal,
+    routing: upstream.routing,
+    llm: upstream.llm,
+    http: upstream.http,
     tools: scopedTools,
     messages,
     artifacts,
     externalCall,
-    args: opts.args ?? {},
-    nodeOutputs: opts.nodeOutputs ?? EMPTY_NODE_OUTPUTS,
+    args: upstream.args,
+    nodeOutputs: upstream.nodeOutputs,
     emit,
-    ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
-    ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
+    withScope,
+    ...(scope.hitlInput !== undefined ? { hitlInput: scope.hitlInput } : {}),
+    ...(scope.steering !== undefined ? { steering: scope.steering } : {}),
     ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
-    ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
+    ...(scope.budgetSnapshot !== undefined ? { budgetSnapshot: scope.budgetSnapshot } : {}),
   };
   return ctx;
 }

@@ -78,6 +78,9 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     args: overrides.args ?? {},
     nodeOutputs: overrides.nodeOutputs ?? new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
+    withScope: () => {
+      throw new Error("stubCtx: withScope not implemented for this test");
+    },
   };
   const merged = { ...base, ...overrides };
   return Object.assign(merged, {
