@@ -10,24 +10,25 @@
 // needed.
 
 import { useQuery } from "@tanstack/react-query";
+import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
+import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { ApiError } from "../lib/api.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
-import { formatUsd } from "../lib/format.ts";
+import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { decodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
-import { formatRelative } from "../lib/time.ts";
+import { computeStats } from "../lib/stats.ts";
+import { formatDuration } from "../lib/time.ts";
 
 const CONFIG_PATH = ".swarm/config.jsonc";
-
-type RunStatus = "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
 
 export function ProjectDetail(): JSX.Element {
   const { cwdEnc = "" } = useParams();
@@ -72,26 +73,8 @@ export function ProjectDetail(): JSX.Element {
     retry: false,
   });
 
-  const stats = useMemo(() => {
-    const list = rows ?? [];
-    const mix: Record<RunStatus, number> = {
-      queued: 0,
-      running: 0,
-      paused: 0,
-      success: 0,
-      fail: 0,
-      canceled: 0,
-      unknown: 0,
-    };
-    let totalCost = 0;
-    let lastActivity: string | undefined;
-    for (const r of list) {
-      mix[r.status] = (mix[r.status] ?? 0) + 1;
-      totalCost += r.costUsd ?? 0;
-      if (!lastActivity || r.startedAt > lastActivity) lastActivity = r.startedAt;
-    }
-    return { total: list.length, mix, totalCost, lastActivity };
-  }, [rows]);
+  const stats = useMemo(() => computeStats(rows ?? []), [rows]);
+  const parsedConfig = useMemo(() => (configText !== undefined ? parseJsonc(configText) : null), [configText]);
 
   useEffect(() => {
     if (error)
@@ -156,53 +139,49 @@ export function ProjectDetail(): JSX.Element {
         </code>
       </header>
 
-      <section
-        data-testid="project-stats-card"
-        className="grid grid-cols-2 gap-3 rounded-sw-card border border-sw-border bg-sw-surface p-4 md:grid-cols-4"
-      >
-        <Stat label="Runs" value={String(stats.total)} testid="project-stats-total" />
-        <Stat label="Status mix" value={<StatusMix mix={stats.mix} />} testid="project-stats-mix" />
-        <Stat
-          label="Total cost"
-          value={stats.totalCost > 0 ? formatUsd(stats.totalCost) : "—"}
-          testid="project-stats-cost"
+      <section data-testid="project-stats" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatTile
+          label="Runs"
+          loading={isPending}
+          numericValue={stats.totalRuns}
+          format={{ notation: "compact", maximumFractionDigits: 1 }}
+          icon={<Play className="size-4" />}
+          testId="project-stat-runs"
         />
-        <Stat
-          label="Last activity"
-          value={stats.lastActivity ? formatRelative(stats.lastActivity) : "—"}
-          testid="project-stats-last"
+        <StatTile
+          label="Spend"
+          loading={isPending}
+          numericValue={stats.totalCostUsd}
+          format={usdFormatOptions(stats.totalCostUsd)}
+          icon={<DollarSign className="size-4" />}
+          testId="project-stat-spend"
+        />
+        <StatTile
+          label="Tokens"
+          loading={isPending}
+          numericValue={stats.freshTokens}
+          format={tokensCompactFormatOptions(stats.freshTokens)}
+          icon={<Coins className="size-4" />}
+          hint={tokensTooltip(stats)}
+          testId="project-stat-tokens"
+        />
+        <StatTile
+          label="Cache"
+          loading={isPending}
+          numericValue={stats.cacheHitRate}
+          format={percentFormatOptions()}
+          icon={<Database className="size-4" />}
+          hint={cacheTooltip(stats)}
+          testId="project-stat-cache"
         />
       </section>
 
-      <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-config-section">
-        <h3 className="text-sw-sm font-medium text-sw-muted">Config</h3>
-        {configMissing ? (
-          <EmptyState
-            data-testid="project-config-empty"
-            title="No project config"
-            description={
-              <span>
-                Expected at <code className="font-mono">{CONFIG_PATH}</code>.
-              </span>
-            }
-          />
-        ) : configError ? (
-          <div
-            className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
-            data-testid="project-config-error"
-          >
-            Couldn't load {CONFIG_PATH}.
-          </div>
-        ) : configLoading && configText === undefined ? (
-          <div className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted">
-            Loading…
-          </div>
-        ) : configText !== undefined ? (
-          <div className="overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface">
-            <CodeBlock code={configText} language="jsonc" showLineNumbers />
-          </div>
-        ) : null}
-      </section>
+      <ConfigSummary
+        loading={configLoading && configText === undefined}
+        missing={configMissing}
+        errored={!configMissing && configError != null}
+        parsed={parsedConfig}
+      />
 
       {projectWorkflows.length > 0 && (
         <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-workflows-section">
@@ -246,8 +225,8 @@ export function ProjectDetail(): JSX.Element {
         </section>
       )}
 
-      <Tabs value={tab} onValueChange={handleTabChange} data-testid="project-tabs">
-        <TabsList>
+      <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col gap-3" data-testid="project-tabs">
+        <TabsList variant="line" className="self-start">
           <TabsTrigger value="runs" data-testid="project-tab-runs">
             Runs
           </TabsTrigger>
@@ -256,118 +235,347 @@ export function ProjectDetail(): JSX.Element {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="runs" className="flex w-full min-w-0 flex-col gap-2">
-          {isPending && (
-            <p className="text-sw-muted text-sm" data-testid="project-runs-loading">
-              Loading…
-            </p>
-          )}
-          {isError && (
-            <EmptyState
-              data-testid="project-runs-error"
-              title="Couldn't load runs"
-              description="The server didn't respond as expected. Check the console for details, or retry shortly."
-            />
-          )}
-          {rows && rows.length === 0 && (
-            <EmptyState
-              data-testid="project-runs-empty"
-              title="No runs in this project yet"
-              description={
-                <span>
-                  Runs enqueued from <code className="font-mono">{cwd}</code> show up here.
-                </span>
-              }
-            />
-          )}
-          {rows && rows.length > 0 && (
-            <div className="w-full min-w-0 overflow-x-auto">
-              <table className="w-full table-fixed border-collapse" data-testid="project-runs-table">
-                <thead>
-                  <tr className="border-b">
-                    <th className="px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
-                      Title
-                    </th>
-                    <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
-                      Workflow
-                    </th>
-                    <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <RunRow key={row.runId} row={row} variant="default" />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </TabsContent>
+        <div className="min-w-0 overflow-auto rounded-md border bg-sw-bg">
+          <TabsContent value="runs" className="flex w-full min-w-0 flex-col gap-2 p-3">
+            {isPending && (
+              <p className="text-sw-muted text-sm" data-testid="project-runs-loading">
+                Loading…
+              </p>
+            )}
+            {isError && (
+              <EmptyState
+                data-testid="project-runs-error"
+                title="Couldn't load runs"
+                description="The server didn't respond as expected. Check the console for details, or retry shortly."
+              />
+            )}
+            {rows && rows.length === 0 && (
+              <EmptyState
+                data-testid="project-runs-empty"
+                title="No runs in this project yet"
+                description={
+                  <span>
+                    Runs enqueued from <code className="font-mono">{cwd}</code> show up here.
+                  </span>
+                }
+              />
+            )}
+            {rows && rows.length > 0 && (
+              <div className="w-full min-w-0 overflow-x-auto">
+                <table className="w-full table-fixed border-collapse" data-testid="project-runs-table">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
+                        Title
+                      </th>
+                      <th className="w-40 px-2 py-2 text-left align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
+                        Workflow
+                      </th>
+                      <th className="w-28 px-2 py-2 text-right align-middle text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <RunRow key={row.runId} row={row} variant="default" />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </TabsContent>
 
-        <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2">
-          {tree && tree.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]" data-testid="project-files-section">
-              <div className="max-h-[28rem] overflow-y-auto" data-testid="project-files-tree">
-                <FileTree selectedPath={selectedPath} onSelect={handleSelect}>
-                  {treeRoot.children.map((child) => (
-                    <TreeNodeView key={child.path} node={child} />
-                  ))}
-                </FileTree>
+          <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2 p-3">
+            {tree && tree.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]" data-testid="project-files-section">
+                <div className="max-h-[28rem] overflow-y-auto" data-testid="project-files-tree">
+                  <FileTree selectedPath={selectedPath} onSelect={handleSelect}>
+                    {treeRoot.children.map((child) => (
+                      <TreeNodeView key={child.path} node={child} />
+                    ))}
+                  </FileTree>
+                </div>
+                <div
+                  className="min-w-0 overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface"
+                  data-testid="project-files-viewer"
+                >
+                  {selectedPath.length === 0 ? (
+                    <div className="p-4 text-sw-sm text-sw-muted">Select a file to preview.</div>
+                  ) : blobError ? (
+                    <BlobError error={blobError} path={selectedPath} />
+                  ) : blobLoading ? (
+                    <div className="p-4 text-sw-sm text-sw-muted">Loading…</div>
+                  ) : blobText !== undefined ? (
+                    <CodeBlock code={blobText} language={extToLang(selectedPath)} showLineNumbers />
+                  ) : (
+                    <div className="p-4 text-sw-sm text-sw-muted">No content.</div>
+                  )}
+                </div>
               </div>
-              <div
-                className="min-w-0 overflow-hidden rounded-sw-card border border-sw-border bg-sw-surface"
-                data-testid="project-files-viewer"
-              >
-                {selectedPath.length === 0 ? (
-                  <div className="p-4 text-sw-sm text-sw-muted">Select a file to preview.</div>
-                ) : blobError ? (
-                  <BlobError error={blobError} path={selectedPath} />
-                ) : blobLoading ? (
-                  <div className="p-4 text-sw-sm text-sw-muted">Loading…</div>
-                ) : blobText !== undefined ? (
-                  <CodeBlock code={blobText} language={extToLang(selectedPath)} showLineNumbers />
-                ) : (
-                  <div className="p-4 text-sw-sm text-sw-muted">No content.</div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <EmptyState
-              data-testid="project-files-empty"
-              title="No files indexed for this project"
-              description="The project tree is empty or hasn't been scanned yet."
-            />
-          )}
-        </TabsContent>
+            ) : (
+              <EmptyState
+                data-testid="project-files-empty"
+                title="No files indexed for this project"
+                description="The project tree is empty or hasn't been scanned yet."
+              />
+            )}
+          </TabsContent>
+        </div>
       </Tabs>
     </section>
   );
 }
 
-function Stat({ label, value, testid }: { label: string; value: React.ReactNode; testid: string }): JSX.Element {
+function tokensTooltip(stats: ReturnType<typeof computeStats>): string {
+  const fmt = new Intl.NumberFormat();
+  return [`input  ${fmt.format(stats.totalInputTokens)}`, `output ${fmt.format(stats.totalOutputTokens)}`].join(" · ");
+}
+
+function cacheTooltip(stats: ReturnType<typeof computeStats>): string {
+  const fmt = new Intl.NumberFormat();
+  return [
+    `cacheRead  ${fmt.format(stats.totalCacheReadTokens)}`,
+    `cacheWrite ${fmt.format(stats.totalCacheWriteTokens)}`,
+  ].join(" · ");
+}
+
+// ─── Config summary ─────────────────────────────────────────────────
+//
+// Surfaces the keys an operator typically wants to see at a glance —
+// bootstrap command, default LLM, concurrency, loop ceilings — instead
+// of dumping the raw JSONC. The full file is still readable via the
+// Files tab, so this view stays purpose-built for "what knobs is this
+// project running with?".
+
+interface ConfigSummaryProps {
+  loading: boolean;
+  missing: boolean;
+  errored: boolean;
+  parsed: ConfigShape | null;
+}
+
+function ConfigSummary({ loading, missing, errored, parsed }: ConfigSummaryProps): JSX.Element {
   return (
-    <div className="flex flex-col gap-1" data-testid={testid}>
-      <div className="text-xs font-medium uppercase tracking-[0.06em] text-sw-muted">{label}</div>
-      <div className="font-mono text-sw-sm text-sw-text">{value}</div>
-    </div>
+    <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-config-section">
+      <h3 className="text-sw-sm font-medium text-sw-muted">Config</h3>
+      {missing ? (
+        <EmptyState
+          data-testid="project-config-empty"
+          title="No project config"
+          description={
+            <span>
+              Expected at <code className="font-mono">{CONFIG_PATH}</code>.
+            </span>
+          }
+        />
+      ) : errored ? (
+        <div
+          className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
+          data-testid="project-config-error"
+        >
+          Couldn't load {CONFIG_PATH}.
+        </div>
+      ) : loading ? (
+        <div className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted">
+          Loading…
+        </div>
+      ) : parsed === null ? (
+        <div
+          className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
+          data-testid="project-config-unparsable"
+        >
+          Couldn't parse {CONFIG_PATH}.
+        </div>
+      ) : (
+        <ConfigValues parsed={parsed} />
+      )}
+    </section>
   );
 }
 
-function StatusMix({ mix }: { mix: Record<RunStatus, number> }): JSX.Element {
-  const order: RunStatus[] = ["running", "queued", "paused", "success", "fail", "canceled", "unknown"];
-  const present = order.filter((s) => (mix[s] ?? 0) > 0);
-  if (present.length === 0) return <span className="text-sw-muted">—</span>;
+interface ConfigShape {
+  name?: string;
+  bootstrap?: string;
+  bootstrapTimeoutMs?: number;
+  autoTitle?: boolean;
+  concurrency?: number;
+  maxLoops?: number;
+  defaults?: {
+    llm_provider?: string;
+    llm_model?: string;
+    permissions?: string;
+  };
+}
+
+function ConfigValues({ parsed }: { parsed: ConfigShape }): JSX.Element {
+  const rows: { label: string; value: React.ReactNode; testid: string }[] = [];
+  if (parsed.name)
+    rows.push({
+      label: "Name",
+      value: <span className="text-sw-text">{parsed.name}</span>,
+      testid: "project-config-name",
+    });
+  if (parsed.defaults?.llm_provider || parsed.defaults?.llm_model) {
+    rows.push({
+      label: "Default LLM",
+      value: (
+        <code className="font-mono text-sw-text">
+          {[parsed.defaults?.llm_provider, parsed.defaults?.llm_model].filter(Boolean).join(" · ")}
+        </code>
+      ),
+      testid: "project-config-llm",
+    });
+  }
+  if (parsed.defaults?.permissions) {
+    rows.push({
+      label: "Permissions",
+      value: <code className="font-mono text-sw-text">{parsed.defaults.permissions}</code>,
+      testid: "project-config-permissions",
+    });
+  }
+  if (parsed.bootstrap) {
+    rows.push({
+      label: "Bootstrap",
+      value: (
+        <code className="block truncate font-mono text-sw-text" title={parsed.bootstrap}>
+          {parsed.bootstrap}
+        </code>
+      ),
+      testid: "project-config-bootstrap",
+    });
+  }
+  if (parsed.bootstrapTimeoutMs !== undefined) {
+    rows.push({
+      label: "Bootstrap timeout",
+      value: <span className="text-sw-text">{formatDuration(parsed.bootstrapTimeoutMs)}</span>,
+      testid: "project-config-bootstrap-timeout",
+    });
+  }
+  if (parsed.concurrency !== undefined) {
+    rows.push({
+      label: "Concurrency",
+      value: <span className="text-sw-text">{parsed.concurrency}</span>,
+      testid: "project-config-concurrency",
+    });
+  }
+  if (parsed.maxLoops !== undefined) {
+    rows.push({
+      label: "Max loops",
+      value: <span className="text-sw-text">{parsed.maxLoops}</span>,
+      testid: "project-config-max-loops",
+    });
+  }
+  if (parsed.autoTitle !== undefined) {
+    rows.push({
+      label: "Auto-title",
+      value: <span className="text-sw-text">{parsed.autoTitle ? "On" : "Off"}</span>,
+      testid: "project-config-auto-title",
+    });
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div
+        className="rounded-sw-card border border-sw-border bg-sw-surface p-4 text-sw-sm text-sw-muted"
+        data-testid="project-config-defaults"
+      >
+        Project uses defaults — no overrides set in <code className="font-mono">{CONFIG_PATH}</code>.
+      </div>
+    );
+  }
+
   return (
-    <span className="flex flex-wrap gap-x-2 gap-y-0.5">
-      {present.map((s) => (
-        <span key={s}>
-          <span className="text-sw-muted">{s}</span> {mix[s]}
-        </span>
+    <dl
+      className="grid grid-cols-1 gap-x-6 gap-y-2 rounded-sw-card border border-sw-border bg-sw-surface p-4 sm:grid-cols-[10rem_1fr]"
+      data-testid="project-config-values"
+    >
+      {rows.map((r) => (
+        <div key={r.testid} className="contents" data-testid={r.testid}>
+          <dt className="truncate text-sw-xs font-medium uppercase tracking-[0.06em] text-sw-muted">{r.label}</dt>
+          <dd className="min-w-0 text-sw-sm">{r.value}</dd>
+        </div>
       ))}
-    </span>
+    </dl>
   );
+}
+
+// ─── JSONC parsing ─────────────────────────────────────────────────
+//
+// The .swarm/config.jsonc file allows comments and trailing commas, so
+// JSON.parse alone won't handle real-world configs. This stripper keeps
+// a tiny state machine for strings (so `//` inside a value isn't
+// mistaken for a comment) and handles the three JSONC affordances:
+// line comments, block comments, and trailing commas.
+function stripJsonc(src: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        out += c;
+      }
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (inString) {
+      if (c === "\\" && i + 1 < src.length) {
+        out += src.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+function parseJsonc(src: string): ConfigShape | null {
+  try {
+    const value = JSON.parse(stripJsonc(src));
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as ConfigShape;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function basename(p: string): string {
