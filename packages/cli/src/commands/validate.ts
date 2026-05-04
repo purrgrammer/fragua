@@ -3,6 +3,7 @@
 // `<cwd>/.swarm/workflows/<name>.dot`, anything pathy is read directly.
 
 import { readFile } from "node:fs/promises";
+import { validateWorkflowModels } from "@swarm/agent";
 import { parseDotSource, validate } from "@swarm/core";
 import chalk from "chalk";
 import { resolveWorkflow } from "../workflow-path.ts";
@@ -21,8 +22,10 @@ export async function validateCommand(workflow: string): Promise<number> {
   const source = await readFile(resolved.dotPath, "utf8");
   const graph = parseDotSource(source);
   const diags = validate(graph);
+  const modelCheck = validateWorkflowModels(source);
 
-  if (diags.length === 0) {
+  const modelErrorCount = modelCheck.ok ? 0 : modelCheck.offenders.length;
+  if (diags.length === 0 && modelErrorCount === 0) {
     console.log(chalk.green("ok — no diagnostics"));
     return 0;
   }
@@ -32,6 +35,13 @@ export async function validateCommand(workflow: string): Promise<number> {
     console.log(color(`[${d.code}] ${d.severity}: ${d.message}`));
     if (d.severity === "error") errors++;
   }
-  console.log(`\n${diags.length} issue(s), ${errors} error(s)`);
+  if (!modelCheck.ok) {
+    for (const o of modelCheck.offenders) {
+      const where = o.provider ? `${o.provider}/${o.model}` : o.model;
+      console.log(chalk.red(`[model] error: node "${o.nodeId}" → ${where}: ${o.reason}`));
+    }
+    errors += modelCheck.offenders.length;
+  }
+  console.log(`\n${diags.length + modelErrorCount} issue(s), ${errors} error(s)`);
   return errors > 0 ? 1 : 0;
 }

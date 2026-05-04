@@ -19,7 +19,7 @@
 // Codergen nodes only — other handler kinds (start/exit/tool/wait.human/
 // conditional/parallel) don't LLM-dispatch.
 
-import { parseDotSource } from "@swarm/core";
+import { parseDotSource, prepareGraph } from "@swarm/core";
 import type { ModelRegistry } from "./credentials/index.ts";
 import { AuthStorage, findByBareId, ModelRegistry as Registry } from "./credentials/index.ts";
 
@@ -54,6 +54,11 @@ export function validateWorkflowModels(
     // error surface elsewhere — don't fake model offenders for it.
     return { ok: true };
   }
+
+  // Expand `model_stylesheet` so node.attrs reflects the same resolved
+  // (provider, model) the dispatcher will see. Without this, stylesheet-
+  // defined models slip past validation and fail at first dispatch.
+  prepareGraph(graph);
 
   const offenders: ModelOffender[] = [];
 

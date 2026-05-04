@@ -137,6 +137,75 @@ describe("validateWorkflowModels", () => {
     expect(r.ok).toBe(true);
   });
 
+  test("rejects an unknown model declared via model_stylesheet (regression: 01kqs7aq2qha5ke3b2)", () => {
+    // The failing run used merge.dot sha 6b06ea3 with:
+    //   model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
+    //                       #preflight { llm_model: claude-haiku-4-6; }"
+    // No per-node attrs declared the bad model — it lived only in the
+    // stylesheet, which the validator used to skip entirely.
+    const dot = `digraph {
+      graph [model_stylesheet="* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #preflight { llm_model: claude-haiku-4-6; }"];
+      start     [shape=Mdiamond];
+      preflight [shape=box];
+      done      [shape=Msquare];
+      start -> preflight;
+      preflight -> done;
+    }`;
+    const r = validateWorkflowModels(dot);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      const preflight = r.offenders.find((o) => o.nodeId === "preflight");
+      expect(preflight).toBeDefined();
+      expect(preflight?.provider).toBe("anthropic");
+      expect(preflight?.model).toBe("claude-haiku-4-6");
+    }
+  });
+
+  test("accepts a workflow whose stylesheet resolves to known (provider, model) pairs", () => {
+    const dot = `digraph {
+      graph [model_stylesheet="* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #preflight { llm_model: claude-haiku-4-5; }"];
+      start     [shape=Mdiamond];
+      preflight [shape=box];
+      review    [shape=box];
+      done      [shape=Msquare];
+      start -> preflight;
+      preflight -> review;
+      review -> done;
+    }`;
+    const r = validateWorkflowModels(dot);
+    expect(r.ok).toBe(true);
+  });
+
+  test("per-node llm_model overrides stylesheet (per-node wins per §8.5)", () => {
+    // Stylesheet declares a bad model; the per-node attr overrides it
+    // with a known-good one. Validator must defer to the per-node attr,
+    // matching dispatcher behaviour.
+    const dot = `digraph {
+      graph [model_stylesheet="* { llm_provider: anthropic; llm_model: claude-zapp-brannigan-v9; }"];
+      start [shape=Mdiamond];
+      impl  [shape=box, llm_model="claude-sonnet-4-6"];
+      done  [shape=Msquare];
+      start -> impl;
+      impl -> done;
+    }`;
+    const r = validateWorkflowModels(dot);
+    expect(r.ok).toBe(true);
+  });
+
+  test("stylesheet bare model (no provider) goes through the lenient bare-id path", () => {
+    const dot = `digraph {
+      graph [model_stylesheet="* { llm_model: claude-sonnet-4-6; }"];
+      start [shape=Mdiamond];
+      impl  [shape=box];
+      done  [shape=Msquare];
+      start -> impl;
+      impl -> done;
+    }`;
+    // anthropic resolves the bare hyphen form; lenient path accepts.
+    const r = validateWorkflowModels(dot);
+    expect(r.ok).toBe(true);
+  });
+
   test("accepts the fixed build-feature.dot", () => {
     // Spot-check: after B in the plan, build-feature.dot uses
     // `llm_model="anthropic/claude-sonnet-4.6"` without a provider attr.
