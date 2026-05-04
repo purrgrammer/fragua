@@ -118,8 +118,16 @@ export interface DrillSlice {
   /** Window override for this slice (e.g. just the clicked bucket). */
   fromMs: number;
   toMs: number;
-  /** Optional dimension filters applied on top of the window. */
+  /** Pinpoint filter to one workflow content-hash. Set by clickable
+   *  per-sha entries (e.g. TopWorkflowsBar) — distinct from the
+   *  `workflowScope`/`workflowName` lineage filter below. */
   workflowSha?: string;
+  /** Workflow lineage filter inherited from the page-level
+   *  WorkflowSelector. Identity = `(scope, name)`, sha-collapsed.
+   *  When `scope='local'` the predicate also requires `cwd`. */
+  workflowScope?: "global" | "local";
+  /** Pulls double duty: legacy label for `workflowSha`-pinned slices,
+   *  and the lineage filter name when paired with `workflowScope`. */
   workflowName?: string;
   haltCategory?: string;
   haltLabel?: string;

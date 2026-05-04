@@ -48,6 +48,12 @@ function seedRun(opts: {
   /** Optional project root — patched onto `run_state.cwd` so the cwd
    *  filter tests can pin runs to specific projects. */
   cwd?: string;
+  /** Optional resolved workflow identity. `scope='global'` mirrors a
+   *  `~/.swarm/workflows/<name>.dot` resolution; `scope='local'`
+   *  mirrors `<cwd>/.swarm/workflows/<name>.dot`. `path` / `ephemeral`
+   *  runs leave both NULL and never appear in the workflow filter. */
+  workflowScope?: "global" | "local" | "path" | "ephemeral";
+  workflowName?: string;
 }): string {
   const sha = opts.workflowSha ?? "wf1";
   nextRunId++;
@@ -63,11 +69,18 @@ function seedRun(opts: {
     billedTokens: (opts.inputTokens ?? 0) + (opts.outputTokens ?? 0) + (opts.cacheReadTokens ?? 0),
     models: opts.models ?? {},
   });
-  db.query(`UPDATE run_state SET enqueued_at = ?, metrics = ?, status = ?, cwd = ? WHERE run_id = ?`).run(
+  db.query(
+    `UPDATE run_state
+       SET enqueued_at = ?, metrics = ?, status = ?, cwd = ?,
+           workflow_scope = ?, workflow_name = ?
+       WHERE run_id = ?`,
+  ).run(
     opts.enqueuedAtMs,
     metrics,
     opts.status ?? "completed",
     opts.cwd ?? null,
+    opts.workflowScope ?? null,
+    opts.workflowName ?? null,
     runId,
   );
   return runId;
@@ -392,6 +405,163 @@ describe("cwd filter", () => {
     const totals = store.getKpiTotals({ fromMs: nowMs - 1, toMs: nowMs + 1 });
     expect(totals.runs).toBe(3);
     expect(totals.costUsd).toBeCloseTo(7, 5);
+  });
+});
+
+describe("workflow filter (scope + name)", () => {
+  test("getKpiTotals scopes to a global workflow identity", () => {
+    seedRun({
+      enqueuedAtMs: nowMs,
+      costUsd: 1,
+      workflowScope: "global",
+      workflowName: "research",
+      cwd: "/proj/a",
+    });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      costUsd: 3,
+      workflowScope: "global",
+      workflowName: "research",
+      cwd: "/proj/b",
+    });
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 9, workflowScope: "global", workflowName: "ci" });
+
+    const totals = store.getKpiTotals({
+      fromMs: nowMs - 1,
+      toMs: nowMs + 1,
+      workflowScope: "global",
+      workflowName: "research",
+    });
+    expect(totals.runs).toBe(2);
+    expect(totals.costUsd).toBeCloseTo(4, 5);
+  });
+
+  test("local filter requires cwd to disambiguate same-named locals", () => {
+    seedRun({
+      enqueuedAtMs: nowMs,
+      costUsd: 1,
+      workflowScope: "local",
+      workflowName: "triage",
+      cwd: "/proj/a",
+    });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      costUsd: 4,
+      workflowScope: "local",
+      workflowName: "triage",
+      cwd: "/proj/b",
+    });
+
+    const projA = store.getKpiTotals({
+      fromMs: nowMs - 1,
+      toMs: nowMs + 1,
+      cwd: "/proj/a",
+      workflowScope: "local",
+      workflowName: "triage",
+    });
+    expect(projA.runs).toBe(1);
+    expect(projA.costUsd).toBeCloseTo(1, 5);
+  });
+
+  test("excludes path / ephemeral runs even with same workflow_name on workflows table", () => {
+    // path-launched run shares the workflows.name but has no
+    // resolved bare-name on run_state, so the filter ignores it.
+    seedRun({ enqueuedAtMs: nowMs, costUsd: 5, workflowScope: "path" });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      costUsd: 2,
+      workflowScope: "global",
+      workflowName: "build-feature",
+    });
+
+    const totals = store.getKpiTotals({
+      fromMs: nowMs - 1,
+      toMs: nowMs + 1,
+      workflowScope: "global",
+      workflowName: "build-feature",
+    });
+    expect(totals.runs).toBe(1);
+    expect(totals.costUsd).toBeCloseTo(2, 5);
+  });
+
+  test("getDrilldownPage threads workflow filter alongside cwd + sha", () => {
+    const a = seedRun({
+      enqueuedAtMs: nowMs,
+      workflowScope: "global",
+      workflowName: "research",
+      cwd: "/proj/a",
+    });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      workflowScope: "global",
+      workflowName: "ci",
+      cwd: "/proj/a",
+    });
+    const page = store.getDrilldownPage(
+      {
+        fromMs: nowMs - 1,
+        toMs: nowMs + 1,
+        cwd: "/proj/a",
+        workflowScope: "global",
+        workflowName: "research",
+      },
+      { limit: 10 },
+    );
+    expect(page.runIds).toEqual([a]);
+  });
+});
+
+describe("getWorkflowDirectory", () => {
+  test("returns global identities sha-collapsed across all projects", () => {
+    seedRun({
+      enqueuedAtMs: nowMs,
+      workflowScope: "global",
+      workflowName: "research",
+      workflowSha: "wf1",
+      cwd: "/proj/a",
+    });
+    seedRun({
+      enqueuedAtMs: nowMs + 1,
+      workflowScope: "global",
+      workflowName: "research",
+      workflowSha: "wf2",
+      cwd: "/proj/b",
+    });
+
+    const dir = store.getWorkflowDirectory({});
+    expect(dir).toHaveLength(1);
+    expect(dir[0]?.scope).toBe("global");
+    expect(dir[0]?.name).toBe("research");
+    expect(dir[0]?.cwd).toBeNull();
+    expect(dir[0]?.runCount).toBe(2);
+  });
+
+  test("local entries scope to passed cwd; globals always returned", () => {
+    seedRun({ enqueuedAtMs: nowMs, workflowScope: "global", workflowName: "research" });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      workflowScope: "local",
+      workflowName: "triage",
+      cwd: "/proj/a",
+    });
+    seedRun({
+      enqueuedAtMs: nowMs,
+      workflowScope: "local",
+      workflowName: "triage",
+      cwd: "/proj/b",
+    });
+
+    const dir = store.getWorkflowDirectory({ cwd: "/proj/a" });
+    const localTriage = dir.filter((r) => r.scope === "local" && r.name === "triage");
+    expect(localTriage).toHaveLength(1);
+    expect(localTriage[0]?.cwd).toBe("/proj/a");
+    expect(dir.some((r) => r.scope === "global" && r.name === "research")).toBe(true);
+  });
+
+  test("excludes path / ephemeral runs (no canonical name)", () => {
+    seedRun({ enqueuedAtMs: nowMs, workflowScope: "path" });
+    seedRun({ enqueuedAtMs: nowMs, workflowScope: "ephemeral" });
+    expect(store.getWorkflowDirectory({})).toHaveLength(0);
   });
 });
 

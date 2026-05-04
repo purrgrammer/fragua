@@ -33,6 +33,7 @@ import type {
   SpendByBucketRow,
   TokensByBucketRow,
   TopWorkflowRow,
+  WorkflowDirectoryRow,
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
@@ -78,6 +79,8 @@ export type {
   SpendByBucketRow,
   TokensByBucketRow,
   TopWorkflowRow,
+  WorkflowDirectoryRow,
+  WorkflowScopeFilter,
 } from "./analytics-queries.ts";
 export { decodeCursor, encodeCursor } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
@@ -792,6 +795,11 @@ export interface IAnalyticsReader {
   getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
   /** Most-run workflows in the window joined to `workflows.name`. */
   getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
+  /** Distinct `(scope, name[, cwd])` identities across `run_state` for
+   *  the workflow selector on `/analytics`. Sha collapses (every edit
+   *  of `research.dot` shares one row); `path` and `ephemeral` runs
+   *  are excluded. */
+  getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[];
   /** Newest-first paginated run-id scan matching the analytics filters
    *  (workflow / halt category / model). Cursor encodes `(enqueued_at,
    *  run_id)` for stable pagination across same-ms inserts. */

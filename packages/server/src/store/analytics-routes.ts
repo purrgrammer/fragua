@@ -22,6 +22,7 @@ import {
   type DrilldownFilters,
   decodeCursor,
   type IEventStore,
+  type WorkflowScopeFilter,
 } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
@@ -36,6 +37,7 @@ const TOP_WORKFLOWS_LIMIT = 8;
 const DRILLDOWN_DEFAULT_LIMIT = 30;
 const DRILLDOWN_MAX_LIMIT = 100;
 const VALID_BUCKETS: ReadonlySet<BucketKind> = new Set(["hour", "day", "month"]);
+const VALID_WORKFLOW_SCOPES: ReadonlySet<WorkflowScopeFilter> = new Set(["global", "local"]);
 
 export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
   const app = new Hono();
@@ -83,6 +85,10 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     const haltCategory = c.req.query("halt");
     const model = c.req.query("model");
     const cwd = c.req.query("cwd");
+    const workflowFilter = parseWorkflowFilter(c.req.query("workflowScope"), c.req.query("workflowName"));
+    if (workflowFilter && !workflowFilter.ok) {
+      return c.json({ error: workflowFilter.error, code: "bad_request" }, 400);
+    }
 
     const filterArgs: DrilldownFilters = {
       fromMs: window.fromMs,
@@ -92,6 +98,10 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     if (haltCategory) filterArgs.haltCategory = haltCategory;
     if (model) filterArgs.model = model;
     if (cwd) filterArgs.cwd = cwd;
+    if (workflowFilter?.ok) {
+      filterArgs.workflowScope = workflowFilter.scope;
+      filterArgs.workflowName = workflowFilter.name;
+    }
 
     const pageOpts: { limit: number; cursor?: string } = { limit };
     if (cursor && decodeCursor(cursor) !== null) pageOpts.cursor = cursor;
@@ -115,7 +125,45 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     return c.json({ runs: summaries, nextCursor: page.nextCursor });
   });
 
+  app.get("/analytics/workflows", (c) => {
+    // Powers the WorkflowSelector. Distinct `(scope, name[, cwd])`
+    // identities ordered by recent activity. Optional `cwd` scopes
+    // local entries to one project; globals always return.
+    const cwd = parseCwd(c.req.query("cwd"));
+    const directoryArgs = cwd !== undefined ? { cwd } : {};
+    const rows = store.getWorkflowDirectory(directoryArgs);
+    return c.json({ workflows: rows });
+  });
+
   return app;
+}
+
+interface WorkflowFilterOk {
+  ok: true;
+  scope: WorkflowScopeFilter;
+  name: string;
+}
+
+/** Parse the `workflowScope` + `workflowName` query pair. Returns:
+ *   - `null`            when neither is present (no filter requested)
+ *   - `WorkflowFilterOk` when both are present and valid
+ *   - `ParseError`       when one is missing or `scope` is invalid
+ *  Both must be present together; one without the other is rejected
+ *  rather than silently ignored, so a typo on the web side surfaces. */
+function parseWorkflowFilter(
+  scopeRaw: string | undefined,
+  nameRaw: string | undefined,
+): WorkflowFilterOk | ParseError | null {
+  const hasScope = scopeRaw !== undefined && scopeRaw.length > 0;
+  const hasName = nameRaw !== undefined && nameRaw.length > 0;
+  if (!hasScope && !hasName) return null;
+  if (!hasScope || !hasName) {
+    return { ok: false, error: "workflowScope and workflowName must be set together" };
+  }
+  if (!VALID_WORKFLOW_SCOPES.has(scopeRaw as WorkflowScopeFilter)) {
+    return { ok: false, error: `workflowScope must be one of: ${[...VALID_WORKFLOW_SCOPES].join(", ")}` };
+  }
+  return { ok: true, scope: scopeRaw as WorkflowScopeFilter, name: nameRaw };
 }
 
 // ── Query-string parsing ───────────────────────────────────────────────
@@ -160,9 +208,15 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
   }
 
   const cwd = parseCwd(q["cwd"]);
+  const workflowFilter = parseWorkflowFilter(q["workflowScope"], q["workflowName"]);
+  if (workflowFilter && !workflowFilter.ok) return workflowFilter;
 
   const current: AnalyticsWindow = { fromMs, toMs };
   if (cwd !== undefined) current.cwd = cwd;
+  if (workflowFilter?.ok) {
+    current.workflowScope = workflowFilter.scope;
+    current.workflowName = workflowFilter.name;
+  }
 
   const compareFromRaw = q["compareFrom"];
   const compareToRaw = q["compareTo"];
@@ -175,6 +229,10 @@ function parseAnalyticsParams(q: Record<string, string>): AnalyticsParamsOk | Pa
     }
     previous = { fromMs: compareFromMs, toMs: compareToMs };
     if (cwd !== undefined) previous.cwd = cwd;
+    if (workflowFilter?.ok) {
+      previous.workflowScope = workflowFilter.scope;
+      previous.workflowName = workflowFilter.name;
+    }
   }
 
   return {

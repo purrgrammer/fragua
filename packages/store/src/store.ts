@@ -20,10 +20,12 @@ import {
   getSpendByBucket as querySpendByBucket,
   getTokensByBucket as queryTokensByBucket,
   getTopWorkflows as queryTopWorkflows,
+  getWorkflowDirectory as queryWorkflowDirectory,
   type RunsByBucketRow,
   type SpendByBucketRow,
   type TokensByBucketRow,
   type TopWorkflowRow,
+  type WorkflowDirectoryRow,
 } from "./analytics-queries.ts";
 import {
   blobRowExists,
@@ -658,6 +660,10 @@ export class SqliteStore implements IEventStore {
 
   getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[] {
     return queryTopWorkflows(this.db, window, limit);
+  }
+
+  getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[] {
+    return queryWorkflowDirectory(this.db, opts);
   }
 
   getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage {

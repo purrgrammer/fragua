@@ -97,6 +97,10 @@ function DrillPage({ slice, cursor, onAdvance, isLastPage }: DrillPageProps): JS
     toMs: slice.toMs,
   };
   if (slice.workflowSha) requestArgs.workflowSha = slice.workflowSha;
+  if (slice.workflowScope && slice.workflowName) {
+    requestArgs.workflowScope = slice.workflowScope;
+    requestArgs.workflowName = slice.workflowName;
+  }
   if (slice.haltCategory) requestArgs.haltCategory = slice.haltCategory;
   if (slice.model) requestArgs.model = slice.model;
   if (slice.cwd) requestArgs.cwd = slice.cwd;

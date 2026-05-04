@@ -315,32 +315,6 @@ describe("GraphView — rendering", () => {
     expect(w.queryByText("effort")).toBeNull();
     expect(w.queryByAltText(/logo$/)).toBeNull();
   });
-
-  it("start/exit nodes render as a bare header — no NodeContent body, no NodeTitle, no state dot", async () => {
-    const { container } = render(<GraphView detail={makeDetail()} />);
-    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
-    const startNode = canvas.querySelector('[data-node-id="start"]') as HTMLElement | null;
-    const doneNode = canvas.querySelector('[data-node-id="done"]') as HTMLElement | null;
-    const middleNode = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
-    expect(startNode).toBeTruthy();
-    expect(doneNode).toBeTruthy();
-    expect(middleNode).toBeTruthy();
-
-    // Lifecycle nodes show only the uppercase handler label — no `id`
-    // body row, no state dot (the small `rounded-full` element).
-    expect(within(startNode as HTMLElement).getByText("start")).toBeTruthy();
-    expect(within(startNode as HTMLElement).queryByText("id")).toBeNull();
-    expect((startNode as HTMLElement).querySelector(".rounded-full")).toBeNull();
-
-    expect(within(doneNode as HTMLElement).getByText("exit")).toBeTruthy();
-    expect(within(doneNode as HTMLElement).queryByText("id")).toBeNull();
-    expect((doneNode as HTMLElement).querySelector(".rounded-full")).toBeNull();
-
-    // Non-lifecycle nodes still render the body + state dot — sanity check
-    // that the gate is handler-scoped, not a global removal.
-    expect(within(middleNode as HTMLElement).getByText("id")).toBeTruthy();
-    expect((middleNode as HTMLElement).querySelector(".rounded-full")).toBeTruthy();
-  });
 });
 
 describe("toFlowGraph — model_stylesheet cascade surfaces in node data", () => {

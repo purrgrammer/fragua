@@ -198,6 +198,15 @@ export const queries = {
         // slice itself changes. No polling — the data is anchored.
         staleTime: 30_000,
       }),
+    /** Workflow directory powering the WorkflowSelector. Cache key
+     *  splits on `cwd` so toggling the project filter lights up the
+     *  correct local-workflow set without a stale-cache flash. */
+    workflows: (cwd: string | null) =>
+      queryOptions({
+        queryKey: [...queries.analytics.all(), "workflows", cwd ?? "__all__"] as const,
+        queryFn: () => api.getAnalyticsWorkflows(cwd !== null ? { cwd } : {}),
+        staleTime: 30_000,
+      }),
   },
 
   providers: {

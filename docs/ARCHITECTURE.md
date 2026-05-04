@@ -499,6 +499,7 @@ export interface IAnalyticsReader {
   getHaltDistribution(window: AnalyticsWindow): HaltDistributionRow[];
   getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
   getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
+  getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[];
   getDrilldownPage(filters: DrilldownFilters, opts: { limit: number; cursor?: string | undefined }): DrilldownPage;
   getGlobalMetricsTotals(opts: { sinceMs: number }): GlobalMetricsTotalsRow;
   getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];

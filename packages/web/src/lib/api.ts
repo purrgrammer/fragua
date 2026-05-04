@@ -666,6 +666,8 @@ export async function adjustBudget(
 
 // ── Analytics ────────────────────────────────────────────────────────
 
+export type WorkflowScopeFilter = "global" | "local";
+
 export interface AnalyticsRequest {
   fromMs: number;
   toMs: number;
@@ -677,6 +679,13 @@ export interface AnalyticsRequest {
    *  every project. The query-key includes this field so toggling the
    *  project selector re-fetches without a stale-cache flash. */
   cwd?: string;
+  /** Optional workflow filter — predicate `(workflow_scope, workflow_name)`
+   *  so all shas of one workflow identity aggregate together. Local
+   *  workflows additionally need `cwd` to disambiguate same-named
+   *  locals across projects; the WorkflowSelector enforces that
+   *  pairing on the UI side. */
+  workflowScope?: WorkflowScopeFilter;
+  workflowName?: string;
 }
 
 export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayload> {
@@ -691,6 +700,10 @@ export async function getAnalytics(req: AnalyticsRequest): Promise<AnalyticsPayl
     params.set("compareTo", String(req.compareToMs));
   }
   if (req.cwd) params.set("cwd", req.cwd);
+  if (req.workflowScope && req.workflowName) {
+    params.set("workflowScope", req.workflowScope);
+    params.set("workflowName", req.workflowName);
+  }
   return getJson(`/analytics?${params.toString()}`, isAnalyticsPayload);
 }
 
@@ -703,6 +716,10 @@ export interface AnalyticsRunsRequest {
   /** Same shape + semantics as `AnalyticsRequest.cwd`; lets the
    *  drill-down drawer stay scoped to the project the user picked. */
   cwd?: string | undefined;
+  /** Same shape as `AnalyticsRequest.workflow{Scope,Name}` so the
+   *  drawer inherits the workflow filter alongside cwd. */
+  workflowScope?: WorkflowScopeFilter | undefined;
+  workflowName?: string | undefined;
   limit?: number;
   cursor?: string | null | undefined;
 }
@@ -716,9 +733,50 @@ export async function getAnalyticsRuns(req: AnalyticsRunsRequest): Promise<Analy
   if (req.haltCategory) params.set("halt", req.haltCategory);
   if (req.model) params.set("model", req.model);
   if (req.cwd) params.set("cwd", req.cwd);
+  if (req.workflowScope && req.workflowName) {
+    params.set("workflowScope", req.workflowScope);
+    params.set("workflowName", req.workflowName);
+  }
   if (req.limit !== undefined) params.set("limit", String(req.limit));
   if (req.cursor) params.set("cursor", req.cursor);
   return getJson(`/analytics/runs?${params.toString()}`, isAnalyticsRunsPage);
+}
+
+/** One row of the workflow selector. `cwd` is null for `scope='global'`
+ *  (those identities transcend projects). For `scope='local'` it pins
+ *  the local workflow to one project root. */
+export interface AnalyticsWorkflowEntry {
+  scope: WorkflowScopeFilter;
+  name: string;
+  cwd: string | null;
+  runCount: number;
+  lastActivityMs: number;
+}
+
+export async function getAnalyticsWorkflows(opts: { cwd?: string | null } = {}): Promise<AnalyticsWorkflowEntry[]> {
+  const params = new URLSearchParams();
+  if (opts.cwd) params.set("cwd", opts.cwd);
+  const url = params.toString().length > 0 ? `/analytics/workflows?${params.toString()}` : `/analytics/workflows`;
+  const payload = await getJson(url, isAnalyticsWorkflowsPayload);
+  return payload.workflows;
+}
+
+function isAnalyticsWorkflowsPayload(v: unknown): v is { workflows: AnalyticsWorkflowEntry[] } {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return Array.isArray(o["workflows"]) && o["workflows"].every(isAnalyticsWorkflowEntry);
+}
+
+function isAnalyticsWorkflowEntry(v: unknown): v is AnalyticsWorkflowEntry {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    (o["scope"] === "global" || o["scope"] === "local") &&
+    typeof o["name"] === "string" &&
+    (o["cwd"] === null || typeof o["cwd"] === "string") &&
+    typeof o["runCount"] === "number" &&
+    typeof o["lastActivityMs"] === "number"
+  );
 }
 
 function isAnalyticsPayload(v: unknown): v is AnalyticsPayload {

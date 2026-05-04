@@ -29,6 +29,7 @@ import { SpendChart } from "../components/analytics/SpendChart.tsx";
 import { TokensChart } from "../components/analytics/TokensChart.tsx";
 // import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
 import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
+import { type WorkflowSelection, WorkflowSelector } from "../components/analytics/WorkflowSelector.tsx";
 import { resolveWindow, type WindowKey } from "../lib/analytics.ts";
 import type { AnalyticsRequest } from "../lib/api.ts";
 import { categoryLabel, formatBucketTooltip } from "../lib/humanize.ts";
@@ -40,6 +41,25 @@ import type { AnalyticsTotals, DrillSlice } from "../types/analytics.ts";
 export function Analytics(): JSX.Element {
   const [windowKey, setWindowKey] = useState<WindowKey>("today");
   const [cwd, setCwd] = useState<string | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowSelection | null>(null);
+  // Local workflow identities depend on `cwd`. Toggling the project
+  // off must clear a local-scoped workflow filter, otherwise we'd send
+  // `workflowScope=local&workflowName=research` with no cwd — server
+  // accepts it but it would aggregate across every project's local
+  // `research`, which isn't a meaningful identity.
+  const handleCwdChange = (next: string | null) => {
+    setCwd(next);
+    if (next === null && workflow?.scope === "local") setWorkflow(null);
+  };
+  // Selecting a local workflow auto-pins the project — the WorkflowSelector
+  // bundles the local's owning cwd with the selection, and we adopt
+  // both at once so the page-level state stays consistent.
+  const handleWorkflowChange = (next: WorkflowSelection | null) => {
+    setWorkflow(next);
+    if (next?.scope === "local" && next.cwd !== null && next.cwd !== cwd) {
+      setCwd(next.cwd);
+    }
+  };
   // Recompute the resolved window every minute so "Today" naturally
   // grows toward midnight without forcing a refetch on every render.
   // The actual chart refresh is driven by the 30s `refetchInterval`
@@ -56,6 +76,10 @@ export function Analytics(): JSX.Element {
     compareToMs: resolved.compareToMs,
   };
   if (cwd) summaryReq.cwd = cwd;
+  if (workflow) {
+    summaryReq.workflowScope = workflow.scope;
+    summaryReq.workflowName = workflow.name;
+  }
   const { data, isPending } = useQuery(queries.analytics.summary(summaryReq));
 
   const [slice, setSlice] = useState<DrillSlice | null>(null);
@@ -85,13 +109,18 @@ export function Analytics(): JSX.Element {
       title: `${label} · ${formatBucketTooltip(bucketMs, resolved.bucket, locale)}`,
     };
     if (cwd) slice.cwd = cwd;
+    if (workflow) {
+      slice.workflowScope = workflow.scope;
+      slice.workflowName = workflow.name;
+    }
     setSlice(slice);
   }
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex justify-end gap-2">
-        <ProjectSelector value={cwd} onChange={setCwd} />
+        <ProjectSelector value={cwd} onChange={handleCwdChange} />
+        <WorkflowSelector value={workflow} onChange={handleWorkflowChange} cwd={cwd} />
         <WindowSelector value={windowKey} onChange={setWindowKey} />
       </div>
 
@@ -110,6 +139,10 @@ export function Analytics(): JSX.Element {
               title: `Runs · ${categoryLabel(category)} · ${formatBucketTooltip(b, resolved.bucket, locale)}`,
             };
             if (cwd) slice.cwd = cwd;
+            if (workflow) {
+              slice.workflowScope = workflow.scope;
+              slice.workflowName = workflow.name;
+            }
             setSlice(slice);
           }}
           total={runsTotal}

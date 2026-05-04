@@ -28,6 +28,12 @@ import type { Database } from "bun:sqlite";
 
 export type BucketKind = "hour" | "day" | "month";
 
+/** Workflow-scope literals on `run_state.workflow_scope`. `'global'` and
+ *  `'local'` are user-iterable identities (the selector surfaces them);
+ *  `'path'` and `'ephemeral'` runs have no canonical name and stay
+ *  unfiltered (they aggregate into "All workflows" only). */
+export type WorkflowScopeFilter = "global" | "local";
+
 export interface AnalyticsWindow {
   /** Inclusive lower bound on `enqueued_at` (unix ms). */
   fromMs: number;
@@ -36,24 +42,37 @@ export interface AnalyticsWindow {
   /** Optional project filter — exact `run_state.cwd` match. Absent =
    *  aggregate across every project. */
   cwd?: string;
+  /** Optional workflow filter — predicate is `(workflow_scope, workflow_name)`
+   *  so all shas of the same identity aggregate together. For
+   *  `workflowScope = 'local'` the caller MUST also set `cwd`; without
+   *  it the selector would mix the same-named local workflow across
+   *  unrelated projects. */
+  workflowScope?: WorkflowScopeFilter;
+  workflowName?: string;
 }
 
-/** Predicate fragment + bind tuple for `(fromMs, toMs[, cwd])`. The
- *  fragment is splatted into a `WHERE` clause; the params go into
+/** Predicate fragment + bind tuple for `(fromMs, toMs[, cwd][, workflow])`.
+ *  The fragment is splatted into a `WHERE` clause; the params go into
  *  `db.query(...).all(...params)`. Column reference is parameterised so
  *  callers using `run_state` directly and callers using an alias
  *  (`rs.cwd`) can both reuse it. */
-function windowPredicate(w: AnalyticsWindow, cwdCol: string): { sql: string; params: (number | string)[] } {
+function windowPredicate(
+  w: AnalyticsWindow,
+  cwdCol: string,
+  scopeCol: string = cwdCol === "rs.cwd" ? "rs.workflow_scope" : "workflow_scope",
+  nameCol: string = cwdCol === "rs.cwd" ? "rs.workflow_name" : "workflow_name",
+): { sql: string; params: (number | string)[] } {
+  const clauses: string[] = ["enqueued_at >= ?", "enqueued_at < ?"];
+  const params: (number | string)[] = [w.fromMs, w.toMs];
   if (w.cwd !== undefined) {
-    return {
-      sql: `enqueued_at >= ? AND enqueued_at < ? AND ${cwdCol} = ?`,
-      params: [w.fromMs, w.toMs, w.cwd],
-    };
+    clauses.push(`${cwdCol} = ?`);
+    params.push(w.cwd);
   }
-  return {
-    sql: `enqueued_at >= ? AND enqueued_at < ?`,
-    params: [w.fromMs, w.toMs],
-  };
+  if (w.workflowScope !== undefined && w.workflowName !== undefined) {
+    clauses.push(`${scopeCol} = ?`, `${nameCol} = ?`);
+    params.push(w.workflowScope, w.workflowName);
+  }
+  return { sql: clauses.join(" AND "), params };
 }
 
 export interface BucketedWindow extends AnalyticsWindow {
@@ -370,10 +389,79 @@ export function getTopWorkflows(db: Database, w: AnalyticsWindow, limit: number)
   return db.query<TopWorkflowRow, (number | string)[]>(sql).all(...pred.params, limit);
 }
 
+// ── Workflow directory (selector contents) ─────────────────────────────
+
+export interface WorkflowDirectoryRow {
+  scope: WorkflowScopeFilter;
+  name: string;
+  /** `cwd` of the project the local workflow belongs to. NULL for
+   *  `scope = 'global'` (those identities transcend projects). */
+  cwd: string | null;
+  runCount: number;
+  /** `MAX(updated_at)` across the rows that aggregated into this row;
+   *  drives the selector's recent-activity ordering. */
+  lastActivityMs: number;
+}
+
+/** Distinct `(scope, name[, cwd])` identities across `run_state`,
+ *  ordered by recent activity. Powers the `WorkflowSelector` on
+ *  `/analytics`. Identity rule: shas collapse — every edit of
+ *  `research.dot` shares one row. `path` and `ephemeral` runs are
+ *  excluded (no canonical user-iterable identity). When `cwd` is
+ *  supplied, only that project's local workflows show; globals are
+ *  always returned. */
+export function getWorkflowDirectory(db: Database, opts: { cwd?: string }): WorkflowDirectoryRow[] {
+  const params: string[] = [];
+  // Global workflows: identity = name alone. Aggregate across every
+  // project that's run them.
+  let globalSql = `
+    SELECT
+      'global'                AS scope,
+      workflow_name           AS name,
+      NULL                    AS cwd,
+      COUNT(*)                AS runCount,
+      MAX(updated_at)         AS lastActivityMs
+    FROM run_state
+    WHERE workflow_scope = 'global' AND workflow_name IS NOT NULL
+  `;
+  // Local workflows: identity = (cwd, name). When the caller pins a
+  // project, scope to that project; otherwise return per-(cwd, name)
+  // entries so the UI can label them with their project.
+  let localSql = `
+    SELECT
+      'local'                 AS scope,
+      workflow_name           AS name,
+      cwd                     AS cwd,
+      COUNT(*)                AS runCount,
+      MAX(updated_at)         AS lastActivityMs
+    FROM run_state
+    WHERE workflow_scope = 'local' AND workflow_name IS NOT NULL AND cwd IS NOT NULL
+  `;
+  if (opts.cwd !== undefined) {
+    localSql += ` AND cwd = ?`;
+    params.push(opts.cwd);
+  }
+  globalSql += ` GROUP BY workflow_name`;
+  localSql += ` GROUP BY workflow_name, cwd`;
+  const sql = `
+    SELECT scope, name, cwd, runCount, lastActivityMs FROM (
+      ${globalSql}
+      UNION ALL
+      ${localSql}
+    )
+    ORDER BY lastActivityMs DESC
+  `;
+  return db.query<WorkflowDirectoryRow, string[]>(sql).all(...params);
+}
+
 // ── Drill-down: paginated run-id list ──────────────────────────────────
 
 export interface DrilldownFilters extends AnalyticsWindow {
-  /** Filter to one workflow_sha. */
+  /** Filter to one workflow_sha. Distinct from
+   *  `workflowScope`/`workflowName` (inherited from AnalyticsWindow):
+   *  sha is one specific .dot version, scope+name is every version of
+   *  that identity. The two compose — set sha to drill into a single
+   *  edit; set scope+name to scope to a workflow lineage. */
   workflowSha?: string;
   // `cwd` inherits from AnalyticsWindow — exact `run_state.cwd` match,
   // applied alongside the other dimensional filters.
@@ -432,6 +520,10 @@ export function getDrilldownPage(
   if (filters.cwd !== undefined) {
     where.push("rs.cwd = ?");
     params.push(filters.cwd);
+  }
+  if (filters.workflowScope !== undefined && filters.workflowName !== undefined) {
+    where.push("rs.workflow_scope = ?", "rs.workflow_name = ?");
+    params.push(filters.workflowScope, filters.workflowName);
   }
   if (filters.workflowSha) {
     where.push("rs.workflow_sha = ?");
