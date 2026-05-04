@@ -6,19 +6,13 @@
 // observe the loading-skeleton state.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
-// react-dom/test-utils Simulate is the only way to dispatch an event that
-// happy-dom + React 18 will route to a React synthetic onChange handler on
-// controlled inputs.
-import { Simulate } from "react-dom/test-utils";
+import { cleanup, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import type { RunSummary, WorkflowSummary } from "../../src/lib/api.ts";
+import type { RunSummary } from "../../src/lib/api.ts";
 import { queries } from "../../src/lib/queries.ts";
 import { createRoutes } from "../../src/lib/router.tsx";
 import { INBOX_HOME_LIMIT } from "../../src/routes/Home.tsx";
-import { HealthContext, type HealthContextValue, type HealthDaemonSnapshot } from "../../src/types/health.ts";
-import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
+import { createTestQueryClient, installFetchMock, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
 function row(overrides: Partial<RunSummary> = {}): RunSummary {
@@ -41,55 +35,6 @@ function row(overrides: Partial<RunSummary> = {}): RunSummary {
 function mount(client = createTestQueryClient(), path = "/") {
   const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
   return renderWithClient(<RouterProvider router={router} />, { client });
-}
-
-const DAEMON_ON: HealthDaemonSnapshot = {
-  pid: 1,
-  port: 3000,
-  startedAt: "2024-01-01T00:00:00Z",
-  version: "test",
-  concurrency: 1,
-  inflight: 0,
-  queued: 0,
-};
-
-function withHealth(value: HealthContextValue) {
-  return function HealthWrapper({ children }: { children: ReactNode }): JSX.Element {
-    return <HealthContext.Provider value={value}>{children}</HealthContext.Provider>;
-  };
-}
-
-function mountWithHealth(health: HealthContextValue, client = createTestQueryClient(), path = "/") {
-  const router = createMemoryRouter(createRoutes(), { initialEntries: [path] });
-  const Wrapper = withHealth(health);
-  return renderWithClient(
-    <Wrapper>
-      <RouterProvider router={router} />
-    </Wrapper>,
-    { client },
-  );
-}
-
-function workflow(name: string, label?: string): WorkflowSummary {
-  return {
-    name,
-    path: `workflows/${name}.dot`,
-    sha: `sha-${name}`,
-    ...(label !== undefined ? { label } : {}),
-  };
-}
-
-/**
- * Drive a controlled textarea in happy-dom. Native events dispatched via
- * `fireEvent.change`/`fireEvent.input` never reach React 18's synthetic
- * onChange handler under happy-dom, so we set the DOM value and invoke the
- * handler directly through `Simulate.change`. Do NOT wrap in `act()` — the
- * scoped act would stall while react-query's in-flight fetches resolve.
- * Follow each call with `waitFor` to observe the post-dispatch state.
- */
-function typeInto(el: HTMLTextAreaElement, value: string): void {
-  el.value = value;
-  Simulate.change(el);
 }
 
 /** Seed the per-section caches the way the server would respond.
@@ -281,167 +226,5 @@ describe("Home route", () => {
 
     const tokens = q.getByTestId("tile-tokens");
     expect(tokens.querySelector(".sw-pulse")).toBeNull();
-  });
-});
-
-// Overview launcher is temporarily commented out on Home until POST /jobs
-// is restored on the daemon. Re-enable this suite when the component
-// comes back.
-describe.skip("Home / Overview launcher", () => {
-  afterEach(() => cleanup());
-
-  const workflows: WorkflowSummary[] = [workflow("build-feature", "Build feature"), workflow("fix-bug")];
-
-  function installLauncherFetch(
-    extra: Record<
-      string,
-      (req: { url: string; method: string; init?: RequestInit }) => Response | Promise<Response>
-    > = {},
-  ) {
-    return installFetchMock({
-      "/api/runs": () => json([]),
-      "/api/workflows": () => json(workflows),
-      ...extra,
-    });
-  }
-
-  it("renders a workflow selector populated from GET /workflows", async () => {
-    const mock = installLauncherFetch();
-    try {
-      const { container } = mountWithHealth({ status: "connected", error: null, daemon: DAEMON_ON }, withRows([]));
-      const q = within(container);
-      await waitFor(() => {
-        expect(q.getByTestId("overview-workflow-trigger")).toBeTruthy();
-      });
-      await waitFor(() => {
-        const workflowsCall = mock.calls.find((c) => c.url === "/api/workflows" && c.method === "GET");
-        expect(workflowsCall).toBeTruthy();
-      });
-    } finally {
-      mock.restore();
-    }
-  });
-
-  it("disables submit when input is empty and enables after typing", async () => {
-    const mock = installLauncherFetch();
-    try {
-      const { container } = mountWithHealth({ status: "connected", error: null, daemon: DAEMON_ON }, withRows([]));
-      const q = within(container);
-      await waitFor(() => {
-        expect(q.getByTestId("overview-input")).toBeTruthy();
-      });
-      // Initial submit is disabled — either no workflow yet or no input.
-      expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(true);
-
-      const textarea = q.getByTestId("overview-input") as HTMLTextAreaElement;
-      typeInto(textarea, "ship it");
-      // Workflow seeds from the /api/workflows response; submit flips
-      // to enabled once that resolves AND we have non-empty input.
-      await waitFor(() => {
-        expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(false);
-      });
-    } finally {
-      mock.restore();
-    }
-  });
-
-  it("on submit: POSTs /jobs with workflow path, invalidates queries, navigates to the run", async () => {
-    let jobsPosts = 0;
-    let runsReloads = 0;
-    let lastBody: unknown;
-    const mock = installFetchMock({
-      "/api/runs": () => {
-        runsReloads += 1;
-        return json([]);
-      },
-      "/api/workflows": () => json(workflows),
-      "/api/jobs": async ({ method, init }) => {
-        if (method !== "POST") return new Response("method not allowed", { status: 405 });
-        jobsPosts += 1;
-        if (typeof init?.body === "string") lastBody = JSON.parse(init.body);
-        return json({ jobId: "j-1", runId: "r-1" });
-      },
-    });
-    try {
-      const { container } = mountWithHealth({ status: "connected", error: null, daemon: DAEMON_ON }, withRows([]));
-      const q = within(container);
-      const textarea = (await waitFor(() => q.getByTestId("overview-input"))) as HTMLTextAreaElement;
-      typeInto(textarea, "draft the release notes");
-      await waitFor(() => {
-        expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(false);
-      });
-
-      const form = q.getByTestId("overview-form") as HTMLFormElement;
-      await act(async () => {
-        fireEvent.submit(form);
-      });
-
-      await waitFor(() => {
-        expect(jobsPosts).toBe(1);
-      });
-
-      // Body carries the workflow PATH (so old daemons work too) + input.
-      expect(lastBody).toEqual({ workflow: "workflows/build-feature.dot", input: "draft the release notes" });
-
-      // Runs query was invalidated → at least one re-fetch.
-      await waitFor(() => {
-        expect(runsReloads).toBeGreaterThanOrEqual(1);
-      });
-
-      // Navigated away from Home — the overview section is no longer in
-      // the tree. (Asserting on the RunDetail page's contents would
-      // require mocking the run-detail + events endpoints too.)
-      await waitFor(() => {
-        expect(within(container).queryByTestId("overview")).toBeNull();
-      });
-    } finally {
-      mock.restore();
-    }
-  });
-
-  it("on server error: shows an inline error message; input is preserved", async () => {
-    const mock = installFetchMock({
-      "/api/runs": () => json([]),
-      "/api/workflows": () => json(workflows),
-      "/api/jobs": () => new Response("daemon offline", { status: 503 }),
-    });
-    try {
-      const { container } = mountWithHealth({ status: "connected", error: null, daemon: DAEMON_ON }, withRows([]));
-      const q = within(container);
-      const textarea = (await waitFor(() => q.getByTestId("overview-input"))) as HTMLTextAreaElement;
-      typeInto(textarea, "retry me");
-      await waitFor(() => {
-        expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(false);
-      });
-
-      const form = q.getByTestId("overview-form") as HTMLFormElement;
-      await act(async () => {
-        fireEvent.submit(form);
-      });
-
-      await waitFor(() => {
-        expect(q.getByTestId("overview-error")).toBeTruthy();
-      });
-      // Input still holds the typed text for retry.
-      expect((q.getByTestId("overview-input") as HTMLTextAreaElement).value).toBe("retry me");
-    } finally {
-      mock.restore();
-    }
-  });
-
-  it("disables the form and shows the hint when daemon is not running", async () => {
-    const mock = installLauncherFetch();
-    try {
-      const { container } = mountWithHealth({ status: "connected", error: null }, withRows([]));
-      const q = within(container);
-      await waitFor(() => {
-        expect(q.getByTestId("overview-daemon-off")).toBeTruthy();
-      });
-      expect(q.getByTestId("overview-daemon-off").textContent).toContain("Daemon not running");
-      expect((q.getByTestId("overview-input") as HTMLTextAreaElement).disabled).toBe(true);
-      expect((q.getByTestId("overview-submit") as HTMLButtonElement).disabled).toBe(true);
-    } finally {
-      mock.restore();
-    }
   });
 });
