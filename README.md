@@ -41,6 +41,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - Bounded OCC retry loop with structured occ_exhausted halt — fact-append contention storms halt cleanly with a structured `occContext` payload instead of spinning, with 1–16 ms exponential backoff between retries
 - Auto-retry for transient LLM provider errors — 408/429/5xx/529/network classified as auto-retry with full-jitter exponential backoff (or honoured `Retry-After` header) and projected to `paused_provider_retry`; 4xx auth/billing/schema errors fall through to manual `paused` (with `reason: "provider_error"` or `"payment_required"` on `fact.run_paused`); chain capped at 5 attempts / 5 cumulative minutes before `provider_exhausted` halt
 - Self-review workflow (`bun run swarm run introspect`) — read-only periodic audit of architecture, doc-vs-code drift, proposal hygiene, and operational health; see [`docs/proposals/introspection-workflow.md`](docs/proposals/introspection-workflow.md)
+- Parallel branch outputs — substitution + UI awareness: `$<branchId>.output` resolves downstream of a fan-out (per-branch `fact.node_started` / `fact.node_completed` carry `parentNodeId`/`parallelIndex`/`score`); web graph lights up every running branch alongside its parent component and accents the fan_in winner; conversation tab strip per concurrently-running branch; step + cost panels indent branch rows under their parent with summed totals — see [`docs/proposals/parallel-branch-outputs.md`](docs/proposals/parallel-branch-outputs.md)
 
 ## What swarm does not deliver today
 

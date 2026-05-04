@@ -113,6 +113,74 @@ describe("toFlowGraph — pure transform", () => {
   });
 });
 
+describe("GraphView — parallel branches", () => {
+  it("branch nodes render with active styling when their state is running, and the winner gets a success accent after fan_in", () => {
+    const src = `digraph g {
+      fork [shape=box]
+      lensA [shape=box]
+      lensB [shape=box]
+      sink [shape=box]
+      fork -> lensA
+      fork -> lensB
+      lensA -> sink
+      lensB -> sink
+    }`;
+    const graph = parseDotSource(src);
+
+    // ——— During fan-out: parent + branches all running.
+    const detailRunning = makeDetail({
+      runId: "r1",
+      nodes: [
+        { nodeId: "fork", state: "running", lastEventSeq: 1 },
+        { nodeId: "lensA", state: "running", lastEventSeq: 2 },
+        { nodeId: "lensB", state: "running", lastEventSeq: 3 },
+      ],
+      selectedEdges: [
+        { from: "fork", to: "lensA" },
+        { from: "fork", to: "lensB" },
+      ],
+      workflowSource: src,
+    });
+    const { flowNodes: midFlight } = toFlowGraph(detailRunning, graph, {
+      activeNodeIds: new Set(["fork", "lensA", "lensB"]),
+      winnerBranchIds: new Set(),
+    });
+    const byIdMid = new Map(
+      midFlight.map((n) => [n.id, n.data as { active: boolean; winner: boolean; state: string }]),
+    );
+    expect(byIdMid.get("fork")?.active).toBe(true);
+    expect(byIdMid.get("lensA")?.active).toBe(true);
+    expect(byIdMid.get("lensB")?.active).toBe(true);
+    expect(byIdMid.get("lensA")?.winner).toBe(false);
+    expect(byIdMid.get("lensB")?.winner).toBe(false);
+    // sink is not running → not active.
+    expect(byIdMid.get("sink")?.active).toBe(false);
+
+    // ——— After fan_in: branches completed, winner picked.
+    const detailDone = makeDetail({
+      runId: "r1",
+      nodes: [
+        { nodeId: "fork", state: "completed", lastEventSeq: 1 },
+        { nodeId: "lensA", state: "completed", lastEventSeq: 2 },
+        { nodeId: "lensB", state: "completed", lastEventSeq: 3 },
+      ],
+      selectedEdges: [
+        { from: "fork", to: "lensA" },
+        { from: "fork", to: "lensB" },
+      ],
+      workflowSource: src,
+    });
+    const { flowNodes: postFanIn } = toFlowGraph(detailDone, graph, {
+      activeNodeIds: new Set(),
+      winnerBranchIds: new Set(["lensB"]),
+    });
+    const byIdDone = new Map(postFanIn.map((n) => [n.id, n.data as { active: boolean; winner: boolean }]));
+    expect(byIdDone.get("lensA")?.winner).toBe(false);
+    expect(byIdDone.get("lensB")?.winner).toBe(true);
+    expect(byIdDone.get("fork")?.winner).toBe(false);
+  });
+});
+
 describe("toFlowGraph — back-edge detection + edge labels", () => {
   it("marks back-edges whose target sits at an earlier depth as isBackEdge", () => {
     const src = `digraph g {

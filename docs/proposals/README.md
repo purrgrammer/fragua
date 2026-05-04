@@ -25,6 +25,7 @@ delta called out in the proposal body.
 | [Schema additions for project-aware runs](./schema-additions.md) | specified | `run_state.{cwd, workflow_name, workflow_scope, workflow_path}`, `daemon_lock.{http_url, http_port, harness_version}`; `project_id` + `projects` table removed; schema v4 |
 | [Workflow resolution by name](./workflow-resolution.md) | specified | bare names resolve `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot` |
 | [One-off migration](./migration.md) | specified | `scripts/migrate-pre-harness.ts` ran on this repo on 2026-05-04 |
+| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | P0 (per-branch `fact.node_started`/`fact.node_completed` with `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out) + P1 (web graph multi-active states with success accent for fan_in winner; step breakdown branch-row indent + parent summary aggregation) + P2 (conversation split tabs gated on concurrently-running branches; cost panel grouping rides on the same step shape) all complete |
 
 ## In progress
 
@@ -34,7 +35,6 @@ delta called out in the proposal body.
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap cascading from project config |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | workflow `.dot` ships and runs end-to-end; `find`/`grep`/`ls` primitive tools landed; archival path for the synthesised review pending |
-| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | P0 shipped (per-branch `fact.node_started`/`fact.node_completed` carry `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out); P1 (web graph active states + step breakdown sub-rows) and P2 (conversation split view, dynamic tabbed) outstanding |
 
 ## Accepted (design done; awaiting scheduling)
 

@@ -26,6 +26,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Coins, DollarSign, Timer } from "lucide-react";
 import { useEffect } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
+import { cn } from "../lib/cn.ts";
 import { formatTokensCompact, formatUsd, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDuration } from "../lib/time.ts";
@@ -88,6 +89,21 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
     );
   }
 
+  // Partition into top-level vs branch rows. Branch rows are indented
+  // under their parent and the parent renders as a non-leaf summary
+  // (cost / tokens aggregated across itself + every child).
+  const childrenByParent = new Map<string, StepSnapshot[]>();
+  const topLevel: StepSnapshot[] = [];
+  for (const s of steps) {
+    if (typeof s.parentNodeId === "string" && s.parentNodeId.length > 0) {
+      const arr = childrenByParent.get(s.parentNodeId) ?? [];
+      arr.push(s);
+      childrenByParent.set(s.parentNodeId, arr);
+    } else {
+      topLevel.push(s);
+    }
+  }
+
   // Outer grid defines the column tracks once; each row uses
   // `grid-cols-subgrid` to inherit them. Result: every row's cells
   // (nodeId, duration, cost, context) line up across the whole list,
@@ -95,11 +111,99 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // grid-template-columns: [step | duration | cost | context]
   return (
     <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
-      {steps.map((step, i) => (
-        <StepCostRow key={step.startSeq} step={step} nextStartedAt={steps[i + 1]?.startedAt} isLive={isLive} />
-      ))}
+      {topLevel.map((step, i) => {
+        const branchChildren = childrenByParent.get(step.nodeId);
+        const next = topLevel[i + 1] ?? branchChildren?.[0];
+        return (
+          <StepCostRowGroup
+            key={step.startSeq}
+            step={step}
+            branchChildren={branchChildren}
+            nextStartedAt={next?.startedAt}
+            isLive={isLive}
+          />
+        );
+      })}
     </div>
   );
+}
+
+/** A top-level step plus any indented branch rows that ride underneath it. */
+function StepCostRowGroup({
+  step,
+  branchChildren,
+  nextStartedAt,
+  isLive,
+}: {
+  step: StepSnapshot;
+  branchChildren: StepSnapshot[] | undefined;
+  nextStartedAt: string | undefined;
+  isLive: boolean;
+}): JSX.Element {
+  const hasBranchChildren = branchChildren !== undefined && branchChildren.length > 0;
+  // Summary mode: the parent's displayed cost / tokens aggregate itself
+  // plus every child branch. The inspector's per-row breakdown still
+  // shows each branch's own cost, so total + per-branch read consistently.
+  const summary = hasBranchChildren ? aggregateSteps(step, branchChildren) : undefined;
+  return (
+    <>
+      <StepCostRow
+        step={step}
+        nextStartedAt={nextStartedAt}
+        isLive={isLive}
+        summary={summary}
+        hasChildren={hasBranchChildren}
+      />
+      {hasBranchChildren
+        ? branchChildren.map((child, j) => (
+            <StepCostRow
+              key={child.startSeq}
+              step={child}
+              nextStartedAt={branchChildren[j + 1]?.startedAt ?? nextStartedAt}
+              isLive={isLive}
+              isBranchChild
+            />
+          ))
+        : null}
+    </>
+  );
+}
+
+/** Sum a parent step + its branch children into a single cost / token /
+ *  duration row. `cost` defaults to zeros so the popover still renders
+ *  even when the parent had no LLM call of its own (the parallel handler
+ *  doesn't open one for the component shell). */
+function aggregateSteps(
+  parent: StepSnapshot,
+  children: readonly StepSnapshot[],
+): NonNullable<StepSnapshot["cost"]> & { durationMs: number | undefined } {
+  let inputTokens = parent.cost?.input_tokens ?? 0;
+  let outputTokens = parent.cost?.output_tokens ?? 0;
+  let cacheReadTokens = parent.cost?.cache_read_tokens ?? 0;
+  let cacheWriteTokens = parent.cost?.cache_write_tokens ?? 0;
+  let billedTokens = parent.cost?.billed_tokens ?? 0;
+  let costUsd = parent.cost?.cost_usd ?? 0;
+  let durationMs = parent.durationMs;
+  for (const c of children) {
+    inputTokens += c.cost?.input_tokens ?? 0;
+    outputTokens += c.cost?.output_tokens ?? 0;
+    cacheReadTokens += c.cost?.cache_read_tokens ?? 0;
+    cacheWriteTokens += c.cost?.cache_write_tokens ?? 0;
+    billedTokens += c.cost?.billed_tokens ?? 0;
+    costUsd += c.cost?.cost_usd ?? 0;
+    if (c.durationMs !== undefined) {
+      durationMs = (durationMs ?? 0) + c.durationMs;
+    }
+  }
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_write_tokens: cacheWriteTokens,
+    billed_tokens: billedTokens,
+    cost_usd: costUsd,
+    durationMs,
+  };
 }
 
 /**
@@ -122,10 +226,23 @@ function StepCostRow({
   step,
   nextStartedAt,
   isLive,
+  summary,
+  hasChildren = false,
+  isBranchChild = false,
 }: {
   step: StepSnapshot;
   nextStartedAt: string | undefined;
   isLive: boolean;
+  /** When set, the row's displayed cost / tokens / duration override
+   *  the step's own values — used for the parent summary that
+   *  aggregates parent + branch children. */
+  summary?: NonNullable<StepSnapshot["cost"]> & { durationMs: number | undefined };
+  /** Parent has indented branch rows underneath. Marks the row with
+   *  `data-summary="true"` for testability and applies a slightly
+   *  emphasised background. */
+  hasChildren?: boolean;
+  /** This row is a branch child — indent and tone down the chrome. */
+  isBranchChild?: boolean;
 }): JSX.Element {
   const model = useStepModel(step.provider, step.model);
 
@@ -153,10 +270,14 @@ function StepCostRow({
     resolvedDurationMs ?? (stepIsTicking ? Math.max(0, now - Date.parse(step.startedAt)) : undefined);
   const elapsedIsLive = stepIsTicking;
 
-  const inputTokens = step.cost?.input_tokens ?? 0;
-  const outputTokens = step.cost?.output_tokens ?? 0;
-  const cacheReadTokens = step.cost?.cache_read_tokens ?? 0;
-  const cacheWriteTokens = step.cost?.cache_write_tokens ?? 0;
+  // Summary rows pull from the aggregated `summary` so the parent's
+  // displayed total includes every child branch's contribution.
+  const inputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
+  const outputTokens = summary?.output_tokens ?? step.cost?.output_tokens ?? 0;
+  const cacheReadTokens = summary?.cache_read_tokens ?? step.cost?.cache_read_tokens ?? 0;
+  const cacheWriteTokens = summary?.cache_write_tokens ?? step.cost?.cache_write_tokens ?? 0;
+  const displayedCostUsd = summary?.cost_usd ?? step.cost?.cost_usd;
+  const displayedDurationMs = summary?.durationMs ?? liveElapsedMs;
   // Tokens this step generated against the model's context window —
   // matches the run-header "Tokens" tile (input + output sum). The
   // provider-reported billed total is not used: Anthropic includes
@@ -191,11 +312,19 @@ function StepCostRow({
   // `justify-self-end` on each metric cell right-aligns its chip;
   // empty cells (e.g. a step missing cost data) still hold column
   // space so neighbouring rows' chips don't shift.
-  const rowGridClass =
-    "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md bg-sw-surface px-3 py-2";
+  const rowGridClass = cn(
+    "grid grid-cols-subgrid col-span-4 items-center gap-x-4 border rounded-md",
+    isBranchChild ? "bg-sw-surface/50 px-3 py-1 ml-6" : "bg-sw-surface px-3 py-2",
+  );
 
   return (
-    <div data-testid={`step-${step.stepIdx}`} className={rowGridClass}>
+    <div
+      data-testid={`step-${step.stepIdx}`}
+      data-summary={hasChildren ? "true" : undefined}
+      data-parent-step={step.parentNodeId}
+      data-branch-child={isBranchChild ? "true" : undefined}
+      className={rowGridClass}
+    >
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
         <span className="truncate">{step.nodeId}</span>
         {step.iteration && (
@@ -205,7 +334,7 @@ function StepCostRow({
         )}
       </span>
       <span className={`${metricChipClass} justify-self-end`}>
-        {liveElapsedMs !== undefined && (
+        {displayedDurationMs !== undefined && (
           <span
             className={metricChipClass}
             data-testid={`step-${step.stepIdx}-elapsed`}
@@ -213,15 +342,15 @@ function StepCostRow({
             title={elapsedIsLive ? "step in progress" : "elapsed time"}
           >
             <Timer className="size-3" aria-hidden />
-            {formatDuration(liveElapsedMs)}
+            {formatDuration(displayedDurationMs)}
           </span>
         )}
       </span>
       <span className={`${metricChipClass} justify-self-end`}>
-        {step.cost !== undefined && (
-          <span className={metricChipClass} title="cost">
+        {displayedCostUsd !== undefined && (
+          <span className={metricChipClass} title={hasChildren ? "total cost (parent + branches)" : "cost"}>
             <DollarSign className="size-3" aria-hidden />
-            <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
+            <AnimatedNumber value={displayedCostUsd} format={usdFormatOptions(displayedCostUsd)} />
           </span>
         )}
       </span>
@@ -278,10 +407,10 @@ function StepCostRow({
                 </div>
               </ContextContentBody>
               <ContextContentFooter>
-                <span className="text-sw-muted">Total cost</span>
+                <span className="text-sw-muted">{hasChildren ? "Total (parent + branches)" : "Total cost"}</span>
                 <span className="tabular-nums">
-                  {step.cost !== undefined ? (
-                    <AnimatedNumber value={step.cost.cost_usd} format={usdFormatOptions(step.cost.cost_usd)} />
+                  {displayedCostUsd !== undefined ? (
+                    <AnimatedNumber value={displayedCostUsd} format={usdFormatOptions(displayedCostUsd)} />
                   ) : (
                     "—"
                   )}

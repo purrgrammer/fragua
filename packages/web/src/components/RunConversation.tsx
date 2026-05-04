@@ -35,6 +35,7 @@ import { Message as AIMessage, MessageContent, MessageResponse } from "@/compone
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { NodeState, RunMessageRow } from "@/lib/api";
 import type { StreamingBlock, StreamingMessage } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,12 @@ export interface RunConversationProps {
    * user message at the top. The agent's event stream carries only
    * synthesized `role=user` shells, so the initial prompt lives here. */
   userInput?: string | null;
+  /** parentNodeId → currently-running branchIds. When non-empty for a
+   * given parent, the parent's section renders as a tabbed sub-view
+   * with one tab per active branch (filters messages by branch nodeId).
+   * Tabs collapse back into flat node sections once the branches
+   * complete. Absent / empty → today's flat render. */
+  activeBranchesByParent?: ReadonlyMap<string, readonly string[]>;
   className?: string;
 }
 
@@ -70,6 +77,7 @@ export function RunConversation({
   isPaused = false,
   isLoading = false,
   userInput,
+  activeBranchesByParent,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -97,14 +105,39 @@ export function RunConversation({
   const sections = useMemo(() => groupByNode(messages), [messages]);
   const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
 
+  // Branch-tab planning: walk visibleSections; whenever we hit a section
+  // whose nodeId is a parent with active branches, fold every immediately
+  // following section whose nodeId is in that parent's branch set into
+  // a single "branch tabs" group. Once we hit a non-branch nodeId or
+  // run out of sections, the group closes and normal rendering resumes.
+  // Branches whose state has flipped to `completed` (no longer in the
+  // active set) fall back to a flat node section — this is exactly the
+  // "tabs collapse after fan_in" behaviour the proposal asks for.
+  const renderItems = useMemo<RenderItem[]>(
+    () => buildRenderItems(visibleSections, activeBranchesByParent),
+    [visibleSections, activeBranchesByParent],
+  );
+
   // The streaming buffer belongs to whichever node the last frame
   // tagged — usually the one whose section is currently the tail.
   // Append to that section if it exists, otherwise create a new one.
   const streamingNodeId = streaming?.nodeId ?? null;
-  const tailSection = visibleSections[visibleSections.length - 1];
+  const tailItem = renderItems[renderItems.length - 1];
+  const tailSectionNodeId =
+    tailItem?.kind === "section"
+      ? tailItem.section.nodeId
+      : tailItem?.kind === "branch-tabs"
+        ? tailItem.parentNodeId
+        : null;
+  // Streaming may also belong inside a tab — if the streaming nodeId
+  // is one of the active branches of the tail group, we render the
+  // streaming row inside that tab.
+  const tailBranchTabs = tailItem?.kind === "branch-tabs" ? tailItem : null;
+  const streamingInTab =
+    tailBranchTabs != null && streamingNodeId != null && tailBranchTabs.branches.includes(streamingNodeId);
   const appendStreamingToTail =
-    streaming != null && streamingNodeId != null && tailSection != null && tailSection.nodeId === streamingNodeId;
-  const orphanStreaming = streaming != null && !appendStreamingToTail;
+    streaming != null && streamingNodeId != null && tailSectionNodeId === streamingNodeId && !streamingInTab;
+  const orphanStreaming = streaming != null && !appendStreamingToTail && !streamingInTab;
 
   const empty = !isLoading && !userInput && visibleSections.length === 0 && streaming == null;
 
@@ -122,23 +155,40 @@ export function RunConversation({
         ) : (
           <ConversationContent>
             {userInput && <UserPromptMessage text={userInput} />}
-            {visibleSections.map((section, i) => {
-              const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
-              const isTail = i === visibleSections.length - 1;
-              const showStreamHere = appendStreamingToTail && isTail;
+            {renderItems.map((item, i) => {
+              const isTail = i === renderItems.length - 1;
+              if (item.kind === "section") {
+                const section = item.section;
+                const nodeState = section.nodeId ? stateByNodeId.get(section.nodeId) : undefined;
+                const showStreamHere = appendStreamingToTail && isTail;
+                return (
+                  <NodeSection
+                    key={section.key}
+                    nodeId={section.nodeId}
+                    state={nodeState}
+                    isLive={isLive}
+                    isPaused={isPaused}
+                  >
+                    {section.rows.map((row) => (
+                      <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                    ))}
+                    {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
+                  </NodeSection>
+                );
+              }
               return (
-                <NodeSection
-                  key={section.key}
-                  nodeId={section.nodeId}
-                  state={nodeState}
+                <BranchTabsSection
+                  key={item.key}
+                  parentNodeId={item.parentNodeId}
+                  parentSection={item.parentSection}
+                  branches={item.branches}
+                  branchSections={item.branchSections}
+                  stateByNodeId={stateByNodeId}
+                  toolResultsById={toolResultsById}
                   isLive={isLive}
                   isPaused={isPaused}
-                >
-                  {section.rows.map((row) => (
-                    <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
-                  ))}
-                  {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
-                </NodeSection>
+                  streaming={isTail && streamingInTab ? streaming : null}
+                />
               );
             })}
             {orphanStreaming && (
@@ -179,6 +229,192 @@ function groupByNode(messages: RunMessageRow[]): Section[] {
     }
   }
   return out;
+}
+
+// ─── Branch-tabs render planning ──────────────────────────────────
+
+type RenderItem =
+  | { kind: "section"; key: string; section: Section }
+  | {
+      kind: "branch-tabs";
+      key: string;
+      parentNodeId: string;
+      /** Parent's own messages (if any) — rendered above the tab strip. */
+      parentSection: Section | null;
+      /** Active branchIds in declaration order; one tab per entry. */
+      branches: readonly string[];
+      /** branchId → contiguous Section, in tab declaration order. May be
+       *  `null` for branches with no messages yet (still gets a tab). */
+      branchSections: ReadonlyMap<string, Section | null>;
+    };
+
+function buildRenderItems(
+  sections: readonly Section[],
+  activeBranchesByParent: ReadonlyMap<string, readonly string[]> | undefined,
+): RenderItem[] {
+  if (!activeBranchesByParent || activeBranchesByParent.size === 0) {
+    return sections.map((s) => ({ kind: "section", key: s.key, section: s }));
+  }
+  const out: RenderItem[] = [];
+  let i = 0;
+  while (i < sections.length) {
+    const section = sections[i]!;
+    const branches = section.nodeId ? activeBranchesByParent.get(section.nodeId) : undefined;
+    if (!branches || branches.length === 0) {
+      // Also start a tabs group when a branch section appears without
+      // its parent being in the section list (parent had no messages).
+      const parentForOrphan = section.nodeId ? findParentForBranch(section.nodeId, activeBranchesByParent) : null;
+      if (parentForOrphan) {
+        const parentBranches = activeBranchesByParent.get(parentForOrphan) ?? [];
+        const consumed = collectBranchSections(sections, i, parentBranches);
+        out.push({
+          kind: "branch-tabs",
+          key: `tabs-${parentForOrphan}-${section.key}`,
+          parentNodeId: parentForOrphan,
+          parentSection: null,
+          branches: parentBranches,
+          branchSections: consumed.branchSections,
+        });
+        i = consumed.nextIndex;
+        continue;
+      }
+      out.push({ kind: "section", key: section.key, section });
+      i += 1;
+      continue;
+    }
+    // section.nodeId IS a parent with active branches — fold subsequent
+    // branch sections into one tabs group.
+    const consumed = collectBranchSections(sections, i + 1, branches);
+    out.push({
+      kind: "branch-tabs",
+      key: `tabs-${section.nodeId ?? "unknown"}-${section.key}`,
+      parentNodeId: section.nodeId ?? "",
+      parentSection: section,
+      branches,
+      branchSections: consumed.branchSections,
+    });
+    i = consumed.nextIndex;
+  }
+  return out;
+}
+
+function findParentForBranch(
+  nodeId: string,
+  activeBranchesByParent: ReadonlyMap<string, readonly string[]>,
+): string | null {
+  for (const [parent, branches] of activeBranchesByParent) {
+    if (branches.includes(nodeId)) return parent;
+  }
+  return null;
+}
+
+function collectBranchSections(
+  sections: readonly Section[],
+  startIndex: number,
+  branches: readonly string[],
+): { branchSections: Map<string, Section | null>; nextIndex: number } {
+  const branchSet = new Set(branches);
+  const branchSections = new Map<string, Section | null>();
+  for (const b of branches) branchSections.set(b, null);
+  let i = startIndex;
+  while (i < sections.length) {
+    const s = sections[i]!;
+    if (s.nodeId == null || !branchSet.has(s.nodeId)) break;
+    if (branchSections.get(s.nodeId) == null) {
+      branchSections.set(s.nodeId, s);
+    } else {
+      // A branch already had a section earlier — keep both by merging
+      // rows so message order is preserved.
+      const existing = branchSections.get(s.nodeId) as Section;
+      existing.rows.push(...s.rows);
+    }
+    i += 1;
+  }
+  return { branchSections, nextIndex: i };
+}
+
+function BranchTabsSection({
+  parentNodeId,
+  parentSection,
+  branches,
+  branchSections,
+  stateByNodeId,
+  toolResultsById,
+  isLive,
+  isPaused,
+  streaming,
+}: {
+  parentNodeId: string;
+  parentSection: Section | null;
+  branches: readonly string[];
+  branchSections: ReadonlyMap<string, Section | null>;
+  stateByNodeId: Map<string, NodeState>;
+  toolResultsById: Map<string, ToolResultMessage>;
+  isLive: boolean;
+  isPaused: boolean;
+  streaming: StreamingMessage | null;
+}): JSX.Element {
+  const parentState = parentNodeId ? stateByNodeId.get(parentNodeId) : undefined;
+  const initial = branches[0] ?? "";
+  return (
+    <section data-testid={`branch-tabs-${parentNodeId}`} className="relative flex flex-col gap-3">
+      {parentSection ? (
+        <NodeSection nodeId={parentSection.nodeId} state={parentState} isLive={isLive} isPaused={isPaused}>
+          {parentSection.rows.map((row) => (
+            <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+          ))}
+        </NodeSection>
+      ) : (
+        <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
+          <StatusDot status={parentState?.state ?? "running"} isLive={isLive} isPaused={isPaused} />
+          <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">
+            {parentNodeId}
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+            {branches.length} branches
+          </span>
+          <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
+        </header>
+      )}
+      <Tabs defaultValue={initial} className="flex flex-col gap-2 pl-4">
+        <TabsList variant="line" className="self-start">
+          {branches.map((branchId) => {
+            const state = stateByNodeId.get(branchId);
+            return (
+              <TabsTrigger
+                key={branchId}
+                value={branchId}
+                data-testid={`branch-tab-${branchId}`}
+                data-branch-state={state?.state ?? "pending"}
+              >
+                <span className="font-mono text-[11px]">{branchId}</span>
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+        {branches.map((branchId) => {
+          const section = branchSections.get(branchId) ?? null;
+          const state = stateByNodeId.get(branchId);
+          const showStreamHere = streaming?.nodeId === branchId;
+          return (
+            <TabsContent
+              key={branchId}
+              value={branchId}
+              data-testid={`branch-tab-content-${branchId}`}
+              className="flex flex-col gap-3"
+            >
+              <NodeSection nodeId={branchId} state={state} isLive={isLive} isPaused={isPaused}>
+                {section?.rows.map((row) => (
+                  <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                )) ?? null}
+                {showStreamHere && streaming != null && <StreamingMessageRow streaming={streaming} />}
+              </NodeSection>
+            </TabsContent>
+          );
+        })}
+      </Tabs>
+    </section>
+  );
 }
 
 interface NodeSectionProps {

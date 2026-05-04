@@ -171,6 +171,48 @@ describe("eventsToSteps", () => {
     expect(merged[1]!.cost).toBeUndefined();
   });
 
+  test("branch step rows surface parentNodeId and parallelIndex from the preceding fact.node_started", () => {
+    // Parallel handler emits per-branch fact.node_started with
+    // parentNodeId / parallelIndex; llm.start itself does NOT carry
+    // them. The reducer stamps the metadata onto the next llm.start
+    // for that nodeId so the UI can group branch rows under their parent.
+    const events = [
+      ev("fact.node_started", 100, { nodeId: "fork", iteration: 1 }),
+      ev("llm.start", 150, { nodeId: "fork" }),
+      ev("fact.node_started", 200, { nodeId: "lensA", iteration: 1, parentNodeId: "fork", parallelIndex: 0 }),
+      ev("llm.start", 250, { nodeId: "lensA" }),
+      ev("fact.node_started", 300, { nodeId: "lensB", iteration: 1, parentNodeId: "fork", parallelIndex: 1 }),
+      ev("llm.start", 350, { nodeId: "lensB" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(3);
+    const fork = steps.find((s) => s.nodeId === "fork")!;
+    const lensA = steps.find((s) => s.nodeId === "lensA")!;
+    const lensB = steps.find((s) => s.nodeId === "lensB")!;
+    expect(fork.parentNodeId).toBeUndefined();
+    expect(fork.parallelIndex).toBeUndefined();
+    expect(lensA.parentNodeId).toBe("fork");
+    expect(lensA.parallelIndex).toBe(0);
+    expect(lensB.parentNodeId).toBe("fork");
+    expect(lensB.parallelIndex).toBe(1);
+  });
+
+  test("a top-level fact.node_started for a previously-branch nodeId clears stale branch metadata", () => {
+    // Defensive: if a node id reappears as top-level (e.g. workflow
+    // edited mid-replay), the next llm.start must NOT inherit the old
+    // branch attribution.
+    const events = [
+      ev("fact.node_started", 100, { nodeId: "x", iteration: 1, parentNodeId: "p", parallelIndex: 0 }),
+      ev("llm.start", 150, { nodeId: "x" }),
+      ev("fact.node_started", 1000, { nodeId: "x", iteration: 1 }),
+      ev("llm.start", 1050, { nodeId: "x" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]!.parentNodeId).toBe("p");
+    expect(steps[1]!.parentNodeId).toBeUndefined();
+  });
+
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
     const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);

@@ -117,7 +117,7 @@ curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 |---|---|
 | `GET /runs/:id/stream` (SSE) | Live progress. Terminates on disconnect. |
 | `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing. |
-| `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost). |
+| `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost; rows for parallel branches carry `parentNodeId` + `parallelIndex`). |
 | `GET /runs/:id` | Projection summary (status, current node, totals). Cheap status poll. |
 
 ```sh

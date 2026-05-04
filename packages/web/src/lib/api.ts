@@ -223,6 +223,12 @@ export interface StepSnapshot {
   provider?: string;
   model?: string;
   fidelity?: string;
+  /** Set when this step ran as a branch of a parallel/component fan-out:
+   * the parent component's nodeId. Drives the indented child rows under
+   * the parent in CostInspector. */
+  parentNodeId?: string;
+  /** Branch index within the parallel parent's `children` list. */
+  parallelIndex?: number;
   cost?: {
     input_tokens: number;
     output_tokens: number;

@@ -79,6 +79,15 @@ export interface GraphViewProps {
   /** Node currently paused at a HITL gate. Renders with "waiting" state
    * so operators can distinguish it from an actively-running node. */
   hitlNodeId?: string | null;
+  /** Every nodeId currently in `state === "running"` — superset of
+   * `activeNodeId`. Parallel branches stay running while their parent
+   * component is also running, and both should glow. When unset, falls
+   * back to the singular `activeNodeId`. */
+  activeNodeIds?: ReadonlySet<string>;
+  /** Branch nodeIds picked by `fan_in.completed`. Rendered with a
+   * success-tone ring after fan-in to distinguish the chosen branch
+   * from completed-but-not-winner siblings. */
+  winnerBranchIds?: ReadonlySet<string>;
 }
 
 const NODE_TYPE = "swarmNode";
@@ -124,6 +133,8 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     selectedNodeId,
     orientation = "TB",
     hitlNodeId,
+    activeNodeIds,
+    winnerBranchIds,
   } = props;
 
   // Backstop fetch for the `runId`-only call shape. RunDetail passes
@@ -168,8 +179,10 @@ export function GraphView(props: GraphViewProps): JSX.Element {
       selectedNodeId: selectedNodeId ?? null,
       orientation,
       hitlNodeId: resolvedHitlNodeId,
+      activeNodeIds: activeNodeIds ?? null,
+      winnerBranchIds: winnerBranchIds ?? null,
     });
-  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId]);
+  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId, activeNodeIds, winnerBranchIds]);
 
   const handleNodeClick = useCallback(
     (_e: unknown, node: FlowNode) => {
@@ -302,7 +315,8 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
         "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
         d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
-        d.selected && !d.active && "ring-2 ring-sw-accent-idle",
+        d.winner && !d.active && "ring-2 ring-sw-accent-success",
+        d.selected && !d.active && !d.winner && "ring-2 ring-sw-accent-idle",
       )}
     >
       {stripTone ? (
@@ -559,6 +573,9 @@ interface SwarmNodeData extends Record<string, unknown> {
   hasOutgoing: boolean;
   active: boolean;
   selected: boolean;
+  /** This branch nodeId was picked by a `fan_in.completed` event.
+   *  Rendered with a success-tone ring (mutually exclusive with `active`). */
+  winner: boolean;
   /** `true` when the executor hasn't reached this node — either "not yet"
    *  on a live run or "never will" on a terminal run. Rendered at reduced
    *  opacity so the executed path visually dominates. Always `false` in
@@ -572,6 +589,11 @@ export interface ToFlowGraphOptions {
   selectedNodeId?: string | null;
   orientation?: LayoutOrientation;
   hitlNodeId?: string | null;
+  /** Set of every running nodeId — includes parallel branches that
+   * `activeNodeId` (singular) can't represent during fan-out. */
+  activeNodeIds?: ReadonlySet<string> | null;
+  /** Branch nodeIds picked by `fan_in.completed`. */
+  winnerBranchIds?: ReadonlySet<string> | null;
 }
 
 /**
@@ -596,7 +618,14 @@ export function toFlowGraph(
   graph: Graph,
   opts: ToFlowGraphOptions = {},
 ): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
-  const { activeNodeId = null, selectedNodeId = null, orientation = "TB", hitlNodeId = null } = opts;
+  const {
+    activeNodeId = null,
+    selectedNodeId = null,
+    orientation = "TB",
+    hitlNodeId = null,
+    activeNodeIds = null,
+    winnerBranchIds = null,
+  } = opts;
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
   // `selectedEdges` is an ordered log of every (from,to) pair the executor
   // traversed. A Set lookup is enough because multiple traversals of the
@@ -669,8 +698,9 @@ export function toFlowGraph(
       state: resolvedState,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
-      active: activeNodeId === id,
+      active: activeNodeIds ? activeNodeIds.has(id) : activeNodeId === id,
       selected: selectedNodeId === id,
+      winner: winnerBranchIds?.has(id) ?? false,
       // Unreached nodes during a run fade. Workflow-detail mode leaves
       // everything at full opacity.
       dim: hasRun && !reached.has(id),

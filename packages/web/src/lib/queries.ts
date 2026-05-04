@@ -61,6 +61,15 @@ export const queries = {
         queryKey: [...queries.runs.all(), "steps", id] as const,
         queryFn: () => api.getRunSteps(id),
       }),
+    /** Full event log. Heavier than `/steps` — only use when something
+     * needs the raw event stream (branch metadata, fan_in winner, etc.).
+     * Re-keying on `totalEvents` upstream gives a cheap invalidator. */
+    events: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), "events", id] as const,
+        queryFn: () => api.getRunEvents(id),
+        enabled: id.length > 0,
+      }),
     tree: (id: string) =>
       queryOptions({
         queryKey: [...queries.runs.all(), id, "tree"] as const,

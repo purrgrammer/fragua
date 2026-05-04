@@ -817,6 +817,12 @@ app.get("/runs/:id/events", (c) => {
   return c.json(store.getEvents(c.req.param("id"), { sinceSeq, limit }));
 });
 
+// Per-LLM-call snapshots merged with SQL-aggregated cost/token totals.
+// Step rows for parallel branches carry optional `parentNodeId` +
+// `parallelIndex` so the UI can group child rows under their component
+// parent and render the parent as a non-leaf summary aggregating cost.
+app.get("/runs/:id/steps", (c) => c.json(store.getSteps(c.req.param("id"))));
+
 // SSE stream of the same events; resumable via Last-Event-ID or ?sinceSeq.
 app.get("/runs/:id/stream", (c) => streamSSE(c, async (stream) => {
   const runId = c.req.param("id");

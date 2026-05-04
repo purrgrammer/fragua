@@ -46,6 +46,7 @@ import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import type { RunChange, RunDetail as RunDetailT } from "../lib/api.ts";
 import { ApiError } from "../lib/api.ts";
+import { useBranchMeta } from "../lib/branch-meta.ts";
 import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
@@ -116,6 +117,14 @@ export function RunDetail(): JSX.Element {
   const detail = useMemo<RunDetailT | undefined>(
     () => (snapshot != null ? mergeDetail(snapshot, detailOverlay) : undefined),
     [snapshot, detailOverlay],
+  );
+
+  // Branch metadata for parallel fan-outs. Empty maps for runs without
+  // parallel sections — consumers no-op.
+  const branchMeta = useBranchMeta(id || null, detail, totalEvents);
+  const activeNodeIds = useMemo<ReadonlySet<string>>(
+    () => new Set((detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId)),
+    [detail?.nodes],
   );
 
   // `isLive` here means "actively dispatching", not just "SSE connected".
@@ -204,6 +213,7 @@ export function RunDetail(): JSX.Element {
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
+                activeBranchesByParent={branchMeta.activeBranchesByParent}
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">
@@ -212,6 +222,8 @@ export function RunDetail(): JSX.Element {
                 selectedNodeId={selectedNodeId}
                 onSelect={handleNodeClick}
                 onDeselect={handleDeselect}
+                activeNodeIds={activeNodeIds}
+                winnerBranchIds={branchMeta.winnerBranchIds}
               />
             </TabsContent>
             <TabsContent value="cost" className="h-full">
@@ -464,11 +476,15 @@ const RunGraphTab = memo(function RunGraphTab({
   selectedNodeId,
   onSelect,
   onDeselect,
+  activeNodeIds,
+  winnerBranchIds,
 }: {
   detail: RunDetailT | null;
   selectedNodeId: string | null;
   onSelect: (id: string) => void;
   onDeselect: () => void;
+  activeNodeIds?: ReadonlySet<string>;
+  winnerBranchIds?: ReadonlySet<string>;
 }): JSX.Element {
   const graph = useMemo(() => {
     if (!detail?.workflowSource) return null;
@@ -481,6 +497,9 @@ const RunGraphTab = memo(function RunGraphTab({
 
   const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
   const hitlNodeId = detail?.runStatus === "paused_hitl" ? (detail.hitlNodeId ?? null) : null;
+  // Pass the multi-active-node Set through so parallel branches that
+  // are running (alongside their parent component) all glow.
+  const effectiveActiveNodeIds = activeNodeIds ?? (activeNodeId ? new Set([activeNodeId]) : undefined);
   const selected = selectedNodeId && graph ? (graph.nodes[selectedNodeId] ?? null) : null;
   const selectedState = selectedNodeId ? (detail?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null) : null;
 
@@ -492,6 +511,8 @@ const RunGraphTab = memo(function RunGraphTab({
             detail={detail}
             orientation="TB"
             activeNodeId={activeNodeId}
+            activeNodeIds={effectiveActiveNodeIds}
+            winnerBranchIds={winnerBranchIds}
             selectedNodeId={selectedNodeId}
             hitlNodeId={hitlNodeId}
             onNodeClick={onSelect}

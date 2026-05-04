@@ -1,17 +1,27 @@
 ---
 title: Parallel branch outputs — substitution + UI awareness
-status: in-progress
+status: shipped
 maturity: sketch
 last-reviewed: 2026-05-04
 ---
 
-> **Status:** P0 (runtime: per-branch lifecycle events) shipped 2026-05-04 in
-> commits `78e3969` + `e8f70aa`. `$<branchId>.output` substitution now resolves
-> downstream of a parallel fan-out; `parallel.ts` emits `fact.node_started` /
-> `fact.node_completed` per branch with optional `parentNodeId`,
-> `parallelIndex`, `score`; reducer leaves `currentNode` parent-pointed during
-> fan-out. P1 (web graph + step breakdown) and P2 (conversation split view)
-> remain outstanding.
+> **Status:** All three phases shipped.
+> P0 (runtime: per-branch lifecycle events) shipped 2026-05-04 in
+> commits `78e3969` + `d3eb674`. `$<branchId>.output` substitution now
+> resolves downstream of a parallel fan-out; `parallel.ts` emits
+> `fact.node_started` / `fact.node_completed` per branch with optional
+> `parentNodeId`, `parallelIndex`, `score`; reducer leaves `currentNode`
+> parent-pointed during fan-out.
+> P1 (web graph + step breakdown) ships steps endpoint pass-through of
+> `parentNodeId` / `parallelIndex`, multi-active-node graph glow with a
+> success accent for the fan_in winner, and indented branch step rows
+> with parent summary aggregation in CostInspector.
+> P2 (conversation split + cost panel grouping) ships per-branch tabs
+> in `RunConversation` (one tab per concurrently-running branch, label
+> = branchId) that collapse back to flat node sections once branches
+> complete; cost panel grouping rides on the same step shape.
+> The `tripleoctagon.prompt` LLM-eval branch and HITL inside a parallel
+> branch remain explicitly out of scope (see §"Out of scope").
 
 # Parallel branch outputs — substitution + UI awareness
 

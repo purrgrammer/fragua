@@ -139,6 +139,57 @@ describe("CostInspector", () => {
     expect(elapsed.getAttribute("data-live")).toBeNull();
   });
 
+  describe("CostInspector — parallel branches", () => {
+    it("indents step rows with parentNodeId under their parent and shows a parent summary aggregating cost + tokens", async () => {
+      const steps = [
+        makeStep({
+          stepIdx: 0,
+          startSeq: 1,
+          nodeId: "fork",
+          cost: { input_tokens: 50, output_tokens: 50, cost_usd: 0.01 },
+        }),
+        makeStep({
+          stepIdx: 1,
+          startSeq: 2,
+          nodeId: "lensA",
+          parentNodeId: "fork",
+          parallelIndex: 0,
+          cost: { input_tokens: 100, output_tokens: 100, cost_usd: 0.02 },
+        }),
+        makeStep({
+          stepIdx: 2,
+          startSeq: 3,
+          nodeId: "lensB",
+          parentNodeId: "fork",
+          parallelIndex: 1,
+          cost: { input_tokens: 150, output_tokens: 150, cost_usd: 0.03 },
+        }),
+      ];
+      const { container } = mount("r1", steps);
+      const q = within(container);
+      await waitFor(() => {
+        expect(q.getByTestId("step-0")).toBeTruthy();
+      });
+      const parent = q.getByTestId("step-0");
+      const lensA = q.getByTestId("step-1");
+      const lensB = q.getByTestId("step-2");
+      // Parent has children → summary marker + summed cost ($0.06).
+      expect(parent.getAttribute("data-summary")).toBe("true");
+      expect(parent.textContent).toMatch(/0\.06/);
+      // Children carry the parentNodeId attribution + branch-child class.
+      expect(lensA.getAttribute("data-branch-child")).toBe("true");
+      expect(lensA.getAttribute("data-parent-step")).toBe("fork");
+      expect(lensB.getAttribute("data-branch-child")).toBe("true");
+      expect(lensB.getAttribute("data-parent-step")).toBe("fork");
+      // Indent class lands on the row container.
+      expect(lensA.className).toMatch(/ml-6/);
+      expect(lensB.className).toMatch(/ml-6/);
+      // Children render their own (non-summed) cost.
+      expect(lensA.textContent).toMatch(/0\.02/);
+      expect(lensB.textContent).toMatch(/0\.03/);
+    });
+  });
+
   it("in-flight step on a non-live run hides the elapsed chip (no stale tick)", async () => {
     // The server fills durationMs for orphan steps on terminal runs.
     // If it didn't (older snapshot, edge case), the client must NOT show

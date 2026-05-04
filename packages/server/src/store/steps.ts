@@ -72,6 +72,15 @@ export interface StepSnapshot {
   provider?: string;
   model?: string;
   fidelity?: string;
+  /** Set when this step ran as a branch of a parallel/component fan-out:
+   * the parent component's nodeId. Sourced from the matching
+   * `fact.node_started.payload.parentNodeId` (the parallel handler
+   * attaches it on lifecycle facts, not on `llm.start`). The UI groups
+   * branch rows under their parent step. */
+  parentNodeId?: string;
+  /** Branch index within the parallel parent's `children` list.
+   * Populated only for parallel branches. */
+  parallelIndex?: number;
   // ---- what came back (populated by `attachStepAggregates`) ----
   cost?: {
     input_tokens: number;
@@ -98,6 +107,13 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // timestamp instead of the buffered `llm.start.ts`. See the file
   // header for the wall-clock-anchoring story.
   const lastNodeStartedTs = new Map<string, number>();
+  // nodeId → branch metadata last seen on `fact.node_started`. The
+  // parallel handler tags only the lifecycle facts with parentNodeId /
+  // parallelIndex (not `llm.start`); we stamp them onto the next
+  // `llm.start` snapshot for the same nodeId. A top-level re-run of the
+  // same id (parentNodeId unset) clears the entry so stale branch
+  // metadata never leaks across windows.
+  const branchMetaByNode = new Map<string, { parentNodeId: string; parallelIndex?: number }>();
   // nodeIds for which we've already opened the FIRST step of the
   // current node window. The first step uses `fact.node_started.ts`;
   // subsequent loop iterations fall back to `llm.start.ts` (we have no
@@ -113,6 +129,15 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (nodeId) {
         lastNodeStartedTs.set(nodeId, ev.ts);
         firstStepEmittedForNode.delete(nodeId);
+        const parentNodeId = stringField(data, "parentNodeId");
+        if (parentNodeId) {
+          const piRaw = data["parallelIndex"];
+          const meta: { parentNodeId: string; parallelIndex?: number } = { parentNodeId };
+          if (typeof piRaw === "number") meta.parallelIndex = piRaw;
+          branchMetaByNode.set(nodeId, meta);
+        } else {
+          branchMetaByNode.delete(nodeId);
+        }
       }
       continue;
     }
@@ -131,6 +156,11 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         startedAt: new Date(startTs).toISOString(),
       };
       assignOptional(step, data);
+      const branchMeta = nodeId ? branchMetaByNode.get(nodeId) : undefined;
+      if (branchMeta) {
+        step.parentNodeId = branchMeta.parentNodeId;
+        if (branchMeta.parallelIndex !== undefined) step.parallelIndex = branchMeta.parallelIndex;
+      }
       steps.push(step);
       if (nodeId) firstStepEmittedForNode.add(nodeId);
     }
