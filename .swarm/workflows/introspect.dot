@@ -24,7 +24,7 @@ digraph introspect {
     default_fidelity = "compact"
     budget_usd       = 12.00
     budget_policy    = "warn"
-    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #collect { llm_model: claude-haiku-4-6; } #health { llm_model: claude-haiku-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } #collect { llm_model: claude-haiku-4-5; } #health { llm_model: claude-haiku-4-5; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
   ]
 
   start [shape=Mdiamond]
