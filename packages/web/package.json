@@ -31,7 +31,7 @@
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "jotai": "2.19.1",
-    "lucide-react": "1.8.0",
+    "lucide-react": "1.14.0",
     "motion": "12.38.0",
     "nanoid": "5.1.9",
     "radix-ui": "1.4.3",

@@ -32,7 +32,36 @@ export interface WorkflowReader {
   read(name: string, opts?: WorkflowReadOptions): Promise<WorkflowDetail | undefined>;
 }
 
+/** One row in `GET /projects/:id/tree`. The list is flat — every file
+ *  plus every ancestor directory it implies — so the web can fold the
+ *  tree client-side without us picking a transport-specific shape. */
+export interface ProjectTreeEntry {
+  path: string;
+  type: "file" | "dir";
+}
+
+/** Outcome of `readBlob`. Each kind maps to a distinct HTTP status at
+ *  the route layer (`ok` → 200 text/plain, `not_found` → 404,
+ *  `too_large` → 413, `binary` → 415, `invalid_path` → 400). */
+export type ReadBlobResult =
+  | { kind: "ok"; text: string }
+  | { kind: "not_found" }
+  | { kind: "too_large" }
+  | { kind: "binary" }
+  | { kind: "invalid_path" };
+
+export interface ProjectTreeReader {
+  /** Enumerate files under `cwd`. Honours `.gitignore` when `cwd` is a
+   *  git repo; falls back to a recursive dir-walk otherwise. */
+  list(cwd: string): Promise<ProjectTreeEntry[]>;
+  /** Read a project-relative file as utf-8 text, with size + binary
+   *  guards. The same path-traversal checks the route layer applies
+   *  are repeated here so the adapter is safe in isolation. */
+  readBlob(cwd: string, relPath: string): Promise<ReadBlobResult>;
+}
+
 export interface ServerPorts {
   workflowReader?: WorkflowReader;
+  projectTreeReader?: ProjectTreeReader;
   daemonInfo?: () => HealthDaemonInfo | Promise<HealthDaemonInfo>;
 }

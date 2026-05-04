@@ -393,6 +393,34 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   return getJson("/projects", (v): v is ProjectSummary[] => Array.isArray(v) && v.every(isProjectSummary));
 }
 
+/** One row in `GET /projects/:id/tree`. The list is flat — every file
+ *  plus every ancestor directory it implies — so the web folds the
+ *  nested shape `<FileTree>` wants client-side. */
+export interface ProjectTreeEntry {
+  path: string;
+  type: "file" | "dir";
+}
+
+export async function getProjectTree(projectId: string): Promise<ProjectTreeEntry[]> {
+  return getJson(
+    `/projects/${encodeURIComponent(projectId)}/tree`,
+    (v): v is ProjectTreeEntry[] => Array.isArray(v) && v.every(isProjectTreeEntry),
+  );
+}
+
+/** Fetch one file's contents as utf-8 text. Throws `ApiError` on any
+ *  non-2xx — callers branch on `.status` so a 413 / 415 can render the
+ *  right "too large" / "binary" affordance instead of a generic empty
+ *  state. */
+export async function getProjectBlob(projectId: string, path: string): Promise<string> {
+  const u = url(`/projects/${encodeURIComponent(projectId)}/blob?path=${encodeURIComponent(path)}`);
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  return res.text();
+}
+
 export async function getRun(id: string): Promise<RunDetail> {
   return getJson(`/runs/${encodeURIComponent(id)}`, isRunDetail);
 }
@@ -795,6 +823,12 @@ function isRunDetail(v: unknown): v is RunDetail {
     (o.durationMs === undefined || typeof o.durationMs === "number") &&
     (o.cwd === undefined || typeof o.cwd === "string")
   );
+}
+
+function isProjectTreeEntry(v: unknown): v is ProjectTreeEntry {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { path?: unknown; type?: unknown };
+  return typeof o.path === "string" && (o.type === "file" || o.type === "dir");
 }
 
 function isProjectSummary(v: unknown): v is ProjectSummary {

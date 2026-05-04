@@ -11,16 +11,23 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import type { BundledLanguage } from "shiki";
+import { CodeBlock } from "../components/ai-elements/code-block.tsx";
+import { FileTree, FileTreeFile, FileTreeFolder } from "../components/ai-elements/file-tree.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
+import type { ProjectTreeEntry } from "../lib/api.ts";
+import { ApiError } from "../lib/api.ts";
 import { decodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 
 export function ProjectDetail(): JSX.Element {
   const { cwdEnc = "" } = useParams();
   const cwd = useMemo(() => decodeProjectId(cwdEnc), [cwdEnc]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPath = searchParams.get("path") ?? "";
 
   const filter = useMemo(() => (cwd ? { cwd } : undefined), [cwd]);
   const { data: rows, isPending, isError, error } = useQuery({ ...queries.runs.list(filter), enabled: cwd !== null });
@@ -34,6 +41,20 @@ export function ProjectDetail(): JSX.Element {
     [cwd, allWorkflows],
   );
 
+  const { data: tree, error: treeError } = useQuery({
+    ...queries.projects.tree(cwdEnc),
+    enabled: cwd !== null && cwdEnc.length > 0,
+  });
+  const treeRoot = useMemo(() => buildTree(tree ?? []), [tree]);
+
+  const {
+    data: blobText,
+    isFetching: blobLoading,
+    error: blobError,
+  } = useQuery({
+    ...queries.projects.blob(cwdEnc, selectedPath),
+  });
+
   useEffect(() => {
     if (error)
       console.warn("[ProjectDetail] failed to load runs —", error instanceof Error ? error.message : String(error));
@@ -42,7 +63,22 @@ export function ProjectDetail(): JSX.Element {
         "[ProjectDetail] failed to load workflows —",
         workflowsError instanceof Error ? workflowsError.message : String(workflowsError),
       );
-  }, [error, workflowsError]);
+    if (treeError)
+      console.warn(
+        "[ProjectDetail] failed to load file tree —",
+        treeError instanceof Error ? treeError.message : String(treeError),
+      );
+  }, [error, workflowsError, treeError]);
+
+  const handleSelect = (path: string): void => {
+    const next = new URLSearchParams(searchParams);
+    if (path === selectedPath) {
+      next.delete("path");
+    } else {
+      next.set("path", path);
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   if (cwd === null) {
     return (
@@ -74,6 +110,34 @@ export function ProjectDetail(): JSX.Element {
           {cwd}
         </code>
       </header>
+
+      {tree && tree.length > 0 && (
+        <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-files-section">
+          <h3 className="text-sw-sm font-medium text-sw-muted">Files</h3>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]">
+            <div className="max-h-[28rem] overflow-y-auto" data-testid="project-files-tree">
+              <FileTree selectedPath={selectedPath} onSelect={handleSelect}>
+                {treeRoot.children.map((child) => (
+                  <TreeNodeView key={child.path} node={child} />
+                ))}
+              </FileTree>
+            </div>
+            <div className="min-w-0 overflow-hidden rounded-lg border bg-sw-surface" data-testid="project-files-viewer">
+              {selectedPath.length === 0 ? (
+                <div className="p-4 text-sw-sm text-sw-muted">Select a file to preview.</div>
+              ) : blobError ? (
+                <BlobError error={blobError} path={selectedPath} />
+              ) : blobLoading ? (
+                <div className="p-4 text-sw-sm text-sw-muted">Loading…</div>
+              ) : blobText !== undefined ? (
+                <CodeBlock code={blobText} language={extToLang(selectedPath)} showLineNumbers />
+              ) : (
+                <div className="p-4 text-sw-sm text-sw-muted">No content.</div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
 
       {projectWorkflows.length > 0 && (
         <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-workflows-section">
@@ -176,4 +240,112 @@ function basename(p: string): string {
 
 function shortSha(sha: string): string {
   return sha.length > 7 ? sha.slice(0, 7) : sha;
+}
+
+// ── File-tree helpers ─────────────────────────────────────────────────
+
+interface TreeNode {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  children: TreeNode[];
+}
+
+/** Fold the flat `{path,type}[]` the server returns into the nested
+ *  shape `<FileTree>` consumes. Folders appear in the input only when
+ *  they contain at least one file (the server includes every ancestor),
+ *  so we don't need to invent empty directories here. */
+function buildTree(entries: ProjectTreeEntry[]): TreeNode {
+  const root: TreeNode = { name: "", path: "", type: "dir", children: [] };
+  const dirByPath = new Map<string, TreeNode>();
+  dirByPath.set("", root);
+
+  const ensureDir = (path: string): TreeNode => {
+    const cached = dirByPath.get(path);
+    if (cached) return cached;
+    const segs = path.split("/");
+    const name = segs[segs.length - 1] ?? path;
+    const parentPath = segs.slice(0, -1).join("/");
+    const parent = ensureDir(parentPath);
+    const node: TreeNode = { name, path, type: "dir", children: [] };
+    parent.children.push(node);
+    dirByPath.set(path, node);
+    return node;
+  };
+
+  for (const e of entries) {
+    if (e.type === "dir") ensureDir(e.path);
+  }
+  for (const e of entries) {
+    if (e.type !== "file") continue;
+    const segs = e.path.split("/");
+    const name = segs[segs.length - 1] ?? e.path;
+    const parentPath = segs.slice(0, -1).join("/");
+    const parent = ensureDir(parentPath);
+    parent.children.push({ name, path: e.path, type: "file", children: [] });
+  }
+
+  // Folders before files, then alphabetical within each group.
+  const sortRec = (n: TreeNode): void => {
+    n.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+    for (const c of n.children) if (c.type === "dir") sortRec(c);
+  };
+  sortRec(root);
+  return root;
+}
+
+function TreeNodeView({ node }: { node: TreeNode }): JSX.Element {
+  if (node.type === "file") {
+    return <FileTreeFile path={node.path} name={node.name} />;
+  }
+  return (
+    <FileTreeFolder path={node.path} name={node.name}>
+      {node.children.map((child) => (
+        <TreeNodeView key={child.path} node={child} />
+      ))}
+    </FileTreeFolder>
+  );
+}
+
+/** Best-effort extension → shiki BundledLanguage. Anything unknown
+ *  falls back to plain text so the viewer renders without trying to
+ *  load a non-existent grammar. */
+function extToLang(path: string): BundledLanguage {
+  const dot = path.lastIndexOf(".");
+  if (dot < 0) return "shell";
+  const ext = path.slice(dot + 1).toLowerCase();
+  const map: Partial<Record<string, BundledLanguage>> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    json: "json",
+    md: "markdown",
+    mdx: "mdx",
+    html: "html",
+    css: "css",
+    yml: "yaml",
+    yaml: "yaml",
+    sh: "bash",
+    bash: "bash",
+    py: "python",
+    rs: "rust",
+    go: "go",
+    sql: "sql",
+    toml: "toml",
+  };
+  return map[ext] ?? "bash";
+}
+
+function BlobError({ error, path }: { error: unknown; path: string }): JSX.Element {
+  const status = error instanceof ApiError ? error.status : 0;
+  let msg: string;
+  if (status === 413) msg = `File too large to preview (>1 MB).`;
+  else if (status === 415) msg = `Binary file — not previewable.`;
+  else if (status === 404) msg = `File not found.`;
+  else msg = `Couldn't load ${path}.`;
+  return <div className="p-4 text-sw-sm text-sw-muted">{msg}</div>;
 }

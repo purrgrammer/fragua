@@ -93,6 +93,19 @@ export const queries = {
         // SSE frames, which is what shifts a project's lastUpdatedAt /
         // runCount. Same SSE-driven freshness as the runs list.
       }),
+    tree: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.projects.all(), id, "tree"] as const,
+        queryFn: () => api.getProjectTree(id),
+        staleTime: 30_000,
+      }),
+    blob: (id: string, path: string) =>
+      queryOptions({
+        queryKey: [...queries.projects.all(), id, "blob", path] as const,
+        queryFn: () => api.getProjectBlob(id, path),
+        enabled: id.length > 0 && path.length > 0,
+        staleTime: 30_000,
+      }),
   },
 
   jobs: {

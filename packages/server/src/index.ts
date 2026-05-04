@@ -12,8 +12,10 @@ import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 import { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 import { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
-import type { ServerPorts, WorkflowReader } from "./ports.ts";
+import { createFsProjectTreeReader } from "./adapters/project-tree-reader.ts";
+import type { ProjectTreeReader, ServerPorts, WorkflowReader } from "./ports.ts";
 import { healthRoutes } from "./routes/health.ts";
+import { projectsRoutes } from "./routes/projects.ts";
 import { providersRoutes } from "./routes/providers.ts";
 import { workflowsRoutes } from "./routes/workflows.ts";
 import { analyticsRoutes } from "./store/analytics-routes.ts";
@@ -72,10 +74,12 @@ function buildApiApp(opts: ServerOptions): Hono {
   const ports = opts.ports ?? {};
   const cwd = opts.cwd ?? process.cwd();
   const workflowReader: WorkflowReader = ports.workflowReader ?? defaultWorkflowReader(opts, cwd);
+  const projectTreeReader: ProjectTreeReader = ports.projectTreeReader ?? createFsProjectTreeReader();
 
   const api = new Hono();
   api.route("/", healthRoutes(ports.daemonInfo !== undefined ? { daemonInfo: ports.daemonInfo } : {}));
   api.route("/", workflowsRoutes({ workflowReader, store: opts.store }));
+  api.route("/", projectsRoutes({ store: opts.store, reader: projectTreeReader }));
   api.route("/", storeRunsRoutes({ store: opts.store, workflowReader }));
   api.route("/", analyticsRoutes({ store: opts.store, workflowReader }));
   api.route(
@@ -194,7 +198,11 @@ function defaultWorkflowReader(opts: ServerOptions, cwd: string): WorkflowReader
 
 export { createFsWorkflowReader } from "./adapters/fs-workflow-reader.ts";
 export { createMultiSourceWorkflowReader } from "./adapters/multi-source-workflow-reader.ts";
+export { createFsProjectTreeReader } from "./adapters/project-tree-reader.ts";
 export type {
+  ProjectTreeEntry,
+  ProjectTreeReader,
+  ReadBlobResult,
   ServerPorts,
   WorkflowDetail,
   WorkflowReader,
