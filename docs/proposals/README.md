@@ -26,6 +26,7 @@ delta called out in the proposal body.
 | [Workflow resolution by name](./workflow-resolution.md) | specified | bare names resolve `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot` |
 | [One-off migration](./migration.md) | specified | `scripts/migrate-pre-harness.ts` ran on this repo on 2026-05-04 |
 | [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | P0 (per-branch `fact.node_started`/`fact.node_completed` with `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out) + P1 (web graph multi-active states with success accent for fan_in winner; step breakdown branch-row indent + parent summary aggregation) + P2 (conversation split tabs gated on concurrently-running branches; cost panel grouping rides on the same step shape) all complete |
+| [Recoverable pause unification](./recoverable-budget-pause.md) | specified | unified non-terminal `paused` status + reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`); `intent.budget_adjusted` (`POST /runs/:id/budget`) raises caps via `routing.budget_override.<scope>.<metric>`; `paused_provider_error` retired |
 
 ## In progress
 
@@ -52,10 +53,10 @@ delta called out in the proposal body.
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
 | [Cap-overflow strategy](./cap-overflow.md) | sketch | 4 KB / 8 KB / 1 MiB / 16 MiB caps need typed observability + spill paths; routing overflow is the loudest production hazard |
 | [Handler discipline rails for extension code](./handler-discipline-extensions.md) | sketch | extend the in-tree lint to user-supplied handlers / tools and the agent backend |
-| [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §14 risk #3; nominal capacity claims have no measurement behind them |
+| [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §13 risk #3; nominal capacity claims have no measurement behind them |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
-| [Recoverable pause unification](./recoverable-budget-pause.md) | designed | collapse operator-resumable family to one `paused` status + one reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`). Default `budget_policy` flips `stop`→`pause`; budget overruns become recoverable. Absorbs `paused_provider_error`, routes 402 to `payment_required`, leaves `paused_hitl` / `paused_*_retry` / `quarantined` untouched |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
+| [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it |
 
 ## Deferred

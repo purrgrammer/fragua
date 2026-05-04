@@ -7,7 +7,7 @@ last-reviewed: 2026-05-01
 
 # Throughput baseline + benchmark suite
 
-> ARCH §14 risk #3: "SQLite write throughput ceiling — unknown until
+> ARCH §13 risk #3: "SQLite write throughput ceiling — unknown until
 > measured. ... Measure in M6." Never executed. Capacity claims
 > ("comfortably below 1000 writes/sec", `MAX_CONCURRENT_RUNS = 8`) are
 > nominal — no measurement-backed numbers anywhere in the repo.

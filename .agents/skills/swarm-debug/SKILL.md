@@ -277,12 +277,12 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 
 ## 9. Known-incomplete
 
-Per `docs/ARCHITECTURE.md` §13.1, these surfaces parse/serialize but aren't wired:
+Per `docs/ARCHITECTURE.md` §12.1, these surfaces parse/serialize but aren't wired:
 
 - **HITL inside parallel branches.** A `yield_hitl` from inside a `component` coerces to `fail`. Nested HITL not supported in v1.
 - **Per-node provider preflight.** `POST /runs` checks that *some* provider key is configured, not the specific provider on each node. A workflow hardcoding an unconfigured provider fails at *dispatch* with `fact.run_halted`, not at enqueue.
 
-When something looks broken, check §13.1 first.
+When something looks broken, check §12.1 first.
 
 ---
 

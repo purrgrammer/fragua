@@ -50,7 +50,7 @@ type HandlerResult = handler.HandlerResult;
 
 // Safety net for runaway tool loops, not a policy ceiling for legitimately
 // long agent work. Drop this cap once budget enforcement lands
-// (docs/ARCHITECTURE.md §13.1) — the $-budget is the correct fence; a
+// (docs/ARCHITECTURE.md §12.1) — the $-budget is the correct fence; a
 // wall-clock ceiling is just a proxy for "something is wedged".
 const DEFAULT_MAX_MS = 30 * 60 * 1000;
 

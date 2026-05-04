@@ -1,5 +1,5 @@
 // Budget policy — unit tests for the pure read-and-enforce module.
-// See docs/ARCHITECTURE.md §13.1 (budget) for context.
+// See docs/ARCHITECTURE.md §12.1 (budget) for context.
 
 import { describe, expect, test } from "bun:test";
 import { BUDGET_WARN_RATIO, evaluateBudget } from "../../src/engine/budget-policy.ts";

@@ -44,7 +44,7 @@ Goal: bump unsafe defaults, plumb per-node `maxMs` / `timeout` overrides through
 | supervisor leak grace | `packages/daemon/src/executor.ts:56` + `supervisor.ts:31` | 5s | 10s | `timeouts.leak_grace` |
 | shutdown drain | `packages/daemon/src/executor.ts:57` | 30s | 30s (keep) | `timeouts.shutdown_drain` |
 
-**Rationale for the 30m codergen default**: a cap is **not** there to police slow LLMs — it is there to catch **runaway tool loops** (agent stuck re-running the same failing bash command, consuming tokens indefinitely). Without a cap, a wedged run silently burns money until a human notices. Budgets (`graph.attrs.budget_usd`, `budget.warn`, `budget.stop`) are the right abstraction, but are declared-not-wired today (per `docs/ARCHITECTURE.md §13.1`). 30 minutes is ~7× the observed max (251.7 s) — zero false positives, still catches a wedged agent within half an hour. **Once budgets enforce, drop this cap.** Document inline in `handler-bridge.ts` so the intent survives.
+**Rationale for the 30m codergen default**: a cap is **not** there to police slow LLMs — it is there to catch **runaway tool loops** (agent stuck re-running the same failing bash command, consuming tokens indefinitely). Without a cap, a wedged run silently burns money until a human notices. Budgets (`graph.attrs.budget_usd`, `budget.warn`, `budget.stop`) are the right abstraction, but are declared-not-wired today (per `docs/ARCHITECTURE.md §12.1`). 30 minutes is ~7× the observed max (251.7 s) — zero false positives, still catches a wedged agent within half an hour. **Once budgets enforce, drop this cap.** Document inline in `handler-bridge.ts` so the intent survives.
 
 **Parallel — no own cap.** The original plan proposed bumping parallel from 10m → 15m. We are instead **removing parallel's independent timeout** entirely and letting child nodes self-police via their own `maxMs`. Parallel is orchestration, not a deadline in its own right. Simpler, one fewer knob, matches the natural "parallel completes when slowest child completes" semantics.
 
@@ -183,7 +183,7 @@ Inline comment:
 // Safety net for runaway tool loops, NOT a policy ceiling for legitimately
 // long agent work. Observed max successful implement/plan is ~4m on this
 // codebase; 30m gives 7x headroom. When budget enforcement lands
-// (ARCHITECTURE §13.1, `budget.stop`), this cap can be dropped — the
+// (ARCHITECTURE §12.1, `budget.stop`), this cap can be dropped — the
 // $-budget is the correct fence, wall-clock is just a proxy.
 ```
 

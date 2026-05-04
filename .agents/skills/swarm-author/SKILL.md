@@ -8,7 +8,7 @@ version: 0.2.1
 
 The goal is a small, legible `.dot` file that encodes a clear plan the runtime can execute deterministically. Start from a similar workflow, keep nodes few, let edges carry the control flow, and validate before you run.
 
-Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §13.1 (declared-but-not-wired). Attribute grammar: `packages/core/src/types/graph.ts`. Validator: `packages/core/src/engine/validator.ts`.
+Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy) + §12.1 (declared-but-not-wired). Attribute grammar: `packages/core/src/types/graph.ts`. Validator: `packages/core/src/engine/validator.ts`.
 
 For the validator code lookup table, see `references/validator-codes.md`. For retry-policy presets, model stylesheets, and subgraphs, see `references/advanced-attrs.md`.
 

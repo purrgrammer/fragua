@@ -537,11 +537,19 @@ export function makeGreetingHandler(nextNode: string): handler.HandlerSpec {
     maxMs: 30_000,
     handler: async (ctx) => {
       const name = typeof ctx.routing.name === "string" ? ctx.routing.name : "friend";
+      const sentAt = Date.now();
       const res = await ctx.llm.call({
         model: "claude-haiku-4-5",
-        messages: [{ role: "user", content: `Greet ${name} in one sentence.` }],
+        messages: [{ role: "user", content: `Greet ${name} in one sentence.`, timestamp: sentAt }],
       });
-      ctx.messages.append({ role: "assistant", content: res.content });
+      ctx.messages.append({
+        role: "assistant",
+        content: res.content,
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        timestamp: Date.now(),
+      });
       return {
         kind: "transition",
         nextNode,

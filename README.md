@@ -32,7 +32,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - Steering, pause, cancel, HITL input, resume, unquarantine, priority bump — all via intents
 - Bare-name workflow resolution — global then local: `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot`; anything path-shaped resolves verbatim
 - One-off migration script for the swarm repo's pre-harness DB (`scripts/migrate-pre-harness.ts`) — ran on this repo on 2026-05-04, deletable once the global DB has soaked
-- Per-node + per-run cost/token budgets with `warn` / `stop` policies
+- Per-node + per-run cost/token budgets with `warn` / `stop` / `pause` policies (default `pause`); Recoverable pause unification collapses the operator-resumable family to a single non-terminal `paused` status with reason-discriminated `fact.run_paused` (`operator` | `provider_error` | `payment_required` | `budget`); on a budget hit the operator raises the cap via `intent.budget_adjusted` (`POST /runs/:id/budget`, stored at `routing.budget_override.<scope>.<metric>`) and resumes, instead of losing upstream work to a terminal halt
 - Automatic retries inside workflows via backward conditional edges + `max_retries`
 - HITL via `wait.human` nodes returning `yield_hitl { label, options[] }`
 - Auto-titler runs once per run (cost-bounded summariser)

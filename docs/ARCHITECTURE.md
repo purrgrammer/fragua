@@ -354,7 +354,7 @@ All payloads ≤ 4KB. Content references are `artifactKey`.
 
 ### Observability events (writer: `daemon`, no OCC)
 
-Anything emitted via `ctx.emitObservability` from a handler — `agent.message_start/end`, `llm.text_delta`, `llm.thinking_delta`, `llm.toolcall_delta`, `cost.recorded`, `tool.execution_start/end`, `intent.dropped`, `budget.warn` / `budget.stop`, etc. Best-effort streaming telemetry, not transactional bundle: no version bump, no decision logic reads them, consumers are SSE tails and projections. Events land in the same `seq` space as facts.
+Anything emitted via `ctx.emit` from a handler — `agent.message_start/end`, `llm.text_delta`, `llm.thinking_delta`, `llm.toolcall_delta`, `cost.recorded`, `tool.execution_start/end`, `intent.dropped`, `budget.warn` / `budget.stop`, etc. Best-effort streaming telemetry, not transactional bundle: no version bump, no decision logic reads them, consumers are SSE tails and projections. Events land in the same `seq` space as facts.
 
 The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
 
@@ -562,7 +562,7 @@ the corresponding source interface.
 
 ## 5. Handler contract
 
-Unchanged in substance from Revision 1; now with `iteration` visible and side-effect envelope carrying `idempotencyKey`.
+Unchanged in substance from Revision 1; now with `iteration` visible, side-effect envelope carrying `idempotencyKey`, and `ctx.withScope` for parallel-branch sub-contexts.
 
 ```typescript
 export type SideEffect = "none" | "idempotent" | "external";
@@ -602,7 +602,21 @@ export interface HandlerContext {
   readonly steering?: string;
   readonly env?: ExecutionEnvironment;                      // per-run worktree; falls back to process cwd when unset
   readonly budgetSnapshot?: BudgetSnapshotInput;            // cumulative cost / tokens vs configured ceilings
+  readonly withScope: (override: ScopeOverrides) => HandlerContext; // parallel-branch sub-contexts (re-narrowed tools, scoped emit/messages/artifacts)
   // No direct fetch, filesystem, DB, or process access.
+}
+
+export interface ScopeOverrides {
+  nodeId: string;                                           // required — branch identity for emit stamping + side-effect keys
+  iteration: number;                                        // required — per-branch retry counter
+  allowedTools?: readonly string[];
+  deniedTools?: readonly string[];
+  hitlInput?: { selected: string; note?: string } | string;
+  steering?: string;
+  budgetSnapshot?: BudgetSnapshotInput;
+  // Run-level resources (store, llm, http, signal, routing, args,
+  // nodeOutputs, env) are deliberately omitted — captured once at
+  // top-level construction and reused across all withScope calls.
 }
 
 export type HandlerResult =
@@ -817,6 +831,11 @@ app.get("/runs/:id/events", (c) => {
   return c.json(store.getEvents(c.req.param("id"), { sinceSeq, limit }));
 });
 
+// Per-run conversation transcript: pi-agent AgentMessage rows, ordered
+// by per-run `ordinal`. `nodeId` stamps which node appended each
+// message. Used by the web conversation view and post-mortem tooling.
+app.get("/runs/:id/messages", (c) => c.json(store.getMessages(c.req.param("id"))));
+
 // Per-LLM-call snapshots merged with SQL-aggregated cost/token totals.
 // Step rows for parallel branches carry optional `parentNodeId` +
 // `parallelIndex` so the UI can group child rows under their component
@@ -1021,7 +1040,7 @@ packages/
 
 ---
 
-## 13. Deferred decisions
+## 12. Deferred decisions
 
 - **Blob encryption** for secret-bearing outputs — single-user local; deferred.
 - **Cross-machine deployment** — single-machine by design. `IEventStore` is synchronous (matches `bun:sqlite`); a Postgres backing would require async-ifying the interface and every callsite, so this is a future direction rather than a clean drop-in.
@@ -1031,7 +1050,7 @@ packages/
 - **Workflow hot-reload for in-flight runs** — not planned; `workflow_sha` pinned.
 - **Per-workflow concurrency caps** — add when needed; easy via partial-index counts.
 
-### 13.1 Handler coverage
+### 12.1 Handler coverage
 
 All 8 canonical handler kinds from attractor §2.8 dispatch end-to-end
 through `auto-dispatcher.ts`: `start`, `exit`, `conditional`,
@@ -1053,7 +1072,7 @@ Known gaps in coverage live as proposals in [`proposals/`](./proposals/) — see
 
 ---
 
-## 14. Risks ranked
+## 13. Risks ranked
 
 1. **Handler discipline drift** — #1 long-term risk. Structural lint + review gate mandatory. A single handler ignoring `AbortSignal` breaks invariants.
 2. **Provider without idempotency support** — any external tool that can't accept a dedup key cannot be made safe; operator review is the only line of defense. Tag loudly.
@@ -1064,7 +1083,7 @@ Known gaps in coverage live as proposals in [`proposals/`](./proposals/) — see
 
 ---
 
-## 15. What this architecture buys
+## 14. What this architecture buys
 
 - **One coordination surface.** All races resolve in SQLite; nothing in the filesystem; no unix sockets.
 - **Zero-cost pause snapshots.** Projection always current; pausing = emitting an event.

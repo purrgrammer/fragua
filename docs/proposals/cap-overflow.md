@@ -12,7 +12,7 @@ last-reviewed: 2026-05-01
 > - `events.payload` (4 KB) → silent truncation with marker payload + `console.warn`
 > - `run_state.routing` (8 KB) → SQLite CHECK throws; run halts with `reason: "error"`
 > - `messages.content` (1 MiB) → typed `MessageTooLargeError`, but no built-in spill — handler must reach for artifacts manually
-> - `blobs` content (16 MiB) → typed `ArtifactTooLargeError`; no chunking story (deferred per ARCH §13)
+> - `blobs` content (16 MiB) → typed `ArtifactTooLargeError`; no chunking story (deferred per ARCH §12)
 >
 > All four are correct as defences and wrong as UX. Production users will hit each.
 

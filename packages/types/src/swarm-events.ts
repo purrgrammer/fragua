@@ -33,7 +33,7 @@ export type RunStatus =
  *
  * - `operator` — operator hit pause from the UI/CLI; resume to continue.
  * - `provider_error` — non-payment provider HTTP failure (400/401/403/
- *   404/413/422 manual; 408/429/5xx/network with `policy:"auto-retry"`).
+ *   404/413/422 manual; 408/429/5xx/529/network with `policy:"auto-retry"`).
  *   Operator rotates creds / fixes request; resume retries.
  * - `payment_required` — 402 from the provider; operator tops up
  *   off-ledger and resumes.

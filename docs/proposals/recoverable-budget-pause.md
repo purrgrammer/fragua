@@ -1,29 +1,43 @@
 ---
 title: Recoverable pause unification
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-03
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-04
 ---
 
 # Recoverable pause unification
 
-> A budget cap hit emits `fact.run_halted{reason:"budget"}` — terminal,
-> the run's accumulated work is abandoned. A 402 from the provider
-> emits `fact.run_paused_provider_error{httpStatus:402,...}` —
-> non-terminal, resumable via the `RunPausedNotice` banner. **Two
-> operator-fixable "out of money" conditions with opposite fates.**
-> Empirical pain this session: introspect's `drift` node hit a $2.00
-> cap at $2.41 (run `01kqjv5k9jfx0ez86k`), then $4.00 cap at $4.21
-> (run `01kqjwgsxgzxpew320`). Each halt threw away ~$0.50 of upstream
-> `collect` work and left no synthesised review.
+> **Shipped (commit `a2d3a6e [*] unify operator-resumable pauses behind paused + fact.run_paused`).** The operator-resumable family
+> collapsed to a single non-terminal status `paused` and a single
+> reason-discriminated fact `fact.run_paused{reason: "operator" |
+> "provider_error" | "payment_required" | "budget"}`. Budget overruns
+> are now recoverable by default: a cap hit emits
+> `fact.run_paused{reason: "budget", scope, metric, limit, actual}`
+> instead of terminal `fact.run_halted{reason: "budget"}`, and the
+> operator raises the cap via `intent.budget_adjusted` (stored at
+> `routing.budget_override.<scope>.<metric>`) before resuming. The
+> `paused_provider_error` status was retired (status set + table-rebuild
+> migration in the same commit); 402 routes to
+> `reason: "payment_required"`, all other manual-class HTTP failures
+> route to `reason: "provider_error"`. `budget_policy` parser enum
+> gained `"pause"`; the default flipped from `"stop"` → `"pause"`,
+> with `"stop"` and `"warn"` retained for CI gates that want
+> terminal-on-overspend.
 >
-> Provider-retry's recent rework split transient/manual on the wake
-> axis and shipped `paused_provider_retry` alongside
-> `paused_provider_error`. Adding a `paused_budget` here would
-> continue accreting status-per-reason — with `paused_max_retries`,
-> `paused_max_loops`, `paused_goal_gate` queued behind it. **This
-> proposal collapses the operator-resumable family to one status and
-> one fact, before the proliferation compounds.**
+> The original motivation: a budget cap hit emitted
+> `fact.run_halted{reason:"budget"}` (terminal — abandoned all
+> upstream work) while a 402 emitted
+> `fact.run_paused_provider_error{httpStatus:402,...}` (non-terminal,
+> resumable). Two operator-fixable "out of money" conditions with
+> opposite fates. Empirical pain that drove this: introspect's
+> `drift` node hit a $2.00 cap at $2.41 (run `01kqjv5k9jfx0ez86k`),
+> then $4.00 cap at $4.21 (run `01kqjwgsxgzxpew320`); each halt threw
+> away ~$0.50 of upstream `collect` work and left no synthesised
+> review. The shape below records the design as it landed; sections
+> on shipped surfaces (operator endpoints, web UI, intent-fold
+> integration) match current code. Sibling halts
+> (`max_retries`/`max_loops`/`goal_gate`) remain
+> follow-up scope and have not yet shipped.
 
 ## Shape
 
