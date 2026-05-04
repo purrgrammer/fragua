@@ -10,6 +10,7 @@ import {
   FileSearchIcon,
   FileTextIcon,
   FolderIcon,
+  GlobeIcon,
   type LucideIcon,
   PencilIcon,
   SearchIcon,
@@ -72,6 +73,10 @@ export type ToolPart = ToolUIPart | DynamicToolUIPart;
 export type ToolHeaderProps = {
   title?: string;
   className?: string;
+  /** Override the default icon resolution. Used by extension-paired
+   *  `*.web.tsx` renderers that ship their own Lucide icon. When unset,
+   *  falls back to `TOOL_PRESENTATION[name]` then `WrenchIcon`. */
+  iconOverride?: LucideIcon;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
   | {
@@ -142,6 +147,7 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   grep: { icon: SearchIcon, label: "Grep" },
   find: { icon: FileSearchIcon, label: "Find" },
   ls: { icon: FolderIcon, label: "List directory" },
+  web_fetch: { icon: GlobeIcon, label: "Web fetch" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare
@@ -168,14 +174,14 @@ function humanizeToolName(toolName: string): string {
   return [first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(), ...rest.map((w) => w.toLowerCase())].join(" ");
 }
 
-export const ToolHeader = ({ className, title, type, state, toolName, ...props }: ToolHeaderProps) => {
+export const ToolHeader = ({ className, title, type, state, toolName, iconOverride, ...props }: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
   // `title` carries the canonical tool name (e.g. `bash`) when the
   // caller has it; fall back to the derived slug. Look up the registry
   // for icon + human-readable label, and humanize unknown tools.
   const raw = title ?? derivedName;
   const entry = lookupTool(raw);
-  const Icon = entry?.icon ?? WrenchIcon;
+  const Icon = iconOverride ?? entry?.icon ?? WrenchIcon;
   const label = entry?.label ?? humanizeToolName(raw);
 
   return (

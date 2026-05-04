@@ -34,6 +34,7 @@ import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { swarmExtensionsPlugin } from "./src/vite/swarm-extensions.ts";
 
 interface ProxyTarget {
   /** Origin proxied requests are forwarded to (no path). */
@@ -76,8 +77,11 @@ function resolveServerTarget(): ProxyTarget {
 
 const proxy = resolveServerTarget();
 
+// Repo root resolved from the web package (packages/web/vite.config.ts → ../..).
+const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [swarmExtensionsPlugin({ projectRoot: REPO_ROOT }), react(), tailwindcss()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -1,5 +1,6 @@
 export * from "./blocklist.ts";
 export * from "./edit-diff.ts";
+export * from "./extensions/index.ts";
 export * from "./find.ts";
 export * from "./grep.ts";
 export * from "./ignore.ts";

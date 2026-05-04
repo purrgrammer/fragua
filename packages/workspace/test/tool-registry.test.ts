@@ -2,13 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { Type } from "@sinclair/typebox";
 import { type Tool, ToolRegistry } from "../src/types.ts";
 
-function makeTool(name: string): Tool {
+function makeTool(name: string, opts: { defaultDisabled?: boolean } = {}): Tool {
   return {
     name,
     description: "test",
     parameters: Type.Object({}),
     idempotent: true,
     truncation: { max_chars: 1000, mode: "tail" },
+    ...(opts.defaultDisabled ? { defaultDisabled: true } : {}),
     async execute() {
       return { text: "ok" };
     },
@@ -47,6 +48,27 @@ describe("ToolRegistry", () => {
     const r = new ToolRegistry();
     r.registerAll([makeTool("a"), makeTool("b")]);
     const picked = r.select({ deny: ["b"] });
+    expect(picked.map((t) => t.name)).toEqual(["a"]);
+  });
+
+  test("defaultDisabled is excluded from the catch-all (no allow filter)", () => {
+    const r = new ToolRegistry();
+    r.registerAll([makeTool("a"), makeTool("b"), makeTool("web_fetch", { defaultDisabled: true })]);
+    const picked = r.select();
+    expect(picked.map((t) => t.name).sort()).toEqual(["a", "b"]);
+  });
+
+  test("defaultDisabled is included when explicitly listed in allow", () => {
+    const r = new ToolRegistry();
+    r.registerAll([makeTool("a"), makeTool("web_fetch", { defaultDisabled: true })]);
+    const picked = r.select({ allow: ["web_fetch"] });
+    expect(picked.map((t) => t.name)).toEqual(["web_fetch"]);
+  });
+
+  test("deny still wins over an explicit allow", () => {
+    const r = new ToolRegistry();
+    r.registerAll([makeTool("a"), makeTool("web_fetch", { defaultDisabled: true })]);
+    const picked = r.select({ allow: ["a", "web_fetch"], deny: ["web_fetch"] });
     expect(picked.map((t) => t.name)).toEqual(["a"]);
   });
 });

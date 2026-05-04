@@ -5,7 +5,8 @@ import { Agent, type AgentEvent, type AgentMessage } from "@mariozechner/pi-agen
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, failProvider, ok } from "@swarm/core";
-import type { ExecutionEnvironment, Skill, ToolRegistry } from "@swarm/workspace";
+import { makeHttpClient } from "@swarm/core/handler";
+import type { ExecutionEnvironment, Skill, SwarmToolContext, ToolRegistry } from "@swarm/workspace";
 import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
@@ -212,7 +213,26 @@ export class PiCodergenBackend implements CodergenBackend {
         "PiCodergenBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
       );
     }
-    const tools = selectedTools.map((t) => toAgentTool(t, effectiveEnv));
+    // Per-run swarm context for extension tools. Built-ins ignore this
+    // field; loader-wrapped extensions need it to construct their
+    // `ExtensionContext`. Captured by closure on each `toAgentTool`
+    // call — a fresh `Agent({tools})` is built per `backend.run()`,
+    // so closure values are correct for that run.
+    const swarmEmit = input.emit;
+    const summariser = this.summariser;
+    const swarmContext: SwarmToolContext = {
+      runId: input.run_id,
+      nodeId: input.node.id,
+      iteration: input.iteration?.n ?? 0,
+      http: makeHttpClient({ signal: input.signal }),
+      emit: swarmEmit
+        ? (type, payload) => {
+            void swarmEmit(type as EventType, payload);
+          }
+        : () => {},
+      ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
+    };
+    const tools = selectedTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
 
     const declared = (input.node.attrs.context_files as string[] | undefined) ?? [];
     const contextFiles = applyDefaultContextFiles(declared);

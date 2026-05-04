@@ -89,6 +89,30 @@
         "typescript": "5.7.3",
       },
     },
+    "packages/extension": {
+      "name": "@swarm/extension",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mariozechner/pi-agent-core": "0.71.0",
+        "@mariozechner/pi-ai": "0.71.0",
+        "@sinclair/typebox": "0.34.41",
+        "@swarm/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/react": "18.3.12",
+        "lucide-react": "1.14.0",
+        "react": "18.3.1",
+        "typescript": "5.7.3",
+      },
+      "peerDependencies": {
+        "lucide-react": "*",
+        "react": "*",
+      },
+      "optionalPeers": [
+        "lucide-react",
+        "react",
+      ],
+    },
     "packages/server": {
       "name": "@swarm/server",
       "version": "0.0.0",
@@ -142,6 +166,7 @@
         "@streamdown/math": "1.0.2",
         "@streamdown/mermaid": "1.0.2",
         "@swarm/core": "workspace:*",
+        "@swarm/extension": "workspace:*",
         "@swarm/types": "workspace:*",
         "@tanstack/react-query": "5.99.1",
         "@xyflow/react": "12.10.2",
@@ -184,9 +209,11 @@
       "name": "@swarm/workspace",
       "version": "0.0.0",
       "dependencies": {
+        "@mariozechner/pi-agent-core": "0.71.0",
         "@mariozechner/pi-ai": "0.71.0",
         "@sinclair/typebox": "0.34.41",
         "@swarm/core": "workspace:*",
+        "@swarm/extension": "workspace:*",
         "@swarm/types": "workspace:*",
         "diff": "8.0.4",
         "turndown": "7.2.4",
@@ -819,6 +846,8 @@
     "@swarm/core": ["@swarm/core@workspace:packages/core"],
 
     "@swarm/daemon": ["@swarm/daemon@workspace:packages/daemon"],
+
+    "@swarm/extension": ["@swarm/extension@workspace:packages/extension"],
 
     "@swarm/server": ["@swarm/server@workspace:packages/server"],
 

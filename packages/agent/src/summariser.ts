@@ -73,8 +73,8 @@ export class PiSummariserBackend implements SummariserBackend {
 
   async summarise(input: SummariseInput): Promise<SummariseOutput> {
     const started = Date.now();
-    const systemPrompt = systemPromptFor(input);
-    const userContent = userContentFor(input);
+    const systemPrompt = input.system_prompt_override ?? systemPromptFor(input);
+    const userContent = input.system_prompt_override !== undefined ? input.input : userContentFor(input);
     const maxOutputTokens = input.max_output_tokens ?? this.defaultMaxOutputTokens;
 
     // Synthetic-node emit always runs under this summariser's node_id. Falls

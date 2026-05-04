@@ -458,7 +458,22 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
   },
 };
 
-export const CORE_TOOLS: AnyTool[] = [readFileTool, writeFileTool, editFileTool, bashTool, grepTool, findTool, lsTool];
+import { webFetchTool } from "./web-fetch.ts";
+
+// `web_fetch` is included but `defaultDisabled: true` keeps it out of
+// any node's tool set unless `allowed_tools=` lists it explicitly.
+// Workflows that want public-web reading (e.g. `research.dot`) opt in
+// per node; everything else stays unaffected.
+export const CORE_TOOLS: AnyTool[] = [
+  readFileTool,
+  writeFileTool,
+  editFileTool,
+  bashTool,
+  grepTool,
+  findTool,
+  lsTool,
+  webFetchTool,
+];
 
 // ─── helpers ───────────────────────────────────────────────────────
 

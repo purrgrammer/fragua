@@ -23,6 +23,7 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
+import { renderers as extensionRenderers } from "virtual:swarm-extensions";
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@swarm/types";
 import { type ReactNode, useMemo, useState } from "react";
 import {
@@ -34,6 +35,7 @@ import {
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { NodeState, RunMessageRow } from "@/lib/api";
@@ -651,16 +653,22 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
       }
     } else if (chunk.type === "toolCall") {
       const result = toolResultsById.get(chunk.id);
+      const extRenderer = extensionRenderers.get(chunk.name);
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
           <ToolHeader
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
             title={chunk.name}
+            {...(extRenderer?.icon ? { iconOverride: extRenderer.icon } : {})}
           />
           <ToolContent>
             <ToolInput input={chunk.arguments} />
-            <RichToolResult toolName={chunk.name} result={result} />
+            <RichToolResult
+              toolName={chunk.name}
+              result={result}
+              params={chunk.arguments as Record<string, unknown> | undefined}
+            />
           </ToolContent>
         </Tool>,
       );
@@ -781,10 +789,35 @@ function isTextBlock(b: unknown): b is { type: "text"; text: string } {
 function RichToolResult({
   toolName,
   result,
+  params,
 }: {
   toolName: string;
   result: ToolResultMessage | undefined;
+  params?: Record<string, unknown> | undefined;
 }): JSX.Element | null {
+  // web_fetch is a core tool but worth its own dedicated renderer
+  // (URL pill, cache/redirect/error variants, model+cost footer).
+  // Mirrors the bash/edit branches below.
+  if (toolName === "web_fetch") {
+    return (
+      <WebFetchResult
+        params={params as { url?: string; prompt?: string } | undefined}
+        result={result}
+        isStreaming={!result}
+      />
+    );
+  }
+  // Extension-paired *.web.tsx renderer takes precedence over the
+  // hardcoded built-in branches below. The renderer's `content` slots
+  // into <ToolContent> here (isCustom=false). isCustom=true is not
+  // handled at this level — the calling site would need to bypass
+  // <Tool> entirely; deferred until a real tool needs it.
+  const extRenderer = extensionRenderers.get(toolName);
+  if (extRenderer?.render) {
+    const isStreaming = !result;
+    const rendered = extRenderer.render(params, result, { isStreaming, isPartial: false });
+    return <div className="space-y-[var(--sw-space-3)]">{rendered.content}</div>;
+  }
   if (!result) return null;
   const text = flattenText(result.content);
   const errorText = result.isError ? text : undefined;

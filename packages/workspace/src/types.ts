@@ -6,9 +6,31 @@
 
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { TSchema } from "@sinclair/typebox";
-import type { ContextValue, DirEntry, ExecResult, ExecutionEnvironment } from "@swarm/core";
+import type {
+  ContextValue,
+  DirEntry,
+  ExecResult,
+  ExecutionEnvironment,
+  SummariseInput,
+  SummariseOutput,
+} from "@swarm/core";
+import type { HttpClient } from "@swarm/core/handler";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
+
+/** Per-call swarm context passed to extension tools through
+ *  `ToolExecuteOptions.swarmContext`. Built-in tools (read / write /
+ *  edit / bash) ignore this field — they run off `env` alone.
+ *  Loader-wrapped extension tools require it to construct their
+ *  `ExtensionContext`. */
+export interface SwarmToolContext {
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly iteration: number;
+  readonly http: HttpClient;
+  readonly emit: (type: string, payload: Record<string, unknown>) => void;
+  readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
+}
 
 /** Per-tool truncation policy (applied before the value goes to the LLM). */
 export interface TruncationPolicy {
@@ -20,11 +42,13 @@ export interface TruncationPolicy {
   max_lines?: number;
 }
 
-/** Per-call options the host can pass to a tool. Both fields are
- * optional so adapters that don't care can ignore them; tools that do
- * (long-running bash, abortable network calls, streaming progress)
- * read them off the third argument. Mirrors `AgentTool.execute`'s
- * signal/onUpdate plumbing in pi-agent-core. */
+/** Per-call options the host can pass to a tool. Fields are optional
+ * so adapters that don't care can ignore them; tools that do
+ * (long-running bash, abortable network calls, streaming progress,
+ * extensions needing run-scoped context) read what they need off the
+ * third argument. Mirrors `AgentTool.execute`'s signal/onUpdate
+ * plumbing in pi-agent-core, plus a swarm-specific `swarmContext`
+ * slot for extension tools. */
 export interface ToolExecuteOptions<TResult = ContextValue> {
   /** Cancellation signal. Tools should clean up promptly when fired. */
   signal?: AbortSignal;
@@ -32,6 +56,9 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
    * output (bash, long curls) call this with partial `ToolOutput`s
    * during execution; consumers can render a live preview. */
   onUpdate?: (partial: ToolOutput<TResult>) => void;
+  /** Swarm-side run context. Required by extension-supplied tools to
+   * construct their `ExtensionContext`; ignored by built-ins. */
+  swarmContext?: SwarmToolContext;
 }
 
 /** Swarm tool definition. Names are bare identifiers — namespace
@@ -52,6 +79,12 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
    * (e.g. Opus 4.6 / GLM-5.1 sending `edits` as a JSON string instead
    * of an array, legacy `{oldText, newText}` flat shape on edit). */
   prepareArguments?: (input: unknown) => TArgs;
+  /** When true, the tool is excluded from the catch-all "all tools"
+   * set that nodes get when they don't specify `allowed_tools`. The
+   * tool only surfaces when a node explicitly names it. Used by
+   * non-trivial side-effecting tools (web_fetch, future credential
+   * holders) so they don't silently leak into every codergen node. */
+  defaultDisabled?: boolean;
   /** Execute the tool. Receives validated args, the execution env,
    * and optional per-call options (signal / onUpdate). */
   execute(args: TArgs, env: ExecutionEnvironment, opts?: ToolExecuteOptions<TResult>): Promise<ToolOutput<TResult>>;
@@ -113,11 +146,26 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  /** Filter by a node's allowed_tools / denied_tools attributes. */
+  /** Filter by a node's allowed_tools / denied_tools attributes.
+   *
+   * When `allow` is set, it's a pure allowlist — only tools whose
+   * names are in `allow` survive (`defaultDisabled` is bypassed,
+   * because the node opted in by name).
+   *
+   * When `allow` is unset, the node accepts the catch-all "all tools"
+   * set, MINUS:
+   *   - anything in `deny`,
+   *   - any tool with `defaultDisabled: true`.
+   *
+   * The `defaultDisabled` carve-out is the opt-in mechanism for tools
+   * that shouldn't leak into every node by default (e.g. `web_fetch`
+   * makes outbound HTTP and burns summariser tokens — workflows that
+   * want it must list it explicitly). */
   select(opts: { allow?: string[]; deny?: string[] } = {}): AnyTool[] {
     return this.list().filter((t) => {
       if (opts.deny?.includes(t.name)) return false;
-      if (opts.allow && !opts.allow.includes(t.name)) return false;
+      if (opts.allow) return opts.allow.includes(t.name);
+      if (t.defaultDisabled) return false;
       return true;
     });
   }

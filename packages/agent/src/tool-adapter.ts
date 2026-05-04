@@ -17,7 +17,7 @@
 
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import type { ExecutionEnvironment, Tool, ToolOutput } from "@swarm/workspace";
+import type { ExecutionEnvironment, SwarmToolContext, Tool, ToolOutput } from "@swarm/workspace";
 import { truncate } from "@swarm/workspace";
 
 /** Anthropic's tool-name regex is `^[a-zA-Z0-9_-]{1,128}$` — `:` is rejected.
@@ -67,7 +67,7 @@ function buildContent(
   };
 }
 
-export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment): AgentTool {
+export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment, swarmContext?: SwarmToolContext): AgentTool {
   const wireName = sanitizeToolName(swarmTool.name);
   const agentTool: AgentTool = {
     name: wireName,
@@ -101,6 +101,7 @@ export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment): AgentTo
       const result = await swarmTool.execute(params as Record<string, unknown>, env, {
         ...(signal ? { signal } : {}),
         ...(adaptedOnUpdate ? { onUpdate: adaptedOnUpdate } : {}),
+        ...(swarmContext ? { swarmContext } : {}),
       });
       const built = buildContent(result, swarmTool.truncation);
       const data = result.data as { full_output_path?: string } | undefined;

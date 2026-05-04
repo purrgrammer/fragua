@@ -53,6 +53,12 @@ export interface SummariseInput {
   emit?: (type: EventType, data: Record<string, unknown>, node_id: string) => Promise<void>;
   /** Cooperative cancellation from the executor. */
   signal?: AbortSignal;
+  /** Bypass the purpose-derived system prompt with a custom string.
+   *  When set, the summariser also sends `input` verbatim as the user
+   *  message (no "Goal: …" or "Prior conversation to compress:"
+   *  prefix). Used by extension tools that need a generic small-model
+   *  call against the configured summariser provider. */
+  system_prompt_override?: string;
 }
 
 export interface SummariseOutput {
