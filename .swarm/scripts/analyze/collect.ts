@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 interface Args {
@@ -9,8 +11,14 @@ interface Args {
   sinceMs: number | null;
 }
 
+function defaultStorePath(): string {
+  const project = resolve(process.cwd(), ".swarm/swarm.db");
+  if (existsSync(project)) return project;
+  return resolve(homedir(), ".swarm/swarm.db");
+}
+
 function parseArgs(argv: string[]): Args {
-  let storePath = ".swarm/swarm.db";
+  let storePath: string | null = null;
   let limit = 30;
   let workflow: string | null = null;
   let sinceMs: number | null = null;
@@ -24,7 +32,7 @@ function parseArgs(argv: string[]): Args {
       sinceMs = Date.now() - Number(next) * 86400_000; i++;
     }
   }
-  return { storePath: resolve(storePath), limit, workflow, sinceMs };
+  return { storePath: resolve(storePath ?? defaultStorePath()), limit, workflow, sinceMs };
 }
 
 interface RunRow {
