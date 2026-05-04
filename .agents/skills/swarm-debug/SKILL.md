@@ -1,7 +1,7 @@
 ---
 name: swarm-debug
 description: Post-mortem a swarm run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches swarm-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # swarm-debug — run post-mortem procedure
@@ -155,7 +155,7 @@ What to look for:
 - **`run_state.routing` keys worth a glance:**
   - `goal_gates.<nodeId>` — last outcome of every visited gate.
   - `goal_gates.__retries` — cumulative retarget count. Equals `max_goal_gate_retries` (default 3) → `fact.run_halted { reason: "goal_gate_unsatisfied" }`.
-  - `internal.retry_resume_at` — wall-clock ms when a `paused_retry` run is due to wake. In the past + still `paused_retry` → wake-pending sweeper is wedged (check daemon heartbeat).
+  - `internal.auto_resume_at` — wall-clock ms when a `paused_retry` or `paused_provider_retry` run is due to wake (one routing key powers both states; canonical declaration: `packages/core/src/types/context.ts` `AUTO_RESUME_AT_KEY`). In the past + still paused → wake-pending sweeper is wedged (check daemon heartbeat).
   - `__budget_warned.*` — tags suppressing duplicate `budget.warn` events.
 
 Observability events outside fact/intent (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`, `agent.info`, `agent.warning`) carry `nodeId` + `iteration` and fold into step snapshots — don't read them raw, use §5.
@@ -264,7 +264,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to `intent.cancel_requested`. |
 | `fact.run_paused_hitl` | — | `wait.human` yielded. Payload: `{nodeId, label, options[]}`; resume via `/hitl`. |
-| `fact.run_paused_retry` | — | Node returned `outcome=retry`. `routing.internal.retry_resume_at` (ms) tells you when wake-pending will re-queue it. Slot freed during the wait. |
+| `fact.run_paused_retry` | — | Node returned `outcome=retry`. `routing.internal.auto_resume_at` (ms) tells you when wake-pending will re-queue it. Slot freed during the wait. |
 | `fact.run_paused` | `reason: "operator"` | Operator hit Pause. Wake on `intent.resume`. |
 | `fact.run_paused` | `reason: "provider_error"` | Manual-class provider transport error (400/401/403/404/413/422). Wake on `intent.resume` after fixing creds/request. |
 | `fact.run_paused` | `reason: "payment_required"` | Provider returned 402. Top up, then `intent.resume`. |

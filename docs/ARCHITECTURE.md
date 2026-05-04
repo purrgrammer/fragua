@@ -320,6 +320,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
 | `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note?: string` | Operator acknowledgement for a quarantined run |
 | `intent.priority_adjusted` | `newPriority: number`, `note?: string` | Operator bump |
+| `intent.budget_adjusted` | `scope: 'node'\|'run'`, `metric: 'cost'\|'tokens'`, `newLimit: number` (>0), `note?: string` | Operator raises a budget ceiling on a `paused{reason:'budget'}` run; folded into `routing.budget_override.<scope>.<metric>` so the next turn-boundary budget check uses the new ceiling. Web bundles a follow-up `intent.resume` ("Raise & Resume"); intents stay separate at the protocol level |
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
@@ -334,7 +335,7 @@ CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id I
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed |
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
-| `fact.message_appended` | `ordinal`, `role`, `nodeId`, `iteration` | Message metadata |
+| `fact.message_appended` | `ordinal`, `role`, `nodeId: string\|null`, `iteration` | Message metadata. `nodeId` is null for messages appended outside a node turn (e.g. seed messages) |
 | `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input on a workflow `wait.human` node; `options` mirrors the outgoing edge set with parsed accelerator keys |
 | `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'`, `nodeId`, plus reason-specific fields. `provider_error`: `httpStatus`, `provider`, `errorMessage`, `policy?`, `attempt?`, `resumeAt?`. `payment_required`: `provider`, `errorMessage`. `budget`: `scope`, `metric`, `limit`, `actual`. | Unified operator-resumable pause. `reason="provider_error"` with `policy="auto-retry"` projects status to `paused_provider_retry` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, or `intent.budget_adjusted` + `intent.resume` for budget reason) |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
@@ -642,6 +643,7 @@ export type HandlerResult =
       httpStatus: number | null;                         // null on pre-response network failures
       provider: string;
       errorMessage: string;
+      retryAfterMs?: number;                             // provider-supplied Retry-After (ms); honoured exactly when set, otherwise full-jitter exponential
     };
 ```
 
@@ -769,9 +771,10 @@ app.post("/runs", async (c) => {
     priority?: number;
     routing?: Record<string, unknown>;
     input?: string;          // positional input → routing.input → $ARGUMENTS
-    projectId?: string;      // UUIDv7 from <root>/.swarm/config.jsonc
-    projectName?: string;    // display label for the projects cache
-    projectRoot?: string;    // absolute path at enqueue time
+    cwd?: string;            // absolute project root at enqueue time; surfaced on run_state.cwd
+    workflowName?: string;   // resolved name when the caller passed a bare name
+    workflowScope?: "global" | "local" | "path" | "ephemeral";
+    workflowPath?: string;   // filesystem path of the .dot file at resolution time
   };
 
   // Preflight 1: at least one provider credential must be reachable.
@@ -792,8 +795,9 @@ app.post("/runs", async (c) => {
     initialRouting.input = body.input;
   }
   store.enqueueRun({ runId, workflowSha: body.workflowSha, priority: body.priority,
-                     initialRouting, projectId: body.projectId,
-                     projectName: body.projectName, projectRoot: body.projectRoot });
+                     initialRouting, cwd: body.cwd,
+                     workflowName: body.workflowName, workflowScope: body.workflowScope,
+                     workflowPath: body.workflowPath });
   return c.json({ runId });
 });
 
@@ -804,6 +808,7 @@ app.post("/runs/:id/hitl",         async (c) => writeIntent(c, "intent.hitl_inpu
 app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"));
 app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
 app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
+app.post("/runs/:id/budget",       async (c) => writeIntent(c, "intent.budget_adjusted"));  // {scope, metric, newLimit>0, note?}
 
 // JSON-batch read of a run's events; pagination via ?since / ?limit.
 app.get("/runs/:id/events", (c) => {

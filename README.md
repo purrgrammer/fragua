@@ -78,7 +78,7 @@ bun run swarm harness
 bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
-The harness URL is printed on the `ready` line as a clickable hyperlink. Default origin is <http://localhost:6767>; override with `--port` or `web.port` in `~/.swarm/config.jsonc`.
+The harness URL is printed on the `ready` line as a clickable hyperlink. Default origin is <http://localhost:6767>; override with `--port` or `web.port` in `~/.swarm/config.jsonc`. The CI primitive (`swarm daemon --db <path>` + `swarm serve --db <path>`) targets a project-local store and serves on <http://localhost:3000>.
 
 Power-user / CI primitives:
 
