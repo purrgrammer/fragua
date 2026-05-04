@@ -200,6 +200,136 @@ describe("makeParallelHandler — wait_all", () => {
   });
 });
 
+describe("makeParallelHandler — branch lifecycle events", () => {
+  test("emits fact.node_started before and fact.node_completed after each branch with parentNodeId/parallelIndex", async () => {
+    const ctx = stubCtx({ nodeId: "fork" });
+    const specs: Record<string, HandlerSpec> = {
+      a: specReturning("success"),
+      b: specReturning("fail"),
+    };
+    const spec = makeParallelHandler({
+      children: ["a", "b"],
+      fanInNode: "join",
+      resolveChild: (id) => specs[id] ?? null,
+      buildChildContext: (id, parent) => ({ ...parent, nodeId: id, iteration: 0 }),
+    });
+    await spec.handler(ctx);
+
+    const starts = ctx.__emitted.filter((e) => e.type === "fact.node_started");
+    const completes = ctx.__emitted.filter((e) => e.type === "fact.node_completed");
+    expect(starts).toHaveLength(2);
+    expect(completes).toHaveLength(2);
+
+    // Per-branch fence: started precedes completed for the same branch id.
+    for (const branchId of ["a", "b"]) {
+      const startIdx = ctx.__emitted.findIndex(
+        (e) => e.type === "fact.node_started" && e.payload["nodeId"] === branchId,
+      );
+      const completeIdx = ctx.__emitted.findIndex(
+        (e) => e.type === "fact.node_completed" && e.payload["nodeId"] === branchId,
+      );
+      expect(startIdx).toBeGreaterThanOrEqual(0);
+      expect(completeIdx).toBeGreaterThan(startIdx);
+    }
+
+    const startA = starts.find((e) => e.payload["nodeId"] === "a");
+    const startB = starts.find((e) => e.payload["nodeId"] === "b");
+    expect(startA?.payload["parentNodeId"]).toBe("fork");
+    expect(startA?.payload["parallelIndex"]).toBe(0);
+    expect(startA?.payload["iteration"]).toBe(0);
+    expect(startB?.payload["parentNodeId"]).toBe("fork");
+    expect(startB?.payload["parallelIndex"]).toBe(1);
+
+    const completeA = completes.find((e) => e.payload["nodeId"] === "a");
+    const completeB = completes.find((e) => e.payload["nodeId"] === "b");
+    expect(completeA?.payload["parentNodeId"]).toBe("fork");
+    expect(completeA?.payload["parallelIndex"]).toBe(0);
+    expect(completeA?.payload["outcomeStatus"]).toBe("success");
+    expect(completeA?.payload["nextNode"]).toBe("join");
+    expect(completeB?.payload["outcomeStatus"]).toBe("fail");
+    expect(completeB?.payload["parallelIndex"]).toBe(1);
+  });
+
+  test("fact.node_completed carries optional score and outputRef from the branch handler result", async () => {
+    const ctx = stubCtx({ nodeId: "fork" });
+    const lensA: HandlerSpec = handlerSpec(async () => ({
+      kind: "transition" as const,
+      outcomeStatus: "success" as const,
+      tokens: 12,
+      costUsd: 0.01,
+      routingDelta: { score: 7 },
+      outputRef: {
+        runId: "r",
+        nodeId: "lens_a",
+        iteration: 0,
+        key: "output",
+        sha256: "deadbeef",
+        sizeBytes: 4,
+        mime: null,
+      },
+    }));
+    const spec = makeParallelHandler({
+      children: ["lens_a"],
+      fanInNode: "synth",
+      resolveChild: () => lensA,
+      buildChildContext: (id, parent) => ({ ...parent, nodeId: id, iteration: 0 }),
+    });
+    await spec.handler(ctx);
+
+    const completed = ctx.__emitted.find(
+      (e) => e.type === "fact.node_completed" && e.payload["nodeId"] === "lens_a",
+    );
+    expect(completed).toBeTruthy();
+    expect(completed?.payload["score"]).toBe(7);
+    expect(completed?.payload["tokens"]).toBe(12);
+    expect(completed?.payload["costUsd"]).toBe(0.01);
+    // outputRef shape mirrors selectNodeOutputRefs SQL contract: "<refNodeId>:<key>".
+    expect(completed?.payload["outputRef"]).toBe("lens_a:output");
+  });
+
+  test("$<branchId>.output is addressable: outputRef on branch fact.node_completed uses the branch nodeId so getNodeOutputs would key by branch", async () => {
+    const ctx = stubCtx({ nodeId: "fork" });
+    const branchSpec = (branchId: string): HandlerSpec =>
+      handlerSpec(async () => ({
+        kind: "transition" as const,
+        outcomeStatus: "success" as const,
+        tokens: 0,
+        costUsd: 0,
+        outputRef: {
+          runId: "r",
+          nodeId: branchId,
+          iteration: 0,
+          key: "output",
+          sha256: "sha",
+          sizeBytes: 1,
+          mime: null,
+        },
+      }));
+    const specs: Record<string, HandlerSpec> = {
+      lens_correctness: branchSpec("lens_correctness"),
+      lens_security: branchSpec("lens_security"),
+    };
+    const spec = makeParallelHandler({
+      children: ["lens_correctness", "lens_security"],
+      fanInNode: "synth",
+      resolveChild: (id) => specs[id] ?? null,
+      buildChildContext: (id, parent) => ({ ...parent, nodeId: id, iteration: 0 }),
+    });
+    await spec.handler(ctx);
+
+    const completes = ctx.__emitted.filter((e) => e.type === "fact.node_completed");
+    expect(completes).toHaveLength(2);
+    for (const ev of completes) {
+      const branchId = ev.payload["nodeId"] as string;
+      const outputRef = ev.payload["outputRef"] as string;
+      // Substitution contract: selectNodeOutputRefs splits on ":" and uses
+      // the prefix as the addressable nodeId. Branches must surface their
+      // own id so $<branchId>.output resolves downstream of fan_in.
+      expect(outputRef.startsWith(`${branchId}:`)).toBe(true);
+    }
+  });
+});
+
 describe("makeParallelHandler — first_success", () => {
   test("returns as soon as one branch reports success", async () => {
     const ctx = stubCtx({ nodeId: "fork" });

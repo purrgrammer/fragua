@@ -60,14 +60,22 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_started": {
+      // Branch facts (parentNodeId set) leave currentNode pointed at
+      // the parent component during fan-out; per-branch state is
+      // derived live from the events table. Top-level transitions take
+      // the normal path.
+      if (fact.payload.parentNodeId !== undefined) return next;
       next.status = "running";
       next.currentNode = fact.payload.nodeId;
       next.nodeStartedAt = now;
       return next;
     }
     case "fact.node_completed": {
-      closeDispatchInterval(next, now);
       const p = fact.payload;
+      const isBranch = p.parentNodeId !== undefined;
+      // Branch facts must not close the parent's dispatch interval —
+      // the parent is still running until its own fact.node_completed.
+      if (!isBranch) closeDispatchInterval(next, now);
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.totalInputCostUsd += p.inputCostUsd ?? 0;
@@ -92,6 +100,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
         tokens: nodeBucket.tokens + (p.inputTokens ?? 0) + (p.outputTokens ?? 0),
         costUsd: nodeBucket.costUsd + p.costUsd,
       };
+      // Branch completion: don't redirect currentNode — the parent
+      // component is still the active node until all branches resolve
+      // and the parent itself emits fact.node_completed.
+      if (isBranch) return next;
       next.currentNode = p.nextNode;
       next.nodeStartedAt = now;
       return next;

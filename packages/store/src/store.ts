@@ -760,10 +760,8 @@ export class SqliteStore implements IEventStore {
     // the artifact itself was put under the node's own scope, so we
     // recover (nodeId, iteration, key) from the payload directly.
     for (const ref of refs) {
-      // outputRefKey shape: "<refNodeId>:<key>"; the refNodeId may differ
-      // from the node that emitted the fact when handlers eventually
-      // surface child-node refs (e.g. parallel branches). Until that
-      // lands, both strings agree.
+      // outputRefKey shape: "<refNodeId>:<key>"; parallel branches surface
+      // their own branch id here so $<branchId>.output resolves downstream.
       const colon = ref.outputRefKey.indexOf(":");
       if (colon < 0) continue;
       const refNodeId = ref.outputRefKey.slice(0, colon);

@@ -82,26 +82,88 @@ export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
 
     const branchAbort = new AbortController();
     const branches: Promise<ParallelBranchResult>[] = cfg.children.map(
-      async (childId): Promise<ParallelBranchResult> => {
+      async (childId, parallelIndex): Promise<ParallelBranchResult> => {
         const childSpec = cfg.resolveChild(childId);
         if (childSpec == null) {
-          return {
+          const branchResult: ParallelBranchResult = {
             branchId: childId,
             status: "fail",
             failReason: `branch "${childId}" has no dispatchable HandlerSpec`,
           };
+          // Lifecycle fence: emit started/completed even for unresolvable
+          // branches so the per-branch projection stays consistent.
+          // iteration: 0 — branches inherit the parent's iteration but
+          // we have no childCtx here.
+          parentCtx.emit("fact.node_started", {
+            nodeId: childId,
+            iteration: 0,
+            parentNodeId: parentCtx.nodeId,
+            parallelIndex,
+          });
+          parentCtx.emit("fact.node_completed", {
+            nodeId: childId,
+            iteration: 0,
+            parentNodeId: parentCtx.nodeId,
+            parallelIndex,
+            tokens: 0,
+            costUsd: 0,
+            outcomeStatus: "fail",
+            nextNode: cfg.fanInNode,
+          });
+          return branchResult;
         }
         const childCtx = cfg.buildChildContext(childId, parentCtx);
+        const childIteration = childCtx.iteration ?? 0;
+        parentCtx.emit("fact.node_started", {
+          nodeId: childId,
+          iteration: childIteration,
+          parentNodeId: parentCtx.nodeId,
+          parallelIndex,
+        });
+        let result: HandlerResult;
+        let branchResult: ParallelBranchResult;
         try {
-          const result = await childSpec.handler(childCtx);
-          return mapResult(childId, result);
+          result = await childSpec.handler(childCtx);
+          branchResult = mapResult(childId, result);
         } catch (err) {
-          return {
+          branchResult = {
             branchId: childId,
             status: "fail",
             failReason: err instanceof Error ? err.message : String(err),
           };
+          parentCtx.emit("fact.node_completed", {
+            nodeId: childId,
+            iteration: childIteration,
+            parentNodeId: parentCtx.nodeId,
+            parallelIndex,
+            tokens: 0,
+            costUsd: 0,
+            outcomeStatus: "fail",
+            nextNode: cfg.fanInNode,
+          });
+          return branchResult;
         }
+
+        const completedPayload: Record<string, unknown> = {
+          nodeId: childId,
+          iteration: childIteration,
+          parentNodeId: parentCtx.nodeId,
+          parallelIndex,
+          tokens: result.kind === "transition" ? result.tokens : 0,
+          costUsd: result.kind === "transition" ? result.costUsd : 0,
+          outcomeStatus: branchResult.status,
+          nextNode: cfg.fanInNode,
+        };
+        if (result.kind === "transition" && result.outputRef) {
+          // selectNodeOutputRefs SQL parses outputRef as "<refNodeId>:<key>".
+          // Use the branch's own id so $<branchId>.output resolves downstream.
+          completedPayload["outputRef"] = `${result.outputRef.nodeId}:${result.outputRef.key}`;
+        }
+        if (branchResult.score !== undefined) {
+          completedPayload["score"] = branchResult.score;
+        }
+        parentCtx.emit("fact.node_completed", completedPayload);
+        return branchResult;
       },
     );
 

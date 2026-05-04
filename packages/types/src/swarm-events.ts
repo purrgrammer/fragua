@@ -149,7 +149,23 @@ export type FactEvent =
           | "quarantined";
       };
     }
-  | { type: "fact.node_started"; payload: { nodeId: string; iteration: number } }
+  | {
+      type: "fact.node_started";
+      payload: {
+        nodeId: string;
+        iteration: number;
+        /** Set only when this node ran as a branch of a parallel/component
+         * fan-out: the parent component's nodeId. Top-level nodes leave
+         * unset. The reducer keys off this to skip touching
+         * `run_state.currentNode` (the parent stays the active node
+         * during fan-out; per-branch state lives on the live
+         * `run_state.nodes[*]` projection only). */
+        parentNodeId?: string;
+        /** Branch index within the parallel parent's `children` list.
+         * Populated only for parallel branches. */
+        parallelIndex?: number;
+      };
+    }
   | {
       type: "fact.node_completed";
       payload: {
@@ -177,6 +193,21 @@ export type FactEvent =
          * UI distinguish "completed OK" from "completed with outcome=fail"
          * without walking `edge.selected` / `fact.run_halted`. */
         outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+        /** Set only when this node ran as a branch of a parallel/component
+         * fan-out: the parent component's nodeId. Top-level nodes leave
+         * unset. Reducers key off this to skip the
+         * `currentNode = nextNode` transition (the parent stays the
+         * active node during fan-out) while still updating per-node
+         * metrics so cost/tokens accrue under the branch id. */
+        parentNodeId?: string;
+        /** Branch index within the parallel parent's `children` list.
+         * Populated only for parallel branches. */
+        parallelIndex?: number;
+        /** Optional ranking score the branch surfaced via
+         * `routingDelta.score`. Populated only for parallel branches
+         * that emit one; lets fan_in's ordering be debuggable from the
+         * event log alone. */
+        score?: number;
       };
     }
   | {
