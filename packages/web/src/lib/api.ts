@@ -454,6 +454,15 @@ export async function getRunBlob(runId: string, path: string): Promise<string> {
   return res.text();
 }
 
+export async function getRunDiff(runId: string): Promise<string> {
+  const u = url(`/runs/${encodeURIComponent(runId)}/diff`);
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  return res.text();
+}
+
 export async function getRunChanges(runId: string): Promise<RunChange[]> {
   return getJson(
     `/runs/${encodeURIComponent(runId)}/changes`,

@@ -119,6 +119,26 @@ export function runFilesRoutes(opts: RunFilesRouteOptions): Hono {
     return c.json(changes.slice(0, MAX_CHANGES));
   });
 
+  app.get("/runs/:runId/diff", async (c) => {
+    const runId = c.req.param("runId");
+    const state = store.getState(runId);
+    if (state == null) return c.json({ error: "not_found" }, 404);
+
+    const baseGitSha = pickBaseGitSha(state.baseGitSha, store.getEvents(runId, { limit: 200 }));
+    if (baseGitSha == null || state.cwd == null) {
+      return c.json({ error: "base_missing" }, 410);
+    }
+
+    const tip = await resolveRunTip(state.cwd, runId);
+    if (tip == null) return c.json({ error: "branch_missing" }, 410);
+
+    const diff = await runGitCapture(state.cwd, ["diff", `${baseGitSha}..${tip}`]);
+    return new Response(diff, {
+      status: 200,
+      headers: { "content-type": "text/x-diff; charset=utf-8" },
+    });
+  });
+
   return app;
 }
 

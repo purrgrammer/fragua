@@ -578,6 +578,7 @@ function RunFilesTab({ runId }: { runId: string }): JSX.Element {
   const changesQuery = useQuery(queries.runs.changes(runId));
   const treeQuery = useQuery(queries.runs.tree(runId));
   const blobQuery = useQuery(queries.runs.blob(runId, selectedPath));
+  const diffQuery = useQuery(queries.runs.diff(runId));
 
   const treeRoot = useMemo(() => buildTree(treeQuery.data ?? []), [treeQuery.data]);
   const treeUnavailable = treeQuery.error instanceof ApiError && treeQuery.error.status === 410;
@@ -622,11 +623,11 @@ function RunFilesTab({ runId }: { runId: string }): JSX.Element {
           className="rounded-md border border-sw-border bg-sw-surface p-3 text-sw-sm text-sw-muted"
           data-testid="run-files-disposed"
         >
-          Worktree was disposed — file browser unavailable. The diff above is read from the preserved{" "}
+          Worktree disposed; full diff and changes below. Read from the preserved{" "}
           <code className="font-mono">swarm/runs/{runId}</code> branch.
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]">
+        <div className="grid min-h-0 grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]">
           <div className="max-h-[28rem] min-h-0 overflow-y-auto" data-testid="run-files-tree">
             {treeQuery.isPending ? (
               <div className="p-2 text-sw-sm text-sw-muted">Loading…</div>
@@ -655,6 +656,28 @@ function RunFilesTab({ runId }: { runId: string }): JSX.Element {
           </div>
         </div>
       )}
+
+      <div className="flex flex-col gap-2" data-testid="run-files-diff">
+        <div className="text-sw-sm font-medium text-sw-foreground">Full diff</div>
+        {diffQuery.isPending ? (
+          <div className="text-sw-sm text-sw-muted">Loading diff…</div>
+        ) : diffQuery.error instanceof ApiError && diffQuery.error.status === 410 ? (
+          <div
+            className="rounded-md border border-sw-border bg-sw-surface p-3 text-sw-sm text-sw-muted"
+            data-testid="run-files-diff-unavailable"
+          >
+            Diff unavailable — base or branch missing.
+          </div>
+        ) : diffQuery.data === "" ? (
+          <div className="text-sw-sm text-sw-muted" data-testid="run-files-diff-empty">
+            No changes vs base
+          </div>
+        ) : diffQuery.data !== undefined ? (
+          <div className="min-w-0 overflow-hidden rounded-lg border bg-sw-surface">
+            <CodeBlock code={diffQuery.data} language="diff" />
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

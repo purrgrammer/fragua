@@ -84,6 +84,14 @@ export const queries = {
         enabled: id.length > 0,
         staleTime: 30_000,
       }),
+    diff: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "diff"] as const,
+        queryFn: () => api.getRunDiff(id),
+        enabled: id.length > 0,
+        staleTime: 30_000,
+        retry: noRetryOnGone,
+      }),
   },
 
   skills: {

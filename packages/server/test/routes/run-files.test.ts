@@ -132,6 +132,71 @@ describe("GET /runs/:runId/blob", () => {
   });
 });
 
+interface GitFixture {
+  cwd: string;
+  runId: string;
+  baseSha: string;
+  store: SqliteStore;
+  app: { fetch: (req: Request) => Response | Promise<Response> };
+}
+
+// Build a real git repo with a base commit (keep.txt + remove.txt +
+// edit.txt). When `withTip` is true, also create a second commit on
+// `refs/heads/swarm/runs/<id>` that edits edit.txt, removes
+// remove.txt, and adds new.txt — the same shape
+// `WorktreeEnvironment.dispose()` would leave behind. baseGitSha is
+// stamped onto the projection via `fact.run_started`.
+async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string }): Promise<GitFixture> {
+  const cwd = await mkdtemp(join(tmpdir(), `swarm-run-files-${opts.slug}-`));
+  const runId = opts.runId;
+
+  await git(cwd, ["init", "--quiet", "-b", "main"]);
+  await git(cwd, ["config", "user.email", "test@example.com"]);
+  await git(cwd, ["config", "user.name", "test"]);
+  await git(cwd, ["config", "commit.gpgsign", "false"]);
+
+  await writeFile(join(cwd, "keep.txt"), "keep\n");
+  await writeFile(join(cwd, "remove.txt"), "to-remove\n");
+  await writeFile(join(cwd, "edit.txt"), "line1\nline2\n");
+  await git(cwd, ["add", "-A"]);
+  await git(cwd, ["commit", "-m", "base", "--no-gpg-sign", "--quiet"]);
+  const baseSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+
+  if (opts.withTip) {
+    await git(cwd, ["checkout", "-b", `swarm/runs/${runId}`, "--quiet"]);
+    await writeFile(join(cwd, "edit.txt"), "line1\nline2 changed\nline3\n");
+    await rm(join(cwd, "remove.txt"));
+    await writeFile(join(cwd, "new.txt"), "fresh\n");
+    await git(cwd, ["add", "-A"]);
+    await git(cwd, ["commit", "-m", "run delta", "--no-gpg-sign", "--quiet"]);
+  }
+
+  const store = new SqliteStore({ path: ":memory:" });
+  store.saveWorkflow("wf_changes", "noop", "digraph G { a -> b }");
+  store.enqueueRun({ runId, workflowSha: "wf_changes", cwd });
+  const enqueued = store.getState(runId);
+  if (enqueued == null) throw new Error("run not enqueued");
+  store.appendFact(
+    runId,
+    [
+      {
+        type: "fact.run_started",
+        payload: {
+          workflowSha: "wf_changes",
+          schemaVersion: 1,
+          startNode: "a",
+          baseGitSha: baseSha,
+        },
+      },
+    ],
+    enqueued.version,
+  );
+
+  const reader = stubReader();
+  const app = runFilesRoutes({ store, reader });
+  return { cwd, runId, baseSha, store, app };
+}
+
 describe("GET /runs/:runId/changes", () => {
   test("404 when run unknown", async () => {
     fx = await setup();
@@ -140,60 +205,8 @@ describe("GET /runs/:runId/changes", () => {
   });
 
   test("synthesised two-commit history yields {path,status,additions,deletions} rows", async () => {
-    // Build a real git repo:
-    //   base commit: keep.txt + remove.txt + edit.txt
-    //   tip  commit: edited edit.txt, removed remove.txt, added new.txt
-    // Tip is parked on `refs/heads/swarm/runs/<id>` so the route
-    // resolves it the same way `WorktreeEnvironment.dispose()` would.
-    const cwd = await mkdtemp(join(tmpdir(), "swarm-run-files-changes-"));
-    const runId = "r-changes-1";
-
-    await git(cwd, ["init", "--quiet", "-b", "main"]);
-    await git(cwd, ["config", "user.email", "test@example.com"]);
-    await git(cwd, ["config", "user.name", "test"]);
-    await git(cwd, ["config", "commit.gpgsign", "false"]);
-
-    await writeFile(join(cwd, "keep.txt"), "keep\n");
-    await writeFile(join(cwd, "remove.txt"), "to-remove\n");
-    await writeFile(join(cwd, "edit.txt"), "line1\nline2\n");
-    await git(cwd, ["add", "-A"]);
-    await git(cwd, ["commit", "-m", "base", "--no-gpg-sign", "--quiet"]);
-    const baseSha = (await git(cwd, ["rev-parse", "HEAD"])).trim();
-
-    // Branch the run tip off base, do the three deltas, commit.
-    await git(cwd, ["checkout", "-b", `swarm/runs/${runId}`, "--quiet"]);
-    await writeFile(join(cwd, "edit.txt"), "line1\nline2 changed\nline3\n");
-    await rm(join(cwd, "remove.txt"));
-    await writeFile(join(cwd, "new.txt"), "fresh\n");
-    await git(cwd, ["add", "-A"]);
-    await git(cwd, ["commit", "-m", "run delta", "--no-gpg-sign", "--quiet"]);
-
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("wf_changes", "noop", "digraph G { a -> b }");
-    store.enqueueRun({ runId, workflowSha: "wf_changes", cwd });
-    // Stamp baseGitSha onto the projection via fact.run_started so
-    // the route doesn't have to walk events for it.
-    const enqueued = store.getState(runId);
-    if (enqueued == null) throw new Error("run not enqueued");
-    store.appendFact(
-      runId,
-      [
-        {
-          type: "fact.run_started",
-          payload: {
-            workflowSha: "wf_changes",
-            schemaVersion: 1,
-            startNode: "a",
-            baseGitSha: baseSha,
-          },
-        },
-      ],
-      enqueued.version,
-    );
-
-    const reader = stubReader();
-    const app = runFilesRoutes({ store, reader });
-    const res = await app.fetch(new Request(`http://test/runs/${runId}/changes`));
+    const g = await setupGitRun({ withTip: true, runId: "r-changes-1", slug: "changes" });
+    const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/changes`));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{
       path: string;
@@ -217,11 +230,47 @@ describe("GET /runs/:runId/changes", () => {
     // keep.txt is unchanged, must not appear.
     expect(byPath.has("keep.txt")).toBe(false);
 
-    store.close();
-    await rm(cwd, { recursive: true, force: true });
+    g.store.close();
+    await rm(g.cwd, { recursive: true, force: true });
     // Override the global afterEach cleanup — we already closed +
     // removed the per-test fixture above.
-    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app, reader };
+    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
+  });
+});
+
+describe("GET /runs/:runId/diff", () => {
+  test("404 when run unknown", async () => {
+    fx = await setup();
+    const res = await get(`/runs/does-not-exist/diff`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("not_found");
+  });
+
+  test("410 when swarm/runs/<id> branch missing", async () => {
+    const g = await setupGitRun({ withTip: false, runId: "r-diff-410", slug: "diff-gone" });
+    const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/diff`));
+    expect(res.status).toBe(410);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("branch_missing");
+
+    g.store.close();
+    await rm(g.cwd, { recursive: true, force: true });
+    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
+  });
+
+  test("200 returns unified diff text against synthesized two-commit history", async () => {
+    const g = await setupGitRun({ withTip: true, runId: "r-diff-200", slug: "diff-ok" });
+    const res = await g.app.fetch(new Request(`http://test/runs/${g.runId}/diff`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/x-diff/);
+    const body = await res.text();
+    expect(body).toContain("diff --git a/edit.txt b/edit.txt");
+    expect(body).toContain("+++ b/new.txt");
+
+    g.store.close();
+    await rm(g.cwd, { recursive: true, force: true });
+    fx = { store: new SqliteStore({ path: ":memory:" }), cwd: "", runId: "", app: g.app, reader: stubReader() };
   });
 });
 
