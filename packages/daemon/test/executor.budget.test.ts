@@ -9,14 +9,19 @@ import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — budget enforcement", () => {
-  test("graph budget_usd=1.0 (default policy=pause); handler costs 1.5 → paused, reason=budget", async () => {
+  test("graph budget_usd=1.0 (default policy=pause); breach mid-run → paused, reason=budget", async () => {
+    // Non-terminal next node so the pause path is exercised independent
+    // of any terminal-transition interaction. See the
+    // "breach on terminal turn → completed" test below for that case.
     const dot = `digraph G {
       graph [budget_usd=1.0];
       start [shape=Mdiamond];
       spend [shape=box];
+      checkpoint [shape=box];
       done [shape=Msquare];
       start -> spend;
-      spend -> done;
+      spend -> checkpoint;
+      checkpoint -> done;
     }`;
     const r = rig({ dot });
     r.dispatcher.register(r.workflowSha, "start", {
@@ -31,10 +36,16 @@ describe("executor — budget enforcement", () => {
       maxMs: 100,
       handler: async () => ({
         kind: "transition",
-        nextNode: "done",
+        nextNode: "checkpoint",
         tokens: 100,
         costUsd: 1.5,
       }),
+    });
+    r.dispatcher.register(r.workflowSha, "checkpoint", {
+      kind: "codergen",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "done", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "done", {
       kind: "exit",
@@ -73,6 +84,68 @@ describe("executor — budget enforcement", () => {
     expect(p.metric).toBe("cost");
     expect(p.limit).toBe(1.0);
     expect(p.actual).toBeGreaterThanOrEqual(1.5);
+    expect(types).not.toContain("fact.run_halted");
+
+    r.store.close();
+  });
+
+  test("breach on terminal turn → completed (not paused, prevents resume-of-Msquare crash)", async () => {
+    // Regression test: when a turn breaches budget AND its transition
+    // is to a terminal sentinel (Msquare / done / __end__),
+    // result-to-facts emits `fact.run_completed`. Adding a redundant
+    // `fact.run_paused` afterwards used to clobber the terminal status
+    // in the reducer (paused wins because it's last) and leave
+    // `currentNode = "done"`. On resume the executor would dispatch
+    // `done`, fail to find a handler (Msquare terminals have no
+    // handlers in real workflows), and crash with "no handler
+    // registered for <sha>::done" (or `__end__` if `done` itself had
+    // a handler chain). Fix: skip the pause-fact swap when the
+    // result is already terminal.
+    const dot = `digraph G {
+      graph [budget_usd=1.0];
+      start [shape=Mdiamond];
+      spend [shape=box];
+      done [shape=Msquare];
+      start -> spend;
+      spend -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "spend", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "done", tokens: 100, costUsd: 1.5 }),
+    });
+    // Deliberately do NOT register a handler for `done` — Msquare
+    // terminals have no handlers in real workflows. If the fix
+    // regresses, the executor will try to dispatch `done` on resume
+    // and crash; this test catches that by asserting `completed`.
+    enqueue(r, "rb-term", "start");
+    r.store.claimNextRun(1);
+    await runOne("rb-term", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    const state = r.store.getState("rb-term")!;
+    expect(state.status).toBe("completed");
+
+    const types = r.store.getEvents("rb-term").map((e) => e.type);
+    expect(types).toContain("budget.stop"); // budget signal still fires
+    expect(types).toContain("fact.run_completed");
+    expect(types).not.toContain("fact.run_paused"); // suppressed by the terminal-transition guard
     expect(types).not.toContain("fact.run_halted");
 
     r.store.close();

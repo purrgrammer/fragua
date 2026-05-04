@@ -1175,19 +1175,32 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // so the run releases its slot and waits for `intent.budget_adjusted`
       // + `intent.resume`. node_completed is preserved (metrics + the
       // nextNode routing fact).
+      //
+      // EXCEPTION: when this turn's transition was terminal,
+      // result-to-facts has already emitted `fact.run_completed`
+      // (or `fact.run_halted` for fail outcomes). Adding
+      // `fact.run_paused` afterwards would clobber the terminal
+      // status in the reducer (paused wins because it's last) and
+      // leave `currentNode` pointed at a terminal sentinel — on
+      // resume, the dispatcher crashes trying to find a handler for
+      // `done` / `__end__`. Budget enforcement after a successful
+      // terminal transition is moot anyway: the run is finished.
       if (budgetPause !== undefined) {
-        facts = facts.filter((f) => f.type !== "fact.node_started");
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "budget",
-            nodeId: state.currentNode ?? "",
-            scope: budgetPause.scope,
-            metric: budgetPause.metric,
-            limit: budgetPause.limit,
-            actual: budgetPause.actual,
-          },
-        });
+        const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
+        if (!alreadyTerminal) {
+          facts = facts.filter((f) => f.type !== "fact.node_started");
+          facts.push({
+            type: "fact.run_paused",
+            payload: {
+              reason: "budget",
+              nodeId: state.currentNode ?? "",
+              scope: budgetPause.scope,
+              metric: budgetPause.metric,
+              limit: budgetPause.limit,
+              actual: budgetPause.actual,
+            },
+          });
+        }
       }
 
       let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
