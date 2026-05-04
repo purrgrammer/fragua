@@ -1,9 +1,17 @@
 ---
 title: Parallel branch outputs — substitution + UI awareness
-status: proposed
+status: in-progress
 maturity: sketch
 last-reviewed: 2026-05-04
 ---
+
+> **Status:** P0 (runtime: per-branch lifecycle events) shipped 2026-05-04 in
+> commits `78e3969` + `e8f70aa`. `$<branchId>.output` substitution now resolves
+> downstream of a parallel fan-out; `parallel.ts` emits `fact.node_started` /
+> `fact.node_completed` per branch with optional `parentNodeId`,
+> `parallelIndex`, `score`; reducer leaves `currentNode` parent-pointed during
+> fan-out. P1 (web graph + step breakdown) and P2 (conversation split view)
+> remain outstanding.
 
 # Parallel branch outputs — substitution + UI awareness
 

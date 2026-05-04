@@ -34,6 +34,7 @@ delta called out in the proposal body.
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap cascading from project config |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | workflow `.dot` ships and runs end-to-end; `find`/`grep`/`ls` primitive tools landed; archival path for the synthesised review pending |
+| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | P0 shipped (per-branch `fact.node_started`/`fact.node_completed` carry `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out); P1 (web graph active states + step breakdown sub-rows) and P2 (conversation split view, dynamic tabbed) outstanding |
 
 ## Accepted (design done; awaiting scheduling)
 
@@ -55,7 +56,6 @@ delta called out in the proposal body.
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [Recoverable pause unification](./recoverable-budget-pause.md) | designed | collapse operator-resumable family to one `paused` status + one reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`). Default `budget_policy` flips `stop`→`pause`; budget overruns become recoverable. Absorbs `paused_provider_error`, routes 402 to `payment_required`, leaves `paused_hitl` / `paused_*_retry` / `quarantined` untouched |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
-| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | parallel branches don't emit `fact.node_completed` so `$<branchId>.output` is empty; fix by reusing `fact.node_started`/`fact.node_completed` per branch with optional `parentNodeId`/`parallelIndex`. Unblocks parallel-review-then-synthesize and lights up branches in graph/conversation/step-breakdown UI |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it |
 
 ## Deferred
