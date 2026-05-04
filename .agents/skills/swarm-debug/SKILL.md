@@ -68,7 +68,7 @@ FROM daemon_lock;
 SQL
 ```
 
-- `seconds_since_beat` > 30s → daemon presumed dead (`LOCK_TTL_MS = 30s`). `running` runs may be orphaned until the next daemon start sweeps them.
+- `seconds_since_beat` > 30s → daemon presumed dead (`DEFAULT_LOCK_TTL_MS = 30_000` ms in `packages/daemon/src/entrypoint.ts:82`). `running` runs may be orphaned until the next daemon start sweeps them.
 - No rows → no daemon has ever claimed the lock, or shutdown released it cleanly. Runs sit `queued`.
 - `http_url` NULL → daemon up but no HTTP (the user is on the CI primitive: `swarm daemon` + `swarm serve` separately, or harness mid-startup). `<cwd>/.swarm/serve.json` is the fallback.
 - `ps -p <pid>` confirms the process actually exists.

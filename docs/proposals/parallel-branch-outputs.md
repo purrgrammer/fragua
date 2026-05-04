@@ -1,7 +1,7 @@
 ---
 title: Parallel branch outputs — substitution + UI awareness
 status: shipped
-maturity: sketch
+maturity: specified
 last-reviewed: 2026-05-04
 ---
 
