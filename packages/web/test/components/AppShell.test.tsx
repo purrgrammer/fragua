@@ -1,5 +1,5 @@
 // AppShell + AppSidebar tests:
-//   - Sidebar renders the five nav entries with lucide icons.
+//   - Sidebar renders the Operate / Build groups (seven nav entries) with lucide icons.
 //   - Active route carries `aria-current="page"` (and `data-active`).
 //   - ⌘+B / Ctrl+B toggles the collapsed state, persisted via cookie.
 //   - Breadcrumb derivation matches the current route.
@@ -35,16 +35,60 @@ describe("AppShell + AppSidebar", () => {
     expect(q.getByTestId("nav-watchtower")).toBeTruthy();
     expect(q.getByTestId("nav-inbox")).toBeTruthy();
     expect(q.getByTestId("nav-runs")).toBeTruthy();
+    expect(q.getByTestId("nav-analytics")).toBeTruthy();
+    expect(q.getByTestId("nav-projects")).toBeTruthy();
     expect(q.getByTestId("nav-workflows")).toBeTruthy();
     expect(q.getByTestId("nav-providers")).toBeTruthy();
   });
 
   it("renders a lucide icon next to each nav label", () => {
     const { container } = mount("/");
-    for (const id of ["nav-watchtower", "nav-inbox", "nav-runs", "nav-workflows", "nav-providers"]) {
+    for (const id of [
+      "nav-watchtower",
+      "nav-inbox",
+      "nav-runs",
+      "nav-analytics",
+      "nav-projects",
+      "nav-workflows",
+      "nav-providers",
+    ]) {
       const link = within(container).getByTestId(id);
       expect(link.querySelector("svg")).not.toBeNull();
     }
+  });
+
+  it("renders Operate and Build group labels in order", () => {
+    const { container } = mount("/");
+    const labels = Array.from(container.querySelectorAll('[data-slot="sidebar-group-label"]')).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(labels).toEqual(["Operate", "Build"]);
+  });
+
+  it("groups Operate items: Watchtower, Inbox, Runs, Analytics in order", () => {
+    const { container } = mount("/");
+    const groups = Array.from(container.querySelectorAll('[data-slot="sidebar-group"]'));
+    const operate = groups.find(
+      (g) => g.querySelector('[data-slot="sidebar-group-label"]')?.textContent?.trim() === "Operate",
+    );
+    expect(operate).toBeTruthy();
+    const ids = Array.from(operate!.querySelectorAll('[data-testid^="nav-"]')).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual(["nav-watchtower", "nav-inbox", "nav-runs", "nav-analytics"]);
+  });
+
+  it("groups Build items: Projects, Workflows, Providers in order", () => {
+    const { container } = mount("/");
+    const groups = Array.from(container.querySelectorAll('[data-slot="sidebar-group"]'));
+    const build = groups.find(
+      (g) => g.querySelector('[data-slot="sidebar-group-label"]')?.textContent?.trim() === "Build",
+    );
+    expect(build).toBeTruthy();
+    const ids = Array.from(build!.querySelectorAll('[data-testid^="nav-"]')).map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual(["nav-projects", "nav-workflows", "nav-providers"]);
   });
 
   it("marks the link matching the current route with aria-current=page", () => {

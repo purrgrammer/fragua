@@ -1,6 +1,10 @@
 // Persistent left-rail navigation. Hosts the "swarm" wordmark in the
-// header, the Home / Workflows / Runs entries in the content slot, and
-// the connection-status badge in the footer.
+// header, two grouped nav sections (Operate / Build) in the content
+// slot, and the connection-status badge in the footer.
+//
+// The two-group split separates surfaces that observe or steer a
+// running system (Watchtower, Inbox, Runs, Analytics) from surfaces
+// that author or configure it (Projects, Workflows, Providers).
 //
 // The badge moved out of the old `App.tsx` header into the sidebar
 // footer so the topbar can be a clean breadcrumb-only surface; the
@@ -27,6 +31,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -35,17 +40,20 @@ import {
   useSidebar,
 } from "./ui/sidebar.tsx";
 
-const NAV = [
+const OPERATE_NAV = [
   { to: "/", label: "Watchtower", icon: TowerControl, end: true },
-  { to: "/analytics", label: "Analytics", icon: BarChart3, end: false },
   { to: "/inbox", label: "Inbox", icon: InboxIcon, end: false },
   { to: "/runs", label: "Runs", icon: ListChecks, end: false },
+  { to: "/analytics", label: "Analytics", icon: BarChart3, end: false },
+] as const;
+
+const BUILD_NAV = [
   { to: "/projects", label: "Projects", icon: FolderGit2, end: false },
   { to: "/workflows", label: "Workflows", icon: Workflow, end: false },
   { to: "/providers", label: "Providers", icon: Cpu, end: false },
 ] as const;
 
-type NavEntry = (typeof NAV)[number];
+type NavEntry = (typeof OPERATE_NAV)[number] | (typeof BUILD_NAV)[number];
 
 export function AppSidebar(): JSX.Element {
   return (
@@ -66,9 +74,20 @@ export function AppSidebar(): JSX.Element {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
+          <SidebarGroupLabel>Operate</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV.map((entry) => (
+              {OPERATE_NAV.map((entry) => (
+                <NavItem key={entry.to} entry={entry} />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>Build</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {BUILD_NAV.map((entry) => (
                 <NavItem key={entry.to} entry={entry} />
               ))}
             </SidebarMenu>
