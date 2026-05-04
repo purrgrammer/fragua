@@ -76,7 +76,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs, opts.store);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -87,6 +87,7 @@ function specsForGraph(
   dotSource: string,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
+  store?: IEventStore,
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   // Apply transforms (stylesheet, …) so node.attrs reflect the resolved
@@ -150,7 +151,7 @@ function specsForGraph(
           fanInNode: discovery.fanInNode,
           joinPolicy,
           resolveChild: (childId) => specs.get(childId) ?? null,
-          buildChildContext: (childId, parentCtx) => buildBranchContext(childId, parentCtx),
+          buildChildContext: (childId, parentCtx) => buildBranchContext(childId, parentCtx, store),
         }),
       );
     } else if (kind === "parallel.fan_in") {
@@ -199,13 +200,41 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
  * observability events carry the branch id via the handler writing
  * it into the payload.
  */
-function buildBranchContext(childId: string, parent: HandlerContext): HandlerContext {
-  return {
+export function buildBranchContext(childId: string, parent: HandlerContext, store?: IEventStore): HandlerContext {
+  const base: HandlerContext = {
     ...parent,
     nodeId: childId,
     iteration: 0,
     routing: structuredClone(parent.routing as Record<string, unknown>),
   };
+  // Without a store handle we can't rebuild the artifacts closure; fall back
+  // to inherited (parent-scoped) artifacts. Tests that stub the parallel
+  // handler without a store still type-check; production paths always pass
+  // it via specsForGraph -> opts.store.
+  if (store == null) return base;
+  // The parent's `artifacts` API closes over (parent.nodeId, parent.iteration)
+  // at construction time — spreading the parent inherits that closure, so any
+  // `ctx.artifacts.put("output", …)` inside a branch lands at the PARENT's
+  // scope. Rebuild against (childId, 0) so each branch's output artifact
+  // lives at its own scope and `$<branchId>.output` substitution can
+  // dereference it downstream.
+  const childScope = (key: string) => ({ runId: parent.runId, nodeId: childId, iteration: 0, key });
+  const artifacts: handler.ArtifactsApi = {
+    put(key, content, mime, opts) {
+      const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+      return store.putArtifact(childScope(key), bytes, mime, opts);
+    },
+    get(key) {
+      return store.getArtifact(childScope(key));
+    },
+    ref(key) {
+      return store.getArtifactRef(childScope(key));
+    },
+    getFrom(scope) {
+      return store.getArtifact(scope);
+    },
+  };
+  return { ...base, artifacts };
 }
 
 function malformedParallelSpec(nodeId: string, reason = "missing branches or fan-in"): HandlerSpec {

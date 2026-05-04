@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import type { HandlerContext } from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import fc from "fast-check";
-import { autoDispatcherResolver, resolveMaxMs } from "../src/auto-dispatcher.ts";
+import { autoDispatcherResolver, buildBranchContext, resolveMaxMs } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
 describe("autoDispatcherResolver", () => {
@@ -256,6 +257,93 @@ describe("autoDispatcherResolver", () => {
       expect(result.detail).toMatch(/garbage/);
     }
     store.close();
+  });
+});
+
+describe("buildBranchContext", () => {
+  test("rebuilds artifacts API so branch's ctx.artifacts.put lands at branch scope, not parent's", () => {
+    type Scope = { runId: string; nodeId: string; iteration: number; key: string };
+    const writes: { scope: Scope; bytes: Uint8Array }[] = [];
+    const stubStore = {
+      putArtifact: (scope: Scope, bytes: Uint8Array) => {
+        writes.push({ scope, bytes });
+        return { ...scope, sha256: "stub", sizeBytes: bytes.byteLength, mime: null };
+      },
+      getArtifact: () => new Uint8Array(),
+      getArtifactRef: () => null,
+    };
+    const parent: HandlerContext = {
+      runId: "r1",
+      nodeId: "explore",
+      iteration: 0,
+      signal: new AbortController().signal,
+      routing: {},
+      llm: {} as never,
+      http: {} as never,
+      tools: {} as never,
+      messages: {} as never,
+      // Parent artifacts is the closure that bakes in (parent.nodeId, parent.iteration).
+      // If buildBranchContext spreads it through, branch puts land at "explore:output".
+      artifacts: {
+        put: (key, content) => {
+          const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+          return stubStore.putArtifact({ runId: "r1", nodeId: "explore", iteration: 0, key }, bytes);
+        },
+        get: () => new Uint8Array(),
+        ref: () => null,
+        getFrom: () => new Uint8Array(),
+      },
+      externalCall: {} as never,
+      args: {},
+      nodeOutputs: new Map(),
+      emit: () => {},
+    };
+
+    const child = buildBranchContext("lens_correctness", parent, stubStore as never);
+    const ref = child.artifacts.put("output", "lens-correctness findings");
+
+    // Regression: with the bug, ref.nodeId would be "explore" (parent inherited).
+    expect(ref.nodeId).toBe("lens_correctness");
+    expect(ref.iteration).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.scope.nodeId).toBe("lens_correctness");
+    expect(writes[0]?.scope.iteration).toBe(0);
+    expect(new TextDecoder().decode(writes[0]?.bytes)).toBe("lens-correctness findings");
+  });
+
+  test("falls back to inherited artifacts when no store handle is plumbed (test-only path)", () => {
+    const calls: string[] = [];
+    const parent: HandlerContext = {
+      runId: "r1",
+      nodeId: "explore",
+      iteration: 0,
+      signal: new AbortController().signal,
+      routing: {},
+      llm: {} as never,
+      http: {} as never,
+      tools: {} as never,
+      messages: {} as never,
+      artifacts: {
+        put: (key) => {
+          calls.push(`parent-put:${key}`);
+          return { runId: "r1", nodeId: "explore", iteration: 0, key, sha256: "x", sizeBytes: 0, mime: null };
+        },
+        get: () => new Uint8Array(),
+        ref: () => null,
+        getFrom: () => new Uint8Array(),
+      },
+      externalCall: {} as never,
+      args: {},
+      nodeOutputs: new Map(),
+      emit: () => {},
+    };
+
+    const child = buildBranchContext("lens_x", parent /* no store */);
+    child.artifacts.put("output", "x");
+    // Documents the fallback: inherited closure leaks the parent scope.
+    // Production paths always pass the store; this assertion exists so the
+    // fallback can't silently regress to the old semantics under tests.
+    expect(calls).toEqual(["parent-put:output"]);
   });
 });
 
