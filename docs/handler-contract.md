@@ -140,7 +140,7 @@ return {
 When the executor emits `reason: "occ_exhausted"` (optimistic-concurrency retry budget hit on a single `(nodeId, iteration)`), the `fact.run_halted.payload` carries an additional `occContext?: { count, nodeId, iteration, lastVersion, attemptedFactType }` so operators can post-mortem without grepping the freeform `detail`. The shape is authoritative in `packages/types/src/swarm-events.ts` (`fact.run_halted` payload) and mirrored in `docs/ARCHITECTURE.md` §3; this doc does not redefine it.
 
 ### `pause_provider`
-Recoverable provider transport failure (HTTP 402/429/5xx, network reset). The executor commits `fact.run_paused_provider_error`, transitions the run to `paused_provider_error`, and frees the process. An operator `intent.resume` wakes the run and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the codergen agent boundary detects provider transport errors and returns this kind on the handler's behalf.
+Recoverable provider transport failure (HTTP 402/408/429/5xx, network reset). The executor commits `fact.run_paused { reason: "provider_error" | "payment_required" }` (unified per commit `a2d3a6e` — there is no `paused_provider_error` status). The projection moves the run to `paused`, or to `paused_provider_retry` when the auto-retry path fires (`policy="auto-retry"` on the fact's payload; wake-pending re-queues at `resumeAt`). An operator `intent.resume` wakes the run and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript. Handlers never construct this themselves — the codergen agent boundary detects provider transport errors and returns this kind on the handler's behalf.
 
 ```typescript
 return {

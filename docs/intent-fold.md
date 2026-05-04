@@ -21,10 +21,11 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 | `intent.run_enqueued` | n/a | none — already projected at enqueue | n/a (never reaches the fold) |
 | `intent.cancel_requested` | non-terminal | terminal cancel; short-circuits the fold | n/a (terminal runs have no fold turn) |
 | `intent.pause_requested` | `queued` / `running` | `shouldPause = true` (or defers, see R3) | `paused_hitl` → drop `already_paused`; `quarantined` / terminal → drop `wrong_state` |
-| `intent.steering_requested` | `queued` / `running` / `paused_hitl` / `paused_provider_error` | concat `text` into `steering` (commit-order, `\n`-separated) | `quarantined` / terminal → drop `wrong_state` |
-| `intent.hitl_input` | `queued` / `running` (post-wake) / `paused_hitl` / `paused_provider_error` | set `hitlInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
+| `intent.steering_requested` | `queued` / `running` / `paused_hitl` / `paused` / `paused_provider_retry` | concat `text` into `steering` (commit-order, `\n`-separated) | `quarantined` / terminal → drop `wrong_state` |
+| `intent.hitl_input` | `queued` / `running` (post-wake) / `paused_hitl` / `paused` / `paused_provider_retry` | set `hitlInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
 | `intent.priority_adjusted` | fold: any (accepted unconditionally); upstream filter: only non-terminal runs reach the fold (executor scan) | merge `newPriority` into `routingDelta` (last-wins) | n/a |
-| `intent.unquarantine` | `quarantined` | (handled outside the fold — currently unwired, see "Known gaps") | non-quarantined → drop `wrong_state` |
+| `intent.budget_adjusted` | fold: any (accepted unconditionally) | merge `routing.budget_override.<scope>.<metric> = newLimit` into `routingDelta`; the next turn-boundary budget check reads this before the graph/node attr | malformed payload (bad `scope`/`metric` or `newLimit ≤ 0`) → drop `wrong_state` |
+| `intent.unquarantine` | `quarantined` | handled outside the fold by `wakeUnquarantine` (`packages/daemon/src/wake-pending.ts`); resolves `cancel` / `retry` / `treat_as_done` (see *Pending-intent driver* below) | non-quarantined → drop `wrong_state` |
 
 ---
 

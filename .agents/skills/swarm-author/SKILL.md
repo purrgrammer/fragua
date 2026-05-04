@@ -1,7 +1,7 @@
 ---
 name: swarm-author
 description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
-version: 0.2.0
+version: 0.2.1
 ---
 
 # swarm-author — writing DOT workflows that run
@@ -377,7 +377,7 @@ graph [
 ```
 
 - `goal` — keep it short. Summarisers read this when deciding what matters in the run.
-- Defaults (`default_*`) cascade into nodes unless overridden. `default_max_retry` (singular) is accepted as a legacy alias of `default_max_retries`.
+- Defaults (`default_*`) cascade into nodes unless overridden.
 - `budget_*` — wired. `budget-policy.ts` evaluates `cumulative >= ceiling` at every turn boundary. `budget_policy="stop"` halts with `fact.run_halted { reason: "budget" }`; `budget_policy="warn"` emits `budget.warn` / `budget.stop` events without halting. Same semantics for node-level `max_cost_usd` / `max_tokens`.
 
 For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_<name>` semantics, see `references/advanced-attrs.md`.

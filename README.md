@@ -33,7 +33,7 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 - Daemon-events audit log (process lifecycle, sweeps, GC, leak detection, worktree provisioning)
 - Doc-vs-code drift CI lint enforces AGENTS.md rule #1 — `bun run lint:docs` cross-checks `schema.sql` / `swarm-events.ts` / `handler/types.ts` / proposal index against `docs/`
 - Bounded OCC retry loop with structured occ_exhausted halt — fact-append contention storms halt cleanly with a structured `occContext` payload instead of spinning, with 1–16 ms exponential backoff between retries
-- Auto-retry for transient LLM provider errors — 408/429/5xx/529/network classified as auto-retry with full-jitter exponential backoff (or honoured `Retry-After` header); 4xx auth/billing/schema errors fall through to manual `paused_provider_error`; chain capped at 5 attempts / 5 cumulative minutes before `provider_exhausted` halt
+- Auto-retry for transient LLM provider errors — 408/429/5xx/529/network classified as auto-retry with full-jitter exponential backoff (or honoured `Retry-After` header); 4xx auth/billing/schema errors fall through to manual `paused` (reason: `provider_error`); chain capped at 5 attempts / 5 cumulative minutes before `provider_exhausted` halt
 - Self-review workflow (`bun run swarm run introspect`) — read-only periodic audit of architecture, doc-vs-code drift, proposal hygiene, and operational health; see [`docs/proposals/introspection-workflow.md`](docs/proposals/introspection-workflow.md)
 
 ## What swarm does not deliver today
@@ -60,17 +60,19 @@ coming, see [`docs/proposals/`](docs/proposals/README.md).
 ```sh
 bun install
 
-# Terminal 1: HTTP surface (intents, reads, SSE)
-bun run swarm serve
+# Typical: harness supervises daemon + HTTP server in one foreground process,
+# binding ~/.swarm/swarm.db so every project shares one DB.
+bun run swarm harness
 
-# Terminal 2: executor (real LLM)
-bun run swarm daemon --provider anthropic --model claude-opus-4-7
+# Or, as separate CI primitives against a project-local store:
+#   bun run swarm serve  --db .swarm/swarm.db          # HTTP surface (intents, reads, SSE) on :3000
+#   bun run swarm daemon --db .swarm/swarm.db --llm-provider anthropic --llm-model claude-sonnet-4-5
 
-# Terminal 3: upload a workflow, enqueue, stream events
+# Then: upload a workflow, enqueue, stream events
 bun run swarm run examples/hello.dot
 ```
 
-The store lives at `.swarm/swarm.db`. Web UI is at <http://localhost:3000>.
+The harness binds `~/.swarm/swarm.db` and serves the Web UI on <http://localhost:6767>. The CI primitive (`swarm daemon --db <path>` + `swarm serve --db <path>`) targets a project-local store and serves on <http://localhost:3000>.
 
 Maintenance:
 
