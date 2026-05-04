@@ -182,6 +182,37 @@ describe("HandlerContext.withScope", () => {
     expect(emitted[1]?.payload["tokens"]).toBe(42);
   });
 
+  test("emit lets handler-provided nodeId/iteration in the payload override the scope's stamp", () => {
+    // The parallel handler emits per-branch fact.node_started/completed
+    // through the PARENT's emit (it's announcing a child's lifecycle).
+    // Those payloads carry an explicit `nodeId: childId`, and that
+    // explicit value MUST survive — otherwise run_state.nodes lumps
+    // every branch under the parent (no per-branch graph state, no
+    // per-branch step rows, no $<branchId>.output substitution).
+    const emitted: { type: string; payload: Record<string, unknown> }[] = [];
+    const store = makeStubStore([], []);
+    const upstreamStamp = (type: string, payload: Record<string, unknown>) => {
+      emitted.push({ type, payload: { nodeId: "parent", iteration: 3, ...payload } });
+    };
+    const parent = buildHandlerContext({ ...baseOpts(store), emitObservability: upstreamStamp });
+
+    parent.emit("fact.node_started", { nodeId: "lens_correctness", iteration: 0, parentNodeId: "explore" });
+    parent.emit("fact.node_completed", {
+      nodeId: "lens_correctness",
+      iteration: 0,
+      parentNodeId: "explore",
+      outputRef: "lens_correctness:output",
+    });
+
+    expect(emitted).toHaveLength(2);
+    for (const ev of emitted) {
+      expect(ev.payload["nodeId"]).toBe("lens_correctness");
+      expect(ev.payload["iteration"]).toBe(0);
+      expect(ev.payload["parentNodeId"]).toBe("explore");
+    }
+    expect(emitted[1]?.payload["outputRef"]).toBe("lens_correctness:output");
+  });
+
   test("applies per-scope allowedTools/deniedTools to ctx.tools", () => {
     const store = makeStubStore([], []);
     const parent = buildHandlerContext(baseOpts(store));

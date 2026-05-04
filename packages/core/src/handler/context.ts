@@ -175,14 +175,21 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
     recorder: upstream.recorder,
   });
 
-  // Always inject the SCOPE's nodeId / iteration into observability
-  // payloads. At top-level the executor's own stamp at
-  // executor.emitObservability also writes nodeId/iteration, but its
-  // ordering puts payload-keys last so our values win — both consistent
-  // with the top-level scope and a hard override for branches whose
-  // upstream stamp would otherwise carry the parent's nodeId.
+  // Default-stamp the scope's nodeId / iteration onto observability
+  // payloads, but let handler-provided values override. Spread order:
+  // scope defaults FIRST, payload LAST. Two reasons:
+  //   1. The executor's own emitObservability also default-stamps
+  //      `currentNode` (the parent) and spreads payload last; this
+  //      wrapper has to defer to the same convention so a branch can
+  //      announce a sibling/child fact via the parent's emit (e.g.
+  //      `parallel.ts` emits per-branch fact.node_completed with an
+  //      explicit `nodeId: childId` — the explicit value MUST win or
+  //      run_state.nodes lumps every branch under the parent).
+  //   2. For ordinary handler emits (no nodeId in payload), the scope's
+  //      stamp flows through unchanged — so a branch's `llm.start`
+  //      still carries the branch nodeId rather than the parent's.
   const emit = (type: string, payload: Record<string, unknown>): void => {
-    upstream.emitObservability(type, { ...payload, nodeId, iteration });
+    upstream.emitObservability(type, { nodeId, iteration, ...payload });
   };
 
   const narrowOpts: { allow?: readonly string[]; deny?: readonly string[] } = {};
