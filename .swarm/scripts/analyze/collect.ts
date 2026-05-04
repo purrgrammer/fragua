@@ -13,8 +13,25 @@ interface Args {
 
 function defaultStorePath(): string {
   const project = resolve(process.cwd(), ".swarm/swarm.db");
-  if (existsSync(project)) return project;
+  // Empty/stray project DBs sometimes appear (test fixtures, mis-init).
+  // Treat as absent unless populated — falls through to the harness store
+  // so `swarm run analyze` from a project root keeps working.
+  if (existsSync(project) && projectStoreHasRuns(project)) return project;
   return resolve(homedir(), ".swarm/swarm.db");
+}
+
+function projectStoreHasRuns(path: string): boolean {
+  try {
+    const db = new Database(path, { readonly: true });
+    try {
+      const row = db.prepare("SELECT 1 FROM run_state LIMIT 1").get();
+      return row != null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 function parseArgs(argv: string[]): Args {
@@ -106,6 +123,10 @@ interface PerNodeSummary {
   cost_usd: number;
   models: string[];
   wall_seconds: number;
+  llm_seconds: number;
+  tool_seconds: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   tool_calls: { tool: string; n: number; n_errors: number }[];
   tool_call_total: number;
 }
@@ -241,21 +262,26 @@ for (const r of runs) {
   // is_error by tool_call_id when both are intact; otherwise the call
   // counts but its outcome is unknown.
   const toolStartRows = db.prepare(`
-    SELECT payload FROM events
+    SELECT ts, payload FROM events
     WHERE run_id = ? AND type = 'tool.execution_start'
-  `).all(r.run_id) as { payload: string }[];
+  `).all(r.run_id) as { ts: number; payload: string }[];
   const toolEndRows = db.prepare(`
-    SELECT payload FROM events
+    SELECT ts, payload FROM events
     WHERE run_id = ? AND type = 'tool.execution_end'
-  `).all(r.run_id) as { payload: string }[];
+  `).all(r.run_id) as { ts: number; payload: string }[];
 
   const errorByCallId = new Map<string, boolean>();
+  const endTsByCallId = new Map<string, number>();
   for (const te of toolEndRows) {
     const p = JSON.parse(te.payload) as { tool_call_id?: string; is_error?: boolean };
-    if (typeof p.tool_call_id === "string") errorByCallId.set(p.tool_call_id, !!p.is_error);
+    if (typeof p.tool_call_id === "string") {
+      errorByCallId.set(p.tool_call_id, !!p.is_error);
+      endTsByCallId.set(p.tool_call_id, te.ts);
+    }
   }
 
   const toolsByNode = new Map<string, Map<string, { n: number; n_errors: number }>>();
+  const toolMsByNode = new Map<string, number>();
   let runToolTotal = 0;
   for (const ts of toolStartRows) {
     const p = JSON.parse(ts.payload) as {
@@ -268,11 +294,76 @@ for (const r of runs) {
     const inner = toolsByNode.get(p.nodeId) ?? new Map();
     const slot = inner.get(p.tool_name) ?? { n: 0, n_errors: 0 };
     slot.n++;
-    if (typeof p.tool_call_id === "string" && errorByCallId.get(p.tool_call_id) === true) {
-      slot.n_errors++;
+    if (typeof p.tool_call_id === "string") {
+      if (errorByCallId.get(p.tool_call_id) === true) slot.n_errors++;
+      const endTs = endTsByCallId.get(p.tool_call_id);
+      if (endTs !== undefined && endTs >= ts.ts) {
+        toolMsByNode.set(p.nodeId, (toolMsByNode.get(p.nodeId) ?? 0) + (endTs - ts.ts));
+      }
     }
     inner.set(p.tool_name, slot);
     toolsByNode.set(p.nodeId, inner);
+  }
+
+  // LLM "active" time per node — sum of agent.turn_end - agent.turn_start
+  // pairs. Pair sequentially per nodeId (same approach as the wall_ms
+  // pairing above) — turn boundaries within a node are strictly serial
+  // even when sibling parallel-branch nodes overlap globally.
+  const turnStartRows = db.prepare(`
+    SELECT ts, payload FROM events
+    WHERE run_id = ? AND type = 'agent.turn_start'
+    ORDER BY seq
+  `).all(r.run_id) as { ts: number; payload: string }[];
+  const turnEndRows = db.prepare(`
+    SELECT ts, payload FROM events
+    WHERE run_id = ? AND type = 'agent.turn_end'
+    ORDER BY seq
+  `).all(r.run_id) as { ts: number; payload: string }[];
+  const turnStartsByNode = new Map<string, number[]>();
+  for (const tr of turnStartRows) {
+    const p = JSON.parse(tr.payload) as { nodeId?: string };
+    if (!p.nodeId) continue;
+    const list = turnStartsByNode.get(p.nodeId) ?? [];
+    list.push(tr.ts);
+    turnStartsByNode.set(p.nodeId, list);
+  }
+  const turnCursorByNode = new Map<string, number>();
+  const llmMsByNode = new Map<string, number>();
+  for (const tr of turnEndRows) {
+    const p = JSON.parse(tr.payload) as { nodeId?: string };
+    if (!p.nodeId) continue;
+    const starts = turnStartsByNode.get(p.nodeId);
+    if (starts === undefined) continue;
+    const idx = turnCursorByNode.get(p.nodeId) ?? 0;
+    const startTs = starts[idx];
+    if (startTs !== undefined && tr.ts >= startTs) {
+      llmMsByNode.set(p.nodeId, (llmMsByNode.get(p.nodeId) ?? 0) + (tr.ts - startTs));
+      turnCursorByNode.set(p.nodeId, idx + 1);
+    }
+  }
+
+  // Per-node cache token attribution from cost.recorded payloads. Run-
+  // level totals already live in metrics.totalCacheReadTokens; per-node
+  // breakdown isn't projected anywhere, so we sum it here from raw events.
+  const costRows = db.prepare(`
+    SELECT payload FROM events
+    WHERE run_id = ? AND type = 'cost.recorded'
+  `).all(r.run_id) as { payload: string }[];
+  const cacheReadByNode = new Map<string, number>();
+  const cacheWriteByNode = new Map<string, number>();
+  for (const cr of costRows) {
+    const p = JSON.parse(cr.payload) as {
+      nodeId?: string;
+      cache_read_tokens?: number;
+      cache_write_tokens?: number;
+    };
+    if (!p.nodeId) continue;
+    if (typeof p.cache_read_tokens === "number") {
+      cacheReadByNode.set(p.nodeId, (cacheReadByNode.get(p.nodeId) ?? 0) + p.cache_read_tokens);
+    }
+    if (typeof p.cache_write_tokens === "number") {
+      cacheWriteByNode.set(p.nodeId, (cacheWriteByNode.get(p.nodeId) ?? 0) + p.cache_write_tokens);
+    }
   }
 
   const steerRows = db.prepare(`
@@ -291,8 +382,12 @@ for (const r of runs) {
     ...Object.keys(metrics.loopCounts ?? {}),
     ...Object.keys(metrics.nodeCosts ?? {}),
     ...wallMsByNode.keys(),
+    ...llmMsByNode.keys(),
+    ...toolMsByNode.keys(),
     ...modelsByNode.keys(),
     ...toolsByNode.keys(),
+    ...cacheReadByNode.keys(),
+    ...cacheWriteByNode.keys(),
   ]);
   for (const nid of allNodeIds) {
     const tools = toolsByNode.get(nid);
@@ -308,6 +403,10 @@ for (const r of runs) {
       cost_usd: metrics.nodeCosts?.[nid]?.costUsd ?? 0,
       models: [...(modelsByNode.get(nid) ?? [])],
       wall_seconds: Math.round((wallMsByNode.get(nid) ?? 0) / 1000),
+      llm_seconds: Math.round((llmMsByNode.get(nid) ?? 0) / 1000),
+      tool_seconds: Math.round((toolMsByNode.get(nid) ?? 0) / 1000),
+      cache_read_tokens: cacheReadByNode.get(nid) ?? 0,
+      cache_write_tokens: cacheWriteByNode.get(nid) ?? 0,
       tool_calls: toolList,
       tool_call_total: toolList.reduce((a, t) => a + t.n, 0),
     });
@@ -362,6 +461,10 @@ interface NodeProfile {
   mean_cost_usd: number;
   mean_tokens: number;
   mean_wall_seconds: number;
+  mean_llm_seconds: number;
+  mean_tool_seconds: number;
+  mean_cache_read_tokens: number;
+  cache_read_ratio: number;
   mean_tool_calls: number;
   top_tools: { tool: string; mean_per_run: number; error_rate: number }[];
   max_loop_count: number;
@@ -408,6 +511,10 @@ for (const [wf, runs] of byWorkflow) {
     cost: number;
     tokens: number;
     wallSeconds: number;
+    llmSeconds: number;
+    toolSeconds: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
     toolCalls: number;
     maxLoop: number;
     models: Set<string>;
@@ -438,13 +545,18 @@ for (const [wf, runs] of byWorkflow) {
     for (const m of r.models) models.add(m);
     for (const pn of r.per_node) {
       const slot = nodeAcc.get(pn.node_id) ?? {
-        n: 0, cost: 0, tokens: 0, wallSeconds: 0, toolCalls: 0, maxLoop: 0,
+        n: 0, cost: 0, tokens: 0, wallSeconds: 0, llmSeconds: 0, toolSeconds: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0, toolCalls: 0, maxLoop: 0,
         models: new Set<string>(), toolUse: new Map<string, { n: number; n_errors: number }>(),
       };
       slot.n++;
       slot.cost += pn.cost_usd;
       slot.tokens += pn.tokens;
       slot.wallSeconds += pn.wall_seconds;
+      slot.llmSeconds += pn.llm_seconds;
+      slot.toolSeconds += pn.tool_seconds;
+      slot.cacheReadTokens += pn.cache_read_tokens;
+      slot.cacheWriteTokens += pn.cache_write_tokens;
       slot.toolCalls += pn.tool_call_total;
       slot.maxLoop = Math.max(slot.maxLoop, pn.loop_count);
       for (const m of pn.models) slot.models.add(m);
@@ -470,24 +582,33 @@ for (const [wf, runs] of byWorkflow) {
     .slice(0, 5);
 
   const node_profiles: NodeProfile[] = [...nodeAcc.entries()]
-    .map(([node_id, v]) => ({
-      node_id,
-      in_runs: v.n,
-      models: [...v.models],
-      mean_cost_usd: Number((v.cost / v.n).toFixed(4)),
-      mean_tokens: Math.round(v.tokens / v.n),
-      mean_wall_seconds: Math.round(v.wallSeconds / v.n),
-      mean_tool_calls: Number((v.toolCalls / v.n).toFixed(1)),
-      max_loop_count: v.maxLoop,
-      top_tools: [...v.toolUse.entries()]
-        .map(([tool, u]) => ({
-          tool,
-          mean_per_run: Number((u.n / v.n).toFixed(1)),
-          error_rate: u.n === 0 ? 0 : Number((u.n_errors / u.n).toFixed(2)),
-        }))
-        .sort((a, b) => b.mean_per_run - a.mean_per_run)
-        .slice(0, 5),
-    }))
+    .map(([node_id, v]) => {
+      const cacheRead = v.cacheReadTokens;
+      const fresh = v.tokens;
+      const denom = cacheRead + fresh;
+      return {
+        node_id,
+        in_runs: v.n,
+        models: [...v.models],
+        mean_cost_usd: Number((v.cost / v.n).toFixed(4)),
+        mean_tokens: Math.round(v.tokens / v.n),
+        mean_wall_seconds: Math.round(v.wallSeconds / v.n),
+        mean_llm_seconds: Math.round(v.llmSeconds / v.n),
+        mean_tool_seconds: Math.round(v.toolSeconds / v.n),
+        mean_cache_read_tokens: Math.round(cacheRead / v.n),
+        cache_read_ratio: denom === 0 ? 0 : Number((cacheRead / denom).toFixed(3)),
+        mean_tool_calls: Number((v.toolCalls / v.n).toFixed(1)),
+        max_loop_count: v.maxLoop,
+        top_tools: [...v.toolUse.entries()]
+          .map(([tool, u]) => ({
+            tool,
+            mean_per_run: Number((u.n / v.n).toFixed(1)),
+            error_rate: u.n === 0 ? 0 : Number((u.n_errors / u.n).toFixed(2)),
+          }))
+          .sort((a, b) => b.mean_per_run - a.mean_per_run)
+          .slice(0, 5),
+      };
+    })
     .sort((a, b) => b.mean_cost_usd - a.mean_cost_usd);
 
   const abort_hotspots = Object.entries(abortNode)
