@@ -276,9 +276,7 @@ describe("makeParallelHandler — branch lifecycle events", () => {
     });
     await spec.handler(ctx);
 
-    const completed = ctx.__emitted.find(
-      (e) => e.type === "fact.node_completed" && e.payload["nodeId"] === "lens_a",
-    );
+    const completed = ctx.__emitted.find((e) => e.type === "fact.node_completed" && e.payload["nodeId"] === "lens_a");
     expect(completed).toBeTruthy();
     expect(completed?.payload["score"]).toBe(7);
     expect(completed?.payload["tokens"]).toBe(12);
