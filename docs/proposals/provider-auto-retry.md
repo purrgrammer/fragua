@@ -13,9 +13,6 @@ last-reviewed: 2026-05-02
 > `intent.resume`. For interactive use this is reasonable; for unattended
 > batch use it's a regression — a single 429 mid-run halts the whole
 > batch.
->
-> Currently a one-line item in `docs/PENDING.md`; this promotes it to a
-> proper design.
 
 ## Shape
 

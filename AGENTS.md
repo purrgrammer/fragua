@@ -13,7 +13,7 @@ Authoritative docs:
 - `docs/SPEC.md` — what swarm is, invariants
 - `docs/ARCHITECTURE.md` — schema, design, property matrix
 - `docs/handler-contract.md` — handler API
-- `docs/PENDING.md` — known gaps and deferred work
+- `docs/proposals/` — known gaps and deferred work, organised by status × maturity
 
 ## Stack
 
@@ -29,12 +29,13 @@ bun run lint                             # biome check
 bun run format                           # biome format --write
 bun run ci                               # lint + typecheck + tests, pass-noise filtered
 
-bun run swarm daemon                     # executor + built-in HTTP, port written to .swarm/daemon/daemon.json
-bun run swarm serve                      # standalone HTTP + SSE, default :3000
-bun run swarm run <workflow.dot> --input="<task>"  # upload + enqueue + stream events
+bun run swarm harness                    # default entry point: daemon + HTTP, ~/.swarm/swarm.db, default :6767, auto-builds web bundle
+bun run swarm daemon --db <path>         # CI primitive: executor only against an explicit DB
+bun run swarm serve  --db <path>         # CI primitive: standalone HTTP + SSE, default :3000
+bun run swarm run <workflow|name> [--input "…"]    # upload + enqueue + stream events; bare names resolve against ~/.swarm/workflows/, then <cwd>/.swarm/workflows/
 bun run swarm validate <workflow.dot>    # parse + lint, no execution
 bun run swarm db {vacuum,gc-blobs,backup --to <path>}
-bun run dev:web                          # Vite dev server (:5173), proxies /api/** to daemon; run daemon first
+bun run dev:web                          # Vite dev server (:5173), proxies /api/** to harness; run harness first
 ```
 
 ## Codebase map
@@ -51,11 +52,13 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 | `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
 | `@swarm/server` | `src/store/{routes,runs-routes,runs-adapter,steps}.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
 | `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Swarm primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
-| `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `daemon` / `serve` / `run` / `validate` / `db` |
+| `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
 
 Event taxonomy lives in `docs/ARCHITECTURE.md` §3; invariants I1–I10 in `docs/SPEC.md` §4.
 
-Runtime state: `.swarm/swarm.db` (the store), `.swarm/daemon/daemon.json` (daemon HTTP port + PID), `.swarm/serve.json` (serve URL, read by `swarm run` for discovery).
+Runtime state: `~/.swarm/swarm.db` (the global store the harness binds to by default; `daemon_lock.{http_url, http_port, harness_version}` carry the running URL — that's how `swarm run` discovers the harness, no JSON file). The CI primitive (`swarm daemon --db <path>` + `swarm serve --db <path>`) writes its serve URL to `<cwd>/.swarm/serve.json`; `swarm run` falls back to that when no harness lock is present. `cwd` on `run_state` is the only project identifier — there is no `projects` table; the UI lists projects via `SELECT DISTINCT cwd`. Worktrees live under each run's `cwd` at `.swarm/worktrees/<run_id>/`.
+
+Config cascade: `~/.swarm/config.jsonc` (global — defaults, autoTitle, blocklist, concurrency, …) overlaid by `<cwd>/.swarm/config.jsonc` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep.
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
 

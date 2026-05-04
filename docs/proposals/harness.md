@@ -1,58 +1,70 @@
 ---
 title: Harness
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-03
+summary: "Foreground harness — daemon + HTTP under one supervisor"
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-04
 ---
 
 # Harness
 
-> Architectural commitment point. After this lands, the harness is the
-> canonical entry point and the per-cwd `swarm daemon` mode becomes a
-> CI/power-user primitive. Downstream proposals
-> ([migration](./migration.md), [token auth](./token-auth.md),
+> Shipped. `swarm harness` is the canonical entry point; the per-cwd
+> `swarm daemon` / `swarm serve` mode is a CI/power-user primitive.
+> Downstream proposals ([token auth](./token-auth.md),
 > [project-config extensions](./project-config-extensions.md),
 > [project tools, hooks, skills](./project-extensions.md),
-> [file server](./file-server.md)) all depend on this.
+> [file server](./file-server.md)) build on it. The one-off
+> [migration](./migration.md) script ran on this repo on 2026-05-04.
 
 ## Shape
 
-`swarm harness` supervises the daemon and HTTP server as a single
-foreground process. `swarm daemon --db <path>` and `swarm serve --db
-<path>` remain as primitives for CI and power users.
+`swarm harness` supervises the daemon (subprocess) and HTTP server
+(in-process via `startServer`) as a single foreground process. Default
+DB `~/.swarm/swarm.db`; default port 6767, configurable via `web.port`
+in `~/.swarm/config.jsonc` or `--port` (collisions auto-bump to
+6768/6769/… on the default path; `--port` hard-fails). The web bundle
+auto-rebuilds when sources are newer than `dist/`. The `ready` line
+prints an OSC 8 hyperlink so modern terminals render the URL clickable.
+
+`swarm daemon --db <path>` and `swarm serve --db <path>` remain as
+primitives for CI and power users — they never appear on the default
+install path.
 
 Discovery is via the DB itself. `~/.swarm/swarm.db` is the only
 filesystem rendezvous; everything else lives in rows.
 
-`daemon_lock` (singleton, CHECK id=1) gains URL columns:
+`daemon_lock` (singleton, CHECK id=1) carries URL columns:
 
 ```sql
-ALTER TABLE daemon_lock ADD COLUMN http_url TEXT;
-ALTER TABLE daemon_lock ADD COLUMN http_port INTEGER;
-ALTER TABLE daemon_lock ADD COLUMN harness_version TEXT;
+http_url        TEXT,        -- harness/serve listener URL; NULL for `swarm daemon` only
+http_port       INTEGER,
+harness_version TEXT
 ```
 
-The harness writes its URL on startup. CLIs (`swarm run`, `swarm
-projects ls`, ...) open `~/.swarm/swarm.db` read-only and read the
-lock row. Concurrent SQLite readers are fine; the cost is one
-`open()` + one `SELECT` per CLI invocation.
+The harness writes its URL on startup and clears it on SIGINT. CLIs
+(`swarm run`, …) open `~/.swarm/swarm.db` read-only and read the lock
+row. Concurrent SQLite readers are fine; the cost is one `open()` +
+one `SELECT` per CLI invocation.
 
-CI primitives write their own DB's `daemon_lock` and discover
-through that same DB.
+`swarm run`'s discovery cascade: `--url` flag → `<cwd>/.swarm/serve.json`
+(CI primitive) → `~/.swarm/swarm.db` `daemon_lock.http_url` (harness)
+→ `http://localhost:3000` last-resort default.
 
-No JSON discovery files. The only filesystem state outside the DB
-is the DB itself, the blobs directory, and per-run worktrees.
+CI primitives write their own DB's `daemon_lock` and discover through
+that same DB. No JSON discovery files in the default install path. The
+only filesystem state outside the DB is the DB itself, the blobs
+directory, and per-run worktrees.
 
-## Open questions
+## Open questions (post-ship)
 
 ### Lifecycle
 
-Foreground process is the v0 starting point: cross-platform,
-debuggable, ctrl-c works. `swarm harness install` for launchd /
-systemd is out of scope until the foreground UX has soaked.
+Foreground process is v0: cross-platform, debuggable, ctrl-c works.
+`swarm harness install` for launchd / systemd is out of scope until the
+foreground UX has soaked.
 
-What does `swarm run` do when the harness is not running? Hard-fail
-with a tip; no magic auto-start.
+`swarm run` against an absent harness: hard-fail with a tip pointing
+at `bun run swarm harness`; no magic auto-start.
 
 ### Watchdog
 
@@ -66,7 +78,7 @@ Need: heartbeat from daemon to harness. If the daemon hasn't made
 progress in N minutes (no fact event written, no tick observed),
 the harness signals restart. The metric for "progress" is open —
 last fact-event timestamp is the obvious candidate; supervisor-tick
-counter is more accurate.
+counter is more accurate. Deferred until the foreground UX has soaked.
 
 ### Threat model
 
@@ -89,16 +101,25 @@ the first `swarm harness` invocation. There's no per-cwd path to
 retire; the flagged form is a primitive that always existed and
 always will.
 
-The only one-off migration is for the swarm repo itself, which has
+The only one-off migration was for the swarm repo itself, which had
 months of pre-harness run history; see [migration](./migration.md).
+The script ran on 2026-05-04.
 
-## What this enables
+## What this enables (now live)
 
-- Cross-project visibility (UI listing every cwd swarm has run from)
-- `~/.swarm/swarm.db` (one DB for every project)
-- `~/.swarm/workflows/` (workflow lookup by name)
-- [One-off migration](./migration.md) (lifts this repo's pre-harness
-  DB into the global DB)
+- Cross-project visibility — `/projects` page lists every cwd swarm
+  has run from with run rollups; `/projects/:cwdEnc` adds a
+  `.gitignore`-honored file tree + blob viewer; `/analytics` carries
+  a per-project filter
+- `~/.swarm/swarm.db` — one DB for every project
+- `~/.swarm/workflows/` — workflow lookup by bare name, with
+  `<cwd>/.swarm/workflows/` as the local fallback (see
+  [workflow-resolution](./workflow-resolution.md))
+- Workflow listing aggregates global + every project cwd's
+  `.swarm/workflows/` (cross-source name collisions disambiguate by
+  `cwd`)
+- Two-layer config cascade — `~/.swarm/config.jsonc` overlaid by
+  `<cwd>/.swarm/config.jsonc`
 
 ## What does not change
 

@@ -1,8 +1,9 @@
 ---
 title: Workflow resolution by name
-status: accepted
+summary: "Bare-name workflow resolution — global then local"
+status: shipped
 maturity: specified
-last-reviewed: 2026-05-03
+last-reviewed: 2026-05-04
 ---
 
 # Workflow resolution by name

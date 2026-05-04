@@ -91,7 +91,7 @@ There's no story for "rebase on resume" or "warn that base is stale."
 
 ### B4 — Per-branch isolation in `parallel` is missing
 
-The PENDING.md item — branches share the worktree, so a workflow that
+Branches share the worktree, so a workflow that
 wants to "explore 3 candidate patches in parallel and test each one"
 can't actually compile/test each branch independently. Branches are
 forced to be read-only deliberation.
@@ -221,7 +221,7 @@ Solves B4. Increases the surface area of B1 / B8 unless paired with D1.
 
 ### D4 — Tighter resume semantics: rebase-on-wake
 
-On resume from `paused_hitl` / `paused_provider_error`, the executor
+On resume from `paused_hitl` / `paused`, the executor
 emits a `worktree.rebased` observability event after either rebasing
 the worktree onto current `main` (clean tree) or warning + skipping
 (dirty tree). Solves B3 partially; doesn't solve B6.

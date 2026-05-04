@@ -9,7 +9,7 @@
 ## 0. Context and decisions
 
 ### What we're committing to
-- **Single coordination surface: one SQLite database.** All state, events, queue, locks, and artifact metadata. Two processes (daemon, web server) both read and write. WAL mode handles multi-process access. Artifact *content* lives on the filesystem under `blobsDir`, keyed by sha256 — keeping raw bytes out of the WAL.
+- **Single coordination surface: one SQLite database.** All state, events, queue, locks, and artifact metadata. The harness supervises a daemon subprocess + in-process HTTP server against `~/.swarm/swarm.db` by default; both halves read and write. WAL mode handles multi-process access. Artifact *content* lives on the filesystem under `blobsDir`, keyed by sha256 — keeping raw bytes out of the WAL. The CI primitives (`swarm daemon --db <path>` + `swarm serve --db <path>`) hit the same store contract against an explicit DB path.
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
 - **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
@@ -17,7 +17,7 @@
 - **Content-addressed blobs on disk.** Tool outputs never inline in event payloads or the WAL. Handlers write raw content to `<blobsDir>/<first2>/<sha256>`; a metadata row in `blobs` points at it. Events carry a ref + bounded preview. File-then-row commit ordering: a crash can leave orphan files (GC sweeps), never dangling rows.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
-- **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs.
+- **Singleton daemon via `daemon_lock` row with heartbeat.** Zombie detection on reclaim + startup sweep of mid-flight runs. The same row carries the harness's `http_url`/`http_port`/`harness_version` columns so CLIs discover the running URL by opening the DB read-only — one `open()` + one `SELECT` per invocation, no JSON rendezvous file.
 - **Web UI works daemon-down.** Reads hit SQLite directly; intents queue; SSE continues polling. No daemon required for observability or control-plane writes.
 
 ### Invariants (the contract)
@@ -136,7 +136,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 2` (v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 4`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -1038,7 +1038,7 @@ mutating tool (`bash` / `write` / `edit`) is visible, so
 handlers that bypass the tool registry. HITL inside a parallel branch
 is coerced to `fail`.
 
-Known gaps in coverage live in [`PENDING.md`](./PENDING.md).
+Known gaps in coverage live as proposals in [`proposals/`](./proposals/) — see [`proposals/README.md`](./proposals/README.md) for the index.
 
 ---
 

@@ -1,27 +1,30 @@
 ---
 title: Schema additions for project-aware runs
-status: in-progress
+summary: "Project-aware run schema (cwd + workflow metadata + harness URL columns)"
+status: shipped
 maturity: specified
-last-reviewed: 2026-05-03
+last-reviewed: 2026-05-04
 ---
 
 # Schema additions for project-aware runs
 
-> Pure additive migration; foundation for the harness-by-default
-> globalization plan.
+> Shipped. The harness-by-default globalization plan's schema
+> foundation is in place at `CURRENT_SCHEMA_VERSION = 4`.
 >
-> **Staying:** `run_state.{base_git_sha, branch}` are shipped and
-> load-bearing — note that the proposal's `worktree_branch` shipped
-> as `branch` (the `worktree_` prefix was redundant; the column
-> always refers to the run's worktree).
+> **Live now:** `run_state.{base_git_sha, branch}`,
+> `run_state.{cwd, workflow_name, workflow_scope, workflow_path}`,
+> `daemon_lock.{http_url, http_port, harness_version}`. `idx_run_state_cwd`
+> backs the emergent-paths project listing. `workflow_scope` CHECK
+> covers `'global' | 'local' | 'path' | 'ephemeral'`.
 >
-> **Outstanding:** `run_state.cwd`, `run_state.workflow_name` /
-> `_scope` / `_path`, plus the `daemon_lock` URL columns the
-> harness uses for discovery.
->
-> **Removing:** `run_state.project_id` and the `projects` table.
-> Projects are emergent paths in the harness-by-default model; see
+> **Removed:** `run_state.project_id` and the `projects` table —
+> projects are emergent paths in the harness-by-default model
+> (`SELECT DISTINCT cwd FROM run_state`); see
 > [project-config extensions](./project-config-extensions.md).
+>
+> **Still deferred:** `project_context_sha` (lands with
+> [project-extensions](./project-extensions.md)) and `parent_run_id`
+> (no sub-run support in v0).
 
 ## What lands
 

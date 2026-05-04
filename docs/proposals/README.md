@@ -21,12 +21,15 @@ delta called out in the proposal body.
 | [Doc-vs-code drift CI lint](./drift-lint.md) | specified | `bun run lint:docs` in CI |
 | [Bound the OCC retry loop](./occ-retry-ceiling.md) | specified | ceiling=3 with exponential backoff; structured `occ_exhausted` halt |
 | [Auto-retry for transient LLM provider errors](./provider-auto-retry.md) | specified | classify 408/429/5xx/529/network as auto; full-jitter exponential or honoured `Retry-After`; new `paused_provider_retry` status |
+| [Harness](./harness.md) | specified | `swarm harness` foreground supervisor; default DB `~/.swarm/swarm.db`, default :6767, web bundle auto-build, OSC 8 hyperlink. Discovery via `daemon_lock.{http_url, http_port, harness_version}` |
+| [Schema additions for project-aware runs](./schema-additions.md) | specified | `run_state.{cwd, workflow_name, workflow_scope, workflow_path}`, `daemon_lock.{http_url, http_port, harness_version}`; `project_id` + `projects` table removed; schema v4 |
+| [Workflow resolution by name](./workflow-resolution.md) | specified | bare names resolve `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot` |
+| [One-off migration](./migration.md) | specified | `scripts/migrate-pre-harness.ts` ran on this repo on 2026-05-04 |
 
 ## In progress
 
 | Proposal | Maturity | Outstanding |
 |---|---|---|
-| [Schema additions for project-aware runs](./schema-additions.md) | specified | `workflow_name` / `_scope` / `_path`, `project_context_sha`, `parent_run_id`, `events.project_id` |
 | [Run isolation via worktrees](./run-isolation.md) | sketch | branch GC, paused-run base-drift, per-branch parallel isolation, editor co-occupancy — see [worktree-design](./worktree-design.md) |
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap cascading from project config |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
@@ -36,15 +39,12 @@ delta called out in the proposal body.
 
 | Proposal | Maturity |
 |---|---|
-| [Workflow resolution by name](./workflow-resolution.md) | specified |
 | [Daemon UI — stats + feed](./daemon-ui.md) | specified |
 
 ## Proposed (under design)
 
 | Proposal | Maturity | Notes |
 |---|---|---|
-| [Harness](./harness.md) | designed | architectural commitment point; everything below depends on it |
-| [One-off migration](./migration.md) | designed | one-shot script for this repo's pre-harness DB; new installs start global |
 | [Project tools, hooks, skills](./project-extensions.md) | sketch | trust-boundary risk — biggest open question |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |

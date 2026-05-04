@@ -1,15 +1,21 @@
 ---
 title: One-off migration
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-03
+summary: "One-off migration script for the swarm repo's pre-harness DB"
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-04
 ---
 
 # One-off migration
 
-> One-shot script for the swarm repo's own pre-harness DB. New installs
-> start on the harness from day one — they never touch a per-cwd
-> `.swarm/swarm.db` and don't need migrating.
+> Shipped. Ran on this repo on 2026-05-04: 37 runs / 36 155 events /
+> 2 449 messages / 133 blobs / 136 artifacts lifted from
+> `<repo>/.swarm/swarm.db` into `~/.swarm/swarm.db`. Source renamed to
+> `<repo>/.swarm/swarm.db.pre-harness.2026-05-04`. Script
+> (`scripts/migrate-pre-harness.ts`) is idempotent (re-running bails
+> on the first runId collision) and deletable once this repo has soaked
+> on the global DB. New installs start on the harness from day one —
+> they never touch a per-cwd `.swarm/swarm.db` and don't need migrating.
 
 ## Shape
 

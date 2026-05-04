@@ -237,6 +237,14 @@ Conventional keys:
 
 Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
+For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
+
+```sh
+curl -fsS "$URL/runs/$RUN/tree"           | jq '.[] | select(.type=="file") | .path'   # 410 if worktree disposed without a branch; otherwise live ls
+curl -fsS "$URL/runs/$RUN/blob?path=…"                                                  # raw text of one file in the worktree
+curl -fsS "$URL/runs/$RUN/changes"        | jq .                                        # base..tip diff; survives worktree disposal via the preserved branch
+```
+
 ---
 
 ## 8. Failure-mode playbook

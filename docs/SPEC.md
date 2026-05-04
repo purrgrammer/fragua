@@ -26,32 +26,32 @@ Core values, in priority order:
 
 ## 2. System shape
 
-Single machine, two processes, one SQLite database.
+Single machine, one harness process, one SQLite database. The harness supervises a daemon subprocess and an in-process HTTP server against `~/.swarm/swarm.db`.
 
 ```
-┌────────────────┐                 ┌──────────────┐
-│  swarm daemon  │ ──────────────▶ │              │
-│  (executor +   │ ◀────────────── │   SQLite     │
-│  supervisor)   │    facts /      │  .swarm/     │
-└────────────────┘    reads        │  swarm.db    │
-                                   │              │
-┌────────────────┐                 │  (WAL mode,  │
-│  swarm serve   │ ◀────────────── │   single     │
-│  (HTTP + SSE)  │ ──────────────▶ │   coord.     │
-└────────────────┘    intents /    │   surface)   │
-                      reads        └──────────────┘
-       ▲
-       │  HTTP + SSE
-       ▼
-┌────────────────┐
-│  Web UI / CLI  │
-└────────────────┘
+┌──────────────────────────────────┐
+│            swarm harness         │      ┌───────────────┐
+│  ┌───────────────────────────┐   │      │               │
+│  │ daemon subprocess         │ ──┼─────▶│   SQLite      │
+│  │ (executor + supervisor)   │ ◀─┼──────│  ~/.swarm/    │
+│  └───────────────────────────┘   │      │  swarm.db     │
+│  ┌───────────────────────────┐   │      │               │
+│  │ HTTP + SSE (in-process)   │ ◀─┼──────│  WAL,         │
+│  │ default :6767             │ ──┼─────▶│  single coord │
+│  └───────────────────────────┘   │      │  surface      │
+└────────────────┬─────────────────┘      └───────────────┘
+                 │  HTTP + SSE
+                 ▼
+        ┌────────────────┐
+        │  Web UI / CLI  │
+        └────────────────┘
 ```
 
+- **Harness** (`swarm harness`) is the default entry point: foreground process that spawns the daemon as a subprocess and runs the HTTP server in-process. Publishes its URL on `daemon_lock.{http_url, http_port, harness_version}` so CLIs discover it via the DB itself — no JSON rendezvous file. SIGINT clears the URL columns on the way out.
 - **Daemon** runs the executor fiber + a 50ms supervisor fiber (heartbeat + intent detection + watchdog). Writes **facts** under OCC.
 - **Server** exposes a Hono HTTP surface. Writes **intents** (always appendable, no OCC). Reads go straight to the store's projection.
-- **CLI** wraps both via `swarm daemon`, `swarm serve`, `swarm run`, `swarm db`.
-- **Store** (`@swarm/store`) is the only coordination surface. WAL-mode SQLite; both processes read and write.
+- **CLI** wraps everything via `swarm harness` (default), `swarm run`, `swarm validate`, `swarm db`. `swarm daemon --db <path>` and `swarm serve --db <path>` remain as CI/power-user primitives — they never appear on the default install path.
+- **Store** (`@swarm/store`) is the only coordination surface. WAL-mode SQLite; harness, daemon, and any client read and write.
 
 ---
 
