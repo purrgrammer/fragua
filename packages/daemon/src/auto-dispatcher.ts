@@ -201,11 +201,24 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
  * it into the payload.
  */
 export function buildBranchContext(childId: string, parent: HandlerContext, store?: IEventStore): HandlerContext {
+  // The parent's `emit` closure stamps payloads with the parent's nodeId /
+  // iteration before forwarding to the executor's observability sink (see
+  // packages/daemon/src/executor.ts emitObservability). Spreading the parent
+  // ctx inherits that closure, so any `llm.start` / `agent.*` / `cost.*` /
+  // `tool.*` event a branch emits would land with `nodeId: <parent>` —
+  // breaking the steps endpoint's per-branch tracking, the conversation /
+  // graph branch UI, and any operator query that scopes by nodeId. Inject
+  // the branch identity into payloads before forwarding so the executor's
+  // own stamp (which is overridden by anything in payload) reflects the
+  // branch. Same closure-capture pattern as `artifacts` below.
+  const branchEmit: HandlerContext["emit"] = (type, payload) =>
+    parent.emit(type, { ...payload, nodeId: childId, iteration: 0 });
   const base: HandlerContext = {
     ...parent,
     nodeId: childId,
     iteration: 0,
     routing: structuredClone(parent.routing as Record<string, unknown>),
+    emit: branchEmit,
   };
   // Without a store handle we can't rebuild the artifacts closure; fall back
   // to inherited (parent-scoped) artifacts. Tests that stub the parallel

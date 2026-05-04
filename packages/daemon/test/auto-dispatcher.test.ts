@@ -311,6 +311,48 @@ describe("buildBranchContext", () => {
     expect(new TextDecoder().decode(writes[0]?.bytes)).toBe("lens-correctness findings");
   });
 
+  test("rebuilds emit so branch observability events stamp the branch nodeId, not the parent's", () => {
+    // Parent's emit closure stamps `nodeId: <parent>` before forwarding;
+    // without rebuilding, every llm.start / agent.* / cost.recorded / tool.*
+    // emitted from inside a branch lands as nodeId="explore" — collapsing
+    // every branch's per-step row, conversation messages, and cost rows
+    // back onto the parent.
+    const emitted: { type: string; payload: Record<string, unknown> }[] = [];
+    const parent: HandlerContext = {
+      runId: "r1",
+      nodeId: "explore",
+      iteration: 2,
+      signal: new AbortController().signal,
+      routing: {},
+      llm: {} as never,
+      http: {} as never,
+      tools: {} as never,
+      messages: {} as never,
+      artifacts: {} as never,
+      externalCall: {} as never,
+      args: {},
+      nodeOutputs: new Map(),
+      // Mimic executor.emitObservability: stamp parent's nodeId/iteration,
+      // payload spread last so handler-provided overrides win.
+      emit: (type, payload) => {
+        emitted.push({ type, payload: { nodeId: "explore", iteration: 2, ...payload } });
+      },
+    };
+
+    const child = buildBranchContext("lens_security", parent);
+    child.emit("llm.start", { provider: "anthropic", model: "claude-sonnet-4-6" });
+    child.emit("cost.recorded", { tokens: 42 });
+
+    expect(emitted).toHaveLength(2);
+    for (const ev of emitted) {
+      expect(ev.payload["nodeId"]).toBe("lens_security");
+      expect(ev.payload["iteration"]).toBe(0);
+    }
+    // Original handler-provided payload fields preserved.
+    expect(emitted[0]?.payload["provider"]).toBe("anthropic");
+    expect(emitted[1]?.payload["tokens"]).toBe(42);
+  });
+
   test("falls back to inherited artifacts when no store handle is plumbed (test-only path)", () => {
     const calls: string[] = [];
     const parent: HandlerContext = {
