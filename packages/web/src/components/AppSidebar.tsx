@@ -36,7 +36,7 @@ import {
 } from "./ui/sidebar.tsx";
 
 const NAV = [
-  { to: "/", label: "Control Center", icon: TowerControl, end: true },
+  { to: "/", label: "Watchtower", icon: TowerControl, end: true },
   { to: "/analytics", label: "Analytics", icon: BarChart3, end: false },
   { to: "/inbox", label: "Inbox", icon: InboxIcon, end: false },
   { to: "/runs", label: "Runs", icon: ListChecks, end: false },

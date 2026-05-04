@@ -136,7 +136,7 @@ export function crumbsFor(
   params: Record<string, string | undefined>,
   workflowName?: string,
 ): Crumb[] {
-  if (pathname === "/" || pathname === "") return [{ label: "Control Center" }];
+  if (pathname === "/" || pathname === "") return [{ label: "Watchtower" }];
   const segments = pathname.split("/").filter(Boolean);
   if (segments[0] === "inbox") {
     return [{ label: "Inbox" }];
