@@ -187,4 +187,22 @@ describe("foldIntents", () => {
       expect(out.dropped).toEqual([]);
     }
   });
+
+  test("steer on paused_retry is buffered (treated like paused_hitl)", () => {
+    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_retry");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.steering).toBe("hint");
+      expect(out.dropped).toEqual([]);
+    }
+  });
+
+  test("hitl_input on paused_retry is buffered, not dropped", () => {
+    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "paused_retry");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.hitlInput).toEqual({ selected: "A" });
+      expect(out.dropped).toEqual([]);
+    }
+  });
 });
