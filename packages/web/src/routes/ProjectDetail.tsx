@@ -15,6 +15,7 @@ import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
+import { RunComposer } from "../components/RunComposer.tsx";
 import { RunRow } from "../components/RunRow.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
@@ -183,9 +184,10 @@ export function ProjectDetail(): JSX.Element {
         parsed={parsedConfig}
       />
 
-      {projectWorkflows.length > 0 && (
-        <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-workflows-section">
-          <h3 className="text-sw-sm font-medium text-sw-muted">Workflows</h3>
+      <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-workflows-section">
+        <h3 className="text-sw-sm font-medium text-sw-muted">Workflows</h3>
+        <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
+        {projectWorkflows.length > 0 && (
           <div className="w-full min-w-0 overflow-x-auto">
             <Table data-testid="project-workflows-table" className="table-fixed">
               <TableHeader>
@@ -222,8 +224,8 @@ export function ProjectDetail(): JSX.Element {
               </TableBody>
             </Table>
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
       <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col gap-3" data-testid="project-tabs">
         <TabsList variant="line" className="self-start">

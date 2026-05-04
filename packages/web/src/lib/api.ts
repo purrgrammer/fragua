@@ -584,6 +584,36 @@ export async function enqueueJob(input: {
   );
 }
 
+/** Direct POST /runs — bypasses /jobs. The workflow must already be
+ * registered (its sha is what GET /workflows returns), so the composer
+ * doesn't re-upload DOT source. `cwd` lands on `run_state.cwd` and is
+ * how the project filter on /projects/:id resolves the run later. */
+export interface CreateRunInput {
+  workflowSha: string;
+  workflowName?: string;
+  workflowScope?: "global" | "local" | "path" | "ephemeral";
+  workflowPath?: string;
+  cwd?: string;
+  input?: string;
+  priority?: number;
+}
+
+export async function createRun(args: CreateRunInput): Promise<{ runId: string }> {
+  const body: Record<string, unknown> = { workflowSha: args.workflowSha };
+  if (args.workflowName !== undefined) body["workflowName"] = args.workflowName;
+  if (args.workflowScope !== undefined) body["workflowScope"] = args.workflowScope;
+  if (args.workflowPath !== undefined) body["workflowPath"] = args.workflowPath;
+  if (args.cwd !== undefined) body["cwd"] = args.cwd;
+  if (args.input !== undefined) body["input"] = args.input;
+  if (args.priority !== undefined) body["priority"] = args.priority;
+  return postJson(
+    "/runs",
+    body,
+    (v): v is { runId: string } =>
+      typeof v === "object" && v !== null && typeof (v as { runId?: unknown }).runId === "string",
+  );
+}
+
 export async function steerRun(id: string, message: string): Promise<{ seq: number }> {
   return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedSeq);
 }
