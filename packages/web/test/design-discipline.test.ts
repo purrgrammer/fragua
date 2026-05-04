@@ -23,6 +23,7 @@ const SRC = join(import.meta.dir, "..", "src");
 
 // Shadcn-generated files + ai-elements: tokens are correct here by design.
 const CLEAN_PATHS_CONTAINING = [
+  "components/ui/avatar",
   "components/ui/badge",
   "components/ui/button",
   "components/ui/card",

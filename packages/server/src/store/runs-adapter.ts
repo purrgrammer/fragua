@@ -4,6 +4,8 @@
 // module projects a RunState + its event tail into the shapes the
 // `/runs` REST endpoints hand to the web UI.
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, StoredEvent } from "@swarm/store";
 import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
@@ -100,6 +102,11 @@ export function runStateToDetail(
     selectedEdges: deriveSelectedEdges(events),
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
+
+  if (state.cwd != null) {
+    const candidate = join(state.cwd, ".swarm", "worktrees", state.runId);
+    if (existsSync(candidate)) detail.worktreePath = candidate;
+  }
 
   if (state.status === "paused_hitl") {
     for (let i = events.length - 1; i >= 0; i--) {

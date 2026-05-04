@@ -141,6 +141,20 @@ export interface RunDetail {
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
+  /** Absolute path to the still-mounted worktree under
+   * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree was
+   * disposed or for runs that never had one. */
+  worktreePath?: string;
+}
+
+/** One row in `GET /runs/:runId/changes`. Server projects
+ *  `git diff --numstat` + `--name-status` between the run's
+ *  `baseGitSha` and the tip of `swarm/runs/<runId>`. */
+export interface RunChange {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
 }
 
 export interface WorkflowSummary {
@@ -419,6 +433,32 @@ export async function getProjectBlob(projectId: string, path: string): Promise<s
     throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
   }
   return res.text();
+}
+
+/** GET /runs/:runId/tree → flat ProjectTreeEntry[] under the run's
+ *  worktree. Throws ApiError; callers branch on `.status === 410` to
+ *  treat the worktree as disposed (still show the changes panel). */
+export async function getRunTree(runId: string): Promise<ProjectTreeEntry[]> {
+  return getJson(
+    `/runs/${encodeURIComponent(runId)}/tree`,
+    (v): v is ProjectTreeEntry[] => Array.isArray(v) && v.every(isProjectTreeEntry),
+  );
+}
+
+export async function getRunBlob(runId: string, path: string): Promise<string> {
+  const u = url(`/runs/${encodeURIComponent(runId)}/blob?path=${encodeURIComponent(path)}`);
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  return res.text();
+}
+
+export async function getRunChanges(runId: string): Promise<RunChange[]> {
+  return getJson(
+    `/runs/${encodeURIComponent(runId)}/changes`,
+    (v): v is RunChange[] => Array.isArray(v) && v.every(isRunChange),
+  );
 }
 
 export async function getRun(id: string): Promise<RunDetail> {
@@ -821,7 +861,20 @@ function isRunDetail(v: unknown): v is RunDetail {
     (o.cacheReadTokens === undefined || typeof o.cacheReadTokens === "number") &&
     (o.cacheWriteTokens === undefined || typeof o.cacheWriteTokens === "number") &&
     (o.durationMs === undefined || typeof o.durationMs === "number") &&
-    (o.cwd === undefined || typeof o.cwd === "string")
+    (o.cwd === undefined || typeof o.cwd === "string") &&
+    ((o as { worktreePath?: unknown }).worktreePath === undefined ||
+      typeof (o as { worktreePath?: unknown }).worktreePath === "string")
+  );
+}
+
+function isRunChange(v: unknown): v is RunChange {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { path?: unknown; status?: unknown; additions?: unknown; deletions?: unknown };
+  return (
+    typeof o.path === "string" &&
+    (o.status === "added" || o.status === "modified" || o.status === "deleted" || o.status === "renamed") &&
+    typeof o.additions === "number" &&
+    typeof o.deletions === "number"
   );
 }
 

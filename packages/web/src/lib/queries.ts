@@ -1,6 +1,16 @@
 import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import type { AnalyticsRequest, AnalyticsRunsRequest, JobStatus, ListRunsFilter } from "./api.ts";
 import * as api from "./api.ts";
+import { ApiError } from "./api.ts";
+
+/** Don't retry a 410 — "worktree disposed" is a terminal classification
+ *  and the UI handles it by hiding the FileTree pane. Retrying just
+ *  burns requests + delays the disposal banner. Other failures use the
+ *  default retry policy (max 3). */
+function noRetryOnGone(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status === 410) return false;
+  return failureCount < 3;
+}
 
 /** Canonicalize a `ListRunsFilter` so the same logical filter always
  * produces the same query-key fragment. */
@@ -50,6 +60,29 @@ export const queries = {
       queryOptions({
         queryKey: [...queries.runs.all(), "steps", id] as const,
         queryFn: () => api.getRunSteps(id),
+      }),
+    tree: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "tree"] as const,
+        queryFn: () => api.getRunTree(id),
+        enabled: id.length > 0,
+        staleTime: 30_000,
+        retry: noRetryOnGone,
+      }),
+    blob: (id: string, path: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "blob", path] as const,
+        queryFn: () => api.getRunBlob(id, path),
+        enabled: id.length > 0 && path.length > 0,
+        staleTime: 30_000,
+        retry: noRetryOnGone,
+      }),
+    changes: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "changes"] as const,
+        queryFn: () => api.getRunChanges(id),
+        enabled: id.length > 0,
+        staleTime: 30_000,
       }),
   },
 

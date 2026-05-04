@@ -4,6 +4,9 @@
 // until auto-title support landed.
 
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RunState, StoredEvent } from "@swarm/store";
 import {
   deriveNodeStates,
@@ -320,5 +323,33 @@ describe("runStateToDetail — HITL projection", () => {
     expect(detail.hitlNodeId).toBeUndefined();
     expect(detail.hitlLabel).toBeUndefined();
     expect(detail.hitlOptions).toBeUndefined();
+  });
+});
+
+describe("runStateToDetail \u2014 worktreePath", () => {
+  test("populates worktreePath when worktree directory exists", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "swarm-runs-adapter-wt-"));
+    try {
+      const runId = "r-wt-1";
+      const wt = join(cwd, ".swarm", "worktrees", runId);
+      // First call: dir absent → worktreePath should stay undefined.
+      const stateNoDir = makeState({ runId, cwd });
+      const detailNoDir = runStateToDetail(stateNoDir, [], undefined, undefined);
+      expect(detailNoDir.worktreePath).toBeUndefined();
+
+      // Now create the canonical worktree dir and re-derive.
+      await mkdir(wt, { recursive: true });
+      const stateWithDir = makeState({ runId, cwd });
+      const detailWithDir = runStateToDetail(stateWithDir, [], undefined, undefined);
+      expect(detailWithDir.worktreePath).toBe(wt);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("omits worktreePath when state.cwd is null", () => {
+    const state = makeState({ cwd: null });
+    const detail = runStateToDetail(state, [], undefined, undefined);
+    expect(detail.worktreePath).toBeUndefined();
   });
 });

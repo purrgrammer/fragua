@@ -16,7 +16,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { CodeBlock } from "../components/ai-elements/code-block.tsx";
+import {
+  Commit,
+  CommitFile,
+  CommitFileAdditions,
+  CommitFileChanges,
+  CommitFileDeletions,
+  CommitFileIcon,
+  CommitFileInfo,
+  CommitFilePath,
+  CommitFileStatus,
+  CommitFiles,
+} from "../components/ai-elements/commit.tsx";
+import { FileTree } from "../components/ai-elements/file-tree.tsx";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { HitlChoice } from "../components/HitlChoice.tsx";
@@ -30,8 +44,10 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
-import type { RunDetail as RunDetailT } from "../lib/api.ts";
+import type { RunChange, RunDetail as RunDetailT } from "../lib/api.ts";
+import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { encodeProjectId } from "../lib/projectId.ts";
@@ -43,7 +59,7 @@ import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useNow } from "../lib/useNow.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
-const VIEWS = ["conversation", "graph", "cost"] as const;
+const VIEWS = ["conversation", "graph", "cost", "files"] as const;
 type TabId = (typeof VIEWS)[number];
 
 /** Statuses where the run is still progressing and the clock should tick.
@@ -170,6 +186,9 @@ export function RunDetail(): JSX.Element {
             <TabsTrigger value="cost" data-testid="view-tab-cost">
               Cost
             </TabsTrigger>
+            <TabsTrigger value="files" data-testid="view-tab-files">
+              Files
+            </TabsTrigger>
           </TabsList>
 
           <div
@@ -197,6 +216,9 @@ export function RunDetail(): JSX.Element {
             </TabsContent>
             <TabsContent value="cost" className="h-full">
               <CostInspector runId={id} totalEvents={totalEvents} isLive={isLive} />
+            </TabsContent>
+            <TabsContent value="files" className="h-full">
+              <RunFilesTab runId={id} />
             </TabsContent>
           </div>
 
@@ -530,4 +552,158 @@ function projectBasename(p: string): string {
   const trimmed = p.replace(/[/\\]+$/, "");
   const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return i >= 0 ? trimmed.slice(i + 1) : trimmed;
+}
+
+// ─── Files tab ─────────────────────────────────────────────────────────
+//
+// Two stacked panes:
+//
+//   1. <Commit> block — one row per RunChange. Driven by
+//      `GET /runs/:id/changes`, which folds `git diff --numstat` +
+//      `--name-status` between `baseGitSha` and the
+//      `swarm/runs/<id>` ref. Survives worktree disposal because the
+//      branch ref is preserved in the project repo.
+//   2. FileTree + CodeBlock — driven by `GET /runs/:id/tree` /
+//      `/blob`. Both 410 once the worktree is disposed; in that case
+//      we hide this pane entirely and the Commit block stands alone.
+//
+// Selecting a file (either by clicking a row in the Commit list or a
+// node in the FileTree) writes `?path=` to the URL so the selection is
+// shareable.
+
+function RunFilesTab({ runId }: { runId: string }): JSX.Element {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPath = searchParams.get("path") ?? "";
+
+  const changesQuery = useQuery(queries.runs.changes(runId));
+  const treeQuery = useQuery(queries.runs.tree(runId));
+  const blobQuery = useQuery(queries.runs.blob(runId, selectedPath));
+
+  const treeRoot = useMemo(() => buildTree(treeQuery.data ?? []), [treeQuery.data]);
+  const treeUnavailable = treeQuery.error instanceof ApiError && treeQuery.error.status === 410;
+
+  const handleSelect = useCallback(
+    (path: string): void => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (path === selectedPath) next.delete("path");
+          else next.set("path", path);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [selectedPath, setSearchParams],
+  );
+
+  const changes = changesQuery.data ?? [];
+
+  return (
+    <section className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4 p-3" data-testid="run-files-section">
+      {changes.length > 0 ? (
+        <Commit defaultOpen data-testid="run-files-commit">
+          <CommitFiles>
+            {changes.map((c) => (
+              <CommitRow key={c.path} change={c} selected={c.path === selectedPath} onSelect={handleSelect} />
+            ))}
+          </CommitFiles>
+        </Commit>
+      ) : changesQuery.isPending ? (
+        <div className="text-sw-sm text-sw-muted">Loading changes…</div>
+      ) : (
+        <div className="text-sw-sm text-sw-muted" data-testid="run-files-no-changes">
+          No tracked changes yet.
+        </div>
+      )}
+
+      {treeUnavailable ? (
+        <div
+          className="rounded-md border border-sw-border bg-sw-surface p-3 text-sw-sm text-sw-muted"
+          data-testid="run-files-disposed"
+        >
+          Worktree was disposed — file browser unavailable. The diff above is read from the preserved{" "}
+          <code className="font-mono">swarm/runs/{runId}</code> branch.
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[18rem_1fr]">
+          <div className="max-h-[28rem] min-h-0 overflow-y-auto" data-testid="run-files-tree">
+            {treeQuery.isPending ? (
+              <div className="p-2 text-sw-sm text-sw-muted">Loading…</div>
+            ) : treeQuery.data && treeQuery.data.length > 0 ? (
+              <FileTree selectedPath={selectedPath} onSelect={handleSelect}>
+                {treeRoot.children.map((child) => (
+                  <TreeNodeView key={child.path} node={child} />
+                ))}
+              </FileTree>
+            ) : (
+              <div className="p-2 text-sw-sm text-sw-muted">Worktree is empty.</div>
+            )}
+          </div>
+          <div className="min-w-0 overflow-hidden rounded-lg border bg-sw-surface" data-testid="run-files-viewer">
+            {selectedPath.length === 0 ? (
+              <div className="p-4 text-sw-sm text-sw-muted">Select a file to preview.</div>
+            ) : blobQuery.error ? (
+              <RunBlobError error={blobQuery.error} path={selectedPath} />
+            ) : blobQuery.isFetching ? (
+              <div className="p-4 text-sw-sm text-sw-muted">Loading…</div>
+            ) : blobQuery.data !== undefined ? (
+              <CodeBlock code={blobQuery.data} language={extToLang(selectedPath)} showLineNumbers />
+            ) : (
+              <div className="p-4 text-sw-sm text-sw-muted">No content.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CommitRow({
+  change,
+  selected,
+  onSelect,
+}: {
+  change: RunChange;
+  selected: boolean;
+  onSelect: (path: string) => void;
+}): JSX.Element {
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: CommitFile renders a <div> from ai-elements; role+tabIndex give it button semantics without a wrapping <button> that would break the existing styling.
+    <CommitFile
+      role="button"
+      tabIndex={0}
+      data-testid={`run-files-commit-row-${change.path}`}
+      data-selected={selected ? "true" : undefined}
+      className={cn("cursor-pointer", selected && "bg-sw-surface ring-1 ring-sw-border")}
+      onClick={() => onSelect(change.path)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(change.path);
+        }
+      }}
+    >
+      <CommitFileInfo>
+        <CommitFileStatus status={change.status} />
+        <CommitFileIcon />
+        <CommitFilePath title={change.path}>{change.path}</CommitFilePath>
+      </CommitFileInfo>
+      <CommitFileChanges>
+        <CommitFileAdditions count={change.additions} />
+        <CommitFileDeletions count={change.deletions} />
+      </CommitFileChanges>
+    </CommitFile>
+  );
+}
+
+function RunBlobError({ error, path }: { error: unknown; path: string }): JSX.Element {
+  const status = error instanceof ApiError ? error.status : 0;
+  let msg: string;
+  if (status === 413) msg = "File too large to preview (>1 MB).";
+  else if (status === 415) msg = "Binary file — not previewable.";
+  else if (status === 404) msg = "File not found.";
+  else if (status === 410) msg = "Worktree disposed.";
+  else msg = `Couldn't load ${path}.`;
+  return <div className="p-4 text-sw-sm text-sw-muted">{msg}</div>;
 }
