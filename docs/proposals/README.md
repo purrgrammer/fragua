@@ -39,9 +39,10 @@ delta called out in the proposal body.
 
 ## Accepted (design done; awaiting scheduling)
 
-| Proposal | Maturity |
-|---|---|
-| [Daemon UI — stats + feed](./daemon-ui.md) | specified |
+| Proposal | Maturity | Notes |
+|---|---|---|
+| [Daemon UI — stats + feed](./daemon-ui.md) | specified | |
+| [Cap-overflow strategy](./cap-overflow.md) | designed | Promoted from sketch by introspect run 01kqsj2z28wv7sxdfh finding C5 (1.41% of runs ≥ 80% of routing cap, peak 6,629 B). Owns the spill / compaction / typed-halt path for `run_state.routing` (8 KB) and `messages.content` (1 MiB); observability lives in `payload-pressure-signal.md` |
 
 ## Proposed (under design)
 
@@ -51,13 +52,12 @@ delta called out in the proposal body.
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
-| [Cap-overflow strategy](./cap-overflow.md) | sketch | 4 KB / 8 KB / 1 MiB / 16 MiB caps need typed observability + spill paths; routing overflow is the loudest production hazard |
 | [Handler discipline rails for extension code](./handler-discipline-extensions.md) | sketch | extend the in-tree lint to user-supplied handlers / tools and the agent backend |
 | [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §13 risk #3; nominal capacity claims have no measurement behind them |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
 | [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
-| [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it |
+| [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 
 ## Deferred
 
