@@ -20,8 +20,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
-import { ProjectSelector } from "../components/analytics/ProjectSelector.tsx";
-// Hidden pending revisit — see commented JSX below.
+// ProjectSelector intentionally absent: the project↔workflow filter
+// interactions (auto-pin on local pick, auto-clear on project unpick)
+// were subtle enough to defer. The server still accepts `?cwd=` and
+// the WorkflowSelector still threads the local's owning cwd through
+// the request — picking `Local · swarm:research` scopes everything to
+// `swarm` implicitly. A separate, deliberate ProjectSelector
+// integration is a follow-up.
 // import { HaltDonut } from "../components/analytics/HaltDonut.tsx";
 // import { ModelDonut } from "../components/analytics/ModelDonut.tsx";
 import { RunsChart } from "../components/analytics/RunsChart.tsx";
@@ -40,26 +45,12 @@ import type { AnalyticsTotals, DrillSlice } from "../types/analytics.ts";
 
 export function Analytics(): JSX.Element {
   const [windowKey, setWindowKey] = useState<WindowKey>("today");
-  const [cwd, setCwd] = useState<string | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowSelection | null>(null);
-  // Local workflow identities depend on `cwd`. Toggling the project
-  // off must clear a local-scoped workflow filter, otherwise we'd send
-  // `workflowScope=local&workflowName=research` with no cwd — server
-  // accepts it but it would aggregate across every project's local
-  // `research`, which isn't a meaningful identity.
-  const handleCwdChange = (next: string | null) => {
-    setCwd(next);
-    if (next === null && workflow?.scope === "local") setWorkflow(null);
-  };
-  // Selecting a local workflow auto-pins the project — the WorkflowSelector
-  // bundles the local's owning cwd with the selection, and we adopt
-  // both at once so the page-level state stays consistent.
-  const handleWorkflowChange = (next: WorkflowSelection | null) => {
-    setWorkflow(next);
-    if (next?.scope === "local" && next.cwd !== null && next.cwd !== cwd) {
-      setCwd(next.cwd);
-    }
-  };
+  // Effective cwd is derived from the workflow selection — locals
+  // carry their owning project root; globals contribute none. The
+  // WorkflowSelector reads it to switch between "show all locals
+  // grouped per-project" and "show this project's locals flat."
+  const effectiveCwd = workflow?.scope === "local" ? workflow.cwd : null;
   // Recompute the resolved window every minute so "Today" naturally
   // grows toward midnight without forcing a refetch on every render.
   // The actual chart refresh is driven by the 30s `refetchInterval`
@@ -75,7 +66,7 @@ export function Analytics(): JSX.Element {
     compareFromMs: resolved.compareFromMs,
     compareToMs: resolved.compareToMs,
   };
-  if (cwd) summaryReq.cwd = cwd;
+  if (effectiveCwd) summaryReq.cwd = effectiveCwd;
   if (workflow) {
     summaryReq.workflowScope = workflow.scope;
     summaryReq.workflowName = workflow.name;
@@ -108,7 +99,7 @@ export function Analytics(): JSX.Element {
       toMs: Math.min(next, resolved.toMs),
       title: `${label} · ${formatBucketTooltip(bucketMs, resolved.bucket, locale)}`,
     };
-    if (cwd) slice.cwd = cwd;
+    if (effectiveCwd) slice.cwd = effectiveCwd;
     if (workflow) {
       slice.workflowScope = workflow.scope;
       slice.workflowName = workflow.name;
@@ -119,8 +110,7 @@ export function Analytics(): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex justify-end gap-2">
-        <ProjectSelector value={cwd} onChange={handleCwdChange} />
-        <WorkflowSelector value={workflow} onChange={handleWorkflowChange} cwd={cwd} />
+        <WorkflowSelector value={workflow} onChange={setWorkflow} cwd={effectiveCwd} />
         <WindowSelector value={windowKey} onChange={setWindowKey} />
       </div>
 
@@ -138,7 +128,7 @@ export function Analytics(): JSX.Element {
               haltLabel: categoryLabel(category),
               title: `Runs · ${categoryLabel(category)} · ${formatBucketTooltip(b, resolved.bucket, locale)}`,
             };
-            if (cwd) slice.cwd = cwd;
+            if (effectiveCwd) slice.cwd = effectiveCwd;
             if (workflow) {
               slice.workflowScope = workflow.scope;
               slice.workflowName = workflow.name;
