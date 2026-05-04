@@ -55,6 +55,8 @@ delta called out in the proposal body.
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [Recoverable pause unification](./recoverable-budget-pause.md) | designed | collapse operator-resumable family to one `paused` status + one reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`). Default `budget_policy` flips `stop`→`pause`; budget overruns become recoverable. Absorbs `paused_provider_error`, routes 402 to `payment_required`, leaves `paused_hitl` / `paused_*_retry` / `quarantined` untouched |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
+| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | sketch | parallel branches don't emit `fact.node_completed` so `$<branchId>.output` is empty; fix by reusing `fact.node_started`/`fact.node_completed` per branch with optional `parentNodeId`/`parallelIndex`. Unblocks parallel-review-then-synthesize and lights up branches in graph/conversation/step-breakdown UI |
+| [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it |
 
 ## Deferred
 
@@ -65,6 +67,7 @@ delta called out in the proposal body.
 | [Token auth for the harness API](./token-auth.md) | sketch | localhost-no-auth is the v0 default; revisit for shared/remote/browser-hostile cases |
 | [Project config extensions](./project-config-extensions.md) | sketch | projects are emergent paths; per-project knobs return when path-keyed config hits a real constraint |
 | [Credentials in DB](./credentials.md) | designed | `~/.swarm/auth.json` (already global) is enough for single-user; revisit when extension code can read other projects' state |
+| [Honest token count on system-prompt rows](./system-prompt-token-count.md) | sketch | char count is fine for a label; full per-model accuracy needs server routing + provenance lookup, more infra than the UX warrants today |
 
 ## Discarded
 
