@@ -22,6 +22,7 @@ export type {
   ToolResultMessage,
   UserMessage,
 } from "@mariozechner/pi-ai";
+export type { AgentDefinition, AgentDefinitionScope, AgentDefinitionsConfig } from "./agents.ts";
 export { ALL_EVENT_TYPES, type EventType } from "./events.ts";
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "./skills.ts";
 export type {
