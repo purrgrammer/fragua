@@ -2,6 +2,7 @@
 
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
+  BotIcon,
   CheckCircleIcon,
   ChevronDownIcon,
   CircleIcon,
@@ -148,6 +149,7 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   find: { icon: FileSearchIcon, label: "Find" },
   ls: { icon: FolderIcon, label: "List directory" },
   web_fetch: { icon: GlobeIcon, label: "Web fetch" },
+  agent: { icon: BotIcon, label: "Sub-agent" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare

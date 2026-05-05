@@ -94,6 +94,41 @@ export function RunConversation({
     return map;
   }, [messages]);
 
+  // subagent_id → label, derived from `agent` tool calls in the
+  // parent's transcript. The toolCall's args carry `description`
+  // (the operator-friendly label the calling LLM picked) and the
+  // toolResult's data carries `subagent_id`. Pair them by
+  // `toolCallId` and stash the mapping so a sub-agent's message
+  // section can render `agent · <label>` instead of the raw uuid.
+  const subagentLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of messages) {
+      if (row.content.role !== "assistant" || !Array.isArray(row.content.content)) continue;
+      const blocks = row.content.content as Array<{
+        type: string;
+        toolCallId?: string;
+        toolName?: string;
+        args?: { description?: unknown };
+      }>;
+      for (const block of blocks) {
+        if (block.type !== "toolCall") continue;
+        if (block.toolName !== "agent") continue;
+        const callId = block.toolCallId;
+        if (!callId) continue;
+        const description = typeof block.args?.description === "string" ? block.args.description : undefined;
+        if (!description) continue;
+        const result = toolResultsById.get(callId);
+        if (!result || !Array.isArray(result.content)) continue;
+        for (const resBlock of result.content as Array<{ output?: { value?: { data?: unknown } } }>) {
+          const data = resBlock.output?.value?.data as { subagent_id?: unknown } | undefined;
+          const sid = typeof data?.subagent_id === "string" ? data.subagent_id : undefined;
+          if (sid) map.set(sid, description);
+        }
+      }
+    }
+    return map;
+  }, [messages, toolResultsById]);
+
   const stateByNodeId = useMemo(() => {
     const map = new Map<string, NodeState>();
     for (const n of nodeStates ?? []) map.set(n.nodeId, n);
@@ -170,6 +205,7 @@ export function RunConversation({
                     state={nodeState}
                     isLive={isLive}
                     isPaused={isPaused}
+                    subagentLabelById={subagentLabelById}
                   >
                     {section.rows.map((row) => (
                       <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
@@ -199,6 +235,7 @@ export function RunConversation({
                 state={streamingNodeId ? stateByNodeId.get(streamingNodeId) : undefined}
                 isLive={isLive}
                 isPaused={isPaused}
+                subagentLabelById={subagentLabelById}
               >
                 <StreamingMessageRow streaming={streaming!} />
               </NodeSection>
@@ -424,21 +461,27 @@ interface NodeSectionProps {
   state?: NodeState;
   isLive: boolean;
   isPaused: boolean;
+  /** subagent_id → label map, derived from the parent's `agent`
+   *  toolCall args. Used to render sub-agent sections with the
+   *  caller's friendly label instead of a raw uuid. */
+  subagentLabelById?: ReadonlyMap<string, string>;
   children: ReactNode;
 }
 
-function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionProps): JSX.Element {
+function NodeSection({ nodeId, state, isLive, isPaused, subagentLabelById, children }: NodeSectionProps): JSX.Element {
   // Sub-agent message sections carry a synthetic `__subagent:<uuid>`
-  // nodeId. Render them as `agent · <short-id>` instead of the raw
-  // uuid; the operator still sees the discriminator but the line
-  // reads as "what this is" rather than implementation noise.
+  // nodeId. Prefer the operator-friendly label from the parent's
+  // `agent` toolCall args; fall back to a short-id slice when no
+  // label was set. The full uuid stays on the header's `title` so
+  // operators can still copy the discriminator.
   const SUBAGENT_PREFIX = "__subagent:";
-  const label =
-    nodeId == null
-      ? "unscoped"
-      : nodeId.startsWith(SUBAGENT_PREFIX)
-        ? `agent · ${nodeId.slice(SUBAGENT_PREFIX.length, SUBAGENT_PREFIX.length + 8)}`
-        : nodeId;
+  const label = (() => {
+    if (nodeId == null) return "unscoped";
+    if (!nodeId.startsWith(SUBAGENT_PREFIX)) return nodeId;
+    const sid = nodeId.slice(SUBAGENT_PREFIX.length);
+    const friendly = subagentLabelById?.get(sid);
+    return `agent · ${friendly ?? sid.slice(0, 8)}`;
+  })();
   const status: NodeState["state"] | "idle" = state?.state ?? "idle";
   return (
     <section
