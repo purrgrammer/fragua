@@ -114,7 +114,14 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
               />
             }
           />
-          <ChartLegend content={<ChartLegendContent />} className="-translate-y-1 justify-center gap-3" />
+          {/* Legend ordering matches the tooltip + the bar stack order
+           * (Input · Cache write · Cache read · Output). Without the
+           * itemSorter recharts orders by data-key add order, which
+           * the tooltip already rectifies but the legend doesn't. */}
+          <ChartLegend
+            content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />}
+            className="-translate-y-1 justify-center gap-3"
+          />
           {SPEND_KEYS.map((key) => (
             <Bar
               key={key}

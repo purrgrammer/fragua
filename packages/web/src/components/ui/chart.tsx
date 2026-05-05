@@ -257,9 +257,14 @@ function ChartLegendContent({
   payload,
   verticalAlign = "bottom",
   nameKey,
+  itemSorter,
 }: React.ComponentProps<"div"> & {
   hideIcon?: boolean;
   nameKey?: string;
+  /** Sort key for legend items — mirrors the tooltip's `itemSorter`
+   * prop so both surfaces can use the same ranking and stay in
+   * lockstep. Items render ascending by the returned number. */
+  itemSorter?: (item: NonNullable<RechartsPrimitive.DefaultLegendContentProps["payload"]>[number]) => number;
 } & RechartsPrimitive.DefaultLegendContentProps) {
   const { config } = useChart();
 
@@ -267,33 +272,34 @@ function ChartLegendContent({
     return null;
   }
 
+  const visibleItems = payload.filter((item) => item.type !== "none");
+  const orderedItems = itemSorter ? [...visibleItems].sort((a, b) => itemSorter(a) - itemSorter(b)) : visibleItems;
+
   return (
     <div className={cn("flex items-center justify-center gap-4", verticalAlign === "top" ? "pb-3" : "pt-3", className)}>
-      {payload
-        .filter((item) => item.type !== "none")
-        .map((item, index) => {
-          const key = `${nameKey ?? item.dataKey ?? "value"}`;
-          const itemConfig = getPayloadConfigFromPayload(config, item, key);
+      {orderedItems.map((item, index) => {
+        const key = `${nameKey ?? item.dataKey ?? "value"}`;
+        const itemConfig = getPayloadConfigFromPayload(config, item, key);
 
-          return (
-            <div
-              key={index}
-              className={cn("flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground")}
-            >
-              {itemConfig?.icon && !hideIcon ? (
-                <itemConfig.icon />
-              ) : (
-                <div
-                  className="h-2 w-2 shrink-0 rounded-[2px]"
-                  style={{
-                    backgroundColor: item.color,
-                  }}
-                />
-              )}
-              {itemConfig?.label}
-            </div>
-          );
-        })}
+        return (
+          <div
+            key={index}
+            className={cn("flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground")}
+          >
+            {itemConfig?.icon && !hideIcon ? (
+              <itemConfig.icon />
+            ) : (
+              <div
+                className="h-2 w-2 shrink-0 rounded-[2px]"
+                style={{
+                  backgroundColor: item.color,
+                }}
+              />
+            )}
+            {itemConfig?.label}
+          </div>
+        );
+      })}
     </div>
   );
 }

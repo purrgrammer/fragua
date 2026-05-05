@@ -38,6 +38,11 @@ const config: ChartConfig = {
   cacheWriteTokens: { label: "Cache writes", color: "var(--sw-chart-pair-secondary)" },
 };
 
+function rankOf(key: string): number {
+  const idx = (CACHE_KEYS as readonly string[]).indexOf(key);
+  return idx === -1 ? CACHE_KEYS.length : idx;
+}
+
 export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: CacheChartProps): JSX.Element {
   const locale = useLocale();
   const reduceMotion = useReducedMotion();
@@ -74,6 +79,7 @@ export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: Cac
           />
           <ChartTooltip
             cursor={false}
+            itemSorter={(item) => rankOf(String(item.dataKey ?? ""))}
             content={
               <ChartTooltipContent
                 indicator="dot"
@@ -82,7 +88,7 @@ export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: Cac
               />
             }
           />
-          <ChartLegend content={<ChartLegendContent />} />
+          <ChartLegend content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />} />
           {CACHE_KEYS.map((key) => (
             <Bar
               key={key}

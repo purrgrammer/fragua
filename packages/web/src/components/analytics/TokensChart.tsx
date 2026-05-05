@@ -45,6 +45,11 @@ const config: ChartConfig = {
   outputTokens: { label: "Output", color: "var(--sw-chart-2)" },
 };
 
+function rankOf(key: string): number {
+  const idx = (TOKEN_KEYS as readonly string[]).indexOf(key);
+  return idx === -1 ? TOKEN_KEYS.length : idx;
+}
+
 export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: TokensChartProps): JSX.Element {
   const locale = useLocale();
   const reduceMotion = useReducedMotion();
@@ -90,6 +95,7 @@ export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: To
           />
           <ChartTooltip
             cursor={false}
+            itemSorter={(item) => rankOf(String(item.dataKey ?? ""))}
             content={
               <ChartTooltipContent
                 indicator="dot"
@@ -98,7 +104,7 @@ export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: To
               />
             }
           />
-          <ChartLegend content={<ChartLegendContent />} />
+          <ChartLegend content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />} />
           {TOKEN_KEYS.map((key) => (
             <Bar
               key={key}

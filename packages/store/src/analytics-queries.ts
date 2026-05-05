@@ -224,39 +224,55 @@ export interface SpendByBucketRow {
 
 export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
-  // Fallback ladder per run, applied independently to each of the four
-  // bucket components:
-  //   1. If the reducer recorded ANY non-zero cost split, use the
-  //      recorded values verbatim. Components that came back as 0
-  //      stay at 0 — they really were 0 (e.g. no cache_read this run).
-  //   2. Otherwise (the run pre-dates the cost split entirely), split
-  //      `total_cost_usd` by the token-share for that bucket so the
-  //      bar isn't empty. Approximate but visually truthful.
-  //   3. As a last resort (no token data either), split into the four
-  //      buckets evenly.
-  // The "any cost-split recorded" probe is shared so all four components
-  // pick the same branch — guarantees they sum to total_cost_usd.
-  const anyCostSplit = `(
-    COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')      AS REAL), 0) > 0
- OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd')     AS REAL), 0) > 0
- OR COALESCE(CAST(json_extract(metrics, '$.totalCacheReadCostUsd')  AS REAL), 0) > 0
- OR COALESCE(CAST(json_extract(metrics, '$.totalCacheWriteCostUsd') AS REAL), 0) > 0
+  // Per-bucket fallback ladder with residual redistribution. Handles
+  // three states a run can be in cleanly:
+  //   - No cost split recorded at all (legacy, pre-split): all four
+  //     buckets approximate from `total_cost_usd` × token share.
+  //   - Some buckets recorded, others not (transition state — e.g.
+  //     input/output split shipped before cache cost split, so
+  //     pre-cache-split runs have I/O cost but no cache cost): the
+  //     recorded buckets keep their values; the residual
+  //     (`total_cost_usd - Σrecorded`) gets distributed across the
+  //     unrecorded buckets that have tokens, by token share.
+  //   - All four recorded (post b525617 runs): bars match recorded
+  //     values exactly; residual ≈ 0; no redistribution.
+  //
+  // For each bucket i ∈ {Input, Output, CacheRead, CacheWrite}:
+  //   - If R_i > 0: use it.
+  //   - Else if there's residual to distribute AND this bucket has
+  //     tokens: take a share of residual proportional to T_i over
+  //     the sum of tokens in unrecorded buckets.
+  //   - Else if no buckets recorded ANY cost AND no tokens were
+  //     recorded either (synthetic node with $cost but no tokens):
+  //     fall back to an even quartersplit.
+  //   - Else 0.
+  //
+  // Invariant: for any run with tokens recorded in at least one
+  // unrecorded bucket OR all four cost buckets recorded, the four
+  // bucket splits sum to total_cost_usd (within float rounding).
+  const r = (k: string) => `COALESCE(CAST(json_extract(metrics, '$.${k}') AS REAL), 0)`;
+  const recordedSum = `(
+    ${r("totalInputCostUsd")}
+  + ${r("totalOutputCostUsd")}
+  + ${r("totalCacheReadCostUsd")}
+  + ${r("totalCacheWriteCostUsd")}
   )`;
-  const tokenSum = `(
-    COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')      AS REAL), 0)
-  + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens')     AS REAL), 0)
-  + COALESCE(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS REAL), 0)
-  + COALESCE(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS REAL), 0)
+  const residual = `MAX(0, total_cost_usd - ${recordedSum})`;
+  const unrecordedTokens = `(
+      CASE WHEN ${r("totalInputCostUsd")}      = 0 THEN ${r("totalInputTokens")}      ELSE 0 END
+    + CASE WHEN ${r("totalOutputCostUsd")}     = 0 THEN ${r("totalOutputTokens")}     ELSE 0 END
+    + CASE WHEN ${r("totalCacheReadCostUsd")}  = 0 THEN ${r("totalCacheReadTokens")}  ELSE 0 END
+    + CASE WHEN ${r("totalCacheWriteCostUsd")} = 0 THEN ${r("totalCacheWriteTokens")} ELSE 0 END
   )`;
   const splitFor = (costKey: string, tokenKey: string) => `
     CASE
-      WHEN ${anyCostSplit}
-        THEN COALESCE(CAST(json_extract(metrics, '$.${costKey}') AS REAL), 0)
-      WHEN ${tokenSum} > 0
-        THEN total_cost_usd
-             * COALESCE(CAST(json_extract(metrics, '$.${tokenKey}') AS REAL), 0)
-             / ${tokenSum}
-      ELSE total_cost_usd * 0.25
+      WHEN ${r(costKey)} > 0
+        THEN ${r(costKey)}
+      WHEN ${unrecordedTokens} > 0 AND ${r(tokenKey)} > 0
+        THEN ${residual} * ${r(tokenKey)} / ${unrecordedTokens}
+      WHEN ${recordedSum} = 0 AND ${unrecordedTokens} = 0 AND total_cost_usd > 0
+        THEN total_cost_usd * 0.25
+      ELSE 0
     END
   `;
   const pred = windowPredicate(w, "cwd");
