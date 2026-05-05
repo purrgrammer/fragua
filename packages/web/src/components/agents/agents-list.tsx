@@ -12,9 +12,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 export interface AgentsListProps {
   projectCwd?: string;
   testIdPrefix?: string;
+  compact?: boolean;
 }
 
-export function AgentsList({ projectCwd, testIdPrefix = "agents-list" }: AgentsListProps): JSX.Element {
+export function AgentsList({
+  projectCwd,
+  testIdPrefix = "agents-list",
+  compact = false,
+}: AgentsListProps): JSX.Element {
   const { data, isPending, isError } = useQuery(queries.agents.list(projectCwd));
 
   if (isPending) {
@@ -50,7 +55,8 @@ export function AgentsList({ projectCwd, testIdPrefix = "agents-list" }: AgentsL
     );
   }
 
-  const showProjectCol = projectCwd === undefined;
+  const showModelCol = !compact;
+  const showProjectCol = !compact && projectCwd === undefined;
 
   return (
     <div className="w-full min-w-0 overflow-x-auto">
@@ -60,7 +66,7 @@ export function AgentsList({ projectCwd, testIdPrefix = "agents-list" }: AgentsL
             <TableHead className="w-48">Name</TableHead>
             <TableHead>Description</TableHead>
             <TableHead className="w-24">Scope</TableHead>
-            <TableHead className="w-32">Model</TableHead>
+            {showModelCol && <TableHead className="w-32">Model</TableHead>}
             {showProjectCol && <TableHead className="w-32">Project</TableHead>}
           </TableRow>
         </TableHeader>
@@ -87,9 +93,11 @@ export function AgentsList({ projectCwd, testIdPrefix = "agents-list" }: AgentsL
               <TableCell>
                 <code className="font-mono text-xs text-sw-muted">{a.scope}</code>
               </TableCell>
-              <TableCell className="max-w-0 truncate" title={a.model ?? "(inherit)"}>
-                <code className="font-mono text-xs text-sw-muted">{a.model ?? "—"}</code>
-              </TableCell>
+              {showModelCol && (
+                <TableCell className="max-w-0 truncate" title={a.model ?? "(inherit)"}>
+                  <code className="font-mono text-xs text-sw-muted">{a.model ?? "—"}</code>
+                </TableCell>
+              )}
               {showProjectCol && (
                 <TableCell className="max-w-0 truncate" title={a.project_cwd ?? "—"}>
                   <code className="font-mono text-xs text-sw-muted">

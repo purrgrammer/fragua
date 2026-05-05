@@ -21,7 +21,7 @@ export function Agents(): JSX.Element {
           Rescan
         </Button>
       </header>
-      <AgentsList projectCwd={projectCwd} testIdPrefix="agents" />
+      <AgentsList projectCwd={projectCwd} testIdPrefix="agents" compact />
     </section>
   );
 }
