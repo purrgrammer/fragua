@@ -792,6 +792,13 @@ function AssistantMessageRow({
         }
         agentLabel = description ? `Agent · ${description}` : "Agent";
       }
+      // For `agent` toolCalls the embedded sub-agent transcript is
+      // the full picture: the system_prompt / prompt args appear as
+      // system / user message rows inside it, and the sub-agent's
+      // last assistant message IS the toolResult content. Rendering
+      // ToolInput + RichToolResult on top duplicates everything, so
+      // we drop them — the card body is just the transcript.
+      const isAgent = chunk.name === "agent";
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
           <ToolHeader
@@ -802,13 +809,15 @@ function AssistantMessageRow({
             {...(extRenderer?.icon ? { iconOverride: extRenderer.icon } : {})}
           />
           <ToolContent>
-            <ToolInput input={chunk.arguments} />
+            {!isAgent && <ToolInput input={chunk.arguments} />}
             {embeddedSubagent}
-            <RichToolResult
-              toolName={chunk.name}
-              result={result}
-              params={chunk.arguments as Record<string, unknown> | undefined}
-            />
+            {!isAgent && (
+              <RichToolResult
+                toolName={chunk.name}
+                result={result}
+                params={chunk.arguments as Record<string, unknown> | undefined}
+              />
+            )}
           </ToolContent>
         </Tool>,
       );
