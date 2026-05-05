@@ -913,6 +913,21 @@ app.delete("/schedules/:id",          (c) => deleteSchedule(c));
 app.post("/schedules/:id/pause",      (c) => pauseSchedule(c));
 app.post("/schedules/:id/resume",     (c) => resumeSchedule(c));
 
+// Skills + agents discovery surface (proposal: docs/proposals/skills-and-agents-ui.md).
+// Read-only views over the live filesystem; each request re-walks
+// `cwd ∪ store.listCwds()` (frontmatter-only, ms-scale). Identity in
+// detail / tree / file URLs is `:locId = base64url(skill_dir)` for
+// skills and `base64url(location)` for agents — names aren't unique
+// across projects, so the absolute path is the canonical handle.
+// `?project_cwd=<cwd>` on list endpoints filters to globals + that one
+// project's project-scope records.
+app.get("/skills",                    (c) => listSkills(c));
+app.get("/skills/:locId",             (c) => skillDetail(c));     // metadata + frontmatter + SKILL.md body
+app.get("/skills/:locId/tree",        (c) => skillTree(c));        // recursive walk under skill_dir
+app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel>; sandboxed to skill_dir
+app.get("/agents",                    (c) => listAgents(c));
+app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
+
 // JSON-batch read of a run's events; pagination via ?since / ?limit.
 app.get("/runs/:id/events", (c) => {
   const sinceSeq = Number(c.req.query("since") ?? 0);

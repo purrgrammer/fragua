@@ -122,6 +122,8 @@
         "@swarm/agent": "workspace:*",
         "@swarm/core": "workspace:*",
         "@swarm/store": "workspace:*",
+        "@swarm/types": "workspace:*",
+        "@swarm/workspace": "workspace:*",
         "hono": "4.12.14",
       },
       "devDependencies": {
