@@ -102,3 +102,4 @@ Skills (domain context loaded on demand) come from two layers: `~/.agents/skills
 9. **Handlers route I/O through `ctx`.** No bare `fetch` / `node:fs` / `node:child_process` inside `packages/core/src/handler/handlers/`. Enforced by `packages/core/test/handler/discipline.test.ts`.
 10. **Write transactions are pure SQL.** No `await` / `JSON.stringify` inside `db.transaction(...)`. Enforced by `packages/store/test/lint.test.ts` (I1).
 11. **No prior-state references.** Pre-release; no backwards-compat. Don't write "replaces the old reducer", "previously…", "legacy". Git is the history.
+12. **Skills load through the `skill` tool.** The catalogue advertises `skill({ name, arguments })`; `$ARGUMENTS` substitution + frontmatter parsing happen in the tool, not in the agent's prose interpretation of SKILL.md. The tool is force-included by the codergen backend even when a node's `allowed_tools` / `denied_tools` would exclude it — see `packages/agent/src/backend.ts`.

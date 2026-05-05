@@ -1,8 +1,8 @@
 ---
 title: Skill tool
-status: proposed
-maturity: sketch
-last-reviewed: 2026-05-05
+status: shipped
+maturity: stable
+last-reviewed: 2026-05-12
 ---
 
 # Skill tool
@@ -149,3 +149,31 @@ what the sub-agent *can* call; the tool itself is always wired.
 ## Open questions
 
 None — design fully resolved during brainstorming.
+
+## What shipped vs. what was proposed
+
+Two deliberate deviations from the original sketch:
+
+1. **Tool name is `skill` (lowercase), not `Skill`.** Bare-identifier
+   constraint on `ToolRegistry` (`/^[a-z][a-z0-9_]*$/`) — lower-case
+   names compose with the existing four-tool surface
+   (`read` / `write` / `edit` / `bash`) without a special-case carve-out.
+2. **No new `tool.start.skill` / `tool.end.skill` event variants.** The
+   tool reuses the existing `tool.execution_start` / `tool.execution_end`
+   envelope and the UI dispatches the dedicated card on
+   `tool_name === "skill"` — the same precedent every other built-in
+   card (bash spill notice, edit diff, web_fetch URL pill, agent
+   sub-agent transcript) follows. Avoids fragmenting the event taxonomy
+   for what's structurally a UI dispatch concern; the structured
+   payload (`{name, description, path, content}`) lands on
+   `tool.execution_end.data.result.details.data` exactly as the proposal
+   describes, just under the existing event type rather than a new one.
+   No `EventType` union edit, no ARCH §3 update.
+
+Everything else landed as written: built-in (force-included by
+`PiCodergenBackend` regardless of `allowed_tools` / `denied_tools`),
+single skill per call, `$ARGUMENTS` substitution, trailing
+`<invocation>` block when the body has no placeholder, central
+frontmatter parsing (only `name` + `description` honoured), unknown-name
+recovery hint, sub-agent inheritance via `materialiseForChild`, and the
+flipped catalog instruction text in `renderSkillsCatalog`.
