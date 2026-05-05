@@ -25,6 +25,14 @@ import {
   providersTestCommand,
 } from "../src/commands/providers.ts";
 import { runCommand } from "../src/commands/run.ts";
+import {
+  scheduleAddCommand,
+  scheduleHelp,
+  scheduleListCommand,
+  schedulePauseCommand,
+  scheduleResumeCommand,
+  scheduleRmCommand,
+} from "../src/commands/schedule.ts";
 import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
@@ -299,6 +307,87 @@ cli
       ...(options["follow"] === false ? { follow: false } : {}),
     });
     process.exit(code);
+  });
+
+cli
+  .command("schedule [action] [target]", "Manage recurring workflow runs (run without args for help)")
+  .option("--every <interval>", "`add` only: 30m | 1h | 6h | 24h (required)")
+  .option("--cwd <dir>", "Project root for `add` / filter for `list`")
+  .option("--input <text>", "`add` only: $ARGUMENTS piped to every fire")
+  .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")
+  .option("--no-fire-on-create", "`add` only: wait one full interval before the first fire")
+  .option("--url <url>", "Server URL (default: discovered via serve.json or daemon_lock)")
+  .option("--db <path>", "Store path; discovers server at <dirname(db)>/serve.json")
+  .action(async (action: string | undefined, target: string | undefined, options: Record<string, unknown>) => {
+    const pick = (key: string): string | undefined => {
+      const v = options[key];
+      return typeof v === "string" ? v : undefined;
+    };
+    switch (action) {
+      case undefined:
+        process.exit(scheduleHelp());
+        break;
+      case "add": {
+        if (target == null) {
+          console.error(chalk.red("schedule add: workflow required"));
+          process.exit(1);
+        }
+        const every = pick("every");
+        if (every == null) {
+          console.error(chalk.red("schedule add: --every required"));
+          process.exit(1);
+        }
+        const code = await scheduleAddCommand({
+          workflow: target,
+          every,
+          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+          ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+          ...(pick("input") !== undefined ? { input: pick("input")! } : {}),
+          ...(pick("onOverlap") !== undefined ? { overlap: pick("onOverlap")! } : {}),
+          // cac renders `--no-fire-on-create` as `options.fireOnCreate === false`.
+          ...(options["fireOnCreate"] === false ? { noFireOnCreate: true } : {}),
+        });
+        process.exit(code);
+        break;
+      }
+      case "list":
+      case "ls": {
+        const code = await scheduleListCommand({
+          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+          ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+        });
+        process.exit(code);
+        break;
+      }
+      case "rm":
+      case "pause":
+      case "resume": {
+        if (target == null) {
+          console.error(chalk.red(`schedule ${action}: id required`));
+          process.exit(1);
+        }
+        const idOpts = {
+          id: target,
+          ...(pick("url") !== undefined ? { url: pick("url")! } : {}),
+          ...(pick("cwd") !== undefined ? { cwd: pick("cwd")! } : {}),
+          ...(pick("db") !== undefined ? { dbPath: pick("db")! } : {}),
+        };
+        const code =
+          action === "rm"
+            ? await scheduleRmCommand(idOpts)
+            : action === "pause"
+              ? await schedulePauseCommand(idOpts)
+              : await scheduleResumeCommand(idOpts);
+        process.exit(code);
+        break;
+      }
+      default:
+        console.error(chalk.red(`unknown schedule action: ${action}`));
+        scheduleHelp();
+        process.exit(1);
+    }
   });
 
 cli.help();
