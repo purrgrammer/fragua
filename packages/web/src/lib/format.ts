@@ -89,6 +89,35 @@ export function formatTokensCompact(value: number | null | undefined, opts: Numb
   return new Intl.NumberFormat(locale, opts.intlOptions ?? tokensCompactFormatOptions(value)).format(value);
 }
 
+/** Pick a single `Intl.NumberFormatOptions` for USD that uses enough
+ * fraction digits to render the smallest non-zero value in the group
+ * legibly. Returns `undefined` when no positive values are present —
+ * caller then falls back to per-row magnitude-adaptive formatting.
+ *
+ * Use this when a tooltip / popover / row group must align decimals
+ * across siblings of disparate magnitudes (e.g. Input $0.12 next to
+ * Cache read $0.0003 — both render at 4 digits so the column lines up). */
+export function pickSharedUsdOptions(
+  values: ReadonlyArray<number | null | undefined>,
+): Intl.NumberFormatOptions | undefined {
+  let min: number | undefined;
+  for (const v of values) {
+    if (typeof v === "number" && v > 0 && (min === undefined || v < min)) min = v;
+  }
+  return min === undefined ? undefined : usdFormatOptions(min);
+}
+
+/** Mirror of `pickSharedUsdOptions` for token counts. */
+export function pickSharedTokensOptions(
+  values: ReadonlyArray<number | null | undefined>,
+): Intl.NumberFormatOptions | undefined {
+  let min: number | undefined;
+  for (const v of values) {
+    if (typeof v === "number" && v > 0 && (min === undefined || v < min)) min = v;
+  }
+  return min === undefined ? undefined : tokensCompactFormatOptions(min);
+}
+
 /** Long form token count, for tooltips where precision matters. */
 export function formatTokensLong(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";

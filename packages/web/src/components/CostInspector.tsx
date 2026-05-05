@@ -27,7 +27,13 @@ import { Coins, DollarSign, Timer } from "lucide-react";
 import { useEffect } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { formatTokensCompact, formatUsd, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import {
+  formatTokensCompact,
+  formatUsd,
+  pickSharedTokensOptions,
+  pickSharedUsdOptions,
+  usdFormatOptions,
+} from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDuration } from "../lib/time.ts";
 import { useNow } from "../lib/useNow.ts";
@@ -506,25 +512,4 @@ function UsageGridRow({
       </span>
     </>
   );
-}
-
-/** Pick a single `Intl.NumberFormatOptions` for USD that uses enough
- * fraction digits to render the smallest non-zero value in the row group
- * legibly. Returns `undefined` when no positive values are present (the
- * caller falls back to per-row magnitude-adaptive formatting). */
-function pickSharedUsdOptions(values: ReadonlyArray<number | undefined>): Intl.NumberFormatOptions | undefined {
-  let min: number | undefined;
-  for (const v of values) {
-    if (typeof v === "number" && v > 0 && (min === undefined || v < min)) min = v;
-  }
-  return min === undefined ? undefined : usdFormatOptions(min);
-}
-
-/** Mirror of `pickSharedUsdOptions` for token counts. */
-function pickSharedTokensOptions(values: ReadonlyArray<number>): Intl.NumberFormatOptions | undefined {
-  let min: number | undefined;
-  for (const v of values) {
-    if (v > 0 && (min === undefined || v < min)) min = v;
-  }
-  return min === undefined ? undefined : tokensCompactFormatOptions(min);
 }

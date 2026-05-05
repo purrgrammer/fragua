@@ -6,7 +6,7 @@
 
 import { DollarSign } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
-import { formatUsd, usdFormatOptions } from "@/lib/format";
+import { formatUsd, pickSharedUsdOptions, usdFormatOptions } from "@/lib/format";
 import { formatBucketTick, formatBucketTooltip } from "@/lib/humanize";
 import { useLocale } from "@/lib/locale";
 import { useReducedMotion } from "@/lib/useReducedMotion";
@@ -97,7 +97,16 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
               <ChartTooltipContent
                 indicator="dot"
                 labelFormatter={(label) => formatBucketTooltip(Number(label), bucket, locale)}
-                valueFormatter={(value) => formatUsd(Number(value))}
+                valueFormatter={(value, _name, payload) => {
+                  // Align fraction-digit precision across the four bucket
+                  // rows in the hovered slice so decimals line up — same
+                  // rationale as the per-step popover. Cache_read at
+                  // $0.0003 forces 4 digits; Input + Output then render
+                  // at 4 digits too instead of 2.
+                  const slice = (payload as { payload?: SpendBucketRow }).payload;
+                  const sharedOpts = slice ? pickSharedUsdOptions(SPEND_KEYS.map((k) => slice[k])) : undefined;
+                  return formatUsd(Number(value), sharedOpts ? { intlOptions: sharedOpts } : {});
+                }}
               />
             }
           />
