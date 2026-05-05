@@ -38,7 +38,7 @@ describe("Agents", () => {
     expect(empty.textContent).toContain(".agents/agents/");
   });
 
-  test("renders rows with name, model, and project basename", async () => {
+  test("renders rows with only name, description, and scope on /agents", async () => {
     installAgentsFetch({
       agents: [
         {
@@ -71,11 +71,10 @@ describe("Agents", () => {
     expect(reviewerRow.textContent).toContain("reviewer");
     expect(reviewerRow.textContent).toContain("Reviews diffs.");
     expect(reviewerRow.textContent).toContain("project");
-    expect(reviewerRow.textContent).toContain("claude-sonnet-4");
-    expect(reviewerRow.textContent).toContain("a");
+    expect(reviewerRow.textContent).not.toContain("claude-sonnet-4");
     const researcherRow = within(table).getByTestId("agent-row-researcher");
     expect(researcherRow.textContent).toContain("user");
-    // Inherit-by-default: model column shows dash when not set.
-    expect(researcherRow.textContent).toContain("—");
+    expect(table.textContent).not.toContain("Model");
+    expect(table.textContent).not.toContain("Project");
   });
 });
