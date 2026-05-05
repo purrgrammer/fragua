@@ -48,9 +48,13 @@ export interface DashboardStats {
   totalInputTokens: number;
   /** Sum of `outputTokens` across every input row — generated tokens. */
   totalOutputTokens: number;
-  /** Fresh tokens — `totalInputTokens + totalOutputTokens`. The "work
-   * done" headline. What `budget_tokens` fences against. */
-  freshTokens: number;
+  /** Billed tokens — `totalInputTokens + totalOutputTokens +
+   * totalCacheReadTokens + totalCacheWriteTokens`. The headline figure
+   * the Tokens tile renders; matches `run_state.billed_tokens`,
+   * pi-ai's `usage.totalTokens`, and the run's `total_cost_usd`. Budget
+   * enforcement runs against fresh tokens only and lives in the
+   * daemon executor — not surfaced here. */
+  billedTokens: number;
   /** Sum of `cacheReadTokens` — prompt-cache hits across every run. */
   totalCacheReadTokens: number;
   /** Sum of `cacheWriteTokens` — cache priming across every run. */
@@ -134,7 +138,7 @@ export function computeStats(runs: readonly RunSummary[]): DashboardStats {
     totalCostUsd,
     totalInputTokens,
     totalOutputTokens,
-    freshTokens: totalInputTokens + totalOutputTokens,
+    billedTokens: totalInputTokens + totalOutputTokens + totalCacheReadTokens + totalCacheWriteTokens,
     totalCacheReadTokens,
     totalCacheWriteTokens,
     ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),

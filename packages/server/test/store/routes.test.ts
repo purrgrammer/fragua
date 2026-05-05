@@ -591,7 +591,6 @@ describe("GET /metrics/global", () => {
     const body = (await res.json()) as {
       total_runs: number;
       total_usd: number;
-      fresh_tokens: number;
       billed_tokens: number;
       successful: number;
       breakdownByModel: { model_name: string; tokens: number; cost_usd: number }[];

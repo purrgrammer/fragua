@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, waitFor, within } from "@testing-library/react";
 import { CostInspector } from "../../src/components/CostInspector.tsx";
-import type { StepSnapshot } from "../../src/lib/api.ts";
+import type { ProviderDetail, ProviderModel, StepSnapshot } from "../../src/lib/api.ts";
 import { createTestQueryClient, installFetchMock, json, renderWithClient } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -187,6 +187,80 @@ describe("CostInspector", () => {
       // Children render their own (non-summed) cost.
       expect(lensA.textContent).toMatch(/0\.02/);
       expect(lensB.textContent).toMatch(/0\.03/);
+    });
+  });
+
+  describe("billed token reconciliation", () => {
+    // Pinned rate card so the four breakdown rows have predictable
+    // dollar figures: input 3, output 15, cacheRead 0.3, cacheWrite
+    // 3.75 (USD per million tokens). Context window 200k keeps the
+    // gauge percent < 1% so the trigger label is unambiguous.
+    const RATE_MODEL: ProviderModel = {
+      id: "claude-sonnet-4.6",
+      name: "Claude Sonnet 4.6",
+      api: "anthropic",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+      baseUrl: "",
+    };
+    const PROVIDER: ProviderDetail = {
+      name: "anthropic",
+      model_count: 1,
+      credentialed: true,
+      auth_source: "env",
+      auth_kind: null,
+      oauth_available: false,
+      default_model: "claude-sonnet-4.6",
+      models: [RATE_MODEL],
+    };
+
+    function mountWithModel(steps: StepSnapshot[]) {
+      const client = createTestQueryClient();
+      client.setQueryData(["runs", "steps", "r-cache"], steps);
+      client.setQueryData(["providers", "detail", "anthropic"], PROVIDER);
+      return renderWithClient(<CostInspector runId="r-cache" />, { client });
+    }
+
+    const cacheStep: StepSnapshot = makeStep({
+      stepIdx: 0,
+      startSeq: 1,
+      nodeId: "plan",
+      provider: "anthropic",
+      model: "claude-sonnet-4.6",
+      durationMs: 1_000,
+      cost: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read_tokens: 1000,
+        cache_write_tokens: 500,
+        cost_usd: 0.01,
+      },
+    });
+
+    it("context gauge usedTokens equals input + cache_write + cache_read + output (1650 / 200000 ≈ 0.8%)", async () => {
+      // The gauge percent is the linchpin assertion for the headline-tile
+      // fix: with `billedTokens = inputTokens + cacheWriteTokens +
+      // cacheReadTokens + outputTokens` the trigger renders 1650/200000
+      // = 0.825% → "0.8%" (maxFractionDigits=1). The prior bug excluded
+      // cache_read and would render 150/200000 = 0.075% → "0.1%".
+      //
+      // The popover's per-bucket rows (Input 600 tokens / $0.0022; Cache
+      // read $0.0003) can't be asserted in this test environment: Radix
+      // portals don't mount under happy-dom because globals are
+      // registered after radix imports run — see
+      // `test/routes/WorkflowDetail.test.tsx` ("renders no inspector by
+      // default ..."). The math lives in straightforward inline
+      // expressions in CostInspector.tsx; the gauge percent here covers
+      // the four-bucket sum end-to-end.
+      const { container } = mountWithModel([cacheStep]);
+      const q = within(container);
+      await waitFor(() => {
+        expect(q.getByTestId("step-0")).toBeTruthy();
+      });
+      expect(q.getByText("0.8%")).toBeTruthy();
     });
   });
 

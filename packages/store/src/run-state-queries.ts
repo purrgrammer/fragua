@@ -497,7 +497,6 @@ export function getRunCostTotals(db: Database, runId: string): RunCostTotalsRow 
 export interface GlobalMetricsTotalsRow {
   total_runs: number;
   total_usd: number | null;
-  fresh_tokens: number | null;
   billed_tokens: number | null;
   successful: number;
   halted: number;
@@ -511,10 +510,6 @@ const SELECT_GLOBAL_METRICS_TOTALS_SQL = `
   SELECT
     COUNT(*) AS total_runs,
     SUM(total_cost_usd) AS total_usd,
-    SUM(
-      COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS INTEGER), 0) +
-      COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS INTEGER), 0)
-    )                  AS fresh_tokens,
     SUM(billed_tokens) AS billed_tokens,
     SUM(CASE WHEN status = 'completed'   THEN 1 ELSE 0 END) AS successful,
     SUM(CASE WHEN status = 'halted'      THEN 1 ELSE 0 END) AS halted,
@@ -529,7 +524,6 @@ const SELECT_GLOBAL_METRICS_TOTALS_SQL = `
 const ZERO_GLOBAL_METRICS: GlobalMetricsTotalsRow = {
   total_runs: 0,
   total_usd: 0,
-  fresh_tokens: 0,
   billed_tokens: 0,
   successful: 0,
   halted: 0,

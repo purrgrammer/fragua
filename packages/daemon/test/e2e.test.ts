@@ -98,12 +98,10 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     const metricsRes = await app.request("/metrics/global");
     const metrics = (await metricsRes.json()) as {
       total_runs: number;
-      fresh_tokens: number;
       billed_tokens: number;
       breakdownByModel: { model_name: string; tokens: number }[];
     };
     expect(metrics.total_runs).toBe(1);
-    expect(metrics.fresh_tokens).toBe(42);
     expect(metrics.billed_tokens).toBe(42);
     expect(metrics.breakdownByModel.find((m) => m.model_name === "stub-model")?.tokens).toBe(42);
 

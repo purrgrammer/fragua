@@ -286,23 +286,23 @@ function StepCostRow({
   // "consumed" but invisible. Cache_read stays in its own bucket
   // (reused content from a prior turn — not new work this step).
   const inputTokens = rawInputTokens + cacheWriteTokens;
-  // Tokens this step generated against the model's context window —
-  // input (incl. cache_write) + output. Cache_read is excluded
-  // because it's reused content from a previous step's input write,
-  // already counted there.
-  const freshTokens = inputTokens + outputTokens;
+  // Billed tokens — what the model saw in its context window for this
+  // call: input (incl. cache_write) + cache_read + output. Matches the
+  // run-level billed_tokens convention (input + output + cache_read +
+  // cache_write); also drives the context-window gauge.
+  const billedTokens = inputTokens + outputTokens + cacheReadTokens;
 
-  // Input row's $ figure includes the cache_write premium (Anthropic
-  // bills cache writes at ~1.25× the normal input rate). Output uses
-  // its own rate. Cache_read row stays without a $ — its per-token
-  // rate often rounds to $0.00 against tiny cache windows; the
-  // footer's `Total cost` accounts for everything verbatim.
+  // Per-bucket $ figures so Input + Cache read + Output sum to the
+  // displayed Total cost. Anthropic bills cache writes at ~1.25× the
+  // normal input rate (folded into the Input row) and cache reads at
+  // a discount (its own row).
   const inputCostUsd = model
     ? (model.cost.input * rawInputTokens + model.cost.cacheWrite * cacheWriteTokens) / COST_RATE_DIVISOR
     : undefined;
   const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
+  const cacheReadCostUsd = model ? (model.cost.cacheRead * cacheReadTokens) / COST_RATE_DIVISOR : undefined;
 
-  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
+  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && billedTokens > 0;
 
   // All trailing chips share the same `text-xs text-sw-muted
   // tabular-nums` and a small leading icon so each metric is identifiable
@@ -367,17 +367,19 @@ function StepCostRow({
         {showContextCircle && (
           <Context
             maxTokens={model.contextWindow}
-            usedTokens={freshTokens}
+            usedTokens={billedTokens}
             usage={{
               inputTokens,
               outputTokens,
               cachedInputTokens: cacheReadTokens,
               reasoningTokens: 0,
-              totalTokens: freshTokens,
+              totalTokens: billedTokens,
               inputTokenDetails: {
                 // `inputTokens` already includes cache_write (folded
-                // in above). Surface cache_write as zero here so the
-                // gauge tooltip doesn't double-count it.
+                // in above) — surface it as `noCacheTokens` and zero
+                // out cache_write so the gauge tooltip doesn't
+                // double-count it. cache_read is its own bucket; both
+                // contribute to the gauge denominator.
                 noCacheTokens: inputTokens,
                 cacheReadTokens,
                 cacheWriteTokens: 0,
@@ -409,7 +411,7 @@ function StepCostRow({
                   </ContextInputUsage>
                   {cacheReadTokens > 0 && (
                     <ContextCacheUsage>
-                      <UsageGridRow label="Cache read" tokens={cacheReadTokens} subtle />
+                      <UsageGridRow label="Cache read" tokens={cacheReadTokens} costUsd={cacheReadCostUsd} subtle />
                     </ContextCacheUsage>
                   )}
                   <ContextOutputUsage>

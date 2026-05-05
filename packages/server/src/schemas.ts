@@ -134,15 +134,16 @@ export const ErrorBody = Type.Object({
 export type ErrorBody = Static<typeof ErrorBody>;
 
 /**
- * Aggregate dashboard payload returned by `GET /metrics/global`. Backed by
- * the store's generated columns (`run_state.total_cost_usd` /
- * `billed_tokens`) plus a SUM over `metrics.totalInputTokens +
- * metrics.totalOutputTokens` for `fresh_tokens`. UI renders a 30-day
- * ticker without parsing any metrics JSON.
+ * Aggregate dashboard payload returned by `GET /metrics/global`. Backed
+ * entirely by `run_state` generated columns (`total_cost_usd`,
+ * `billed_tokens`); the UI renders a 30-day ticker without parsing
+ * any metrics JSON.
  *
- * `billed_tokens` = input + output + cacheRead + cacheWrite (invoice).
- * `fresh_tokens`  = input + output (work done — what `budget_tokens`
- * fences against).
+ * `billed_tokens` = input + output + cacheRead + cacheWrite — the
+ * headline figure that matches the run's invoiced cost and pi-ai's
+ * `usage.totalTokens`. Budget enforcement runs against fresh tokens
+ * only and is owned by the daemon executor; that signal is not
+ * surfaced here.
  *
  * Per-model breakdown uses `json_each` over `run_state.metrics.models` —
  * executed server-side so only aggregated rows cross the wire.
@@ -172,7 +173,6 @@ export type ProjectSummary = Static<typeof ProjectSummary>;
 export const GlobalMetricsPayload = Type.Object({
   total_runs: Type.Integer({ minimum: 0 }),
   total_usd: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
-  fresh_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   billed_tokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   successful: Type.Integer({ minimum: 0 }),
   halted: Type.Integer({ minimum: 0 }),

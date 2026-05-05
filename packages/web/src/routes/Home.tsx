@@ -137,7 +137,12 @@ interface StatsTilesProps {
 
 function tokensTooltip(stats: ReturnType<typeof computeStats>): string {
   const fmt = new Intl.NumberFormat();
-  return [`input  ${fmt.format(stats.totalInputTokens)}`, `output ${fmt.format(stats.totalOutputTokens)}`].join(" · ");
+  return [
+    `input  ${fmt.format(stats.totalInputTokens)}`,
+    `output ${fmt.format(stats.totalOutputTokens)}`,
+    `cache read ${fmt.format(stats.totalCacheReadTokens)}`,
+    `cache write ${fmt.format(stats.totalCacheWriteTokens)}`,
+  ].join(" · ");
 }
 
 function cacheTooltip(stats: ReturnType<typeof computeStats>): string {
@@ -171,8 +176,8 @@ function StatsTiles({ stats, loading }: StatsTilesProps): JSX.Element {
         <StatTile
           label="Tokens"
           loading={loading}
-          numericValue={stats.freshTokens}
-          format={tokensCompactFormatOptions(stats.freshTokens ?? 0)}
+          numericValue={stats.billedTokens}
+          format={tokensCompactFormatOptions(stats.billedTokens ?? 0)}
           icon={<Coins className="size-4" />}
           hint={tokensTooltip(stats)}
           testId="tile-tokens"

@@ -41,7 +41,7 @@ describe("computeStats", () => {
     expect(s.canceled).toBe(0);
     expect(s.successRate).toBe(0);
     expect(s.totalCostUsd).toBe(0);
-    expect(s.freshTokens).toBe(0);
+    expect(s.billedTokens).toBe(0);
     expect(s.totalCacheReadTokens).toBe(0);
     expect(s.totalCacheWriteTokens).toBe(0);
     expect(s.cacheHitRate).toBeUndefined();
@@ -117,7 +117,20 @@ describe("computeStats", () => {
       row({ runId: "c", costUsd: 0.02, inputTokens: 50, outputTokens: 10 }),
     ]);
     expect(s.totalCostUsd).toBeCloseTo(0.17, 6);
-    expect(s.freshTokens).toBe(100 + 50 + 200 + 25 + 50 + 10);
+    expect(s.billedTokens).toBe(100 + 50 + 200 + 25 + 50 + 10);
+  });
+
+  it("billedTokens sums input + output + cacheRead + cacheWrite", () => {
+    // Regression guard for the headline-tile undercount: a cache-warm
+    // run's billed total must include cache_read + cache_write, not
+    // just fresh input/output. Cache-hit-rate denominator is unchanged
+    // (commit 0dab015) — only the headline tokens number widens.
+    const s = computeStats([
+      row({ runId: "a", inputTokens: 100, outputTokens: 50, cacheReadTokens: 1000, cacheWriteTokens: 500 }),
+    ]);
+    expect(s.billedTokens).toBe(1650);
+    // hit-rate denominator: input + cacheRead + cacheWrite = 1600.
+    expect(s.cacheHitRate).toBeCloseTo(1000 / 1600, 6);
   });
 
   it("avgDurationMs averages terminal runs only and excludes running ones", () => {

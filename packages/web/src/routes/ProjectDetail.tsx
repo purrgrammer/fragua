@@ -160,8 +160,8 @@ export function ProjectDetail(): JSX.Element {
         <StatTile
           label="Tokens"
           loading={isPending}
-          numericValue={stats.freshTokens}
-          format={tokensCompactFormatOptions(stats.freshTokens)}
+          numericValue={stats.billedTokens}
+          format={tokensCompactFormatOptions(stats.billedTokens)}
           icon={<Coins className="size-4" />}
           hint={tokensTooltip(stats)}
           testId="project-stat-tokens"
@@ -331,7 +331,12 @@ export function ProjectDetail(): JSX.Element {
 
 function tokensTooltip(stats: ReturnType<typeof computeStats>): string {
   const fmt = new Intl.NumberFormat();
-  return [`input  ${fmt.format(stats.totalInputTokens)}`, `output ${fmt.format(stats.totalOutputTokens)}`].join(" · ");
+  return [
+    `input  ${fmt.format(stats.totalInputTokens)}`,
+    `output ${fmt.format(stats.totalOutputTokens)}`,
+    `cache read ${fmt.format(stats.totalCacheReadTokens)}`,
+    `cache write ${fmt.format(stats.totalCacheWriteTokens)}`,
+  ].join(" · ");
 }
 
 function cacheTooltip(stats: ReturnType<typeof computeStats>): string {

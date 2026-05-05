@@ -416,7 +416,7 @@ export const StatsStrip = memo(function StatsStrip({
     detail?.cacheReadTokens === undefined ? undefined : detail.cacheReadTokens + liveCacheReadTokens;
   const cacheWriteTokens: number | undefined =
     detail?.cacheWriteTokens === undefined ? undefined : detail.cacheWriteTokens + liveCacheWriteTokens;
-  const freshTokens = inputTokens + outputTokens;
+  const billedTokens = inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
   // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
   // A warm thread otherwise reads as ~100% on a single-turn re-dispatch.
   const cacheHitDenom = inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
@@ -444,11 +444,15 @@ export const StatsStrip = memo(function StatsStrip({
       <StatTile
         label="Tokens"
         loading={loading}
-        numericValue={freshTokens}
-        format={tokensCompactFormatOptions(freshTokens)}
+        numericValue={billedTokens}
+        format={tokensCompactFormatOptions(billedTokens)}
         testId="detail-tokens-tile"
         icon={<Coins className="size-4" />}
-        hint={detail ? `input ${inputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()}` : undefined}
+        hint={
+          detail
+            ? `input ${inputTokens.toLocaleString()} · output ${outputTokens.toLocaleString()} · cache read ${(cacheReadTokens ?? 0).toLocaleString()} · cache write ${(cacheWriteTokens ?? 0).toLocaleString()}`
+            : undefined
+        }
       />
       <StatTile
         label="Cache"

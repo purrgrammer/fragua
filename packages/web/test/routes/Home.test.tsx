@@ -161,7 +161,8 @@ describe("Home route", () => {
     // share the same definition of "Runs".
     expect(q.getByTestId("tile-runs").textContent).toContain("3");
     expect(q.getByTestId("tile-spend").textContent).toMatch(/\$0\.16/);
-    expect(q.getByTestId("tile-tokens").textContent).toContain("235");
+    // billed = input(155) + output(80) + cacheRead(400) + cacheWrite(40) = 675.
+    expect(q.getByTestId("tile-tokens").textContent).toContain("675");
     expect(q.getByTestId("tile-cache")).toBeTruthy();
   });
 
@@ -214,7 +215,7 @@ describe("Home route", () => {
   // a Skeleton. Skeleton is reserved for the loading branch. `cacheHitRate`
   // and `avgDurationMs` are the two optional stats fields — an empty run
   // list yields both as `undefined` via `computeStats`.
-  it("renders '—' (not Skeleton) for absent totalCostUsd + freshTokens once loaded", async () => {
+  it("renders '—' (not Skeleton) for absent totalCostUsd + billedTokens once loaded", async () => {
     const client = withRows([]);
     const { container } = mount(client);
     const q = within(container);

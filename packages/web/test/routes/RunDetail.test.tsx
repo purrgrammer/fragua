@@ -413,11 +413,11 @@ describe("RunDetail", () => {
         expect(costText).toContain("$0.10");
       });
 
-      // Tokens tile should reflect 1200 total (1000 input + 200 output).
+      // Tokens tile renders the BILLED total: input + output + cache_read +
+      // cache_write across both frames = 2*(500+100+50+0) = 1300 → "1.3K".
       await waitFor(() => {
         const tokenText = q.getByTestId("detail-tokens-tile").textContent ?? "";
-        // 1200 renders as "1.2K" in compact format
-        expect(tokenText).toMatch(/1\.2K|1,200/);
+        expect(tokenText).toMatch(/1\.3K|1,300/);
       });
 
       // Cache tile should show a non-dash percentage (50+50=100 cache read,
