@@ -239,7 +239,10 @@ export class PiCodergenBackend implements CodergenBackend {
     // happily generates `<tool_call>` XML as plain text and the run looks
     // like it succeeded while nothing actually ran. Caller should populate
     // the registry (e.g. `registry.registerAll(CORE_TOOLS)`) before
-    // constructing the backend.
+    // constructing the backend. Gated on `selectedTools` (not the
+    // post-skill-merge `finalTools` below) so the diagnostic still fires
+    // when the registry is genuinely empty — a registry that holds only
+    // the force-included `skill` is still misconfigured.
     if (allow && allow.length > 0 && selectedTools.length === 0) {
       const registered = this.registry.list().map((t) => t.name);
       return fail(
@@ -248,13 +251,23 @@ export class PiCodergenBackend implements CodergenBackend {
       );
     }
 
+    // Force-include the built-in `skill` tool. Even when the node pins
+    // `allowed_tools` (excluding skill) or lists it under `denied_tools`,
+    // skill loading must remain available — the proposal is explicit
+    // ("always available, zero .dot migration"). The catalog block in the
+    // system prompt already advertises `skill({ name, arguments })`; if
+    // the tool weren't actually wired the model would call it and get a
+    // hard-to-diagnose unknown-tool error. Skipped only when the registry
+    // doesn't carry it (tests with a hand-rolled registry that omits
+    // skill); workflow `allowed_tools` / `denied_tools` cannot exclude it.
+    const skillTool = this.registry.get("skill");
+    const finalTools =
+      skillTool && !selectedTools.some((t) => t.name === "skill") ? [...selectedTools, skillTool] : selectedTools;
+
     // Resolve the skill catalog for this call. Filter by node attrs, render
-    // the catalog block for the system prompt, and mint a scoped
-    // `local:load_skill` tool whose `name` enum matches the filtered set.
-    // Skills are injected into the system prompt as a catalog listing;
-    // agents read the SKILL.md at `<location>` directly via the `read`
-    // tool. No dedicated load-skill tool exists under the trimmed
-    // four-tool surface (read / write / edit / bash).
+    // the catalog block for the system prompt. The catalog drives both
+    // the system-prompt advertisement and the `skill` tool's name lookup
+    // (via swarmContext.skillCatalog patched onto the closure below).
     const nodeSkills = input.node.attrs.skills as string[] | undefined;
     const skillFilter: { skills?: readonly string[]; skills_disabled?: boolean } = {
       skills_disabled: input.node.attrs.skills_disabled === true,
@@ -301,7 +314,7 @@ export class PiCodergenBackend implements CodergenBackend {
         : () => {},
       ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
     };
-    const tools = selectedTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
+    const tools = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
 
     const declared = (input.node.attrs.context_files as string[] | undefined) ?? [];
     const contextFiles = applyDefaultContextFiles(declared);

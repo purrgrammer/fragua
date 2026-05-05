@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Skill } from "@swarm/types";
+import { loadSkill } from "@swarm/workspace";
 import {
   applyDefaultContextFiles,
   buildSystemPrompt,
@@ -306,5 +307,53 @@ describe("materialiseForChild", () => {
     expect(out.systemPrompt).toContain("a skill description");
     // No persona injected — just the catalog.
     expect(out.systemPrompt).not.toContain("PARENT BASE PERSONA");
+  });
+});
+
+describe("materialiseForChild — Skill tool inheritance", () => {
+  // The Skill tool itself is force-included by `PiCodergenBackend`
+  // regardless of whether the child sees a non-empty skills catalogue.
+  // What matters here is the `effectiveSkills` set the loader sees:
+  // a `skill({name})` call resolves only against the filtered set.
+  const parentSkills: Skill[] = [
+    {
+      name: "a",
+      description: "a desc",
+      location: "/skills/a/SKILL.md",
+      skill_dir: "/skills/a",
+      sha256: "d",
+      bytes: 1,
+      scope: "user",
+      source_dir: "/skills/a",
+    },
+    {
+      name: "b",
+      description: "b desc",
+      location: "/skills/b/SKILL.md",
+      skill_dir: "/skills/b",
+      sha256: "d",
+      bytes: 1,
+      scope: "user",
+      source_dir: "/skills/b",
+    },
+  ];
+
+  test("child can call skill({name: A}) when spec.skills filters to {A}", async () => {
+    const filtered = materialiseForChild({ skills: ["a"] }, "", parentSkills);
+    expect(filtered.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
+    const env = {
+      readFile: async () => "---\nname: a\ndescription: a desc\n---\nbody-a",
+    };
+    const out = await loadSkill(env, "a", undefined, filtered.effectiveSkills);
+    expect(out.ok).toBe(true);
+  });
+
+  test("child gets unknown-name error for skill({name: B}) when spec.skills filters to {A}", async () => {
+    const filtered = materialiseForChild({ skills: ["a"] }, "", parentSkills);
+    const env = { readFile: async () => "" };
+    const out = await loadSkill(env, "b", undefined, filtered.effectiveSkills);
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error("expected failure");
+    expect(out.available).toEqual(["a"]);
   });
 });
