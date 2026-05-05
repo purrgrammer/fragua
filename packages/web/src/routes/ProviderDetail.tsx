@@ -8,6 +8,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -177,17 +188,32 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
           {testMutation.isPending ? "Testing…" : "Test current"}
         </Button>
         {authKind !== null && (
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={rmMutation.isPending}
-            onClick={() => {
-              if (window.confirm(`Remove stored credentials for "${name}"?`)) rmMutation.mutate();
-            }}
-            data-testid="credential-rm"
-          >
-            Remove
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button size="sm" variant="destructive" disabled={rmMutation.isPending} data-testid="credential-rm">
+                Remove
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent data-testid="credential-rm-dialog">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove provider credentials?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Deletes the stored credentials for <span className="font-medium text-[var(--sw-text)]">{name}</span>.
+                  Workflows using this provider will pause until credentials are re-added. This can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel asChild>
+                  <Button variant="outline">Cancel</Button>
+                </AlertDialogCancel>
+                <AlertDialogAction asChild>
+                  <Button variant="destructive" data-testid="credential-rm-confirm" onClick={() => rmMutation.mutate()}>
+                    Remove credentials
+                  </Button>
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
         {oauthAvailable && authKind !== "oauth" && (
           <span className="text-sw-muted text-xs self-center">

@@ -8,6 +8,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock } from "lucide-react";
 import { useEffect } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
@@ -88,10 +99,6 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
   const isPaused = row.pausedAt != null;
   const status: "active" | "paused" = isPaused ? "paused" : "active";
 
-  function handleDeleteClick(): void {
-    if (window.confirm(`Delete schedule "${row.workflowRef}" in ${basename(row.cwd)}?`)) deleteM.mutate();
-  }
-
   return (
     <TableRow data-testid={`schedule-row-${row.id}`}>
       <TableCell className="max-w-0 truncate font-medium" title={row.workflowRef}>
@@ -132,15 +139,45 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
               Pause
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="destructive"
-            data-testid={`schedule-delete-${row.id}`}
-            disabled={deleteM.isPending}
-            onClick={handleDeleteClick}
-          >
-            Delete
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="sm"
+                variant="destructive"
+                data-testid={`schedule-delete-${row.id}`}
+                disabled={deleteM.isPending}
+              >
+                Delete
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent data-testid={`schedule-delete-dialog-${row.id}`}>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete schedule?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Stops <span className="font-medium text-[var(--sw-text)]">{row.workflowRef}</span> from firing every{" "}
+                  <code className="font-mono">{row.intervalText}</code> in{" "}
+                  <code className="font-mono">{basename(row.cwd)}</code>. Runs already spawned by this schedule are
+                  unaffected. This can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel asChild>
+                  <Button variant="outline" data-testid={`schedule-delete-cancel-${row.id}`}>
+                    Cancel
+                  </Button>
+                </AlertDialogCancel>
+                <AlertDialogAction asChild>
+                  <Button
+                    variant="destructive"
+                    data-testid={`schedule-delete-confirm-${row.id}`}
+                    onClick={() => deleteM.mutate()}
+                  >
+                    Delete schedule
+                  </Button>
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </TableCell>
     </TableRow>

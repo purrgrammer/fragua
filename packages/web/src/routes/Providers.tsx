@@ -13,6 +13,17 @@ import { Cpu, KeyRound, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ModelSelectorLogo } from "../components/ai-elements/model-selector";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -149,18 +160,42 @@ export function Providers(): JSX.Element {
                           {feedback && "pending" in feedback ? "Testing…" : "Test"}
                         </Button>
                         {p.auth_kind !== null && (
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => {
-                              if (window.confirm(`Remove stored credentials for "${p.name}"?`)) {
-                                rmMutation.mutate({ name: p.name });
-                              }
-                            }}
-                            data-testid={`provider-rm-${p.name}`}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                data-testid={`provider-rm-${p.name}`}
+                                aria-label={`Remove ${p.name} credentials`}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent data-testid={`provider-rm-dialog-${p.name}`}>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Remove provider credentials?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Deletes the stored credentials for{" "}
+                                  <span className="font-medium text-[var(--sw-text)]">{p.name}</span>. Workflows using
+                                  this provider will pause until credentials are re-added. This can't be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel asChild>
+                                  <Button variant="outline">Cancel</Button>
+                                </AlertDialogCancel>
+                                <AlertDialogAction asChild>
+                                  <Button
+                                    variant="destructive"
+                                    data-testid={`provider-rm-confirm-${p.name}`}
+                                    onClick={() => rmMutation.mutate({ name: p.name })}
+                                  >
+                                    Remove credentials
+                                  </Button>
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         )}
                         {!p.credentialed && (
                           <Link
