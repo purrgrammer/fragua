@@ -339,7 +339,7 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
-  test("subagent.start payload carries `name: <profile>` when spec.agentName set", async () => {
+  test("subagent.start payload splits `name` (label) from `agent_def` (resolved profile)", async () => {
     const store = freshStore();
     seedParent(store, "parent-agentname");
     const registry = freshRegistry();
@@ -362,10 +362,72 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
+    // Both fields populated independently — the inline `name` is the
+    // free-form caller label, `agentName` is the resolved profile.
     await spawn({ prompt: "x", agentName: "reviewer", name: "label-only" });
     const start = events.find((e) => e.type === "subagent.start")!;
-    // agentName wins over the free-form `name` label.
-    expect(start.data["name"]).toBe("reviewer");
+    expect(start.data["name"]).toBe("label-only");
+    expect(start.data["agent_def"]).toBe("reviewer");
+    store.close();
+  });
+
+  test("subagent.start payload omits both `name` and `agent_def` for a bare spawn", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-bare");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-bare",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x" });
+    const start = events.find((e) => e.type === "subagent.start")!;
+    expect(start.data).not.toHaveProperty("name");
+    expect(start.data).not.toHaveProperty("agent_def");
+    store.close();
+  });
+
+  test("subagent.start payload carries only `agent_def` when invoked via def with no inline name", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-def-only");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-def-only",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x", agentName: "reviewer" });
+    const start = events.find((e) => e.type === "subagent.start")!;
+    expect(start.data).not.toHaveProperty("name");
+    expect(start.data["agent_def"]).toBe("reviewer");
     store.close();
   });
 

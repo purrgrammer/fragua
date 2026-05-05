@@ -130,13 +130,17 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // truthful per-iteration boundary). Cleared on each new
   // `fact.node_started`.
   const firstStepEmittedForNode = new Set<string>();
-  // subagent_id → { label?, parentNodeId } captured from
+  // subagent_id → { displayName?, parentNodeId } captured from
   // `subagent.start` events. Drives two pieces of step enrichment:
-  //   - `subagentLabel` for the operator-friendly name in the UI
+  //   - `subagentName` for the operator-friendly name in the UI. Pick
+  //     the free-form `name` label first, fall back to the resolved
+  //     `agent_def` profile name. Either can be present; both can
+  //     coexist; the label wins because the caller chose it
+  //     specifically for this spawn.
   //   - `parentNodeId` so sub-agent steps render as indented children
   //     under the calling parent step (same path the parallel-branch
-  //     UI already uses for fan-out branches)
-  const subagentMetaById = new Map<string, { name?: string; parentNodeId?: string }>();
+  //     UI already uses for fan-out branches).
+  const subagentMetaById = new Map<string, { displayName?: string; parentNodeId?: string }>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -145,9 +149,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     if (ev.type === "subagent.start") {
       const sid = stringField(data, "subagent_id");
       if (sid) {
-        const meta: { name?: string; parentNodeId?: string } = {};
-        const name = stringField(data, "name");
-        if (name) meta.name = name;
+        const meta: { displayName?: string; parentNodeId?: string } = {};
+        const displayName = stringField(data, "name") || stringField(data, "agent_def");
+        if (displayName) meta.displayName = displayName;
         const parentNode = stringField(data, "parent_node_id");
         if (parentNode) meta.parentNodeId = parentNode;
         subagentMetaById.set(sid, meta);
@@ -204,7 +208,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         const sid = step.nodeId.slice(SUBAGENT_PREFIX.length);
         step.subagentId = sid;
         const meta = subagentMetaById.get(sid);
-        if (meta?.name) step.subagentName = meta.name;
+        if (meta?.displayName) step.subagentName = meta.displayName;
         if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
       }
       steps.push(step);

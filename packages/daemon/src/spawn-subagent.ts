@@ -131,18 +131,21 @@ export function makeSpawnSubagent(
       },
     };
 
-    // Subagent-boundary marker on the parent's stream. `name` carries
-    // the resolved profile name when the parent invoked
-    // `agent({ agent: <name> })`; otherwise it falls through to the
-    // free-form `spec.name` label; otherwise it's omitted.
-    const startName = spec.agentName ?? spec.name;
+    // Subagent-boundary marker on the parent's stream. Two independent
+    // labels: `name` is the free-form caller label from inline
+    // `agent({ name: <label> })`; `agent_def` is the resolved profile
+    // name from `agent({ agent: <def-name> })`. Both can coexist
+    // (`agent({ agent: "reviewer", name: "reviewer-1" })`), either
+    // alone, or neither (a bare `agent({ prompt })` spawn). See
+    // SubagentStartData in @swarm/core/types/events for the schema.
     await parentCtx.parentEmit("subagent.start", {
       subagent_id: subagentId,
       parent_node_id: parentCtx.parentNodeId,
       iteration: parentCtx.parentIteration,
       provider: childProvider,
       model: childModel,
-      ...(startName !== undefined ? { name: startName } : {}),
+      ...(spec.name !== undefined ? { name: spec.name } : {}),
+      ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
     });
 
     // Forward every observability event the sub-agent emits to the

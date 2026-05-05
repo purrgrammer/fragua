@@ -95,12 +95,14 @@ export function RunConversation({
     return map;
   }, [messages]);
 
-  // subagent_id → name, derived from `agent` tool calls in the
-  // parent's transcript. The toolCall's `arguments.name` is the
-  // short name the calling LLM picked; the matching toolResult's
-  // `details.data.subagent_id` is the discriminator. Pair them by
-  // toolCall id and stash the mapping so a sub-agent's transcript
-  // can render with its name instead of the raw uuid.
+  // subagent_id → display label, derived from `agent` tool calls in
+  // the parent's transcript. Two independent label sources on the
+  // toolCall args: `name` (free-form caller label from
+  // `agent({ name: "<label>", ... })`) and `agent` (resolved profile
+  // name from `agent({ agent: "<def-name>", ... })`). Prefer `name`
+  // (the caller chose it for this spawn); fall back to `agent` so
+  // def-only invocations still render a friendly label instead of
+  // the raw uuid.
   const subagentNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of messages) {
@@ -109,14 +111,16 @@ export function RunConversation({
         type: string;
         id?: string;
         name?: string;
-        arguments?: { name?: unknown };
+        arguments?: { name?: unknown; agent?: unknown };
       }>;
       for (const block of blocks) {
         if (block.type !== "toolCall") continue;
         if (block.name !== "agent") continue;
         const callId = block.id;
         if (!callId) continue;
-        const subagentName = typeof block.arguments?.name === "string" ? block.arguments.name : undefined;
+        const inlineLabel = typeof block.arguments?.name === "string" ? block.arguments.name : undefined;
+        const profileLabel = typeof block.arguments?.agent === "string" ? block.arguments.agent : undefined;
+        const subagentName = inlineLabel ?? profileLabel;
         if (!subagentName) continue;
         const result = toolResultsById.get(callId);
         if (!result) continue;
@@ -773,10 +777,13 @@ function AssistantMessageRow({
       let embeddedSubagent: ReactNode = null;
       let agentLabel: string | undefined;
       if (chunk.name === "agent") {
-        const subagentName =
-          typeof (chunk.arguments as { name?: unknown } | undefined)?.name === "string"
-            ? ((chunk.arguments as { name?: unknown }).name as string)
-            : undefined;
+        // Same name/agent fallback as the catalog map above — keep
+        // the rule local because the embedded transcript card may
+        // render before the parent's useMemo has populated the map.
+        const args = chunk.arguments as { name?: unknown; agent?: unknown } | undefined;
+        const inlineLabel = typeof args?.name === "string" ? args.name : undefined;
+        const profileLabel = typeof args?.agent === "string" ? args.agent : undefined;
+        const subagentName = inlineLabel ?? profileLabel;
         if (subagentMessagesById && result) {
           const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
           const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
