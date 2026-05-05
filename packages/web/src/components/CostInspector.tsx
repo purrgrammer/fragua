@@ -272,37 +272,34 @@ function StepCostRow({
 
   // Summary rows pull from the aggregated `summary` so the parent's
   // displayed total includes every child branch's contribution.
-  const inputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
+  const rawInputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
   const outputTokens = summary?.output_tokens ?? step.cost?.output_tokens ?? 0;
   const cacheReadTokens = summary?.cache_read_tokens ?? step.cost?.cache_read_tokens ?? 0;
   const cacheWriteTokens = summary?.cache_write_tokens ?? step.cost?.cache_write_tokens ?? 0;
   const displayedCostUsd = summary?.cost_usd ?? step.cost?.cost_usd;
   const displayedDurationMs = summary?.durationMs ?? liveElapsedMs;
-  // Tokens this step actually fed to (or pulled from) the model's
-  // context window. Sums every input bucket — cache writes and cache
-  // reads ARE input tokens that occupy the context, just billed at
-  // different rates — plus generated output. Without the cache
-  // buckets the count understates by the entire system prompt
-  // whenever caching is on (Anthropic puts the system prompt into
-  // cache_write on the first turn and cache_read after), which made
-  // the per-step "Tokens" chip read as ~0 for steps that actually
-  // sent ~7 KB of system prompt.
-  //
-  // We deliberately do not use the provider-reported billed_tokens:
-  // Anthropic's billed_tokens shape varies across cached / uncached
-  // calls (cache_read sometimes inside, sometimes not), and summing
-  // across mixed steps produced an inflated total (the implement
-  // step on 01kq5962q5hee63nsk showed 1.09M / 1M = 109% from that
-  // mixed accounting). Manually summing the four buckets we measure
-  // ourselves is consistent regardless of provider quirks.
-  const freshTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  // Per-step "Input" rolls cache_write tokens INTO the input bucket:
+  // cache_write is content the model is seeing for the first time
+  // this step (Anthropic just marks it cacheable on the way in).
+  // Without folding it in, the input row reads as ~0 for any step
+  // whose system prompt is being primed — the system prompt was
+  // "consumed" but invisible. Cache_read stays in its own bucket
+  // (reused content from a prior turn — not new work this step).
+  const inputTokens = rawInputTokens + cacheWriteTokens;
+  // Tokens this step generated against the model's context window —
+  // input (incl. cache_write) + output. Cache_read is excluded
+  // because it's reused content from a previous step's input write,
+  // already counted there.
+  const freshTokens = inputTokens + outputTokens;
 
-  // Only Input / Output carry a $ figure in the breakdown — cache rows
-  // intentionally don't, even though cache reads/writes are technically
-  // billable. Their per-token rate often rounds to $0.00 against tiny
-  // cache windows, which reads as "free" and is more confusing than
-  // useful. The footer's `Total cost` already accounts for everything.
-  const inputCostUsd = model ? (model.cost.input * inputTokens) / COST_RATE_DIVISOR : undefined;
+  // Input row's $ figure includes the cache_write premium (Anthropic
+  // bills cache writes at ~1.25× the normal input rate). Output uses
+  // its own rate. Cache_read row stays without a $ — its per-token
+  // rate often rounds to $0.00 against tiny cache windows; the
+  // footer's `Total cost` accounts for everything verbatim.
+  const inputCostUsd = model
+    ? (model.cost.input * rawInputTokens + model.cost.cacheWrite * cacheWriteTokens) / COST_RATE_DIVISOR
+    : undefined;
   const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
 
   const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
@@ -378,9 +375,12 @@ function StepCostRow({
               reasoningTokens: 0,
               totalTokens: freshTokens,
               inputTokenDetails: {
+                // `inputTokens` already includes cache_write (folded
+                // in above). Surface cache_write as zero here so the
+                // gauge tooltip doesn't double-count it.
                 noCacheTokens: inputTokens,
                 cacheReadTokens,
-                cacheWriteTokens,
+                cacheWriteTokens: 0,
               },
               outputTokenDetails: {
                 textTokens: outputTokens,
@@ -415,7 +415,6 @@ function StepCostRow({
                   <ContextOutputUsage>
                     <UsageGridRow label="Output" tokens={outputTokens} costUsd={outputCostUsd} />
                   </ContextOutputUsage>
-                  {cacheWriteTokens > 0 && <UsageGridRow label="Cache write" tokens={cacheWriteTokens} subtle />}
                 </div>
               </ContextContentBody>
               <ContextContentFooter>
