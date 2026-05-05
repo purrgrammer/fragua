@@ -14,6 +14,7 @@ import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
+import { DEFAULT_SCHEDULE_TICK_MS, startScheduleDispatcher } from "./schedule-dispatcher.ts";
 import { startSupervisor, sweepOrphanChildren } from "./supervisor.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
 
@@ -84,6 +85,10 @@ export interface DaemonMainOpts {
    * Optional — when omitted, conversation runs halt with a clear
    * error rather than wedging the queue. */
   codergenBackend?: core.CodergenBackend;
+  /** Tick interval for the schedule-dispatcher fiber. Defaults to
+   * 60s; tests inject smaller values. Set to 0 to disable scheduled
+   * runs entirely. */
+  scheduleTickMs?: number;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -192,6 +197,20 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         blobGc = startBlobGc(gcOpts);
       }
 
+      // Schedule dispatcher fiber (proposal: docs/proposals/scheduled-runs.md).
+      // Peer to supervisor + executor + blob-gc; ticks once a minute and
+      // fires runs for every due schedule. Disable by setting
+      // `scheduleTickMs: 0` (CI primitives without recurring workloads).
+      const scheduleTickMs = opts.scheduleTickMs ?? DEFAULT_SCHEDULE_TICK_MS;
+      let scheduleDispatcher: { promise: Promise<void> } | undefined;
+      if (scheduleTickMs > 0) {
+        scheduleDispatcher = startScheduleDispatcher({
+          store: opts.store,
+          shutdownSignal: ctrl.signal,
+          tickIntervalMs: scheduleTickMs,
+        });
+      }
+
       const executorOpts: Parameters<typeof runExecutor>[0] = {
         store: opts.store,
         dispatcher: opts.dispatcher,
@@ -226,6 +245,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
       registry.tripAll(new Error("shutdown"));
       await supervisor.promise;
       if (blobGc) await blobGc.promise;
+      if (scheduleDispatcher) await scheduleDispatcher.promise;
       if (opts.autoTitler) await opts.autoTitler.drain();
     } catch (err) {
       stoppedReason = "error";

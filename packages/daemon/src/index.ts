@@ -18,6 +18,13 @@ export {
   cancelToFacts,
   resultToFacts,
 } from "./result-to-facts.ts";
+export type { ScheduleDispatcherOpts } from "./schedule-dispatcher.ts";
+export {
+  DEFAULT_SCHEDULE_TICK_MS,
+  scheduleDispatcherTick,
+  startScheduleDispatcher,
+} from "./schedule-dispatcher.ts";
+export { InvalidScheduleIntervalError, parseScheduleInterval, SCHEDULE_INTERVALS } from "./schedule-interval.ts";
 export type { SpawnSubagentDeps, SpawnSubagentParentCtx } from "./spawn-subagent.ts";
 export { makeSpawnSubagent } from "./spawn-subagent.ts";
 export type { SupervisorOpts } from "./supervisor.ts";
