@@ -3,7 +3,7 @@
 // slot, and the connection-status badge in the footer.
 //
 // The two-group split separates surfaces that observe or steer a
-// running system (Watchtower, Inbox, Runs, Analytics) from surfaces
+// running system (Watchtower, Inbox, Runs, Schedules, Analytics) from surfaces
 // that author or configure it (Projects, Workflows, Providers).
 //
 // The badge moved out of the old `App.tsx` header into the sidebar
@@ -14,6 +14,7 @@
 
 import {
   BarChart3,
+  CalendarClock,
   Cpu,
   Drone,
   FolderGit2,
@@ -44,6 +45,7 @@ const OPERATE_NAV = [
   { to: "/", label: "Watchtower", icon: TowerControl, end: true },
   { to: "/inbox", label: "Inbox", icon: InboxIcon, end: false },
   { to: "/runs", label: "Runs", icon: ListChecks, end: false },
+  { to: "/schedules", label: "Schedules", icon: CalendarClock, end: false },
   { to: "/analytics", label: "Analytics", icon: BarChart3, end: false },
 ] as const;
 

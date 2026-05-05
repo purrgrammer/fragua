@@ -226,4 +226,27 @@ export const queries = {
         staleTime: 30_000,
       }),
   },
+
+  schedules: {
+    all: () => ["schedules"] as const,
+    list: () =>
+      queryOptions({
+        queryKey: [...queries.schedules.all(), "list"] as const,
+        queryFn: api.listSchedules,
+        // 10s poll — there is no SSE channel for schedule mutations and
+        // `next_fire_at` ticks naturally (relative-time labels go stale).
+        refetchInterval: 10_000,
+        staleTime: 0,
+      }),
+    runs: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.schedules.all(), id, "runs"] as const,
+        queryFn: () => api.getScheduleRuns(id, 50),
+        enabled: id.length > 0,
+        // Same 10s cadence as the list — keeps the drilldown panel
+        // honest about freshly-spawned runs without piling more polls
+        // on the harness.
+        refetchInterval: 10_000,
+      }),
+  },
 };

@@ -664,6 +664,70 @@ export async function adjustBudget(
   return postJson(`/runs/${encodeURIComponent(id)}/budget`, body, isAcceptedSeq);
 }
 
+// ── Schedules ────────────────────────────────────────────────────────
+// Mirror of `Schedule` from @swarm/store/types.ts. Camel-case on the wire
+// per the server's `schedule-routes.ts` payload (the store boundary already
+// performs row→domain translation). `recentRuns` is embedded by
+// `GET /schedules` (last-10 health stripe — keeps the list a single round
+// trip). `ScheduleRunRow` keeps the snake_case wire shape produced by
+// `selectScheduleRuns`.
+
+export type ScheduleOverlapPolicy = "skip" | "queue" | "concurrent";
+
+export interface Schedule {
+  id: string;
+  workflowRef: string;
+  cwd: string;
+  intervalMs: number;
+  intervalText: string;
+  input: string | null;
+  overlapPolicy: ScheduleOverlapPolicy;
+  nextFireAt: number;
+  lastFireAt: number | null;
+  lastRunId: string | null;
+  pausedAt: number | null;
+  createdAt: number;
+}
+
+export interface ScheduleRunRow {
+  run_id: string;
+  status: string;
+  enqueued_at: number;
+}
+
+export interface ScheduleWithStripe extends Schedule {
+  recentRuns: ScheduleRunRow[];
+}
+
+export async function listSchedules(): Promise<ScheduleWithStripe[]> {
+  return getJson("/schedules", (v): v is ScheduleWithStripe[] => Array.isArray(v) && v.every(isScheduleWithStripe));
+}
+
+export async function getScheduleRuns(id: string, limit?: number): Promise<ScheduleRunRow[]> {
+  const qs = typeof limit === "number" ? `?limit=${limit}` : "";
+  return getJson(
+    `/schedules/${encodeURIComponent(id)}/runs${qs}`,
+    (v): v is ScheduleRunRow[] => Array.isArray(v) && v.every(isScheduleRunRow),
+  );
+}
+
+export async function pauseSchedule(id: string): Promise<Schedule> {
+  return postJson(`/schedules/${encodeURIComponent(id)}/pause`, undefined, isSchedule);
+}
+
+export async function resumeSchedule(id: string): Promise<Schedule> {
+  return postJson(`/schedules/${encodeURIComponent(id)}/resume`, undefined, isSchedule);
+}
+
+export async function deleteSchedule(id: string): Promise<{ deleted: string }> {
+  const u = url(`/schedules/${encodeURIComponent(id)}`);
+  const res = await fetch(u, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(`DELETE ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  const body = (await res.json()) as { deleted?: unknown };
+  if (typeof body.deleted !== "string") throw new Error(`DELETE ${u} → malformed response`);
+  return { deleted: body.deleted };
+}
+
 // ── Analytics ────────────────────────────────────────────────────────
 
 export type WorkflowScopeFilter = "global" | "local";
@@ -1064,6 +1128,37 @@ function isSkillSummary(v: unknown): v is SkillSummary {
 function isSkillDetail(v: unknown): v is SkillDetail {
   if (!isSkillSummary(v)) return false;
   return typeof (v as { body?: unknown }).body === "string";
+}
+
+function isSchedule(v: unknown): v is Schedule {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o["id"] === "string" &&
+    typeof o["workflowRef"] === "string" &&
+    typeof o["cwd"] === "string" &&
+    typeof o["intervalMs"] === "number" &&
+    typeof o["intervalText"] === "string" &&
+    (o["input"] === null || typeof o["input"] === "string") &&
+    (o["overlapPolicy"] === "skip" || o["overlapPolicy"] === "queue" || o["overlapPolicy"] === "concurrent") &&
+    typeof o["nextFireAt"] === "number" &&
+    (o["lastFireAt"] === null || typeof o["lastFireAt"] === "number") &&
+    (o["lastRunId"] === null || typeof o["lastRunId"] === "string") &&
+    (o["pausedAt"] === null || typeof o["pausedAt"] === "number") &&
+    typeof o["createdAt"] === "number"
+  );
+}
+
+function isScheduleRunRow(v: unknown): v is ScheduleRunRow {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { run_id?: unknown; status?: unknown; enqueued_at?: unknown };
+  return typeof o.run_id === "string" && typeof o.status === "string" && typeof o.enqueued_at === "number";
+}
+
+function isScheduleWithStripe(v: unknown): v is ScheduleWithStripe {
+  if (!isSchedule(v)) return false;
+  const recent = (v as { recentRuns?: unknown }).recentRuns;
+  return Array.isArray(recent) && recent.every(isScheduleRunRow);
 }
 
 function isStepSnapshot(v: unknown): v is StepSnapshot {

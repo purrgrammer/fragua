@@ -65,7 +65,7 @@ describe("AppShell + AppSidebar", () => {
     expect(labels).toEqual(["Operate", "Build"]);
   });
 
-  it("groups Operate items: Watchtower, Inbox, Runs, Analytics in order", () => {
+  it("groups Operate items: Watchtower, Inbox, Runs, Schedules, Analytics in order", () => {
     const { container } = mount("/");
     const groups = Array.from(container.querySelectorAll('[data-slot="sidebar-group"]'));
     const operate = groups.find(
@@ -75,7 +75,7 @@ describe("AppShell + AppSidebar", () => {
     const ids = Array.from(operate!.querySelectorAll('[data-testid^="nav-"]')).map((el) =>
       el.getAttribute("data-testid"),
     );
-    expect(ids).toEqual(["nav-watchtower", "nav-inbox", "nav-runs", "nav-analytics"]);
+    expect(ids).toEqual(["nav-watchtower", "nav-inbox", "nav-runs", "nav-schedules", "nav-analytics"]);
   });
 
   it("groups Build items: Projects, Workflows, Providers in order", () => {

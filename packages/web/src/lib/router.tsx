@@ -14,6 +14,7 @@ import { ProviderDetail } from "../routes/ProviderDetail.tsx";
 import { Providers } from "../routes/Providers.tsx";
 import { RunDetail } from "../routes/RunDetail.tsx";
 import { RunsList } from "../routes/RunsList.tsx";
+import { Schedules } from "../routes/Schedules.tsx";
 import { WorkflowDetail } from "../routes/WorkflowDetail.tsx";
 import { Workflows } from "../routes/Workflows.tsx";
 
@@ -32,6 +33,7 @@ export function createRoutes(): RouteObject[] {
         { path: "projects/:cwdEnc", element: <ProjectDetail /> },
         { path: "providers", element: <Providers /> },
         { path: "providers/:name", element: <ProviderDetail /> },
+        { path: "schedules", element: <Schedules /> },
         { path: "runs", element: <RunsList /> },
         // Run detail is one component regardless of which tab is
         // selected — the `:view` param (conversation | events | graph |
