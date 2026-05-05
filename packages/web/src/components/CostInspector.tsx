@@ -27,7 +27,7 @@ import { Coins, DollarSign, Timer } from "lucide-react";
 import { useEffect } from "react";
 import type { ProviderModel, StepSnapshot } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { formatTokensCompact, formatUsd, usdFormatOptions } from "../lib/format.ts";
+import { formatTokensCompact, formatUsd, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { queries } from "../lib/queries.ts";
 import { formatDuration } from "../lib/time.ts";
 import { useNow } from "../lib/useNow.ts";
@@ -296,6 +296,14 @@ function StepCostRow({
 
   const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
 
+  // Derive ONE format spec for $ and tokens from the smallest non-zero
+  // value across the four breakdown rows so decimals line up. Otherwise
+  // input ($0.12) and cache_read ($0.0003) pick different fraction-digit
+  // counts and read as ragged in the stack. Cache read often forces 4
+  // digits → all four rows render at 4 digits within this step.
+  const sharedUsdOptions = pickSharedUsdOptions([inputCostUsd, cacheWriteCostUsd, cacheReadCostUsd, outputCostUsd]);
+  const sharedTokensOptions = pickSharedTokensOptions([inputTokens, cacheWriteTokens, cacheReadTokens, outputTokens]);
+
   // All trailing chips share the same `text-xs text-sw-muted
   // tabular-nums` and a small leading icon so each metric is identifiable
   // at a glance — Timer for elapsed, DollarSign for cost, Coins for the
@@ -392,20 +400,46 @@ function StepCostRow({
                  * Output) sum to Total cost. */}
                 <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 gap-y-1 text-xs">
                   <ContextInputUsage>
-                    <UsageGridRow label="Input" tokens={inputTokens} costUsd={inputCostUsd} />
+                    <UsageGridRow
+                      label="Input"
+                      tokens={inputTokens}
+                      costUsd={inputCostUsd}
+                      usdOptions={sharedUsdOptions}
+                      tokensOptions={sharedTokensOptions}
+                    />
                   </ContextInputUsage>
                   {cacheWriteTokens > 0 && (
                     <ContextCacheUsage>
-                      <UsageGridRow label="Cache write" tokens={cacheWriteTokens} costUsd={cacheWriteCostUsd} subtle />
+                      <UsageGridRow
+                        label="Cache write"
+                        tokens={cacheWriteTokens}
+                        costUsd={cacheWriteCostUsd}
+                        usdOptions={sharedUsdOptions}
+                        tokensOptions={sharedTokensOptions}
+                        subtle
+                      />
                     </ContextCacheUsage>
                   )}
                   {cacheReadTokens > 0 && (
                     <ContextCacheUsage>
-                      <UsageGridRow label="Cache read" tokens={cacheReadTokens} costUsd={cacheReadCostUsd} subtle />
+                      <UsageGridRow
+                        label="Cache read"
+                        tokens={cacheReadTokens}
+                        costUsd={cacheReadCostUsd}
+                        usdOptions={sharedUsdOptions}
+                        tokensOptions={sharedTokensOptions}
+                        subtle
+                      />
                     </ContextCacheUsage>
                   )}
                   <ContextOutputUsage>
-                    <UsageGridRow label="Output" tokens={outputTokens} costUsd={outputCostUsd} />
+                    <UsageGridRow
+                      label="Output"
+                      tokens={outputTokens}
+                      costUsd={outputCostUsd}
+                      usdOptions={sharedUsdOptions}
+                      tokensOptions={sharedTokensOptions}
+                    />
                   </ContextOutputUsage>
                 </div>
               </ContextContentBody>
@@ -440,11 +474,19 @@ function UsageGridRow({
   tokens,
   costUsd,
   subtle,
+  usdOptions,
+  tokensOptions,
 }: {
   label: string;
   tokens: number;
   costUsd?: number;
   subtle?: boolean;
+  /** Shared $-format options derived from the smallest cost across all
+   * sibling rows; ensures decimal alignment within a step. */
+  usdOptions?: Intl.NumberFormatOptions;
+  /** Shared tokens-format options derived from the smallest token count
+   * across all sibling rows. */
+  tokensOptions?: Intl.NumberFormatOptions;
 }): JSX.Element {
   const labelClass = subtle ? "text-sw-muted/80 pl-3" : "text-sw-muted";
   const numericClass = subtle ? "tabular-nums text-right text-sw-muted" : "tabular-nums text-right";
@@ -452,8 +494,37 @@ function UsageGridRow({
   return (
     <>
       <span className={labelClass}>{label}</span>
-      <span className={numericClass}>{formatTokensCompact(tokens)}</span>
-      <span className={costClass}>{costUsd !== undefined ? formatUsd(costUsd) : ""}</span>
+      <span className={numericClass}>
+        {tokensOptions ? formatTokensCompact(tokens, { intlOptions: tokensOptions }) : formatTokensCompact(tokens)}
+      </span>
+      <span className={costClass}>
+        {costUsd !== undefined
+          ? usdOptions
+            ? formatUsd(costUsd, { intlOptions: usdOptions })
+            : formatUsd(costUsd)
+          : ""}
+      </span>
     </>
   );
+}
+
+/** Pick a single `Intl.NumberFormatOptions` for USD that uses enough
+ * fraction digits to render the smallest non-zero value in the row group
+ * legibly. Returns `undefined` when no positive values are present (the
+ * caller falls back to per-row magnitude-adaptive formatting). */
+function pickSharedUsdOptions(values: ReadonlyArray<number | undefined>): Intl.NumberFormatOptions | undefined {
+  let min: number | undefined;
+  for (const v of values) {
+    if (typeof v === "number" && v > 0 && (min === undefined || v < min)) min = v;
+  }
+  return min === undefined ? undefined : usdFormatOptions(min);
+}
+
+/** Mirror of `pickSharedUsdOptions` for token counts. */
+function pickSharedTokensOptions(values: ReadonlyArray<number>): Intl.NumberFormatOptions | undefined {
+  let min: number | undefined;
+  for (const v of values) {
+    if (v > 0 && (min === undefined || v < min)) min = v;
+  }
+  return min === undefined ? undefined : tokensCompactFormatOptions(min);
 }

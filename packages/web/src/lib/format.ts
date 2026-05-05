@@ -13,6 +13,11 @@ export interface NumberFormatOptions {
   locale?: string;
   /** Fallback string when the input is null / NaN / non-finite. */
   fallback?: string;
+  /** Override the magnitude-derived `Intl.NumberFormatOptions`. Use when
+   * a group of values needs to share precision regardless of each one's
+   * own magnitude (e.g. four cost rows in the same popover so decimals
+   * line up across rows). */
+  intlOptions?: Intl.NumberFormatOptions;
 }
 
 function isFiniteNumber(n: unknown): n is number {
@@ -70,7 +75,7 @@ export function percentFormatOptions(): Intl.NumberFormatOptions {
 export function formatUsd(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";
   const locale = opts.locale ?? defaultLocale();
-  return new Intl.NumberFormat(locale, usdFormatOptions(value)).format(value);
+  return new Intl.NumberFormat(locale, opts.intlOptions ?? usdFormatOptions(value)).format(value);
 }
 
 /**
@@ -81,7 +86,7 @@ export function formatUsd(value: number | null | undefined, opts: NumberFormatOp
 export function formatTokensCompact(value: number | null | undefined, opts: NumberFormatOptions = {}): string {
   if (!isFiniteNumber(value) || value < 0) return opts.fallback ?? "—";
   const locale = opts.locale ?? defaultLocale();
-  return new Intl.NumberFormat(locale, tokensCompactFormatOptions(value)).format(value);
+  return new Intl.NumberFormat(locale, opts.intlOptions ?? tokensCompactFormatOptions(value)).format(value);
 }
 
 /** Long form token count, for tooltips where precision matters. */
