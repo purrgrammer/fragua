@@ -1,8 +1,8 @@
 ---
 title: Skills + agents — web UI surface and unified discovery
-summary: "Read-only web UI for discovered skills and agents, plus daemon discovery widened from one-cwd-at-boot to globals + every known project cwd"
-status: proposed
-maturity: designed
+summary: "Skills + agents discovery UI plus unified discovery across globals and every known project cwd"
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-05
 ---
 
