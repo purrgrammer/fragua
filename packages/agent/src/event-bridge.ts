@@ -31,6 +31,8 @@ export function costPayload(msg: AssistantMessage): Record<string, unknown> {
     cost_usd: msg.usage.cost.total,
     cost_input_usd: msg.usage.cost.input,
     cost_output_usd: msg.usage.cost.output,
+    cost_cache_read_usd: msg.usage.cost.cacheRead,
+    cost_cache_write_usd: msg.usage.cost.cacheWrite,
   };
 }
 

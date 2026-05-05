@@ -174,6 +174,73 @@ describe("SqliteStore — appendFact", () => {
     store.close();
   });
 
+  test("fact.node_completed accumulates the four-bucket cost split into metrics", async () => {
+    // Pin the cost-split projection so the analytics SpendChart can sum
+    // per-bucket dollars over `metrics.total{Input,Output,CacheRead,CacheWrite}CostUsd`.
+    // Two completions; the reducer must add each bucket separately.
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const s0 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: s0.workflowSha, schemaVersion: s0.schemaVersion, startNode: "a" },
+        },
+      ],
+      s0.version,
+    );
+    const s1 = store.getState(runId)!;
+    store.appendFact(
+      runId,
+      [
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "a",
+            iteration: 0,
+            tokens: 100,
+            costUsd: 0.01,
+            inputCostUsd: 0.003,
+            outputCostUsd: 0.005,
+            cacheReadCostUsd: 0.0005,
+            cacheWriteCostUsd: 0.0015,
+            nextNode: "b",
+          },
+        },
+        {
+          type: "fact.node_completed",
+          payload: {
+            nodeId: "b",
+            iteration: 0,
+            tokens: 50,
+            costUsd: 0.005,
+            inputCostUsd: 0.001,
+            outputCostUsd: 0.002,
+            cacheReadCostUsd: 0.0008,
+            cacheWriteCostUsd: 0.0012,
+            nextNode: "c",
+          },
+        },
+      ],
+      s1.version,
+    );
+    const s2 = store.getState(runId)!;
+    expect(s2.metrics.totalInputCostUsd).toBeCloseTo(0.004, 6);
+    expect(s2.metrics.totalOutputCostUsd).toBeCloseTo(0.007, 6);
+    expect(s2.metrics.totalCacheReadCostUsd).toBeCloseTo(0.0013, 6);
+    expect(s2.metrics.totalCacheWriteCostUsd).toBeCloseTo(0.0027, 6);
+    // The four splits sum to totalCostUsd within float rounding.
+    const splitSum =
+      s2.metrics.totalInputCostUsd +
+      s2.metrics.totalOutputCostUsd +
+      s2.metrics.totalCacheReadCostUsd +
+      s2.metrics.totalCacheWriteCostUsd;
+    expect(splitSum).toBeCloseTo(s2.metrics.totalCostUsd, 6);
+    store.close();
+  });
+
   test("fact.run_paused (payment_required) transitions status; fact.run_resumed wakes back to queued", async () => {
     const store = freshStore();
     const runId = await seedRun(store);

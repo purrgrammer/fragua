@@ -206,6 +206,8 @@ function rowToRunState(row: RunStateRow): RunState {
     totalCostUsd: parsedMetrics.totalCostUsd ?? 0,
     totalInputCostUsd: parsedMetrics.totalInputCostUsd ?? 0,
     totalOutputCostUsd: parsedMetrics.totalOutputCostUsd ?? 0,
+    totalCacheReadCostUsd: parsedMetrics.totalCacheReadCostUsd ?? 0,
+    totalCacheWriteCostUsd: parsedMetrics.totalCacheWriteCostUsd ?? 0,
     totalInputTokens: parsedMetrics.totalInputTokens ?? 0,
     totalOutputTokens: parsedMetrics.totalOutputTokens ?? 0,
     totalCacheReadTokens: parsedMetrics.totalCacheReadTokens ?? 0,

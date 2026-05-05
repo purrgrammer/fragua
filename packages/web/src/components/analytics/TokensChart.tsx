@@ -1,5 +1,8 @@
-// Bucketed token usage, stacked input vs output. Cache reads/writes
-// have their own chart — splitting them out keeps both readable.
+// Bucketed token usage, stacked across the four buckets (input / cache
+// write / cache read / output). The Cache chart still exists but
+// answers a different question (read vs write share); this one is the
+// "where did the tokens go" surface — billed total in the header,
+// per-bucket stacks in the bars.
 
 import { Coins } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
@@ -20,7 +23,9 @@ import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
 import { visibleSegmentRadius } from "./chart-stack.ts";
 
-const TOKEN_KEYS = ["inputTokens", "outputTokens"] as const;
+// Stack order = bar order from bottom to top, mirroring the popover's
+// row order: Input · Cache write · Cache read · Output.
+const TOKEN_KEYS = ["inputTokens", "cacheWriteTokens", "cacheReadTokens", "outputTokens"] as const;
 type TokenKey = (typeof TOKEN_KEYS)[number];
 
 export interface TokensChartProps {
@@ -28,20 +33,26 @@ export interface TokensChartProps {
   bucket: BucketKind;
   loading?: boolean;
   onSelectBucket?: (bucketMs: number) => void;
-  /** Headline total (fresh input + output) + comparison baseline. */
+  /** Headline billed total (input + output + cache_read + cache_write)
+   * + comparison baseline rendered in the card header. */
   total: { current: number | undefined; previous: number | null };
 }
 
 const config: ChartConfig = {
-  inputTokens: { label: "Input", color: "var(--sw-chart-pair-primary)" },
-  outputTokens: { label: "Output", color: "var(--sw-chart-pair-secondary)" },
+  inputTokens: { label: "Input", color: "var(--sw-chart-1)" },
+  cacheWriteTokens: { label: "Cache write", color: "var(--sw-chart-3)" },
+  cacheReadTokens: { label: "Cache read", color: "var(--sw-chart-4)" },
+  outputTokens: { label: "Output", color: "var(--sw-chart-2)" },
 };
 
 export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: TokensChartProps): JSX.Element {
   const locale = useLocale();
   const reduceMotion = useReducedMotion();
   const animMs = reduceMotion ? 0 : 250;
-  const rowsTotal = rows.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
+  const rowsTotal = rows.reduce(
+    (s, r) => s + r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheWriteTokens,
+    0,
+  );
 
   return (
     <ChartCard

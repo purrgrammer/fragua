@@ -208,51 +208,55 @@ export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRo
 
 export interface SpendByBucketRow {
   bucket: number;
-  /** Total cost = input + output (+ any cache/other) per the run-level
-   *  `total_cost_usd` generated column. The split fields below sum the
-   *  reducer-projected `metrics.totalInputCostUsd` /
-   *  `metrics.totalOutputCostUsd`; runs that pre-date the split show 0
-   *  in the components but still contribute to `costUsd`. */
+  /** Total cost per the run-level `total_cost_usd` generated column.
+   *  The four split fields below sum the reducer-projected
+   *  `metrics.total{Input,Output,CacheRead,CacheWrite}CostUsd`. Runs
+   *  that pre-date a given split show 0 for that component; when ALL
+   *  four splits are 0 the SQL falls back to a token-share approximation
+   *  so the bar isn't empty. The four splits + any unattributed
+   *  remainder always sum to `costUsd`. */
   costUsd: number;
   inputCostUsd: number;
   outputCostUsd: number;
+  cacheReadCostUsd: number;
+  cacheWriteCostUsd: number;
 }
 
 export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucketRow[] {
   const bucketExpr = bucketExprFor(w.bucket, w.tzOffsetMinutes);
-  // Fallback ladder per run for the input/output split:
-  //   1. If the reducer recorded a split (`totalInput/OutputCostUsd` non-zero),
-  //      use it verbatim.
-  //   2. Otherwise, if input/output token counts are present, split
-  //      `total_cost_usd` by the token ratio. Approximate but visually
-  //      truthful — keeps pre-split runs from rendering as empty stacks.
-  //   3. As a last resort, split 50/50.
-  const inputCost = `
+  // Fallback ladder per run, applied independently to each of the four
+  // bucket components:
+  //   1. If the reducer recorded ANY non-zero cost split, use the
+  //      recorded values verbatim. Components that came back as 0
+  //      stay at 0 — they really were 0 (e.g. no cache_read this run).
+  //   2. Otherwise (the run pre-dates the cost split entirely), split
+  //      `total_cost_usd` by the token-share for that bucket so the
+  //      bar isn't empty. Approximate but visually truthful.
+  //   3. As a last resort (no token data either), split into the four
+  //      buckets evenly.
+  // The "any cost-split recorded" probe is shared so all four components
+  // pick the same branch — guarantees they sum to total_cost_usd.
+  const anyCostSplit = `(
+    COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')      AS REAL), 0) > 0
+ OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd')     AS REAL), 0) > 0
+ OR COALESCE(CAST(json_extract(metrics, '$.totalCacheReadCostUsd')  AS REAL), 0) > 0
+ OR COALESCE(CAST(json_extract(metrics, '$.totalCacheWriteCostUsd') AS REAL), 0) > 0
+  )`;
+  const tokenSum = `(
+    COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')      AS REAL), 0)
+  + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens')     AS REAL), 0)
+  + COALESCE(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS REAL), 0)
+  + COALESCE(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS REAL), 0)
+  )`;
+  const splitFor = (costKey: string, tokenKey: string) => `
     CASE
-      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')  AS REAL), 0) > 0
-        OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0) > 0
-        THEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd') AS REAL), 0)
-      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
-         + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0) > 0
+      WHEN ${anyCostSplit}
+        THEN COALESCE(CAST(json_extract(metrics, '$.${costKey}') AS REAL), 0)
+      WHEN ${tokenSum} > 0
         THEN total_cost_usd
-             * COALESCE(CAST(json_extract(metrics, '$.totalInputTokens') AS REAL), 0)
-             / (COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
-              + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0))
-      ELSE total_cost_usd * 0.5
-    END
-  `;
-  const outputCost = `
-    CASE
-      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputCostUsd')  AS REAL), 0) > 0
-        OR COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0) > 0
-        THEN COALESCE(CAST(json_extract(metrics, '$.totalOutputCostUsd') AS REAL), 0)
-      WHEN COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
-         + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0) > 0
-        THEN total_cost_usd
-             * COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0)
-             / (COALESCE(CAST(json_extract(metrics, '$.totalInputTokens')  AS REAL), 0)
-              + COALESCE(CAST(json_extract(metrics, '$.totalOutputTokens') AS REAL), 0))
-      ELSE total_cost_usd * 0.5
+             * COALESCE(CAST(json_extract(metrics, '$.${tokenKey}') AS REAL), 0)
+             / ${tokenSum}
+      ELSE total_cost_usd * 0.25
     END
   `;
   const pred = windowPredicate(w, "cwd");
@@ -260,8 +264,10 @@ export function getSpendByBucket(db: Database, w: BucketedWindow): SpendByBucket
     SELECT
       ${bucketExpr}                       AS bucket,
       COALESCE(SUM(total_cost_usd), 0)    AS costUsd,
-      COALESCE(SUM(${inputCost}),  0)     AS inputCostUsd,
-      COALESCE(SUM(${outputCost}), 0)     AS outputCostUsd
+      COALESCE(SUM(${splitFor("totalInputCostUsd", "totalInputTokens")}),      0)     AS inputCostUsd,
+      COALESCE(SUM(${splitFor("totalOutputCostUsd", "totalOutputTokens")}),     0)     AS outputCostUsd,
+      COALESCE(SUM(${splitFor("totalCacheReadCostUsd", "totalCacheReadTokens")}),  0)     AS cacheReadCostUsd,
+      COALESCE(SUM(${splitFor("totalCacheWriteCostUsd", "totalCacheWriteTokens")}), 0)     AS cacheWriteCostUsd
     FROM run_state
     WHERE ${pred.sql}
     GROUP BY bucket
@@ -274,6 +280,8 @@ export interface TokensByBucketRow {
   bucket: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 export function getTokensByBucket(db: Database, w: BucketedWindow): TokensByBucketRow[] {
@@ -282,8 +290,10 @@ export function getTokensByBucket(db: Database, w: BucketedWindow): TokensByBuck
   const sql = `
     SELECT
       ${bucketExpr}                                                                          AS bucket,
-      COALESCE(SUM(CAST(json_extract(metrics, '$.totalInputTokens')  AS INTEGER)), 0)        AS inputTokens,
-      COALESCE(SUM(CAST(json_extract(metrics, '$.totalOutputTokens') AS INTEGER)), 0)        AS outputTokens
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalInputTokens')      AS INTEGER)), 0)    AS inputTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalOutputTokens')     AS INTEGER)), 0)    AS outputTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheReadTokens')  AS INTEGER)), 0)    AS cacheReadTokens,
+      COALESCE(SUM(CAST(json_extract(metrics, '$.totalCacheWriteTokens') AS INTEGER)), 0)    AS cacheWriteTokens
     FROM run_state
     WHERE ${pred.sql}
     GROUP BY bucket

@@ -53,12 +53,16 @@ export interface SpendBucketRow {
   costUsd: number;
   inputCostUsd: number;
   outputCostUsd: number;
+  cacheReadCostUsd: number;
+  cacheWriteCostUsd: number;
 }
 
 export interface TokensBucketRow {
   bucket: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 export interface CacheBucketRow {

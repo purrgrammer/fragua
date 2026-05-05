@@ -80,9 +80,16 @@ export function Analytics(): JSX.Element {
   const previous = data?.totals.previous ?? null;
   const runsTotal = { current: current?.runs, previous: previous?.runs ?? null };
   const spendTotal = { current: current?.costUsd, previous: previous?.costUsd ?? null };
+  // Headline = billed (input + output + cache_read + cache_write).
+  // Matches `run_state.billed_tokens` and the per-run Tokens tile;
+  // the chart bars carry the bucket breakdown.
   const tokensTotal = {
-    current: current ? current.inputTokens + current.outputTokens : undefined,
-    previous: previous ? previous.inputTokens + previous.outputTokens : null,
+    current: current
+      ? current.inputTokens + current.outputTokens + current.cacheReadTokens + current.cacheWriteTokens
+      : undefined,
+    previous: previous
+      ? previous.inputTokens + previous.outputTokens + previous.cacheReadTokens + previous.cacheWriteTokens
+      : null,
   };
   const cacheTotal = {
     current: cacheHitRate(current) ?? undefined,

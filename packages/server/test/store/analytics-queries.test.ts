@@ -225,15 +225,34 @@ describe("getSpendByBucket / getTokensByBucket", () => {
     expect(spend[0]?.costUsd).toBeCloseTo(2.0, 5);
     expect(spend[0]?.inputCostUsd).toBeCloseTo(1.5 * (100 / 125) + 0.5 * (50 / 75), 5);
     expect(spend[0]?.outputCostUsd).toBeCloseTo(1.5 * (25 / 125) + 0.5 * (25 / 75), 5);
+    // Cache buckets are 0 because the seeded runs don't carry cache
+    // tokens or a recorded cache cost split. The fallback splits the
+    // total over only the buckets that have non-zero token counts.
+    expect(spend[0]?.cacheReadCostUsd).toBeCloseTo(0, 5);
+    expect(spend[0]?.cacheWriteCostUsd).toBeCloseTo(0, 5);
     expect(spend[1]?.bucket).toBe(Date.UTC(2026, 3, 28, 11));
     expect(spend[1]?.costUsd).toBeCloseTo(2.0, 5);
     expect(spend[1]?.inputCostUsd).toBeCloseTo(2.0 * (200 / 300), 5);
     expect(spend[1]?.outputCostUsd).toBeCloseTo(2.0 * (100 / 300), 5);
+    expect(spend[1]?.cacheReadCostUsd).toBeCloseTo(0, 5);
+    expect(spend[1]?.cacheWriteCostUsd).toBeCloseTo(0, 5);
 
     const tokens = store.getTokensByBucket(w);
     expect(tokens).toEqual([
-      { bucket: Date.UTC(2026, 3, 28, 10), inputTokens: 150, outputTokens: 50 },
-      { bucket: Date.UTC(2026, 3, 28, 11), inputTokens: 200, outputTokens: 100 },
+      {
+        bucket: Date.UTC(2026, 3, 28, 10),
+        inputTokens: 150,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      {
+        bucket: Date.UTC(2026, 3, 28, 11),
+        inputTokens: 200,
+        outputTokens: 100,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
     ]);
   });
 });

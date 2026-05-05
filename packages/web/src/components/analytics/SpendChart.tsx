@@ -1,7 +1,8 @@
-// Bucketed spend over time, stacked input vs output USD. Cost split is
-// sourced from `metrics.totalInputCostUsd` / `totalOutputCostUsd` —
-// runs that pre-date the split show 0 in the components but still
-// contribute to the total via `total_cost_usd`.
+// Bucketed spend over time, stacked across the four token buckets
+// (input / cache write / cache read / output USD). Sourced from the
+// reducer-projected `metrics.total{Input,Output,CacheRead,CacheWrite}CostUsd`.
+// Runs that pre-date a given split fall back to a token-share approximation
+// of `total_cost_usd` so the bar isn't empty (see analytics-queries).
 
 import { DollarSign } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
@@ -22,7 +23,10 @@ import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
 import { visibleSegmentRadius } from "./chart-stack.ts";
 
-const SPEND_KEYS = ["inputCostUsd", "outputCostUsd"] as const;
+// Stack order = bar order from bottom to top: Input · Cache write ·
+// Cache read · Output. Mirrors the per-step popover's row order so
+// operators read both surfaces with the same vocabulary.
+const SPEND_KEYS = ["inputCostUsd", "cacheWriteCostUsd", "cacheReadCostUsd", "outputCostUsd"] as const;
 type SpendKey = (typeof SPEND_KEYS)[number];
 
 export interface SpendChartProps {
@@ -34,9 +38,15 @@ export interface SpendChartProps {
   total: { current: number | undefined; previous: number | null };
 }
 
+// Input + Output get the two strong tones (sw-chart-1 / sw-chart-2);
+// cache write + cache read get the softer ones (sw-chart-3 / sw-chart-4).
+// Reads as "real work" (input/output) framing the cache layer, with
+// cache_read as the lightest segment since it's the discounted bucket.
 const config: ChartConfig = {
-  inputCostUsd: { label: "Input", color: "var(--sw-chart-pair-primary)" },
-  outputCostUsd: { label: "Output", color: "var(--sw-chart-pair-secondary)" },
+  inputCostUsd: { label: "Input", color: "var(--sw-chart-1)" },
+  cacheWriteCostUsd: { label: "Cache write", color: "var(--sw-chart-3)" },
+  cacheReadCostUsd: { label: "Cache read", color: "var(--sw-chart-4)" },
+  outputCostUsd: { label: "Output", color: "var(--sw-chart-2)" },
 };
 
 function rankOf(key: string): number {

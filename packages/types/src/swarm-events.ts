@@ -174,11 +174,13 @@ export type FactEvent =
         outputRef?: string;
         tokens: number;
         costUsd: number;
-        /** USD cost split between input and output tokens (per pi-ai's
-         * `usage.cost.input` / `usage.cost.output`). Optional for
-         * back-compat with pre-split runs; reducer defaults to 0. */
+        /** USD cost split across the four token buckets (per pi-ai's
+         * `usage.cost.{input,output,cacheRead,cacheWrite}`). Optional
+         * for back-compat with pre-split runs; reducer defaults to 0. */
         inputCostUsd?: number;
         outputCostUsd?: number;
+        cacheReadCostUsd?: number;
+        cacheWriteCostUsd?: number;
         /** Input/output/cache split. Optional so older runs (pre-split)
          * still round-trip through replay; the reducer defaults missing
          * fields to 0 so totals never NaN. */
@@ -218,9 +220,12 @@ export type FactEvent =
         cause: string;
         partialTokens: number;
         partialCostUsd: number;
-        /** Partial input/output USD split for work before the abort. */
+        /** Partial USD split for work before the abort, across all
+         * four token buckets. */
         partialInputCostUsd?: number;
         partialOutputCostUsd?: number;
+        partialCacheReadCostUsd?: number;
+        partialCacheWriteCostUsd?: number;
         /** Partial split for work done before the abort. Optional for
          * back-compat with pre-split runs. */
         partialInputTokens?: number;

@@ -77,6 +77,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     let costUsd = 0;
     let inputCostUsd = 0;
     let outputCostUsd = 0;
+    let cacheReadCostUsd = 0;
+    let cacheWriteCostUsd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheReadTokens = 0;
@@ -100,6 +102,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
         costUsd += numAt(data, "cost_usd");
         inputCostUsd += numAt(data, "cost_input_usd");
         outputCostUsd += numAt(data, "cost_output_usd");
+        cacheReadCostUsd += numAt(data, "cost_cache_read_usd");
+        cacheWriteCostUsd += numAt(data, "cost_cache_write_usd");
         inputTokens += numAt(data, "input_tokens");
         outputTokens += numAt(data, "output_tokens");
         cacheReadTokens += numAt(data, "cache_read_tokens");
@@ -242,6 +246,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       costUsd,
       inputCostUsd,
       outputCostUsd,
+      cacheReadCostUsd,
+      cacheWriteCostUsd,
       inputTokens,
       outputTokens,
       cacheReadTokens,

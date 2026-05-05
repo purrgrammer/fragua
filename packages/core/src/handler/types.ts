@@ -254,13 +254,15 @@ export type HandlerResult =
       failureReason?: string;
       tokens: number;
       costUsd: number;
-      /** USD cost split between input and output tokens. Sourced from
-       * pi-ai's `usage.cost.input` / `usage.cost.output` (or
+      /** USD cost split across the four token buckets. Sourced from
+       * pi-ai's `usage.cost.{input,output,cacheRead,cacheWrite}` (or
        * `usage.reportedCost.*` when the provider returns it). Optional
        * — handlers that only know the lump-sum `costUsd` skip these
        * and the run-level reducer defaults to 0. */
       inputCostUsd?: number;
       outputCostUsd?: number;
+      cacheReadCostUsd?: number;
+      cacheWriteCostUsd?: number;
       /** Input/output/cache split accumulated across every `cost.recorded`
        * event the node emitted. Optional so legacy handlers that only
        * report `tokens` + `costUsd` (e.g. tool handlers, wait.human)

@@ -29,6 +29,8 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
       totalCostUsd: 0,
       totalInputCostUsd: 0,
       totalOutputCostUsd: 0,
+      totalCacheReadCostUsd: 0,
+      totalCacheWriteCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalCacheReadTokens: 0,

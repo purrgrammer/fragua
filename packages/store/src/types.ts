@@ -126,6 +126,14 @@ export interface RunMetrics {
    * reasoning/thinking on providers that bundle them under output).
    * 0 on older runs. */
   totalOutputCostUsd: number;
+  /** Cost attributable to cache-read tokens (pi-ai's
+   * `usage.cost.cacheRead`, billed at ~0.1× input rate on Anthropic).
+   * 0 on older runs. */
+  totalCacheReadCostUsd: number;
+  /** Cost attributable to cache-write tokens (pi-ai's
+   * `usage.cost.cacheWrite`, billed at ~1.25× input rate on Anthropic).
+   * 0 on older runs. */
+  totalCacheWriteCostUsd: number;
   /** Fresh prompt tokens (excludes cache hits on providers that track
    * them separately, e.g. Anthropic). Zero on older runs that predate
    * the split — reducers accept missing fields defensively. */

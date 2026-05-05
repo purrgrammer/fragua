@@ -75,6 +75,12 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       if (result.inputCostUsd != null && result.inputCostUsd > 0) payload.inputCostUsd = result.inputCostUsd;
       if (result.outputCostUsd != null && result.outputCostUsd > 0) payload.outputCostUsd = result.outputCostUsd;
+      if (result.cacheReadCostUsd != null && result.cacheReadCostUsd > 0) {
+        payload.cacheReadCostUsd = result.cacheReadCostUsd;
+      }
+      if (result.cacheWriteCostUsd != null && result.cacheWriteCostUsd > 0) {
+        payload.cacheWriteCostUsd = result.cacheWriteCostUsd;
+      }
       facts.push({ type: "fact.node_completed", payload });
 
       if (isTerminalNode(nextNode)) {
@@ -167,6 +173,8 @@ export function abortResultToFacts(
     costUsd: number;
     inputCostUsd?: number;
     outputCostUsd?: number;
+    cacheReadCostUsd?: number;
+    cacheWriteCostUsd?: number;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
@@ -183,6 +191,12 @@ export function abortResultToFacts(
   if (partial.inputCostUsd != null && partial.inputCostUsd > 0) payload.partialInputCostUsd = partial.inputCostUsd;
   if (partial.outputCostUsd != null && partial.outputCostUsd > 0) {
     payload.partialOutputCostUsd = partial.outputCostUsd;
+  }
+  if (partial.cacheReadCostUsd != null && partial.cacheReadCostUsd > 0) {
+    payload.partialCacheReadCostUsd = partial.cacheReadCostUsd;
+  }
+  if (partial.cacheWriteCostUsd != null && partial.cacheWriteCostUsd > 0) {
+    payload.partialCacheWriteCostUsd = partial.cacheWriteCostUsd;
   }
   if (partial.inputTokens != null && partial.inputTokens > 0) payload.partialInputTokens = partial.inputTokens;
   if (partial.outputTokens != null && partial.outputTokens > 0) payload.partialOutputTokens = partial.outputTokens;
