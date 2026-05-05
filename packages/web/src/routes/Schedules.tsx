@@ -1,24 +1,21 @@
 // /schedules — read-only viewer for the `schedules` table with control
 // verbs (pause / resume / delete). The CLI keeps owning create.
 //
-// Polling-only: the schedule routes don't publish over SSE, and the
-// relative-time columns ("in 12 min", "1h ago") need a steady tick to
-// stay honest — the 10s `refetchInterval` on `queries.schedules.list()`
-// is the single source of freshness.
+// Polling-only: the schedule routes don't publish over SSE. The 10s
+// `refetchInterval` on `queries.schedules.list()` is the single source
+// of freshness.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import type { Schedule, ScheduleRunRow, ScheduleWithStripe } from "../lib/api.ts";
+import type { ScheduleRunRow, ScheduleWithStripe } from "../lib/api.ts";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
-import { formatRelative, toIsoTitle } from "../lib/time.ts";
 
 const STRIPE_LEN = 10;
-const CONFIRM_WINDOW_MS = 5_000;
 
 export function Schedules(): JSX.Element {
   const { data: rows, isPending, isError, error } = useQuery(queries.schedules.list());
@@ -63,11 +60,9 @@ export function Schedules(): JSX.Element {
                 <TableHead className="w-44">Workflow</TableHead>
                 <TableHead className="w-32">Project</TableHead>
                 <TableHead className="w-20">Interval</TableHead>
-                <TableHead className="w-32">Next fire</TableHead>
-                <TableHead className="w-32">Last fire</TableHead>
                 <TableHead className="w-20">Status</TableHead>
                 <TableHead className="w-32">Health</TableHead>
-                <TableHead className="w-56 text-right">Actions</TableHead>
+                <TableHead className="w-44 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -84,46 +79,17 @@ export function Schedules(): JSX.Element {
 
 function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
   const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const invalidate = (): Promise<unknown> => qc.invalidateQueries({ queryKey: queries.schedules.all() });
 
-  const pauseM = useMutation({
-    mutationFn: () => api.pauseSchedule(row.id),
-    onSuccess: invalidate,
-  });
-  const resumeM = useMutation({
-    mutationFn: () => api.resumeSchedule(row.id),
-    onSuccess: invalidate,
-  });
-  const deleteM = useMutation({
-    mutationFn: () => api.deleteSchedule(row.id),
-    onSuccess: invalidate,
-  });
-
-  useEffect(() => {
-    return () => {
-      if (confirmTimer.current) clearTimeout(confirmTimer.current);
-    };
-  }, []);
+  const pauseM = useMutation({ mutationFn: () => api.pauseSchedule(row.id), onSuccess: invalidate });
+  const resumeM = useMutation({ mutationFn: () => api.resumeSchedule(row.id), onSuccess: invalidate });
+  const deleteM = useMutation({ mutationFn: () => api.deleteSchedule(row.id), onSuccess: invalidate });
 
   const isPaused = row.pausedAt != null;
   const status: "active" | "paused" = isPaused ? "paused" : "active";
 
   function handleDeleteClick(): void {
-    if (!confirming) {
-      setConfirming(true);
-      if (confirmTimer.current) clearTimeout(confirmTimer.current);
-      confirmTimer.current = setTimeout(() => setConfirming(false), CONFIRM_WINDOW_MS);
-      return;
-    }
-    if (confirmTimer.current) {
-      clearTimeout(confirmTimer.current);
-      confirmTimer.current = null;
-    }
-    setConfirming(false);
-    deleteM.mutate();
+    if (window.confirm(`Delete schedule "${row.workflowRef}" in ${basename(row.cwd)}?`)) deleteM.mutate();
   }
 
   return (
@@ -136,12 +102,6 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
       </TableCell>
       <TableCell>
         <code className="font-mono text-xs">{row.intervalText}</code>
-      </TableCell>
-      <TableCell title={toIsoTitle(row.nextFireAt)}>
-        <span className="text-sw-muted text-xs">{isPaused ? "—" : formatRelative(row.nextFireAt)}</span>
-      </TableCell>
-      <TableCell title={row.lastFireAt != null ? toIsoTitle(row.lastFireAt) : ""}>
-        <span className="text-sw-muted text-xs">{row.lastFireAt != null ? formatRelative(row.lastFireAt) : "—"}</span>
       </TableCell>
       <TableCell>
         <StatusPill status={status} />
@@ -174,13 +134,12 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
           )}
           <Button
             size="sm"
-            variant={confirming ? "destructive" : "outline"}
+            variant="destructive"
             data-testid={`schedule-delete-${row.id}`}
-            data-confirming={confirming ? "true" : "false"}
             disabled={deleteM.isPending}
             onClick={handleDeleteClick}
           >
-            {confirming ? "Confirm delete" : "Delete"}
+            Delete
           </Button>
         </div>
       </TableCell>
@@ -249,5 +208,3 @@ function basename(p: string): string {
   const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }
-
-export type { Schedule };

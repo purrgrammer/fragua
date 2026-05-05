@@ -130,31 +130,41 @@ describe("Schedules", () => {
     expect(within(pausedRow).getByTestId("schedule-resume-sch_paused")).toBeTruthy();
   });
 
-  // ── two-click delete confirmation ──
-  test("first click on the delete button flips it to a 'Confirm delete' state without calling DELETE; a second click within the window calls DELETE /schedules/:id once", async () => {
+  // ── delete via window.confirm ──
+  test("Delete invokes window.confirm; DELETE /schedules/:id fires only when the user accepts", async () => {
     const sched = makeSchedule({ id: "sch_doomed", pausedAt: null });
     const { calls } = installFetch({ schedules: [sched] });
 
-    const { container } = renderWithClient(<Schedules />);
-    const btn = await waitFor(() => within(container).getByTestId("schedule-delete-sch_doomed") as HTMLButtonElement);
+    const originalConfirm = globalThis.confirm;
+    try {
+      // Cancel path: confirm → false, no DELETE.
+      const cancel = mock((_message?: string) => false);
+      globalThis.confirm = cancel as unknown as typeof globalThis.confirm;
 
-    // First click: confirming, no DELETE.
-    expect(btn.getAttribute("data-confirming")).toBe("false");
-    expect(btn.textContent).toContain("Delete");
-    await act(async () => {
-      fireEvent.click(btn);
-    });
-    expect(btn.getAttribute("data-confirming")).toBe("true");
-    expect(btn.textContent).toContain("Confirm delete");
-    expect(calls.filter((c) => c.method === "DELETE" && c.url.includes("/schedules/sch_doomed")).length).toBe(0);
+      const { container } = renderWithClient(<Schedules />);
+      const btn = await waitFor(() => within(container).getByTestId("schedule-delete-sch_doomed") as HTMLButtonElement);
+      expect(btn.getAttribute("data-variant")).toBe("destructive");
 
-    // Second click within the window: DELETE fires exactly once.
-    await act(async () => {
-      fireEvent.click(btn);
-    });
-    await waitFor(() => {
-      const deletes = calls.filter((c) => c.method === "DELETE" && c.url.includes("/schedules/sch_doomed"));
-      expect(deletes.length).toBe(1);
-    });
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel.mock.calls[0]?.[0] ?? "").toContain("ci-gate");
+      expect(calls.filter((c) => c.method === "DELETE" && c.url.includes("/schedules/sch_doomed")).length).toBe(0);
+
+      // Accept path: confirm → true, DELETE fires once.
+      const accept = mock((_message?: string) => true);
+      globalThis.confirm = accept as unknown as typeof globalThis.confirm;
+
+      await act(async () => {
+        fireEvent.click(btn);
+      });
+      await waitFor(() => {
+        const deletes = calls.filter((c) => c.method === "DELETE" && c.url.includes("/schedules/sch_doomed"));
+        expect(deletes.length).toBe(1);
+      });
+    } finally {
+      globalThis.confirm = originalConfirm;
+    }
   });
 });
