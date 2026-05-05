@@ -702,14 +702,6 @@ export async function listSchedules(): Promise<ScheduleWithStripe[]> {
   return getJson("/schedules", (v): v is ScheduleWithStripe[] => Array.isArray(v) && v.every(isScheduleWithStripe));
 }
 
-export async function getScheduleRuns(id: string, limit?: number): Promise<ScheduleRunRow[]> {
-  const qs = typeof limit === "number" ? `?limit=${limit}` : "";
-  return getJson(
-    `/schedules/${encodeURIComponent(id)}/runs${qs}`,
-    (v): v is ScheduleRunRow[] => Array.isArray(v) && v.every(isScheduleRunRow),
-  );
-}
-
 export async function pauseSchedule(id: string): Promise<Schedule> {
   return postJson(`/schedules/${encodeURIComponent(id)}/pause`, undefined, isSchedule);
 }

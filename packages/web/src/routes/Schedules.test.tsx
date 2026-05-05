@@ -11,8 +11,6 @@ interface FetchCall {
 
 interface StubOpts {
   schedules?: unknown[];
-  /** Per-id GET /schedules/:id/runs payload. Defaults to []. */
-  scheduleRuns?: Record<string, unknown[]>;
 }
 
 function installFetch(opts: StubOpts = {}): { calls: FetchCall[] } {
@@ -27,16 +25,6 @@ function installFetch(opts: StubOpts = {}): { calls: FetchCall[] } {
     // GET /schedules
     if (method === "GET" && url.endsWith("/api/schedules")) {
       return new Response(JSON.stringify(opts.schedules ?? []), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    // GET /schedules/:id/runs
-    const m = url.match(/\/api\/schedules\/([^/?]+)\/runs/);
-    if (method === "GET" && m) {
-      const id = decodeURIComponent(m[1]!);
-      const runs = opts.scheduleRuns?.[id] ?? [];
-      return new Response(JSON.stringify(runs), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
