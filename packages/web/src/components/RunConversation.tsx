@@ -190,6 +190,15 @@ export function RunConversation({
   // tagged — usually the one whose section is currently the tail.
   // Append to that section if it exists, otherwise create a new one.
   const streamingNodeId = streaming?.nodeId ?? null;
+  // Sub-agent streams use the synthetic `__subagent:<sid>` namespace.
+  // We thread the buffer into the parent's `agent` toolCall card
+  // (alongside the persisted sub-agent transcript) so the streaming
+  // row appears inline rather than as a sibling section. Multiple
+  // parallel sub-agents can each have a card; only the one whose sid
+  // matches `streaming.nodeId` shows the live buffer.
+  const streamingSubagentId = streamingNodeId?.startsWith(SUBAGENT_NODE_PREFIX)
+    ? streamingNodeId.slice(SUBAGENT_NODE_PREFIX.length)
+    : null;
   const tailItem = renderItems[renderItems.length - 1];
   const tailSectionNodeId =
     tailItem?.kind === "section"
@@ -205,7 +214,7 @@ export function RunConversation({
     tailBranchTabs != null && streamingNodeId != null && tailBranchTabs.branches.includes(streamingNodeId);
   const appendStreamingToTail =
     streaming != null && streamingNodeId != null && tailSectionNodeId === streamingNodeId && !streamingInTab;
-  const orphanStreaming = streaming != null && !appendStreamingToTail && !streamingInTab;
+  const orphanStreaming = streaming != null && !appendStreamingToTail && !streamingInTab && streamingSubagentId == null;
 
   const empty = !isLoading && !userInput && visibleSections.length === 0 && streaming == null;
 
@@ -244,6 +253,8 @@ export function RunConversation({
                         row={row}
                         toolResultsById={toolResultsById}
                         subagentMessagesById={subagentMessagesById}
+                        streamingSubagentId={streamingSubagentId}
+                        streaming={streaming}
                         isLive={isLive}
                       />
                     ))}
@@ -650,10 +661,25 @@ interface MessageRowProps {
    *  parent flow needs it; nested toolCall cards inside an embedded
    *  sub-agent transcript don't (sub-agents can't spawn sub-agents). */
   subagentMessagesById?: ReadonlyMap<string, RunMessageRow[]>;
+  /** subagent_id whose deltas the in-flight `streaming` buffer carries,
+   *  derived from a `__subagent:<sid>` nodeId. When this matches the
+   *  sid an `agent` toolCall result resolves to, the streaming row
+   *  renders inside that toolCall card — keeps mid-message deltas
+   *  inline next to the call that spawned them, even when the
+   *  sub-agent has no persisted rows yet. */
+  streamingSubagentId?: string | null;
+  streaming?: StreamingMessage | null;
   isLive: boolean;
 }
 
-function MessageRow({ row, toolResultsById, subagentMessagesById, isLive }: MessageRowProps): JSX.Element | null {
+function MessageRow({
+  row,
+  toolResultsById,
+  subagentMessagesById,
+  streamingSubagentId,
+  streaming,
+  isLive,
+}: MessageRowProps): JSX.Element | null {
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
   if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
@@ -664,6 +690,8 @@ function MessageRow({ row, toolResultsById, subagentMessagesById, isLive }: Mess
         message={msg}
         toolResultsById={toolResultsById}
         subagentMessagesById={subagentMessagesById}
+        streamingSubagentId={streamingSubagentId ?? null}
+        streaming={streaming ?? null}
         ordinal={row.ordinal}
         isLive={isLive}
         testid={testid}
@@ -733,6 +761,12 @@ interface AssistantRowProps {
   message: AssistantMessage;
   toolResultsById: Map<string, ToolResultMessage>;
   subagentMessagesById?: ReadonlyMap<string, RunMessageRow[]>;
+  /** subagent_id whose deltas the in-flight `streaming` buffer carries.
+   *  Threaded down so each `agent` toolCall card whose result resolves
+   *  to this sid embeds the streaming row inline (next to or in place
+   *  of the persisted sub-agent transcript). */
+  streamingSubagentId?: string | null;
+  streaming?: StreamingMessage | null;
   ordinal: number;
   isLive: boolean;
   testid: string;
@@ -742,6 +776,8 @@ function AssistantMessageRow({
   message,
   toolResultsById,
   subagentMessagesById,
+  streamingSubagentId,
+  streaming,
   ordinal,
   isLive,
   testid,
@@ -784,16 +820,18 @@ function AssistantMessageRow({
         const inlineLabel = typeof args?.name === "string" ? args.name : undefined;
         const profileLabel = typeof args?.agent === "string" ? args.agent : undefined;
         const subagentName = inlineLabel ?? profileLabel;
-        if (subagentMessagesById && result) {
+        if (result) {
           const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
           const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
-          const subagentRows = sid ? subagentMessagesById.get(sid) : undefined;
-          if (subagentRows && subagentRows.length > 0) {
+          const subagentRows = sid && subagentMessagesById ? subagentMessagesById.get(sid) : undefined;
+          const isStreamingHere = sid != null && streamingSubagentId === sid && streaming != null;
+          if ((subagentRows && subagentRows.length > 0) || isStreamingHere) {
             embeddedSubagent = (
               <div className="flex flex-col gap-2" data-testid={`subagent-transcript-${sid}`}>
-                {subagentRows.map((row) => (
+                {subagentRows?.map((row) => (
                   <MessageRow key={`sub-${row.ordinal}`} row={row} toolResultsById={toolResultsById} isLive={isLive} />
                 ))}
+                {isStreamingHere && <StreamingMessageRow streaming={streaming} />}
               </div>
             );
           }
@@ -807,8 +845,18 @@ function AssistantMessageRow({
       // ToolInput + RichToolResult on top duplicates everything, so
       // we drop them — the card body is just the transcript.
       const isAgent = chunk.name === "agent";
+      // Open the card by default whenever the embedded sub-agent
+      // transcript has anything to show (persisted rows or an in-flight
+      // stream). Plain tool cards stay closed by default — the body
+      // is just args + textual output, the header is enough.
+      const defaultOpen = embeddedSubagent != null;
       blocks.push(
-        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
+        <Tool
+          key={`${ordinal}-c${i}`}
+          data-testid={`tool-${chunk.id}`}
+          className="mb-0"
+          {...(defaultOpen ? { defaultOpen: true } : {})}
+        >
           <ToolHeader
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
