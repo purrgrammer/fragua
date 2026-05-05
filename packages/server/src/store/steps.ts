@@ -130,10 +130,13 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // truthful per-iteration boundary). Cleared on each new
   // `fact.node_started`.
   const firstStepEmittedForNode = new Set<string>();
-  // subagent_id → label captured from `subagent.start` events. Used to
-  // surface a friendly label on each sub-agent's step row (instead of
-  // the raw `__subagent:<uuid>` nodeId).
-  const subagentLabelById = new Map<string, string>();
+  // subagent_id → { label?, parentNodeId } captured from
+  // `subagent.start` events. Drives two pieces of step enrichment:
+  //   - `subagentLabel` for the operator-friendly name in the UI
+  //   - `parentNodeId` so sub-agent steps render as indented children
+  //     under the calling parent step (same path the parallel-branch
+  //     UI already uses for fan-out branches)
+  const subagentMetaById = new Map<string, { label?: string; parentNodeId?: string }>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -141,8 +144,14 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
 
     if (ev.type === "subagent.start") {
       const sid = stringField(data, "subagent_id");
-      const label = stringField(data, "label");
-      if (sid && label) subagentLabelById.set(sid, label);
+      if (sid) {
+        const meta: { label?: string; parentNodeId?: string } = {};
+        const label = stringField(data, "label");
+        if (label) meta.label = label;
+        const parentNode = stringField(data, "parent_node_id");
+        if (parentNode) meta.parentNodeId = parentNode;
+        subagentMetaById.set(sid, meta);
+      }
       continue;
     }
 
@@ -186,13 +195,17 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // namespace (chosen so the SQL aggregator doesn't conflate
       // sub-agent cost with the parent's calling node). Stamp the
       // discriminator + the operator-friendly label so the UI can
-      // render `agent · <label>` in place of the raw uuid.
+      // render `agent · <label>` in place of the raw uuid, and stamp
+      // `parentNodeId` so the sub-agent row renders as an indented
+      // child under the calling parent step (same path the parallel
+      // branch UI already uses).
       const SUBAGENT_PREFIX = "__subagent:";
       if (step.nodeId.startsWith(SUBAGENT_PREFIX)) {
         const sid = step.nodeId.slice(SUBAGENT_PREFIX.length);
         step.subagentId = sid;
-        const label = subagentLabelById.get(sid);
-        if (label) step.subagentLabel = label;
+        const meta = subagentMetaById.get(sid);
+        if (meta?.label) step.subagentLabel = meta.label;
+        if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
       }
       steps.push(step);
       if (nodeId) firstStepEmittedForNode.add(nodeId);

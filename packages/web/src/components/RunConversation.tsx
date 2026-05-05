@@ -95,39 +95,65 @@ export function RunConversation({
   }, [messages]);
 
   // subagent_id → label, derived from `agent` tool calls in the
-  // parent's transcript. The toolCall's args carry `description`
-  // (the operator-friendly label the calling LLM picked) and the
-  // toolResult's data carries `subagent_id`. Pair them by
-  // `toolCallId` and stash the mapping so a sub-agent's message
-  // section can render `agent · <label>` instead of the raw uuid.
+  // parent's transcript. The toolCall's `arguments.description` is
+  // the operator-friendly label the calling LLM picked; the matching
+  // toolResult's `details.data.subagent_id` is the discriminator.
+  // Pair them by toolCall id and stash the mapping so a sub-agent's
+  // transcript can render with its label instead of the raw uuid.
   const subagentLabelById = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of messages) {
       if (row.content.role !== "assistant" || !Array.isArray(row.content.content)) continue;
       const blocks = row.content.content as Array<{
         type: string;
-        toolCallId?: string;
-        toolName?: string;
-        args?: { description?: unknown };
+        id?: string;
+        name?: string;
+        arguments?: { description?: unknown };
       }>;
       for (const block of blocks) {
         if (block.type !== "toolCall") continue;
-        if (block.toolName !== "agent") continue;
-        const callId = block.toolCallId;
+        if (block.name !== "agent") continue;
+        const callId = block.id;
         if (!callId) continue;
-        const description = typeof block.args?.description === "string" ? block.args.description : undefined;
+        const description = typeof block.arguments?.description === "string" ? block.arguments.description : undefined;
         if (!description) continue;
         const result = toolResultsById.get(callId);
-        if (!result || !Array.isArray(result.content)) continue;
-        for (const resBlock of result.content as Array<{ output?: { value?: { data?: unknown } } }>) {
-          const data = resBlock.output?.value?.data as { subagent_id?: unknown } | undefined;
-          const sid = typeof data?.subagent_id === "string" ? data.subagent_id : undefined;
-          if (sid) map.set(sid, description);
-        }
+        if (!result) continue;
+        const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
+        const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
+        if (sid) map.set(sid, description);
       }
     }
     return map;
   }, [messages, toolResultsById]);
+
+  // subagent_id → ordered array of sub-agent transcript messages.
+  // Sub-agent messages are written to the parent's run with
+  // `nodeId = "__subagent:<id>"`; they're rendered inline inside the
+  // matching `agent` toolCall card (not as their own NodeSection)
+  // so the parent's section flow stays unbroken and the operator
+  // sees "spawned X with prompt Y, here's what it produced" in one
+  // visual unit.
+  const SUBAGENT_NODE_PREFIX = "__subagent:";
+  const subagentMessagesById = useMemo(() => {
+    const map = new Map<string, RunMessageRow[]>();
+    for (const row of messages) {
+      const nid = row.nodeId;
+      if (typeof nid !== "string" || !nid.startsWith(SUBAGENT_NODE_PREFIX)) continue;
+      const sid = nid.slice(SUBAGENT_NODE_PREFIX.length);
+      const arr = map.get(sid) ?? [];
+      arr.push(row);
+      map.set(sid, arr);
+    }
+    return map;
+  }, [messages]);
+
+  // Strip sub-agent rows from the main message stream — they render
+  // inside the agent toolCall card, not as their own section.
+  const mainMessages = useMemo(
+    () => messages.filter((m) => typeof m.nodeId !== "string" || !m.nodeId.startsWith(SUBAGENT_NODE_PREFIX)),
+    [messages],
+  );
 
   const stateByNodeId = useMemo(() => {
     const map = new Map<string, NodeState>();
@@ -139,7 +165,7 @@ export function RunConversation({
   // the nodeId changes from the previous row. `null` / missing nodeIds
   // collapse into a single "(unscoped)" section — shouldn't happen
   // for agent-emitted messages but we guard defensively.
-  const sections = useMemo(() => groupByNode(messages), [messages]);
+  const sections = useMemo(() => groupByNode(mainMessages), [mainMessages]);
   const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
 
   // Branch-tab planning: walk visibleSections; whenever we hit a section
@@ -208,7 +234,13 @@ export function RunConversation({
                     subagentLabelById={subagentLabelById}
                   >
                     {section.rows.map((row) => (
-                      <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                      <MessageRow
+                        key={row.ordinal}
+                        row={row}
+                        toolResultsById={toolResultsById}
+                        subagentMessagesById={subagentMessagesById}
+                        isLive={isLive}
+                      />
                     ))}
                     {showStreamHere && <StreamingMessageRow streaming={streaming!} />}
                   </NodeSection>
@@ -606,10 +638,17 @@ function NodeStatusLabel({
 interface MessageRowProps {
   row: RunMessageRow;
   toolResultsById: Map<string, ToolResultMessage>;
+  /** Sub-agent transcripts keyed by subagent_id, indexed from the
+   *  parent's `messages` table. Threaded into AssistantMessageRow so
+   *  each `agent` toolCall card embeds its sub-agent's messages
+   *  inline (no separate NodeSection break). Optional: only the
+   *  parent flow needs it; nested toolCall cards inside an embedded
+   *  sub-agent transcript don't (sub-agents can't spawn sub-agents). */
+  subagentMessagesById?: ReadonlyMap<string, RunMessageRow[]>;
   isLive: boolean;
 }
 
-function MessageRow({ row, toolResultsById, isLive }: MessageRowProps): JSX.Element | null {
+function MessageRow({ row, toolResultsById, subagentMessagesById, isLive }: MessageRowProps): JSX.Element | null {
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
   if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
@@ -619,6 +658,7 @@ function MessageRow({ row, toolResultsById, isLive }: MessageRowProps): JSX.Elem
       <AssistantMessageRow
         message={msg}
         toolResultsById={toolResultsById}
+        subagentMessagesById={subagentMessagesById}
         ordinal={row.ordinal}
         isLive={isLive}
         testid={testid}
@@ -687,12 +727,20 @@ function UserMessageRow({
 interface AssistantRowProps {
   message: AssistantMessage;
   toolResultsById: Map<string, ToolResultMessage>;
+  subagentMessagesById?: ReadonlyMap<string, RunMessageRow[]>;
   ordinal: number;
   isLive: boolean;
   testid: string;
 }
 
-function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: AssistantRowProps): JSX.Element | null {
+function AssistantMessageRow({
+  message,
+  toolResultsById,
+  subagentMessagesById,
+  ordinal,
+  isLive,
+  testid,
+}: AssistantRowProps): JSX.Element | null {
   const blocks: ReactNode[] = [];
   let i = 0;
   for (const chunk of message.content) {
@@ -712,6 +760,38 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
     } else if (chunk.type === "toolCall") {
       const result = toolResultsById.get(chunk.id);
       const extRenderer = extensionRenderers.get(chunk.name);
+      // Embedded sub-agent transcript: when this is an `agent`
+      // toolCall, look up the sub-agent's messages by subagent_id
+      // (carried on the matching toolResult's
+      // `details.data.subagent_id`) and render them inside the Tool
+      // card. Keeps the parent's NodeSection unbroken — no
+      // interleaving with the sub-agent's transcript as a sibling
+      // section. The recursive render uses an EMPTY
+      // subagentMessagesById so sub-agent toolCalls inside don't
+      // try to recurse (sub-agents can't spawn sub-agents).
+      let embeddedSubagent: ReactNode = null;
+      if (chunk.name === "agent" && subagentMessagesById && result) {
+        const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
+        const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
+        const subagentRows = sid ? subagentMessagesById.get(sid) : undefined;
+        if (subagentRows && subagentRows.length > 0) {
+          embeddedSubagent = (
+            <div
+              className="ml-2 mt-2 flex flex-col gap-2 border-l-2 border-sw-border pl-3"
+              data-testid={`subagent-transcript-${sid}`}
+            >
+              {subagentRows.map((row) => (
+                <MessageRow
+                  key={`sub-${row.ordinal}`}
+                  row={row}
+                  toolResultsById={toolResultsById}
+                  isLive={isLive}
+                />
+              ))}
+            </div>
+          );
+        }
+      }
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
           <ToolHeader
@@ -722,6 +802,7 @@ function AssistantMessageRow({ message, toolResultsById, ordinal, testid }: Assi
           />
           <ToolContent>
             <ToolInput input={chunk.arguments} />
+            {embeddedSubagent}
             <RichToolResult
               toolName={chunk.name}
               result={result}
