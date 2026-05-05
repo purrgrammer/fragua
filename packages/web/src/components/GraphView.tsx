@@ -626,10 +626,13 @@ export function toFlowGraph(
     activeNodeIds = null,
     winnerBranchIds = null,
   } = opts;
+  // `detail.nodes` is sorted by `(nodeId, iteration)` ascending, so
+  // overwriting by nodeId keeps the latest iteration's state — the
+  // default "show me where this node ended up" behaviour for loops.
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
-  // `selectedEdges` is an ordered log of every (from,to) pair the executor
-  // traversed. A Set lookup is enough because multiple traversals of the
-  // same pair all mean "taken"; iteration count isn't surfaced visually yet.
+  // `selectedEdges` is an ordered log of every (from,to,iteration) triple
+  // the executor traversed. The set ignores iteration: any traversal makes
+  // an edge "taken" for fade-styling purposes.
   const takenEdges = new Set(detail?.selectedEdges.map((e) => edgeKey(e.from, e.to)) ?? []);
   // A node is "reached" if it received a `fact.node_*` event OR if some
   // selected edge points at it. Terminal nodes (Msquare) never emit their

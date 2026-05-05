@@ -154,10 +154,14 @@ export function startupSweep(db: Database, now: () => number, opts?: StartupSwee
       ) {
         activeMsDelta = lastAlive - current.dispatch_started_at;
       }
+      // Preserve current_node so the executor resumes on the in-flight node
+      // instead of re-emitting fact.run_started and re-running the workflow
+      // from the start node. Partial-side-effect safety is covered by the
+      // orphan quarantine pass above; rerun-from-start was never the
+      // intended recovery semantics.
       db.query(
         `UPDATE run_state SET
              status = 'queued',
-             current_node = NULL,
              node_started_at = NULL,
              dispatch_started_at = NULL,
              ready_at = ?,

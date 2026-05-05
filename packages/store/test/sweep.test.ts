@@ -25,7 +25,11 @@ describe("startupSweep", () => {
     expect(result.requeued).toContain(runId);
     const after = store.getState(runId)!;
     expect(after.status).toBe("queued");
-    expect(after.currentNode).toBeNull();
+    // Sweep preserves current_node so the executor re-dispatches the
+    // in-flight node instead of re-emitting fact.run_started.
+    expect(after.currentNode).toBe("a");
+    expect(after.dispatchStartedAt).toBeNull();
+    expect(after.nodeStartedAt).toBeNull();
 
     // A fact.run_requeued_after_crash event is in the log.
     const events = store.getEvents(runId);

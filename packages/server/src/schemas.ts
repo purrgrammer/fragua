@@ -65,6 +65,10 @@ export type RunSummary = Static<typeof RunSummary>;
 
 export const NodeState = Type.Object({
   nodeId: Type.String(),
+  /** Loop iteration this entry describes (0 for the first dispatch, 1 for
+   * the first re-entry across a backward edge or goal-gate retarget, …). A
+   * non-looping run carries only `iteration: 0` entries. */
+  iteration: Type.Integer({ minimum: 0 }),
   state: Type.Union([
     Type.Literal("pending"),
     Type.Literal("running"),
@@ -80,10 +84,12 @@ export type NodeState = Static<typeof NodeState>;
 /** `(from, to)` pair for an edge the executor actually traversed. Projected
  * from the run's `edge.selected` event stream. Lets the UI fade edges that
  * were never taken so the executed path pops visually. Multiple entries for
- * the same pair are allowed (back-edges re-entered across iterations). */
+ * the same `(from, to)` are emitted when a back-edge or goal-gate retarget
+ * re-traverses across iterations; `iteration` distinguishes them. */
 export const SelectedEdge = Type.Object({
   from: Type.String(),
   to: Type.String(),
+  iteration: Type.Integer({ minimum: 0 }),
 });
 export type SelectedEdge = Static<typeof SelectedEdge>;
 

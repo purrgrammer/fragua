@@ -516,8 +516,8 @@ describe("RunDetail", () => {
       startedAt: "2024-01-01T00:00:00Z",
       status: "running",
       lastEventSeq: 1,
-      nodes: [{ nodeId: "implement", state: "running", lastEventSeq: 1 }],
-      selectedEdges: [{ from: "start", to: "implement" }],
+      nodes: [{ nodeId: "implement", iteration: 0, state: "running", lastEventSeq: 1 }],
+      selectedEdges: [{ from: "start", to: "implement", iteration: 0 }],
       workflowSource: `digraph demo {
         start [shape=Mdiamond]
         implement [shape=box, label="Implement", model="claude-sonnet-4-5"]

@@ -9,8 +9,8 @@ describe("layoutDag", () => {
     const input = {
       nodes: [{ id: "a" }, { id: "b" }, { id: "c" }],
       edges: [
-        { from: "a", to: "b" },
-        { from: "b", to: "c" },
+        { from: "a", to: "b", iteration: 0 },
+        { from: "b", to: "c", iteration: 0 },
       ],
     };
     const tb = layoutDag(input, { orientation: "TB" });
@@ -27,7 +27,7 @@ describe("layoutDag", () => {
   it("defaults to TB when orientation is omitted", () => {
     const input = {
       nodes: [{ id: "a" }, { id: "b" }],
-      edges: [{ from: "a", to: "b" }],
+      edges: [{ from: "a", to: "b", iteration: 0 }],
     };
     const out = layoutDag(input);
     const byId = new Map(out.map((p) => [p.id, p.position]));
@@ -38,9 +38,9 @@ describe("layoutDag", () => {
     const input = {
       nodes: [{ id: "s" }, { id: "a" }, { id: "b" }, { id: "c" }],
       edges: [
-        { from: "s", to: "a" },
-        { from: "s", to: "b" },
-        { from: "s", to: "c" },
+        { from: "s", to: "a", iteration: 0 },
+        { from: "s", to: "b", iteration: 0 },
+        { from: "s", to: "c", iteration: 0 },
       ],
     };
     const tb = layoutDag(input, { orientation: "TB" });
@@ -54,8 +54,8 @@ describe("layoutDag", () => {
     const input = {
       nodes: [{ id: "a" }, { id: "b" }],
       edges: [
-        { from: "a", to: "b" },
-        { from: "b", to: "a" },
+        { from: "a", to: "b", iteration: 0 },
+        { from: "b", to: "a", iteration: 0 },
       ],
     };
     const out = layoutDag(input);
@@ -64,7 +64,7 @@ describe("layoutDag", () => {
   });
 
   it("picks up ids that appear only in edges (defensive union)", () => {
-    const input = { nodes: [{ id: "a" }], edges: [{ from: "a", to: "b" }] };
+    const input = { nodes: [{ id: "a" }], edges: [{ from: "a", to: "b", iteration: 0 }] };
     const out = layoutDag(input);
     expect(out.map((p) => p.id).sort()).toEqual(["a", "b"]);
   });

@@ -71,7 +71,7 @@ describe("NodeInspector", () => {
     const a = nodes["a"];
     if (!a) return;
     const { container } = render(
-      <NodeInspector node={a} state={{ nodeId: "a", state: "running", lastEventSeq: 42 }} />,
+      <NodeInspector node={a} state={{ nodeId: "a", iteration: 0, state: "running", lastEventSeq: 42 }} />,
     );
     const text = container.textContent ?? "";
     expect(text).toContain("running");

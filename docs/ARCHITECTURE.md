@@ -79,11 +79,15 @@ ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cros
 **Resolution.** **Startup sweep** runs before the executor loop, in a single transaction:
 
 ```sql
--- (a) Requeue crash-interrupted runs
+-- (a) Requeue crash-interrupted runs. current_node is preserved so the
+--     executor resumes on the in-flight node instead of re-emitting
+--     fact.run_started and re-running the workflow from the start node.
+--     Partial-side-effect safety lives in (b) below — rerun-from-start
+--     was never the intended recovery semantics.
 UPDATE run_state
    SET status = 'queued',
-       current_node = NULL,
        node_started_at = NULL,
+       dispatch_started_at = NULL,
        ready_at = :now,
        version = version + 1,
        updated_at = :now

@@ -54,32 +54,55 @@ describe("isDetailEvent", () => {
 });
 
 describe("foldDetailFrame", () => {
-  test("fact.node_started → nodeStates['n1'] = running", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n1" }, 5);
-    expect(out.nodeStates.get("n1")).toEqual({ state: "running", lastEventSeq: 5 });
+  test("fact.node_started → nodeStates['n1#0'] = running", () => {
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n1", iteration: 0 }, 5);
+    expect(out.nodeStates.get("n1#0")).toEqual({ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 5 });
   });
 
   test("fact.node_completed (outcomeStatus=fail) → failed", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", outcomeStatus: "fail" }, 7);
-    expect(out.nodeStates.get("n1")?.state).toBe("failed");
+    const out = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.node_completed",
+      { nodeId: "n1", iteration: 0, outcomeStatus: "fail" },
+      7,
+    );
+    expect(out.nodeStates.get("n1#0")?.state).toBe("failed");
   });
 
   test("fact.node_completed (no outcomeStatus) → completed", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1" }, 7);
-    expect(out.nodeStates.get("n1")?.state).toBe("completed");
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", iteration: 0 }, 7);
+    expect(out.nodeStates.get("n1#0")?.state).toBe("completed");
   });
 
   test("fact.node_aborted → failed", () => {
-    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_aborted", { nodeId: "n1" }, 9);
-    expect(out.nodeStates.get("n1")?.state).toBe("failed");
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_aborted", { nodeId: "n1", iteration: 0 }, 9);
+    expect(out.nodeStates.get("n1#0")?.state).toBe("failed");
   });
 
-  test("edge.selected appends to selectedEdges in order", () => {
-    let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b" }, 1);
-    s = fold(s, "edge.selected", { from: "b", to: "c" }, 2);
+  test("loop iterations track separate entries by (nodeId, iteration)", () => {
+    let s = fold(
+      EMPTY_DETAIL_OVERLAY,
+      "fact.node_completed",
+      { nodeId: "verify", iteration: 0, outcomeStatus: "fail" },
+      5,
+    );
+    s = fold(s, "fact.node_started", { nodeId: "verify", iteration: 1 }, 6);
+    s = fold(s, "fact.node_completed", { nodeId: "verify", iteration: 1, outcomeStatus: "success" }, 7);
+    expect(s.nodeStates.get("verify#0")?.state).toBe("failed");
+    expect(s.nodeStates.get("verify#1")?.state).toBe("completed");
+  });
+
+  test("missing iteration on payload defaults to 0 (back-compat with older event logs)", () => {
+    const out = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n1" }, 5);
+    expect(out.nodeStates.get("n1#0")?.state).toBe("running");
+  });
+
+  test("edge.selected appends to selectedEdges in order, with iteration", () => {
+    let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 1);
+    s = fold(s, "edge.selected", { from: "b", to: "c", iteration: 0 }, 2);
     expect(s.selectedEdges).toEqual([
-      { from: "a", to: "b" },
-      { from: "b", to: "c" },
+      { from: "a", to: "b", iteration: 0 },
+      { from: "b", to: "c", iteration: 0 },
     ]);
   });
 
@@ -178,25 +201,37 @@ describe("foldDetailFrame", () => {
 
 describe("mergeDetail", () => {
   test("empty overlay returns the snapshot reference unchanged", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", state: "running", lastEventSeq: 10 }] });
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10 }] });
     const merged = mergeDetail(snap, EMPTY_DETAIL_OVERLAY);
     expect(merged).toBe(snap);
   });
 
   test("overlay node state replaces snapshot row when seq is newer", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", state: "running", lastEventSeq: 10 }] });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1" }, 20);
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 10 }] });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_completed", { nodeId: "n1", iteration: 0 }, 20);
     const merged = mergeDetail(snap, overlay);
-    expect(merged.nodes).toEqual([{ nodeId: "n1", state: "completed", lastEventSeq: 20 }]);
+    expect(merged.nodes).toEqual([{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 20 }]);
   });
 
   test("overlay introduces nodes not in the snapshot", () => {
-    const snap = snapshot({ nodes: [{ nodeId: "n1", state: "completed", lastEventSeq: 10 }] });
-    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n2" }, 25);
+    const snap = snapshot({ nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 }] });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "n2", iteration: 0 }, 25);
     const merged = mergeDetail(snap, overlay);
     expect(merged.nodes).toEqual([
-      { nodeId: "n1", state: "completed", lastEventSeq: 10 },
-      { nodeId: "n2", state: "running", lastEventSeq: 25 },
+      { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 },
+      { nodeId: "n2", iteration: 0, state: "running", lastEventSeq: 25 },
+    ]);
+  });
+
+  test("overlay introduces a fresh iteration alongside an existing one", () => {
+    const snap = snapshot({
+      nodes: [{ nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10 }],
+    });
+    const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.node_started", { nodeId: "verify", iteration: 1 }, 25);
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.nodes).toEqual([
+      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 10 },
+      { nodeId: "verify", iteration: 1, state: "running", lastEventSeq: 25 },
     ]);
   });
 
@@ -206,8 +241,8 @@ describe("mergeDetail", () => {
     const snap = snapshot({
       status: "running",
       nodes: [
-        { nodeId: "running-node", state: "running", lastEventSeq: 5 },
-        { nodeId: "done-node", state: "completed", lastEventSeq: 8 },
+        { nodeId: "running-node", iteration: 0, state: "running", lastEventSeq: 5 },
+        { nodeId: "done-node", iteration: 0, state: "completed", lastEventSeq: 8 },
       ],
     });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_halted", null, 42);
@@ -219,15 +254,15 @@ describe("mergeDetail", () => {
 
   test("selectedEdges concatenate snapshot + overlay in order", () => {
     const snap = snapshot({
-      selectedEdges: [{ from: "a", to: "b" }],
+      selectedEdges: [{ from: "a", to: "b", iteration: 0 }],
     });
-    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c" }, 11);
-    overlay = fold(overlay, "edge.selected", { from: "c", to: "d" }, 12);
+    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c", iteration: 0 }, 11);
+    overlay = fold(overlay, "edge.selected", { from: "c", to: "d", iteration: 0 }, 12);
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
-      { from: "a", to: "b" },
-      { from: "b", to: "c" },
-      { from: "c", to: "d" },
+      { from: "a", to: "b", iteration: 0 },
+      { from: "b", to: "c", iteration: 0 },
+      { from: "c", to: "d", iteration: 0 },
     ]);
   });
 
@@ -247,8 +282,8 @@ describe("mergeDetail", () => {
     const snap = snapshot({
       status: "running",
       nodes: [
-        { nodeId: "n1", state: "completed", lastEventSeq: 10 },
-        { nodeId: "n2", state: "completed", lastEventSeq: 20 },
+        { nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 10 },
+        { nodeId: "n2", iteration: 0, state: "completed", lastEventSeq: 20 },
       ],
     });
     const overlay = fold(EMPTY_DETAIL_OVERLAY, "fact.run_completed", null, 50);
@@ -262,12 +297,12 @@ describe("mergeDetail", () => {
     // is dropped, so no node row actually moves. The output array must
     // still be the snapshot's reference.
     const snap = snapshot({
-      nodes: [{ nodeId: "n1", state: "completed", lastEventSeq: 30 }],
+      nodes: [{ nodeId: "n1", iteration: 0, state: "completed", lastEventSeq: 30 }],
     });
     const overlay: DetailOverlay = {
       ...EMPTY_DETAIL_OVERLAY,
       // Forge a stale entry with older seq than the snapshot's.
-      nodeStates: new Map([["n1", { state: "running", lastEventSeq: 5 }]]),
+      nodeStates: new Map([["n1#0", { nodeId: "n1", iteration: 0, state: "running", lastEventSeq: 5 }]]),
       status: "running",
     };
     const merged = mergeDetail(snap, overlay);

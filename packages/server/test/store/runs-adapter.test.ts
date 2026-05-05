@@ -125,14 +125,14 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
       },
     ];
     const nodes = deriveNodeStates(events);
-    expect(nodes).toEqual([{ nodeId: "lint", state: "failed", lastEventSeq: 2 }]);
+    expect(nodes).toEqual([{ nodeId: "lint", iteration: 0, state: "failed", lastEventSeq: 2 }]);
   });
 
   test("node_completed without outcomeStatus → state: completed (back-compat)", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_completed", { nodeId: "plan", iteration: 0, nextNode: "implement" }), seq: 5 },
     ];
-    expect(deriveNodeStates(events)).toEqual([{ nodeId: "plan", state: "completed", lastEventSeq: 5 }]);
+    expect(deriveNodeStates(events)).toEqual([{ nodeId: "plan", iteration: 0, state: "completed", lastEventSeq: 5 }]);
   });
 
   test("node_completed with outcomeStatus=success → state: completed", () => {
@@ -152,30 +152,56 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
     ];
     expect(deriveNodeStates(events)[0]?.state).toBe("failed");
   });
+
+  test("loop iterations produce one entry per (nodeId, iteration)", () => {
+    const events: StoredEvent[] = [
+      { ...ev("fact.node_started", { nodeId: "verify", iteration: 0 }), seq: 1 },
+      {
+        ...ev("fact.node_completed", { nodeId: "verify", iteration: 0, outcomeStatus: "fail", nextNode: "fix" }),
+        seq: 2,
+      },
+      { ...ev("fact.node_started", { nodeId: "verify", iteration: 1 }), seq: 3 },
+      {
+        ...ev("fact.node_completed", { nodeId: "verify", iteration: 1, outcomeStatus: "success", nextNode: "done" }),
+        seq: 4,
+      },
+    ];
+    const nodes = deriveNodeStates(events);
+    expect(nodes).toEqual([
+      { nodeId: "verify", iteration: 0, state: "failed", lastEventSeq: 2 },
+      { nodeId: "verify", iteration: 1, state: "completed", lastEventSeq: 4 },
+    ]);
+  });
 });
 
 describe("deriveSelectedEdges — edge.selected projection", () => {
-  test("extracts (from, to) pairs in event order", () => {
+  test("extracts (from, to, iteration) triples in event order", () => {
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "start", to: "lint", rule: "weight" }), seq: 1 },
+      { ...ev("edge.selected", { from: "start", to: "lint", iteration: 0, rule: "weight" }), seq: 1 },
       {
-        ...ev("edge.selected", { from: "lint", to: "done", rule: "condition", matched_condition: "outcome=fail" }),
+        ...ev("edge.selected", {
+          from: "lint",
+          to: "done",
+          iteration: 0,
+          rule: "condition",
+          matched_condition: "outcome=fail",
+        }),
         seq: 2,
       },
     ];
     expect(deriveSelectedEdges(events)).toEqual([
-      { from: "start", to: "lint" },
-      { from: "lint", to: "done" },
+      { from: "start", to: "lint", iteration: 0 },
+      { from: "lint", to: "done", iteration: 0 },
     ]);
   });
 
   test("non-edge.selected events are ignored", () => {
     const events: StoredEvent[] = [
       { ...ev("fact.node_started", { nodeId: "x", iteration: 0 }), seq: 1 },
-      { ...ev("edge.selected", { from: "x", to: "y" }), seq: 2 },
+      { ...ev("edge.selected", { from: "x", to: "y", iteration: 0 }), seq: 2 },
       { ...ev("fact.run_halted", { reason: "error" }), seq: 3 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y" }]);
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "x", to: "y", iteration: 0 }]);
   });
 
   test("drops edge.selected with non-string from/to", () => {
@@ -186,12 +212,20 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     expect(deriveSelectedEdges(events)).toEqual([]);
   });
 
-  test("duplicates are preserved — back-edge iterations matter", () => {
+  test("back-edge re-traversals carry distinct iterations", () => {
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "verify", to: "fix" }), seq: 1 },
-      { ...ev("edge.selected", { from: "verify", to: "fix" }), seq: 2 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 0 }), seq: 1 },
+      { ...ev("edge.selected", { from: "verify", to: "fix", iteration: 1 }), seq: 2 },
     ];
-    expect(deriveSelectedEdges(events)).toHaveLength(2);
+    const edges = deriveSelectedEdges(events);
+    expect(edges).toHaveLength(2);
+    expect(edges[0]?.iteration).toBe(0);
+    expect(edges[1]?.iteration).toBe(1);
+  });
+
+  test("missing iteration on payload defaults to 0 (back-compat for older event logs)", () => {
+    const events: StoredEvent[] = [{ ...ev("edge.selected", { from: "a", to: "b" }), seq: 1 }];
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0 }]);
   });
 });
 

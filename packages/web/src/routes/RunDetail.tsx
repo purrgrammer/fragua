@@ -277,6 +277,10 @@ const DetailHeader = memo(function DetailHeader({
           : detail?.status === "canceled"
             ? "canceled"
             : null;
+  // Highest iteration touched by any node fact. > 0 means the run actually
+  // looped (backward edge or goal-gate retarget); surface it so the user
+  // knows the graph view's per-node state collapses iterations.
+  const maxIteration = nodes.reduce((m, n) => (n.iteration > m ? n.iteration : m), 0);
   return (
     <header className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 items-baseline gap-2">
@@ -343,6 +347,15 @@ const DetailHeader = memo(function DetailHeader({
               title={currentLabel}
             >
               {currentLabel}
+            </span>
+          )}
+          {detail && maxIteration > 0 && (
+            <span
+              data-testid="detail-loops-pill"
+              className="shrink-0 rounded border border-sw-border bg-sw-surface px-1.5 py-0.5 font-mono text-[0.65rem] text-sw-muted"
+              title={`At least one node re-entered — ${maxIteration + 1} iterations seen`}
+            >
+              loops {maxIteration + 1}×
             </span>
           )}
           {detail && (

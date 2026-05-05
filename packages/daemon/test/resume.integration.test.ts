@@ -176,7 +176,9 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     expect(sweepResult.requeued).toContain("crash-1");
     const afterSweep = store2.getState("crash-1")!;
     expect(afterSweep.status).toBe("queued");
-    expect(afterSweep.currentNode).toBeNull();
+    // current_node is preserved so the executor resumes on the in-flight
+    // node (here: start) without re-emitting fact.run_started.
+    expect(afterSweep.currentNode).toBe("start");
     expect(afterSweep.dispatchStartedAt).toBeNull();
 
     // Re-register the handler on a fresh dispatcher — non-hanging this
@@ -194,13 +196,130 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     expect(final.status).toBe("completed");
     expect(final.dispatchStartedAt).toBeNull();
 
-    // Tally: requeued_after_crash present in the log.
+    // Tally: requeued_after_crash present in the log, and fact.run_started
+    // appears exactly once (resume must not re-emit it — that was the bug
+    // where workflows re-ran end-to-end after every crash).
     const types = store2.getEvents("crash-1").map((e) => e.type);
     expect(types).toContain("fact.run_requeued_after_crash");
+    expect(types.filter((t) => t === "fact.run_started")).toHaveLength(1);
 
     // Drain the orphan handler. Its terminal append will OCC-fail
     // because version moved on after sweep + completion — that's the
     // intended behaviour.
+    resolveHang({ kind: "halt", reason: "error", detail: "test cleanup" });
+    ac.abort();
+    await ranAway.catch(() => undefined);
+    store2.close();
+    r.cleanup();
+  });
+
+  test("crash on a deep node: sweep resumes on that node, no rerun-from-start", async () => {
+    // Regression for the bug where startupSweep nulled current_node, the
+    // executor's `needsStart` then re-fired fact.run_started, and the
+    // workflow re-ran from the start node end-to-end. Visible in the wild
+    // as duplicate edges in selectedEdges and collapsed nodes[] state.
+    const dot = `digraph {
+      start [shape=Mdiamond]; collect [shape=box]; deep [shape=box];
+      start -> collect; collect -> deep; deep -> __end__
+    }`;
+    const r = makeRig(dot);
+    let resolveHang: (v: { kind: "halt"; reason: "error"; detail: string }) => void = () => undefined;
+    const hangPromise = new Promise<{ kind: "halt"; reason: "error"; detail: string }>((res) => {
+      resolveHang = res;
+    });
+    let deepCallCount = 0;
+    let collectCallCount = 0;
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "collect", tokens: 0, costUsd: 0 }),
+    });
+    r.dispatcher.register(r.workflowSha, "collect", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => {
+        collectCallCount++;
+        return { kind: "transition", nextNode: "deep", tokens: 0, costUsd: 0 };
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "deep", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 60_000,
+      handler: async () => {
+        deepCallCount++;
+        return hangPromise;
+      },
+    });
+    enqueue(r, "deep-crash");
+
+    const ac = new AbortController();
+    r.store.claimNextRun(1);
+    const ranAway = runOne("deep-crash", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 50,
+      shutdownSignal: ac.signal,
+    });
+
+    for (let i = 0; i < 200 && deepCallCount === 0; i++) await new Promise((res) => setTimeout(res, 5));
+    expect(deepCallCount).toBe(1);
+    expect(collectCallCount).toBe(1);
+    expect(r.store.getState("deep-crash")!.currentNode).toBe("deep");
+
+    const store2 = reopenStore(r.dbPath);
+    store2.startupSweep();
+    expect(store2.getState("deep-crash")!.currentNode).toBe("deep");
+
+    const dispatcher2 = new Dispatcher();
+    dispatcher2.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => ({ kind: "transition", nextNode: "collect", tokens: 0, costUsd: 0 }),
+    });
+    dispatcher2.register(r.workflowSha, "collect", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => {
+        collectCallCount++;
+        return { kind: "transition", nextNode: "deep", tokens: 0, costUsd: 0 };
+      },
+    });
+    dispatcher2.register(r.workflowSha, "deep", {
+      kind: "step",
+      sideEffect: "none",
+      maxMs: 200,
+      handler: async () => {
+        deepCallCount++;
+        return { kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 };
+      },
+    });
+    await runUntilSettled(store2, dispatcher2, "deep-crash");
+
+    expect(store2.getState("deep-crash")!.status).toBe("completed");
+    // collect must not have run again — resume picked up on `deep`, not start.
+    expect(collectCallCount).toBe(1);
+    // deep ran twice: once before crash (hung), once after resume (completed).
+    expect(deepCallCount).toBe(2);
+
+    const events = store2.getEvents("deep-crash");
+    // fact.run_started must appear exactly once: the bug was that resume
+    // re-emitted it and re-traversed the workflow from the start node.
+    expect(events.filter((e) => e.type === "fact.run_started")).toHaveLength(1);
+    const dispatched = events
+      .filter((e) => e.type === "fact.dispatch_started")
+      .map((e) => (e.payload as { nodeId: string }).nodeId);
+    // Pre-crash: collect, deep. Post-resume: deep again. No second start/collect.
+    expect(dispatched).toEqual(["collect", "deep", "deep"]);
+
     resolveHang({ kind: "halt", reason: "error", detail: "test cleanup" });
     ac.abort();
     await ranAway.catch(() => undefined);

@@ -844,7 +844,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             });
             if (selection != null) {
               result.nextNode = selection.edge.to;
-              recordEdgeSelected(observability, currentNode, selection);
+              recordEdgeSelected(observability, currentNode, iteration, selection);
             } else if (result.outcomeStatus === "fail") {
               // §3.7 step 2/3 — when no fail-edge claimed the failure,
               // consult the source node's retry_target / fallback_retry_target
@@ -1508,11 +1508,13 @@ function readBudgetOverrides(routing: Record<string, unknown>):
 function recordEdgeSelected(
   buffer: { type: string; payload: Record<string, unknown> }[],
   fromNode: string,
+  iteration: number,
   selection: EdgeSelection,
 ): void {
   const payload: Record<string, unknown> = {
     from: fromNode,
     to: selection.edge.to,
+    iteration,
     rule: selection.rule,
   };
   if (selection.matched !== undefined) {

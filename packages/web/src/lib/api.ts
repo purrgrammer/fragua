@@ -83,6 +83,11 @@ export interface RunSummary {
 
 export interface NodeState {
   nodeId: string;
+  /** Loop iteration this entry describes (0 for the first dispatch, 1 for
+   * the first re-entry across a backward edge or goal-gate retarget, …). A
+   * non-looping run carries only `iteration: 0` entries; the graph view
+   * groups by `nodeId` and renders the latest iteration's state. */
+  iteration: number;
   state: "pending" | "running" | "completed" | "failed" | "skipped" | "retrying";
   lastEventSeq: number;
 }
@@ -94,11 +99,13 @@ export interface NodeState {
  * client-side by `@swarm/core`'s `parseDotSource` so the server isn't a
  * second parser.
  */
-/** `(from, to)` pair for an edge the executor traversed — see server's
- *  `SelectedEdge` schema. Ordered log; duplicates allowed. */
+/** `(from, to, iteration)` triple for an edge the executor traversed — see
+ *  server's `SelectedEdge` schema. Ordered log. Multiple entries for the
+ *  same `(from, to)` carry distinct `iteration`s (back-edge re-traversal). */
 export interface SelectedEdge {
   from: string;
   to: string;
+  iteration: number;
 }
 
 export interface RunDetail {

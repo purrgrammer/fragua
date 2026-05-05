@@ -125,8 +125,8 @@ export function runStateToDetail(
 }
 
 /**
- * Walk the event log and emit one NodeState per nodeId seen. State is
- * derived from the latest transition fact on that node:
+ * Walk the event log and emit one NodeState per `(nodeId, iteration)` seen.
+ * State is derived from the latest transition fact on that pair:
  *   - node_started + node_completed(outcomeStatus≠fail) → completed
  *   - node_started + node_completed(outcomeStatus=fail) → failed
  *   - node_started only                                 → running
@@ -135,39 +135,48 @@ export function runStateToDetail(
  *     emitted; graph layer renders pending for nodes absent from the list,
  *     which the UI then fades to mark "never executed").
  *
+ * Loops (backward edges, goal-gate retargets) bump `iteration` on
+ * `fact.node_started`; each iteration appears as its own entry. The web
+ * UI groups by `nodeId` and renders the latest iteration's state; non-loop
+ * runs see iteration=0 only and behave identically to pre-loop output.
+ *
  * Terminal-halt patch: if the run ended via `fact.run_halted`,
- * `fact.run_cancelled`, or `fact.run_quarantined` and a node is still
- * marked `running` (no node_completed / node_aborted of its own), we
- * downgrade it to `failed` so the UI doesn't show a stale "in progress"
- * spinner on a halted run.
+ * `fact.run_cancelled`, or `fact.run_quarantined` and any entry is still
+ * marked `running`, we downgrade to `failed` so the UI doesn't show a
+ * stale "in progress" spinner on a halted run.
  */
 function deriveNodeStates(events: StoredEvent[]): NodeState[] {
-  const byNode = new Map<string, { state: NodeState["state"]; lastEventSeq: number }>();
-  const bump = (nodeId: string, state: NodeState["state"], seq: number) => {
-    byNode.set(nodeId, { state, lastEventSeq: seq });
+  const byKey = new Map<
+    string,
+    { nodeId: string; iteration: number; state: NodeState["state"]; lastEventSeq: number }
+  >();
+  const keyOf = (nodeId: string, iteration: number) => `${nodeId}#${iteration}`;
+  const bump = (nodeId: string, iteration: number, state: NodeState["state"], seq: number) => {
+    byKey.set(keyOf(nodeId, iteration), { nodeId, iteration, state, lastEventSeq: seq });
   };
 
   for (const ev of events) {
     const nodeId = nodeIdOf(ev);
     if (nodeId == null) continue;
+    const iteration = iterationOf(ev) ?? 0;
     switch (ev.type) {
       case "fact.node_started":
-        bump(nodeId, "running", ev.seq);
+        bump(nodeId, iteration, "running", ev.seq);
         break;
       // `dispatch_started` fires on every dispatch including resume after
       // an operator-pause abort. Without this case the prior `node_aborted`
       // wins as the last-counted event and the node stays "failed" until
       // `node_completed` finally fires — long minutes for a chatty agent.
       case "fact.dispatch_started":
-        bump(nodeId, "running", ev.seq);
+        bump(nodeId, iteration, "running", ev.seq);
         break;
       case "fact.node_completed": {
         const outcome = (ev.payload as { outcomeStatus?: string }).outcomeStatus;
-        bump(nodeId, outcome === "fail" ? "failed" : "completed", ev.seq);
+        bump(nodeId, iteration, outcome === "fail" ? "failed" : "completed", ev.seq);
         break;
       }
       case "fact.node_aborted":
-        bump(nodeId, "failed", ev.seq);
+        bump(nodeId, iteration, "failed", ev.seq);
         break;
       default:
         break;
@@ -185,31 +194,33 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
     }
   }
   if (haltSeq !== undefined) {
-    for (const [nodeId, v] of byNode) {
+    for (const [k, v] of byKey) {
       if (v.state === "running") {
-        byNode.set(nodeId, { state: "failed", lastEventSeq: haltSeq });
+        byKey.set(k, { ...v, state: "failed", lastEventSeq: haltSeq });
       }
     }
   }
 
-  return Array.from(byNode.entries()).map(([nodeId, v]) => ({
-    nodeId,
-    state: v.state,
-    lastEventSeq: v.lastEventSeq,
-  }));
+  // Stable order: by `(nodeId, iteration)`. The UI groups by nodeId so
+  // adjacent iterations land together, which makes "latest" lookups cheap.
+  return Array.from(byKey.values()).sort((a, b) => {
+    if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+    return a.iteration - b.iteration;
+  });
 }
 
-/** Project `edge.selected` events into the `(from, to)` pairs the executor
- *  traversed. Order preserved. Duplicates kept — a back-edge re-entered N
- *  times emits N entries, which lets the UI reason about iteration if it
- *  cares. */
+/** Project `edge.selected` events into the `(from, to, iteration)` triples
+ *  the executor traversed. Order preserved. Multiple entries for the same
+ *  `(from, to)` are emitted when a back-edge or goal-gate retarget
+ *  re-traverses across iterations; `iteration` distinguishes them. */
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
   for (const ev of events) {
     if (ev.type !== "edge.selected") continue;
-    const p = ev.payload as { from?: unknown; to?: unknown };
+    const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
     if (typeof p.from === "string" && typeof p.to === "string") {
-      out.push({ from: p.from, to: p.to });
+      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      out.push({ from: p.from, to: p.to, iteration });
     }
   }
   return out;
@@ -219,6 +230,11 @@ function nodeIdOf(event: StoredEvent): string | null {
   if (!event.type.startsWith("fact.")) return null;
   const p = event.payload as { nodeId?: unknown };
   return typeof p.nodeId === "string" ? p.nodeId : null;
+}
+
+function iterationOf(event: StoredEvent): number | null {
+  const p = event.payload as { iteration?: unknown };
+  return typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : null;
 }
 
 export { deriveNodeStates, deriveSelectedEdges };

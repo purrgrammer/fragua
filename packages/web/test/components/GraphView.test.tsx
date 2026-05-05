@@ -53,10 +53,10 @@ function makeDetail(overrides: Partial<RunDetail> = {}): RunDetail {
     status: "running",
     lastEventSeq: 2,
     nodes: [
-      { nodeId: "start", state: "completed", lastEventSeq: 1 },
-      { nodeId: "middle", state: "running", lastEventSeq: 2 },
+      { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+      { nodeId: "middle", iteration: 0, state: "running", lastEventSeq: 2 },
     ],
-    selectedEdges: [{ from: "start", to: "middle" }],
+    selectedEdges: [{ from: "start", to: "middle", iteration: 0 }],
     workflowSource: WORKFLOW_SOURCE,
     costUsd: 0,
     inputTokens: 0,
@@ -131,13 +131,13 @@ describe("GraphView — parallel branches", () => {
     const detailRunning = makeDetail({
       runId: "r1",
       nodes: [
-        { nodeId: "fork", state: "running", lastEventSeq: 1 },
-        { nodeId: "lensA", state: "running", lastEventSeq: 2 },
-        { nodeId: "lensB", state: "running", lastEventSeq: 3 },
+        { nodeId: "fork", iteration: 0, state: "running", lastEventSeq: 1 },
+        { nodeId: "lensA", iteration: 0, state: "running", lastEventSeq: 2 },
+        { nodeId: "lensB", iteration: 0, state: "running", lastEventSeq: 3 },
       ],
       selectedEdges: [
-        { from: "fork", to: "lensA" },
-        { from: "fork", to: "lensB" },
+        { from: "fork", to: "lensA", iteration: 0 },
+        { from: "fork", to: "lensB", iteration: 0 },
       ],
       workflowSource: src,
     });
@@ -160,13 +160,13 @@ describe("GraphView — parallel branches", () => {
     const detailDone = makeDetail({
       runId: "r1",
       nodes: [
-        { nodeId: "fork", state: "completed", lastEventSeq: 1 },
-        { nodeId: "lensA", state: "completed", lastEventSeq: 2 },
-        { nodeId: "lensB", state: "completed", lastEventSeq: 3 },
+        { nodeId: "fork", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "lensA", iteration: 0, state: "completed", lastEventSeq: 2 },
+        { nodeId: "lensB", iteration: 0, state: "completed", lastEventSeq: 3 },
       ],
       selectedEdges: [
-        { from: "fork", to: "lensA" },
-        { from: "fork", to: "lensB" },
+        { from: "fork", to: "lensA", iteration: 0 },
+        { from: "fork", to: "lensB", iteration: 0 },
       ],
       workflowSource: src,
     });

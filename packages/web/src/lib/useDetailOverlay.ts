@@ -19,8 +19,10 @@ import type { NodeState, RunDetail, SelectedEdge } from "./api.ts";
 type UiStatus = RunDetail["status"];
 
 export interface DetailOverlay {
-  /** nodeId → most recent state derived from `fact.node_*` events. */
-  nodeStates: Map<string, { state: NodeState["state"]; lastEventSeq: number }>;
+  /** `${nodeId}#${iteration}` → most recent state derived from `fact.node_*`
+   * events. Keyed by iteration too so loops (backward edges, goal-gate
+   * retargets) keep one entry per re-entry instead of last-write-wins. */
+  nodeStates: Map<string, { nodeId: string; iteration: number; state: NodeState["state"]; lastEventSeq: number }>;
   /** `edge.selected` events appended in order. Snapshot already includes
    * its own; the overlay only carries events with seq > snapshot.lastEventSeq.
    * `mergeDetail` concatenates rather than dedupes. */
@@ -102,7 +104,8 @@ export function foldDetailFrame(
       const from = stringField(payload, "from");
       const to = stringField(payload, "to");
       if (from === undefined || to === undefined) return prev;
-      return { ...prev, selectedEdges: [...prev.selectedEdges, { from, to }] };
+      const iteration = numberField(payload, "iteration") ?? 0;
+      return { ...prev, selectedEdges: [...prev.selectedEdges, { from, to, iteration }] };
     }
     case "fact.run_started":
       return { ...prev, status: "running" };
@@ -160,14 +163,24 @@ function setNodeState(
 ): DetailOverlay {
   const nodeId = stringField(payload, "nodeId");
   if (nodeId === undefined) return prev;
+  const iteration = numberField(payload, "iteration") ?? 0;
   const next = new Map(prev.nodeStates);
-  next.set(nodeId, { state, lastEventSeq: seq });
+  next.set(stateKey(nodeId, iteration), { nodeId, iteration, state, lastEventSeq: seq });
   return { ...prev, nodeStates: next };
+}
+
+function stateKey(nodeId: string, iteration: number): string {
+  return `${nodeId}#${iteration}`;
 }
 
 function stringField(payload: Record<string, unknown> | null, key: string): string | undefined {
   const v = payload?.[key];
   return typeof v === "string" ? v : undefined;
+}
+
+function numberField(payload: Record<string, unknown> | null, key: string): number | undefined {
+  const v = payload?.[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
 /** Project the snapshot through the overlay so consumers read a single
@@ -204,17 +217,18 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
   const seen = new Set<string>();
   let nodesChanged = false;
   const nodes: NodeState[] = snapshot.nodes.map((n) => {
-    seen.add(n.nodeId);
-    const ov = overlay.nodeStates.get(n.nodeId);
+    const key = `${n.nodeId}#${n.iteration}`;
+    seen.add(key);
+    const ov = overlay.nodeStates.get(key);
     if (ov && ov.lastEventSeq >= n.lastEventSeq) {
       nodesChanged = true;
-      return { nodeId: n.nodeId, state: ov.state, lastEventSeq: ov.lastEventSeq };
+      return { nodeId: n.nodeId, iteration: n.iteration, state: ov.state, lastEventSeq: ov.lastEventSeq };
     }
     return n;
   });
-  for (const [nodeId, ov] of overlay.nodeStates) {
-    if (!seen.has(nodeId)) {
-      nodes.push({ nodeId, state: ov.state, lastEventSeq: ov.lastEventSeq });
+  for (const [key, ov] of overlay.nodeStates) {
+    if (!seen.has(key)) {
+      nodes.push({ nodeId: ov.nodeId, iteration: ov.iteration, state: ov.state, lastEventSeq: ov.lastEventSeq });
       nodesChanged = true;
     }
   }
@@ -225,7 +239,7 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i]!;
       if (n.state === "running") {
-        nodes[i] = { nodeId: n.nodeId, state: "failed", lastEventSeq: overlay.haltSeq };
+        nodes[i] = { nodeId: n.nodeId, iteration: n.iteration, state: "failed", lastEventSeq: overlay.haltSeq };
         nodesChanged = true;
       }
     }

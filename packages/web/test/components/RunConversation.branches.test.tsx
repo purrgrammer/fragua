@@ -33,10 +33,10 @@ describe("RunConversation — parallel branches", () => {
       userMsg(4, "lensC", "lensC work"),
     ];
     const nodeStates: NodeState[] = [
-      { nodeId: "fork", state: "running", lastEventSeq: 1 },
-      { nodeId: "lensA", state: "running", lastEventSeq: 2 },
-      { nodeId: "lensB", state: "running", lastEventSeq: 3 },
-      { nodeId: "lensC", state: "running", lastEventSeq: 4 },
+      { nodeId: "fork", iteration: 0, state: "running", lastEventSeq: 1 },
+      { nodeId: "lensA", iteration: 0, state: "running", lastEventSeq: 2 },
+      { nodeId: "lensB", iteration: 0, state: "running", lastEventSeq: 3 },
+      { nodeId: "lensC", iteration: 0, state: "running", lastEventSeq: 4 },
     ];
     const activeBranchesByParent = new Map<string, readonly string[]>([["fork", ["lensA", "lensB", "lensC"]]]);
 
@@ -53,10 +53,10 @@ describe("RunConversation — parallel branches", () => {
 
     // After fan_in: branches done, no active branches.
     const completedStates: NodeState[] = [
-      { nodeId: "fork", state: "completed", lastEventSeq: 5 },
-      { nodeId: "lensA", state: "completed", lastEventSeq: 6 },
-      { nodeId: "lensB", state: "completed", lastEventSeq: 7 },
-      { nodeId: "lensC", state: "completed", lastEventSeq: 8 },
+      { nodeId: "fork", iteration: 0, state: "completed", lastEventSeq: 5 },
+      { nodeId: "lensA", iteration: 0, state: "completed", lastEventSeq: 6 },
+      { nodeId: "lensB", iteration: 0, state: "completed", lastEventSeq: 7 },
+      { nodeId: "lensC", iteration: 0, state: "completed", lastEventSeq: 8 },
     ];
     rerender(<RunConversation messages={messages} nodeStates={completedStates} activeBranchesByParent={new Map()} />);
     const q2 = within(container);
