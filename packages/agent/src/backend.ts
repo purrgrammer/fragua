@@ -15,7 +15,14 @@ import type {
   SwarmToolContext,
   ToolRegistry,
 } from "@swarm/workspace";
-import { filterSkillsForNode, renderAgentsCatalog, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
+import {
+  filterAgentsCatalogueForRun,
+  filterCatalogueForRun,
+  filterSkillsForNode,
+  renderAgentsCatalog,
+  renderSkillsCatalog,
+  toCatalogRecord,
+} from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
@@ -275,6 +282,28 @@ export class PiCodergenBackend implements CodergenBackend {
     const finalTools =
       skillTool && !selectedTools.some((t) => t.name === "skill") ? [...selectedTools, skillTool] : selectedTools;
 
+    // Prefer per-call env (wired via HandlerContext → CodergenInput by
+    // the executor when a WorktreeProvisioner is active). Falls back
+    // to the construction-time env for tests + callers that still pass
+    // a shared LocalEnvironment. Resolved here ahead of the catalogue
+    // filter — `env.projectCwd()` is what slices the discovery superset
+    // down to this run's project.
+    const effectiveEnv = input.env ?? this.env;
+    if (!effectiveEnv) {
+      return fail(
+        "PiCodergenBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
+      );
+    }
+
+    // Slice the discovery superset down to what this run can see: user-
+    // scope records plus project-scope records whose `project_cwd`
+    // matches `env.projectCwd()`, with project-scope shadowing user-
+    // scope by name within the slice. Without this, a run in project A
+    // would see project B's project-scope skills.
+    const runProjectCwd = effectiveEnv.projectCwd();
+    const runCwdSkills = filterCatalogueForRun(this.skills, runProjectCwd);
+    const runCwdAgents = filterAgentsCatalogueForRun(this.agentDefinitions, runProjectCwd);
+
     // Resolve the skill catalog for this call. Filter by node attrs, render
     // the catalog block for the system prompt. The catalog drives both
     // the system-prompt advertisement and the `skill` tool's name lookup
@@ -284,25 +313,14 @@ export class PiCodergenBackend implements CodergenBackend {
       skills_disabled: input.node.attrs.skills_disabled === true,
     };
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
-    const effectiveSkills = filterSkillsForNode(this.skills, skillFilter);
+    const effectiveSkills = filterSkillsForNode(runCwdSkills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
     // Render the named-sub-agent catalogue only when (a) the node's
     // tool pool actually includes `agent` and (b) at least one profile
     // was discovered. Cost-control: a node that doesn't allow `agent`
     // also doesn't pay for the catalogue's tokens (~1 KB per profile).
     const wantsAgentTool = selectedTools.some((t) => t.name === "agent");
-    const agentsCatalog =
-      wantsAgentTool && this.agentDefinitions.length > 0 ? renderAgentsCatalog(this.agentDefinitions) : "";
-    // Prefer per-call env (wired via HandlerContext → CodergenInput by
-    // the executor when a WorktreeProvisioner is active). Falls back
-    // to the construction-time env for tests + callers that still pass
-    // a shared LocalEnvironment.
-    const effectiveEnv = input.env ?? this.env;
-    if (!effectiveEnv) {
-      return fail(
-        "PiCodergenBackend: no execution environment available — configure `env` on backendOpts or wire a WorktreeProvisioner on the daemon",
-      );
-    }
+    const agentsCatalog = wantsAgentTool && runCwdAgents.length > 0 ? renderAgentsCatalog(runCwdAgents) : "";
     // Per-run swarm context for extension tools. Built-ins ignore this
     // field; loader-wrapped extensions need it to construct their
     // `ExtensionContext`. Captured by closure on each `toAgentTool`
@@ -373,7 +391,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // `materialiseForChild`). `skillCatalog` makes the parent's
     // resolved skill set available so `spec.skills` can be intersected
     // against it on each spawn.
-    Object.assign(swarmContext, { skillCatalog: effectiveSkills, agentCatalog: this.agentDefinitions });
+    Object.assign(swarmContext, { skillCatalog: effectiveSkills, agentCatalog: runCwdAgents });
     if (this.spawnSubagentFactory !== undefined) {
       // The sub-agent's emit channel: same `input.emit` the parent's
       // codergen call uses, so sub-agent observability lands on the

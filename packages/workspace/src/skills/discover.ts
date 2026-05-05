@@ -1,10 +1,13 @@
-// Skill discovery. Scans well-known paths by default; honours an explicit
-// `skills.paths` override from `.swarm/config.jsonc`.
+// Skill discovery. Walks `~/.agents`, `~/.claude` and every project cwd
+// passed in `projectCwds`, emitting a superset of records. Project-scope
+// records carry `project_cwd`; the codergen-time filter prunes to a
+// single project per run.
 //
-// Precedence on name collision: project scope beats user scope. Within the
-// same scope, the path listed earlier wins (swarm-native before cross-client
-// interop before Claude compat). Collisions emit a warning that surfaces
-// on the loser's `disabled_reason`.
+// Within-bucket precedence: for project scope, `.agents/skills` beats
+// `.claude/skills` per cwd; for user scope, same order. Cross-scope
+// (project↔user) and cross-project shadowing is NOT applied at discovery
+// — both happen at codergen filter time, since the answer depends on
+// `run.cwd`. See `filterCatalogueForRun` in `catalog.ts`.
 
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -12,13 +15,21 @@ import { isAbsolute, resolve } from "node:path";
 import { parseSkillMd } from "./parse.ts";
 import type { DiscoverOptions, Skill, SkillScope, SkillsConfig } from "./types.ts";
 
-/** Well-known paths, project before user. See docs/skills.md. */
+/** Well-known relative paths under each cwd / homeDir. Order matters —
+ * earlier entries win on within-scope name collisions. */
 const PROJECT_WELL_KNOWN = [".agents/skills", ".claude/skills"] as const;
 const USER_WELL_KNOWN = [".agents/skills", ".claude/skills"] as const;
 
 export interface DiscoverResult {
   skills: Skill[];
   warnings: string[];
+}
+
+interface Root {
+  path: string;
+  scope: SkillScope;
+  /** Set when `scope === "project"`. */
+  projectCwd?: string;
 }
 
 export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverResult> {
@@ -28,62 +39,92 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<DiscoverRes
 
   const roots = buildRoots(opts, config);
   const warnings: string[] = [];
-  const byName = new Map<string, Skill>();
+
+  // Two dedup buckets so cross-scope shadowing is deferred:
+  //   project: keyed by `(project_cwd, name)` — same name in two
+  //            different projects coexists; same name across the two
+  //            project roots within one cwd shadows (earlier wins).
+  //   user:    keyed by `name` — single user scope, two roots,
+  //            earlier wins.
+  const projectByCwdName = new Map<string, Map<string, Skill>>();
+  const userByName = new Map<string, Skill>();
 
   for (const root of roots) {
-    const skillsFromRoot = await scanRoot(root.path, root.scope, warnings);
-    for (const skill of skillsFromRoot) {
-      // skills.disabled is an exclusion list: drop matching skills before
-      // the precedence merge so they're absent from the catalog, GET /skills,
-      // and the web UI — the user's intent is "pretend this isn't installed".
-      // For soft-hiding that still surfaces in /skills, see trustProject.
+    const fromRoot = await scanRoot(root.path, root.scope, warnings);
+    for (const skill of fromRoot) {
       if (disabledSet.has(skill.name)) continue;
-      if (skill.scope === "project" && !trustProject) {
-        skill.disabled_reason = "project scope hidden (skills.trustProject=false)";
-      }
-
-      const existing = byName.get(skill.name);
-      if (!existing) {
-        byName.set(skill.name, skill);
-        continue;
-      }
-      // Project always beats user. Within the same scope, earlier root wins.
-      const existingRank = scopeRank(existing.scope);
-      const newRank = scopeRank(skill.scope);
-      if (newRank < existingRank) {
-        warnings.push(`skill "${skill.name}" at ${existing.location} shadowed by ${skill.location}`);
-        byName.set(skill.name, skill);
+      if (skill.scope === "project") {
+        if (!trustProject) {
+          skill.disabled_reason = "project scope hidden (skills.trustProject=false)";
+        }
+        if (root.projectCwd !== undefined) {
+          skill.project_cwd = root.projectCwd;
+        }
+        const cwdKey = root.projectCwd ?? "";
+        let inner = projectByCwdName.get(cwdKey);
+        if (!inner) {
+          inner = new Map();
+          projectByCwdName.set(cwdKey, inner);
+        }
+        const existing = inner.get(skill.name);
+        if (!existing) {
+          inner.set(skill.name, skill);
+        } else {
+          warnings.push(`skill "${skill.name}" at ${skill.location} shadowed by ${existing.location}`);
+        }
       } else {
-        warnings.push(`skill "${skill.name}" at ${skill.location} shadowed by ${existing.location}`);
+        const existing = userByName.get(skill.name);
+        if (!existing) {
+          userByName.set(skill.name, skill);
+        } else {
+          warnings.push(`skill "${skill.name}" at ${skill.location} shadowed by ${existing.location}`);
+        }
       }
     }
   }
 
-  return { skills: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)), warnings };
-}
-
-interface Root {
-  path: string;
-  scope: SkillScope;
+  const out: Skill[] = [];
+  for (const inner of projectByCwdName.values()) for (const s of inner.values()) out.push(s);
+  for (const s of userByName.values()) out.push(s);
+  // Stable sort: name, then user-before-project, then project_cwd asc.
+  out.sort((a, b) => {
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    if (a.scope !== b.scope) return a.scope === "user" ? -1 : 1;
+    return (a.project_cwd ?? "").localeCompare(b.project_cwd ?? "");
+  });
+  return { skills: out, warnings };
 }
 
 function buildRoots(opts: DiscoverOptions, config: SkillsConfig): Root[] {
   if (config.paths && config.paths.length > 0) {
-    // Explicit list disables auto-discovery. Relative paths resolve against
-    // cwd; absolute paths are honoured as-is. Scope is inferred: anything
-    // under cwd is "project", anything under homeDir is "user", otherwise
-    // "project" (closest practical match for a vendored directory).
+    // Explicit list disables auto-discovery. Scope is inferred:
+    //   - under any of `projectCwds` → project, `project_cwd` = that cwd
+    //   - under `homeDir` (and not under any project) → user
+    //   - otherwise → project with no `project_cwd` (degraded record;
+    //     codergen filter will exclude it because it can't match any
+    //     `run.cwd`, but the UI still surfaces it)
+    // Relative paths resolve against `projectCwds[0]` if any, else
+    // `homeDir`. Absolute paths are honoured as-is.
+    const anchor = opts.projectCwds[0] ?? opts.homeDir;
     return config.paths.map((p) => {
-      const abs = isAbsolute(p) ? p : resolve(opts.cwd, p);
-      const scope: SkillScope =
-        opts.homeDir && abs.startsWith(opts.homeDir) && !abs.startsWith(opts.cwd) ? "user" : "project";
-      return { path: abs, scope };
+      const abs = isAbsolute(p) ? p : resolve(anchor, p);
+      const projectMatch = opts.projectCwds.find((cwd) => abs.startsWith(cwd));
+      if (projectMatch !== undefined) {
+        return { path: abs, scope: "project", projectCwd: projectMatch };
+      }
+      if (opts.homeDir && abs.startsWith(opts.homeDir)) {
+        return { path: abs, scope: "user" };
+      }
+      return { path: abs, scope: "project" };
     });
   }
 
   const roots: Root[] = [];
-  for (const rel of PROJECT_WELL_KNOWN) {
-    roots.push({ path: resolve(opts.cwd, rel), scope: "project" });
+  for (const cwd of opts.projectCwds) {
+    for (const rel of PROJECT_WELL_KNOWN) {
+      roots.push({ path: resolve(cwd, rel), scope: "project", projectCwd: cwd });
+    }
   }
   if (opts.homeDir) {
     for (const rel of USER_WELL_KNOWN) {
@@ -91,10 +132,6 @@ function buildRoots(opts: DiscoverOptions, config: SkillsConfig): Root[] {
     }
   }
   return roots;
-}
-
-function scopeRank(scope: SkillScope): number {
-  return scope === "project" ? 0 : 1;
 }
 
 /** Spec constraints (agentskills.io §SKILL.md format). Enforced as

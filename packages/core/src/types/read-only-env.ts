@@ -27,6 +27,7 @@ export const ENV_MUTATOR_TOOLS: readonly string[] = ["bash", "write", "edit"];
 export function makeReadOnlyEnv(env: ExecutionEnvironment): ExecutionEnvironment {
   return {
     cwd: () => env.cwd(),
+    projectCwd: () => env.projectCwd(),
     readFile: (path) => env.readFile(path),
     exists: (path) => env.exists(path),
     listDir: (path) => env.listDir(path),

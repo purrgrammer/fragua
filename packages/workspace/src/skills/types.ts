@@ -6,12 +6,17 @@
 export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "@swarm/types";
 
 export interface DiscoverOptions {
-  /** Working directory (project root). Used for `<cwd>/.agents/skills/` etc. */
-  cwd: string;
+  /** Project cwds to scan. Each yields project-scope records stamped
+   * with `project_cwd`. Pass `[]` for user-scope-only discovery.
+   * Discovery emits a superset across every cwd; the codergen-time
+   * filter prunes to a single project per run. */
+  projectCwds: readonly string[];
   /** User home directory. Used for `~/.agents/skills/` etc. Pass empty
    * string to skip user-scope discovery. */
   homeDir: string;
-  /** Merged skills config from `.swarm/config.jsonc`. */
+  /** Merged skills config from `.swarm/config.jsonc`. Treated as global
+   * across all `projectCwds` — per-project config reading is a separate
+   * concern (see proposals/skills-and-agents-ui.md). */
   config?: import("@swarm/types").SkillsConfig;
 }
 

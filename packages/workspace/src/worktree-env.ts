@@ -292,6 +292,12 @@ export class WorktreeEnvironment implements ExecutionEnvironment {
     return this.worktreePath;
   }
 
+  /** The source repo root the worktree was provisioned from. Distinct
+   * from `cwd()` which points at the worktree under `.swarm/worktrees/`. */
+  projectCwd(): string {
+    return this.repoRoot;
+  }
+
   readFile(path: string): Promise<string> {
     return this.local.readFile(path);
   }

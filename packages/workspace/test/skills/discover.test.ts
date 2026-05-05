@@ -34,7 +34,7 @@ describe("discoverSkills", () => {
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/hello", "hello", "Greet the user.");
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(skills[0]!.name).toBe("hello");
     expect(skills[0]!.scope).toBe("project");
@@ -48,23 +48,27 @@ describe("discoverSkills", () => {
     await mkdir(cwd, { recursive: true });
     await writeSkill(home, ".agents/skills/pdf", "pdf", "Handle PDFs.");
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(skills[0]!.scope).toBe("user");
   });
 
-  test("project scope shadows user scope on name collision", async () => {
+  test("project + user collisions coexist in the superset (filter resolves at codergen time)", async () => {
     const cwd = join(tmp, "proj");
     const home = join(tmp, "home");
     await mkdir(cwd, { recursive: true });
     await writeSkill(cwd, ".agents/skills/dup", "dup", "project version");
     await writeSkill(home, ".agents/skills/dup", "dup", "user version");
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
-    expect(skills).toHaveLength(1);
-    expect(skills[0]!.scope).toBe("project");
-    expect(skills[0]!.description).toBe("project version");
-    expect(warnings.some((w) => w.includes("dup"))).toBe(true);
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
+    // Both records present — cross-scope shadowing is deferred to per-run filter.
+    expect(skills).toHaveLength(2);
+    const byScope = new Map(skills.map((s) => [s.scope, s]));
+    expect(byScope.get("project")?.description).toBe("project version");
+    expect(byScope.get("project")?.project_cwd).toBe(cwd);
+    expect(byScope.get("user")?.description).toBe("user version");
+    expect(byScope.get("user")?.project_cwd).toBeUndefined();
+    expect(warnings.filter((w) => w.includes("dup"))).toHaveLength(0);
   });
 
   test("skips skills without a description", async () => {
@@ -74,7 +78,7 @@ describe("discoverSkills", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), `---\nname: broken\n---\n\nbody`, "utf8");
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(0);
   });
 
@@ -86,7 +90,7 @@ describe("discoverSkills", () => {
     await writeSkill(cwd, "vendor/pack", "vendored", "only via explicit path");
 
     const { skills } = await discoverSkills({
-      cwd,
+      projectCwds: [cwd],
       homeDir: home,
       config: { paths: ["vendor"] },
     });
@@ -100,7 +104,7 @@ describe("discoverSkills", () => {
     await writeSkill(cwd, ".agents/skills/legacy", "legacy", "old skill");
 
     const { skills } = await discoverSkills({
-      cwd,
+      projectCwds: [cwd],
       homeDir: home,
       config: { disabled: ["legacy"] },
     });
@@ -113,7 +117,7 @@ describe("discoverSkills", () => {
     await writeSkill(cwd, ".agents/skills/untrusted", "untrusted", "vendored by repo");
 
     const { skills } = await discoverSkills({
-      cwd,
+      projectCwds: [cwd],
       homeDir: home,
       config: { trustProject: false },
     });
@@ -126,7 +130,7 @@ describe("discoverSkills", () => {
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/ok", "ok", "project skill");
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(skills[0]!.disabled_reason).toBeUndefined();
   });
@@ -146,7 +150,7 @@ metadata:
   version: "1.0"`,
     );
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     const s = skills[0]!;
     expect(s.license).toBe("Apache-2.0");
@@ -159,7 +163,7 @@ metadata:
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/k", "k", "kebab spec form", `allowed-tools: Bash(git:*) Bash(jq:*) Read`);
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills[0]!.allowed_tools).toEqual(["Bash(git:*)", "Bash(jq:*)", "Read"]);
   });
 
@@ -176,7 +180,7 @@ metadata:
   - bash`,
     );
 
-    const { skills } = await discoverSkills({ cwd, homeDir: home });
+    const { skills } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills[0]!.allowed_tools).toEqual(["read", "bash"]);
   });
 
@@ -193,7 +197,7 @@ allowed_tools:
   - bash`,
     );
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills[0]!.allowed_tools).toEqual(["Read", "Write"]);
     expect(warnings.some((w) => w.includes("allowed-tools") && w.includes("allowed_tools"))).toBe(true);
   });
@@ -203,7 +207,7 @@ allowed_tools:
     const home = join(tmp, "home");
     await writeSkill(cwd, ".agents/skills/parent-dir", "different-name", "mismatched");
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(skills[0]!.name).toBe("different-name");
     expect(warnings.some((w) => w.includes("does not match directory"))).toBe(true);
@@ -215,7 +219,7 @@ allowed_tools:
     // Uppercase + leading hyphen + consecutive hyphens — three violations.
     await writeSkill(cwd, ".agents/skills/Bad--Name", "Bad--Name", "shape violations");
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1); // still loaded
     expect(warnings.some((w) => w.includes("violates spec charset"))).toBe(true);
   });
@@ -226,7 +230,7 @@ allowed_tools:
     const longName = "a".repeat(70);
     await writeSkill(cwd, `.agents/skills/${longName}`, longName, "long name");
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(warnings.some((w) => w.includes("exceeds 64 chars"))).toBe(true);
   });
@@ -237,7 +241,7 @@ allowed_tools:
     const longDesc = "x".repeat(1100);
     await writeSkill(cwd, ".agents/skills/wordy", "wordy", longDesc);
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(warnings.some((w) => w.includes("description") && w.includes("exceeds 1024"))).toBe(true);
   });
@@ -255,7 +259,7 @@ description: too long
 ${Array.from({ length: 600 }, (_, i) => `line ${i}`).join("\n")}`;
     await writeFile(join(skillDir, "SKILL.md"), big, "utf8");
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(warnings.some((w) => w.includes("soft cap"))).toBe(true);
   });
@@ -266,8 +270,65 @@ ${Array.from({ length: 600 }, (_, i) => `line ${i}`).join("\n")}`;
     const longCompat = "y".repeat(600);
     await writeSkill(cwd, ".agents/skills/cc", "cc", "ok", `compatibility: ${longCompat}`);
 
-    const { skills, warnings } = await discoverSkills({ cwd, homeDir: home });
+    const { skills, warnings } = await discoverSkills({ projectCwds: [cwd], homeDir: home });
     expect(skills).toHaveLength(1);
     expect(warnings.some((w) => w.includes("compatibility") && w.includes("exceeds 500"))).toBe(true);
+  });
+
+  test("multi-project: same skill name in two projects coexists in the superset, distinguished by project_cwd", async () => {
+    const projA = join(tmp, "projA");
+    const projB = join(tmp, "projB");
+    await writeSkill(projA, ".agents/skills/frontend", "frontend", "A's frontend");
+    await writeSkill(projB, ".agents/skills/frontend", "frontend", "B's frontend");
+
+    const { skills } = await discoverSkills({ projectCwds: [projA, projB], homeDir: "" });
+    expect(skills).toHaveLength(2);
+    const byCwd = new Map(skills.map((s) => [s.project_cwd, s]));
+    expect(byCwd.get(projA)?.description).toBe("A's frontend");
+    expect(byCwd.get(projB)?.description).toBe("B's frontend");
+    // Each carries the right project_cwd anchor — that's what the
+    // codergen-time filter reads.
+    expect(byCwd.get(projA)?.scope).toBe("project");
+    expect(byCwd.get(projB)?.scope).toBe("project");
+  });
+
+  test("multi-project: project records are stamped with project_cwd; user records are not", async () => {
+    const projA = join(tmp, "projA");
+    const home = join(tmp, "home");
+    await writeSkill(projA, ".agents/skills/proj-only", "proj-only", "from project A");
+    await writeSkill(home, ".agents/skills/user-only", "user-only", "from user scope");
+
+    const { skills } = await discoverSkills({ projectCwds: [projA], homeDir: home });
+    expect(skills).toHaveLength(2);
+    const projOnly = skills.find((s) => s.name === "proj-only");
+    const userOnly = skills.find((s) => s.name === "user-only");
+    expect(projOnly?.project_cwd).toBe(projA);
+    expect(userOnly?.project_cwd).toBeUndefined();
+  });
+
+  test("non-existent project paths are silently skipped", async () => {
+    const realProj = join(tmp, "real");
+    const fakeProj = join(tmp, "does-not-exist");
+    await writeSkill(realProj, ".agents/skills/here", "here", "real");
+
+    const { skills, warnings } = await discoverSkills({
+      projectCwds: [realProj, fakeProj],
+      homeDir: "",
+    });
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.name).toBe("here");
+    // Missing dirs aren't a warning condition — the reader treats
+    // optional roots as absent, no diagnostic noise.
+    expect(warnings.filter((w) => w.includes(fakeProj))).toHaveLength(0);
+  });
+
+  test("empty projectCwds with homeDir set → user-scope only", async () => {
+    const home = join(tmp, "home");
+    await writeSkill(home, ".agents/skills/u", "u", "user-only");
+
+    const { skills } = await discoverSkills({ projectCwds: [], homeDir: home });
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.scope).toBe("user");
+    expect(skills[0]!.project_cwd).toBeUndefined();
   });
 });

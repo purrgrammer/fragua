@@ -10,8 +10,18 @@
 // implement it without reaching back into the host.
 
 export interface ExecutionEnvironment {
-  /** Absolute path of the working directory for this run. */
+  /** Absolute path of the working directory for this run. For
+   * worktree-backed runs this points at the run's isolated worktree
+   * (under `.swarm/worktrees/<run-id>/`); for `LocalEnvironment` this
+   * coincides with the project root. */
   cwd(): string;
+  /** Absolute path of the *project root* this env was provisioned from.
+   * For `LocalEnvironment` this equals `cwd()`; for `WorktreeEnvironment`
+   * it's the source repo root (the worktree's parent project), which is
+   * the cwd recorded on `run_state.cwd`. Used by per-run catalogue
+   * filtering so a run only sees its own project's project-scope skills
+   * and agent profiles. */
+  projectCwd(): string;
   /** Read a text file. Path is resolved against cwd() when relative. */
   readFile(path: string): Promise<string>;
   /** Write a text file (atomic replace). */

@@ -35,3 +35,13 @@ export function filterAgentsForNode(
 ): AgentDefinition[] {
   return defs.filter((d) => !d.disabled_reason);
 }
+
+/** Project the discovery superset down to the slice a single run can see.
+ *  Mirrors `filterCatalogueForRun` in `skills/catalog.ts` — keeps user
+ *  scope, keeps project records matching `runCwd`, then shadows user
+ *  records by name when a project record with the same name survives. */
+export function filterAgentsCatalogueForRun(defs: readonly AgentDefinition[], runCwd: string): AgentDefinition[] {
+  const slice = defs.filter((d) => d.scope === "user" || d.project_cwd === runCwd);
+  const projectNames = new Set(slice.filter((d) => d.scope === "project").map((d) => d.name));
+  return slice.filter((d) => d.scope === "project" || !projectNames.has(d.name));
+}

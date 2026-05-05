@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "../../src/skills/catalog.ts";
+import {
+  filterCatalogueForRun,
+  filterSkillsForNode,
+  renderSkillsCatalog,
+  toCatalogRecord,
+} from "../../src/skills/catalog.ts";
 import type { Skill } from "../../src/skills/types.ts";
 
 function skill(name: string, extras: Partial<Skill> = {}): Skill {
@@ -92,5 +97,70 @@ describe("toCatalogRecord", () => {
   test("omits compatibility when unset", () => {
     const rec = toCatalogRecord(skill("plain"));
     expect("compatibility" in rec).toBe(false);
+  });
+
+  test("forwards project_cwd when set so replay can correlate per-run filtering", () => {
+    const rec = toCatalogRecord(skill("frontend", { scope: "project", project_cwd: "/projects/a" }));
+    expect(rec.project_cwd).toBe("/projects/a");
+  });
+
+  test("omits project_cwd when unset (user-scope records)", () => {
+    const rec = toCatalogRecord(skill("plain"));
+    expect("project_cwd" in rec).toBe(false);
+  });
+});
+
+describe("filterCatalogueForRun", () => {
+  const userPdf = skill("pdf");
+  const userFrontend = skill("frontend", { description: "user frontend" });
+  const projAFrontend = skill("frontend", {
+    scope: "project",
+    project_cwd: "/projects/a",
+    description: "A's frontend",
+    location: "/projects/a/.agents/skills/frontend/SKILL.md",
+  });
+  const projBFrontend = skill("frontend", {
+    scope: "project",
+    project_cwd: "/projects/b",
+    description: "B's frontend",
+    location: "/projects/b/.agents/skills/frontend/SKILL.md",
+  });
+  const projAOnly = skill("aOnly", {
+    scope: "project",
+    project_cwd: "/projects/a",
+    location: "/projects/a/.agents/skills/aOnly/SKILL.md",
+  });
+  const superset: Skill[] = [userPdf, userFrontend, projAFrontend, projBFrontend, projAOnly];
+
+  test("returns user-scope records and project records matching runCwd", () => {
+    const slice = filterCatalogueForRun(superset, "/projects/a");
+    const names = slice.map((s) => s.name).sort();
+    expect(names).toEqual(["aOnly", "frontend", "pdf"]);
+  });
+
+  test("project-scope shadows user-scope by name within the slice", () => {
+    const slice = filterCatalogueForRun(superset, "/projects/a");
+    const frontend = slice.find((s) => s.name === "frontend");
+    expect(frontend?.scope).toBe("project");
+    expect(frontend?.description).toBe("A's frontend");
+  });
+
+  test("the OTHER project's records are excluded", () => {
+    const slice = filterCatalogueForRun(superset, "/projects/a");
+    expect(slice.find((s) => s.location.includes("projects/b"))).toBeUndefined();
+  });
+
+  test("unknown runCwd surfaces user-scope only (no project records match)", () => {
+    const slice = filterCatalogueForRun(superset, "/projects/never-seen");
+    const names = slice.map((s) => s.name).sort();
+    expect(names).toEqual(["frontend", "pdf"]);
+    // Without a project record to shadow, the user-scope frontend wins.
+    const frontend = slice.find((s) => s.name === "frontend");
+    expect(frontend?.scope).toBe("user");
+    expect(frontend?.description).toBe("user frontend");
+  });
+
+  test("empty input → empty slice", () => {
+    expect(filterCatalogueForRun([], "/anywhere")).toEqual([]);
   });
 });

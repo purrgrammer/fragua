@@ -6,14 +6,15 @@
 export type { AgentDefinition, AgentDefinitionScope, AgentDefinitionsConfig } from "@swarm/types";
 
 export interface DiscoverAgentsOptions {
-  /** Working directory (project root). Used for `<cwd>/.agents/agents/`
-   *  and `<cwd>/.claude/agents/`. */
-  cwd: string;
+  /** Project cwds to scan. Each yields project-scope records stamped
+   *  with `project_cwd`. Pass `[]` for user-scope-only discovery.
+   *  Mirrors the skills shape — see `skills/types.ts`. */
+  projectCwds: readonly string[];
   /** User home directory. Used for `~/.agents/agents/` and
    *  `~/.claude/agents/`. Pass empty string to skip user-scope
    *  discovery. */
   homeDir: string;
-  /** Merged config from `.swarm/config.jsonc`. */
+  /** Merged config from `.swarm/config.jsonc`. Treated as global. */
   config?: import("@swarm/types").AgentDefinitionsConfig;
 }
 

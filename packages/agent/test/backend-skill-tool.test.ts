@@ -39,6 +39,10 @@ async function setupSkill(scratch: string): Promise<{ skill: Skill; skillsCatalo
     bytes: md.length,
     scope: "project",
     source_dir: join(scratch, "skills"),
+    // The per-run filter keeps project-scope records only when their
+    // project_cwd matches `env.projectCwd()` — which is `scratch` for
+    // a `LocalEnvironment({ cwd: scratch })`.
+    project_cwd: scratch,
   };
   return { skill, skillsCatalog: [skill] };
 }

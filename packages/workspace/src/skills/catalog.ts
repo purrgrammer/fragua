@@ -48,6 +48,23 @@ export function filterSkillsForNode(
   return skills.filter((s) => !s.disabled_reason && allow.has(s.name));
 }
 
+/** Project the discovery superset down to the slice a single run can see.
+ *
+ * Two responsibilities:
+ *   1. Scope/cwd filter — keep `scope === "user"` records and project
+ *      records whose `project_cwd` matches `runCwd`.
+ *   2. Cross-scope shadow — within the filtered slice, project-scope
+ *      records shadow user-scope records by name. Discovery emits both;
+ *      this is where the "project beats user" rule materialises.
+ *
+ * Returns a fresh array; callers may sort it for deterministic output.
+ */
+export function filterCatalogueForRun(skills: readonly Skill[], runCwd: string): Skill[] {
+  const slice = skills.filter((s) => s.scope === "user" || s.project_cwd === runCwd);
+  const projectNames = new Set(slice.filter((s) => s.scope === "project").map((s) => s.name));
+  return slice.filter((s) => s.scope === "project" || !projectNames.has(s.name));
+}
+
 /** Project a skill down to the event-log subset. Only visible skills end up
  * on `llm.start.skills[]` — disabled_reason ones never reached the model. */
 export function toCatalogRecord(s: Skill): SkillCatalogRecord {
@@ -58,6 +75,7 @@ export function toCatalogRecord(s: Skill): SkillCatalogRecord {
     bytes: s.bytes,
     scope: s.scope,
     source_dir: s.source_dir,
+    ...(s.project_cwd !== undefined ? { project_cwd: s.project_cwd } : {}),
     ...(s.compatibility !== undefined ? { compatibility: s.compatibility } : {}),
   };
 }

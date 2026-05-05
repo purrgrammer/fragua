@@ -38,6 +38,7 @@ function recorder(): SideEffectRecorder {
 function fullEnv(written: { path: string; content: string }[]): ExecutionEnvironment {
   return {
     cwd: () => "/work",
+    projectCwd: () => "/work",
     readFile: async () => "ok",
     writeFile: async (path, content) => {
       written.push({ path, content: typeof content === "string" ? content : new TextDecoder().decode(content) });

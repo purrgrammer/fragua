@@ -31,6 +31,7 @@ function freshRegistry(): ToolRegistry {
 // records inputs and returns canned outcomes without touching the FS.
 const STUB_ENV: ExecutionEnvironment = {
   cwd: () => "/tmp/stub",
+  projectCwd: () => "/tmp/stub",
   exists: async () => false,
   readFile: async () => "",
   writeFile: async () => undefined,

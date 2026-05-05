@@ -32,6 +32,11 @@ export class LocalEnvironment implements ExecutionEnvironment {
     return this._cwd;
   }
 
+  /** LocalEnvironment runs directly in the project root; cwd === projectCwd. */
+  projectCwd(): string {
+    return this._cwd;
+  }
+
   private resolvePath(path: string): string {
     return isAbsolute(path) ? path : resolve(this._cwd, path);
   }

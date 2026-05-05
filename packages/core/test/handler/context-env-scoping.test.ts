@@ -14,6 +14,7 @@ import { ReadOnlyEnvError } from "../../src/types/read-only-env.ts";
 function fullEnv(): ExecutionEnvironment {
   return {
     cwd: () => "/work",
+    projectCwd: () => "/work",
     readFile: async () => "ok",
     writeFile: async () => {},
     exists: async () => true,

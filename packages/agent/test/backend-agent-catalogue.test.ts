@@ -12,16 +12,17 @@ import type { AgentDefinition } from "@swarm/types";
 import { CORE_TOOLS, LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import { PiCodergenBackend } from "../src/backend.ts";
 
-function mkDef(name: string, description: string): AgentDefinition {
+function mkDef(name: string, description: string, projectCwd: string): AgentDefinition {
   return {
     name,
     description,
     body: `body for ${name}`,
-    location: `/tmp/${name}.md`,
+    location: `${projectCwd}/.agents/agents/${name}.md`,
     sha256: "0".repeat(64),
     bytes: 1,
     scope: "project",
-    source_dir: "/tmp",
+    source_dir: `${projectCwd}/.agents/agents`,
+    project_cwd: projectCwd,
   };
 }
 
@@ -47,7 +48,7 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
           env,
           resolveModel: () => model,
           defaultModel: { provider: model.provider, model: model.id },
-          agentDefinitions: [mkDef("reviewer", "Reviews diffs."), mkDef("researcher", "Reads docs.")],
+          agentDefinitions: [mkDef("reviewer", "Reviews diffs.", scratch), mkDef("researcher", "Reads docs.", scratch)],
         });
 
         await backend.run({
@@ -101,7 +102,7 @@ describe("PiCodergenBackend — agent catalogue injection", () => {
           env,
           resolveModel: () => model,
           defaultModel: { provider: model.provider, model: model.id },
-          agentDefinitions: [mkDef("reviewer", "Reviews diffs.")],
+          agentDefinitions: [mkDef("reviewer", "Reviews diffs.", scratch)],
         });
 
         await backend.run({

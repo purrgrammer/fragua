@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentDefinition } from "@swarm/types";
-import { lookupAgentDef, renderAgentsCatalog } from "../../src/agents/catalog.ts";
+import { filterAgentsCatalogueForRun, lookupAgentDef, renderAgentsCatalog } from "../../src/agents/catalog.ts";
 
 function mk(name: string, description: string, extra: Partial<AgentDefinition> = {}): AgentDefinition {
   return {
@@ -49,5 +49,42 @@ describe("lookupAgentDef", () => {
   test("disabled defs do not resolve", () => {
     const cat = [mk("hidden", "h", { disabled_reason: "test" })];
     expect(lookupAgentDef(cat, "hidden")).toBeUndefined();
+  });
+});
+
+describe("filterAgentsCatalogueForRun", () => {
+  const userReviewer = mk("reviewer", "user reviewer", { scope: "user", source_dir: "/home/.agents/agents" });
+  const projAReviewer = mk("reviewer", "A's reviewer", {
+    project_cwd: "/projects/a",
+    location: "/projects/a/.agents/agents/reviewer.md",
+  });
+  const projBReviewer = mk("reviewer", "B's reviewer", {
+    project_cwd: "/projects/b",
+    location: "/projects/b/.agents/agents/reviewer.md",
+  });
+  const projAOnly = mk("aOnly", "project A only", {
+    project_cwd: "/projects/a",
+    location: "/projects/a/.agents/agents/aOnly.md",
+  });
+  const superset = [userReviewer, projAReviewer, projBReviewer, projAOnly];
+
+  test("returns user-scope + project records matching runCwd; project shadows user", () => {
+    const slice = filterAgentsCatalogueForRun(superset, "/projects/a");
+    const names = slice.map((d) => d.name).sort();
+    expect(names).toEqual(["aOnly", "reviewer"]);
+    const reviewer = slice.find((d) => d.name === "reviewer");
+    expect(reviewer?.scope).toBe("project");
+    expect(reviewer?.description).toBe("A's reviewer");
+  });
+
+  test("excludes other projects' records", () => {
+    const slice = filterAgentsCatalogueForRun(superset, "/projects/a");
+    expect(slice.find((d) => d.location.includes("projects/b"))).toBeUndefined();
+  });
+
+  test("unknown runCwd surfaces user-scope only", () => {
+    const slice = filterAgentsCatalogueForRun(superset, "/projects/never-seen");
+    expect(slice.map((d) => d.name)).toEqual(["reviewer"]);
+    expect(slice[0]?.scope).toBe("user");
   });
 });

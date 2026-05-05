@@ -199,14 +199,15 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     getApiKey,
   });
 
-  // Discover skills once at boot. Project-scope (`<cwd>/.agents/skills/`,
-  // `<cwd>/.claude/skills/`) and user-scope (`~/.agents/skills/`,
-  // `~/.claude/skills/`) are scanned by default; `config.skills.paths`
-  // overrides. Result is shared across every codergen backend the
-  // dispatcher mints below — there's no reload-on-change yet, so a new
-  // skill drop requires a daemon restart.
+  // Discover skills once at boot. Walks every cwd that has ever been a
+  // run target (`store.listCwds()`) plus the daemon's own startup cwd,
+  // emitting a superset across all known projects. Per-run filtering
+  // happens at codergen dispatch time. New project cwds discovered after
+  // boot trigger an auto-scan on first sight.
+  const knownCwds = store.listCwds().map((r) => r.cwd);
+  const projectCwds = Array.from(new Set([cwd, ...knownCwds]));
   const { skills: discoveredSkills, warnings: skillWarnings } = await discoverSkills({
-    cwd,
+    projectCwds,
     homeDir: homedir(),
     ...(config.skills ? { config: config.skills } : {}),
   });
@@ -214,19 +215,16 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   if (discoveredSkills.length > 0) {
     console.log(
       chalk.dim(
-        `discovered ${discoveredSkills.length} skill${discoveredSkills.length === 1 ? "" : "s"} (${discoveredSkills.map((s) => s.name).join(", ")})`,
+        `discovered ${discoveredSkills.length} skill${discoveredSkills.length === 1 ? "" : "s"} across ${projectCwds.length} project${projectCwds.length === 1 ? "" : "s"} (${discoveredSkills.map((s) => s.name).join(", ")})`,
       ),
     );
   }
 
-  // Discover named sub-agent profiles. Same scope precedence as skills
-  // (`<cwd>/.agents/agents/`, `<cwd>/.claude/agents/`, `~/.agents/agents/`,
-  // `~/.claude/agents/`). Project beats user; within a scope the
-  // earlier root wins. The catalogue lands on every codergen call
-  // whose tool pool includes `agent`. Restart picks up changes — no
-  // hot reload.
+  // Discover named sub-agent profiles across the same project set.
+  // Catalogue lands on every codergen call whose tool pool includes
+  // `agent`; per-run filter at dispatch picks the right slice.
   const { agents: discoveredAgents, warnings: agentWarnings } = await discoverAgents({
-    cwd,
+    projectCwds,
     homeDir: homedir(),
   });
   for (const w of agentWarnings) console.warn(chalk.yellow(`agents: ${w}`));
@@ -237,6 +235,56 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       ),
     );
   }
+
+  // Auto-scan-on-first-sight. The catalogues above are a superset across
+  // every cwd known at boot. When the dispatcher prepares a codergen call
+  // for a `run.cwd` that wasn't in `store.listCwds()` yet — typically the
+  // first run for a freshly-onboarded project — we incrementally scan
+  // that cwd and merge results into the live arrays before the backend
+  // reads them. The backend's `this.skills` / `this.agentDefinitions`
+  // are set once on construction, but they hold the same array
+  // references mutated here, so pushed records become visible on the
+  // next read.
+  const knownProjectCwds = new Set<string>(projectCwds);
+  const inflightAutoScans = new Map<string, Promise<void>>();
+  const ensureCatalogueForCwd = async (runCwd: string): Promise<void> => {
+    if (knownProjectCwds.has(runCwd)) return;
+    const inflight = inflightAutoScans.get(runCwd);
+    if (inflight !== undefined) {
+      await inflight;
+      return;
+    }
+    const promise = (async () => {
+      const home = homedir();
+      const [skillsResult, agentsResult] = await Promise.all([
+        discoverSkills({
+          projectCwds: [runCwd],
+          homeDir: home,
+          ...(config.skills ? { config: config.skills } : {}),
+        }),
+        discoverAgents({ projectCwds: [runCwd], homeDir: home }),
+      ]);
+      // Merge by `location` — globally unique per record. Skip any
+      // duplicate (e.g. user-scope records the second scan re-emits).
+      const existingSkillLocs = new Set(discoveredSkills.map((s) => s.location));
+      for (const s of skillsResult.skills) {
+        if (!existingSkillLocs.has(s.location)) discoveredSkills.push(s);
+      }
+      const existingAgentLocs = new Set(discoveredAgents.map((a) => a.location));
+      for (const a of agentsResult.agents) {
+        if (!existingAgentLocs.has(a.location)) discoveredAgents.push(a);
+      }
+      for (const w of skillsResult.warnings) console.warn(chalk.yellow(`skills (auto-scan ${runCwd}): ${w}`));
+      for (const w of agentsResult.warnings) console.warn(chalk.yellow(`agents (auto-scan ${runCwd}): ${w}`));
+      knownProjectCwds.add(runCwd);
+    })();
+    inflightAutoScans.set(runCwd, promise);
+    try {
+      await promise;
+    } finally {
+      inflightAutoScans.delete(runCwd);
+    }
+  };
 
   // Discover and load extensions once at boot. Same scopes as skills
   // (`<cwd>/.swarm/extensions/`, `~/.swarm/extensions/`); precedence on
@@ -375,7 +423,20 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     codergenFactory = (node, _nextNode, maxMs) => {
       const factoryOpts: Parameters<typeof makeCodergenHandler>[0] = { node, backendOpts };
       if (maxMs !== undefined) factoryOpts.maxMs = maxMs;
-      return makeCodergenHandler(factoryOpts);
+      const inner = makeCodergenHandler(factoryOpts);
+      // Run auto-scan before the inner handler dispatches: if the run's
+      // project cwd hasn't been catalogued yet, scan it and merge.
+      // First-run-of-a-new-project pays one extra frontmatter walk;
+      // every subsequent dispatch hits the `knownProjectCwds.has()`
+      // fast path and is a no-op.
+      const innerHandler = inner.handler;
+      return {
+        ...inner,
+        handler: async (ctx) => {
+          if (ctx.env !== undefined) await ensureCatalogueForCwd(ctx.env.projectCwd());
+          return innerHandler(ctx);
+        },
+      };
     };
   }
   const defaultMaxMs: { codergen?: number; tool?: number } = {};

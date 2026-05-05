@@ -7,6 +7,7 @@ function fullEnv(): ExecutionEnvironment {
   files.set("/a/b.txt", "hello");
   return {
     cwd: () => "/a",
+    projectCwd: () => "/a",
     readFile: async (p) => files.get(p) ?? "",
     writeFile: async (p, c) => {
       files.set(p, c);

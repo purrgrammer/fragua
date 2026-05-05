@@ -17,6 +17,7 @@ import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 function stubEnv(cwd: string, extras: Record<string, unknown> = {}): ExecutionEnvironment {
   const base: ExecutionEnvironment = {
     cwd: () => cwd,
+    projectCwd: () => cwd,
     readFile: async () => "",
     writeFile: async () => {},
     exists: async () => false,

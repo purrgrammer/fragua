@@ -40,11 +40,16 @@ export interface AgentDefinition {
   /** Byte length of the raw file. */
   bytes: number;
   /** Scope where the profile was discovered. Project beats user on
-   *  collisions. */
+   *  collisions (resolved at spawn-time per-run, not at discovery — see
+   *  `project_cwd`). */
   scope: AgentDefinitionScope;
   /** The well-known directory the profile came from (absolute), e.g.
    *  "/Users/x/.agents/agents". Useful for UI "source" columns. */
   source_dir: string;
+  /** Project cwd this record is anchored to. Set only when `scope === "project"`.
+   *  Discovery walks every known project cwd and emits a superset; the
+   *  codergen-time filter prunes to `scope === "user" || project_cwd === run.cwd`. */
+  project_cwd?: string;
   /** When set, the profile was discovered but should not appear in the
    *  parent's catalogue. Reserved for forward-compat (V3 per-node
    *  filtering) — discovery itself sets this only for soft-disable

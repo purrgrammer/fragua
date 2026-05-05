@@ -42,11 +42,18 @@ export interface Skill {
   sha256: string;
   /** Byte length of SKILL.md raw bytes. */
   bytes: number;
-  /** Scope where the skill was discovered. Project beats user on collisions. */
+  /** Scope where the skill was discovered. Project beats user on collisions
+   * (resolved at codergen-time per-run, not at discovery — see `project_cwd`). */
   scope: SkillScope;
   /** The well-known path the skill came from (absolute), e.g.
    * "/Users/x/.agents/skills". Useful for UI "source" columns. */
   source_dir: string;
+  /** Project cwd this record is anchored to. Set only when `scope === "project"`.
+   * Discovery walks every known project cwd and emits a superset; the
+   * codergen-time filter prunes to `scope === "user" || project_cwd === run.cwd`.
+   * Two projects can both legitimately ship a skill named `frontend` — they
+   * coexist in the superset, distinguished by this field. */
+  project_cwd?: string;
   /** When set, the skill was discovered but should not appear in the
    * tier-1 catalog / enum. Surfaced via GET /skills so the UI can show
    * it greyed-out with an explanation. */
@@ -84,6 +91,10 @@ export interface SkillCatalogRecord {
   bytes: number;
   scope: SkillScope;
   source_dir: string;
+  /** Project cwd this record is anchored to. Set only when `scope === "project"`.
+   * Captured so replay can correlate per-run filtering decisions against
+   * which project's skills the run actually saw. */
+  project_cwd?: string;
   /** Captured when set so replay can correlate environment-mismatch
    * outcomes against advertised compatibility constraints. */
   compatibility?: string;

@@ -1,10 +1,11 @@
-// Agent-definition discovery. Scans well-known paths by default. Project
-// scope beats user scope on name collisions. Within the same scope,
-// the path listed earlier wins (.agents/agents/ before .claude/agents/).
-// Mirrors `skills/discover.ts` structurally; differs in two ways:
-//   - flat `.md` layout (no per-skill directory wrapper),
-//   - `allowed_tools` is normalised through `normaliseToolName` before
-//     storing, with one warning per non-canonical entry.
+// Agent-definition discovery. Mirrors `skills/discover.ts`: walks
+// `~/.agents`, `~/.claude` and every project cwd in `projectCwds`,
+// emitting a superset. Project-scope records carry `project_cwd`; the
+// codergen-time filter prunes per-run.
+//
+// Within-bucket precedence: project = `.agents/agents` beats
+// `.claude/agents` per cwd; user scope same order. Cross-scope and
+// cross-project shadowing happens at codergen filter time.
 
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -22,49 +23,71 @@ export interface DiscoverAgentsResult {
   warnings: string[];
 }
 
+interface Root {
+  path: string;
+  scope: AgentDefinitionScope;
+  projectCwd?: string;
+}
+
 export async function discoverAgents(opts: DiscoverAgentsOptions): Promise<DiscoverAgentsResult> {
   const config: AgentDefinitionsConfig = opts.config ?? {};
   const disabledSet = new Set(config.disabled ?? []);
 
   const roots = buildRoots(opts);
   const warnings: string[] = [];
-  const byName = new Map<string, AgentDefinition>();
+
+  const projectByCwdName = new Map<string, Map<string, AgentDefinition>>();
+  const userByName = new Map<string, AgentDefinition>();
 
   for (const root of roots) {
     const fromRoot = await scanRoot(root.path, root.scope, warnings);
     for (const def of fromRoot) {
       if (disabledSet.has(def.name)) continue;
-      const existing = byName.get(def.name);
-      if (!existing) {
-        byName.set(def.name, def);
-        continue;
-      }
-      const existingRank = scopeRank(existing.scope);
-      const newRank = scopeRank(def.scope);
-      if (newRank < existingRank) {
-        warnings.push(`agent "${def.name}" at ${existing.location} shadowed by ${def.location}`);
-        byName.set(def.name, def);
+      if (def.scope === "project") {
+        if (root.projectCwd !== undefined) {
+          def.project_cwd = root.projectCwd;
+        }
+        const cwdKey = root.projectCwd ?? "";
+        let inner = projectByCwdName.get(cwdKey);
+        if (!inner) {
+          inner = new Map();
+          projectByCwdName.set(cwdKey, inner);
+        }
+        const existing = inner.get(def.name);
+        if (!existing) {
+          inner.set(def.name, def);
+        } else {
+          warnings.push(`agent "${def.name}" at ${def.location} shadowed by ${existing.location}`);
+        }
       } else {
-        warnings.push(`agent "${def.name}" at ${def.location} shadowed by ${existing.location}`);
+        const existing = userByName.get(def.name);
+        if (!existing) {
+          userByName.set(def.name, def);
+        } else {
+          warnings.push(`agent "${def.name}" at ${def.location} shadowed by ${existing.location}`);
+        }
       }
     }
   }
 
-  return {
-    agents: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
-    warnings,
-  };
-}
-
-interface Root {
-  path: string;
-  scope: AgentDefinitionScope;
+  const out: AgentDefinition[] = [];
+  for (const inner of projectByCwdName.values()) for (const d of inner.values()) out.push(d);
+  for (const d of userByName.values()) out.push(d);
+  out.sort((a, b) => {
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    if (a.scope !== b.scope) return a.scope === "user" ? -1 : 1;
+    return (a.project_cwd ?? "").localeCompare(b.project_cwd ?? "");
+  });
+  return { agents: out, warnings };
 }
 
 function buildRoots(opts: DiscoverAgentsOptions): Root[] {
   const roots: Root[] = [];
-  for (const rel of PROJECT_WELL_KNOWN) {
-    roots.push({ path: resolve(opts.cwd, rel), scope: "project" });
+  for (const cwd of opts.projectCwds) {
+    for (const rel of PROJECT_WELL_KNOWN) {
+      roots.push({ path: resolve(cwd, rel), scope: "project", projectCwd: cwd });
+    }
   }
   if (opts.homeDir) {
     for (const rel of USER_WELL_KNOWN) {
@@ -72,10 +95,6 @@ function buildRoots(opts: DiscoverAgentsOptions): Root[] {
     }
   }
   return roots;
-}
-
-function scopeRank(scope: AgentDefinitionScope): number {
-  return scope === "project" ? 0 : 1;
 }
 
 const NAME_MAX = 64;

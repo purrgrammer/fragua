@@ -400,6 +400,8 @@ Anything emitted via `ctx.emit` from a handler — `agent.message_start/end`, `l
 
 The executor flushes the in-handler buffer to the store on a soft 50ms timer or when 64 events accumulate, whichever first, so the conversation view streams mid-LLM-call. The handler's tail (`edge.selected`, post-handler budget warnings) is drained synchronously before the terminal `fact.node_*` so consumers see the trail in causal order.
 
+`llm.start.skills[]` carries one `SkillCatalogRecord` (see `packages/types/src/skills.ts`) per skill the model saw on this call. Each record includes `name`, `location`, `sha256`, `bytes`, `scope`, `source_dir`, optional `compatibility`, and — for `scope === "project"` — `project_cwd` so replay can correlate which project's skills were active for this run after per-run filtering at codergen dispatch (see [`docs/proposals/skills-and-agents-ui.md`](./proposals/skills-and-agents-ui.md)).
+
 ### Daemon events (writer: `daemon`, separate `daemon_events` table)
 
 Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_events` table — disjoint from the per-run `seq` space because many entries are global (no run scope) and they must not interleave into the per-run reducer's projection. Same 4 KB payload cap as fact events.

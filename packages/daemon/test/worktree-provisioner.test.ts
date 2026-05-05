@@ -26,6 +26,7 @@ import { LocalEnvironmentProvisioner, WorktreeProvisioner } from "../src/worktre
 function stubEnv(cwd: string): ExecutionEnvironment {
   return {
     cwd: () => cwd,
+    projectCwd: () => cwd,
     readFile: async () => "",
     writeFile: async () => {},
     exists: async () => false,
