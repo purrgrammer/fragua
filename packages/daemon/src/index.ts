@@ -3,6 +3,8 @@ export type { AutoDispatcherOpts } from "./auto-dispatcher.ts";
 export { autoDispatcherResolver } from "./auto-dispatcher.ts";
 export type { AutoTitlerOpts, TitleRequest } from "./auto-titler.ts";
 export { AutoTitler } from "./auto-titler.ts";
+export type { RunConversationDeps } from "./conversation.ts";
+export { runConversation } from "./conversation.ts";
 export type { DispatcherResolver } from "./dispatch.ts";
 export { Dispatcher } from "./dispatch.ts";
 export type { DaemonHandle, DaemonMainOpts } from "./entrypoint.ts";
@@ -16,11 +18,14 @@ export {
   cancelToFacts,
   resultToFacts,
 } from "./result-to-facts.ts";
+export type { SpawnSubagentDeps, SpawnSubagentParentCtx } from "./spawn-subagent.ts";
+export { makeSpawnSubagent } from "./spawn-subagent.ts";
 export type { SupervisorOpts } from "./supervisor.ts";
 export {
   HandlerLeakedError,
   IntentArrivedError,
   startSupervisor,
+  sweepOrphanChildren,
 } from "./supervisor.ts";
 export type { Provisioner, ProvisionOpts, WorktreeProvisionerOptions } from "./worktree-provisioner.ts";
 export { LocalEnvironmentProvisioner, WorktreeProvisioner } from "./worktree-provisioner.ts";

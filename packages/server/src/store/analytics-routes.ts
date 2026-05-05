@@ -118,7 +118,9 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
       const state = store.getState(runId);
       if (state == null) continue;
       const events = store.getEvents(runId, { limit: 5000 });
-      const wf = store.getWorkflow(state.workflowSha);
+      // Conversation runs (kind='conversation') carry no workflow_sha
+      // — skip the lookup; the summary's `workflowName` falls through.
+      const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
       summaries.push(runStateToSummary(state, events, wf?.name));
     }
 

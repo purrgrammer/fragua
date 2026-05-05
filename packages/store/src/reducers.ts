@@ -223,6 +223,12 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.handler_timeout_leaked":
     case "fact.daemon_takeover":
     case "fact.provider_retry_attempted":
+    // Subagent facts are observability-only — they ride the parent's
+    // event stream for SSE / replay but do not mutate the parent's
+    // projection. Child status lives on the child's own `run_state`
+    // row; parent gets to it via `parent_run_id` join.
+    case "fact.subagent.spawned":
+    case "fact.subagent.completed":
       return next;
   }
 }

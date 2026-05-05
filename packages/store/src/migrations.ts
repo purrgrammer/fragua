@@ -23,6 +23,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [2, MIGRATION_002_PAUSE_UNIFICATION()],
   [3, MIGRATION_003_HARNESS_BY_DEFAULT()],
   [4, MIGRATION_004_LOCAL_WORKFLOW_SCOPE()],
+  [5, MIGRATION_005_CONVERSATION_KIND()],
 ]);
 
 /**
@@ -406,5 +407,104 @@ function MIGRATION_004_LOCAL_WORKFLOW_SCOPE(): string {
     CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
     CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
     CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+  `;
+}
+
+/**
+ * v4 → v5: conversation runs as a kind.
+ *
+ * - `run_state` gains a `kind` discriminator
+ *   ('workflow' | 'conversation'); existing rows default to 'workflow'.
+ * - `workflow_sha` becomes nullable so conversation runs can carry
+ *   `NULL` (they have no DOT document). Workflow runs continue to
+ *   require a non-NULL workflow_sha; the invariant is enforced at the
+ *   writer (enqueueRun), not by CHECK — SQLite can't express
+ *   conditional NOT NULL.
+ * - Parent linkage columns (`parent_run_id`, `parent_node_id`,
+ *   `parent_iteration`) anchor sub-agent runs back to the codergen
+ *   iteration that spawned them. Foreign-key cascade is SET NULL so
+ *   GC'ing a parent leaves the child as a free-standing run.
+ * - New partial index `idx_run_state_parent` covers parent_run_id
+ *   lookups (orphan-child sweep, listChildRunIds).
+ *
+ * SQLite has no `ALTER TABLE … DROP NOT NULL`, so the column shape
+ * change goes through a table rebuild. Indexes recreate identically
+ * plus the new partial parent index.
+ */
+function MIGRATION_005_CONVERSATION_KIND(): string {
+  return `
+    CREATE TABLE run_state_v5 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
+        'completed','cancelled','halted','quarantined'
+      )),
+      kind TEXT NOT NULL DEFAULT 'workflow' CHECK (kind IN ('workflow','conversation')),
+      current_node TEXT,
+      workflow_sha TEXT REFERENCES workflows(sha),
+      parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+      parent_node_id TEXT,
+      parent_iteration INTEGER,
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v5 (
+      run_id, version, status, kind, current_node, workflow_sha,
+      parent_run_id, parent_node_id, parent_iteration,
+      schema_version, routing, metrics, next_seq, last_applied_seq,
+      priority, enqueued_at, ready_at, node_started_at, dispatch_started_at,
+      updated_at, title, cwd, workflow_name, workflow_scope, workflow_path,
+      base_git_sha, branch
+    )
+    SELECT
+      run_id, version, status, 'workflow' AS kind, current_node, workflow_sha,
+      NULL AS parent_run_id, NULL AS parent_node_id, NULL AS parent_iteration,
+      schema_version, routing, metrics, next_seq, last_applied_seq,
+      priority, enqueued_at, ready_at, node_started_at, dispatch_started_at,
+      updated_at, title, cwd, workflow_name, workflow_scope, workflow_path,
+      base_git_sha, branch
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+    DROP INDEX IF EXISTS idx_run_state_parent;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v5 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+    CREATE INDEX idx_run_state_parent
+      ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
   `;
 }

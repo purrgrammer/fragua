@@ -6,7 +6,14 @@ import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai
 import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
-import type { ExecutionEnvironment, Skill, SwarmToolContext, ToolRegistry } from "@swarm/workspace";
+import type {
+  ExecutionEnvironment,
+  Skill,
+  SubagentResult,
+  SubagentSpec,
+  SwarmToolContext,
+  ToolRegistry,
+} from "@swarm/workspace";
 import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
@@ -69,6 +76,40 @@ export interface PiCodergenBackendOptions {
    * the same `runId` finds the live-agent slot it expects. Omit in
    * tests/one-shots that don't need cross-backend steering. */
   steering?: SteeringRegistry;
+  /** Factory that builds a per-call sub-agent spawner for the `agent`
+   * tool. Called once per `backend.run()` with the parent's resolved
+   * persona + skills + pool, and returns the `spawnSubagent` closure
+   * that lands on `swarmContext.spawnSubagent`. The daemon wires this
+   * to its store + tool registry; tests / one-shots can omit it (the
+   * tool then surfaces `is_error` to the LLM rather than silently
+   * stalling). */
+  spawnSubagentFactory?: (parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>;
+}
+
+/** Parent-context snapshot the spawn factory needs to materialise a
+ *  child run. Captured per `backend.run()` and frozen — the same
+ *  closure runs against every `agent` tool call inside that turn.
+ *  Field names mirror the daemon's `SpawnSubagentParentCtx` so the
+ *  factory wired by the CLI can forward this object verbatim. */
+export interface SpawnSubagentParentCtx {
+  parentRunId: string;
+  parentNodeId: string;
+  parentIteration: number;
+  /** The fully-built parent system prompt (post-merge with protocol /
+   *  skills / context-files / environment). Used verbatim when the
+   *  child inherits. */
+  parentSystemPrompt: string;
+  /** Skills the parent codergen call had visible. Sub-agents intersect
+   *  `spec.skills` against this set. */
+  parentSkills: readonly Skill[];
+  /** Parent's `allowed_tools` attribute (or undefined when the node
+   *  used the catch-all). Becomes the default for the child's pool
+   *  unless `spec.allowed_tools` is set. */
+  parentAllowedTools?: readonly string[];
+  /** Parent's `denied_tools`. */
+  parentDeniedTools?: readonly string[];
+  /** Filesystem cwd inherited from the parent's worktree (if any). */
+  cwd?: string;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -106,6 +147,9 @@ export class PiCodergenBackend implements CodergenBackend {
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
+  private readonly spawnSubagentFactory:
+    | ((parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>)
+    | undefined;
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -121,6 +165,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.runEnv = opts.runEnv;
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
+    this.spawnSubagentFactory = opts.spawnSubagentFactory;
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -220,7 +265,17 @@ export class PiCodergenBackend implements CodergenBackend {
     // so closure values are correct for that run.
     const swarmEmit = input.emit;
     const summariser = this.summariser;
-    const swarmContext: SwarmToolContext = {
+    // The `agent` tool needs the resolved parent system prompt + skills
+    // to seed sub-agent runs, but `systemPrompt` isn't built until
+    // after context-file loading below. Stage swarmContext as a
+    // `let` and patch in `spawnSubagent` + `skillCatalog` once those
+    // resources are ready. Tools captured by `toAgentTool` close over
+    // the SAME object reference, so the patches are visible to every
+    // tool call without re-mapping.
+    const swarmContext: SwarmToolContext & {
+      spawnSubagent?: SwarmToolContext["spawnSubagent"];
+      skillCatalog?: readonly Skill[];
+    } = {
       runId: input.run_id,
       nodeId: input.node.id,
       iteration: input.iteration?.n ?? 0,
@@ -258,6 +313,27 @@ export class PiCodergenBackend implements CodergenBackend {
       skillsCatalog,
       ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
     });
+
+    // Now that the parent's system prompt is fully resolved, wire the
+    // `agent` tool. Sub-agents inherit this exact string verbatim when
+    // their spec leaves `system_prompt` undefined (see
+    // `materialiseForChild`). `skillCatalog` makes the parent's
+    // resolved skill set available so `spec.skills` can be intersected
+    // against it on each spawn.
+    Object.assign(swarmContext, { skillCatalog: effectiveSkills });
+    if (this.spawnSubagentFactory !== undefined) {
+      const parentCtx: SpawnSubagentParentCtx = {
+        parentRunId: input.run_id,
+        parentNodeId: input.node.id,
+        parentIteration: input.iteration?.n ?? 0,
+        parentSystemPrompt: systemPrompt,
+        parentSkills: effectiveSkills,
+        ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
+        ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
+        ...(typeof effectiveEnv.cwd === "function" ? { cwd: effectiveEnv.cwd() } : {}),
+      };
+      Object.assign(swarmContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
+    }
 
     // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out
     // of any cross-node transcript sharing — it wins over thread_id and

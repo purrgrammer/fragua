@@ -6,6 +6,7 @@
 // its current turn; supervisor exits; release lock.
 
 import { hostname as osHostname } from "node:os";
+import type * as core from "@swarm/core";
 import type * as coreHandler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import { AbortRegistry } from "./abort-registry.ts";
@@ -13,7 +14,7 @@ import type { AutoTitler } from "./auto-titler.ts";
 import { type BlobGcOpts, DEFAULT_BLOB_GC_INTERVAL_MS, DEFAULT_BLOB_GC_MAX_ROWS, startBlobGc } from "./blob-gc.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import { runExecutor } from "./executor.ts";
-import { startSupervisor } from "./supervisor.ts";
+import { startSupervisor, sweepOrphanChildren } from "./supervisor.ts";
 import type { Provisioner } from "./worktree-provisioner.ts";
 
 export interface DaemonMainOpts {
@@ -77,6 +78,12 @@ export interface DaemonMainOpts {
    * backend. Without this, steers either land via the standard intent
    * fold on re-dispatch or stay buffered until the next `beginRun`. */
   onSteer?: (runId: string, text: string) => void;
+  /** Codergen backend used to drive `kind='conversation'` runs (sub-
+   * agents spawned by the `agent` tool). Forwarded into
+   * `ExecutorOpts.codergenBackend`. Workflow runs never need it.
+   * Optional — when omitted, conversation runs halt with a clear
+   * error rather than wedging the queue. */
+  codergenBackend?: core.CodergenBackend;
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -146,6 +153,11 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
           durationMs: Date.now() - sweepStart,
         },
       });
+      // Cancel any orphan sub-agent runs whose parent terminated
+      // while the daemon was down. Same shape as the zombie cleanup
+      // above — emit `intent.cancel_requested`, let the standard fold
+      // path pick it up on the next claim.
+      sweepOrphanChildren(opts.store);
 
       const registry = new AbortRegistry();
 
@@ -190,6 +202,7 @@ export function startDaemon(opts: DaemonMainOpts): DaemonHandle {
         shutdownSignal: ctrl.signal,
       };
       if (opts.autoTitler) executorOpts.autoTitler = opts.autoTitler;
+      if (opts.codergenBackend) executorOpts.codergenBackend = opts.codergenBackend;
       if (opts.provisioner) executorOpts.provisioner = opts.provisioner;
       if (opts.leakGraceMs !== undefined) executorOpts.leakGraceMs = opts.leakGraceMs;
       if (opts.shutdownDrainMs !== undefined) executorOpts.shutdownDrainMs = opts.shutdownDrainMs;

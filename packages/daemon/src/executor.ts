@@ -10,6 +10,7 @@
 
 import {
   AUTO_RESUME_AT_KEY,
+  type CodergenBackend,
   type EdgeSelection,
   type ExecutionEnvironment,
   evaluateBudget,
@@ -41,6 +42,7 @@ import {
 } from "@swarm/store";
 import type { AbortRegistry } from "./abort-registry.ts";
 import type { AutoTitler, TitleRequest } from "./auto-titler.ts";
+import { runConversation } from "./conversation.ts";
 import type { Dispatcher } from "./dispatch.ts";
 import {
   decideProviderRetry,
@@ -78,6 +80,12 @@ export interface ExecutorOpts {
   /** Optional auto-titler. When set, `titleRun` fires once per run just
    * after `fact.run_started` is durably committed. */
   autoTitler?: AutoTitler;
+  /** Codergen backend used to drive `kind='conversation'` runs (sub-
+   * agents spawned by the `agent` tool). Workflow runs never hit this
+   * path — their handlers go through `Dispatcher`. Optional so daemons
+   * that don't enable sub-agents can omit it; a conversation run
+   * arriving without a backend is halted with a clear `error` reason. */
+  codergenBackend?: CodergenBackend;
   /** Optional worktree provisioner. When set, the executor calls
    * `ensure(runId)` before any handler dispatches so the per-run env
    * is ready, and `dispose(runId)` once the run reaches a terminal
@@ -226,6 +234,43 @@ export async function runOne(runId: string, opts: ExecutorOpts, leakBudget?: Lea
 }
 
 async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBudget): Promise<void> {
+  // Conversation runs (kind='conversation') drive a single codergen
+  // call via runConversation rather than walking a graph. The branch
+  // sits at the top of runOneInner so OCC, intent fold, dispatcher
+  // lookup, etc. are all skipped. Workflow runs fall through.
+  const initialState = opts.store.getState(runId);
+  if (initialState == null) return;
+  if (initialState.kind === "conversation") {
+    if (opts.codergenBackend == null) {
+      // No backend wired — halt the child so the parent's `agent` tool
+      // call surfaces a clear failure rather than hanging.
+      try {
+        opts.store.appendFact(
+          runId,
+          [
+            {
+              type: "fact.run_halted",
+              payload: {
+                reason: "error",
+                detail: "daemon has no codergen backend wired for conversation runs",
+              },
+            },
+          ],
+          initialState.version,
+        );
+      } catch {
+        // best-effort
+      }
+      return;
+    }
+    await runConversation(runId, {
+      store: opts.store,
+      backend: opts.codergenBackend,
+      shutdownSignal: opts.shutdownSignal,
+    });
+    return;
+  }
+
   const leakGrace = opts.leakGraceMs ?? DEFAULT_LEAK_GRACE_MS;
   const maxTurns = opts.maxTurnsForTesting ?? Number.POSITIVE_INFINITY;
   const maxLoops = opts.maxLoops ?? DEFAULT_MAX_LOOPS;
@@ -314,7 +359,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
   // the validator catches them at upload-time via E015, so by the time
   // a graph reaches the executor any stylesheet is well-formed.
   let cachedGraph: Graph | null = null;
-  const graphFor = (workflowSha: string): Graph | null => {
+  const graphFor = (workflowSha: string | null): Graph | null => {
+    if (workflowSha == null) return null;
     if (cachedGraph != null) return cachedGraph;
     const wf = opts.store.getWorkflow(workflowSha);
     if (wf == null) return null;
@@ -333,6 +379,27 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       turns++;
       const state = opts.store.getState(runId);
       if (state == null) return;
+      // Conversation runs were branched off at the top of runOneInner;
+      // by the time we reach here the run is `kind='workflow'` and the
+      // schema invariant guarantees a non-null workflow_sha (enforced
+      // at `enqueueRun`'s FK reference). Narrow once so the remainder
+      // of the body — dispatcher, getWorkflow, provisioner.dispose —
+      // doesn't pay the null check on every read.
+      const workflowSha = state.workflowSha;
+      if (workflowSha == null) {
+        // Defensive: a conversation run somehow surviving the branch
+        // above. Halt to avoid wedging the queue slot.
+        try {
+          opts.store.appendFact(
+            runId,
+            [{ type: "fact.run_halted", payload: { reason: "error", detail: "workflow run with null workflow_sha" } }],
+            state.version,
+          );
+        } catch {
+          // best-effort
+        }
+        return;
+      }
 
       if (
         state.status === "completed" ||
@@ -483,10 +550,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         onOccResolved(start, 0);
         if (opts.autoTitler) {
           const input = routingString(state.routing, "input") ?? "";
-          const goal = graphFor(state.workflowSha)?.attrs.goal;
+          const goal = graphFor(workflowSha)?.attrs.goal;
           const req: TitleRequest = {
             runId,
-            workflowSha: state.workflowSha,
+            workflowSha,
             input,
           };
           if (goal !== undefined) req.goal = goal;
@@ -547,7 +614,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
 
       // Dispatch.
-      const spec = opts.dispatcher.get(state.workflowSha, currentNode);
+      const spec = opts.dispatcher.get(workflowSha, currentNode);
       const steerCtrl = new AbortController();
       const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
       const signal = AbortSignal.any(signals);
@@ -1292,7 +1359,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     if (opts.provisioner) {
       const finalState = opts.store.getState(runId);
       const terminalStatuses = new Set(["completed", "cancelled", "halted", "quarantined"]);
-      if (finalState != null && terminalStatuses.has(finalState.status)) {
+      if (finalState != null && terminalStatuses.has(finalState.status) && finalState.workflowSha != null) {
         const workflow = opts.store.getWorkflow(finalState.workflowSha);
         const ctx = {
           status: finalState.status,

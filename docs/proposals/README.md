@@ -27,6 +27,7 @@ delta called out in the proposal body.
 | [One-off migration](./migration.md) | specified | `scripts/migrate-pre-harness.ts` ran on this repo on 2026-05-04 |
 | [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | specified | P0 (per-branch `fact.node_started`/`fact.node_completed` with `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out) + P1 (web graph multi-active states with success accent for fan_in winner; step breakdown branch-row indent + parent summary aggregation) + P2 (conversation split tabs gated on concurrently-running branches; cost panel grouping rides on the same step shape) all complete |
 | [Recoverable pause unification](./recoverable-budget-pause.md) | specified | unified non-terminal `paused` status + reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`); `intent.budget_adjusted` (`POST /runs/:id/budget`) raises caps via `routing.budget_override.<scope>.<metric>`; `paused_provider_error` retired |
+| [Agent tool — LLM-spawned sub-agents](./agent-tool.md) | specified | one new LLM-callable tool (`agent`, `defaultDisabled: true`) plus the `kind='conversation'` run discriminator (schema v5: `kind` + `parent_run_id`/`parent_node_id`/`parent_iteration` on `run_state`, `workflow_sha` nullable). Two observability-only fact types (`fact.subagent.spawned` / `fact.subagent.completed`) ride the parent's stream; child runs are first-class with full event-log replay |
 
 ## In progress
 

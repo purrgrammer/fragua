@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";
 import fc from "fast-check";
 import { AbortRegistry } from "../src/abort-registry.ts";
-import { HandlerLeakedError, startSupervisor } from "../src/supervisor.ts";
+import { HandlerLeakedError, startSupervisor, sweepOrphanChildren } from "../src/supervisor.ts";
 
 const closers: Array<() => void> = [];
 afterEach(() => {
@@ -253,5 +253,89 @@ describe("HandlerLeakedError", () => {
     expect(e.name).toBe("AbortError");
     expect(e.message).toMatch(/r1/);
     expect(e.message).toMatch(/impl/);
+  });
+});
+
+describe("sweepOrphanChildren", () => {
+  function seedTerminal(store: SqliteStore, runId: string, status: "completed" | "halted" | "cancelled"): void {
+    store.saveWorkflow("wf", "t", "digraph{}");
+    store.enqueueRun({ runId, workflowSha: "wf" });
+    const claimed = store.claimNextRun(10);
+    expect(claimed?.runId).toBe(runId);
+    const live = store.getState(runId)!;
+    const fact =
+      status === "completed"
+        ? {
+            type: "fact.run_started" as const,
+            payload: { workflowSha: "wf", schemaVersion: live.schemaVersion, startNode: "a" },
+          }
+        : null;
+    if (fact != null) {
+      store.appendFact(runId, [fact], live.version);
+    }
+    const terminalFact =
+      status === "completed"
+        ? { type: "fact.run_completed" as const, payload: { finalNode: "a" } }
+        : status === "halted"
+          ? { type: "fact.run_halted" as const, payload: { reason: "error" as const, detail: "" } }
+          : { type: "fact.run_cancelled" as const, payload: { intentSeq: 0 } };
+    const v2 = store.getState(runId)!.version;
+    store.appendFact(runId, [terminalFact], v2);
+  }
+
+  test("boot sweep cancels orphan children whose parent is terminal", () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    seedTerminal(store, "parent-1", "completed");
+    store.enqueueConversation({
+      runId: "child-1",
+      parentRunId: "parent-1",
+      parentNodeId: "plan",
+      parentIteration: 0,
+    });
+
+    const cancelled = sweepOrphanChildren(store);
+    expect(cancelled).toBe(1);
+
+    const intents = store.getEvents("child-1").filter((e) => e.type === "intent.cancel_requested");
+    expect(intents).toHaveLength(1);
+    expect((intents[0]?.payload as { reason: string })?.reason).toBe("parent terminal");
+    store.close();
+  });
+
+  test("boot sweep leaves children alone when the parent is still active", () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("wf", "t", "digraph{}");
+    store.enqueueRun({ runId: "parent-2", workflowSha: "wf" });
+    store.enqueueConversation({
+      runId: "child-2",
+      parentRunId: "parent-2",
+      parentNodeId: "plan",
+      parentIteration: 0,
+    });
+
+    const cancelled = sweepOrphanChildren(store);
+    expect(cancelled).toBe(0);
+
+    const intents = store.getEvents("child-2").filter((e) => e.type === "intent.cancel_requested");
+    expect(intents).toHaveLength(0);
+    store.close();
+  });
+
+  test("boot sweep skips children that are themselves terminal", () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    seedTerminal(store, "parent-3", "completed");
+    store.enqueueConversation({
+      runId: "child-3",
+      parentRunId: "parent-3",
+      parentNodeId: "plan",
+      parentIteration: 0,
+    });
+    // Drive the child to terminal so it's no longer an orphan.
+    const v0 = store.getState("child-3")!.version;
+    store.appendFact("child-3", [{ type: "fact.run_halted", payload: { reason: "error", detail: "manual" } }], v0);
+
+    const cancelled = sweepOrphanChildren(store);
+    expect(cancelled).toBe(0);
+    store.close();
   });
 });

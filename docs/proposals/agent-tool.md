@@ -1,6 +1,7 @@
 ---
 title: Agent tool — LLM-spawned sub-agents via conversation runs
-status: accepted
+summary: "LLM-spawnable sub-agents via the `agent` tool"
+status: shipped
 maturity: specified
 last-reviewed: 2026-05-05
 ---

@@ -58,7 +58,8 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       const state = store.getState(runId);
       if (state == null) continue;
       const events = store.getEvents(runId, { limit: 5000 });
-      const name = await workflowName(state.workflowSha);
+      // Conversation runs carry no workflow_sha; skip the lookup.
+      const name = state.workflowSha != null ? await workflowName(state.workflowSha) : undefined;
       summaries.push(runStateToSummary(state, events, name));
     }
     return c.json(summaries);
@@ -75,7 +76,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // runs. The derivations themselves filter to a handful of event
     // types per walk, so total work stays bounded.
     const events = store.getEvents(runId);
-    const wf = store.getWorkflow(state.workflowSha);
+    const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
     const name = wf?.name;
     const source = wf?.dotSource;
     return c.json(runStateToDetail(state, events, name, source));

@@ -2,7 +2,8 @@
 // Pulled into a separate module so it can be unit-tested without pi-agent-core.
 
 import { createHash } from "node:crypto";
-import type { ExecutionEnvironment } from "@swarm/workspace";
+import type { ExecutionEnvironment, Skill } from "@swarm/workspace";
+import { renderSkillsCatalog } from "@swarm/workspace";
 
 /** Hard cap on the total bytes of project-conventions content prepended to the
  * system prompt. A single oversized AGENTS.md should not blow the context
@@ -230,4 +231,61 @@ function escapeAttr(value: string): string {
 
 function sha256Hex(contents: string): string {
   return createHash("sha256").update(contents, "utf8").digest("hex");
+}
+
+/** Spec subset `materialiseForChild` consumes. The full `SubagentSpec`
+ *  in @swarm/workspace carries a few runtime-only fields (signal,
+ *  allowed_tools, etc.) we don't need here — the prompt builder
+ *  cares only about persona override + skill name filter. Kept local
+ *  so this module doesn't pull the workspace types graph. */
+export interface MaterialiseChildSpec {
+  system_prompt?: string;
+  skills?: readonly string[];
+}
+
+export interface MaterialiseChildResult {
+  /** Final system prompt fed into the child Agent. */
+  systemPrompt: string;
+  /** The skill subset projected into the child's catalog. Empty when
+   *  the spec didn't name any — sub-agents do not inherit the parent's
+   *  loaded skills implicitly. */
+  effectiveSkills: Skill[];
+}
+
+/** Build the system prompt + skill catalog for a sub-agent run.
+ *
+ *  - `spec.system_prompt` overrides the parent's persona; otherwise the
+ *    child inherits the parent's system prompt verbatim (the parent
+ *    string already includes the protocol + environment blocks).
+ *  - `spec.skills` is intersected with the parent's loaded catalog
+ *    (unknown names silently dropped, by design — the LLM gets a
+ *    smaller catalog rather than a hard error).
+ *  - When the spec asks for a persona override, the child still gets a
+ *    fresh `<protocol>` block + skills catalog wrap so the abort
+ *    contract holds. When the spec inherits, the parent's prompt is
+ *    used verbatim; protocol / catalog are already baked into it.
+ */
+export function materialiseForChild(
+  spec: MaterialiseChildSpec,
+  parentSystemPrompt: string,
+  parentSkills: readonly Skill[],
+): MaterialiseChildResult {
+  const requested = spec.skills;
+  const effectiveSkills: Skill[] =
+    requested == null
+      ? []
+      : (() => {
+          const allow = new Set(requested);
+          return parentSkills.filter((s) => allow.has(s.name) && !s.disabled_reason);
+        })();
+
+  if (spec.system_prompt === undefined) {
+    return { systemPrompt: parentSystemPrompt, effectiveSkills };
+  }
+
+  const catalog = renderSkillsCatalog(effectiveSkills);
+  let out = spec.system_prompt;
+  if (catalog.length > 0) out = mergeSystemPrompt(out, catalog);
+  out = mergeSystemPrompt(out, renderProtocol());
+  return { systemPrompt: out, effectiveSkills };
 }

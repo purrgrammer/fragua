@@ -42,6 +42,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { agentTool } from "./agent.ts";
 import {
   applyEditsToNormalizedContent,
   detectLineEnding,
@@ -460,10 +461,10 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
 
 import { webFetchTool } from "./web-fetch.ts";
 
-// `web_fetch` is included but `defaultDisabled: true` keeps it out of
-// any node's tool set unless `allowed_tools=` lists it explicitly.
-// Workflows that want public-web reading (e.g. `research.dot`) opt in
-// per node; everything else stays unaffected.
+// `web_fetch` and `agent` are included but `defaultDisabled: true`
+// keeps them out of any node's tool set unless `allowed_tools=` lists
+// them explicitly. Workflows that want public-web reading or sub-agents
+// opt in per node; everything else stays unaffected.
 export const CORE_TOOLS: AnyTool[] = [
   readFileTool,
   writeFileTool,
@@ -473,7 +474,16 @@ export const CORE_TOOLS: AnyTool[] = [
   findTool,
   lsTool,
   webFetchTool,
+  agentTool,
 ];
+
+/** Structurally remove the `agent` tool from a pool. The `agent` tool
+ *  spawns sub-agents; allowing a sub-agent to reach for `agent` itself
+ *  would invite arbitrarily deep nesting. Belt-and-braces with the
+ *  spec-time strip in spawnSubagent. */
+export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
+  return tools.filter((t) => t.name !== "agent");
+}
 
 // ─── helpers ───────────────────────────────────────────────────────
 

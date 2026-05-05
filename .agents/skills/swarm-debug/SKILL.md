@@ -313,7 +313,8 @@ sqlite3 -readonly "$DB" \
 # Run summary
 curl -fsS "$URL/runs/$RUN" | jq .
 sqlite3 -readonly "$DB" \
-  "SELECT run_id, status, current_node, version, workflow_sha, cwd, routing, metrics,
+  "SELECT run_id, status, kind, current_node, version, workflow_sha,
+          parent_run_id, parent_node_id, parent_iteration, cwd, routing, metrics,
           datetime(updated_at/1000,'unixepoch','localtime') AS updated
    FROM run_state WHERE run_id='$RUN';"
 

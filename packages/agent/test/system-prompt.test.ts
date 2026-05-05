@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import type { Skill } from "@swarm/types";
 import {
   applyDefaultContextFiles,
   buildSystemPrompt,
   CONTEXT_FILES_MAX_BYTES,
   loadContextFiles,
+  materialiseForChild,
   mergeSystemPrompt,
   renderProtocol,
   renderRunEnvironment,
@@ -229,5 +231,66 @@ describe("buildSystemPrompt with runEnv", () => {
     expect(out).toContain("<protocol>");
     expect(out).toContain("<abort>reason</abort>");
     expect(out.endsWith("base")).toBe(true);
+  });
+});
+
+function makeSkill(name: string): Skill {
+  return {
+    name,
+    description: `${name} skill description`,
+    location: `/skills/${name}/SKILL.md`,
+    skill_dir: `/skills/${name}`,
+    sha256: "deadbeef",
+    bytes: 100,
+    scope: "user",
+    source_dir: `/skills/${name}`,
+  };
+}
+
+describe("materialiseForChild", () => {
+  const parentSystemPrompt = "PARENT BASE PERSONA\n<protocol>\n…\n</protocol>";
+  const parentSkills: Skill[] = [makeSkill("a"), makeSkill("b"), makeSkill("c")];
+
+  test("inherits parent system prompt verbatim when spec.system_prompt is undefined", () => {
+    const out = materialiseForChild({}, parentSystemPrompt, parentSkills);
+    expect(out.systemPrompt).toBe(parentSystemPrompt);
+    expect(out.effectiveSkills).toEqual([]);
+  });
+
+  test("replaces persona when spec.system_prompt is set; protocol block is reapplied", () => {
+    const out = materialiseForChild({ system_prompt: "REVIEWER" }, parentSystemPrompt, parentSkills);
+    expect(out.systemPrompt).toContain("REVIEWER");
+    expect(out.systemPrompt).not.toContain("PARENT BASE PERSONA");
+    expect(out.systemPrompt).toContain("<protocol>");
+    expect(out.systemPrompt).toContain("<abort>reason</abort>");
+  });
+
+  test("filters skills to spec.skills set; empty / unset spec.skills means no skills", () => {
+    const filtered = materialiseForChild({ skills: ["b"] }, parentSystemPrompt, parentSkills);
+    expect(filtered.effectiveSkills.map((s) => s.name)).toEqual(["b"]);
+
+    const noSkills = materialiseForChild({}, parentSystemPrompt, parentSkills);
+    expect(noSkills.effectiveSkills).toEqual([]);
+  });
+
+  test("unknown skill names are silently dropped", () => {
+    const out = materialiseForChild({ skills: ["a", "does-not-exist"] }, parentSystemPrompt, parentSkills);
+    expect(out.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
+  });
+
+  test("override + skills renders a skills catalog block alongside the protocol and the override persona", () => {
+    const out = materialiseForChild({ system_prompt: "REVIEWER", skills: ["a"] }, parentSystemPrompt, parentSkills);
+    expect(out.systemPrompt).toContain("REVIEWER");
+    expect(out.systemPrompt).toContain("<available_skills>");
+    expect(out.systemPrompt).toContain("a skill description");
+    expect(out.systemPrompt).toContain("<protocol>");
+    // Protocol sits above the skills catalog (top-down: protocol →
+    // skills → persona) — matches `buildSystemPrompt` layering.
+    const protocolIdx = out.systemPrompt.indexOf("<protocol>");
+    const skillsIdx = out.systemPrompt.indexOf("<available_skills>");
+    const personaIdx = out.systemPrompt.indexOf("REVIEWER");
+    expect(protocolIdx).toBeGreaterThanOrEqual(0);
+    expect(skillsIdx).toBeGreaterThan(protocolIdx);
+    expect(personaIdx).toBeGreaterThan(skillsIdx);
   });
 });

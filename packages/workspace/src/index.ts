@@ -1,3 +1,4 @@
+export * from "./agent.ts";
 export * from "./blocklist.ts";
 export * from "./edit-diff.ts";
 export * from "./extensions/index.ts";

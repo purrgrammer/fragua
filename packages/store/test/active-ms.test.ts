@@ -10,8 +10,12 @@ function blankState(): RunState {
     runId: "r",
     version: 0,
     status: "queued",
+    kind: "workflow",
     currentNode: null,
     workflowSha: "wf",
+    parentRunId: null,
+    parentNodeId: null,
+    parentIteration: null,
     schemaVersion: 1,
     routing: {},
     metrics: emptyMetrics(),
@@ -222,5 +226,35 @@ describe("dispatch interval bookkeeping", () => {
     const a = foldFacts(blankState(), facts, 1234);
     const b = foldFacts(blankState(), facts, 1234);
     expect(a).toEqual(b);
+  });
+});
+
+describe("applyFact — subagent facts are observability-only", () => {
+  test("fact.subagent.spawned and fact.subagent.completed do not mutate projection scalars", () => {
+    const base = blankState();
+    const spawned: FactEvent = {
+      type: "fact.subagent.spawned",
+      payload: { parent_node_id: "plan", iteration: 0, child_run_id: "c-1", label: "summarise" },
+    };
+    const completed: FactEvent = {
+      type: "fact.subagent.completed",
+      payload: { child_run_id: "c-1", status: "completed", summary_chars: 42, total_tool_calls: 3 },
+    };
+
+    const afterSpawn = applyFact(base, spawned, 999);
+    expect({ ...afterSpawn, updatedAt: 0, metrics: undefined, routing: undefined }).toEqual({
+      ...base,
+      updatedAt: 0,
+      metrics: undefined,
+      routing: undefined,
+    });
+
+    const afterCompleted = applyFact(afterSpawn, completed, 1000);
+    expect({ ...afterCompleted, updatedAt: 0, metrics: undefined, routing: undefined }).toEqual({
+      ...base,
+      updatedAt: 0,
+      metrics: undefined,
+      routing: undefined,
+    });
   });
 });

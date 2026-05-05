@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Type } from "@sinclair/typebox";
+import { stripAgentTool } from "../src/tools.ts";
 import { type Tool, ToolRegistry } from "../src/types.ts";
 
 function makeTool(name: string, opts: { defaultDisabled?: boolean } = {}): Tool {
@@ -70,5 +71,18 @@ describe("ToolRegistry", () => {
     r.registerAll([makeTool("a"), makeTool("web_fetch", { defaultDisabled: true })]);
     const picked = r.select({ allow: ["a", "web_fetch"], deny: ["web_fetch"] });
     expect(picked.map((t) => t.name)).toEqual(["a"]);
+  });
+
+  test("select({ allow: ['agent'] }) includes agent (defaultDisabled bypass for explicit allow)", () => {
+    const r = new ToolRegistry();
+    r.registerAll([makeTool("a"), makeTool("agent", { defaultDisabled: true })]);
+    const picked = r.select({ allow: ["agent"] });
+    expect(picked.map((t) => t.name)).toEqual(["agent"]);
+  });
+
+  test("stripAgentTool removes agent from a pool", () => {
+    const pool = [makeTool("read"), makeTool("write"), makeTool("agent", { defaultDisabled: true })];
+    const stripped = stripAgentTool(pool);
+    expect(stripped.map((t) => t.name).sort()).toEqual(["read", "write"]);
   });
 });

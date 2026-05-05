@@ -15,6 +15,7 @@ import type {
   SummariseOutput,
 } from "@swarm/core";
 import type { HttpClient } from "@swarm/core/handler";
+import type { HaltReason, RunStatus, Skill } from "@swarm/types";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
 
@@ -22,7 +23,8 @@ export type { DirEntry, ExecResult, ExecutionEnvironment };
  *  `ToolExecuteOptions.swarmContext`. Built-in tools (read / write /
  *  edit / bash) ignore this field — they run off `env` alone.
  *  Loader-wrapped extension tools require it to construct their
- *  `ExtensionContext`. */
+ *  `ExtensionContext`. The `agent` tool reads `spawnSubagent` +
+ *  `skillCatalog` to drive sub-agent runs. */
 export interface SwarmToolContext {
   readonly runId: string;
   readonly nodeId: string;
@@ -30,6 +32,59 @@ export interface SwarmToolContext {
   readonly http: HttpClient;
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
   readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
+  /** Spawn a sub-agent run from inside a codergen turn. Wired by the
+   *  daemon (per call) when the parent node's tool pool includes
+   *  `agent`. Absent in tests / extension hosts that don't drive
+   *  sub-agents. */
+  readonly spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>;
+  /** Parent's resolved skill catalog. The `agent` tool's `spec.skills`
+   *  is filtered against this set; sub-agents never see a skill the
+   *  parent didn't load. */
+  readonly skillCatalog?: readonly Skill[];
+}
+
+/** Inputs the `agent` tool hands to `spawnSubagent`. Mirrors the
+ *  tool's TypeBox schema, plus a per-call `signal` so cancellation
+ *  propagates from the parent dispatch into the child run. */
+export interface SubagentSpec {
+  /** Optional 1-line label surfaced on `fact.subagent.spawned`. */
+  description?: string;
+  /** The only context the sub-agent sees — the LLM constructs it. */
+  prompt: string;
+  /** Override the parent's system prompt; otherwise the child inherits
+   *  the parent's verbatim. */
+  system_prompt?: string;
+  /** Allowlist for the child's tool pool. Defaults to the parent's
+   *  effective pool minus `agent` (no nesting). */
+  allowed_tools?: readonly string[];
+  /** Denylist applied after the allowlist. */
+  disallowed_tools?: readonly string[];
+  /** Skill names; resolved against the parent's catalog. Sub-agents
+   *  never inherit the parent's loaded skills implicitly. */
+  skills?: readonly string[];
+  /** Hard cap on agent loop iterations; defaults to the parent's
+   *  remaining budget. */
+  max_iterations?: number;
+  /** Forwarded from the calling tool's `ToolExecuteOptions.signal` so
+   *  parent cancellation propagates as `intent.cancel_requested` on
+   *  the child run. */
+  signal?: AbortSignal;
+}
+
+/** What `spawnSubagent` returns to the `agent` tool. The tool packs
+ *  this into its `ToolOutput.{text, data}` shape for the parent LLM. */
+export interface SubagentResult {
+  /** Concatenated text of the child's final assistant message. Empty
+   *  string when the child terminated without one. */
+  summary: string;
+  /** The child run's id (kind='conversation'). */
+  childRunId: string;
+  /** Terminal status of the child run. */
+  status: RunStatus;
+  /** Set when `status === 'halted'`. */
+  haltReason?: HaltReason;
+  /** Count of tool calls the child made across its loop. */
+  totalToolCalls: number;
 }
 
 /** Per-tool truncation policy (applied before the value goes to the LLM). */
