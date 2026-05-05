@@ -459,12 +459,18 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
   },
 };
 
+import { skillTool } from "./skill-tool.ts";
 import { webFetchTool } from "./web-fetch.ts";
 
 // `web_fetch` and `agent` are included but `defaultDisabled: true`
 // keeps them out of any node's tool set unless `allowed_tools=` lists
 // them explicitly. Workflows that want public-web reading or sub-agents
 // opt in per node; everything else stays unaffected.
+//
+// `skill` is built-in: included here so it lands in every node's tool
+// pool by default, AND force-included by the codergen backend even when
+// a node's `allowed_tools` / `denied_tools` would exclude it. The
+// proposal is explicit — "always available, zero .dot migration".
 export const CORE_TOOLS: AnyTool[] = [
   readFileTool,
   writeFileTool,
@@ -475,6 +481,7 @@ export const CORE_TOOLS: AnyTool[] = [
   lsTool,
   webFetchTool,
   agentTool,
+  skillTool,
 ];
 
 /** Structurally remove the `agent` tool from a pool. The `agent` tool

@@ -27,14 +27,16 @@ describe("renderSkillsCatalog", () => {
     expect(out).toContain("<available_skills>");
     expect(out).toContain("<name>pdf</name>");
     expect(out).toContain("<name>csv</name>");
-    // Instructions direct the agent to read the SKILL.md with the `read`
-    // tool — no dedicated load_skill tool under the trimmed surface.
-    expect(out).toContain("`read`");
-    expect(out).toContain("SKILL.md");
+    // Instructions direct the agent to load skills via the built-in
+    // `skill` tool — not by reading SKILL.md with `read` (was the
+    // pre-skill-tool convention).
+    expect(out).toContain("`skill` tool");
+    expect(out).toContain("$ARGUMENTS");
+    expect(out).toContain("<invocation>");
     // Spec wording: relative paths resolve against the skill's directory
     // and tool calls should use absolute paths.
     expect(out).toContain("absolute paths");
-    expect(out).toContain("parent of SKILL.md");
+    expect(out).toContain("<location>");
   });
 
   test("emits <compatibility> only when set on the skill", () => {

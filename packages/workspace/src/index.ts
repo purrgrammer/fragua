@@ -8,6 +8,7 @@ export * from "./ignore.ts";
 export * from "./local-env.ts";
 export * from "./ls.ts";
 export * from "./path-utils.ts";
+export * from "./skill-tool.ts";
 export * from "./skills/index.ts";
 export * from "./tools.ts";
 export * from "./truncate.ts";
