@@ -35,6 +35,7 @@ import {
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -951,6 +952,19 @@ function RichToolResult({
     return (
       <WebFetchResult
         params={params as { url?: string; prompt?: string } | undefined}
+        result={result}
+        isStreaming={!result}
+      />
+    );
+  }
+  // skill: built-in tool that loads a SKILL.md by catalogue name and
+  // substitutes $ARGUMENTS. The structured payload (name, description,
+  // path, content) lands on result.details.data — same channel every
+  // built-in uses.
+  if (toolName === "skill") {
+    return (
+      <SkillToolResult
+        params={params as { name?: string; arguments?: string } | undefined}
         result={result}
         isStreaming={!result}
       />

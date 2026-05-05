@@ -2,6 +2,7 @@
 
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
+  BookOpenIcon,
   BotIcon,
   CheckCircleIcon,
   ChevronDownIcon,
@@ -158,6 +159,7 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // per-call `labelOverride` of `Agent · <description>` so each
   // spawn shows its caller-supplied label rather than a generic noun.
   agent: { icon: BotIcon, label: "Agent" },
+  skill: { icon: BookOpenIcon, label: "Skill" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare
