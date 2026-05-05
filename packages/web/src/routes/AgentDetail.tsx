@@ -7,7 +7,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -40,6 +40,13 @@ export function AgentDetail(): JSX.Element {
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-4" data-testid="agent-detail">
+      <Link
+        to="/agents"
+        className="text-xs text-sw-muted hover:text-sw-text hover:underline"
+        data-testid="agent-detail-back"
+      >
+        ← all agents
+      </Link>
       <Header agent={agent} />
       <div className="flex min-h-0 flex-1 flex-col rounded-md border border-sw-border bg-sw-surface">
         <div className="flex items-center justify-between border-b border-sw-border px-4 py-2">

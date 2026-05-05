@@ -120,10 +120,7 @@ function ImageView({
     <div className="flex h-full min-h-0 flex-col" data-testid="file-viewer-image">
       <Toolbar path={path} />
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {url && (
-          // biome-ignore lint/a11y/useAltText: the file path is the most useful alt text we have here
-          <img src={url} alt={path} className="max-w-full" />
-        )}
+        {url && <img src={url} alt={path} className="max-w-full" />}
       </div>
     </div>
   );
