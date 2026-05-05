@@ -39,8 +39,8 @@ export function ProjectDetail(): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedPath = searchParams.get("path") ?? "";
   const rawTab = searchParams.get("tab");
-  const tab: "runs" | "files" | "skills" | "agents" =
-    rawTab === "files" || rawTab === "skills" || rawTab === "agents" ? rawTab : "runs";
+  const tab: "runs" | "workflows" | "files" | "skills" | "agents" =
+    rawTab === "workflows" || rawTab === "files" || rawTab === "skills" || rawTab === "agents" ? rawTab : "runs";
 
   const filter = useMemo(() => (cwd ? { cwd } : undefined), [cwd]);
   const { data: rows, isPending, isError, error } = useQuery({ ...queries.runs.list(filter), enabled: cwd !== null });
@@ -108,7 +108,13 @@ export function ProjectDetail(): JSX.Element {
 
   const handleTabChange = (v: string): void => {
     const next = new URLSearchParams(searchParams);
-    const known: Record<string, string> = { runs: "runs", files: "files", skills: "skills", agents: "agents" };
+    const known: Record<string, string> = {
+      runs: "runs",
+      workflows: "workflows",
+      files: "files",
+      skills: "skills",
+      agents: "agents",
+    };
     next.set("tab", known[v] ?? "runs");
     setSearchParams(next, { replace: true });
   };
@@ -189,53 +195,13 @@ export function ProjectDetail(): JSX.Element {
         parsed={parsedConfig}
       />
 
-      <section className="flex w-full min-w-0 flex-col gap-2" data-testid="project-workflows-section">
-        <h3 className="text-sw-sm font-medium text-sw-muted">Workflows</h3>
-        <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
-        {projectWorkflows.length > 0 && (
-          <div className="w-full min-w-0 overflow-x-auto">
-            <Table data-testid="project-workflows-table" className="table-fixed">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-56">Name</TableHead>
-                  <TableHead>Path</TableHead>
-                  <TableHead className="w-24">SHA</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {projectWorkflows.map((w) => (
-                  <TableRow key={w.path} data-testid={`project-workflow-row-${w.name}`}>
-                    <TableCell className="max-w-0 truncate font-medium" title={w.label ?? w.name}>
-                      <Link
-                        to={`/workflows/${encodeURIComponent(w.name)}?cwd=${encodeURIComponent(w.cwd ?? "")}`}
-                        className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
-                        data-testid={`project-workflow-link-${w.name}`}
-                      >
-                        {w.label ?? w.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <code className="block truncate font-mono text-xs text-sw-muted" title={w.path}>
-                        {w.path}
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code className="font-mono text-xs" title={w.sha}>
-                        {shortSha(w.sha)}
-                      </code>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
-
       <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col gap-3" data-testid="project-tabs">
         <TabsList variant="line" className="self-start">
           <TabsTrigger value="runs" data-testid="project-tab-runs">
             Runs
+          </TabsTrigger>
+          <TabsTrigger value="workflows" data-testid="project-tab-workflows">
+            Workflows
           </TabsTrigger>
           <TabsTrigger value="files" data-testid="project-tab-files">
             Files
@@ -295,6 +261,63 @@ export function ProjectDetail(): JSX.Element {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent
+            value="workflows"
+            className="flex w-full min-w-0 flex-col gap-2 p-3"
+            data-testid="project-workflows-section"
+          >
+            <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
+            {projectWorkflows.length === 0 ? (
+              <EmptyState
+                data-testid="project-workflows-empty"
+                title="No workflows in this project yet"
+                description={
+                  <span>
+                    Add a <code className="font-mono">.dot</code> file under{" "}
+                    <code className="font-mono">.swarm/workflows/</code> to launch workflows from this project.
+                  </span>
+                }
+              />
+            ) : (
+              <div className="w-full min-w-0 overflow-x-auto">
+                <Table data-testid="project-workflows-table" className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-56">Name</TableHead>
+                      <TableHead>Path</TableHead>
+                      <TableHead className="w-24">SHA</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projectWorkflows.map((w) => (
+                      <TableRow key={w.path} data-testid={`project-workflow-row-${w.name}`}>
+                        <TableCell className="max-w-0 truncate font-medium" title={w.label ?? w.name}>
+                          <Link
+                            to={`/workflows/${encodeURIComponent(w.name)}?cwd=${encodeURIComponent(w.cwd ?? "")}`}
+                            className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
+                            data-testid={`project-workflow-link-${w.name}`}
+                          >
+                            {w.label ?? w.name}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="max-w-0">
+                          <code className="block truncate font-mono text-xs text-sw-muted" title={w.path}>
+                            {w.path}
+                          </code>
+                        </TableCell>
+                        <TableCell>
+                          <code className="font-mono text-xs" title={w.sha}>
+                            {shortSha(w.sha)}
+                          </code>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
           </TabsContent>
