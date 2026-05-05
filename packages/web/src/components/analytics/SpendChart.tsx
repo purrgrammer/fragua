@@ -103,7 +103,11 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
                   // rationale as the per-step popover. Cache_read at
                   // $0.0003 forces 4 digits; Input + Output then render
                   // at 4 digits too instead of 2.
-                  const slice = (payload as { payload?: SpendBucketRow }).payload;
+                  //
+                  // Recharts passes `item.payload` here (the data row
+                  // directly — `{ bucket, costUsd, inputCostUsd, ... }`),
+                  // not a wrapper. Cast straight to SpendBucketRow.
+                  const slice = payload as SpendBucketRow | undefined;
                   const sharedOpts = slice ? pickSharedUsdOptions(SPEND_KEYS.map((k) => slice[k])) : undefined;
                   return formatUsd(Number(value), sharedOpts ? { intlOptions: sharedOpts } : {});
                 }}
