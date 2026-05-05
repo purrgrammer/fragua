@@ -24,6 +24,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [3, MIGRATION_003_HARNESS_BY_DEFAULT()],
   [4, MIGRATION_004_LOCAL_WORKFLOW_SCOPE()],
   [5, MIGRATION_005_CONVERSATION_KIND()],
+  [6, MIGRATION_006_SCHEDULES()],
 ]);
 
 /**
@@ -492,7 +493,6 @@ function MIGRATION_005_CONVERSATION_KIND(): string {
     DROP INDEX IF EXISTS idx_run_state_workflow;
     DROP INDEX IF EXISTS idx_run_state_updated;
     DROP INDEX IF EXISTS idx_run_state_cwd;
-    DROP INDEX IF EXISTS idx_run_state_parent;
 
     DROP TABLE run_state;
     ALTER TABLE run_state_v5 RENAME TO run_state;
@@ -506,5 +506,47 @@ function MIGRATION_005_CONVERSATION_KIND(): string {
     CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
     CREATE INDEX idx_run_state_parent
       ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md).
+ *
+ * - `run_state` gains nullable `schedule_id TEXT` (no FK by design —
+ *   schedule deletion is hard DELETE while run lineage persists).
+ * - New `schedules` table holds `(workflow_ref, cwd, interval_ms,
+ *   optional input)` triples with a `next_fire_at` cursor.
+ *
+ * The column add is a plain ALTER (run_state's generated columns
+ * don't block adding a non-generated nullable column).
+ */
+function MIGRATION_006_SCHEDULES(): string {
+  return `
+    ALTER TABLE run_state ADD COLUMN schedule_id TEXT;
+
+    CREATE INDEX idx_runs_by_schedule
+      ON run_state(schedule_id)
+      WHERE schedule_id IS NOT NULL;
+
+    CREATE TABLE schedules (
+      id              TEXT PRIMARY KEY,
+      workflow_ref    TEXT NOT NULL,
+      cwd             TEXT NOT NULL,
+      interval_ms     INTEGER NOT NULL,
+      interval_text   TEXT NOT NULL,
+      input           TEXT,
+      overlap_policy  TEXT NOT NULL DEFAULT 'skip'
+                      CHECK (overlap_policy IN ('skip','queue','concurrent')),
+      next_fire_at    INTEGER NOT NULL,
+      last_fire_at    INTEGER,
+      last_run_id     TEXT,
+      paused_at       INTEGER,
+      created_at      INTEGER NOT NULL
+    ) STRICT;
+
+    CREATE INDEX idx_schedules_due
+      ON schedules(next_fire_at)
+      WHERE paused_at IS NULL;
+    CREATE INDEX idx_schedules_cwd ON schedules(cwd);
   `;
 }

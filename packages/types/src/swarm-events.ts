@@ -502,7 +502,49 @@ export type DaemonEvent =
       type: "daemon.leak_detected";
       payload: { runId: string; nodeId: string; count: number; ceiling: number };
     }
-  | { type: "daemon.worktree_provisioned"; payload: { runId: string; ok: boolean; errorDetail?: string } };
+  | { type: "daemon.worktree_provisioned"; payload: { runId: string; ok: boolean; errorDetail?: string } }
+  // ─── Schedules (proposal: docs/proposals/scheduled-runs.md) ───
+  // Schedules are global primitives — they fire workflows on a fixed
+  // interval regardless of any one run's lifecycle. Their audit log
+  // rides `daemon_events` (not the per-run `events` table) because at
+  // the moment of `intent.schedule_create` no run yet exists, and
+  // `fact.schedule_skipped` may fire without a corresponding run id.
+  // When a fire produces a run, the daemon writes
+  // `fact.schedule_fired` with `runId` set so consumers can join the
+  // schedule timeline against the run timeline.
+  | {
+      type: "intent.schedule_create";
+      payload: {
+        scheduleId: string;
+        workflowRef: string;
+        cwd: string;
+        intervalMs: number;
+        intervalText: string;
+        input?: string;
+        overlapPolicy: "skip" | "queue" | "concurrent";
+        fireOnCreate: boolean;
+      };
+    }
+  | { type: "intent.schedule_pause"; payload: { scheduleId: string } }
+  | { type: "intent.schedule_resume"; payload: { scheduleId: string } }
+  | { type: "intent.schedule_delete"; payload: { scheduleId: string } }
+  | { type: "fact.schedule_fired"; payload: { scheduleId: string; runId: string } }
+  | {
+      type: "fact.schedule_skipped";
+      payload: { scheduleId: string; reason: "overlap" | "paused" };
+    }
+  | {
+      // Emitted *before* the catch-up fire when ≥1 slot was missed —
+      // see proposal §Catch-up policy. `missedIntervals` counts whole
+      // intervals between `lastTargetAt` and `now`; `lastTargetAt` is
+      // the original `next_fire_at` value that aged past `now`.
+      type: "fact.schedule_late";
+      payload: { scheduleId: string; missedIntervals: number; lastTargetAt: number };
+    }
+  | {
+      type: "fact.schedule_invalid_workflow";
+      payload: { scheduleId: string; error: string };
+    };
 
 export type DaemonEventType = DaemonEvent["type"];
 
@@ -514,6 +556,14 @@ export const ALL_DAEMON_EVENT_TYPES: readonly DaemonEventType[] = [
   "daemon.blob_gc_completed",
   "daemon.leak_detected",
   "daemon.worktree_provisioned",
+  "intent.schedule_create",
+  "intent.schedule_pause",
+  "intent.schedule_resume",
+  "intent.schedule_delete",
+  "fact.schedule_fired",
+  "fact.schedule_skipped",
+  "fact.schedule_late",
+  "fact.schedule_invalid_workflow",
 ];
 
 /** Wire shape for `daemon_events` rows. `seq` is the AUTOINCREMENT

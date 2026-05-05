@@ -34,6 +34,7 @@ function blankState(): RunState {
     workflowName: null,
     workflowScope: null,
     workflowPath: null,
+    scheduleId: null,
   };
 }
 

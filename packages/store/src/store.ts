@@ -105,6 +105,20 @@ import {
   type WakeCandidateRow,
   writeRunStateProjection,
 } from "./run-state-queries.ts";
+import {
+  deleteScheduleRow,
+  insertSchedule,
+  type ScheduleRow,
+  selectAllSchedules,
+  selectDueSchedules,
+  selectSchedule,
+  selectScheduleRuns,
+  selectSchedulesByCwd,
+  updateScheduleAfterFire,
+  updateSchedulePaused,
+  updateScheduleResumed,
+  updateScheduleSkip,
+} from "./schedule-queries.ts";
 import { sha256Hex } from "./sha256.ts";
 import { startupSweep } from "./sweep.ts";
 import {
@@ -114,6 +128,7 @@ import {
   type ArtifactScope,
   ArtifactTooLargeError,
   ConcurrencyError,
+  type CreateScheduleParams,
   type DaemonEvent,
   type DaemonEventRow,
   type DaemonLockResult,
@@ -144,6 +159,7 @@ import {
   PayloadTooLargeError,
   type RunMetrics,
   type RunState,
+  type Schedule,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
@@ -232,6 +248,24 @@ function rowToRunState(row: RunStateRow): RunState {
     workflowName: row.workflow_name,
     workflowScope: row.workflow_scope,
     workflowPath: row.workflow_path,
+    scheduleId: row.schedule_id,
+  };
+}
+
+function rowToSchedule(row: ScheduleRow): Schedule {
+  return {
+    id: row.id,
+    workflowRef: row.workflow_ref,
+    cwd: row.cwd,
+    intervalMs: row.interval_ms,
+    intervalText: row.interval_text,
+    input: row.input,
+    overlapPolicy: row.overlap_policy,
+    nextFireAt: row.next_fire_at,
+    lastFireAt: row.last_fire_at,
+    lastRunId: row.last_run_id,
+    pausedAt: row.paused_at,
+    createdAt: row.created_at,
   };
 }
 
@@ -451,6 +485,7 @@ export class SqliteStore implements IEventStore {
         workflowName: params.workflowName ?? null,
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
+        scheduleId: params.scheduleId ?? null,
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
@@ -945,6 +980,94 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       updateDaemonLockHttp(this.db, args.url, args.port, args.version);
     });
+  }
+
+  // ─────────────── Schedules ───────────────
+
+  createSchedule(params: CreateScheduleParams, now: number): Schedule {
+    const fireOnCreate = params.fireOnCreate ?? true;
+    const overlapPolicy = params.overlapPolicy ?? "skip";
+    const nextFireAt = fireOnCreate ? now : now + params.intervalMs;
+    const input = params.input ?? null;
+    this.writeTxn(() => {
+      insertSchedule(this.db, {
+        id: params.id,
+        workflowRef: params.workflowRef,
+        cwd: params.cwd,
+        intervalMs: params.intervalMs,
+        intervalText: params.intervalText,
+        input,
+        overlapPolicy,
+        nextFireAt,
+        createdAt: now,
+      });
+    });
+    return {
+      id: params.id,
+      workflowRef: params.workflowRef,
+      cwd: params.cwd,
+      intervalMs: params.intervalMs,
+      intervalText: params.intervalText,
+      input,
+      overlapPolicy,
+      nextFireAt,
+      lastFireAt: null,
+      lastRunId: null,
+      pausedAt: null,
+      createdAt: now,
+    };
+  }
+
+  getSchedule(id: string): Schedule | null {
+    const row = selectSchedule(this.db, id);
+    return row == null ? null : rowToSchedule(row);
+  }
+
+  listSchedules(opts?: { cwd?: string }): Schedule[] {
+    const rows = opts?.cwd != null ? selectSchedulesByCwd(this.db, opts.cwd) : selectAllSchedules(this.db);
+    return rows.map(rowToSchedule);
+  }
+
+  getDueSchedules(now: number): Schedule[] {
+    return selectDueSchedules(this.db, now).map(rowToSchedule);
+  }
+
+  pauseSchedule(id: string, now: number): void {
+    this.writeTxn(() => {
+      updateSchedulePaused(this.db, id, now);
+    });
+  }
+
+  resumeSchedule(id: string, now: number): void {
+    this.writeTxn(() => {
+      updateScheduleResumed(this.db, id, now);
+    });
+  }
+
+  deleteSchedule(id: string): void {
+    this.writeTxn(() => {
+      deleteScheduleRow(this.db, id);
+    });
+  }
+
+  recordScheduleFire(scheduleId: string, runId: string, now: number): void {
+    this.writeTxn(() => {
+      updateScheduleAfterFire(this.db, { id: scheduleId, runId, now });
+    });
+  }
+
+  recordScheduleSkipped(scheduleId: string, now: number): void {
+    this.writeTxn(() => {
+      updateScheduleSkip(this.db, scheduleId, now);
+    });
+  }
+
+  getScheduleRuns(scheduleId: string, limit: number): Array<{ runId: string; status: string; enqueuedAt: number }> {
+    return selectScheduleRuns(this.db, scheduleId, limit).map((r) => ({
+      runId: r.run_id,
+      status: r.status,
+      enqueuedAt: r.enqueued_at,
+    }));
   }
 
   // ─────────────── Workflows ───────────────

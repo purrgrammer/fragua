@@ -57,6 +57,7 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     workflowName: null,
     workflowScope: null,
     workflowPath: null,
+    scheduleId: null,
     ...overrides,
   };
 }

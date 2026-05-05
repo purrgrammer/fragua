@@ -223,6 +223,12 @@ export interface RunState {
   /** Filesystem path of the .dot file at resolution time. Diagnostic
    * only — replay keys on `workflowSha`. */
   workflowPath: string | null;
+  /** Schedule lineage — the id of the schedule that fired this run, or
+   * `null` for manually-enqueued runs. Schedule deletion is hard
+   * DELETE; this field is informational, not a foreign-key cascade
+   * target, so a run keeps its lineage even after the schedule row is
+   * gone. */
+  scheduleId: string | null;
 }
 
 /**
@@ -491,6 +497,11 @@ export interface EnqueueRunParams {
   /** Filesystem path of the .dot file at resolution time. Diagnostic
    * only; replay still keys on `workflowSha`. */
   workflowPath?: string;
+  /** Schedule lineage — the id of the schedule that fired this run.
+   * Set only by the daemon's schedule-dispatcher; manual `swarm run`
+   * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
+   * deletion does NOT cascade here; lineage outlives the schedule. */
+  scheduleId?: string;
 }
 
 /** Insert params for a conversation (sub-agent) run. The runner
@@ -864,6 +875,50 @@ export interface IAnalyticsReader {
   getGlobalModelBreakdown(opts: { sinceMs: number }): GlobalModelBreakdownRow[];
 }
 
+/**
+ * Recurring-run primitive (docs/proposals/scheduled-runs.md). A row in
+ * `schedules` carries the (workflow_ref, cwd, interval_ms, optional
+ * input) triple plus a `nextFireAt` cursor; the daemon's
+ * schedule-dispatcher fiber selects rows where `next_fire_at <= now
+ * AND paused_at IS NULL` once per minute and fires runs by calling
+ * `enqueueRun` with `scheduleId` set.
+ *
+ * `workflowRef` is the workflow name or path as a string — NOT a sha.
+ * Resolution happens at fire time so schedules survive workflow edits;
+ * if the file is missing or fails to validate, the dispatcher records
+ * `fact.schedule_invalid_workflow` and auto-pauses.
+ */
+export type ScheduleOverlapPolicy = "skip" | "queue" | "concurrent";
+
+export interface Schedule {
+  id: string;
+  workflowRef: string;
+  cwd: string;
+  intervalMs: number;
+  intervalText: string;
+  input: string | null;
+  overlapPolicy: ScheduleOverlapPolicy;
+  nextFireAt: number;
+  lastFireAt: number | null;
+  lastRunId: string | null;
+  pausedAt: number | null;
+  createdAt: number;
+}
+
+export interface CreateScheduleParams {
+  id: string;
+  workflowRef: string;
+  cwd: string;
+  intervalMs: number;
+  intervalText: string;
+  input?: string;
+  overlapPolicy?: ScheduleOverlapPolicy;
+  /** When true (default), `nextFireAt = now`. When false,
+   * `nextFireAt = now + intervalMs` so the first fire waits a full
+   * interval. Mirrors the CLI's `--no-fire-on-create` flag. */
+  fireOnCreate?: boolean;
+}
+
 export interface IDaemonCoordinator {
   /**
    * Append a daemon-level event to the dedicated `daemon_events` table.
@@ -887,6 +942,48 @@ export interface IDaemonCoordinator {
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
+
+  // ─── Schedules (proposal: docs/proposals/scheduled-runs.md)
+  /**
+   * Insert a new schedule row. Caller mints `id` (e.g. `sch_<rand>`).
+   * `nextFireAt` is set from `fireOnCreate`: true → now, false →
+   * `now + intervalMs`. Audit row (`intent.schedule_create`) is the
+   * caller's responsibility — the route layer writes one via
+   * `appendDaemonEvent`.
+   */
+  createSchedule(params: CreateScheduleParams, now: number): Schedule;
+  /** Single row by id, or `null` if missing. */
+  getSchedule(id: string): Schedule | null;
+  /** All schedules for `cwd` (or every schedule when `cwd` is
+   *  undefined), ordered by `created_at ASC`. */
+  listSchedules(opts?: { cwd?: string }): Schedule[];
+  /** Schedules where `next_fire_at <= now AND paused_at IS NULL`,
+   *  ordered by `next_fire_at ASC`. Powers the daemon's tick loop. */
+  getDueSchedules(now: number): Schedule[];
+  /** Mark a schedule paused. Idempotent: re-pause is a no-op. */
+  pauseSchedule(id: string, now: number): void;
+  /** Clear `paused_at` and re-anchor `next_fire_at = now + intervalMs`.
+   *  Per the proposal: resume must NOT retroactively contradict the
+   *  pause window, so no catch-up fire is emitted. */
+  resumeSchedule(id: string, now: number): void;
+  /** Hard `DELETE FROM schedules WHERE id = ?`. Past runs retain their
+   *  `schedule_id` for lineage. */
+  deleteSchedule(id: string): void;
+  /**
+   * Atomically advance after a successful fire: set `last_fire_at = now`,
+   * `last_run_id = runId`, `next_fire_at = now + interval_ms`. Anchored
+   * to actual fire time per proposal §Daemon dispatcher.
+   */
+  recordScheduleFire(scheduleId: string, runId: string, now: number): void;
+  /**
+   * Advance `next_fire_at = now + interval_ms` without recording a fire.
+   * Used on `overlap=skip` skip-paths so the dispatcher doesn't busy-loop
+   * on the same due row.
+   */
+  recordScheduleSkipped(scheduleId: string, now: number): void;
+  /** Return the last `limit` runs fired by `scheduleId`, newest-first.
+   *  Powers the health stripe in `swarm schedule list`. */
+  getScheduleRuns(scheduleId: string, limit: number): Array<{ runId: string; status: string; enqueuedAt: number }>;
 }
 
 /**

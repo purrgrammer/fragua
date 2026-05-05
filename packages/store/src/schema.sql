@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 5
+-- swarm event store schema — Revision 6
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- v1 → v2: pause unification. `paused_provider_error` collapses into the
@@ -19,6 +19,12 @@
 -- iteration that spawned them. The workflow_sha NOT NULL invariant
 -- for workflow runs is enforced at the writer paths (enqueueRun),
 -- not by CHECK — SQLite has no conditional-NOT-NULL syntax.
+-- v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md). New
+-- `schedules` table holds the recurring (workflow_ref, cwd, interval)
+-- triples; `run_state.schedule_id` carries lineage from each fired run
+-- back to the schedule that produced it. Schedule deletion is hard
+-- DELETE while runs persist — `run_state.schedule_id` is informational,
+-- not a foreign-key cascade target.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -94,6 +100,11 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- `swarm/runs/<run_id>`. NULL for clean runs (no work to commit) and for
   -- runs without a worktree.
   branch TEXT,
+  -- Schedule lineage: when set, the run was fired by the named schedule
+  -- (see `schedules.id`). Informational only — schedule deletion does
+  -- NOT cascade here, so a run keeps its lineage even after the schedule
+  -- is removed. No `REFERENCES schedules(id)` constraint by design.
+  schedule_id TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -113,6 +124,9 @@ CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
 -- so the index stays small.
 CREATE INDEX IF NOT EXISTS idx_run_state_parent
   ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
+  ON run_state(schedule_id)
+  WHERE schedule_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -218,3 +232,37 @@ CREATE TABLE IF NOT EXISTS daemon_events (
 CREATE INDEX IF NOT EXISTS idx_daemon_events_ts ON daemon_events(ts, seq);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX IF NOT EXISTS idx_daemon_events_run ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
+
+-- Recurring-run primitive (docs/proposals/scheduled-runs.md).
+-- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
+-- `next_fire_at` cursor; the daemon's `schedule-dispatcher` fiber
+-- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
+-- per minute, fires runs by calling `enqueueRun` with `schedule_id` set,
+-- then advances `next_fire_at = now + interval_ms` (anchored to actual
+-- fire time, not to the original target — avoids drift compounding into
+-- thundering herds across schedules whose targets happen to align).
+--
+-- `workflow_ref` stores the workflow name or path as a string, NOT a
+-- workflow sha. Resolution happens at fire time so schedules survive
+-- workflow edits; if the file is missing or fails to validate, the
+-- dispatcher records `fact.schedule_invalid_workflow` and auto-pauses.
+CREATE TABLE IF NOT EXISTS schedules (
+  id              TEXT PRIMARY KEY,
+  workflow_ref    TEXT NOT NULL,
+  cwd             TEXT NOT NULL,
+  interval_ms     INTEGER NOT NULL,
+  interval_text   TEXT NOT NULL,
+  input           TEXT,
+  overlap_policy  TEXT NOT NULL DEFAULT 'skip'
+                  CHECK (overlap_policy IN ('skip','queue','concurrent')),
+  next_fire_at    INTEGER NOT NULL,
+  last_fire_at    INTEGER,
+  last_run_id     TEXT,
+  paused_at       INTEGER,
+  created_at      INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_schedules_due
+  ON schedules(next_fire_at)
+  WHERE paused_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);

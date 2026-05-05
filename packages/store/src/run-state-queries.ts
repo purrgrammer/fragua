@@ -54,6 +54,7 @@ export interface RunStateRow {
   workflow_path: string | null;
   base_git_sha: string | null;
   branch: string | null;
+  schedule_id: string | null;
 }
 
 /** Per-run identity + version + lastAppliedSeq + status. Returned by
@@ -77,7 +78,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, branch
+         base_git_sha, branch, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -213,8 +214,8 @@ const INSERT_RUN_STATE_SQL = `
     parent_run_id, parent_node_id, parent_iteration,
     schema_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    cwd, workflow_name, workflow_scope, workflow_path
-  ) VALUES (?, 1, 'queued', 'workflow', NULL, ?, NULL, NULL, NULL, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
+    cwd, workflow_name, workflow_scope, workflow_path, schedule_id
+  ) VALUES (?, 1, 'queued', 'workflow', NULL, ?, NULL, NULL, NULL, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -233,6 +234,7 @@ export function insertRunState(
     workflowName: string | null;
     workflowScope: "global" | "local" | "path" | "ephemeral" | null;
     workflowPath: string | null;
+    scheduleId: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -249,6 +251,7 @@ export function insertRunState(
     args.workflowName,
     args.workflowScope,
     args.workflowPath,
+    args.scheduleId,
   );
 }
 
