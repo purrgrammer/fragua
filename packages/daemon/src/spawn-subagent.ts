@@ -102,6 +102,13 @@ export function makeSpawnSubagent(
       }),
     );
 
+    // Provider/model: a named-profile def (resolved by the `agent`
+    // tool) can carry `model` / `provider` frontmatter, surfaced on
+    // the spec as overrides. When unset the child inherits the
+    // parent's choice verbatim.
+    const childProvider = spec.provider ?? parentCtx.parentProvider;
+    const childModel = spec.model ?? parentCtx.parentModel;
+
     // Synthetic node passed to the codergen backend. The backend
     // reads `system_prompt`, `allowed_tools`, `skills`, `llm_provider`,
     // `llm_model` off `node.attrs`. The nodeId itself isn't stored
@@ -115,8 +122,8 @@ export function makeSpawnSubagent(
         ...(childSystemPrompt.length > 0 ? { system_prompt: childSystemPrompt } : {}),
         allowed_tools: childPool.map((t) => t.name),
         ...(effectiveSkills.length > 0 ? { skills: effectiveSkills.map((s) => s.name) } : {}),
-        llm_provider: parentCtx.parentProvider,
-        llm_model: parentCtx.parentModel,
+        llm_provider: childProvider,
+        llm_model: childModel,
         // No AGENTS.md auto-load — the parent's system prompt already
         // framed the persona; layering the project primer on top would
         // just inflate context.
@@ -124,14 +131,18 @@ export function makeSpawnSubagent(
       },
     };
 
-    // Subagent-boundary marker on the parent's stream.
+    // Subagent-boundary marker on the parent's stream. `name` carries
+    // the resolved profile name when the parent invoked
+    // `agent({ agent: <name> })`; otherwise it falls through to the
+    // free-form `spec.name` label; otherwise it's omitted.
+    const startName = spec.agentName ?? spec.name;
     await parentCtx.parentEmit("subagent.start", {
       subagent_id: subagentId,
       parent_node_id: parentCtx.parentNodeId,
       iteration: parentCtx.parentIteration,
-      provider: parentCtx.parentProvider,
-      model: parentCtx.parentModel,
-      ...(spec.name !== undefined ? { name: spec.name } : {}),
+      provider: childProvider,
+      model: childModel,
+      ...(startName !== undefined ? { name: startName } : {}),
     });
 
     // Forward every observability event the sub-agent emits to the

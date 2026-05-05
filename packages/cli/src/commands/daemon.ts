@@ -35,7 +35,7 @@ import {
   WorktreeProvisioner,
 } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
-import { CORE_TOOLS, discoverSkills, loadExtensions, ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, discoverAgents, discoverSkills, loadExtensions, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
 
@@ -219,6 +219,25 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     );
   }
 
+  // Discover named sub-agent profiles. Same scope precedence as skills
+  // (`<cwd>/.agents/agents/`, `<cwd>/.claude/agents/`, `~/.agents/agents/`,
+  // `~/.claude/agents/`). Project beats user; within a scope the
+  // earlier root wins. The catalogue lands on every codergen call
+  // whose tool pool includes `agent`. Restart picks up changes — no
+  // hot reload.
+  const { agents: discoveredAgents, warnings: agentWarnings } = await discoverAgents({
+    cwd,
+    homeDir: homedir(),
+  });
+  for (const w of agentWarnings) console.warn(chalk.yellow(`agents: ${w}`));
+  if (discoveredAgents.length > 0) {
+    console.log(
+      chalk.dim(
+        `discovered ${discoveredAgents.length} agent${discoveredAgents.length === 1 ? "" : "s"} (${discoveredAgents.map((a) => a.name).join(", ")})`,
+      ),
+    );
+  }
+
   // Discover and load extensions once at boot. Same scopes as skills
   // (`<cwd>/.swarm/extensions/`, `~/.swarm/extensions/`); precedence on
   // tool-name collision is project-beats-user. Hot reload is deferred —
@@ -320,6 +339,10 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       // codergen call, filtered per-node by `attrs.skills` /
       // `skills_disabled`. Empty array is a valid no-op.
       skills: discoveredSkills,
+      // Named sub-agent profiles. The backend renders the `## Available
+      // sub-agents` block into the system prompt only when the node's
+      // tool pool includes `agent`; otherwise the catalogue is silent.
+      agentDefinitions: discoveredAgents,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
       // Wire the per-call sub-agent spawner. The closure built by
       // makeSpawnSubagent runs the sub-agent's codergen call inline

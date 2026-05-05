@@ -338,4 +338,81 @@ describe("makeSpawnSubagent", () => {
     expect(observedSystemPrompt!).not.toContain("PARENT BLOAT");
     store.close();
   });
+
+  test("subagent.start payload carries `name: <profile>` when spec.agentName set", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-agentname");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-agentname",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x", agentName: "reviewer", name: "label-only" });
+    const start = events.find((e) => e.type === "subagent.start")!;
+    // agentName wins over the free-form `name` label.
+    expect(start.data["name"]).toBe("reviewer");
+    store.close();
+  });
+
+  test("def-supplied model/provider override parent's on the synthesised child node", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-modeloverride");
+    const registry = freshRegistry();
+    let observedProvider: string | undefined;
+    let observedModel: string | undefined;
+    const backend = new StubBackend((input) => {
+      observedProvider =
+        typeof input.node.attrs["llm_provider"] === "string" ? (input.node.attrs["llm_provider"] as string) : undefined;
+      observedModel =
+        typeof input.node.attrs["llm_model"] === "string" ? (input.node.attrs["llm_model"] as string) : undefined;
+      return ok({ notes: "" });
+    });
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-modeloverride",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-opus-4-7",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({
+      prompt: "x",
+      provider: "openai",
+      model: "gpt-5",
+    });
+
+    expect(observedProvider).toBe("openai");
+    expect(observedModel).toBe("gpt-5");
+    // The boundary marker also records the child's resolved (overridden)
+    // provider/model so traces don't lie about which model ran.
+    const start = events.find((e) => e.type === "subagent.start")!;
+    expect(start.data["provider"]).toBe("openai");
+    expect(start.data["model"]).toBe("gpt-5");
+    store.close();
+  });
 });
