@@ -1,0 +1,35 @@
+// orchestrate.dot — decompose a task, dispatch to specialist sub-agents.
+//
+// Single orchestrator node with `agent` in its tool pool. The model sees
+// the discovered sub-agent catalog in its system prompt (rendered iff
+// `agent` is allowed) and decides per sub-task whether to spawn a named
+// profile or an ad-hoc agent (passing `system_prompt` + `allowed_tools`
+// inline). Parallel dispatch is implicit — pi-agent-core fires concurrent
+// `agent` toolcalls when issued in one assistant message.
+//
+//   bun run swarm run orchestrate --input "your task here"
+
+digraph orchestrate {
+  graph [
+    goal             = "Decompose a task, dispatch to named or ad-hoc sub-agents, synthesize."
+    label            = "orchestrate"
+    default_fidelity = "compact"
+    budget_usd       = 5.00
+    budget_policy    = "stop"
+  ]
+
+  start [shape=Mdiamond]
+
+  orchestrate [
+    prompt = "Task (authoritative): $ARGUMENTS.\nIf empty, emit `<abort>missing task</abort>`.\n\nDecompose into 2–5 sub-tasks (one concern each), then delegate via the `agent` tool. Don't solve.\n\nFor each sub-task:\n- Named profile fits → `agent({ agent: \"<name>\", prompt: \"<brief>\" })`. The profile carries its own tool pool.\n- Otherwise ad-hoc → `agent({ name: \"<label>\", system_prompt: \"<role>\", allowed_tools: [...], prompt: \"<brief>\" })`. ALWAYS pass `allowed_tools` — omitting it inherits THIS node's read-only pool. Pick the minimum needed (e.g. `[\"read\",\"write\",\"edit\",\"bash\"]` to edit code, `[\"read\",\"grep\",\"bash\"]` to analyse).\n\nIssue independent calls in parallel (multiple `agent` calls in one message). Briefs carry only the slice needed; cite paths, don't dump.\n\nSynthesize returns into one answer. Reconcile conflicts; don't list reports.\n\nIf a sub-agent aborts, narrow and re-spawn once, or proceed with a marked gap. If the task can't be decomposed, emit `<abort>not decomposable: <reason></abort>`."
+    allowed_tools = "read, grep, find, ls, agent"
+    model         = "claude-opus-4-7"
+    max_cost_usd  = 3.00
+  ]
+
+  done [shape=Msquare]
+
+  start -> orchestrate
+  orchestrate -> done [condition="outcome=fail"]
+  orchestrate -> done
+}
