@@ -7,7 +7,10 @@
 //   - P19: SSE replay via Last-Event-ID
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { SqliteStore } from "@swarm/store";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SqliteStore, sha256Hex } from "@swarm/store";
 import { createRoutes } from "../../src/store/routes.ts";
 
 let store: SqliteStore;
@@ -181,6 +184,45 @@ describe("POST /runs — enqueue", () => {
   test("rejects unknown workflow", async () => {
     const res = await req("POST", "/runs", { workflowSha: "nonexistent" });
     expect(res.status).toBe(400);
+  });
+
+  test("web composer flow: sha computed from a filesystem-listed workflow enqueues via workflowPath", async () => {
+    // Reproduces the bug operators see when submitting from the
+    // ProjectDetail PromptInput (RunComposer): GET /workflows lists
+    // workflows scanned off disk and reports each one's content sha.
+    // The composer POSTs /runs with that sha + the workflow's path, but
+    // nothing has called saveWorkflow() for that sha yet, so today
+    // enqueueRun() rejects with "unknown workflow sha …" → the route
+    // surfaces it as 400 "Bad Request". The composer already sends
+    // workflowPath; the server should resolve the DOT from disk and
+    // register it before enqueuing so submitting from the web works
+    // without an explicit upload step.
+    const dir = mkdtempSync(join(tmpdir(), "swarm-runs-bug-"));
+    try {
+      const dotSource = "digraph WebComposer { a -> b }";
+      const dotPath = join(dir, "web-composer.dot");
+      writeFileSync(dotPath, dotSource);
+      const sha = sha256Hex(dotSource);
+
+      // Sha is NOT in the workflows table — mirrors what the composer
+      // sends after a fresh GET /workflows on a project that has never
+      // had a run enqueued.
+      const res = await req("POST", "/runs", {
+        workflowSha: sha,
+        workflowName: "web-composer",
+        workflowScope: "local",
+        workflowPath: dotPath,
+        cwd: dir,
+        input: "",
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { runId: string };
+      const state = store.getState(body.runId);
+      expect(state).not.toBeNull();
+      expect(state!.workflowSha).toBe(sha);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("body.input lands on routing.input — the $ARGUMENTS bridge", async () => {
