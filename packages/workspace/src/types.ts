@@ -15,7 +15,7 @@ import type {
   SummariseOutput,
 } from "@swarm/core";
 import type { HttpClient } from "@swarm/core/handler";
-import type { Skill } from "@swarm/types";
+import type { AgentDefinition, Skill } from "@swarm/types";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
 
@@ -41,6 +41,11 @@ export interface SwarmToolContext {
    *  is filtered against this set; sub-agents never see a skill the
    *  parent didn't load. */
   readonly skillCatalog?: readonly Skill[];
+  /** Parent's resolved agent-definition catalogue (project + user
+   *  scopes merged). The `agent` tool resolves its `agent: <name>`
+   *  argument against this set. Absent in tests / extension hosts
+   *  that don't drive sub-agents. */
+  readonly agentCatalog?: readonly AgentDefinition[];
 }
 
 /** Inputs the `agent` tool hands to `spawnSubagent`. Mirrors the
@@ -75,6 +80,19 @@ export interface SubagentSpec {
    *  parent cancellation propagates as `intent.cancel_requested` on
    *  the child run. */
   signal?: AbortSignal;
+  /** Resolved profile name when the parent invoked
+   *  `agent({ agent: <name>, … })`. Stamped onto `subagent.start.name`
+   *  by the daemon so traces / UI can group spawns by profile.
+   *  Distinct from `name` (a free-form short label). */
+  agentName?: string;
+  /** Optional model override. When set (typically from a profile's
+   *  `model:` frontmatter), the synthesised child node carries this
+   *  as `llm_model` instead of inheriting the parent's. */
+  model?: string;
+  /** Optional provider override. When set (typically from a profile's
+   *  `provider:` frontmatter), the synthesised child node carries this
+   *  as `llm_provider` instead of inheriting the parent's. */
+  provider?: string;
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs

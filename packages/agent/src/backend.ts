@@ -7,6 +7,7 @@ import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, 
 import { fail, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
 import type {
+  AgentDefinition,
   ExecutionEnvironment,
   Skill,
   SubagentResult,
@@ -14,7 +15,7 @@ import type {
   SwarmToolContext,
   ToolRegistry,
 } from "@swarm/workspace";
-import { filterSkillsForNode, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
+import { filterSkillsForNode, renderAgentsCatalog, renderSkillsCatalog, toCatalogRecord } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
 import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
 import { MessageStore } from "./message-store.ts";
@@ -84,6 +85,14 @@ export interface PiCodergenBackendOptions {
    * tool then surfaces `is_error` to the LLM rather than silently
    * stalling). */
   spawnSubagentFactory?: (parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>;
+  /** Named sub-agent profiles discovered by the CLI at startup (see
+   * `@swarm/workspace`'s `discoverAgents`). When the run's tool pool
+   * includes the `agent` tool and this list is non-empty, the backend
+   * appends an `## Available sub-agents` catalogue block to the
+   * system prompt and exposes the catalogue on
+   * `swarmContext.agentCatalog` so the `agent` tool can resolve
+   * `agent: <name>` calls. */
+  agentDefinitions?: readonly AgentDefinition[];
 }
 
 /** Parent-context snapshot the spawn factory needs to materialise a
@@ -164,6 +173,7 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly spawnSubagentFactory:
     | ((parentCtx: SpawnSubagentParentCtx) => (spec: SubagentSpec) => Promise<SubagentResult>)
     | undefined;
+  private readonly agentDefinitions: readonly AgentDefinition[];
 
   constructor(opts: PiCodergenBackendOptions) {
     this.registry = opts.registry;
@@ -180,6 +190,7 @@ export class PiCodergenBackend implements CodergenBackend {
     this.inProcessWrites = opts.inProcessWrites ?? new Set<string>();
     this.steering = opts.steering ?? new SteeringRegistry();
     this.spawnSubagentFactory = opts.spawnSubagentFactory;
+    this.agentDefinitions = opts.agentDefinitions ?? [];
   }
 
   /** True when we've already persisted `threadId` for `runId` during
@@ -275,6 +286,13 @@ export class PiCodergenBackend implements CodergenBackend {
     if (nodeSkills !== undefined) skillFilter.skills = nodeSkills;
     const effectiveSkills = filterSkillsForNode(this.skills, skillFilter);
     const skillsCatalog = renderSkillsCatalog(effectiveSkills);
+    // Render the named-sub-agent catalogue only when (a) the node's
+    // tool pool actually includes `agent` and (b) at least one profile
+    // was discovered. Cost-control: a node that doesn't allow `agent`
+    // also doesn't pay for the catalogue's tokens (~1 KB per profile).
+    const wantsAgentTool = selectedTools.some((t) => t.name === "agent");
+    const agentsCatalog =
+      wantsAgentTool && this.agentDefinitions.length > 0 ? renderAgentsCatalog(this.agentDefinitions) : "";
     // Prefer per-call env (wired via HandlerContext → CodergenInput by
     // the executor when a WorktreeProvisioner is active). Falls back
     // to the construction-time env for tests + callers that still pass
@@ -302,6 +320,7 @@ export class PiCodergenBackend implements CodergenBackend {
     const swarmContext: SwarmToolContext & {
       spawnSubagent?: SwarmToolContext["spawnSubagent"];
       skillCatalog?: readonly Skill[];
+      agentCatalog?: readonly AgentDefinition[];
     } = {
       runId: input.run_id,
       nodeId: input.node.id,
@@ -344,6 +363,7 @@ export class PiCodergenBackend implements CodergenBackend {
           perNode: perNodeSystemPrompt,
           contextBlock,
           skillsCatalog,
+          agentsCatalog,
           ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
         });
 
@@ -353,7 +373,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // `materialiseForChild`). `skillCatalog` makes the parent's
     // resolved skill set available so `spec.skills` can be intersected
     // against it on each spawn.
-    Object.assign(swarmContext, { skillCatalog: effectiveSkills });
+    Object.assign(swarmContext, { skillCatalog: effectiveSkills, agentCatalog: this.agentDefinitions });
     if (this.spawnSubagentFactory !== undefined) {
       // The sub-agent's emit channel: same `input.emit` the parent's
       // codergen call uses, so sub-agent observability lands on the

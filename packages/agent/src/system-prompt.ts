@@ -142,6 +142,11 @@ export interface BuildSystemPromptInput {
    * before `contextBlock` so skill advertisements frame the whole call —
    * order: skills → project-conventions → base. */
   skillsCatalog?: string;
+  /** Tier-1 sub-agent catalogue block (empty when the `agent` tool isn't
+   * in the pool or no profiles are discovered). Prepended after skills
+   * and before the protocol block so spawn affordances sit alongside
+   * the tool advertisements that frame them. */
+  agentsCatalog?: string;
   /** Per-run isolation facts (cwd, bootstrap status). Rendered as an
    * `<environment>` block at the top so agents know where they are
    * before reading anything else. */
@@ -178,19 +183,23 @@ export function buildSystemPrompt({
   perNode,
   contextBlock,
   skillsCatalog,
+  agentsCatalog,
   runEnv,
 }: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
-  const catalog = skillsCatalog ?? "";
+  const skillsBlock = skillsCatalog ?? "";
+  const agentsBlock = agentsCatalog ?? "";
   // Prepend order (top → bottom of the assembled prompt):
   //   <environment>   — where the agent is running
   //   <protocol>      — the abort emit contract; constant per call
-  //   skills catalog  — what tools are available
+  //   agents catalog  — named sub-agents the LLM can spawn (when `agent` tool present)
+  //   skills catalog  — what tools / skills are available
   //   project conv.   — AGENTS.md and friends
   //   base persona    — the per-node or global system prompt
   let out = base;
   out = mergeSystemPrompt(out, contextBlock);
-  out = mergeSystemPrompt(out, catalog);
+  out = mergeSystemPrompt(out, skillsBlock);
+  out = mergeSystemPrompt(out, agentsBlock);
   out = mergeSystemPrompt(out, PROTOCOL_BLOCK);
   if (runEnv !== undefined) {
     out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));

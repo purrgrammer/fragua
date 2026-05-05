@@ -12,9 +12,15 @@
 // "host doesn't support sub-agents" signal rather than a silent stall.
 
 import { Type } from "@sinclair/typebox";
+import { lookupAgentDef } from "./agents/catalog.ts";
+import { normaliseToolName } from "./agents/normalise.ts";
 import type { SubagentSpec, Tool } from "./types.ts";
 
 export interface AgentToolArgs {
+  /** Optional resolved-profile name. When set, the named def's fields
+   *  fill in unspecified slots; inline params on the same call
+   *  override the def. Resolved against `swarmContext.agentCatalog`. */
+  agent?: string;
   name?: string;
   prompt: string;
   system_prompt?: string;
@@ -40,6 +46,12 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
     "Spawn an isolated sub-agent that runs in its own context window. The sub-agent sees only the `prompt` you provide \u2014 no parent transcript. Its observability (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) lands on the parent's event stream with a `subagent_id` discriminator; cost rolls into the parent's metrics naturally. You receive only its final assistant message plus the discriminator. `agent` itself is structurally stripped from the sub-agent's tool pool (no nesting). Use to delegate a self-contained task with a fresh context window.",
   parameters: Type.Object(
     {
+      agent: Type.Optional(
+        Type.String({
+          description:
+            "Optional name of a discovered sub-agent profile (see the `## Available sub-agents` block in your system prompt, if present). When set, the profile's body becomes the sub-agent's system prompt and its `model` / `provider` / `allowed_tools` fill in any slots you didn't pass inline. Inline params on this call override the profile.",
+        }),
+      ),
       name: Type.Optional(
         Type.String({
           description:
@@ -91,13 +103,46 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
     }
 
     try {
+      // Resolve the named profile (if any) before building the spec.
+      // Resolution rules per docs/proposals/agent-definitions.md
+      // "Tool surface change" table: inline > def > inherit-parent.
+      const catalog = ctx.agentCatalog ?? [];
+      let def: ReturnType<typeof lookupAgentDef> | undefined;
+      if (args.agent !== undefined) {
+        def = lookupAgentDef(catalog, args.agent);
+        if (def === undefined) {
+          const names = catalog.filter((d) => !d.disabled_reason).map((d) => d.name);
+          const list = names.length > 0 ? names.join(", ") : "(none discovered)";
+          return {
+            text: `unknown agent profile "${args.agent}". Available: ${list}.`,
+            is_error: true,
+          };
+        }
+      }
+
+      // Inline `allowed_tools` are normalised too — keeps the surface
+      // symmetric with the loader so Claude-style names
+      // (`Read`, `WebFetch`) don't silently fail the intersection check.
+      const inlineAllowed =
+        args.allowed_tools !== undefined ? args.allowed_tools.map((t) => normaliseToolName(t).name) : undefined;
+
       const spec: SubagentSpec = { prompt: args.prompt };
       if (args.name !== undefined) spec.name = args.name;
-      if (args.system_prompt !== undefined) spec.system_prompt = args.system_prompt;
-      if (args.allowed_tools !== undefined) spec.allowed_tools = args.allowed_tools;
+
+      const systemPrompt = args.system_prompt ?? def?.body;
+      if (systemPrompt !== undefined && systemPrompt.length > 0) spec.system_prompt = systemPrompt;
+
+      const allowedTools = inlineAllowed ?? def?.allowed_tools;
+      if (allowedTools !== undefined) spec.allowed_tools = allowedTools;
+
       if (args.disallowed_tools !== undefined) spec.disallowed_tools = args.disallowed_tools;
       if (args.skills !== undefined) spec.skills = args.skills;
       if (args.max_iterations !== undefined) spec.max_iterations = args.max_iterations;
+
+      if (def?.model !== undefined) spec.model = def.model;
+      if (def?.provider !== undefined) spec.provider = def.provider;
+      if (def !== undefined) spec.agentName = def.name;
+
       if (opts?.signal !== undefined) spec.signal = opts.signal;
 
       const result = await ctx.spawnSubagent(spec);

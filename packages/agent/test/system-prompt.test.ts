@@ -235,6 +235,44 @@ describe("buildSystemPrompt with runEnv", () => {
   });
 });
 
+describe("buildSystemPrompt — agents catalogue", () => {
+  const agentsCatalog = [
+    "## Available sub-agents",
+    "",
+    "Spawn one of these by calling the `agent` tool with `agent: <name>`.",
+    "",
+    "- `reviewer` — Reviews diffs.",
+  ].join("\n");
+
+  test("agentsCatalog is appended above skills and below protocol", () => {
+    const skillsBlock = "<available_skills>...</available_skills>";
+    const out = buildSystemPrompt({
+      global: "you are the agent",
+      perNode: undefined,
+      contextBlock: "",
+      skillsCatalog: skillsBlock,
+      agentsCatalog,
+    });
+    const protocolIdx = out.indexOf("<protocol>");
+    const agentsIdx = out.indexOf("## Available sub-agents");
+    const skillsIdx = out.indexOf("<available_skills>");
+    expect(protocolIdx).toBeGreaterThan(-1);
+    expect(agentsIdx).toBeGreaterThan(-1);
+    expect(skillsIdx).toBeGreaterThan(-1);
+    expect(protocolIdx).toBeLessThan(agentsIdx);
+    expect(agentsIdx).toBeLessThan(skillsIdx);
+  });
+
+  test("agentsCatalog absent → no '## Available sub-agents' header", () => {
+    const out = buildSystemPrompt({
+      global: "base",
+      perNode: undefined,
+      contextBlock: "",
+    });
+    expect(out).not.toContain("## Available sub-agents");
+  });
+});
+
 function makeSkill(name: string): Skill {
   return {
     name,

@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Value } from "@sinclair/typebox/value";
+import type { AgentDefinition } from "@swarm/types";
 import { agentTool } from "../src/agent.ts";
 import { LocalEnvironment } from "../src/local-env.ts";
 import { CORE_TOOLS, stripAgentTool } from "../src/tools.ts";
@@ -114,6 +115,121 @@ describe("agent tool", () => {
     expect(out.is_error).toBe(true);
     const data = out.data as { halt_reason?: string };
     expect(data.halt_reason).toBe("max_loops");
+  });
+});
+
+describe("agent tool — named-profile path", () => {
+  function mkDef(name: string, extra: Partial<AgentDefinition> = {}): AgentDefinition {
+    return {
+      name,
+      description: `desc for ${name}`,
+      body: `body for ${name}`,
+      location: `/tmp/${name}.md`,
+      sha256: "0".repeat(64),
+      bytes: 1,
+      scope: "project",
+      source_dir: "/tmp",
+      ...extra,
+    };
+  }
+
+  test("agent: <name> resolves a def from swarmContext.agentCatalog and merges fields", async () => {
+    const env = new LocalEnvironment();
+    const calls: SubagentSpec[] = [];
+    const reviewer = mkDef("reviewer", {
+      body: "be a reviewer",
+      allowed_tools: ["read", "grep"],
+      model: "claude-haiku-4-5",
+      provider: "anthropic",
+    });
+    const swarmContext: SwarmToolContext = {
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      http: {} as SwarmToolContext["http"],
+      emit: () => {},
+      agentCatalog: [reviewer],
+      spawnSubagent: async (spec) => {
+        calls.push(spec);
+        return { summary: "ok", subagentId: "s1", status: "completed", totalToolCalls: 0 };
+      },
+    };
+    const out = await agentTool.execute({ prompt: "please review", agent: "reviewer" }, env, { swarmContext });
+    expect(out.is_error).toBeFalsy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.system_prompt).toBe("be a reviewer");
+    expect(calls[0]!.allowed_tools).toEqual(["read", "grep"]);
+    expect(calls[0]!.model).toBe("claude-haiku-4-5");
+    expect(calls[0]!.provider).toBe("anthropic");
+    expect(calls[0]!.agentName).toBe("reviewer");
+  });
+
+  test("agent: <name> with inline overrides — inline wins per the resolution table", async () => {
+    const env = new LocalEnvironment();
+    const calls: SubagentSpec[] = [];
+    const reviewer = mkDef("reviewer", { body: "def body", allowed_tools: ["read", "grep"] });
+    const swarmContext: SwarmToolContext = {
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      http: {} as SwarmToolContext["http"],
+      emit: () => {},
+      agentCatalog: [reviewer],
+      spawnSubagent: async (spec) => {
+        calls.push(spec);
+        return { summary: "", subagentId: "s", status: "completed", totalToolCalls: 0 };
+      },
+    };
+    await agentTool.execute(
+      {
+        prompt: "x",
+        agent: "reviewer",
+        system_prompt: "inline persona",
+        allowed_tools: ["read"],
+      },
+      env,
+      { swarmContext },
+    );
+    expect(calls[0]!.system_prompt).toBe("inline persona");
+    expect(calls[0]!.allowed_tools).toEqual(["read"]);
+  });
+
+  test("agent: <unknown> returns is_error listing discovered names", async () => {
+    const env = new LocalEnvironment();
+    const swarmContext: SwarmToolContext = {
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      http: {} as SwarmToolContext["http"],
+      emit: () => {},
+      agentCatalog: [mkDef("alpha"), mkDef("beta")],
+      spawnSubagent: async () => {
+        throw new Error("should not be called");
+      },
+    };
+    const out = await agentTool.execute({ prompt: "x", agent: "missing" }, env, { swarmContext });
+    expect(out.is_error).toBe(true);
+    expect(out.text).toContain("missing");
+    expect(out.text).toContain("alpha");
+    expect(out.text).toContain("beta");
+  });
+
+  test("inline allowed_tools with non-canonical entries are normalised before passing to spawnSubagent", async () => {
+    const env = new LocalEnvironment();
+    const calls: SubagentSpec[] = [];
+    const swarmContext: SwarmToolContext = {
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      http: {} as SwarmToolContext["http"],
+      emit: () => {},
+      spawnSubagent: async (spec) => {
+        calls.push(spec);
+        return { summary: "", subagentId: "s", status: "completed", totalToolCalls: 0 };
+      },
+    };
+    await agentTool.execute({ prompt: "x", allowed_tools: ["Read", "WebFetch"] }, env, { swarmContext });
+    expect(calls[0]!.allowed_tools).toEqual(["read", "web_fetch"]);
   });
 });
 
