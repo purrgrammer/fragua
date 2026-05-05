@@ -22,6 +22,7 @@ import { workflowsRoutes } from "./routes/workflows.ts";
 import { analyticsRoutes } from "./store/analytics-routes.ts";
 import { createRoutes as createStoreRoutes, type WorkflowModelValidator } from "./store/routes.ts";
 import { storeRunsRoutes } from "./store/runs-routes.ts";
+import { createScheduleRoutes } from "./store/schedule-routes.ts";
 
 export interface ServerOptions {
   /** SQLite event store — the backbone for all reads and intent writes. */
@@ -93,6 +94,7 @@ function buildApiApp(opts: ServerOptions): Hono {
       ...(opts.maxQueuedRuns !== undefined ? { maxQueuedRuns: opts.maxQueuedRuns } : {}),
     }),
   );
+  api.route("/", createScheduleRoutes({ store: opts.store }));
   if (opts.authStorage && opts.modelRegistry) {
     api.route("/", providersRoutes({ authStorage: opts.authStorage, modelRegistry: opts.modelRegistry }));
   }
