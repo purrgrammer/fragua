@@ -666,11 +666,10 @@ export async function adjustBudget(
 
 // ── Schedules ────────────────────────────────────────────────────────
 // Mirror of `Schedule` from @swarm/store/types.ts. Camel-case on the wire
-// per the server's `schedule-routes.ts` payload (the store boundary already
+// per the server's `schedule-routes.ts` payload (the store boundary
 // performs row→domain translation). `recentRuns` is embedded by
 // `GET /schedules` (last-10 health stripe — keeps the list a single round
-// trip). `ScheduleRunRow` keeps the snake_case wire shape produced by
-// `selectScheduleRuns`.
+// trip).
 
 export type ScheduleOverlapPolicy = "skip" | "queue" | "concurrent";
 
@@ -690,9 +689,9 @@ export interface Schedule {
 }
 
 export interface ScheduleRunRow {
-  run_id: string;
+  runId: string;
   status: string;
-  enqueued_at: number;
+  enqueuedAt: number;
 }
 
 export interface ScheduleWithStripe extends Schedule {
@@ -1151,8 +1150,8 @@ function isSchedule(v: unknown): v is Schedule {
 
 function isScheduleRunRow(v: unknown): v is ScheduleRunRow {
   if (typeof v !== "object" || v === null) return false;
-  const o = v as { run_id?: unknown; status?: unknown; enqueued_at?: unknown };
-  return typeof o.run_id === "string" && typeof o.status === "string" && typeof o.enqueued_at === "number";
+  const o = v as { runId?: unknown; status?: unknown; enqueuedAt?: unknown };
+  return typeof o.runId === "string" && typeof o.status === "string" && typeof o.enqueuedAt === "number";
 }
 
 function isScheduleWithStripe(v: unknown): v is ScheduleWithStripe {

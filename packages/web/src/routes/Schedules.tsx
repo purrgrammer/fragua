@@ -82,7 +82,7 @@ export function Schedules(): JSX.Element {
                 <TableHead className="w-32">Last fire</TableHead>
                 <TableHead className="w-20">Status</TableHead>
                 <TableHead className="w-32">Health</TableHead>
-                <TableHead className="w-44 text-right">Actions</TableHead>
+                <TableHead className="w-64 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -132,8 +132,7 @@ function ScheduleRow({ row, onOpen }: ScheduleRowProps): JSX.Element {
   const isPaused = row.pausedAt != null;
   const status: "active" | "paused" = isPaused ? "paused" : "active";
 
-  function handleDeleteClick(e: React.MouseEvent): void {
-    e.stopPropagation();
+  function handleDeleteClick(): void {
     if (!confirming) {
       setConfirming(true);
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -149,18 +148,7 @@ function ScheduleRow({ row, onOpen }: ScheduleRowProps): JSX.Element {
   }
 
   return (
-    <TableRow
-      data-testid={`schedule-row-${row.id}`}
-      className="cursor-pointer"
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      tabIndex={0}
-    >
+    <TableRow data-testid={`schedule-row-${row.id}`}>
       <TableCell className="max-w-0 truncate font-medium" title={row.workflowRef}>
         {row.workflowRef}
       </TableCell>
@@ -184,41 +172,37 @@ function ScheduleRow({ row, onOpen }: ScheduleRowProps): JSX.Element {
       </TableCell>
       <TableCell className="text-right">
         <div className="inline-flex items-center gap-1">
+          <Button size="sm" variant="ghost" data-testid={`schedule-runs-${row.id}`} onClick={onOpen}>
+            Runs
+          </Button>
           {isPaused ? (
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               data-testid={`schedule-resume-${row.id}`}
               disabled={resumeM.isPending}
-              onClick={(e) => {
-                e.stopPropagation();
-                resumeM.mutate();
-              }}
+              onClick={() => resumeM.mutate()}
             >
               Resume
             </Button>
           ) : (
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               data-testid={`schedule-pause-${row.id}`}
               disabled={pauseM.isPending}
-              onClick={(e) => {
-                e.stopPropagation();
-                pauseM.mutate();
-              }}
+              onClick={() => pauseM.mutate()}
             >
               Pause
             </Button>
           )}
           <Button
             size="sm"
-            variant="ghost"
+            variant={confirming ? "destructive" : "outline"}
             data-testid={`schedule-delete-${row.id}`}
             data-confirming={confirming ? "true" : "false"}
             disabled={deleteM.isPending}
             onClick={handleDeleteClick}
-            className={confirming ? "text-sw-accent-error" : undefined}
           >
             {confirming ? "Confirm delete" : "Delete"}
           </Button>
@@ -246,9 +230,8 @@ function StatusPill({ status }: { status: "active" | "paused" }): JSX.Element {
 
 function HealthStripe({ runs }: { runs: ScheduleRunRow[] }): JSX.Element {
   // Render up to STRIPE_LEN cells, oldest → newest. The wire payload
-  // is newest-first (selectScheduleRuns ORDER BY enqueued_at DESC), so
-  // we reverse before slicing. Empty trailing slots render as neutral
-  // ghost cells so width is stable across rows.
+  // is newest-first, so we reverse before slicing. Empty trailing
+  // slots render as neutral ghost cells so width is stable across rows.
   const ordered = [...runs].reverse().slice(-STRIPE_LEN);
   const ghostCount = Math.max(0, STRIPE_LEN - ordered.length);
   return (
@@ -268,8 +251,8 @@ function HealthStripe({ runs }: { runs: ScheduleRunRow[] }): JSX.Element {
           tone === "success" ? "bg-sw-accent-success" : tone === "error" ? "bg-sw-accent-error" : "bg-sw-accent-idle";
         return (
           <span
-            key={r.run_id}
-            title={`${r.run_id} · ${r.status}`}
+            key={r.runId}
+            title={`${r.runId} · ${r.status}`}
             data-tone={tone}
             className={`inline-block h-3 w-1.5 rounded-[1px] ${cls}`}
           />
@@ -308,7 +291,7 @@ function RunsDrilldown({ scheduleId, onClose }: RunsDrilldownProps): JSX.Element
           ) : !data || data.length === 0 ? (
             <p className="text-sw-muted text-sm">No runs yet.</p>
           ) : (
-            data.map((r) => <RunRow key={r.run_id} variant="compact" row={toRunSummary(r)} />)
+            data.map((r) => <RunRow key={r.runId} variant="compact" row={toRunSummary(r)} />)
           )}
         </div>
         <DialogFooter showCloseButton />
@@ -322,8 +305,8 @@ function RunsDrilldown({ scheduleId, onClose }: RunsDrilldownProps): JSX.Element
  *  reads identity, title fallback, status, and (for the link) `runId`. */
 function toRunSummary(r: ScheduleRunRow): RunSummary {
   return {
-    runId: r.run_id,
-    startedAt: new Date(r.enqueued_at).toISOString(),
+    runId: r.runId,
+    startedAt: new Date(r.enqueuedAt).toISOString(),
     status: coerceStatus(r.status),
     eventCount: 0,
     costUsd: 0,

@@ -101,11 +101,11 @@ describe("Schedules", () => {
   // ── populated list ──
   test("renders one row per schedule with status pill reflecting active vs paused (pausedAt) and a 10-cell health stripe with green/red cells matching recentRuns status", async () => {
     const recent = [
-      { run_id: "r1", status: "completed", enqueued_at: 1 },
-      { run_id: "r2", status: "completed", enqueued_at: 2 },
-      { run_id: "r3", status: "completed", enqueued_at: 3 },
-      { run_id: "r4", status: "halted", enqueued_at: 4 },
-      { run_id: "r5", status: "cancelled", enqueued_at: 5 },
+      { runId: "r1", status: "completed", enqueuedAt: 1 },
+      { runId: "r2", status: "completed", enqueuedAt: 2 },
+      { runId: "r3", status: "completed", enqueuedAt: 3 },
+      { runId: "r4", status: "halted", enqueuedAt: 4 },
+      { runId: "r5", status: "cancelled", enqueuedAt: 5 },
     ];
     const active = makeSchedule({ id: "sch_active", pausedAt: null, recentRuns: recent });
     const paused = makeSchedule({
