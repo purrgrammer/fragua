@@ -49,7 +49,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 | `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,fan-in,retry-policy}.ts`, `src/parser/` | Pure types; DOT parser; handler contract; engine reducers |
 | `@swarm/daemon` | `src/{executor,supervisor,auto-dispatcher,result-to-facts,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner |
 | `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,fidelity,event-bridge,tool-adapter}.ts` | `PiCodergenBackend`; pi-ai → handler bridge; per-run system-prompt builder |
-| `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills discovery |
+| `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
 | `@swarm/server` | `src/store/{routes,runs-routes,runs-adapter,steps}.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
 | `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Swarm primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
 | `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
@@ -61,6 +61,8 @@ Runtime state: `~/.swarm/swarm.db` (the global store the harness binds to by def
 Config cascade: `~/.swarm/config.jsonc` (global — defaults, autoTitle, blocklist, concurrency, …) overlaid by `<cwd>/.swarm/config.jsonc` (project — bootstrap and any project-specific overrides). Project keys win; nested objects merge one level deep.
 
 Skills (domain context loaded on demand) come from two layers: `~/.agents/skills/` (global — `ai-elements`, `shadcn`, plus user-installed skills) and `<repo>/.agents/skills/` (project-internal — `frontend`, `design`, `backend`, `swarm-author`, `swarm-debug`, `swarm-run`). The daemon scans both at boot. Load before touching any file in a skill's domain.
+
+Named sub-agent profiles live alongside skills under `.agents/agents/` (project) and `~/.agents/agents/` (user); `.claude/agents/` is scanned as a cross-client fallback. Each profile is a flat `.md` file with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`); the body becomes the sub-agent's system prompt. Project beats user on collisions. The daemon scans them at boot and the catalogue lands on every codergen call whose tool pool includes `agent` — see [`docs/proposals/agent-definitions.md`](docs/proposals/agent-definitions.md).
 
 ## Commit conventions
 

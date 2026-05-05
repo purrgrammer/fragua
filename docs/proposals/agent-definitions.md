@@ -1,7 +1,7 @@
 ---
 title: Agent definitions — named, reusable sub-agent profiles
 summary: "Named sub-agent profiles loaded from `.agents/agents/` + `~/.agents/agents/`, resolved at `agent` tool spawn site"
-status: proposed
+status: shipped
 maturity: designed
 last-reviewed: 2026-05-05
 ---

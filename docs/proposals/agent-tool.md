@@ -20,9 +20,10 @@ last-reviewed: 2026-05-05
 - One LLM-callable tool, `agent`, registered alongside `read` /
   `write` / `edit` / `bash` / `web_fetch`. `defaultDisabled: true`,
   opt-in per node via `allowed_tools="…,agent"`.
-- All knobs inline at the tool-call site. No definition files. No
-  named/registered sub-agent profiles. The LLM constructs the
-  sub-agent's prompt, tool pool, and skill set per call.
+- All knobs inline at the tool-call site. The LLM constructs the
+  sub-agent's prompt, tool pool, and skill set per call. Named
+  profiles loaded from `.agents/agents/` are V2 territory — see
+  [`agent-definitions.md`](./agent-definitions.md).
 - Sub-agents are **not runs**. They have no `run_state` row, no
   separate event stream, no independent lifecycle. They're a tool
   implementation that uses a separate LLM context window.
