@@ -186,22 +186,71 @@ export interface WorkflowDetail extends WorkflowSummary {
 }
 
 export interface SkillSummary {
+  /** base64url(skill_dir) — opaque URL-safe handle. Names aren't unique
+   * across projects (project A and project B can both have `frontend`),
+   * so the absolute path is the canonical identity. */
+  locId: string;
   name: string;
   description: string;
   version?: string;
   allowed_tools?: string[];
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
   location: string;
   skill_dir: string;
   sha256: string;
   bytes: number;
   scope: "project" | "user";
   source_dir: string;
+  /** Set only when `scope === "project"`. */
+  project_cwd?: string;
   disabled_reason?: string;
 }
 
-export interface SkillDetail extends SkillSummary {
+export interface SkillDetail {
+  skill: SkillSummary;
+  /** YAML frontmatter from SKILL.md, parsed into a flat object. */
+  frontmatter: Record<string, unknown>;
+  /** SKILL.md body, frontmatter stripped, leading/trailing whitespace trimmed. */
   body: string;
-  usage?: { runs: string[]; count: number };
+}
+
+export interface SkillTreeEntry {
+  /** Path relative to skill_dir, posix-separated. */
+  path: string;
+  type: "file" | "dir";
+  /** Bytes for files, 0 for dirs. */
+  size: number;
+}
+
+export interface SkillTreeResponse {
+  tree: SkillTreeEntry[];
+  truncated: boolean;
+}
+
+export interface AgentSummary {
+  /** base64url(location) — opaque URL-safe handle. */
+  locId: string;
+  name: string;
+  description: string;
+  model?: string;
+  provider?: string;
+  allowed_tools?: string[];
+  location: string;
+  sha256: string;
+  bytes: number;
+  scope: "project" | "user";
+  source_dir: string;
+  project_cwd?: string;
+  disabled_reason?: string;
+}
+
+export interface AgentDetail {
+  agent: AgentSummary;
+  /** The body verbatim — what the sub-agent receives as its system
+   * prompt on spawn (when no inline override is passed). */
+  body: string;
 }
 
 /**
@@ -506,13 +555,60 @@ export async function getWorkflow(name: string, opts?: { cwd?: string }): Promis
   return getJson(`/workflows/${encodeURIComponent(name)}${qs}`, isWorkflowDetail);
 }
 
-export async function listSkills(opts?: { refresh?: boolean }): Promise<SkillSummary[]> {
-  const qs = opts?.refresh ? "?refresh=1" : "";
-  return getJson(`/skills${qs}`, (v): v is SkillSummary[] => Array.isArray(v) && v.every(isSkillSummary));
+export async function listSkills(opts?: { projectCwd?: string }): Promise<SkillSummary[]> {
+  const qs = opts?.projectCwd !== undefined ? `?project_cwd=${encodeURIComponent(opts.projectCwd)}` : "";
+  const body = await getJson(
+    `/skills${qs}`,
+    (v): v is { skills: SkillSummary[] } =>
+      typeof v === "object" &&
+      v !== null &&
+      Array.isArray((v as { skills?: unknown }).skills) &&
+      (v as { skills: unknown[] }).skills.every(isSkillSummary),
+  );
+  return body.skills;
 }
 
-export async function getSkill(name: string): Promise<SkillDetail> {
-  return getJson(`/skills/${encodeURIComponent(name)}`, isSkillDetail);
+export async function getSkill(locId: string): Promise<SkillDetail> {
+  return getJson(`/skills/${encodeURIComponent(locId)}`, isSkillDetail);
+}
+
+export async function getSkillTree(locId: string): Promise<SkillTreeResponse> {
+  return getJson(`/skills/${encodeURIComponent(locId)}/tree`, isSkillTreeResponse);
+}
+
+/** Raw byte fetch for one file under a skill_dir. Returns the body
+ * bytes plus the server-asserted Content-Type so the file viewer can
+ * dispatch on it (markdown, image, monospace, hex-dump). 403 on
+ * sandbox escape, 404 when missing, 400 when path is omitted or names
+ * a directory. */
+export async function getSkillFile(locId: string, path: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const u = url(`/skills/${encodeURIComponent(locId)}/file?path=${encodeURIComponent(path)}`);
+  const res = await fetch(u);
+  if (!res.ok) {
+    throw new ApiError(`GET ${u} → ${res.status} ${res.statusText}`, res.status, u);
+  }
+  const buf = await res.arrayBuffer();
+  return {
+    bytes: new Uint8Array(buf),
+    contentType: res.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
+export async function listAgents(opts?: { projectCwd?: string }): Promise<AgentSummary[]> {
+  const qs = opts?.projectCwd !== undefined ? `?project_cwd=${encodeURIComponent(opts.projectCwd)}` : "";
+  const body = await getJson(
+    `/agents${qs}`,
+    (v): v is { agents: AgentSummary[] } =>
+      typeof v === "object" &&
+      v !== null &&
+      Array.isArray((v as { agents?: unknown }).agents) &&
+      (v as { agents: unknown[] }).agents.every(isAgentSummary),
+  );
+  return body.agents;
+}
+
+export async function getAgent(locId: string): Promise<AgentDetail> {
+  return getJson(`/agents/${encodeURIComponent(locId)}`, isAgentDetail);
 }
 
 export async function getRunEvents(id: string): Promise<RunEventsPayload> {
@@ -1111,6 +1207,53 @@ function isJobSummary(v: unknown): v is JobSummary {
 function isSkillSummary(v: unknown): v is SkillSummary {
   if (typeof v !== "object" || v === null) return false;
   const o = v as {
+    locId?: unknown;
+    name?: unknown;
+    description?: unknown;
+    location?: unknown;
+    skill_dir?: unknown;
+    sha256?: unknown;
+    bytes?: unknown;
+    scope?: unknown;
+    source_dir?: unknown;
+  };
+  return (
+    typeof o.locId === "string" &&
+    typeof o.name === "string" &&
+    typeof o.description === "string" &&
+    typeof o.location === "string" &&
+    typeof o.skill_dir === "string" &&
+    typeof o.sha256 === "string" &&
+    typeof o.bytes === "number" &&
+    (o.scope === "project" || o.scope === "user") &&
+    typeof o.source_dir === "string"
+  );
+}
+
+function isSkillDetail(v: unknown): v is SkillDetail {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { skill?: unknown; frontmatter?: unknown; body?: unknown };
+  return (
+    isSkillSummary(o.skill) && typeof o.frontmatter === "object" && o.frontmatter !== null && typeof o.body === "string"
+  );
+}
+
+function isSkillTreeEntry(v: unknown): v is SkillTreeEntry {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { path?: unknown; type?: unknown; size?: unknown };
+  return typeof o.path === "string" && (o.type === "file" || o.type === "dir") && typeof o.size === "number";
+}
+
+function isSkillTreeResponse(v: unknown): v is SkillTreeResponse {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { tree?: unknown; truncated?: unknown };
+  return Array.isArray(o.tree) && o.tree.every(isSkillTreeEntry) && typeof o.truncated === "boolean";
+}
+
+function isAgentSummary(v: unknown): v is AgentSummary {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as {
+    locId?: unknown;
     name?: unknown;
     description?: unknown;
     location?: unknown;
@@ -1120,6 +1263,7 @@ function isSkillSummary(v: unknown): v is SkillSummary {
     source_dir?: unknown;
   };
   return (
+    typeof o.locId === "string" &&
     typeof o.name === "string" &&
     typeof o.description === "string" &&
     typeof o.location === "string" &&
@@ -1130,9 +1274,10 @@ function isSkillSummary(v: unknown): v is SkillSummary {
   );
 }
 
-function isSkillDetail(v: unknown): v is SkillDetail {
-  if (!isSkillSummary(v)) return false;
-  return typeof (v as { body?: unknown }).body === "string";
+function isAgentDetail(v: unknown): v is AgentDetail {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as { agent?: unknown; body?: unknown };
+  return isAgentSummary(o.agent) && typeof o.body === "string";
 }
 
 function isSchedule(v: unknown): v is Schedule {

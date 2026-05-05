@@ -105,15 +105,54 @@ export const queries = {
 
   skills: {
     all: () => ["skills"] as const,
-    list: () =>
+    /** Discovery superset (or globals + one project when `projectCwd`
+     *  is set). The cache key splits on `projectCwd` so the global view
+     *  and per-project views don't collide. */
+    list: (projectCwd?: string) =>
       queryOptions({
-        queryKey: [...queries.skills.all(), "list"] as const,
-        queryFn: () => api.listSkills(),
+        queryKey: [...queries.skills.all(), "list", projectCwd ?? "__all__"] as const,
+        queryFn: () => api.listSkills(projectCwd !== undefined ? { projectCwd } : undefined),
+        // Long staleTime — file-system content rarely changes mid-session.
+        // Manual refetch fires the rescan button.
+        staleTime: 60_000,
       }),
-    detail: (name: string) =>
+    detail: (locId: string) =>
       queryOptions({
-        queryKey: [...queries.skills.all(), "detail", name] as const,
-        queryFn: () => api.getSkill(name),
+        queryKey: [...queries.skills.all(), "detail", locId] as const,
+        queryFn: () => api.getSkill(locId),
+        staleTime: 60_000,
+      }),
+    tree: (locId: string) =>
+      queryOptions({
+        queryKey: [...queries.skills.all(), "tree", locId] as const,
+        queryFn: () => api.getSkillTree(locId),
+        staleTime: 60_000,
+      }),
+    /** Per-file content under a skill_dir. Keyed by `(locId, path)` so
+     *  the cache resolves the same file in O(1) on re-mount. Long
+     *  staleTime — paths are content-addressable enough that staleness
+     *  is rarely visible. */
+    file: (locId: string, path: string) =>
+      queryOptions({
+        queryKey: [...queries.skills.all(), "file", locId, path] as const,
+        queryFn: () => api.getSkillFile(locId, path),
+        staleTime: 5 * 60_000,
+      }),
+  },
+
+  agents: {
+    all: () => ["agents"] as const,
+    list: (projectCwd?: string) =>
+      queryOptions({
+        queryKey: [...queries.agents.all(), "list", projectCwd ?? "__all__"] as const,
+        queryFn: () => api.listAgents(projectCwd !== undefined ? { projectCwd } : undefined),
+        staleTime: 60_000,
+      }),
+    detail: (locId: string) =>
+      queryOptions({
+        queryKey: [...queries.agents.all(), "detail", locId] as const,
+        queryFn: () => api.getAgent(locId),
+        staleTime: 60_000,
       }),
   },
 
