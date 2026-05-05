@@ -10,7 +10,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { FileTree } from "../components/skills/file-tree.tsx";
 import { FileViewer } from "../components/skills/file-viewer.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
@@ -59,6 +59,13 @@ export function SkillDetail(): JSX.Element {
 
   return (
     <section className="flex w-full min-w-0 flex-col gap-4" data-testid="skill-detail">
+      <Link
+        to="/skills"
+        className="text-xs text-sw-muted hover:text-sw-text hover:underline"
+        data-testid="skill-detail-back"
+      >
+        ← all skills
+      </Link>
       <Header skill={skill} />
       <div className="grid min-h-0 flex-1 grid-cols-[16rem_1fr] gap-3 rounded-md border border-sw-border bg-sw-surface">
         <aside className="min-h-0 overflow-auto border-r border-sw-border" data-testid="skill-detail-tree-pane">
