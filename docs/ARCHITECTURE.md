@@ -213,6 +213,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   workflow_path TEXT,                             -- .dot file path at resolution time; diagnostic
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
   branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
+  schedule_id TEXT,                               -- schedule that fired this run; informational, not a FK cascade target
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -232,6 +233,8 @@ CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
 -- listChildRunIds). NULL parents excluded.
 CREATE INDEX idx_run_state_parent
   ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX idx_runs_by_schedule
+  ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
 
 CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -314,6 +317,39 @@ CREATE TABLE daemon_events (
 CREATE INDEX idx_daemon_events_ts   ON daemon_events(ts, seq);
 CREATE INDEX idx_daemon_events_type ON daemon_events(type, ts);
 CREATE INDEX idx_daemon_events_run  ON daemon_events(run_id, seq) WHERE run_id IS NOT NULL;
+
+-- Recurring-run primitive (proposal: docs/proposals/scheduled-runs.md).
+-- `(workflow_ref, cwd, interval_ms, optional input)` triple plus a
+-- `next_fire_at` cursor. The daemon's `schedule-dispatcher` fiber
+-- selects rows where `next_fire_at <= now AND paused_at IS NULL` once
+-- per minute, fires runs by calling `enqueueRun` with `schedule_id`
+-- set, then advances `next_fire_at = now + interval_ms` (anchored to
+-- actual fire time). `workflow_ref` stores the workflow name or path
+-- as a string — NOT a sha; resolution happens at fire time so schedules
+-- survive workflow edits. If the file is missing or fails to validate,
+-- the dispatcher records `fact.schedule_invalid_workflow` and
+-- auto-pauses. `last_run_id` is informational (no FK), as is
+-- `run_state.schedule_id` — schedule deletion is hard DELETE while runs
+-- persist.
+CREATE TABLE schedules (
+  id              TEXT PRIMARY KEY,
+  workflow_ref    TEXT NOT NULL,
+  cwd             TEXT NOT NULL,
+  interval_ms     INTEGER NOT NULL,
+  interval_text   TEXT NOT NULL,                  -- "30m" / "1h" / "6h" / "24h"; display only
+  input           TEXT,                           -- positional input piped to the run via routing.input
+  overlap_policy  TEXT NOT NULL DEFAULT 'skip'
+                  CHECK (overlap_policy IN ('skip','queue','concurrent')),
+  next_fire_at    INTEGER NOT NULL,               -- unix ms
+  last_fire_at    INTEGER,
+  last_run_id     TEXT,
+  paused_at       INTEGER,                        -- NULL = active; non-NULL = explicitly paused
+  created_at      INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX idx_schedules_due
+  ON schedules(next_fire_at) WHERE paused_at IS NULL;
+CREATE INDEX idx_schedules_cwd ON schedules(cwd);
 ```
 
 **Size targets:**
@@ -390,8 +426,18 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
 | `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced |
 | `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
+| `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `input?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |
+| `intent.schedule_pause` | `scheduleId` | Operator paused a schedule |
+| `intent.schedule_resume` | `scheduleId` | Operator resumed a schedule (no catch-up: `next_fire_at = now + interval_ms`) |
+| `intent.schedule_delete` | `scheduleId` | Operator hard-deleted a schedule |
+| `fact.schedule_fired` | `scheduleId`, `runId` | Dispatcher enqueued a run for the schedule (also writes `run_id` on the row) |
+| `fact.schedule_skipped` | `scheduleId`, `reason: 'overlap'\|'paused'` | Dispatcher skipped a due fire because the prior run is non-terminal under `overlap=skip` |
+| `fact.schedule_late` | `scheduleId`, `missedIntervals`, `lastTargetAt` | Emitted *before* the catch-up fire when ≥1 slot was missed; one fire per resume window per proposal §Catch-up policy |
+| `fact.schedule_invalid_workflow` | `scheduleId`, `error` | Workflow ref failed to resolve / parse / validate; schedule auto-paused |
 
-`run_id` on the row is set for run-scoped daemon events (leak_detected, worktree_provisioned); global lifecycle / sweep / GC events leave it NULL.
+Schedule events ride `daemon_events` (not the per-run `events` table) because the dispatcher writes them outside any one run's lifecycle: `intent.schedule_create` arrives before any run exists, `fact.schedule_skipped` may not produce a run at all, and `fact.schedule_fired` carries the new run id on the row's `run_id` column for join-back. The `schedules` table itself is the canonical state; the events here are a queryable audit log.
+
+`run_id` on the row is set for run-scoped daemon events (leak_detected, worktree_provisioned, fact.schedule_fired); global lifecycle / sweep / GC events leave it NULL.
 
 ---
 
@@ -554,8 +600,28 @@ export interface IDaemonCoordinator {
   heartbeatDaemonLock(pid: number): void;
   releaseDaemonLock(pid: number): void;
   currentDaemonLock(): DaemonLockRow | null;
+
+  // schedules (proposal: docs/proposals/scheduled-runs.md)
+  createSchedule(params: CreateScheduleParams, now: number): Schedule;
+  getSchedule(id: string): Schedule | null;
+  listSchedules(opts?: { cwd?: string }): Schedule[];
+  getDueSchedules(now: number): Schedule[];
+  pauseSchedule(id: string, now: number): void;
+  resumeSchedule(id: string, now: number): void;
+  deleteSchedule(id: string): void;
+  recordScheduleFire(scheduleId: string, runId: string, now: number): void;
+  recordScheduleSkipped(scheduleId: string, now: number): void;
+  getScheduleRuns(scheduleId: string, limit: number): Array<{ runId: string; status: string; enqueuedAt: number }>;
 }
 ```
+
+Schedule methods are CRUD over the `schedules` table plus two
+daemon-side advancers (`recordScheduleFire`, `recordScheduleSkipped`)
+that the dispatcher fiber calls atomically inside its tick. They
+bypass OCC because schedules don't ride the per-run reducer: a
+schedule's only state transitions are paused/resumed/fired/deleted,
+all single-row updates with no cross-table invariants. Audit rows live
+on `daemon_events` (see §3).
 
 ### 4.5 Errors and shared types
 
@@ -853,6 +919,20 @@ app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"))
 app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
 app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
 app.post("/runs/:id/budget",       async (c) => writeIntent(c, "intent.budget_adjusted"));  // {scope, metric, newLimit>0, note?}
+
+// Schedules surface (proposal: docs/proposals/scheduled-runs.md).
+// CRUD over the `schedules` table plus pause/resume verbs. Each
+// mutation lands a matching `intent.schedule_*` audit row on
+// `daemon_events`. Body of POST /schedules:
+//   { workflow, cwd, every: "30m"|"1h"|"6h"|"24h",
+//     input?, overlap?: "skip"|"queue"|"concurrent", fireOnCreate?: bool }
+// `every` outside the four-value whitelist returns 400
+// `code:"invalid_interval"`; bad overlap returns `code:"invalid_overlap"`.
+app.post("/schedules",                async (c) => createSchedule(c));
+app.get("/schedules",                 (c) => c.json(store.listSchedules({ cwd: c.req.query("cwd") })));
+app.delete("/schedules/:id",          (c) => deleteSchedule(c));
+app.post("/schedules/:id/pause",      (c) => pauseSchedule(c));
+app.post("/schedules/:id/resume",     (c) => resumeSchedule(c));
 
 // JSON-batch read of a run's events; pagination via ?since / ?limit.
 app.get("/runs/:id/events", (c) => {

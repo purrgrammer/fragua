@@ -225,6 +225,43 @@ Present options + evidence to the user. Never auto-choose.
 
 ---
 
+## 6.5 Schedules — recurring runs
+
+A schedule fires a workflow on a fixed shorthand interval (`30m` / `1h` / `6h` / `24h` only — cron is out of scope). Each fire enqueues a normal run with `run_state.schedule_id` carrying lineage. Skip-on-overlap is the default; one coalesced catch-up after daemon downtime.
+
+```sh
+# Add
+bun run swarm schedule add analyze --every 1h
+bun run swarm schedule add introspect --every 6h --on-overlap skip
+bun run swarm schedule add change --every 24h --input "sweep deps" --no-fire-on-create
+
+# Inspect
+bun run swarm schedule list
+bun run swarm schedule list --cwd "$PWD"
+
+# Operate
+bun run swarm schedule pause sch_xxxxxx
+bun run swarm schedule resume sch_xxxxxx       # no catch-up; next_fire_at = now + interval
+bun run swarm schedule rm sch_xxxxxx
+```
+
+HTTP equivalents (mirrors the CLI 1:1):
+
+```sh
+URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
+
+curl -fsS -X POST   "$URL/schedules"               -H 'content-type: application/json' \
+   -d '{"workflow":"analyze","cwd":"'"$PWD"'","every":"1h"}'
+curl -fsS            "$URL/schedules?cwd=$PWD"     | jq .
+curl -fsS -X DELETE "$URL/schedules/sch_xxxxxx"
+curl -fsS -X POST   "$URL/schedules/sch_xxxxxx/pause"  -H 'content-type: application/json' -d '{}'
+curl -fsS -X POST   "$URL/schedules/sch_xxxxxx/resume" -H 'content-type: application/json' -d '{}'
+```
+
+When a schedule's workflow file is missing or fails to parse at fire time, the dispatcher records `fact.schedule_invalid_workflow` on `daemon_events` and auto-pauses the schedule. Fix the file and `schedule resume` to bring it back. Transient run failures (provider error, halted run) do NOT pause the schedule — maintenance workflows are idempotent; one bad fire isn't a reason to disable the cadence.
+
+---
+
 ## 7. Anti-patterns
 
 - **Don't spam steer.** 5 steering intents in 30s usually means `cancel` + re-enqueue with a better prompt. The runtime halts with `reason:"abort_loop"` after 5 consecutive aborts without progress anyway.
@@ -262,6 +299,11 @@ curl -fsS -X POST "$URL/runs/$RUN/hitl"         -d '{"selected":"A"}'           
 curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'
+
+# Schedules (proposal: docs/proposals/scheduled-runs.md)
+bun run swarm schedule add <workflow> --every 1h          # create + fire immediately
+bun run swarm schedule list [--cwd <dir>]                  # tabular health view
+bun run swarm schedule pause | resume | rm <sch_id>
 ```
 
 For diagnosis after terminal state, switch to swarm-debug. This skill drives runs forward; that one looks backward.

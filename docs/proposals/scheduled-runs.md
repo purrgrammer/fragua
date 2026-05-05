@@ -1,8 +1,8 @@
 ---
 title: Scheduled runs
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-05
+status: shipped
+maturity: shipped
+last-reviewed: 2026-05-12
 ---
 
 # Scheduled runs
