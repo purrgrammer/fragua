@@ -4,6 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
+import { readFile } from "node:fs/promises";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
@@ -233,6 +234,47 @@ export function createRoutes(deps: ServerDeps): Hono {
     }>(c);
     if (!body || typeof body.workflowSha !== "string") {
       return c.json({ error: "workflowSha required" }, 400);
+    }
+    // Web composer flow: GET /workflows lists workflows scanned off
+    // disk and reports each one's content sha; the composer POSTs
+    // /runs with that sha + the source path before anyone has uploaded
+    // the DOT. When the sha is unknown but a workflowPath is provided,
+    // read the file, verify it hashes to the claimed sha, and register
+    // it so enqueueRun finds it. A mismatch means the on-disk file
+    // changed since the listing was fetched (or the path points
+    // somewhere else) — refuse rather than silently substitute.
+    if (
+      typeof body.workflowPath === "string" &&
+      body.workflowPath.length > 0 &&
+      deps.store.getWorkflow(body.workflowSha) == null
+    ) {
+      let dotSource: string;
+      try {
+        dotSource = await readFile(body.workflowPath, "utf8");
+      } catch (err) {
+        return c.json(
+          {
+            error: `cannot read workflowPath ${body.workflowPath}: ${(err as Error).message}`,
+            code: "workflow_path_unreadable",
+          },
+          400,
+        );
+      }
+      const actualSha = sha256Hex(dotSource);
+      if (actualSha !== body.workflowSha) {
+        return c.json(
+          {
+            error: `workflowPath content sha ${actualSha} does not match workflowSha ${body.workflowSha}`,
+            code: "workflow_sha_mismatch",
+            expected: body.workflowSha,
+            actual: actualSha,
+          },
+          400,
+        );
+      }
+      const name =
+        typeof body.workflowName === "string" && body.workflowName.length > 0 ? body.workflowName : actualSha;
+      deps.store.saveWorkflow(actualSha, name, dotSource);
     }
     if (deps.preflightProviders != null) {
       const check = deps.preflightProviders();
