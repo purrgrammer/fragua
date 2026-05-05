@@ -260,24 +260,20 @@ export interface MaterialiseChildResult {
  *  - `spec.skills` is intersected with the parent's loaded catalog
  *    (unknown names silently dropped, by design — the LLM gets a
  *    smaller catalog rather than a hard error).
- *  - When the spec provides an explicit `system_prompt`, the child
- *    still gets a fresh `<protocol>` block + skills catalog wrap so
- *    the abort contract holds.
- *  - When the spec omits `system_prompt`, the child gets an EMPTY
- *    per-node prompt and the codergen backend assembles a fresh
- *    minimal system prompt from its `global` framework default +
- *    the child's filtered skills + the child's own tool pool
- *    description + env info. We deliberately do NOT inherit the
- *    parent's *fully-assembled* system prompt: that would carry
- *    tools the child can't use, context files the child didn't
- *    request, and 10s of KB of irrelevant framing. Inheritance of
- *    the framework persona is automatic through the backend's
- *    `global` field; everything else is redundant or wrong for the
- *    child.
- *
- * `parentSystemPrompt` is currently retained for reference only —
- * future iterations may extract specific slices (e.g. project memory)
- * to seed the child's prompt without inheriting the full bloat.
+ *  - The caller owns the sub-agent's persona. When `spec.system_prompt`
+ *    is set, that string drives the prompt verbatim. When absent, the
+ *    sub-agent gets no persona by default — framework injection (the
+ *    `<protocol>` block, env-info, the global codergen persona) would
+ *    surprise the calling LLM, which constructed the tool call
+ *    expecting a specific context shape.
+ *  - `spec.skills` is intersected with the parent's loaded catalog
+ *    (unknown names silently dropped). When the filtered set is
+ *    non-empty, an `<available_skills>` block IS rendered into the
+ *    sub-agent's prompt — the sub-agent has to know what skills exist
+ *    in order to invoke them. With both `system_prompt` + skills set,
+ *    the catalog block sits below the persona.
+ *  - When `spec.system_prompt` is absent AND no skills, the sub-agent
+ *    runs with NO system prompt at all.
  */
 export function materialiseForChild(
   spec: MaterialiseChildSpec,
@@ -293,13 +289,8 @@ export function materialiseForChild(
           return parentSkills.filter((s) => allow.has(s.name) && !s.disabled_reason);
         })();
 
-  if (spec.system_prompt === undefined) {
-    return { systemPrompt: "", effectiveSkills };
-  }
-
-  const catalog = renderSkillsCatalog(effectiveSkills);
-  let out = spec.system_prompt;
-  if (catalog.length > 0) out = mergeSystemPrompt(out, catalog);
-  out = mergeSystemPrompt(out, renderProtocol());
-  return { systemPrompt: out, effectiveSkills };
+  const persona = spec.system_prompt ?? "";
+  const catalog = effectiveSkills.length > 0 ? renderSkillsCatalog(effectiveSkills) : "";
+  const systemPrompt = catalog.length > 0 ? mergeSystemPrompt(persona, catalog) : persona;
+  return { systemPrompt, effectiveSkills };
 }

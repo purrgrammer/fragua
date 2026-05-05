@@ -278,14 +278,24 @@ function StepCostRow({
   const cacheWriteTokens = summary?.cache_write_tokens ?? step.cost?.cache_write_tokens ?? 0;
   const displayedCostUsd = summary?.cost_usd ?? step.cost?.cost_usd;
   const displayedDurationMs = summary?.durationMs ?? liveElapsedMs;
-  // Tokens this step generated against the model's context window —
-  // matches the run-header "Tokens" tile (input + output sum). The
-  // provider-reported billed total is not used: Anthropic includes
-  // cache_read_tokens in it on cached calls and excludes it on uncached
-  // ones, so summing across calls produced an inflated, inconsistent
-  // number (the implement step on 01kq5962q5hee63nsk showed 1.09M / 1M
-  // = 109% from that mixed accounting).
-  const freshTokens = inputTokens + outputTokens;
+  // Tokens this step actually fed to (or pulled from) the model's
+  // context window. Sums every input bucket — cache writes and cache
+  // reads ARE input tokens that occupy the context, just billed at
+  // different rates — plus generated output. Without the cache
+  // buckets the count understates by the entire system prompt
+  // whenever caching is on (Anthropic puts the system prompt into
+  // cache_write on the first turn and cache_read after), which made
+  // the per-step "Tokens" chip read as ~0 for steps that actually
+  // sent ~7 KB of system prompt.
+  //
+  // We deliberately do not use the provider-reported billed_tokens:
+  // Anthropic's billed_tokens shape varies across cached / uncached
+  // calls (cache_read sometimes inside, sometimes not), and summing
+  // across mixed steps produced an inflated total (the implement
+  // step on 01kq5962q5hee63nsk showed 1.09M / 1M = 109% from that
+  // mixed accounting). Manually summing the four buckets we measure
+  // ourselves is consistent regardless of provider quirks.
+  const freshTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
 
   // Only Input / Output carry a $ figure in the breakdown — cache rows
   // intentionally don't, even though cache reads/writes are technically
@@ -326,7 +336,9 @@ function StepCostRow({
       className={rowGridClass}
     >
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
-        <span className="truncate">{step.nodeId}</span>
+        <span className="truncate" title={step.subagentId ? `subagent_id: ${step.subagentId}` : undefined}>
+          {step.subagentId ? `agent · ${step.subagentLabel ?? step.subagentId.slice(0, 8)}` : step.nodeId}
+        </span>
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>
             iter {step.iteration.n}/{step.iteration.max}

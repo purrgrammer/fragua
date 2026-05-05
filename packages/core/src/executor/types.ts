@@ -61,11 +61,14 @@ export interface CodergenInput {
   budgetSnapshot?: BudgetSnapshotInput;
   /** When true, the backend skips its own `role:'system'` persistMessage
    * write on the assumption that the caller has already seeded the
-   * system prompt as a message (avoiding a duplicate row). Used by
-   * the conversation-run path: `spawnSubagent` writes the system
-   * prompt as the seed message itself so it doesn't have to round-trip
-   * through `run_state.routing` (capped at 8 KB). The system prompt
-   * still flows into the LLM call via `node.attrs.system_prompt`;
-   * this only suppresses the *storage* duplicate. */
+   * system prompt as a message (avoiding a duplicate row). */
   skipSystemPersist?: boolean;
+  /** When true, the backend uses `node.attrs.system_prompt` (or the
+   * empty string when absent) as the COMPLETE system prompt — no
+   * framework `<protocol>`, no skills catalog, no context-files block,
+   * no run-env description. Used by the `agent` tool's spawn path so
+   * the calling LLM has full control over the sub-agent's context
+   * window: framework injection-by-default would change the shape of
+   * the call the parent constructed without asking. */
+  skipFrameworkSystemPrompt?: boolean;
 }

@@ -428,7 +428,17 @@ interface NodeSectionProps {
 }
 
 function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionProps): JSX.Element {
-  const label = nodeId ?? "unscoped";
+  // Sub-agent message sections carry a synthetic `__subagent:<uuid>`
+  // nodeId. Render them as `agent · <short-id>` instead of the raw
+  // uuid; the operator still sees the discriminator but the line
+  // reads as "what this is" rather than implementation noise.
+  const SUBAGENT_PREFIX = "__subagent:";
+  const label =
+    nodeId == null
+      ? "unscoped"
+      : nodeId.startsWith(SUBAGENT_PREFIX)
+        ? `agent · ${nodeId.slice(SUBAGENT_PREFIX.length, SUBAGENT_PREFIX.length + 8)}`
+        : nodeId;
   const status: NodeState["state"] | "idle" = state?.state ?? "idle";
   return (
     <section
@@ -438,7 +448,12 @@ function NodeSection({ nodeId, state, isLive, isPaused, children }: NodeSectionP
     >
       <header className="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-sw-bg/95 px-1 py-1 backdrop-blur-sm">
         <StatusDot status={status} isLive={isLive} isPaused={isPaused} />
-        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">{label}</span>
+        <span
+          className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80"
+          title={nodeId ?? undefined}
+        >
+          {label}
+        </span>
         {state && <NodeStatusLabel state={state.state} isLive={isLive} isPaused={isPaused} />}
         <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
       </header>

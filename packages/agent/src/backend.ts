@@ -320,13 +320,19 @@ export class PiCodergenBackend implements CodergenBackend {
     // tests. We detect a `WorktreeEnvironment` structurally so this
     // module stays free of the workspace-layer dependency.
     const effectiveRunEnv = deriveRunEnv(effectiveEnv, input.run_id) ?? this.runEnv;
-    const systemPrompt = buildSystemPrompt({
-      global: this.systemPrompt,
-      perNode: perNodeSystemPrompt,
-      contextBlock,
-      skillsCatalog,
-      ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
-    });
+    // Sub-agent path: `skipFrameworkSystemPrompt` makes the perNode
+    // string the COMPLETE system prompt — no protocol wrap, no skills
+    // catalog, no context-files, no run-env block. The calling LLM has
+    // full control over the sub-agent's context window.
+    const systemPrompt = input.skipFrameworkSystemPrompt
+      ? (perNodeSystemPrompt ?? "")
+      : buildSystemPrompt({
+          global: this.systemPrompt,
+          perNode: perNodeSystemPrompt,
+          contextBlock,
+          skillsCatalog,
+          ...(effectiveRunEnv !== undefined ? { runEnv: effectiveRunEnv } : {}),
+        });
 
     // Now that the parent's system prompt is fully resolved, wire the
     // `agent` tool. Sub-agents inherit this exact string verbatim when

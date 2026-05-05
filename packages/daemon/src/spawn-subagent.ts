@@ -135,13 +135,26 @@ export function makeSpawnSubagent(
     });
 
     // Forward every observability event the sub-agent emits to the
-    // parent's stream with `subagent_id` stamped on the payload. Cost
-    // events ride through unchanged — the parent's handler-bridge sees
-    // them and accumulates them into the parent node's
-    // `fact.node_completed`, so spend attributes correctly to the
-    // calling node.
+    // parent's stream. Two payload stamps happen here:
+    //
+    //   - `subagent_id` discriminates this sub-agent's slice from the
+    //     parent's own events and from any sibling sub-agents running
+    //     in parallel.
+    //   - `nodeId` is set to `subagentNodeId` (overriding whatever the
+    //     handler context's emit wrapper would default-stamp). Without
+    //     this override, the sub-agent's `llm.start` / `cost.recorded`
+    //     events would carry the PARENT'S nodeId, get folded into the
+    //     parent's step in `getStepAggregates`, and silently inflate
+    //     the parent step's totals with the sub-agent's spend. With
+    //     the override, the sub-agent gets its own row in the steps
+    //     view; the parent's calling node still sees the cost rolled
+    //     up via the handler-bridge's per-turn accumulator.
     const subagentEmit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
-      await parentCtx.parentEmit(type, { ...data, subagent_id: subagentId });
+      await parentCtx.parentEmit(type, {
+        ...data,
+        nodeId: subagentNodeId,
+        subagent_id: subagentId,
+      });
     };
 
     // Capture the sub-agent's last assistant message + tool-call count
@@ -201,9 +214,15 @@ export function makeSpawnSubagent(
         // No workflow document for a sub-agent. Empty string is the
         // backend's accepted sentinel for "no workflow context".
         workflow_sha: "",
-        // The system prompt already lands as a `role:'system'` message
-        // via the backend's own persistMessage path (line ~462 in
-        // backend.ts). We don't seed manually; one row per turn.
+        // The caller (the parent's LLM) constructed the tool call
+        // expecting a specific context shape. Suppress framework
+        // injection (`<protocol>`, skills catalog, env-info, global
+        // persona) so the sub-agent's system prompt is exactly what
+        // the caller passed via `spec.system_prompt` — or empty when
+        // omitted. The skills filter still drives the sub-agent's
+        // available skill files / tool surface; nothing auto-renders
+        // into the system prompt.
+        skipFrameworkSystemPrompt: true,
         env: parentCtx.parentEnv,
         emit: subagentEmit,
         persistMessage,

@@ -81,6 +81,16 @@ export interface StepSnapshot {
   /** Branch index within the parallel parent's `children` list.
    * Populated only for parallel branches. */
   parallelIndex?: number;
+  /** Per-spawn discriminator for sub-agent steps. Populated when the
+   *  step's `nodeId` starts with `__subagent:` — sub-agents emit their
+   *  events under a synthetic nodeId so they don't conflate with the
+   *  parent step's totals in `getStepAggregates`. */
+  subagentId?: string;
+  /** Human label the calling LLM passed via `agent({ description })`,
+   *  surfaced for the UI as a friendly alternative to the raw
+   *  `__subagent:<uuid>` nodeId. Empty when the caller didn't supply
+   *  one. */
+  subagentLabel?: string;
   // ---- what came back (populated by `attachStepAggregates`) ----
   cost?: {
     input_tokens: number;
@@ -120,10 +130,21 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // truthful per-iteration boundary). Cleared on each new
   // `fact.node_started`.
   const firstStepEmittedForNode = new Set<string>();
+  // subagent_id → label captured from `subagent.start` events. Used to
+  // surface a friendly label on each sub-agent's step row (instead of
+  // the raw `__subagent:<uuid>` nodeId).
+  const subagentLabelById = new Map<string, string>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
     const nodeId = stringField(data, "nodeId");
+
+    if (ev.type === "subagent.start") {
+      const sid = stringField(data, "subagent_id");
+      const label = stringField(data, "label");
+      if (sid && label) subagentLabelById.set(sid, label);
+      continue;
+    }
 
     if (ev.type === "fact.node_started") {
       if (nodeId) {
@@ -160,6 +181,18 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (branchMeta) {
         step.parentNodeId = branchMeta.parentNodeId;
         if (branchMeta.parallelIndex !== undefined) step.parallelIndex = branchMeta.parallelIndex;
+      }
+      // Sub-agent steps: the `__subagent:<id>` nodeId is a synthetic
+      // namespace (chosen so the SQL aggregator doesn't conflate
+      // sub-agent cost with the parent's calling node). Stamp the
+      // discriminator + the operator-friendly label so the UI can
+      // render `agent · <label>` in place of the raw uuid.
+      const SUBAGENT_PREFIX = "__subagent:";
+      if (step.nodeId.startsWith(SUBAGENT_PREFIX)) {
+        const sid = step.nodeId.slice(SUBAGENT_PREFIX.length);
+        step.subagentId = sid;
+        const label = subagentLabelById.get(sid);
+        if (label) step.subagentLabel = label;
       }
       steps.push(step);
       if (nodeId) firstStepEmittedForNode.add(nodeId);

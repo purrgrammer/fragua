@@ -229,6 +229,13 @@ export interface StepSnapshot {
   parentNodeId?: string;
   /** Branch index within the parallel parent's `children` list. */
   parallelIndex?: number;
+  /** Per-spawn discriminator for sub-agent steps. Set when nodeId
+   * starts with `__subagent:`. */
+  subagentId?: string;
+  /** Operator-friendly label the calling LLM passed via
+   * `agent({ description })`. Surface this instead of the raw
+   * `__subagent:<uuid>` nodeId when present. */
+  subagentLabel?: string;
   cost?: {
     input_tokens: number;
     output_tokens: number;

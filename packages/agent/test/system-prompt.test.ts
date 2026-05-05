@@ -262,12 +262,15 @@ describe("materialiseForChild", () => {
     expect(out.effectiveSkills).toEqual([]);
   });
 
-  test("replaces persona when spec.system_prompt is set; protocol block is reapplied", () => {
+  test("uses spec.system_prompt verbatim — no framework wraps", () => {
+    // Caller-owns-the-system-prompt rule: when spec.system_prompt is
+    // set we use it as-is. No `<protocol>` wrap, no skills catalog,
+    // no framework injection. If the caller wants the abort contract
+    // they include it themselves. (Earlier behaviour wrapped — was
+    // changed when sub-agents stopped inheriting the parent's
+    // assembled prompt; see the file-level docstring.)
     const out = materialiseForChild({ system_prompt: "REVIEWER" }, parentSystemPrompt, parentSkills);
-    expect(out.systemPrompt).toContain("REVIEWER");
-    expect(out.systemPrompt).not.toContain("PARENT BASE PERSONA");
-    expect(out.systemPrompt).toContain("<protocol>");
-    expect(out.systemPrompt).toContain("<abort>reason</abort>");
+    expect(out.systemPrompt).toBe("REVIEWER");
   });
 
   test("filters skills to spec.skills set; empty / unset spec.skills means no skills", () => {
@@ -283,19 +286,25 @@ describe("materialiseForChild", () => {
     expect(out.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
   });
 
-  test("override + skills renders a skills catalog block alongside the protocol and the override persona", () => {
+  test("override + skills: catalog above persona — sub-agent needs to know what skills it can invoke", () => {
+    // Layer order matches `buildSystemPrompt`: extensions (skills
+    // catalog) sit above the base (persona), so the sub-agent reads
+    // the available-skills block before the role framing.
     const out = materialiseForChild({ system_prompt: "REVIEWER", skills: ["a"] }, parentSystemPrompt, parentSkills);
     expect(out.systemPrompt).toContain("REVIEWER");
     expect(out.systemPrompt).toContain("<available_skills>");
     expect(out.systemPrompt).toContain("a skill description");
-    expect(out.systemPrompt).toContain("<protocol>");
-    // Protocol sits above the skills catalog (top-down: protocol →
-    // skills → persona) — matches `buildSystemPrompt` layering.
-    const protocolIdx = out.systemPrompt.indexOf("<protocol>");
-    const skillsIdx = out.systemPrompt.indexOf("<available_skills>");
+    expect(out.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
     const personaIdx = out.systemPrompt.indexOf("REVIEWER");
-    expect(protocolIdx).toBeGreaterThanOrEqual(0);
-    expect(skillsIdx).toBeGreaterThan(protocolIdx);
+    const skillsIdx = out.systemPrompt.indexOf("<available_skills>");
     expect(personaIdx).toBeGreaterThan(skillsIdx);
+  });
+
+  test("skills with no spec.system_prompt: bare skills catalog is the entire prompt", () => {
+    const out = materialiseForChild({ skills: ["a"] }, parentSystemPrompt, parentSkills);
+    expect(out.systemPrompt).toContain("<available_skills>");
+    expect(out.systemPrompt).toContain("a skill description");
+    // No persona injected — just the catalog.
+    expect(out.systemPrompt).not.toContain("PARENT BASE PERSONA");
   });
 });
