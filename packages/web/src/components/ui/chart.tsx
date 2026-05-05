@@ -257,14 +257,9 @@ function ChartLegendContent({
   payload,
   verticalAlign = "bottom",
   nameKey,
-  itemSorter,
 }: React.ComponentProps<"div"> & {
   hideIcon?: boolean;
   nameKey?: string;
-  /** Sort key for legend items — mirrors the tooltip's `itemSorter`
-   * prop so both surfaces can use the same ranking and stay in
-   * lockstep. Items render ascending by the returned number. */
-  itemSorter?: (item: NonNullable<RechartsPrimitive.DefaultLegendContentProps["payload"]>[number]) => number;
 } & RechartsPrimitive.DefaultLegendContentProps) {
   const { config } = useChart();
 
@@ -273,11 +268,10 @@ function ChartLegendContent({
   }
 
   const visibleItems = payload.filter((item) => item.type !== "none");
-  const orderedItems = itemSorter ? [...visibleItems].sort((a, b) => itemSorter(a) - itemSorter(b)) : visibleItems;
 
   return (
     <div className={cn("flex items-center justify-center gap-4", verticalAlign === "top" ? "pb-3" : "pt-3", className)}>
-      {orderedItems.map((item, index) => {
+      {visibleItems.map((item, index) => {
         const key = `${nameKey ?? item.dataKey ?? "value"}`;
         const itemConfig = getPayloadConfigFromPayload(config, item, key);
 

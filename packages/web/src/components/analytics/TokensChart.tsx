@@ -104,7 +104,16 @@ export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: To
               />
             }
           />
-          <ChartLegend content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />} />
+          <ChartLegend
+            content={({ payload: rawPayload, verticalAlign }) => (
+              <ChartLegendContent
+                payload={[...(rawPayload ?? [])].sort(
+                  (a, b) => rankOf(String(a.dataKey ?? "")) - rankOf(String(b.dataKey ?? "")),
+                )}
+                verticalAlign={verticalAlign}
+              />
+            )}
+          />
           {TOKEN_KEYS.map((key) => (
             <Bar
               key={key}

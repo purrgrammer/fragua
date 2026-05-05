@@ -114,13 +114,22 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
               />
             }
           />
-          {/* Legend ordering matches the tooltip + the bar stack order
-           * (Input · Cache write · Cache read · Output). Without the
-           * itemSorter recharts orders by data-key add order, which
-           * the tooltip already rectifies but the legend doesn't. */}
+          {/* Function form of `content` so recharts hands us the
+           * built `payload` directly; we reorder by SPEND_KEYS rank and
+           * forward to ChartLegendContent. Tooltip + bar stack + legend
+           * all share the same order (Input · Cache write · Cache read ·
+           * Output). The element form would clobber an `itemSorter` prop
+           * on cloneElement — the function form bypasses that. */}
           <ChartLegend
-            content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />}
-            className="-translate-y-1 justify-center gap-3"
+            content={({ payload: rawPayload, verticalAlign }) => (
+              <ChartLegendContent
+                payload={[...(rawPayload ?? [])].sort(
+                  (a, b) => rankOf(String(a.dataKey ?? "")) - rankOf(String(b.dataKey ?? "")),
+                )}
+                verticalAlign={verticalAlign}
+                className="-translate-y-1 justify-center gap-3"
+              />
+            )}
           />
           {SPEND_KEYS.map((key) => (
             <Bar

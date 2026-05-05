@@ -88,7 +88,16 @@ export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: Cac
               />
             }
           />
-          <ChartLegend content={<ChartLegendContent itemSorter={(item) => rankOf(String(item.dataKey ?? ""))} />} />
+          <ChartLegend
+            content={({ payload: rawPayload, verticalAlign }) => (
+              <ChartLegendContent
+                payload={[...(rawPayload ?? [])].sort(
+                  (a, b) => rankOf(String(a.dataKey ?? "")) - rankOf(String(b.dataKey ?? "")),
+                )}
+                verticalAlign={verticalAlign}
+              />
+            )}
+          />
           {CACHE_KEYS.map((key) => (
             <Bar
               key={key}
