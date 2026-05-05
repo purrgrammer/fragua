@@ -1,33 +1,34 @@
-// makeSpawnSubagent — the per-call factory that connects a parent
-// codergen turn's `agent` tool to the child run lifecycle.
+// makeSpawnSubagent — the per-call factory that runs a sub-agent
+// inline as a codergen call against the parent's event stream.
 //
-// The 9-step protocol from `docs/proposals/agent-tool.md`:
+// A sub-agent is NOT a run. It can't be enqueued, can't be paused or
+// resumed independently, and has no `run_state` row. It is a tool
+// implementation that happens to use a separate LLM context window.
+// All of its observability (`llm.start`, `llm.toolcall_*`,
+// `cost.recorded`, `agent.turn_*`) flows onto the PARENT's event
+// stream with a `subagent_id` discriminator stamped on the payload.
+// Cost flows naturally into the parent's `metrics` because the
+// parent's handler-bridge accumulates every `cost.recorded` event the
+// emit channel sees, regardless of `subagent_id`.
 //
-//   1. Filter parent skills by `spec.skills` (intersection by name).
-//   2. Materialise the child's system prompt (override or inherit).
-//   3. Compute the child's tool pool (parent's pool, narrowed by
-//      `spec.allowed_tools` / `spec.disallowed_tools`, then strip
-//      `agent` so children can't recursively spawn).
-//   4. Insert a conversation row keyed by a fresh `child_run_id`.
-//   5. Append `fact.subagent.spawned` to the PARENT's stream
-//      (observability writer — no version bump on the parent).
-//   6. Drive the child run to terminal via runConversation.
-//   7. Read the child's last assistant message + terminal status.
-//   8. Append `fact.subagent.completed` to the parent's stream.
-//   9. Return the summary payload to the `agent` tool.
+// Two new observability event types bracket the slice:
 //
-// Parent cancellation propagates through `spec.signal` → an
-// `intent.cancel_requested` on the child, which the conversation
-// runner picks up via the standard fold.
+//   subagent.start { subagent_id, parent_node_id, iteration, label?, provider, model }
+//   subagent.end   { subagent_id, status, summary_chars, total_tool_calls, halt_reason? }
+//
+// No `fact.*` events for sub-agents — `fact.run_*` and `fact.node_*`
+// carry run-level / node-level semantics that fire long tails of
+// reducer / dispatcher / sweep / analytics logic on something that
+// isn't a run or a node.
 
 import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
-import type { CodergenBackend } from "@swarm/core";
-import type { IEventStore, ObservabilityEvent } from "@swarm/store";
+import type { CodergenBackend, ContextMap, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
+import { fail } from "@swarm/core";
+import type { IEventStore } from "@swarm/store";
 import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@swarm/workspace";
 import { stripAgentTool } from "@swarm/workspace";
-import { runConversation } from "./conversation.ts";
 
 export interface SpawnSubagentDeps {
   store: IEventStore;
@@ -42,10 +43,29 @@ export interface SpawnSubagentParentCtx {
   parentIteration: number;
   parentSystemPrompt: string;
   parentSkills: readonly Skill[];
+  /** Provider/model the parent codergen call resolved to. The child
+   *  inherits both verbatim — no per-call model selection from the LLM. */
+  parentProvider: string;
+  parentModel: string;
+  /** Execution environment from the parent codergen call. The child's
+   *  tool pool runs against the same env (no per-call worktree
+   *  isolation in V1). */
+  parentEnv: ExecutionEnvironment;
+  /** Forwards every observability event the sub-agent emits onto the
+   *  parent's stream with `subagent_id` stamped on the payload. The
+   *  parent's handler-bridge supplies this — typically wraps
+   *  `appendObservabilityEvents(parentRunId, …)`. Cost events flow
+   *  through unchanged so the parent's terminal `fact.node_completed`
+   *  rolls them in. */
+  parentEmit: (type: EventType, data: Record<string, unknown>) => Promise<void>;
   parentAllowedTools?: readonly string[];
   parentDeniedTools?: readonly string[];
-  cwd?: string;
 }
+
+/** Distinct nodeId namespace for sub-agent transcript rows in the
+ *  parent's `messages` table. Keeps the parent's main-thread
+ *  `priorMessages` load uncontaminated by sub-agent turns. */
+const SUBAGENT_NODE_PREFIX = "__subagent:";
 
 /** Build a `spawnSubagent` closure scoped to one parent codergen call.
  *  Wired by the daemon into `PiCodergenBackend.spawnSubagentFactory`
@@ -55,7 +75,12 @@ export function makeSpawnSubagent(
   parentCtx: SpawnSubagentParentCtx,
 ): (spec: SubagentSpec) => Promise<SubagentResult> {
   return async (spec) => {
-    // Step 2: build the child's system prompt + skill catalog.
+    const subagentId = randomUUID();
+    const subagentNodeId = `${SUBAGENT_NODE_PREFIX}${subagentId}`;
+
+    // Materialise the child's system prompt + filter parent skills by
+    // `spec.skills` (intersection by name). System-prompt override on
+    // the spec wins outright.
     const { systemPrompt: childSystemPrompt, effectiveSkills } = materialiseForChild(
       {
         ...(spec.system_prompt !== undefined ? { system_prompt: spec.system_prompt } : {}),
@@ -65,14 +90,11 @@ export function makeSpawnSubagent(
       parentCtx.parentSkills,
     );
 
-    // Step 3: child's tool pool. Start from parent allow/deny;
-    // `spec.allowed_tools` / `spec.disallowed_tools` narrow further;
-    // strip `agent` so children can't nest sub-agents.
+    // Tool pool: parent's pool, narrowed by `spec.allowed_tools` /
+    // `spec.disallowed_tools`, then strip `agent` so children can't
+    // recursively spawn.
     const allow = spec.allowed_tools ?? parentCtx.parentAllowedTools;
     const deny = spec.disallowed_tools ?? parentCtx.parentDeniedTools;
-    const selectOpts: { allow?: readonly string[]; deny?: readonly string[] } = {};
-    if (allow !== undefined) selectOpts.allow = allow;
-    if (deny !== undefined) selectOpts.deny = deny;
     const childPool: AnyTool[] = stripAgentTool(
       deps.registry.select({
         ...(allow !== undefined ? { allow: [...allow] } : {}),
@@ -80,142 +102,151 @@ export function makeSpawnSubagent(
       }),
     );
 
-    // Step 4: enqueue the child as a conversation run.
-    const childRunId = `conv-${randomUUID()}`;
-    deps.store.enqueueConversation({
-      runId: childRunId,
-      parentRunId: parentCtx.parentRunId,
-      parentNodeId: parentCtx.parentNodeId,
-      parentIteration: parentCtx.parentIteration,
-      ...(parentCtx.cwd !== undefined ? { cwd: parentCtx.cwd } : {}),
-      initialRouting: {
-        input: spec.prompt,
-        "agent.system_prompt": childSystemPrompt,
-        "agent.tool_pool": childPool.map((t) => t.name),
-        "agent.skills": effectiveSkills.map((s) => s.name),
-        ...(spec.max_iterations !== undefined ? { "agent.max_iterations": spec.max_iterations } : {}),
-        ...(spec.description !== undefined ? { "agent.label": spec.description } : {}),
+    // Synthetic node passed to the codergen backend. The backend
+    // reads `system_prompt`, `allowed_tools`, `skills`, `llm_provider`,
+    // `llm_model` off `node.attrs`. The nodeId itself isn't stored
+    // anywhere persistent — it's only used to namespace messages in
+    // the parent's transcript table.
+    const node: Node = {
+      id: subagentNodeId,
+      shape: "box",
+      classes: [],
+      attrs: {
+        ...(childSystemPrompt.length > 0 ? { system_prompt: childSystemPrompt } : {}),
+        allowed_tools: childPool.map((t) => t.name),
+        ...(effectiveSkills.length > 0 ? { skills: effectiveSkills.map((s) => s.name) } : {}),
+        llm_provider: parentCtx.parentProvider,
+        llm_model: parentCtx.parentModel,
+        // No AGENTS.md auto-load — the parent's system prompt already
+        // framed the persona; layering the project primer on top would
+        // just inflate context.
+        context_files: [],
       },
-    });
+    };
 
-    // Step 5: spawn fact on the parent's stream (observability).
-    const spawnedPayload: Record<string, unknown> = {
+    // Subagent-boundary marker on the parent's stream.
+    await parentCtx.parentEmit("subagent.start", {
+      subagent_id: subagentId,
       parent_node_id: parentCtx.parentNodeId,
       iteration: parentCtx.parentIteration,
-      child_run_id: childRunId,
-    };
-    if (spec.description !== undefined) spawnedPayload["label"] = spec.description;
-    deps.store.appendObservabilityEvents(parentCtx.parentRunId, [
-      { type: "fact.subagent.spawned", payload: spawnedPayload },
-    ]);
+      provider: parentCtx.parentProvider,
+      model: parentCtx.parentModel,
+      ...(spec.description !== undefined ? { label: spec.description } : {}),
+    });
 
-    // Wire abort propagation. A parent-side abort fires
-    // `intent.cancel_requested` on the child, which the conversation
-    // runner picks up on the next fold. We don't await the cancel
-    // synchronously — the child's own teardown handles it.
-    const onAbort = () => {
-      try {
-        deps.store.appendIntent(childRunId, {
-          type: "intent.cancel_requested",
-          payload: { reason: "parent cancelled" },
-        });
-      } catch {
-        // best-effort
+    // Forward every observability event the sub-agent emits to the
+    // parent's stream with `subagent_id` stamped on the payload. Cost
+    // events ride through unchanged — the parent's handler-bridge sees
+    // them and accumulates them into the parent node's
+    // `fact.node_completed`, so spend attributes correctly to the
+    // calling node.
+    const subagentEmit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
+      await parentCtx.parentEmit(type, { ...data, subagent_id: subagentId });
+    };
+
+    // Capture the sub-agent's last assistant message + tool-call count
+    // off the persistMessage stream as it lands. Each sub-agent
+    // message also lands in the parent's `messages` table under the
+    // distinct `subagentNodeId` so it doesn't pollute the parent's
+    // main-thread `priorMessages` on subsequent dispatches.
+    let lastAssistantSummary = "";
+    let totalToolCalls = 0;
+    const persistMessage = (message: AgentMessage): void => {
+      if (message.role === "assistant" && Array.isArray(message.content)) {
+        const blocks = message.content as Array<{ type: string; text?: string }>;
+        const text = blocks
+          .filter((b) => b.type === "text" && typeof b.text === "string")
+          .map((b) => b.text as string)
+          .join("\n");
+        if (text.length > 0) lastAssistantSummary = text;
+        for (const b of blocks) if (b.type === "toolCall") totalToolCalls += 1;
       }
-    };
-    if (spec.signal) {
-      if (spec.signal.aborted) onAbort();
-      else spec.signal.addEventListener("abort", onAbort, { once: true });
-    }
-
-    // Step 6: drive the child to terminal.
-    try {
-      await runConversation(childRunId, {
-        store: deps.store,
-        backend: deps.backend,
-        shutdownSignal: deps.shutdownSignal,
+      deps.store.appendMessage(parentCtx.parentRunId, {
+        content: message,
+        nodeId: subagentNodeId,
+        iteration: 0,
       });
+    };
+
+    // Cancellation: thread the tool's signal + the daemon shutdown
+    // signal into a fresh AbortController that the codergen call
+    // listens on. No DB intent — there's no child run to cancel via
+    // the standard fold; abort propagation is purely in-process.
+    const childCtrl = new AbortController();
+    const onParentAbort = () => childCtrl.abort();
+    if (spec.signal) {
+      if (spec.signal.aborted) childCtrl.abort();
+      else spec.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+    const onShutdown = () => childCtrl.abort();
+    if (deps.shutdownSignal.aborted) childCtrl.abort();
+    else deps.shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+
+    let outcome: Outcome;
+    try {
+      outcome = await deps.backend.run({
+        node,
+        prompt: spec.prompt,
+        // Sub-agent gets a fresh context — no inherited routing
+        // substitutions. The LLM constructed the prompt to be
+        // self-contained.
+        context: {} as ContextMap,
+        // Distinct thread keeps the sub-agent's pi-ai message store
+        // separate from the parent's main thread. The backend keys its
+        // in-process MessageStore by (runId, threadId).
+        thread_id: subagentNodeId,
+        fidelity: "full",
+        signal: childCtrl.signal,
+        run_id: parentCtx.parentRunId,
+        // No workflow document for a sub-agent. Empty string is the
+        // backend's accepted sentinel for "no workflow context".
+        workflow_sha: "",
+        // The system prompt already lands as a `role:'system'` message
+        // via the backend's own persistMessage path (line ~462 in
+        // backend.ts). We don't seed manually; one row per turn.
+        env: parentCtx.parentEnv,
+        emit: subagentEmit,
+        persistMessage,
+        ...(spec.max_iterations !== undefined ? { iteration: { n: 0, max: spec.max_iterations } } : {}),
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      outcome = fail(detail);
     } finally {
-      if (spec.signal) spec.signal.removeEventListener("abort", onAbort);
+      if (spec.signal) spec.signal.removeEventListener("abort", onParentAbort);
+      deps.shutdownSignal.removeEventListener("abort", onShutdown);
     }
 
-    // Step 7: read terminal status + last assistant message.
-    const childState = deps.store.getState(childRunId);
-    const messages = deps.store.getMessages(childRunId);
-    const summary = lastAssistantText(messages.map((m) => m.content));
-    const totalToolCalls = countToolCalls(messages.map((m) => m.content));
-    const status = childState?.status ?? "halted";
+    const status = mapOutcomeStatus(outcome, childCtrl.signal.aborted);
+    const haltReason = deriveHaltReason(outcome, status);
 
-    // Step 8: completion fact on the parent's stream.
-    const completedEvent: ObservabilityEvent = {
-      type: "fact.subagent.completed",
-      payload: {
-        child_run_id: childRunId,
-        status,
-        summary_chars: summary.length,
-        total_tool_calls: totalToolCalls,
-      },
-    };
-    deps.store.appendObservabilityEvents(parentCtx.parentRunId, [completedEvent]);
+    await parentCtx.parentEmit("subagent.end", {
+      subagent_id: subagentId,
+      status,
+      summary_chars: lastAssistantSummary.length,
+      total_tool_calls: totalToolCalls,
+      ...(haltReason !== undefined ? { halt_reason: haltReason } : {}),
+    });
 
-    // Step 9: surface the result to the `agent` tool.
     const result: SubagentResult = {
-      summary,
-      childRunId,
+      summary: lastAssistantSummary,
+      subagentId,
       status,
       totalToolCalls,
     };
-    if (status === "halted") {
-      const halt = deriveHaltReason(deps.store, childRunId);
-      if (halt !== undefined) result.haltReason = halt;
-    }
+    if (haltReason !== undefined) result.haltReason = haltReason;
     return result;
   };
 }
 
-/** Concatenate every text block on the most recent assistant message.
- *  Returns "" when no assistant message landed (the child terminated
- *  before producing one). */
-function lastAssistantText(messages: AgentMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m == null) continue;
-    if (m.role !== "assistant") continue;
-    if (!Array.isArray(m.content)) continue;
-    const parts = m.content as Array<{ type: string; text?: string }>;
-    return parts
-      .filter((p) => p.type === "text" && typeof p.text === "string")
-      .map((p) => p.text)
-      .join("\n");
-  }
-  return "";
+function mapOutcomeStatus(outcome: Outcome, aborted: boolean): SubagentResult["status"] {
+  if (aborted) return "cancelled";
+  if (outcome.status === "success" || outcome.status === "partial_success") return "completed";
+  return "halted";
 }
 
-/** Count tool calls across the child's transcript. Each assistant
- *  message with a `toolCall` block counts; multiple tool blocks on one
- *  message count individually. */
-function countToolCalls(messages: AgentMessage[]): number {
-  let n = 0;
-  for (const m of messages) {
-    if (m.role !== "assistant") continue;
-    if (!Array.isArray(m.content)) continue;
-    for (const block of m.content as Array<{ type: string }>) {
-      if (block.type === "toolCall") n += 1;
-    }
-  }
-  return n;
-}
-
-/** Pull the most recent halt reason off the child's event log. The
- *  conversation runner writes one `fact.run_halted` per terminal halt;
- *  we read it back so the parent sees a structured failure cause. */
-function deriveHaltReason(store: IEventStore, runId: string): SubagentResult["haltReason"] {
-  const events = store.getEvents(runId);
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e?.type !== "fact.run_halted") continue;
-    const reason = (e.payload as { reason?: unknown } | null)?.reason;
-    if (typeof reason === "string") return reason as SubagentResult["haltReason"];
-  }
-  return undefined;
+function deriveHaltReason(outcome: Outcome, status: SubagentResult["status"]): string | undefined {
+  if (status === "completed") return undefined;
+  if (outcome.provider_error) return "provider_exhausted";
+  return outcome.failure_reason ?? undefined;
 }

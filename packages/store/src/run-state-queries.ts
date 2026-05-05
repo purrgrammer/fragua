@@ -16,7 +16,7 @@
 // where they care about recency.
 
 import type { Database } from "bun:sqlite";
-import type { RunKind, RunStatus } from "@swarm/types";
+import type { RunStatus } from "@swarm/types";
 
 // ─────────────────────────────────────────────────────────────────────
 // Row types
@@ -26,16 +26,8 @@ export interface RunStateRow {
   run_id: string;
   version: number;
   status: RunStatus;
-  /** v5 discriminator. Workflow runs walk a graph; conversation runs
-   *  drive a single codergen loop. */
-  kind: RunKind;
   current_node: string | null;
-  /** Nullable in v5: conversation runs carry no DOT document. */
-  workflow_sha: string | null;
-  /** Parent linkage for conversation runs. NULL for workflow runs. */
-  parent_run_id: string | null;
-  parent_node_id: string | null;
-  parent_iteration: number | null;
+  workflow_sha: string;
   schema_version: number;
   routing: string;
   metrics: string;
@@ -72,8 +64,7 @@ export interface WakeCandidateRow {
 // ─────────────────────────────────────────────────────────────────────
 
 const SELECT_RUN_STATE_FULL_SQL = `
-  SELECT run_id, version, status, kind, current_node, workflow_sha,
-         parent_run_id, parent_node_id, parent_iteration,
+  SELECT run_id, version, status, current_node, workflow_sha,
          schema_version, routing, metrics, next_seq, last_applied_seq,
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
@@ -210,12 +201,11 @@ export function selectWakeCandidates(
 
 const INSERT_RUN_STATE_SQL = `
   INSERT INTO run_state (
-    run_id, version, status, kind, current_node, workflow_sha,
-    parent_run_id, parent_node_id, parent_iteration,
+    run_id, version, status, current_node, workflow_sha,
     schema_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
     cwd, workflow_name, workflow_scope, workflow_path, schedule_id
-  ) VALUES (?, 1, 'queued', 'workflow', NULL, ?, NULL, NULL, NULL, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -253,90 +243,6 @@ export function insertRunState(
     args.workflowPath,
     args.scheduleId,
   );
-}
-
-const INSERT_CONVERSATION_RUN_SQL = `
-  INSERT INTO run_state (
-    run_id, version, status, kind, current_node, workflow_sha,
-    parent_run_id, parent_node_id, parent_iteration,
-    schema_version, routing, metrics, next_seq, last_applied_seq, priority,
-    enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    cwd, workflow_name, workflow_scope, workflow_path
-  ) VALUES (?, 1, 'queued', 'conversation', NULL, NULL, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL)
-`;
-
-/** Insert a conversation (sub-agent) run row. Distinct from
- *  insertRunState because conversation runs carry no `workflow_sha`
- *  (NULL) and need parent linkage. The writer-side enforcement of
- *  "workflow runs require a non-NULL workflow_sha" lives here
- *  symmetrically: this helper hard-codes workflow_sha to NULL. */
-export function insertConversationRun(
-  db: Database,
-  args: {
-    runId: string;
-    parentRunId: string;
-    parentNodeId: string;
-    parentIteration: number;
-    schemaVersion: number;
-    routing: string;
-    metrics: string;
-    priority: number;
-    enqueuedAt: number;
-    readyAt: number;
-    updatedAt: number;
-    cwd: string | null;
-  },
-): void {
-  db.query(INSERT_CONVERSATION_RUN_SQL).run(
-    args.runId,
-    args.parentRunId,
-    args.parentNodeId,
-    args.parentIteration,
-    args.schemaVersion,
-    args.routing,
-    args.metrics,
-    args.priority,
-    args.enqueuedAt,
-    args.readyAt,
-    args.updatedAt,
-    args.cwd,
-  );
-}
-
-const SELECT_CHILD_RUN_IDS_SQL = `
-  SELECT run_id FROM run_state
-   WHERE parent_run_id = ?
-   ORDER BY enqueued_at ASC, run_id ASC
-`;
-
-/** Child run ids for a given parent, oldest-first. Backed by
- *  `idx_run_state_parent` (partial index, NULL parents excluded). */
-export function selectChildRunIds(db: Database, parentRunId: string): string[] {
-  return db
-    .query<{ run_id: string }, [string]>(SELECT_CHILD_RUN_IDS_SQL)
-    .all(parentRunId)
-    .map((r) => r.run_id);
-}
-
-const SELECT_ORPHAN_CHILD_RUN_IDS_SQL = `
-  SELECT c.run_id FROM run_state c
-    JOIN run_state p ON p.run_id = c.parent_run_id
-   WHERE c.parent_run_id IS NOT NULL
-     AND c.status NOT IN ('completed','cancelled','halted','quarantined')
-     AND p.status     IN ('completed','cancelled','halted','quarantined')
-   ORDER BY c.enqueued_at ASC, c.run_id ASC
-`;
-
-/** Conversation runs whose parent has reached a terminal state but
- *  the child itself hasn't. The supervisor's boot sweep cancels each
- *  by appending `intent.cancel_requested`. Backed by
- *  `idx_run_state_parent` for the lookup; the parent terminal-status
- *  filter rides `idx_run_state_status`. */
-export function selectOrphanChildRunIds(db: Database): string[] {
-  return db
-    .query<{ run_id: string }, []>(SELECT_ORPHAN_CHILD_RUN_IDS_SQL)
-    .all()
-    .map((r) => r.run_id);
 }
 
 const UPDATE_RUN_STATE_TITLE_SQL = `

@@ -251,9 +251,14 @@ describe("materialiseForChild", () => {
   const parentSystemPrompt = "PARENT BASE PERSONA\n<protocol>\n…\n</protocol>";
   const parentSkills: Skill[] = [makeSkill("a"), makeSkill("b"), makeSkill("c")];
 
-  test("inherits parent system prompt verbatim when spec.system_prompt is undefined", () => {
+  test("returns empty per-node prompt when spec.system_prompt is undefined (backend builds fresh minimal prompt)", () => {
+    // Earlier behaviour was to inherit the parent's *fully-assembled*
+    // prompt (10s of KB of tools/skills/context-files for a pool the
+    // sub-agent doesn't even have). We now return empty so the
+    // codergen backend builds a fresh minimal prompt for the child's
+    // own pool — global framework persona stays automatic.
     const out = materialiseForChild({}, parentSystemPrompt, parentSkills);
-    expect(out.systemPrompt).toBe(parentSystemPrompt);
+    expect(out.systemPrompt).toBe("");
     expect(out.effectiveSkills).toEqual([]);
   });
 

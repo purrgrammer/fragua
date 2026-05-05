@@ -25,8 +25,11 @@ export interface AgentToolArgs {
 }
 
 export interface AgentToolData {
-  child_run_id: string;
-  status: string;
+  /** Per-spawn discriminator. Stamped on every observability event the
+   *  sub-agent emitted (`subagent_id` payload field) and bracketed by
+   *  `subagent.start` / `subagent.end` events on the parent's stream. */
+  subagent_id: string;
+  status: "completed" | "halted" | "cancelled";
   halt_reason?: string;
   total_tool_calls: number;
 }
@@ -34,7 +37,7 @@ export interface AgentToolData {
 export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
   name: "agent",
   description:
-    "Spawn an isolated sub-agent that runs in its own context window. The sub-agent sees only the `prompt` you provide \u2014 no parent transcript. It runs in its own `run_id` (kind='conversation') with full event-stream replay; you receive only its final assistant message. `agent` itself is structurally stripped from the sub-agent's tool pool (no nesting). Use to delegate a self-contained task with a fresh context window.",
+    "Spawn an isolated sub-agent that runs in its own context window. The sub-agent sees only the `prompt` you provide \u2014 no parent transcript. Its observability (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) lands on the parent's event stream with a `subagent_id` discriminator; cost rolls into the parent's metrics naturally. You receive only its final assistant message plus the discriminator. `agent` itself is structurally stripped from the sub-agent's tool pool (no nesting). Use to delegate a self-contained task with a fresh context window.",
   parameters: Type.Object(
     {
       description: Type.Optional(
@@ -45,7 +48,8 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       }),
       system_prompt: Type.Optional(
         Type.String({
-          description: "Override the parent's system prompt. Omit to inherit the parent's verbatim.",
+          description:
+            "Optional per-call system prompt. Omit to let the framework build a fresh minimal prompt for the sub-agent's own tool pool — the parent's full assembled prompt is NOT inherited (it would carry tools the sub-agent can't use).",
         }),
       ),
       allowed_tools: Type.Optional(
@@ -95,7 +99,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
 
       const result = await ctx.spawnSubagent(spec);
       const data: AgentToolData = {
-        child_run_id: result.childRunId,
+        subagent_id: result.subagentId,
         status: result.status,
         total_tool_calls: result.totalToolCalls,
       };

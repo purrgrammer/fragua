@@ -49,16 +49,17 @@ describe("migrate — schema version handling", () => {
   });
 });
 
-describe("migrate — v4 → v5 conversation kind", () => {
-  /** Build a minimal v4-shaped run_state table (pre-v5 column set) so we
-   *  can exercise the v4→v5 step delta in isolation. The v5 migration
-   *  rebuilds the table; we only need the columns the rebuild reads. */
-  function seedV4Db(): Database {
+describe("migrate — v6 → v7 drops conversation-run scaffolding", () => {
+  /** Build a minimal v6-shaped run_state table (with the v5 conversation
+   *  columns + the v6 schedule_id) so we can exercise the v6 → v7 step
+   *  delta. v7 deletes any `kind='conversation'` rows, drops the kind +
+   *  parent_* columns, and restores `workflow_sha NOT NULL`. */
+  function seedV6Db(): Database {
     const db = freshDb();
     db.exec("PRAGMA foreign_keys = OFF");
     db.exec(`
       CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL) STRICT;
-      INSERT INTO schema_version (id, version) VALUES (1, 4);
+      INSERT INTO schema_version (id, version) VALUES (1, 6);
       CREATE TABLE workflows (sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
       INSERT INTO workflows (sha, name, dot_source, created_at) VALUES ('wf-1', 't', 'digraph {}', 0);
       CREATE TABLE run_state (
@@ -68,8 +69,12 @@ describe("migrate — v4 → v5 conversation kind", () => {
           'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
           'completed','cancelled','halted','quarantined'
         )),
+        kind TEXT NOT NULL DEFAULT 'workflow' CHECK (kind IN ('workflow','conversation')),
         current_node TEXT,
-        workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+        workflow_sha TEXT REFERENCES workflows(sha),
+        parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+        parent_node_id TEXT,
+        parent_iteration INTEGER,
         schema_version INTEGER NOT NULL,
         routing TEXT NOT NULL CHECK (length(routing) < 8192),
         metrics TEXT NOT NULL,
@@ -88,6 +93,7 @@ describe("migrate — v4 → v5 conversation kind", () => {
         workflow_path TEXT,
         base_git_sha TEXT,
         branch TEXT,
+        schedule_id TEXT,
         total_cost_usd REAL GENERATED ALWAYS AS
           (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
         billed_tokens INTEGER GENERATED ALWAYS AS
@@ -97,60 +103,45 @@ describe("migrate — v4 → v5 conversation kind", () => {
     return db;
   }
 
-  test("v4 → v5 walks; existing rows get kind='workflow', workflow_sha unchanged, parent columns NULL", () => {
-    const db = seedV4Db();
+  test("v6 → v7 deletes kind='conversation' rows; preserves workflow rows; columns are gone", () => {
+    const db = seedV6Db();
+    // Seed: one workflow run + one conversation run (the latter must be
+    // deleted by the migration).
     db.query(
-      `INSERT INTO run_state (run_id, version, status, current_node, workflow_sha, schema_version,
+      `INSERT INTO run_state (run_id, version, status, kind, current_node, workflow_sha, schema_version,
          routing, metrics, priority, enqueued_at, ready_at, updated_at)
-       VALUES (?, 1, 'queued', NULL, ?, 4, '{}', '{}', 0, 0, 0, 0)`,
-    ).run("r-old-1", "wf-1");
+       VALUES (?, 1, 'queued', 'workflow', NULL, ?, 6, '{}', '{}', 0, 0, 0, 0)`,
+    ).run("r-wf", "wf-1");
     db.query(
-      `INSERT INTO run_state (run_id, version, status, current_node, workflow_sha, schema_version,
-         routing, metrics, priority, enqueued_at, ready_at, updated_at)
-       VALUES (?, 2, 'running', 'n1', ?, 4, '{}', '{}', 0, 1, 1, 1)`,
-    ).run("r-old-2", "wf-1");
+      `INSERT INTO run_state (run_id, version, status, kind, current_node, workflow_sha,
+         parent_run_id, parent_node_id, parent_iteration,
+         schema_version, routing, metrics, priority, enqueued_at, ready_at, updated_at)
+       VALUES (?, 1, 'queued', 'conversation', NULL, NULL, ?, ?, ?, 6, '{}', '{}', 0, 0, 0, 0)`,
+    ).run("r-conv", "r-wf", "plan", 0);
 
     migrate(db);
 
     const row = db.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get();
     expect(row?.version).toBe(CURRENT_SCHEMA_VERSION);
 
-    const rows = db
-      .query<
-        {
-          run_id: string;
-          kind: string;
-          workflow_sha: string | null;
-          parent_run_id: string | null;
-          parent_node_id: string | null;
-          parent_iteration: number | null;
-        },
-        []
-      >(
-        `SELECT run_id, kind, workflow_sha, parent_run_id, parent_node_id, parent_iteration
-           FROM run_state ORDER BY run_id`,
-      )
-      .all();
+    const ids = db.query<{ run_id: string }, []>("SELECT run_id FROM run_state ORDER BY run_id").all();
+    expect(ids.map((r) => r.run_id)).toEqual(["r-wf"]);
 
-    expect(rows.length).toBe(2);
-    for (const r of rows) {
-      expect(r.kind).toBe("workflow");
-      expect(r.workflow_sha).toBe("wf-1");
-      expect(r.parent_run_id).toBeNull();
-      expect(r.parent_node_id).toBeNull();
-      expect(r.parent_iteration).toBeNull();
-    }
-    db.close();
-  });
+    // The kind column is gone — querying it errors.
+    expect(() => db.query("SELECT kind FROM run_state").all()).toThrow(/no such column/i);
+    // parent_* columns are gone too.
+    expect(() => db.query("SELECT parent_run_id FROM run_state").all()).toThrow(/no such column/i);
 
-  test("v5 partial parent index is used by EXPLAIN QUERY PLAN for WHERE parent_run_id=?", () => {
-    const db = freshDb();
-    migrate(db);
-    const plan = db
-      .query<{ detail: string }, [string]>("EXPLAIN QUERY PLAN SELECT run_id FROM run_state WHERE parent_run_id = ?")
-      .all("any");
-    const text = plan.map((r) => r.detail).join("\n");
-    expect(text).toContain("idx_run_state_parent");
+    // workflow_sha is back to NOT NULL — verify by inserting NULL throws.
+    expect(() =>
+      db
+        .query(
+          `INSERT INTO run_state (run_id, version, status, current_node, workflow_sha, schema_version,
+           routing, metrics, priority, enqueued_at, ready_at, updated_at)
+         VALUES (?, 1, 'queued', NULL, NULL, 7, '{}', '{}', 0, 0, 0, 0)`,
+        )
+        .run("r-bad"),
+    ).toThrow(/NOT NULL constraint failed: run_state.workflow_sha/);
     db.close();
   });
 });

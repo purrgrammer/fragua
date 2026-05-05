@@ -41,7 +41,6 @@ export type {
   MessageRole,
   QuarantineReason,
   RawEvent,
-  RunKind,
   RunStatus,
 } from "./swarm-events.ts";
 export { ALL_DAEMON_EVENT_TYPES, FEED_EVENT_KINDS } from "./swarm-events.ts";

@@ -251,7 +251,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   let steeringRegistry: SteeringRegistry | undefined;
-  let conversationBackend: PiCodergenBackend | undefined;
   if (useLlm) {
     // `env` is wired per-run via the WorktreeProvisioner below —
     // the backend reads it off `CodergenInput` on each call, so we
@@ -323,36 +322,25 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       skills: discoveredSkills,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
       // Wire the per-call sub-agent spawner. The closure built by
-      // makeSpawnSubagent enqueues a conversation child, drives it via
-      // runConversation, and surfaces the summary to the parent's
-      // `agent` tool. `conversationBackend` is captured by reference —
-      // it's assigned just below — and resolved lazily on each spawn.
+      // makeSpawnSubagent runs the sub-agent's codergen call inline
+      // against the parent's event stream — no child run, no separate
+      // dispatcher path. Each spawn synthesises a one-off backend so
+      // the per-call factory has a `backend` reference that doesn't
+      // capture the parent's per-node backend (which carries
+      // node-scoped attrs irrelevant to the sub-agent).
       spawnSubagentFactory: (parentCtx: SpawnSubagentParentCtx) => {
-        const cb = conversationBackend;
-        if (cb == null) {
-          // Defensive: should never trip because the factory only fires
-          // from inside a codergen call that this same backend created.
-          return async () => {
-            throw new Error("conversationBackend not initialised before spawnSubagent fired");
-          };
-        }
+        const subagentBackend = new PiCodergenBackend(backendOpts);
         return makeSpawnSubagent(
           {
             store,
             registry,
-            backend: cb,
+            backend: subagentBackend,
             shutdownSignal: signalCtrl.signal,
           },
           parentCtx,
         );
       },
     };
-    // Top-level backend used by the executor's runConversation path
-    // for `kind='conversation'` runs. Distinct from the per-codergen-
-    // node backends that flow through the dispatcher: those exist per
-    // graph node so they can carry node-scoped opts; the conversation
-    // path needs one shared instance the executor can call directly.
-    conversationBackend = new PiCodergenBackend(backendOpts);
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
     // The factory receives the first outgoing edge as a legacy-compat
     // hint for tool/transition nodes, but for codergen that would force
@@ -476,7 +464,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       provisioner,
     };
     if (autoTitler.titler) daemonOpts.autoTitler = autoTitler.titler;
-    if (conversationBackend) daemonOpts.codergenBackend = conversationBackend;
     if (timeouts.leakGrace !== undefined) daemonOpts.leakGraceMs = timeouts.leakGrace;
     if (timeouts.shutdownDrain !== undefined) daemonOpts.shutdownDrainMs = timeouts.shutdownDrain;
     if (timeouts.http !== undefined) daemonOpts.defaultHttpTimeoutMs = timeouts.http;

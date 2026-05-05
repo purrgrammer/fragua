@@ -108,8 +108,22 @@ export interface SpawnSubagentParentCtx {
   parentAllowedTools?: readonly string[];
   /** Parent's `denied_tools`. */
   parentDeniedTools?: readonly string[];
-  /** Filesystem cwd inherited from the parent's worktree (if any). */
-  cwd?: string;
+  /** Provider the parent codergen call resolved to. The child inherits
+   *  by default — no per-call model selection from the LLM. */
+  parentProvider: string;
+  /** Model id the parent codergen call resolved to. */
+  parentModel: string;
+  /** Execution environment from the parent codergen call. Sub-agents
+   *  inherit verbatim — no per-call worktree isolation, the
+   *  sub-agent's read/write/edit/bash see the same filesystem the
+   *  parent did. */
+  parentEnv: ExecutionEnvironment;
+  /** Forwards every observability event the sub-agent emits onto the
+   *  parent's stream. The factory layers a `subagent_id` discriminator
+   *  on top before invoking this. The host typically wraps
+   *  `appendObservabilityEvents(parentRunId, …)` here — same channel
+   *  the parent's own `input.emit` writes through. */
+  parentEmit: (type: EventType, data: Record<string, unknown>) => Promise<void>;
 }
 
 export class PiCodergenBackend implements CodergenBackend {
@@ -322,15 +336,28 @@ export class PiCodergenBackend implements CodergenBackend {
     // against it on each spawn.
     Object.assign(swarmContext, { skillCatalog: effectiveSkills });
     if (this.spawnSubagentFactory !== undefined) {
+      // The sub-agent's emit channel: same `input.emit` the parent's
+      // codergen call uses, so sub-agent observability lands on the
+      // parent's stream as a slice. The factory stamps `subagent_id`
+      // on every payload before calling this. When the parent has no
+      // emit (tests / extensions), sub-agents become a no-op stream.
+      const parentEmit = input.emit
+        ? async (type: EventType, data: Record<string, unknown>) => {
+            await input.emit!(type, data);
+          }
+        : async () => {};
       const parentCtx: SpawnSubagentParentCtx = {
         parentRunId: input.run_id,
         parentNodeId: input.node.id,
         parentIteration: input.iteration?.n ?? 0,
         parentSystemPrompt: systemPrompt,
         parentSkills: effectiveSkills,
+        parentProvider: provider,
+        parentModel: modelId,
+        parentEnv: effectiveEnv,
+        parentEmit,
         ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
         ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
-        ...(typeof effectiveEnv.cwd === "function" ? { cwd: effectiveEnv.cwd() } : {}),
       };
       Object.assign(swarmContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
     }
@@ -459,7 +486,12 @@ export class PiCodergenBackend implements CodergenBackend {
     // table is JSON + unbounded (§I9), so full content lives there.
     // Filtered back out before feeding priorMessages to pi-agent-core —
     // pi-ai carries the system prompt separately on each call.
-    if (input.persistMessage && systemPrompt.length > 0) {
+    //
+    // `skipSystemPersist` is the conversation-run path: the caller has
+    // already seeded the system prompt as a message (because
+    // `run_state.routing`'s 8 KB cap can't carry it), so skipping
+    // avoids a duplicate row.
+    if (input.persistMessage && systemPrompt.length > 0 && !input.skipSystemPersist) {
       input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() });
     }
 

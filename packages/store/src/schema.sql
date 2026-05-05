@@ -52,21 +52,8 @@ CREATE TABLE IF NOT EXISTS run_state (
     'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
-  -- Discriminator added in v5. 'workflow' runs walk a DOT graph;
-  -- 'conversation' runs are sub-agents (LLM-spawned via the `agent`
-  -- tool) that drive a single codergen loop with no graph walk.
-  kind TEXT NOT NULL DEFAULT 'workflow' CHECK (kind IN ('workflow','conversation')),
   current_node TEXT,
-  -- Nullable in v5: conversation runs carry no DOT document.
-  -- The NOT NULL invariant for workflow runs is enforced at the writer
-  -- paths (enqueueRun), not by CHECK.
-  workflow_sha TEXT REFERENCES workflows(sha),
-  -- Parent linkage for conversation runs. NULL for workflow runs and
-  -- for top-level runs without a spawning parent. ON DELETE SET NULL
-  -- preserves the child as a free-standing run if its parent is GC'd.
-  parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
-  parent_node_id TEXT,
-  parent_iteration INTEGER,
+  workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
   schema_version INTEGER NOT NULL,
   routing TEXT NOT NULL CHECK (length(routing) < 8192),
   metrics TEXT NOT NULL,
@@ -119,11 +106,6 @@ CREATE INDEX IF NOT EXISTS idx_run_state_status ON run_state(status);
 CREATE INDEX IF NOT EXISTS idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX IF NOT EXISTS idx_run_state_updated ON run_state(updated_at);
 CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
--- Partial index covering parent_run_id lookups (orphan-child sweep,
--- listChildRunIds). NULL rows are excluded — most rows have no parent,
--- so the index stays small.
-CREATE INDEX IF NOT EXISTS idx_run_state_parent
-  ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;

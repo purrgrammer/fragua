@@ -9,12 +9,6 @@
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-/** Discriminator for the kind of run carried by `run_state.kind`.
- * `'workflow'` runs walk a DOT graph; `'conversation'` runs are
- * sub-agents spawned by the `agent` tool from inside a codergen
- * iteration and drive a single codergen loop with no graph walk. */
-export type RunKind = "workflow" | "conversation";
-
 /** Lifecycle states for a run. `paused`, `paused_hitl`, and
  * `quarantined` are operator-actionable; the rest are automatic.
  * Mirrored by `run_state.status` (CHECK constraint in schema.sql)
@@ -125,10 +119,7 @@ export type FactEvent =
   | {
       type: "fact.run_started";
       payload: {
-        /** Null for conversation (sub-agent) runs, which carry no DOT
-         * document. Workflow runs always set this; the writer path
-         * (`enqueueRun`) enforces non-null at insert time. */
-        workflowSha: string | null;
+        workflowSha: string;
         schemaVersion: number;
         startNode: string;
         /** HEAD sha of the run's worktree at provision time. Set when a
@@ -428,43 +419,15 @@ export type FactEvent =
        * provisioner. Lands AFTER the terminal status fact. */
       type: "fact.run_branched";
       payload: { branch: string };
-    }
-  | {
-      /** Observability-only. Emitted on the PARENT's event stream when a
-       * codergen iteration spawns a sub-agent via the `agent` tool. The
-       * child run gets its own `run_state` row keyed by `child_run_id`
-       * with `kind='conversation'` and `parent_run_id` pointing back here.
-       *
-       * Written via `appendObservabilityEvents` (no OCC, no `version`
-       * bump, skipped by `applyFact`'s reducer). Excluded from
-       * `FEED_EVENT_KINDS` because the parent UI surfaces sub-agent
-       * activity as a sub-thread under the parent run, not on the
-       * global Home feed. */
-      type: "fact.subagent.spawned";
-      payload: {
-        parent_node_id: string;
-        iteration: number;
-        child_run_id: string;
-        label?: string;
-      };
-    }
-  | {
-      /** Observability-only. Emitted on the PARENT's event stream when a
-       * sub-agent run reaches a terminal status. Pairs with
-       * `fact.subagent.spawned` (same `child_run_id`); the actual child
-       * lifecycle facts live on the child's own stream and the child's
-       * `run_state` row.
-       *
-       * Written via `appendObservabilityEvents`; not folded into the
-       * parent's projection. */
-      type: "fact.subagent.completed";
-      payload: {
-        child_run_id: string;
-        status: RunStatus;
-        summary_chars: number;
-        total_tool_calls: number;
-      };
     };
+
+// Note: there are no dedicated `fact.subagent.*` events. Sub-agent
+// activity is fully covered by the existing `llm.toolcall_*` lifecycle
+// on the parent's stream — `tool_name="agent"` plus the toolcall
+// result's `data.child_run_id` is the bidirectional link. The child
+// run carries its own complete observability stream (llm.start /
+// toolcall_* / cost.recorded / fact.run_started / fact.node_completed /
+// fact.run_completed) keyed by its own run_id.
 
 export type FactType = FactEvent["type"];
 

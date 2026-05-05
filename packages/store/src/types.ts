@@ -18,7 +18,6 @@ import type {
   IntentType as IntentTypeFromTypes,
   MessageRole as MessageRoleFromTypes,
   QuarantineReason as QuarantineReasonFromTypes,
-  RunKind as RunKindFromTypes,
   RunStatus as RunStatusFromTypes,
 } from "@swarm/types";
 import type {
@@ -63,7 +62,6 @@ export type {
   MessageRole,
   QuarantineReason,
   RawEvent,
-  RunKind,
   RunStatus,
 } from "@swarm/types";
 export { ALL_DAEMON_EVENT_TYPES } from "@swarm/types";
@@ -100,7 +98,6 @@ export type {
 // re-exports above; just keeps function signatures in this file
 // readable without long type-import names.
 type RunStatus = RunStatusFromTypes;
-type RunKind = RunKindFromTypes;
 type EventWriter = EventWriterFromTypes;
 type IntentEvent = IntentEventFromTypes;
 type FactEvent = FactEventFromTypes;
@@ -161,21 +158,8 @@ export interface RunState {
   runId: string;
   version: number;
   status: RunStatus;
-  /** v5 discriminator. Workflow runs walk a graph; conversation runs
-   *  drive a single codergen loop and carry parent linkage. */
-  kind: RunKind;
   currentNode: string | null;
-  /** Nullable in v5: conversation runs have no DOT document. The
-   *  NOT NULL invariant for workflow runs is enforced at the writer
-   *  paths (`enqueueRun`), not by SQL CHECK. */
-  workflowSha: string | null;
-  /** Parent run that spawned this run (only set for conversation
-   *  runs). NULL for top-level workflow runs. */
-  parentRunId: string | null;
-  /** The codergen node id on the parent run that issued the spawn. */
-  parentNodeId: string | null;
-  /** Iteration number on the parent codergen node at spawn time. */
-  parentIteration: number | null;
+  workflowSha: string;
   schemaVersion: number;
   routing: Record<string, unknown>;
   metrics: RunMetrics;
@@ -504,27 +488,6 @@ export interface EnqueueRunParams {
   scheduleId?: string;
 }
 
-/** Insert params for a conversation (sub-agent) run. The runner
- *  fills these from the `agent` tool's spec at spawn time. No
- *  `workflowSha` field — conversation runs carry NULL by definition. */
-export interface EnqueueConversationParams {
-  runId: string;
-  /** Parent run that issued the spawn. Required — conversation runs
-   *  always belong to a parent. */
-  parentRunId: string;
-  /** The codergen node on the parent run that called the `agent` tool. */
-  parentNodeId: string;
-  /** Iteration count of the parent codergen node at spawn time. */
-  parentIteration: number;
-  /** Initial routing keys carrying the spec snapshot (input prompt,
-   *  resolved system prompt, tool pool, skills, max_iterations, label). */
-  initialRouting?: Record<string, unknown>;
-  /** Inherited from the parent's worktree / cwd. Conversation runs
-   *  reuse the parent's filesystem context — no per-child worktree. */
-  cwd?: string;
-  priority?: number;
-}
-
 export interface GetEventsOpts {
   sinceSeq?: number;
   limit?: number;
@@ -628,14 +591,6 @@ export interface IEventWriter {
 
   // ─── Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
-  /**
-   * Enqueue a conversation (sub-agent) run. Distinct from `enqueueRun`
-   * because conversation runs carry no `workflow_sha` and need parent
-   * linkage. No `intent.run_enqueued` event is appended — the parent
-   * already wrote `fact.subagent.spawned` to its own stream as the
-   * genesis record.
-   */
-  enqueueConversation(params: EnqueueConversationParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;
   /**
    * Heal crash damage on daemon startup (requeue 'running' runs,
@@ -821,14 +776,6 @@ export interface IEventReader {
    * model where projects are emergent paths. NULL `cwd` rows are
    * excluded. */
   listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
-  /** Conversation (sub-agent) run ids whose `parent_run_id` matches
-   *  the given parent. Oldest-first. Backed by
-   *  `idx_run_state_parent` (partial index, NULL parents excluded). */
-  listChildRunIds(parentRunId: string): string[];
-  /** Conversation runs whose parent has reached a terminal state but
-   *  the child itself hasn't. Used by the daemon's boot sweep to
-   *  cancel orphan children. */
-  listOrphanChildRunIds(): string[];
 }
 
 export interface IAnalyticsReader {

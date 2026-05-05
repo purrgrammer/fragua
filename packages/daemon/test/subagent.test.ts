@@ -1,14 +1,14 @@
-// E2E for the `agent` tool seam: parent codergen iteration calls
-// `spawnSubagent` (the closure built by `makeSpawnSubagent`), which
-// enqueues a conversation child, drives it via `runConversation`, and
-// returns the summary. The codergen backend is stubbed so we can pin
-// the child's outcome and inspect the resulting state + facts.
+// Sub-agent inline-codergen behaviour: a parent's `agent` tool call
+// drives a fresh codergen call against the same parent run, with all
+// observability events forwarded onto the parent's stream stamped with
+// a `subagent_id`. No child run, no separate stream, no `fact.run_*`
+// for the sub-agent.
 
 import { describe, expect, test } from "bun:test";
-import type { CodergenInput, Outcome } from "@swarm/core";
+import type { CodergenInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
-import type { Skill, SubagentSpec } from "@swarm/workspace";
+import type { Skill } from "@swarm/workspace";
 import { CORE_TOOLS, ToolRegistry } from "@swarm/workspace";
 import { makeSpawnSubagent } from "../src/spawn-subagent.ts";
 
@@ -26,6 +26,18 @@ function freshRegistry(): ToolRegistry {
   r.registerAll(CORE_TOOLS);
   return r;
 }
+
+// Stub env for the StubBackend — never invoked because the backend
+// records inputs and returns canned outcomes without touching the FS.
+const STUB_ENV: ExecutionEnvironment = {
+  cwd: () => "/tmp/stub",
+  exists: async () => false,
+  readFile: async () => "",
+  writeFile: async () => undefined,
+  exec: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
+  listDir: async () => [],
+  glob: async () => [],
+};
 
 class StubBackend {
   public readonly inputs: CodergenInput[] = [];
@@ -52,13 +64,23 @@ class StubBackend {
   }
 }
 
+/** Capture parent-stream emit calls for assertions. */
+function recordingEmit() {
+  const events: Array<{ type: EventType; data: Record<string, unknown> }> = [];
+  const emit = async (type: EventType, data: Record<string, unknown>) => {
+    events.push({ type, data });
+  };
+  return { events, emit };
+}
+
 describe("makeSpawnSubagent", () => {
-  test("parent calls agent → child conversation runs → returns summary", async () => {
+  test("parent calls agent → sub-agent runs inline → returns summary; emits subagent.start/end on parent's stream", async () => {
     const store = freshStore();
     seedParent(store, "parent-1");
     const registry = freshRegistry();
     const backend = new StubBackend(() => ok({ notes: "" }));
     const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
 
     const spawn = makeSpawnSubagent(
       { store, registry, backend, shutdownSignal: ctrl.signal },
@@ -68,6 +90,10 @@ describe("makeSpawnSubagent", () => {
         parentIteration: 2,
         parentSystemPrompt: "PARENT BASE PROMPT",
         parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
       },
     );
 
@@ -75,47 +101,39 @@ describe("makeSpawnSubagent", () => {
 
     expect(result.summary).toBe("child summary text");
     expect(result.status).toBe("completed");
-    expect(result.childRunId).toMatch(/^conv-/);
+    expect(result.subagentId).toMatch(/^[0-9a-f-]{36}$/);
 
-    // Child row carries parent linkage + kind=conversation.
-    const child = store.getState(result.childRunId)!;
-    expect(child.kind).toBe("conversation");
-    expect(child.parentRunId).toBe("parent-1");
-    expect(child.parentNodeId).toBe("plan");
-    expect(child.parentIteration).toBe(2);
-    expect(child.workflowSha).toBeNull();
+    // No child run row, no kind discriminator — sub-agents are not runs.
+    expect(store.getState(result.subagentId)).toBeNull();
 
-    // Parent stream carries fact.subagent.spawned then .completed.
-    const parentEvents = store.getEvents("parent-1");
-    const subagentTypes = parentEvents.map((e) => e.type).filter((t) => t.startsWith("fact.subagent."));
-    expect(subagentTypes).toEqual(["fact.subagent.spawned", "fact.subagent.completed"]);
+    // Parent stream got bracketing subagent.start / subagent.end with
+    // matching subagent_id; everything in between (when there are
+    // tools / cost) carries the same id on payload.
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe("subagent.start");
+    expect(types.at(-1)).toBe("subagent.end");
+    const start = events.find((e) => e.type === "subagent.start")!;
+    expect(start.data["subagent_id"]).toBe(result.subagentId);
+    expect(start.data["parent_node_id"]).toBe("plan");
+    expect(start.data["iteration"]).toBe(2);
+    expect(start.data["label"]).toBe("step 1");
+    expect(start.data["model"]).toBe("claude-haiku-4-5");
+    const end = events.find((e) => e.type === "subagent.end")!;
+    expect(end.data["subagent_id"]).toBe(result.subagentId);
+    expect(end.data["status"]).toBe("completed");
+    expect(end.data["summary_chars"]).toBe("child summary text".length);
 
-    const spawned = parentEvents.find((e) => e.type === "fact.subagent.spawned")!;
-    const spawnedPayload = spawned.payload as {
-      parent_node_id: string;
-      iteration: number;
-      child_run_id: string;
-      label?: string;
-    };
-    expect(spawnedPayload.parent_node_id).toBe("plan");
-    expect(spawnedPayload.iteration).toBe(2);
-    expect(spawnedPayload.child_run_id).toBe(result.childRunId);
-    expect(spawnedPayload.label).toBe("step 1");
+    // Sub-agent transcript landed in the parent run's messages table
+    // under a distinct nodeId so it doesn't pollute the main thread.
+    const messages = store.getMessages("parent-1");
+    expect(messages.length).toBeGreaterThan(0);
+    const subagentNode = `__subagent:${result.subagentId}`;
+    expect(messages.every((m) => m.nodeId === subagentNode)).toBe(true);
 
-    const completed = parentEvents.find((e) => e.type === "fact.subagent.completed")!;
-    const completedPayload = completed.payload as {
-      child_run_id: string;
-      status: string;
-      summary_chars: number;
-      total_tool_calls: number;
-    };
-    expect(completedPayload.child_run_id).toBe(result.childRunId);
-    expect(completedPayload.status).toBe("completed");
-    expect(completedPayload.summary_chars).toBe("child summary text".length);
     store.close();
   });
 
-  test("agent tool is structurally absent from child's pool even when parent allowed it", async () => {
+  test("agent tool is structurally absent from sub-agent's pool even when parent allowed it", async () => {
     const store = freshStore();
     seedParent(store, "parent-2");
     const registry = freshRegistry();
@@ -125,6 +143,7 @@ describe("makeSpawnSubagent", () => {
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
+    const { emit } = recordingEmit();
 
     const spawn = makeSpawnSubagent(
       { store, registry, backend, shutdownSignal: ctrl.signal },
@@ -134,31 +153,33 @@ describe("makeSpawnSubagent", () => {
         parentIteration: 0,
         parentSystemPrompt: "P",
         parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
         parentAllowedTools: ["read", "write", "agent"],
       },
     );
 
-    // Even though the spec explicitly requests `agent`, the stripper
-    // pulls it out before the child's pool is materialised.
-    await spawn({ prompt: "x", allowed_tools: ["read", "agent"] });
-
+    await spawn({ prompt: "x" });
     expect(observedChildPool).toBeDefined();
-    expect(observedChildPool).not.toContain("agent");
-    expect(observedChildPool).toContain("read");
+    expect(observedChildPool!).not.toContain("agent");
+    expect(observedChildPool!.sort()).toEqual(["read", "write"]);
+
     store.close();
   });
 
-  test("parent cancellation propagates to child via intent.cancel_requested", async () => {
+  test("parent cancellation propagates to sub-agent via in-process AbortSignal", async () => {
     const store = freshStore();
     seedParent(store, "parent-3");
     const registry = freshRegistry();
-
-    // Backend resolves immediately; we trip the parent's signal BEFORE
-    // calling spawn so the abort listener fires synchronously and the
-    // child sees an intent.cancel_requested on its stream.
-    const backend = new StubBackend(() => ok({ notes: "" }));
+    let observedSignal: AbortSignal | undefined;
+    const backend = new StubBackend((input) => {
+      observedSignal = input.signal;
+      return ok({ notes: "" });
+    });
     const ctrl = new AbortController();
-    const parentSignal = new AbortController();
+    const { emit } = recordingEmit();
 
     const spawn = makeSpawnSubagent(
       { store, registry, backend, shutdownSignal: ctrl.signal },
@@ -168,30 +189,32 @@ describe("makeSpawnSubagent", () => {
         parentIteration: 0,
         parentSystemPrompt: "P",
         parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
       },
     );
 
-    parentSignal.abort();
-    const spec: SubagentSpec = { prompt: "x", signal: parentSignal.signal };
-    const result = await spawn(spec);
+    const parentSpec = new AbortController();
+    parentSpec.abort();
+    await spawn({ prompt: "x", signal: parentSpec.signal });
 
-    // The cancel intent landed on the child's stream as a side-effect
-    // of the abort listener. Whether it influenced the terminal state
-    // depends on timing (the stub backend returns ok), but the audit
-    // trail is what we care about for the propagation contract.
-    const childIntents = store.getEvents(result.childRunId).filter((e) => e.type === "intent.cancel_requested");
-    expect(childIntents).toHaveLength(1);
-    const payload = childIntents[0]?.payload as { reason: string };
-    expect(payload.reason).toBe("parent cancelled");
+    expect(observedSignal?.aborted).toBe(true);
     store.close();
   });
 
-  test("filtered skills land on the child's catalog and routing snapshot", async () => {
+  test("filtered skills land on the sub-agent's node attrs", async () => {
     const store = freshStore();
     seedParent(store, "parent-4");
     const registry = freshRegistry();
-    const backend = new StubBackend(() => ok({ notes: "" }));
+    let observedSkills: string[] | undefined;
+    const backend = new StubBackend((input) => {
+      observedSkills = (input.node.attrs["skills"] as string[] | undefined)?.slice();
+      return ok({ notes: "" });
+    });
     const ctrl = new AbortController();
+    const { emit } = recordingEmit();
 
     const skillA: Skill = {
       name: "swarm-debug",
@@ -220,12 +243,99 @@ describe("makeSpawnSubagent", () => {
         parentIteration: 0,
         parentSystemPrompt: "P",
         parentSkills: [skillA, skillB],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
       },
     );
 
-    const result = await spawn({ prompt: "x", skills: ["design"] });
-    const child = store.getState(result.childRunId)!;
-    expect(child.routing["agent.skills"]).toEqual(["design"]);
+    await spawn({ prompt: "x", skills: ["design"] });
+    expect(observedSkills).toEqual(["design"]);
+    store.close();
+  });
+
+  test("oversized parent system prompt does not leak onto the sub-agent (no inheritance of parent's assembled bloat)", async () => {
+    // Two regressions in one. First, the earlier child-run design
+    // stuffed the system prompt into `run_state.routing` (8 KB cap)
+    // and broke for any realistic parent prompt — sub-agents now run
+    // inline so routing isn't involved. Second, an interim design
+    // inherited the parent's fully-assembled system prompt verbatim,
+    // bloating every sub-agent call by 10s of KB and feeding tools
+    // the sub-agent couldn't even use. Sub-agents now get a fresh
+    // minimal prompt by default; explicit `system_prompt` overrides.
+    const store = freshStore();
+    seedParent(store, "parent-large");
+    const registry = freshRegistry();
+    let observedSystemPrompt: string | undefined;
+    const backend = new StubBackend((input) => {
+      observedSystemPrompt =
+        typeof input.node.attrs["system_prompt"] === "string"
+          ? (input.node.attrs["system_prompt"] as string)
+          : undefined;
+      return ok({ notes: "" });
+    });
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const oversized = "X".repeat(12_000); // 12 KB
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-large",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: oversized,
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    // Must not throw, must not leak the parent's bloat onto the child.
+    const result = await spawn({ prompt: "user prompt", description: "regression" });
+    expect(result.status).toBe("completed");
+    expect(observedSystemPrompt).toBeUndefined();
+    store.close();
+  });
+
+  test("explicit spec.system_prompt is forwarded to the sub-agent's node.attrs", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-explicit");
+    const registry = freshRegistry();
+    let observedSystemPrompt: string | undefined;
+    const backend = new StubBackend((input) => {
+      observedSystemPrompt =
+        typeof input.node.attrs["system_prompt"] === "string"
+          ? (input.node.attrs["system_prompt"] as string)
+          : undefined;
+      return ok({ notes: "" });
+    });
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-explicit",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "PARENT BLOAT",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x", system_prompt: "FOCUSED REVIEWER PERSONA" });
+    expect(observedSystemPrompt).toBeDefined();
+    expect(observedSystemPrompt!).toContain("FOCUSED REVIEWER PERSONA");
+    expect(observedSystemPrompt!).not.toContain("PARENT BLOAT");
     store.close();
   });
 });

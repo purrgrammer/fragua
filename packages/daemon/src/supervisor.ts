@@ -106,10 +106,6 @@ export function startSupervisor(opts: SupervisorOpts): {
           if (state == null) continue;
           if (state.status !== "running") continue;
           if (state.currentNode == null) continue;
-          // Conversation runs (kind='conversation') have no
-          // workflow_sha and aren't dispatched by handler spec; the
-          // stuck-node watchdog doesn't apply to them.
-          if (state.workflowSha == null) continue;
           const maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
           if (elapsed > maxMs + leakGrace) {
             opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));
@@ -169,34 +165,4 @@ export class HandlerLeakedError extends Error {
     super(`handler leaked on ${runId}/${nodeId}`);
     this.name = "AbortError";
   }
-}
-
-/** Boot-time cancel for orphan sub-agents.
- *
- *  A conversation run whose `parent_run_id` references a parent that's
- *  reached a terminal status (completed / cancelled / halted /
- *  quarantined) but whose own status is still non-terminal is an
- *  orphan: the parent will never read its summary, and the child holds
- *  a queue slot until something cancels it. The proposal calls for
- *  appending `intent.cancel_requested` against each so the standard
- *  fold path picks the cancel up on the executor's next claim.
- *
- *  Returns the count of intents appended. Best-effort — individual
- *  append failures (e.g. race with a concurrent terminal fact) are
- *  swallowed so one bad row never blocks the rest of the sweep. */
-export function sweepOrphanChildren(store: IEventStore): number {
-  const orphanIds = store.listOrphanChildRunIds();
-  let cancelled = 0;
-  for (const childId of orphanIds) {
-    try {
-      store.appendIntent(childId, {
-        type: "intent.cancel_requested",
-        payload: { reason: "parent terminal" },
-      });
-      cancelled += 1;
-    } catch {
-      // best-effort
-    }
-  }
-  return cancelled;
 }

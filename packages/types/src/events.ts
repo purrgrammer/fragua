@@ -68,7 +68,13 @@ export type EventType =
   | "budget.warn"
   | "budget.stop"
   // Cost
-  | "cost.recorded";
+  | "cost.recorded"
+  // Sub-agent boundaries (observability-only). Bracket the slice of
+  // events produced by an inline `agent`-tool spawn on the parent's
+  // stream; every event in between carries `subagent_id` on its
+  // payload.
+  | "subagent.start"
+  | "subagent.end";
 
 /** Every EventType value as a const array, suitable for iteration.
  * Consumers like `EventSource.addEventListener(<type>, ...)` register
@@ -123,4 +129,6 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "budget.warn",
   "budget.stop",
   "cost.recorded",
+  "subagent.start",
+  "subagent.end",
 ];

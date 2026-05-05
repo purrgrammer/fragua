@@ -20,12 +20,8 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     runId: "r1",
     version: 1,
     status: "running",
-    kind: "workflow",
     currentNode: "n1",
     workflowSha: "wf",
-    parentRunId: null,
-    parentNodeId: null,
-    parentIteration: null,
     schemaVersion: 1,
     routing: {},
     metrics: {

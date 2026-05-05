@@ -16,20 +16,57 @@ function freshDb(): Database {
   return db;
 }
 
-/** Pin the DB to v5 by bootstrapping at the current version, then
- *  reverting the v5→v6 deltas (drop schedules table, the partial
- *  index, and the schedule_id column) and rewinding `schema_version`
- *  so a subsequent `migrate(db)` walks the v5→v6 step. */
+/** Build a fresh v5-shaped DB from raw SQL so a subsequent
+ *  `migrate(db)` walks the v5 → v6 step (and v6 → v7) cleanly. We
+ *  can't bootstrap-then-revert because v7 drops the v5 conversation
+ *  scaffolding (`kind` / `parent_*` columns), so a "current then
+ *  rewind" path no longer reproduces the v5 column shape. */
 function pinV5(db: Database): void {
-  migrate(db);
   db.exec("PRAGMA foreign_keys = OFF");
   db.exec(`
-    DROP INDEX IF EXISTS idx_runs_by_schedule;
-    DROP TABLE IF EXISTS schedules;
-    ALTER TABLE run_state DROP COLUMN schedule_id;
+    CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL) STRICT;
+    INSERT INTO schema_version (id, version) VALUES (1, 5);
+    CREATE TABLE workflows (
+      sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE run_state (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
+        'completed','cancelled','halted','quarantined'
+      )),
+      kind TEXT NOT NULL DEFAULT 'workflow' CHECK (kind IN ('workflow','conversation')),
+      current_node TEXT,
+      workflow_sha TEXT REFERENCES workflows(sha),
+      parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+      parent_node_id TEXT,
+      parent_iteration INTEGER,
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
   `);
   db.exec("PRAGMA foreign_keys = ON");
-  db.query("UPDATE schema_version SET version = 5 WHERE id = 1").run();
 }
 
 describe("v5 → v6 schedules migration", () => {

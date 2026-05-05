@@ -53,12 +53,12 @@ describe("agent tool", () => {
     expect(out.is_error).toBe(true);
   });
 
-  test("mocked spawnSubagent round-trips: returns { text: summary, data: { child_run_id, status, total_tool_calls } }", async () => {
+  test("mocked spawnSubagent round-trips: returns { text: summary, data: { subagent_id, status, total_tool_calls } }", async () => {
     const env = new LocalEnvironment();
     const calls: SubagentSpec[] = [];
     const stubResult: SubagentResult = {
       summary: "child said hello",
-      childRunId: "conv-abc",
+      subagentId: "abc-123",
       status: "completed",
       totalToolCalls: 3,
     };
@@ -83,7 +83,7 @@ describe("agent tool", () => {
     expect(out.is_error).toBeFalsy();
     expect(out.text).toBe("child said hello");
     expect(out.data).toEqual({
-      child_run_id: "conv-abc",
+      subagent_id: "abc-123",
       status: "completed",
       total_tool_calls: 3,
     });
@@ -103,7 +103,7 @@ describe("agent tool", () => {
       emit: () => {},
       spawnSubagent: async () => ({
         summary: "",
-        childRunId: "conv-x",
+        subagentId: "abc-999",
         status: "halted",
         haltReason: "max_loops",
         totalToolCalls: 0,

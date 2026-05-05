@@ -180,21 +180,8 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
     'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
     'completed','cancelled','halted','quarantined'
   )),
-  -- v5 discriminator. 'workflow' runs walk a DOT graph; 'conversation'
-  -- runs are sub-agents (LLM-spawned via the `agent` tool) that drive a
-  -- single codergen loop with no graph walk.
-  kind TEXT NOT NULL DEFAULT 'workflow' CHECK (kind IN ('workflow','conversation')),
   current_node TEXT,
-  -- v5: nullable so conversation runs (no DOT document) can carry NULL.
-  -- The NOT NULL invariant for workflow runs is enforced at the writer
-  -- paths (`enqueueRun`), not by SQL CHECK.
-  workflow_sha TEXT REFERENCES workflows(sha),
-  -- Parent linkage for conversation runs. NULL for workflow runs and
-  -- top-level runs without a spawning parent. ON DELETE SET NULL keeps
-  -- the child as a free-standing run if its parent is GC'd.
-  parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
-  parent_node_id TEXT,
-  parent_iteration INTEGER,
+  workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
   schema_version INTEGER NOT NULL,
   routing TEXT NOT NULL CHECK (length(routing) < 8192),
   metrics TEXT NOT NULL,
@@ -229,10 +216,6 @@ CREATE INDEX idx_run_state_status   ON run_state(status);
 CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
 CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
 CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
--- Partial index covering parent_run_id lookups (orphan-child sweep,
--- listChildRunIds). NULL parents excluded.
-CREATE INDEX idx_run_state_parent
-  ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
 CREATE INDEX idx_runs_by_schedule
   ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
 
@@ -402,8 +385,8 @@ CREATE INDEX idx_schedules_cwd ON schedules(cwd);
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
 | `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. <br/> > Status: in-progress — provisioner + branch-on-dispose + post-terminal fact landed; branch GC, paused-run drift, and per-branch isolation in parallel are tracked in [`docs/proposals/worktree-design.md`](./proposals/worktree-design.md) |
-| `fact.subagent.spawned` | `parent_node_id`, `iteration`, `child_run_id`, `label?` | **Observability-only.** Lands on the PARENT's stream when a codergen iteration spawns a sub-agent via the `agent` tool. Written via `appendObservabilityEvents` (no OCC, no `version` bump, skipped by the reducer). Excluded from `FEED_EVENT_KINDS` — the parent UI surfaces sub-agent activity as a sub-thread, not on the global Home feed. Child status lives on the child's own `run_state` row (joined via `parent_run_id`) |
-| `fact.subagent.completed` | `child_run_id`, `status`, `summary_chars`, `total_tool_calls` | **Observability-only.** Pairs with `fact.subagent.spawned` on the parent's stream. Written via `appendObservabilityEvents`; not folded into the parent's projection |
+
+**Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh codergen call against the parent's event stream. Two **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, label?, model, provider }` and `subagent.end { subagent_id, status, summary_chars, total_tool_calls, halt_reason? }`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. Cost rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`.
 
 All payloads ≤ 4KB. Content references are `artifactKey`.
 
@@ -475,10 +458,6 @@ export interface IEventWriter {
 
   // Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
-  // Sub-agent run (kind='conversation', workflow_sha=NULL, parent linkage set).
-  // No `intent.run_enqueued` event — the parent's `fact.subagent.spawned`
-  // is the genesis record on the parent's stream.
-  enqueueConversation(params: EnqueueConversationParams): void;
   claimNextRun(maxInFlight: number): { runId: string } | null;   // atomic; OCC-protected
   startupSweep(opts?: { priorHeartbeatAt?: number }): SweepResult;
   setRunTitle(runId: string, title: string): void;
@@ -545,12 +524,6 @@ export interface IEventReader {
   // Workflow catalog (read) + emergent-paths project listing
   getWorkflow(sha: string): WorkflowRow | null;
   listCwds(): Array<{ cwd: string; lastUpdatedAt: number; runCount: number }>;
-  // Sub-agent linkage. `listChildRunIds` returns conversation runs
-  // whose `parent_run_id` matches; `listOrphanChildRunIds` returns
-  // children whose parent is terminal but the child is not (used by
-  // the daemon's boot sweep to cancel orphans).
-  listChildRunIds(parentRunId: string): string[];
-  listOrphanChildRunIds(): string[];
 }
 ```
 

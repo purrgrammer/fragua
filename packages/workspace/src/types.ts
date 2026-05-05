@@ -15,7 +15,7 @@ import type {
   SummariseOutput,
 } from "@swarm/core";
 import type { HttpClient } from "@swarm/core/handler";
-import type { HaltReason, RunStatus, Skill } from "@swarm/types";
+import type { Skill } from "@swarm/types";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
 
@@ -47,12 +47,18 @@ export interface SwarmToolContext {
  *  tool's TypeBox schema, plus a per-call `signal` so cancellation
  *  propagates from the parent dispatch into the child run. */
 export interface SubagentSpec {
-  /** Optional 1-line label surfaced on `fact.subagent.spawned`. */
+  /** Optional 1-line label for UI / trace navigation. Surfaced on
+   *  the parent's `llm.toolcall_*` events through the standard tool
+   *  args plumbing — there's no dedicated parent-stream fact for it. */
   description?: string;
   /** The only context the sub-agent sees — the LLM constructs it. */
   prompt: string;
-  /** Override the parent's system prompt; otherwise the child inherits
-   *  the parent's verbatim. */
+  /** Optional per-call system prompt for the sub-agent. When omitted,
+   *  the codergen backend builds a fresh minimal system prompt for
+   *  the sub-agent's own tool pool — the parent's *assembled* system
+   *  prompt is NOT inherited (it would carry tools the sub-agent
+   *  can't use and 10s of KB of irrelevant framing). The framework
+   *  protocol is always layered on automatically. */
   system_prompt?: string;
   /** Allowlist for the child's tool pool. Defaults to the parent's
    *  effective pool minus `agent` (no nesting). */
@@ -72,18 +78,28 @@ export interface SubagentSpec {
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs
- *  this into its `ToolOutput.{text, data}` shape for the parent LLM. */
+ *  this into its `ToolOutput.{text, data}` shape for the parent LLM.
+ *  A sub-agent isn't a run — it has no `run_id` of its own. The
+ *  `subagentId` is a per-spawn ULID/UUID stamped on every observability
+ *  event the sub-agent emits onto the parent's stream (via the
+ *  `subagent_id` payload field), so operators / UI / replay can fold
+ *  the slice back together. */
 export interface SubagentResult {
-  /** Concatenated text of the child's final assistant message. Empty
-   *  string when the child terminated without one. */
+  /** Concatenated text of the sub-agent's final assistant message.
+   *  Empty string when it terminated without one. */
   summary: string;
-  /** The child run's id (kind='conversation'). */
-  childRunId: string;
-  /** Terminal status of the child run. */
-  status: RunStatus;
-  /** Set when `status === 'halted'`. */
-  haltReason?: HaltReason;
-  /** Count of tool calls the child made across its loop. */
+  /** Per-spawn discriminator. Stamped on every observability event
+   *  the sub-agent emits onto the parent's stream (`subagent_id`
+   *  payload field) and bracketed by `subagent.start` / `subagent.end`
+   *  events carrying the same id. */
+  subagentId: string;
+  /** Terminal disposition of the sub-agent's codergen call. */
+  status: "completed" | "halted" | "cancelled";
+  /** Set when `status === 'halted'`. Free-form short string so the
+   *  parent LLM can tell why the sub-agent failed without a separate
+   *  log dive. */
+  haltReason?: string;
+  /** Count of tool calls the sub-agent made across its loop. */
   totalToolCalls: number;
 }
 

@@ -84,7 +84,6 @@ import {
   countRunningRuns,
   type GlobalMetricsTotalsRow,
   type GlobalModelBreakdownRow,
-  insertConversationRun,
   insertRunState,
   type ListRunIdsOpts,
   getRunCostTotals as queryRunCostTotals,
@@ -92,12 +91,10 @@ import {
   type RunCostTotalsRow,
   type RunStateRow,
   type StepAggregateRow,
-  selectChildRunIds,
   selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
   selectNextQueuedRun,
-  selectOrphanChildRunIds,
   selectRunIds,
   selectRunStateRow,
   selectWakeCandidates,
@@ -133,7 +130,6 @@ import {
   type DaemonEventRow,
   type DaemonLockResult,
   type DaemonLockRow,
-  type EnqueueConversationParams,
   type EnqueueRunParams,
   type EventWriter,
   type FactAppendResult,
@@ -224,12 +220,8 @@ function rowToRunState(row: RunStateRow): RunState {
     runId: row.run_id,
     version: row.version,
     status: row.status,
-    kind: row.kind,
     currentNode: row.current_node,
     workflowSha: row.workflow_sha,
-    parentRunId: row.parent_run_id,
-    parentNodeId: row.parent_node_id,
-    parentIteration: row.parent_iteration,
     schemaVersion: row.schema_version,
     routing,
     metrics,
@@ -502,46 +494,8 @@ export class SqliteStore implements IEventStore {
     });
   }
 
-  enqueueConversation(params: EnqueueConversationParams): void {
-    const now = this.now();
-    const routing = JSON.stringify(params.initialRouting ?? {});
-    if (routing.length >= MAX_ROUTING_BYTES) {
-      throw new PayloadTooLargeError(routing.length, MAX_ROUTING_BYTES);
-    }
-    const metrics = JSON.stringify(emptyMetrics());
-
-    this.writeTxn(() => {
-      insertConversationRun(this.db, {
-        runId: params.runId,
-        parentRunId: params.parentRunId,
-        parentNodeId: params.parentNodeId,
-        parentIteration: params.parentIteration,
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        routing,
-        metrics,
-        priority: params.priority ?? 0,
-        enqueuedAt: now,
-        readyAt: now,
-        updatedAt: now,
-        cwd: params.cwd ?? null,
-      });
-      // No `intent.run_enqueued` event — the parent's
-      // `fact.subagent.spawned` is the genesis record on the parent's
-      // stream. The child's own stream stays empty until
-      // runConversation emits `fact.run_started`.
-    });
-  }
-
   listRunIds(opts: ListRunIdsOpts = {}): string[] {
     return selectRunIds(this.db, opts);
-  }
-
-  listChildRunIds(parentRunId: string): string[] {
-    return selectChildRunIds(this.db, parentRunId);
-  }
-
-  listOrphanChildRunIds(): string[] {
-    return selectOrphanChildRunIds(this.db);
   }
 
   claimNextRun(maxInFlight: number): { runId: string } | null {

@@ -59,4 +59,13 @@ export interface CodergenInput {
    * so the UI can render "X of Y used" without cross-referencing the
    * graph attrs. Optional: omitted when no ceiling is configured. */
   budgetSnapshot?: BudgetSnapshotInput;
+  /** When true, the backend skips its own `role:'system'` persistMessage
+   * write on the assumption that the caller has already seeded the
+   * system prompt as a message (avoiding a duplicate row). Used by
+   * the conversation-run path: `spawnSubagent` writes the system
+   * prompt as the seed message itself so it doesn't have to round-trip
+   * through `run_state.routing` (capped at 8 KB). The system prompt
+   * still flows into the LLM call via `node.attrs.system_prompt`;
+   * this only suppresses the *storage* duplicate. */
+  skipSystemPersist?: boolean;
 }
