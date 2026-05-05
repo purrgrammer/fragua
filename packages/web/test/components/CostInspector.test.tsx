@@ -240,27 +240,32 @@ describe("CostInspector", () => {
       },
     });
 
-    it("context gauge usedTokens equals input + cache_write + cache_read + output (1650 / 200000 ≈ 0.8%)", async () => {
-      // The gauge percent is the linchpin assertion for the headline-tile
-      // fix: with `billedTokens = inputTokens + cacheWriteTokens +
-      // cacheReadTokens + outputTokens` the trigger renders 1650/200000
-      // = 0.825% → "0.8%" (maxFractionDigits=1). The prior bug excluded
-      // cache_read and would render 150/200000 = 0.075% → "0.1%".
+    it("context gauge usedTokens equals fresh = input + cache_write + output (650 / 200000 ≈ 0.3%)", async () => {
+      // Per-step gauge tracks fresh tokens — new content this step
+      // contributed (input + cache_write + output). Cache_read is reused
+      // content from a prior turn's cache_write, already counted there;
+      // including it would inflate the gauge to ~95% on warm threads
+      // even when actual new work is single-digit tokens. The headline
+      // run-level tile uses billed (= fresh + cache_read) for the
+      // invoice match — different signals, different surfaces.
       //
-      // The popover's per-bucket rows (Input 600 tokens / $0.0022; Cache
-      // read $0.0003) can't be asserted in this test environment: Radix
-      // portals don't mount under happy-dom because globals are
-      // registered after radix imports run — see
+      // With input=100 + cache_write=500 + output=50 the trigger renders
+      // 650/200000 = 0.325% → "0.3%" (maxFractionDigits=1).
+      //
+      // The popover's per-bucket rows (Input 100 / Cache write 500 /
+      // Cache read 1000 / Output 50, each with own $) can't be asserted
+      // here: Radix portals don't mount under happy-dom because globals
+      // are registered after radix imports run — see
       // `test/routes/WorkflowDetail.test.tsx` ("renders no inspector by
-      // default ..."). The math lives in straightforward inline
-      // expressions in CostInspector.tsx; the gauge percent here covers
-      // the four-bucket sum end-to-end.
+      // default …"). The math lives in inline expressions in
+      // CostInspector.tsx; the gauge percent here covers the fresh-sum
+      // end-to-end.
       const { container } = mountWithModel([cacheStep]);
       const q = within(container);
       await waitFor(() => {
         expect(q.getByTestId("step-0")).toBeTruthy();
       });
-      expect(q.getByText("0.8%")).toBeTruthy();
+      expect(q.getByText("0.3%")).toBeTruthy();
     });
   });
 

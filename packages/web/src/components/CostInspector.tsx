@@ -272,37 +272,29 @@ function StepCostRow({
 
   // Summary rows pull from the aggregated `summary` so the parent's
   // displayed total includes every child branch's contribution.
-  const rawInputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
+  const inputTokens = summary?.input_tokens ?? step.cost?.input_tokens ?? 0;
   const outputTokens = summary?.output_tokens ?? step.cost?.output_tokens ?? 0;
   const cacheReadTokens = summary?.cache_read_tokens ?? step.cost?.cache_read_tokens ?? 0;
   const cacheWriteTokens = summary?.cache_write_tokens ?? step.cost?.cache_write_tokens ?? 0;
   const displayedCostUsd = summary?.cost_usd ?? step.cost?.cost_usd;
   const displayedDurationMs = summary?.durationMs ?? liveElapsedMs;
-  // Per-step "Input" rolls cache_write tokens INTO the input bucket:
-  // cache_write is content the model is seeing for the first time
-  // this step (Anthropic just marks it cacheable on the way in).
-  // Without folding it in, the input row reads as ~0 for any step
-  // whose system prompt is being primed — the system prompt was
-  // "consumed" but invisible. Cache_read stays in its own bucket
-  // (reused content from a prior turn — not new work this step).
-  const inputTokens = rawInputTokens + cacheWriteTokens;
-  // Billed tokens — what the model saw in its context window for this
-  // call: input (incl. cache_write) + cache_read + output. Matches the
-  // run-level billed_tokens convention (input + output + cache_read +
-  // cache_write); also drives the context-window gauge.
-  const billedTokens = inputTokens + outputTokens + cacheReadTokens;
+  // Fresh tokens — new content this step contributed: input + cache_write
+  // (Anthropic puts the system prompt in cache_write on the first turn) +
+  // output. Cache_read is reused content from a prior turn's cache_write,
+  // already counted there, so excluded from the per-step gauge to keep it
+  // a "new work this step" signal. Run-level tiles use billed (= fresh +
+  // cache_read) for the headline + invoice match.
+  const freshTokens = inputTokens + cacheWriteTokens + outputTokens;
 
-  // Per-bucket $ figures so Input + Cache read + Output sum to the
-  // displayed Total cost. Anthropic bills cache writes at ~1.25× the
-  // normal input rate (folded into the Input row) and cache reads at
-  // a discount (its own row).
-  const inputCostUsd = model
-    ? (model.cost.input * rawInputTokens + model.cost.cacheWrite * cacheWriteTokens) / COST_RATE_DIVISOR
-    : undefined;
-  const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
+  // Per-bucket $ figures so Input + Cache write + Cache read + Output rows
+  // sum to the displayed Total cost. Each bucket has its own rate:
+  // cache_write ~1.25× input, cache_read ~0.1× input.
+  const inputCostUsd = model ? (model.cost.input * inputTokens) / COST_RATE_DIVISOR : undefined;
+  const cacheWriteCostUsd = model ? (model.cost.cacheWrite * cacheWriteTokens) / COST_RATE_DIVISOR : undefined;
   const cacheReadCostUsd = model ? (model.cost.cacheRead * cacheReadTokens) / COST_RATE_DIVISOR : undefined;
+  const outputCostUsd = model ? (model.cost.output * outputTokens) / COST_RATE_DIVISOR : undefined;
 
-  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && billedTokens > 0;
+  const showContextCircle = !!model?.contextWindow && model.contextWindow > 0 && freshTokens > 0;
 
   // All trailing chips share the same `text-xs text-sw-muted
   // tabular-nums` and a small leading icon so each metric is identifiable
@@ -367,22 +359,17 @@ function StepCostRow({
         {showContextCircle && (
           <Context
             maxTokens={model.contextWindow}
-            usedTokens={billedTokens}
+            usedTokens={freshTokens}
             usage={{
               inputTokens,
               outputTokens,
               cachedInputTokens: cacheReadTokens,
               reasoningTokens: 0,
-              totalTokens: billedTokens,
+              totalTokens: freshTokens,
               inputTokenDetails: {
-                // `inputTokens` already includes cache_write (folded
-                // in above) — surface it as `noCacheTokens` and zero
-                // out cache_write so the gauge tooltip doesn't
-                // double-count it. cache_read is its own bucket; both
-                // contribute to the gauge denominator.
                 noCacheTokens: inputTokens,
                 cacheReadTokens,
-                cacheWriteTokens: 0,
+                cacheWriteTokens,
               },
               outputTokenDetails: {
                 textTokens: outputTokens,
@@ -400,15 +387,18 @@ function StepCostRow({
               <ContextContentHeader />
               <ContextContentBody>
                 {/* CSS-grid table so token + cost columns line up
-                 * across all rows regardless of label width. The rows
-                 * are flat (not nested) — semantic grouping (cache read
-                 * under Input, cache write under Output) is preserved
-                 * via row order and the indented label class, which is
-                 * easier to read than visually nested elements. */}
+                 * across all rows regardless of label width. Four
+                 * parallel rows (Input / Cache write / Cache read /
+                 * Output) sum to Total cost. */}
                 <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-4 gap-y-1 text-xs">
                   <ContextInputUsage>
                     <UsageGridRow label="Input" tokens={inputTokens} costUsd={inputCostUsd} />
                   </ContextInputUsage>
+                  {cacheWriteTokens > 0 && (
+                    <ContextCacheUsage>
+                      <UsageGridRow label="Cache write" tokens={cacheWriteTokens} costUsd={cacheWriteCostUsd} subtle />
+                    </ContextCacheUsage>
+                  )}
                   {cacheReadTokens > 0 && (
                     <ContextCacheUsage>
                       <UsageGridRow label="Cache read" tokens={cacheReadTokens} costUsd={cacheReadCostUsd} subtle />
