@@ -13,10 +13,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Coins, Database, DollarSign, Play } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { AgentsList } from "../components/agents/agents-list.tsx";
 import { CodeBlock } from "../components/ai-elements/code-block.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
 import { RunComposer } from "../components/RunComposer.tsx";
 import { RunRow } from "../components/RunRow.tsx";
+import { SkillsList } from "../components/skills/skills-list.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
@@ -36,7 +38,9 @@ export function ProjectDetail(): JSX.Element {
   const cwd = useMemo(() => decodeProjectId(cwdEnc), [cwdEnc]);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedPath = searchParams.get("path") ?? "";
-  const tab: "runs" | "files" = searchParams.get("tab") === "files" ? "files" : "runs";
+  const rawTab = searchParams.get("tab");
+  const tab: "runs" | "files" | "skills" | "agents" =
+    rawTab === "files" || rawTab === "skills" || rawTab === "agents" ? rawTab : "runs";
 
   const filter = useMemo(() => (cwd ? { cwd } : undefined), [cwd]);
   const { data: rows, isPending, isError, error } = useQuery({ ...queries.runs.list(filter), enabled: cwd !== null });
@@ -104,7 +108,8 @@ export function ProjectDetail(): JSX.Element {
 
   const handleTabChange = (v: string): void => {
     const next = new URLSearchParams(searchParams);
-    next.set("tab", v === "files" ? "files" : "runs");
+    const known: Record<string, string> = { runs: "runs", files: "files", skills: "skills", agents: "agents" };
+    next.set("tab", known[v] ?? "runs");
     setSearchParams(next, { replace: true });
   };
 
@@ -235,6 +240,12 @@ export function ProjectDetail(): JSX.Element {
           <TabsTrigger value="files" data-testid="project-tab-files">
             Files
           </TabsTrigger>
+          <TabsTrigger value="skills" data-testid="project-tab-skills">
+            Skills
+          </TabsTrigger>
+          <TabsTrigger value="agents" data-testid="project-tab-agents">
+            Agents
+          </TabsTrigger>
         </TabsList>
 
         <div className="min-w-0 overflow-auto rounded-md border bg-sw-bg">
@@ -286,6 +297,22 @@ export function ProjectDetail(): JSX.Element {
                 </table>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent
+            value="skills"
+            className="flex w-full min-w-0 flex-col gap-2 p-3"
+            data-testid="project-skills-section"
+          >
+            <SkillsList projectCwd={cwd} testIdPrefix="project-skills" />
+          </TabsContent>
+
+          <TabsContent
+            value="agents"
+            className="flex w-full min-w-0 flex-col gap-2 p-3"
+            data-testid="project-agents-section"
+          >
+            <AgentsList projectCwd={cwd} testIdPrefix="project-agents" />
           </TabsContent>
 
           <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2 p-3">
