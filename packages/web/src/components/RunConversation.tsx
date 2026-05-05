@@ -766,31 +766,31 @@ function AssistantMessageRow({
       // `details.data.subagent_id`) and render them inside the Tool
       // card. Keeps the parent's NodeSection unbroken — no
       // interleaving with the sub-agent's transcript as a sibling
-      // section. The recursive render uses an EMPTY
-      // subagentMessagesById so sub-agent toolCalls inside don't
-      // try to recurse (sub-agents can't spawn sub-agents).
+      // section. The recursive render passes no `subagentMessagesById`
+      // so any nested toolCall doesn't try to recurse (sub-agents
+      // can't spawn sub-agents).
       let embeddedSubagent: ReactNode = null;
-      if (chunk.name === "agent" && subagentMessagesById && result) {
-        const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
-        const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
-        const subagentRows = sid ? subagentMessagesById.get(sid) : undefined;
-        if (subagentRows && subagentRows.length > 0) {
-          embeddedSubagent = (
-            <div
-              className="ml-2 mt-2 flex flex-col gap-2 border-l-2 border-sw-border pl-3"
-              data-testid={`subagent-transcript-${sid}`}
-            >
-              {subagentRows.map((row) => (
-                <MessageRow
-                  key={`sub-${row.ordinal}`}
-                  row={row}
-                  toolResultsById={toolResultsById}
-                  isLive={isLive}
-                />
-              ))}
-            </div>
-          );
+      let agentLabel: string | undefined;
+      if (chunk.name === "agent") {
+        const description =
+          typeof (chunk.arguments as { description?: unknown } | undefined)?.description === "string"
+            ? ((chunk.arguments as { description?: unknown }).description as string)
+            : undefined;
+        if (subagentMessagesById && result) {
+          const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
+          const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
+          const subagentRows = sid ? subagentMessagesById.get(sid) : undefined;
+          if (subagentRows && subagentRows.length > 0) {
+            embeddedSubagent = (
+              <div className="flex flex-col gap-2" data-testid={`subagent-transcript-${sid}`}>
+                {subagentRows.map((row) => (
+                  <MessageRow key={`sub-${row.ordinal}`} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                ))}
+              </div>
+            );
+          }
         }
+        agentLabel = description ? `Agent · ${description}` : "Agent";
       }
       blocks.push(
         <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
@@ -798,6 +798,7 @@ function AssistantMessageRow({
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
             title={chunk.name}
+            {...(agentLabel ? { labelOverride: agentLabel } : {})}
             {...(extRenderer?.icon ? { iconOverride: extRenderer.icon } : {})}
           />
           <ToolContent>

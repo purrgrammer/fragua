@@ -78,6 +78,11 @@ export type ToolHeaderProps = {
    *  `*.web.tsx` renderers that ship their own Lucide icon. When unset,
    *  falls back to `TOOL_PRESENTATION[name]` then `WrenchIcon`. */
   iconOverride?: LucideIcon;
+  /** Override the rendered label. Used by callers that want a richer
+   *  per-call name (e.g. an `agent` toolCall surfaces as
+   *  `Agent · <description>`); if unset, falls back to
+   *  `TOOL_PRESENTATION[name].label` then a humanised slug. */
+  labelOverride?: string;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
   | {
@@ -149,7 +154,10 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   find: { icon: FileSearchIcon, label: "Find" },
   ls: { icon: FolderIcon, label: "List directory" },
   web_fetch: { icon: GlobeIcon, label: "Web fetch" },
-  agent: { icon: BotIcon, label: "Sub-agent" },
+  // Label intentionally absent — `AssistantMessageRow` passes a
+  // per-call `labelOverride` of `Agent · <description>` so each
+  // spawn shows its caller-supplied label rather than a generic noun.
+  agent: { icon: BotIcon, label: "Agent" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare
@@ -176,7 +184,16 @@ function humanizeToolName(toolName: string): string {
   return [first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(), ...rest.map((w) => w.toLowerCase())].join(" ");
 }
 
-export const ToolHeader = ({ className, title, type, state, toolName, iconOverride, ...props }: ToolHeaderProps) => {
+export const ToolHeader = ({
+  className,
+  title,
+  type,
+  state,
+  toolName,
+  iconOverride,
+  labelOverride,
+  ...props
+}: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
   // `title` carries the canonical tool name (e.g. `bash`) when the
   // caller has it; fall back to the derived slug. Look up the registry
@@ -184,7 +201,7 @@ export const ToolHeader = ({ className, title, type, state, toolName, iconOverri
   const raw = title ?? derivedName;
   const entry = lookupTool(raw);
   const Icon = iconOverride ?? entry?.icon ?? WrenchIcon;
-  const label = entry?.label ?? humanizeToolName(raw);
+  const label = labelOverride ?? entry?.label ?? humanizeToolName(raw);
 
   return (
     <CollapsibleTrigger
@@ -273,7 +290,7 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
   // accent token directly so both themes stay legible without inversion.
   return (
     <div className={cn("space-y-[var(--sw-space-2)]", className)} {...props}>
-      <h4 className={SECTION_LABEL}>{errorText ? "Error" : "Result"}</h4>
+      {errorText && <h4 className={SECTION_LABEL}>Error</h4>}
       <div
         className={cn(
           "overflow-x-auto",

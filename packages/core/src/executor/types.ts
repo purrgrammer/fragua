@@ -59,10 +59,6 @@ export interface CodergenInput {
    * so the UI can render "X of Y used" without cross-referencing the
    * graph attrs. Optional: omitted when no ceiling is configured. */
   budgetSnapshot?: BudgetSnapshotInput;
-  /** When true, the backend skips its own `role:'system'` persistMessage
-   * write on the assumption that the caller has already seeded the
-   * system prompt as a message (avoiding a duplicate row). */
-  skipSystemPersist?: boolean;
   /** When true, the backend uses `node.attrs.system_prompt` (or the
    * empty string when absent) as the COMPLETE system prompt — no
    * framework `<protocol>`, no skills catalog, no context-files block,

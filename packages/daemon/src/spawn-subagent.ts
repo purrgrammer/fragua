@@ -223,6 +223,12 @@ export function makeSpawnSubagent(
         // available skill files / tool surface; nothing auto-renders
         // into the system prompt.
         skipFrameworkSystemPrompt: true,
+        // Persist the system prompt as a `role:'system'` message — the
+        // operator wants to see the sub-agent's full transcript
+        // (system + user + assistant + tool turns) inside the
+        // embedded card on the parent's conversation view. Backend
+        // skips this write when the system prompt is empty, so a
+        // no-system-prompt spawn naturally produces no system row.
         env: parentCtx.parentEnv,
         emit: subagentEmit,
         persistMessage,

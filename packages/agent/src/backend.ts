@@ -492,12 +492,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // table is JSON + unbounded (§I9), so full content lives there.
     // Filtered back out before feeding priorMessages to pi-agent-core —
     // pi-ai carries the system prompt separately on each call.
-    //
-    // `skipSystemPersist` is the conversation-run path: the caller has
-    // already seeded the system prompt as a message (because
-    // `run_state.routing`'s 8 KB cap can't carry it), so skipping
-    // avoids a duplicate row.
-    if (input.persistMessage && systemPrompt.length > 0 && !input.skipSystemPersist) {
+    if (input.persistMessage && systemPrompt.length > 0) {
       input.persistMessage({ role: "system", content: systemPrompt, timestamp: Date.now() });
     }
 
