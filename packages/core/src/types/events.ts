@@ -374,3 +374,58 @@ export interface RunCanceledData {
   /** Free-form reason from the requester (or the signal handler). */
   reason?: string;
 }
+
+/** `subagent.start.data` — opens the bracket around an inline `agent`
+ * tool spawn on the parent's event stream. Every event the sub-agent
+ * emits between this and the matching `subagent.end` carries
+ * `subagent_id` on its payload as a discriminator. The `nodeId` on the
+ * envelope is the synthetic `__subagent:<uuid>` namespace, not the
+ * parent codergen node — that's tracked separately on `parent_node_id`
+ * so the steps aggregator can group sub-agent rows under the spawning
+ * call.
+ *
+ * `name` and `agent_def` are independent labels:
+ *   - `name`     — free-form caller-supplied label from inline
+ *                  `agent({ name: "<label>", ... })`. UI surfaces it as
+ *                  `Agent · <name>`.
+ *   - `agent_def` — name of the resolved profile when the call used
+ *                  `agent({ agent: "<def-name>", ... })`. Lets analytics
+ *                  attribute cost per profile and lets the UI tell
+ *                  "called by name" from "called by label" without
+ *                  inspecting tool args.
+ *
+ * Both can coexist (`agent({ agent: "reviewer", name: "reviewer-1" })`),
+ * either alone, or neither (a bare `agent({ prompt })` spawn). */
+export interface SubagentStartData {
+  subagent_id: string;
+  /** The parent codergen node that issued the `agent` tool call. */
+  parent_node_id: string;
+  /** Iteration index on the parent node when the spawn fired. */
+  iteration: number;
+  /** Provider the sub-agent's codergen call resolved to. Inherited from
+   * the parent unless a resolved profile carried `provider:` frontmatter. */
+  provider: string;
+  /** Model id the sub-agent's codergen call resolved to. Inherited from
+   * the parent unless a resolved profile carried `model:` frontmatter. */
+  model: string;
+  /** Free-form caller-supplied label. See header comment. */
+  name?: string;
+  /** Resolved profile name from `agent({ agent: <name> })`. See header. */
+  agent_def?: string;
+}
+
+/** `subagent.end.data` — closes the bracket. Carries terminal status
+ * + lightweight totals so consumers (UI step rows, analytics) don't
+ * have to scan the bracketed slice to render the spawn outcome. */
+export interface SubagentEndData {
+  subagent_id: string;
+  status: "completed" | "halted" | "cancelled";
+  /** Char-length of the sub-agent's final assistant message — the
+   * payload itself sits on the parent's `messages` table under the
+   * synthetic `__subagent:<uuid>` nodeId, this is just a cheap badge. */
+  summary_chars: number;
+  /** Cumulative tool-call count from the sub-agent's transcript. */
+  total_tool_calls: number;
+  /** Present when `status !== "completed"`. */
+  halt_reason?: string;
+}
