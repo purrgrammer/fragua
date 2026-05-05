@@ -86,11 +86,11 @@ export interface StepSnapshot {
    *  events under a synthetic nodeId so they don't conflate with the
    *  parent step's totals in `getStepAggregates`. */
   subagentId?: string;
-  /** Human label the calling LLM passed via `agent({ description })`,
+  /** Short name the calling LLM passed via `agent({ name })`,
    *  surfaced for the UI as a friendly alternative to the raw
    *  `__subagent:<uuid>` nodeId. Empty when the caller didn't supply
    *  one. */
-  subagentLabel?: string;
+  subagentName?: string;
   // ---- what came back (populated by `attachStepAggregates`) ----
   cost?: {
     input_tokens: number;
@@ -136,7 +136,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   //   - `parentNodeId` so sub-agent steps render as indented children
   //     under the calling parent step (same path the parallel-branch
   //     UI already uses for fan-out branches)
-  const subagentMetaById = new Map<string, { label?: string; parentNodeId?: string }>();
+  const subagentMetaById = new Map<string, { name?: string; parentNodeId?: string }>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -145,9 +145,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     if (ev.type === "subagent.start") {
       const sid = stringField(data, "subagent_id");
       if (sid) {
-        const meta: { label?: string; parentNodeId?: string } = {};
-        const label = stringField(data, "label");
-        if (label) meta.label = label;
+        const meta: { name?: string; parentNodeId?: string } = {};
+        const name = stringField(data, "name");
+        if (name) meta.name = name;
         const parentNode = stringField(data, "parent_node_id");
         if (parentNode) meta.parentNodeId = parentNode;
         subagentMetaById.set(sid, meta);
@@ -204,7 +204,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         const sid = step.nodeId.slice(SUBAGENT_PREFIX.length);
         step.subagentId = sid;
         const meta = subagentMetaById.get(sid);
-        if (meta?.label) step.subagentLabel = meta.label;
+        if (meta?.name) step.subagentName = meta.name;
         if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
       }
       steps.push(step);

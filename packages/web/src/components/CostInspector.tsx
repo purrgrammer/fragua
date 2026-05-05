@@ -334,7 +334,7 @@ function StepCostRow({
     >
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
         <span className="truncate" title={step.subagentId ? `subagent_id: ${step.subagentId}` : undefined}>
-          {step.subagentId ? `agent · ${step.subagentLabel ?? step.subagentId.slice(0, 8)}` : step.nodeId}
+          {step.subagentId ? `agent · ${step.subagentName ?? step.subagentId.slice(0, 8)}` : step.nodeId}
         </span>
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>

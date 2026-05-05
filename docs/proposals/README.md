@@ -65,6 +65,7 @@ delta called out in the proposal body.
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Codergen maxMs tuning for verify](./codergen-maxms-tuning.md) | designed | feature-run halt at 31m29s on `fact.handler_timeout_leaked` traced to `DEFAULT_MAX_MS = 30 * 60 * 1000` in `handler-bridge.ts`. Layer-1 fix: explicit `max_ms = 5400000` on `verify` in `feature.dot` / `change.dot`. Layer-2: class-keyed defaults (`verify` → 90 min, `commit` → 30 min). Adjacent to but narrower than [`./timeouts.md`](./timeouts.md) — addresses one concrete bug surfaced by run `01kqtna3ewdet7h6bd` |
+| [Agent definitions — named, reusable sub-agent profiles](./agent-definitions.md) | designed | promote V1's "named/file-defined agent profiles" non-goal to a feature: markdown-with-frontmatter sub-agent profiles loaded from `.agents/agents/` + `~/.agents/agents/`, resolved by name at the `agent` tool spawn site |
 
 ## Deferred
 

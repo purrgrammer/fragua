@@ -47,10 +47,10 @@ export interface SwarmToolContext {
  *  tool's TypeBox schema, plus a per-call `signal` so cancellation
  *  propagates from the parent dispatch into the child run. */
 export interface SubagentSpec {
-  /** Optional 1-line label for UI / trace navigation. Surfaced on
-   *  the parent's `llm.toolcall_*` events through the standard tool
-   *  args plumbing — there's no dedicated parent-stream fact for it. */
-  description?: string;
+  /** Optional short name for this sub-agent (e.g. "reviewer",
+   *  "haiku-poet"). Surfaced in the UI as `Agent · <name>` and on
+   *  the `subagent.start` payload for trace navigation. */
+  name?: string;
   /** The only context the sub-agent sees — the LLM constructs it. */
   prompt: string;
   /** Optional per-call system prompt for the sub-agent. When omitted,

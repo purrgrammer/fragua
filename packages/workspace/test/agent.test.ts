@@ -75,7 +75,7 @@ describe("agent tool", () => {
     };
 
     const out = await agentTool.execute(
-      { prompt: "summarise this", description: "summary", allowed_tools: ["read", "agent"] },
+      { prompt: "summarise this", name: "summary", allowed_tools: ["read", "agent"] },
       env,
       { swarmContext },
     );
@@ -89,7 +89,7 @@ describe("agent tool", () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("summarise this");
-    expect(calls[0]?.description).toBe("summary");
+    expect(calls[0]?.name).toBe("summary");
     expect(calls[0]?.allowed_tools).toEqual(["read", "agent"]);
   });
 

@@ -97,7 +97,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    const result = await spawn({ prompt: "do the thing", description: "step 1" });
+    const result = await spawn({ prompt: "do the thing", name: "step 1" });
 
     expect(result.summary).toBe("child summary text");
     expect(result.status).toBe("completed");
@@ -116,7 +116,7 @@ describe("makeSpawnSubagent", () => {
     expect(start.data["subagent_id"]).toBe(result.subagentId);
     expect(start.data["parent_node_id"]).toBe("plan");
     expect(start.data["iteration"]).toBe(2);
-    expect(start.data["label"]).toBe("step 1");
+    expect(start.data["name"]).toBe("step 1");
     expect(start.data["model"]).toBe("claude-haiku-4-5");
     const end = events.find((e) => e.type === "subagent.end")!;
     expect(end.data["subagent_id"]).toBe(result.subagentId);
@@ -296,7 +296,7 @@ describe("makeSpawnSubagent", () => {
     );
 
     // Must not throw, must not leak the parent's bloat onto the child.
-    const result = await spawn({ prompt: "user prompt", description: "regression" });
+    const result = await spawn({ prompt: "user prompt", name: "regression" });
     expect(result.status).toBe("completed");
     expect(observedSystemPrompt).toBeUndefined();
     store.close();

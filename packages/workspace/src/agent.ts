@@ -15,7 +15,7 @@ import { Type } from "@sinclair/typebox";
 import type { SubagentSpec, Tool } from "./types.ts";
 
 export interface AgentToolArgs {
-  description?: string;
+  name?: string;
   prompt: string;
   system_prompt?: string;
   allowed_tools?: string[];
@@ -40,8 +40,11 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
     "Spawn an isolated sub-agent that runs in its own context window. The sub-agent sees only the `prompt` you provide \u2014 no parent transcript. Its observability (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) lands on the parent's event stream with a `subagent_id` discriminator; cost rolls into the parent's metrics naturally. You receive only its final assistant message plus the discriminator. `agent` itself is structurally stripped from the sub-agent's tool pool (no nesting). Use to delegate a self-contained task with a fresh context window.",
   parameters: Type.Object(
     {
-      description: Type.Optional(
-        Type.String({ description: "Optional 1-line label for UI / events; helpful for trace navigation." }),
+      name: Type.Optional(
+        Type.String({
+          description:
+            'Optional short name for this sub-agent (e.g. "reviewer", "haiku-poet"). Surfaced in the UI as `Agent · <name>` and in `subagent.start` events for trace navigation. Keep it short — it\'s a label, not a sentence.',
+        }),
       ),
       prompt: Type.String({
         description: "The only context the sub-agent will see. Construct it to be self-contained.",
@@ -89,7 +92,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
 
     try {
       const spec: SubagentSpec = { prompt: args.prompt };
-      if (args.description !== undefined) spec.description = args.description;
+      if (args.name !== undefined) spec.name = args.name;
       if (args.system_prompt !== undefined) spec.system_prompt = args.system_prompt;
       if (args.allowed_tools !== undefined) spec.allowed_tools = args.allowed_tools;
       if (args.disallowed_tools !== undefined) spec.disallowed_tools = args.disallowed_tools;

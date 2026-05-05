@@ -13,7 +13,7 @@
 //
 // Two new observability event types bracket the slice:
 //
-//   subagent.start { subagent_id, parent_node_id, iteration, label?, provider, model }
+//   subagent.start { subagent_id, parent_node_id, iteration, name?, provider, model }
 //   subagent.end   { subagent_id, status, summary_chars, total_tool_calls, halt_reason? }
 //
 // No `fact.*` events for sub-agents — `fact.run_*` and `fact.node_*`
@@ -131,7 +131,7 @@ export function makeSpawnSubagent(
       iteration: parentCtx.parentIteration,
       provider: parentCtx.parentProvider,
       model: parentCtx.parentModel,
-      ...(spec.description !== undefined ? { label: spec.description } : {}),
+      ...(spec.name !== undefined ? { name: spec.name } : {}),
     });
 
     // Forward every observability event the sub-agent emits to the
