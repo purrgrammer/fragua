@@ -19,6 +19,7 @@
 import { type Node as GraphNode, handlerOf } from "@swarm/core";
 import type { NodeState } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
+import { canRetry, showsLlm } from "../lib/node-metadata.ts";
 import { ModelSelectorLogo } from "./ai-elements/model-selector.tsx";
 
 export interface NodeInspectorProps {
@@ -51,6 +52,12 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
 
   const attrs = node.attrs;
   const handler = handlerOf(node);
+  // Per-handler relevance gates — see lib/node-metadata.ts. The drawer
+  // and the GraphView card share these predicates so a tool node never
+  // surfaces an LLM section just because the stylesheet cascade pinned
+  // an `llm_model` attr it'll never call.
+  const llmRelevant = showsLlm(handler, attrs);
+  const retryRelevant = canRetry(handler);
   const skills = attrs.skills ?? [];
   const allowedTools = attrs.allowed_tools ?? [];
   const deniedTools = attrs.denied_tools ?? [];
@@ -80,36 +87,46 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         )}
         {/* thread_id — shared LLM session marker. Identity rather than
          *  model-section because it's about *which conversation* this node
-         *  joins, not what model handles it. */}
-        {attrs.thread_id && <Field label="thread" value={<code className="text-sw-text">{attrs.thread_id}</code>} />}
+         *  joins, not what model handles it. Suppressed for non-LLM
+         *  handlers (tool / start / exit / heuristic fan-in) so the
+         *  cascade-resolved value doesn't mislead. */}
+        {llmRelevant && attrs.thread_id && (
+          <Field label="thread" value={<code className="text-sw-text">{attrs.thread_id}</code>} />
+        )}
         {state && <Field label="state" value={<code className="text-sw-text">{state.state}</code>} />}
         {state && state.lastEventSeq > 0 && (
           <Field label="last event" value={<code className="text-sw-text">seq {state.lastEventSeq}</code>} />
         )}
       </Section>
 
-      {/* Model & context */}
-      {(attrs.llm_model || attrs.llm_provider || attrs.context || attrs.fidelity || attrs.reasoning_effort) && (
-        <Section title="model & context">
-          {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
-          {attrs.llm_provider && (
-            <Field
-              label="provider"
-              value={
-                <span className="inline-flex items-center gap-1.5">
-                  <ModelSelectorLogo provider={attrs.llm_provider} />
-                  <code className="text-sw-text">{attrs.llm_provider}</code>
-                </span>
-              }
-            />
-          )}
-          {attrs.context && <Field label="context" value={<code className="text-sw-text">{attrs.context}</code>} />}
-          {attrs.fidelity && <Field label="fidelity" value={<code className="text-sw-text">{attrs.fidelity}</code>} />}
-          {attrs.reasoning_effort && (
-            <Field label="reasoning" value={<code className="text-sw-text">{attrs.reasoning_effort}</code>} />
-          )}
-        </Section>
-      )}
+      {/* Model & context. Gated on `showsLlm` so the section vanishes
+       *  for handlers that never call an LLM (tool / start / exit /
+       *  conditional / heuristic parallel.fan_in) even when the
+       *  stylesheet cascade resolved an llm_model. */}
+      {llmRelevant &&
+        (attrs.llm_model || attrs.llm_provider || attrs.context || attrs.fidelity || attrs.reasoning_effort) && (
+          <Section title="model & context">
+            {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
+            {attrs.llm_provider && (
+              <Field
+                label="provider"
+                value={
+                  <span className="inline-flex items-center gap-1.5">
+                    <ModelSelectorLogo provider={attrs.llm_provider} />
+                    <code className="text-sw-text">{attrs.llm_provider}</code>
+                  </span>
+                }
+              />
+            )}
+            {attrs.context && <Field label="context" value={<code className="text-sw-text">{attrs.context}</code>} />}
+            {attrs.fidelity && (
+              <Field label="fidelity" value={<code className="text-sw-text">{attrs.fidelity}</code>} />
+            )}
+            {attrs.reasoning_effort && (
+              <Field label="reasoning" value={<code className="text-sw-text">{attrs.reasoning_effort}</code>} />
+            )}
+          </Section>
+        )}
 
       {/* Parallel — fan-in target is the convergent tripleoctagon, discovered
        *  by the runtime via edges (attractor §4.8). The `fan_in` attr is the
@@ -169,23 +186,29 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
         </Section>
       )}
 
-      {/* Execution — retries, gates, timeouts, budget. */}
-      {(attrs.max_retries !== undefined ||
-        attrs.retry_policy !== undefined ||
+      {/* Execution — retries, gates, timeouts, budget. Retry-shaped
+       *  rows (max_retries, retry_policy, retry_target,
+       *  fallback_retry_target) are gated on `canRetry(handler)` so
+       *  start / exit / parallel components don't surface a value
+       *  the executor can't act on. Budget + gate rows stay ungated:
+       *  `goal_gate`, `timeout`, `max_cost_usd`, etc. apply uniformly. */}
+      {((retryRelevant &&
+        (attrs.max_retries !== undefined ||
+          attrs.retry_policy !== undefined ||
+          attrs.retry_target !== undefined ||
+          attrs.fallback_retry_target !== undefined)) ||
         attrs.timeout !== undefined ||
         attrs.idle_timeout !== undefined ||
         attrs.max_cost_usd !== undefined ||
         attrs.max_tokens !== undefined ||
         attrs.goal_gate !== undefined ||
-        attrs.retry_target !== undefined ||
-        attrs.fallback_retry_target !== undefined ||
         attrs.allow_partial !== undefined ||
         attrs.auto_status !== undefined) && (
         <Section title="execution">
-          {attrs.retry_policy !== undefined && (
+          {retryRelevant && attrs.retry_policy !== undefined && (
             <Field label="retry policy" value={<code className="text-sw-text">{attrs.retry_policy}</code>} />
           )}
-          {attrs.max_retries !== undefined && (
+          {retryRelevant && attrs.max_retries !== undefined && (
             <Field label="max retries" value={<code className="text-sw-text">{attrs.max_retries}</code>} />
           )}
           {attrs.timeout !== undefined && (
@@ -206,15 +229,17 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
           {/* §3.4 retarget chain — gate-level only. Graph-level retarget
            *  is set on the graph attrs, not the node, so we can't show it
            *  from here without plumbing the parent in. */}
-          {typeof attrs.retry_target === "string" && attrs.retry_target.length > 0 && (
+          {retryRelevant && typeof attrs.retry_target === "string" && attrs.retry_target.length > 0 && (
             <Field label="retry target" value={<code className="text-sw-text">{attrs.retry_target}</code>} />
           )}
-          {typeof attrs.fallback_retry_target === "string" && attrs.fallback_retry_target.length > 0 && (
-            <Field
-              label="fallback target"
-              value={<code className="text-sw-text">{attrs.fallback_retry_target}</code>}
-            />
-          )}
+          {retryRelevant &&
+            typeof attrs.fallback_retry_target === "string" &&
+            attrs.fallback_retry_target.length > 0 && (
+              <Field
+                label="fallback target"
+                value={<code className="text-sw-text">{attrs.fallback_retry_target}</code>}
+              />
+            )}
           {attrs.allow_partial !== undefined && (
             <Field label="allow partial" value={<code className="text-sw-text">{String(attrs.allow_partial)}</code>} />
           )}
