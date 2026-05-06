@@ -34,6 +34,7 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { Snippet } from "@/components/ai-elements/snippet";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
@@ -41,7 +42,7 @@ import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { NodeState, RunMessageRow } from "@/lib/api";
-import type { StreamingBlock, StreamingMessage } from "@/lib/useRunLive";
+import type { StreamingBlock, StreamingMessage, ToolStream } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
 export interface RunConversationProps {
@@ -77,6 +78,13 @@ export interface RunConversationProps {
    * only fires when the sub-agent terminates). Optional so non-live
    * snapshots still render correctly off the persisted toolResult. */
   subagentByToolCallId?: ReadonlyMap<string, string>;
+  /** Per-nodeId in-flight stdout/stderr from running tool
+   * (parallelogram) nodes. Populated by `useRunLive` from
+   * `tool.output_chunk` events. Cleared by `useRunLive` when the
+   * persisted `tool_node` row lands. RunConversation renders a
+   * streaming Terminal for any nodeId in this map that doesn't
+   * already have a `tool_node` message in `messages`. */
+  toolStreams?: ReadonlyMap<string, ToolStream>;
   className?: string;
 }
 
@@ -90,6 +98,7 @@ export function RunConversation({
   userInput,
   activeBranchesByParent,
   subagentByToolCallId,
+  toolStreams,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -225,7 +234,33 @@ export function RunConversation({
     streaming != null && streamingNodeId != null && tailSectionNodeId === streamingNodeId && !streamingInTab;
   const orphanStreaming = streaming != null && !appendStreamingToTail && !streamingInTab && streamingSubagentId == null;
 
-  const empty = !isLoading && !userInput && visibleSections.length === 0 && streaming == null;
+  // In-flight tool nodes (parallelogram). For each entry in
+  // `toolStreams` whose nodeId doesn't already have a persisted
+  // `tool_node` row in `messages`, render a synthesized tail section
+  // with a streaming Terminal. Sections appear in the order the
+  // streams started — Map iteration order is insertion order, which
+  // is what we want for parallel branches.
+  const persistedToolNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of messages) {
+      if (row.content.role === "tool_node" && typeof row.nodeId === "string") {
+        ids.add(row.nodeId);
+      }
+    }
+    return ids;
+  }, [messages]);
+  const liveToolNodes = useMemo<Array<{ nodeId: string; stream: ToolStream }>>(() => {
+    if (!toolStreams || toolStreams.size === 0) return [];
+    const out: Array<{ nodeId: string; stream: ToolStream }> = [];
+    for (const [nodeId, stream] of toolStreams) {
+      if (persistedToolNodeIds.has(nodeId)) continue;
+      out.push({ nodeId, stream });
+    }
+    return out;
+  }, [toolStreams, persistedToolNodeIds]);
+
+  const empty =
+    !isLoading && !userInput && visibleSections.length === 0 && streaming == null && liveToolNodes.length === 0;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -299,6 +334,17 @@ export function RunConversation({
                 <StreamingMessageRow streaming={streaming!} />
               </NodeSection>
             )}
+            {liveToolNodes.map(({ nodeId, stream }) => (
+              <NodeSection
+                key={`tool-stream-${nodeId}`}
+                nodeId={nodeId}
+                state={stateByNodeId.get(nodeId)}
+                isLive={isLive}
+                isPaused={isPaused}
+              >
+                <ToolNodeStreamingRow stream={stream} testid={`tool-stream-${nodeId}`} />
+              </NodeSection>
+            ))}
           </ConversationContent>
         )}
         <ConversationScrollButton />
@@ -771,33 +817,50 @@ function SystemPromptRow({ content, testid }: { content: string; testid: string 
 // ─── Tool-node row (graph-level shell step) ────────────────────────
 
 function ToolNodeRow({ message, testid }: { message: ToolNodeMessage; testid: string }): JSX.Element {
-  // Compose the terminal body: stdout first, then stderr separated by
-  // a hairline-style label so the operator can see both without
-  // scrolling between two cards. Either may be empty.
-  const stdout = message.stdout;
-  const stderr = message.stderr;
-  const body =
-    stderr.length > 0
-      ? `${stdout}${stdout.endsWith("\n") || stdout.length === 0 ? "" : "\n"}\x1b[2m── stderr ──\x1b[0m\n${stderr}`
-      : stdout;
-  const truncationNote = (() => {
-    const parts: string[] = [];
-    if (message.stdoutTruncated) parts.push("stdout truncated");
-    if (message.stderrTruncated) parts.push("stderr truncated");
-    if (parts.length === 0) return "";
-    const ref = message.outputArtifactKey ? ` · full output: ${message.outputArtifactKey}` : "";
-    return `\n\n\x1b[2m[${parts.join(", ")}${ref}]\x1b[0m`;
-  })();
+  const body = composeTerminalBody(message.stdout, message.stderr);
+  const truncationNote = composeTruncationNote(
+    message.stdoutTruncated ?? false,
+    message.stderrTruncated ?? false,
+    message.outputArtifactKey,
+  );
   const status = `exit ${message.exitCode} · ${formatDuration(message.durationMs)}`;
   const tone: "success" | "error" = message.exitCode === 0 ? "success" : "error";
   return (
-    <div data-testid={testid}>
-      <Terminal title={`$ ${message.command}`} status={status} tone={tone} output={`${body}${truncationNote || ""}`} />
-      <p className="mt-1 font-mono text-sw-xs text-sw-muted" title={message.cwd}>
-        cwd: {message.cwd}
-      </p>
+    <div data-testid={testid} className="flex flex-col gap-2">
+      <Snippet code={message.command} prefix="$" />
+      <Terminal status={status} tone={tone} output={`${body}${truncationNote}`} />
     </div>
   );
+}
+
+/** In-flight tool node row: there's no persisted `tool_node` message
+ * yet, but `tool.output_chunk` events have populated a streaming
+ * buffer. Renders a Terminal with `isStreaming` showing accumulated
+ * stdout/stderr. The Snippet (command) only appears after completion
+ * since the substituted command isn't on the SSE stream during the
+ * run — it lands on the persisted message. */
+function ToolNodeStreamingRow({ stream, testid }: { stream: ToolStream; testid: string }): JSX.Element {
+  const body = composeTerminalBody(stream.stdout, stream.stderr);
+  return (
+    <div data-testid={testid} className="flex flex-col gap-2">
+      <Terminal status="running" tone="thinking" output={body} isStreaming />
+    </div>
+  );
+}
+
+function composeTerminalBody(stdout: string, stderr: string): string {
+  if (stderr.length === 0) return stdout;
+  const sep = stdout.length === 0 || stdout.endsWith("\n") ? "" : "\n";
+  return `${stdout}${sep}\x1b[2m── stderr ──\x1b[0m\n${stderr}`;
+}
+
+function composeTruncationNote(stdoutTruncated: boolean, stderrTruncated: boolean, artifactKey?: string): string {
+  const parts: string[] = [];
+  if (stdoutTruncated) parts.push("stdout truncated");
+  if (stderrTruncated) parts.push("stderr truncated");
+  if (parts.length === 0) return "";
+  const ref = artifactKey ? ` · full output: ${artifactKey}` : "";
+  return `\n\n\x1b[2m[${parts.join(", ")}${ref}]\x1b[0m`;
 }
 
 function formatDuration(ms: number): string {

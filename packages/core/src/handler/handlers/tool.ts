@@ -94,18 +94,58 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     }
 
     const context = mergeContext(cfg.defaultContext, ctx.routing);
-    const command = substitute(rawCommand, { args: ctx.args, context, nodeOutputs: ctx.nodeOutputs });
+    // Tool commands are shell strings. Substituted values can contain
+    // whitespace, newlines, quotes, or anything else a previous node
+    // legitimately captured into an artifact (an upstream `echo "$PR"`
+    // for example produces `"9876\n"`). Without escapeForShell, that
+    // trailing newline turns one statement into several when /bin/sh
+    // re-tokenises the rendered command — every substitution becomes
+    // an injection vector. Codergen prompts don't need this: prose
+    // tolerates stray whitespace; shell does not.
+    const command = substitute(rawCommand, {
+      args: ctx.args,
+      context,
+      nodeOutputs: ctx.nodeOutputs,
+      escapeForShell: true,
+    });
 
     // cwd resolution: prefer the run's ExecutionEnvironment so concurrent
     // runs each see their own worktree; fall back to the daemon's process
     // cwd only when no env is wired (tests, bare-LocalEnv daemon).
     const cwd = ctx.env?.cwd() ?? process.cwd();
 
+    // Per-(nodeId, kind) chunk index counters. Streamed to the UI as
+    // `tool.output_chunk` observability events: arrival order is
+    // preserved by the SSE channel, but the index lets a consumer
+    // detect gaps if it joins mid-stream and reconcile against the
+    // persisted `tool_node` message that lands on completion.
+    let stdoutChunkIndex = 0;
+    let stderrChunkIndex = 0;
+    const onData = (chunk: string, kind: "stdout" | "stderr"): void => {
+      if (chunk.length === 0) return;
+      // Slice each onData call to fit comfortably under the 4KB
+      // observability payload cap. `chunk` from a child-process pipe
+      // can land at OS buffer boundaries (typically 16-64 KB), so we
+      // can't trust it to be small. Slice at 3 KB to leave room for
+      // routing fields (nodeId, iteration, kind, content_index, …).
+      // The persisted `tool_node` message at completion still carries
+      // a tail-truncated copy, so an SSE chunk that nevertheless
+      // overflows (the store will write a truncation marker)
+      // degrades gracefully — the operator just sees the missing tail
+      // appear at completion.
+      const SLICE_BYTES = 3 * 1024;
+      for (let i = 0; i < chunk.length; i += SLICE_BYTES) {
+        const piece = chunk.slice(i, i + SLICE_BYTES);
+        const idx = kind === "stdout" ? stdoutChunkIndex++ : stderrChunkIndex++;
+        ctx.emit("tool.output_chunk", { kind, delta: piece, content_index: idx });
+      }
+    };
+
     let ranResult: ToolRunResult | undefined;
     try {
       ranResult = await ctx.externalCall(
         { toolName: "tool.shell", args: { command, cwd }, attempt: ctx.iteration + 1 },
-        () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs),
+        () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs, onData),
       );
     } catch (err) {
       if (isAbortError(err)) {
@@ -204,18 +244,24 @@ function truncateTail(text: string, maxBytes: number): { text: string; truncated
 }
 
 /** Dispatch resolution. Explicit `cfg.spawner` wins (test injection);
- * else `ctx.env.exec` (production worktree path); else `runWithBun`
- * against `process.cwd()` (bare-daemon fallback). */
+ * else `ctx.env.exec` (production worktree path; receives the
+ * onData stream); else `runWithBun` against `process.cwd()`
+ * (bare-daemon fallback, no streaming). */
 async function runCommand(
   command: string,
   signal: AbortSignal,
   env: ExecutionEnvironment | undefined,
   spawner: SpawnFn | undefined,
   timeoutMs: number,
+  onData?: (chunk: string, kind: "stdout" | "stderr") => void,
 ): Promise<ToolRunResult> {
   if (spawner) return spawner(command, signal);
   if (env) {
-    const r = await env.exec(command, { signal, timeoutMs });
+    const r = await env.exec(command, {
+      signal,
+      timeoutMs,
+      ...(onData ? { onData } : {}),
+    });
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
   }
   return runWithBun(command, signal);

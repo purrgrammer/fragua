@@ -46,7 +46,7 @@ describe("RunConversation — tool_node row", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("renders a Terminal card with command, exit code, and stdout for a successful tool node", () => {
+  it("renders a Snippet for the command and a Terminal for the output, no cwd row, no terminal title", () => {
     const messages: RunMessageRow[] = [
       toolNodeRow({
         ordinal: 1,
@@ -62,19 +62,21 @@ describe("RunConversation — tool_node row", () => {
     const { container } = renderWithClient(<RunConversation messages={messages} nodeStates={nodeStates} />);
     const q = within(container);
 
-    // Section exists for the tool node.
     expect(q.getByTestId("node-section-find_pr")).toBeTruthy();
-    // Terminal renders.
+    // Snippet carries the command (read from the readonly input value).
+    const snippet = container.querySelector('[data-slot="snippet"]');
+    expect(snippet).toBeTruthy();
+    const snippetInput = snippet?.querySelector('[data-slot="snippet-input"]') as HTMLInputElement | null;
+    expect(snippetInput?.value).toBe("gh pr list --head l10n_crowdin");
+
+    // Terminal renders the body with exit-code status, no `$ <cmd>` title.
     const terminal = q.getByTestId("terminal");
-    expect(terminal).toBeTruthy();
-    // The full command shows in the title.
-    expect(terminal.textContent).toContain("$ gh pr list --head l10n_crowdin");
-    // Exit code in the status line.
     expect(terminal.textContent).toContain("exit 0");
-    // Stdout body.
     expect(terminal.textContent).toContain("1234");
-    // cwd surfaced under the terminal so operators can answer "where did this run?".
-    expect(container.textContent).toContain("/Users/dev/frontend");
+    expect(terminal.textContent ?? "").not.toContain("$ gh pr list");
+
+    // cwd is no longer rendered under the terminal.
+    expect(container.textContent ?? "").not.toContain("/Users/dev/frontend");
   });
 
   it("renders both stdout and stderr when both are present", () => {
@@ -113,5 +115,45 @@ describe("RunConversation — tool_node row", () => {
     const text = within(container).getByTestId("terminal").textContent ?? "";
     expect(text).toContain("stdout truncated");
     expect(text).toContain("build:stdout");
+  });
+
+  it("renders a streaming Terminal for an in-flight tool node (no persisted message yet)", () => {
+    const toolStreams = new Map<string, { stdout: string; stderr: string }>([
+      ["find_pr", { stdout: "fetching PRs…\n", stderr: "" }],
+    ]);
+    const nodeStates: NodeState[] = [{ nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 1 }];
+    const { container } = renderWithClient(
+      <RunConversation messages={[]} nodeStates={nodeStates} toolStreams={toolStreams} isLive />,
+    );
+    // Synthesized streaming section + streaming row exists.
+    expect(within(container).getByTestId("node-section-find_pr")).toBeTruthy();
+    expect(within(container).getByTestId("tool-stream-find_pr")).toBeTruthy();
+    // Streaming output is visible.
+    const terminal = within(container).getByTestId("terminal");
+    expect(terminal.textContent).toContain("fetching PRs");
+    // Status reads "running" with the thinking pulse.
+    expect(terminal.textContent).toContain("running");
+  });
+
+  it("the streaming row goes away once the persisted tool_node message lands for that node", () => {
+    const toolStreams = new Map<string, { stdout: string; stderr: string }>([
+      ["find_pr", { stdout: "fetching PRs…\n", stderr: "" }],
+    ]);
+    const messages: RunMessageRow[] = [
+      toolNodeRow({
+        ordinal: 1,
+        nodeId: "find_pr",
+        command: "gh pr list",
+        cwd: "/repo",
+        exitCode: 0,
+        stdout: "fetching PRs…\n1234\n",
+      }),
+    ];
+    const { container } = renderWithClient(<RunConversation messages={messages} toolStreams={toolStreams} />);
+    // No synthesized stream-only row when the persisted message exists.
+    expect(within(container).queryByTestId("tool-stream-find_pr")).toBeNull();
+    // The persisted Terminal (with Snippet) is the only one rendered.
+    const snippetInput = container.querySelector('[data-slot="snippet-input"]') as HTMLInputElement | null;
+    expect(snippetInput?.value).toBe("gh pr list");
   });
 });

@@ -105,7 +105,11 @@ function makeStubEnv(opts: {
   cwd: string;
   exec: (
     command: string,
-    options?: { signal?: AbortSignal; timeoutMs?: number },
+    options?: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      onData?: (chunk: string, kind: "stdout" | "stderr") => void;
+    },
   ) => Promise<{ stdout: string; stderr: string; exitCode: number; durationMs: number }>;
 }): ExecutionEnvironment {
   return {
@@ -187,7 +191,14 @@ describe("makeToolHandler — happy path", () => {
 });
 
 describe("makeToolHandler — substitution", () => {
-  test("$ARGUMENTS is substituted into tool_command", async () => {
+  // Tool commands run substitution with `escapeForShell: true`, so
+  // every substituted value is wrapped in POSIX single quotes. Adjacent
+  // quoted/unquoted segments concatenate at shell tokenisation
+  // (e.g. `--filter=''@swarm/core''` is one argument equal to
+  // `--filter=@swarm/core`), so existing workflows that pre-quoted
+  // their substitutions keep the same semantics.
+
+  test("$ARGUMENTS is substituted into tool_command (shell-quoted)", async () => {
     const ctx = stubCtx({ args: { $ARGUMENTS: "auth.ts" } });
     let ranWith = "";
     const spec = makeToolHandler({
@@ -198,10 +209,10 @@ describe("makeToolHandler — substitution", () => {
       },
     });
     await spec.handler(ctx);
-    expect(ranWith).toBe("bun test auth.ts");
+    expect(ranWith).toBe("bun test 'auth.ts'");
   });
 
-  test("${context.name} from routing is substituted", async () => {
+  test("${context.name} from routing is substituted (shell-quoted)", async () => {
     const ctx = stubCtx({ routing: { pkg: "@swarm/core" } });
     let ranWith = "";
     const spec = makeToolHandler({
@@ -212,23 +223,51 @@ describe("makeToolHandler — substitution", () => {
       },
     });
     await spec.handler(ctx);
-    expect(ranWith).toBe("bun run --filter='@swarm/core' typecheck");
+    // Pre-quoted templates keep working: the inner `'…'` from the
+    // template + the outer `'…'` from escapeForShell concatenate at
+    // shell tokenisation back into the unquoted value.
+    expect(ranWith).toBe("bun run --filter=''@swarm/core'' typecheck");
   });
 
-  test("$<nodeId>.output from prior nodes is substituted into tool_command", async () => {
+  test("$<nodeId>.output from prior nodes is shell-quoted (newline-bearing artifact stays one token)", async () => {
+    // Regression: the crowdin-review bug. find_pr's output artifact
+    // ended in `\n` (an `echo` adds it). Without escapeForShell, the
+    // newline got interpolated raw and turned a one-line `gh pr review
+    // …` chain into four /bin/sh statements. The fix wraps the value
+    // in single quotes so the trailing newline becomes part of the
+    // single argument.
     const ctx = stubCtx({
-      nodeOutputs: new Map([["plan", { output: "scope.txt", success: true, timestamp: 1 }]]),
+      nodeOutputs: new Map([["find_pr", { output: "9876\n", success: true, timestamp: 1 }]]),
     });
     let ranWith = "";
     const spec = makeToolHandler({
-      toolCommand: "wc -l $plan.output",
+      toolCommand:
+        "gh pr review $find_pr.output --approve && gh pr update-branch $find_pr.output && gh pr merge $find_pr.output --auto --squash",
       spawner: async (cmd) => {
         ranWith = cmd;
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
       },
     });
     await spec.handler(ctx);
-    expect(ranWith).toBe("wc -l scope.txt");
+    // Each substitution wrapped in '…'; the newline is captured inside
+    // the quoted token rather than ending the statement.
+    expect(ranWith).toBe(
+      "gh pr review '9876\n' --approve && gh pr update-branch '9876\n' && gh pr merge '9876\n' --auto --squash",
+    );
+  });
+
+  test("a value containing single quotes is escaped per POSIX (close-quote, escaped quote, reopen)", async () => {
+    const ctx = stubCtx({ args: { $ARGUMENTS: "it's fine" } });
+    let ranWith = "";
+    const spec = makeToolHandler({
+      toolCommand: "echo $ARGUMENTS",
+      spawner: async (cmd) => {
+        ranWith = cmd;
+        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
+      },
+    });
+    await spec.handler(ctx);
+    expect(ranWith).toBe("echo 'it'\\''s fine'");
   });
 });
 
@@ -367,6 +406,69 @@ describe("makeToolHandler — ExecutionEnvironment routing", () => {
     expect(result.kind).toBe("transition");
     const evt = ctx.__emitted.find((e) => e.type === "tool.completed");
     expect(evt?.payload["cwd"]).toBe(process.cwd());
+  });
+});
+
+describe("makeToolHandler — output streaming", () => {
+  test("env.exec onData chunks fan out as tool.output_chunk events with kind + content_index", async () => {
+    const env = makeStubEnv({
+      cwd: "/tmp/wt",
+      exec: async (_cmd, opts) => {
+        // Simulate a streamed stdout (two chunks) and a stderr chunk.
+        opts?.onData?.("line1\n", "stdout");
+        opts?.onData?.("line2\n", "stdout");
+        opts?.onData?.("warn: x\n", "stderr");
+        return { exitCode: 0, stdout: "line1\nline2\n", stderr: "warn: x\n", durationMs: 4 };
+      },
+    });
+    const ctx = stubCtx({ nodeId: "build", env });
+    const spec = makeToolHandler({ toolCommand: "echo build" });
+    await spec.handler(ctx);
+
+    const chunks = ctx.__emitted.filter((e) => e.type === "tool.output_chunk");
+    expect(chunks.length).toBe(3);
+    expect(chunks[0]?.payload).toMatchObject({ kind: "stdout", delta: "line1\n", content_index: 0 });
+    expect(chunks[1]?.payload).toMatchObject({ kind: "stdout", delta: "line2\n", content_index: 1 });
+    expect(chunks[2]?.payload).toMatchObject({ kind: "stderr", delta: "warn: x\n", content_index: 0 });
+  });
+
+  test("a >3KB chunk is sliced into multiple events so the 4KB observability cap can't truncate the payload", async () => {
+    const big = "y".repeat(7 * 1024); // 7 KB in one onData
+    const env = makeStubEnv({
+      cwd: "/tmp/wt",
+      exec: async (_cmd, opts) => {
+        opts?.onData?.(big, "stdout");
+        return { exitCode: 0, stdout: big, stderr: "", durationMs: 1 };
+      },
+    });
+    const ctx = stubCtx({ nodeId: "noisy", env });
+    const spec = makeToolHandler({ toolCommand: "yes" });
+    await spec.handler(ctx);
+
+    const chunks = ctx.__emitted.filter((e) => e.type === "tool.output_chunk");
+    // 7 KB at 3 KB per slice → 3 events.
+    expect(chunks.length).toBe(3);
+    for (const c of chunks) {
+      const len = (c.payload["delta"] as string).length;
+      expect(len).toBeLessThanOrEqual(3 * 1024);
+    }
+    // Slices reassemble to the original byte-perfect.
+    const reassembled = chunks.map((c) => c.payload["delta"] as string).join("");
+    expect(reassembled).toBe(big);
+  });
+
+  test("no onData is wired when there's no env (Bun fallback path) — chunks aren't emitted", async () => {
+    // Test fallback: explicit spawner takes the place of env.exec, and
+    // the test spawner doesn't synthesise streaming. No tool.output_chunk
+    // events should fire.
+    const ctx = stubCtx();
+    const spec = makeToolHandler({
+      toolCommand: "echo bare",
+      spawner: fakeSpawner({ exitCode: 0, stdout: "bare\n", stderr: "" }),
+    });
+    await spec.handler(ctx);
+    const chunks = ctx.__emitted.filter((e) => e.type === "tool.output_chunk");
+    expect(chunks.length).toBe(0);
   });
 });
 

@@ -100,6 +100,7 @@ export function RunDetail(): JSX.Element {
   const {
     messages,
     streaming,
+    toolStreams,
     status: liveStatus,
     totalEvents,
     liveCost,
@@ -209,6 +210,7 @@ export function RunDetail(): JSX.Element {
               <RunConversation
                 messages={messages}
                 streaming={streaming}
+                toolStreams={toolStreams}
                 nodeStates={detail?.nodes}
                 isLive={isLive}
                 isPaused={detail?.status === "paused"}

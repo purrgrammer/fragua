@@ -40,12 +40,24 @@ export type StreamingBlock =
   | { type: "thinking"; index: number; text: string }
   | { type: "toolCall"; index: number; argsText: string };
 
+/** Live stdout/stderr from a tool (parallelogram) node, accumulated
+ * from `tool.output_chunk` events. Cleared when the persisted
+ * `tool_node` message lands for the same node — the message row is
+ * the source of truth once it arrives. Keyed by nodeId so concurrent
+ * tool nodes (parallel branches) each get their own buffer. */
+export interface ToolStream {
+  stdout: string;
+  stderr: string;
+}
+
 export interface UseRunLiveResult {
   /** All persisted messages for the run, ordered by ordinal. */
   messages: RunMessageRow[];
   /** In-flight assistant message being streamed, or `null` when the
    * agent is idle or between turns. */
   streaming: StreamingMessage | null;
+  /** Per-nodeId in-flight tool output. Empty entries are pruned. */
+  toolStreams: ReadonlyMap<string, ToolStream>;
   /** Connection status across bootstrap + stream. */
   status: RunLiveStatus;
   /** Monotonic counter bumped on every SSE frame. Cheap invalidation
@@ -100,6 +112,7 @@ const MESSAGE_SIGNAL_TYPES = new Set<string>(["agent.message_end", "fact.message
 export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOptions = {}): UseRunLiveResult {
   const [messages, setMessages] = useState<RunMessageRow[]>([]);
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
+  const [toolStreams, setToolStreams] = useState<ReadonlyMap<string, ToolStream>>(() => new Map());
   const [totalEvents, setTotalEvents] = useState(0);
   const [liveCostFrames, setLiveCostFrames] = useState<LiveCostFrame[]>([]);
   const [detailOverlay, setDetailOverlay] = useState<DetailOverlay>(EMPTY_DETAIL_OVERLAY);
@@ -116,6 +129,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   useEffect(() => {
     setMessages([]);
     setStreaming(null);
+    setToolStreams(new Map());
     setTotalEvents(0);
     setLiveCostFrames([]);
     setDetailOverlay(EMPTY_DETAIL_OVERLAY);
@@ -254,6 +268,30 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
           type === "llm.text_delta" ? "text" : type === "llm.thinking_delta" ? "thinking" : "toolCall";
         setStreaming((prev) => applyDelta(prev, nodeId, kind, index, delta));
       }
+
+      // Tool node (parallelogram) output streaming. Each
+      // `tool.output_chunk` event carries a slice of stdout or
+      // stderr; we accumulate into a per-node buffer so the UI can
+      // render a live Terminal until the persisted `tool_node`
+      // message replaces it. Cleared per-node when:
+      //   - `fact.node_completed` lands (handler returned, persisted
+      //      row about to be fetched).
+      //   - The runId resets.
+      if (type === "tool.output_chunk" && nodeId != null) {
+        const kind = payload?.["kind"];
+        const delta = typeof payload?.["delta"] === "string" ? (payload["delta"] as string) : "";
+        if ((kind === "stdout" || kind === "stderr") && delta.length > 0) {
+          setToolStreams((prev) => appendToolChunk(prev, nodeId, kind, delta));
+        }
+      }
+      if (type === "fact.node_completed" && nodeId != null) {
+        setToolStreams((prev) => {
+          if (!prev.has(nodeId)) return prev;
+          const next = new Map(prev);
+          next.delete(nodeId);
+          return next;
+        });
+      }
     },
     [runId],
   );
@@ -299,7 +337,29 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
             ? "loading"
             : sseStatus;
 
-  return { messages, streaming, status, totalEvents, liveCost, detailOverlay, subagentByToolCallId };
+  return { messages, streaming, toolStreams, status, totalEvents, liveCost, detailOverlay, subagentByToolCallId };
+}
+
+/** Append a `tool.output_chunk` slice into the per-node stdout/stderr
+ * buffer. Allocates a fresh top-level Map (so React's setState picks
+ * up the change) but mutates the inner ToolStream object — the buffer
+ * is short-lived and per-node, so in-place string append is fine. */
+function appendToolChunk(
+  prev: ReadonlyMap<string, ToolStream>,
+  nodeId: string,
+  kind: "stdout" | "stderr",
+  delta: string,
+): ReadonlyMap<string, ToolStream> {
+  const next = new Map(prev);
+  const existing = next.get(nodeId);
+  if (existing) {
+    if (kind === "stdout") existing.stdout += delta;
+    else existing.stderr += delta;
+    return next;
+  }
+  const fresh: ToolStream = { stdout: kind === "stdout" ? delta : "", stderr: kind === "stderr" ? delta : "" };
+  next.set(nodeId, fresh);
+  return next;
 }
 
 /** Delta-fold: place `delta` at `index` within the streaming buffer's
