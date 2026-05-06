@@ -1,46 +1,26 @@
 # Proposals — index
 
-Per [AGENTS.md](../../AGENTS.md) ground rule #1, every proposal carries YAML
-front-matter with two orthogonal tags:
+Active proposals at the top; shipped proposals collapsed at the bottom
+as the design record. Each proposal carries YAML front-matter per
+[AGENTS.md](../../AGENTS.md) ground rule #1:
 
 - **status** — decision state: `proposed | accepted | in-progress | shipped | deferred | discarded`
 - **maturity** — design state: `sketch | designed | specified`
 
-A proposal flips to `shipped` only when the README "What swarm delivers
-today" section can claim its capability without qualification. Until
-then, partially-landed work is `in-progress` with the outstanding
-delta called out in the proposal body.
+A proposal flips to `shipped` only when the root [`README.md`](../../README.md)
+"What swarm delivers today" section can claim its capability without
+qualification (drift-lint enforces this). Partially-landed work stays
+`in-progress` with the outstanding delta called out in the proposal body.
 
 ---
-
-## Shipped
-
-| Proposal | Maturity | Notes |
-|---|---|---|
-| [Project config file](./project-config.md) | specified | `<project>/.swarm/config.jsonc` |
-| [Doc-vs-code drift CI lint](./drift-lint.md) | specified | `bun run lint:docs` in CI |
-| [Bound the OCC retry loop](./occ-retry-ceiling.md) | specified | ceiling=3 with exponential backoff; structured `occ_exhausted` halt |
-| [Auto-retry for transient LLM provider errors](./provider-auto-retry.md) | specified | classify 408/429/5xx/529/network as auto; full-jitter exponential or honoured `Retry-After`; new `paused_provider_retry` status |
-| [Harness](./harness.md) | specified | `swarm harness` foreground supervisor; default DB `~/.swarm/swarm.db`, default :6767, web bundle auto-build, OSC 8 hyperlink. Discovery via `daemon_lock.{http_url, http_port, harness_version}` |
-| [Schema additions for project-aware runs](./schema-additions.md) | specified | `run_state.{cwd, workflow_name, workflow_scope, workflow_path}`, `daemon_lock.{http_url, http_port, harness_version}`; `project_id` + `projects` table removed; schema v4 |
-| [Workflow resolution by name](./workflow-resolution.md) | specified | bare names resolve `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot` |
-| [One-off migration](./migration.md) | specified | `scripts/migrate-pre-harness.ts` ran on this repo on 2026-05-04 |
-| [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) | specified | P0 (per-branch `fact.node_started`/`fact.node_completed` with `parentNodeId`/`parallelIndex`/`score`; `$<branchId>.output` resolves downstream of a fan-out) + P1 (web graph multi-active states with success accent for fan_in winner; step breakdown branch-row indent + parent summary aggregation) + P2 (conversation split tabs gated on concurrently-running branches; cost panel grouping rides on the same step shape) all complete |
-| [Recoverable pause unification](./recoverable-budget-pause.md) | specified | unified non-terminal `paused` status + reason-discriminated `fact.run_paused` (`operator` \| `provider_error` \| `payment_required` \| `budget`); `intent.budget_adjusted` (`POST /runs/:id/budget`) raises caps via `routing.budget_override.<scope>.<metric>`; `paused_provider_error` retired |
-| [Agent tool — LLM-spawned sub-agents](./agent-tool.md) | specified | one new LLM-callable tool (`agent`, `defaultDisabled: true`). Sub-agents are NOT runs — they're a tool implementation that runs inline as a fresh codergen call against the parent's event stream, all observability tagged with `subagent_id` on payload. Cost rolls into the parent's `metrics` through the existing accumulation path. Two new observability event types (`subagent.start` / `subagent.end`) bracket each spawn. Parallel-safe — N spawns from one parent message run concurrently, each demuxed by `subagent_id`. Schema v7 drops the v5 conversation-run scaffolding (sub-agents have no `run_state` row, no `kind` discriminator, no parent linkage columns) |
-| [Scheduled runs](./scheduled-runs.md) | specified | `(workflow_ref, cwd, interval, optional input)` operator-side schedules at shorthand cadences (`30m`/`1h`/`6h`/`24h`); each fire enqueues a fresh run with `run_state.schedule_id` lineage; default `overlap=skip`; at-most-one catch-up after downtime via `fact.schedule_late`; auto-pause only on parser/validator failure (schema v6) |
-| [Skill tool](./skill-tool.md) | stable | built-in `skill({ name, arguments? })` LLM-callable tool, force-included on every codergen call (workflow `allowed_tools` / `denied_tools` cannot exclude it); loads SKILL.md by catalogue name, parses frontmatter (only `name` + `description` honoured), substitutes `$ARGUMENTS` (appends `<invocation>` block when body has no placeholder); structured `{name, description, path, content}` payload rides on `tool.execution_end.data.result.details.data` and drives a dedicated viz card; sub-agent inheritance via the existing `materialiseForChild` filter on `spec.skills` |
-| [Skills + agents UI + unified discovery](./skills-and-agents-ui.md) | specified | Read-only `/skills` + `/agents` (and per-project tabs on `/projects/:cwdEnc`) list every discovered skill / sub-agent profile across `~/.agents`, `~/.claude`, and every project root the store has ever seen. Skill detail: metadata header + recursive file tree + on-demand viewer (markdown rendered with raw toggle, images inline, monospace text, 4 KB hex-dump fallback) with SKILL.md auto-selected on open; agent detail: metadata header + prompt body verbatim. Server is stateless — `GET /skills*` / `GET /agents*` re-walk discovery per request, identity in URLs is `base64url(skill_dir)` / `base64url(location)`, `?project_cwd=` scopes lists; `tanstack-query` caches list + tree + per-file content client-side and the Rescan button invalidates. Daemon discovery is the same superset; the codergen-time filter prunes per-run by `env.projectCwd()` (new method on `ExecutionEnvironment`) so a run only sees globals ∪ its own project, and a never-seen project's first run auto-scans its cwd before dispatch (inflight-set guards against double-scan). New `Skill.project_cwd` / `AgentDefinition.project_cwd` (and on `SkillCatalogRecord` for replay correlation — ARCH §3 updated) |
-| [Agent definitions — named, reusable sub-agent profiles](./agent-definitions.md) | specified | Named sub-agent profiles loaded from `.agents/agents/` + `~/.agents/agents/`, resolved at `agent` tool spawn site. Discovery mirrors skills (project beats user; `.claude/agents/` is a cross-client fallback). Each profile is a flat `.md` with YAML frontmatter (`name`, `description`, optional `model` / `provider` / `allowed_tools`) and a body that becomes the sub-agent's system prompt. Catalogue (`name` + `description` per profile) is appended to the parent's system prompt only when the node's tool pool includes `agent`; the LLM invokes one via `agent({ agent: "<name>", … })`, def's body wins when no inline `system_prompt`, def's `allowed_tools` are normalised to canonical lowercase snake_case, def's `model`/`provider` override the parent's choice on the synthesised child node, and `subagent.start.agent_def` carries the resolved profile name (the free-form `name` label and the resolved `agent_def` are independent fields on the wire — see ARCH §3). Inline form unchanged — named profiles are sugar over it |
 
 ## In progress
 
 | Proposal | Maturity | Outstanding |
 |---|---|---|
-| [Run isolation via worktrees](./run-isolation.md) | sketch | branch GC, paused-run base-drift, per-branch parallel isolation, editor co-occupancy — see [worktree-design](./worktree-design.md) |
 | [Budget controls](./budget-controls.md) | specified | per-project cost cap cascading from project config |
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
-| [Periodic introspection workflow](./introspection-workflow.md) | specified | workflow `.dot` ships and runs end-to-end; `find`/`grep`/`ls` primitive tools landed; archival path for the synthesised review pending |
+| [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
 
 ## Accepted (design done; awaiting scheduling)
@@ -54,7 +34,7 @@ delta called out in the proposal body.
 
 | Proposal | Maturity | Notes |
 |---|---|---|
-| [Extensions — custom hooks](./project-extensions.md) | designed | rides the loader from `./extensions-tools.md`; four hook events — `tool.before_call` / `tool.after_call` / `agent.before_start` (feedback: `block` / mutate `input` / replace `content` / replace `systemPrompt`) and `agent.turn_end` (read-only `AssistantMessage`); ships after tools |
+| [Extensions — custom tools and hooks (unified)](./project-extensions.md) | designed | folds tools and hooks back into one factory file riding the loader from `./extensions-tools.md`; four hook events — `tool.before_call` / `tool.after_call` / `agent.before_start` (feedback: `block` / mutate `input` / replace `content` / replace `systemPrompt`) and `agent.turn_end` (read-only `AssistantMessage`); ships after tools |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
@@ -65,12 +45,10 @@ delta called out in the proposal body.
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
 | [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
-| [Agent base prompt](./agent-base-prompt.md) | sketch | flip `skipFrameworkSystemPrompt` default off for sub-agents; profile body becomes the `perNode` specialisation slot, the rest of the scaffold (env / skills catalogue / agents catalogue / context files) is rebuilt for the sub-agent's identity. Nested catalogue gates on `allowed_tools` including `agent` |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Codergen maxMs tuning for verify](./codergen-maxms-tuning.md) | designed | feature-run halt at 31m29s on `fact.handler_timeout_leaked` traced to `DEFAULT_MAX_MS = 30 * 60 * 1000` in `handler-bridge.ts`. Layer-1 fix: explicit `max_ms = 5400000` on `verify` in `feature.dot` / `change.dot`. Layer-2: class-keyed defaults (`verify` → 90 min, `commit` → 30 min). Adjacent to but narrower than [`./timeouts.md`](./timeouts.md) — addresses one concrete bug surfaced by run `01kqtna3ewdet7h6bd` |
 | [Watchdog timeout → pause-retry, not abort](./watchdog-timeout-pause-retry.md) | designed | re-categorise `fact.node_aborted{cause:"timeout"}` as `fact.run_paused{reason:"timeout_retry"}` with `auto_resume_at` so the codergen thread continuity falls out of the existing `paused_retry` plumbing. Operator cancel/steer keeps the abort/wipe path. Driven by run `01kqwzpt0hyfws0a0j` burning $17 across 4 watchdog-timeout-and-restart cycles |
-| [Sub-agent crash resilience](./sub-agent-crash-resilience.md) | designed | resume sub-agents across daemon crashes via deterministic `subagent_id` (sha256 of parent run/node/iter/tool_call_id), child `priorMessages` hydration on respawn, and "already completed" detection that synthesises the parent's tool-result from the persisted transcript. Verified pi-ai preserves `toolCall.id` byte-identically on rehydrate. Driven by run `01kqyjswq14xnv2kts` losing 48 tool calls of work after a daemon crash mid-spawn |
 
 ## Deferred
 
@@ -83,6 +61,28 @@ delta called out in the proposal body.
 | [Credentials in DB](./credentials.md) | designed | `~/.swarm/auth.json` (already global) is enough for single-user; revisit when extension code can read other projects' state |
 | [Honest token count on system-prompt rows](./system-prompt-token-count.md) | sketch | char count is fine for a label; full per-model accuracy needs server routing + provenance lookup, more infra than the UX warrants today |
 
-## Discarded
+## Shipped
 
-_(none yet.)_
+<details>
+<summary>Design records for delivered capability — capability claims live in the root README. Click to expand.</summary>
+
+- [Project config file](./project-config.md)
+- [Doc-vs-code drift CI lint](./drift-lint.md)
+- [Bound the OCC retry loop](./occ-retry-ceiling.md)
+- [Auto-retry for transient LLM provider errors](./provider-auto-retry.md)
+- [Harness](./harness.md)
+- [Schema additions for project-aware runs](./schema-additions.md)
+- [Workflow resolution by name](./workflow-resolution.md)
+- [One-off migration](./migration.md)
+- [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md)
+- [Recoverable pause unification](./recoverable-budget-pause.md)
+- [Run isolation via worktrees](./run-isolation.md)
+- [Agent tool — LLM-spawned sub-agents](./agent-tool.md)
+- [Scheduled runs](./scheduled-runs.md)
+- [Skill tool](./skill-tool.md)
+- [Skills + agents UI + unified discovery](./skills-and-agents-ui.md)
+- [Agent definitions — named, reusable sub-agent profiles](./agent-definitions.md)
+- [Agent base prompt — sub-agents inherit the parent's framing](./agent-base-prompt.md)
+- [Sub-agent crash resilience — resume up to last completed turn](./sub-agent-crash-resilience.md)
+
+</details>

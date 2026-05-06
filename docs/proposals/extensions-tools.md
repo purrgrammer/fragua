@@ -14,9 +14,9 @@ per file. Discovered from `~/.swarm/extensions/` (user) and
 authors who already write pi extensions transfer 1:1.
 
 This is the first half of the extensions surface. Hooks (with
-feedback semantics) live in a sibling proposal,
-[`./extensions-hooks.md`](./extensions-hooks.md), and ride the same
-loader / discovery / hot-reload / trust infrastructure described
+feedback semantics) live in [`./project-extensions.md`](./project-extensions.md),
+which folds tools and hooks back into one factory file but rides the
+same loader / discovery / hot-reload / trust infrastructure described
 here. Tools ship first because the surface is straightforward — no
 mid-run mutation contract, no ordering questions across two scopes.
 
@@ -44,7 +44,7 @@ mid-run mutation contract, no ordering questions across two scopes.
 
 ## Non-goals (this proposal)
 
-- **Hooks** — owned by `./extensions-hooks.md`.
+- **Hooks** — owned by [`./project-extensions.md`](./project-extensions.md).
 - **Custom node-kinds.** `kind` stays closed; tools cover the long tail.
 - **Custom commands / shortcuts / providers / message renderers / UI
   components.** pi-codergen exposes those because it's a TUI; swarm's
@@ -604,7 +604,7 @@ remaining items are additive knobs.
 
 ## What this does not commit to
 
-- **Hooks** — owned by [`./extensions-hooks.md`](./extensions-hooks.md).
+- **Hooks** — owned by [`./project-extensions.md`](./project-extensions.md).
 - **Custom call-time chrome** beyond `<ToolHeader>` + `<ToolInput>`.
   State badge, icon, collapsible behaviour are owned by ai-elements
   (consistent across tools by design). Renderers can opt out of the

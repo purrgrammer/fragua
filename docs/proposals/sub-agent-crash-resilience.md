@@ -1,9 +1,18 @@
 ---
 title: Sub-agent crash resilience — resume up to last completed turn
-status: proposed
-maturity: designed
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-06
 ---
+
+> **Shipped (2026-05-06).** Deterministic `subagent_id` (sha256 of
+> parent runId/nodeId/iteration/tool_call_id), `priorMessages`
+> hydration on respawn, and already-completed-transcript detection
+> all landed in `packages/daemon/src/spawn-subagent.ts`. The
+> `subagent.resumed` event (`{reason: "already_completed" |
+> "transcript_hydrated"}`) brackets the resume path; tests in
+> `packages/daemon/test/subagent.test.ts:924,1036` cover both
+> branches. The narrative below is preserved as the design record.
 
 # Sub-agent crash resilience — resume up to last completed turn
 

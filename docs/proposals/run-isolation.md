@@ -1,8 +1,8 @@
 ---
 title: Run isolation via worktrees
-status: in-progress
-maturity: sketch
-last-reviewed: 2026-05-01
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-06
 ---
 
 # Run isolation via worktrees
@@ -26,14 +26,14 @@ last-reviewed: 2026-05-01
 
 ## Outstanding
 
-- Branch GC (`swarm gc --branches`) — without it, branch-on-dispose
-  becomes a forest.
-- Paused-run base-drift: `HEAD` advances under a paused run, replay
-  semantics murky.
-- Per-branch isolation in `parallel` nodes — today siblings share a
-  worktree.
-- Editor co-occupancy: a developer with the worktree open conflicts
-  with dispose.
+All scope owned by this proposal has shipped. Branch GC landed as
+`swarm gc --branches` (`packages/cli/src/commands/gc.ts`) with the
+30-day default retention contract specified below.
+
+The broader design questions — paused-run base-drift, per-branch
+isolation in `parallel` nodes, editor co-occupancy — are owned by
+[worktree-design](./worktree-design.md), which catalogues the open
+trade-offs without committing to a direction.
 
 ## Shape
 
