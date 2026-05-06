@@ -225,30 +225,90 @@ event stream. Add `subagent.resumed { subagent_id, reason }` so:
 - Operators reading the event stream see the resume cleanly.
 - `tool_call_id` discriminator stays valid across resume.
 
-### E. Parent pre-flight (optional follow-up — full-fidelity callers)
+### E. Pre-flight rehydrate sanitisation (every codergen dispatch)
 
-When the parent itself uses `fidelity=full` and rehydrates a transcript
-ending in an unpaired `agent` toolCall, the child rehydration kicks in
-via the natural agent-tool execute path — but pi-ai needs to actually
-EXECUTE that tool, which only happens on a fresh assistant turn. The
-rehydrated transcript would have to be sanitised first.
+When ANY codergen call (parent or sub-agent) rehydrates a transcript
+ending in an unpaired toolCall, pi-ai sends it verbatim and the
+provider rejects. We sanitise before pi-ai sees it. One generic pass
+handles every depth — depth is bounded at 2 anyway (sub-agents can't
+nest; `agent` is structurally stripped from child pools).
 
-Two options:
+Lands in `PiCodergenBackend.run`, right after `hydrateMessages` is
+computed, before `new Agent({initialState: ..., messages: hydrateMessages})`:
 
-1. **Pre-spawn sweep.** Before `agent.prompt(effectivePrompt)`, scan
-   `priorMessages` for unpaired `toolCall { name: "agent" }` blocks,
-   resolve them via the tool registry directly (running the agent tool
-   with its hydrate-+-detect-completed path), insert synthesised
-   `toolResult` messages after the assistant turn. Pi-ai sees a valid
-   transcript and continues from a clean boundary.
-2. **Wait for compact-fidelity orchestrators only.** Punt full-fidelity
-   resume until someone actually wants it; document that
-   `fidelity=full` runs lose work on crash today and the proposal
-   covers the sub-agent slice only.
+```ts
+hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
+  toolRegistry: this.registry,
+  swarmContext,           // for tool execution (agent tool needs spawnSubagent)
+  signal: input.signal,
+});
+```
 
-Option 2 keeps the scope tight. Production today is compact; the
-sub-agent recovery primitive is the immediate win. Mark Option 1 as a
-deferred follow-up.
+The sanitiser scans the trailing assistant message for unpaired
+`toolCall` blocks (where no following `toolResult` row exists for the
+same `toolCallId`), and per block:
+
+- **`name === "agent"`** — re-execute the agent tool via the registry
+  with `tool_call_id: block.id`. The agent tool's hydrate-or-detect-
+  completed path (primitives B + C above) does the right thing
+  recursively: child rehydrates from `__subagent:<id>`, detects
+  completed-pre-crash, synthesises `SubagentResult` without an LLM
+  call, returns the toolResult.
+- **Idempotent reads** (`read`, `grep`, `glob`, `ls`, `find`) — re-
+  execute. Same input, same output; cheap.
+- **Side-effecting tools** (`bash`, `edit`, `write`, anything else) —
+  synthesise a structured error toolResult:
+  ```json
+  {
+    "is_error": true,
+    "content": "Tool '<name>' execution was interrupted by a daemon
+    restart and cannot be safely replayed (the prior partial effect
+    on the working tree is unknown). Re-issue the call if you still
+    need this work; verify state first if the operation was
+    destructive."
+  }
+  ```
+  The parent's LLM sees the error on its next turn and decides — retry,
+  reverify, abandon. **Never silently re-run a destructive tool**;
+  re-running `rm -rf foo` after partial completion can cascade.
+
+The classification lives on the tool definition itself — extend
+`Tool<...>` with `idempotentOnReplay?: boolean` (default `false`,
+opt-in for the small set of pure reads). Tool authors who want
+re-execution opt in explicitly; the safe default is error-synthesise.
+
+After sanitisation, hydrateMessages contains a well-paired transcript
+ending in a `toolResult` message. Pi-ai's `agent.prompt(...)` flow
+appends the new user message and continues cleanly.
+
+### F. Cost rollup on resumed `subagent.end` is cumulative
+
+The cancelled `subagent.end` from the pre-crash bracket carries the
+partial cost (per the just-shipped `SubagentEndData` cost fields,
+commit `19fe15a`). The resumed bracket's `subagent.end.costUsd` carries
+**the cumulative total across all spawns of this subagent_id** — not
+just the new turns since respawn.
+
+On respawn, before initialising `localCostUsd` to 0, query prior
+`subagent.end` events for the same `subagent_id` and seed:
+
+```ts
+const priorEnds = deps.store
+  .getEventsByType(parentRunId, "subagent.end")
+  .filter((e) => e.payload.subagent_id === subagentId);
+const priorCost = priorEnds.reduce((s, e) => s + (e.payload.costUsd ?? 0), 0);
+let localCostUsd = priorCost;
+let localTotalTokens = priorEnds.reduce((s, e) => s + (e.payload.totalTokens ?? 0), 0);
+// ... same for input/output/cache fields
+```
+
+Operators reading `subagent.end.costUsd` for the latest bracket of a
+given `subagent_id` get the truthful end-to-end cost of the logical
+sub-agent's work. Naïve summation across ALL `subagent.end` rows for
+the same id over-counts — document that consumers should filter by
+`subagent_id` and take the terminal (non-cancelled) bracket. The
+parent's `total_cost_usd` projection is unaffected — that still folds
+each `fact.node_completed`'s costUsd once.
 
 ## What this doesn't change
 
@@ -267,70 +327,104 @@ deferred follow-up.
   sweep; no change needed. The new path just reads the existing fact
   as the trigger to scan for resumable sub-agents.
 
-## Open questions
+## Open questions (resolved)
 
-1. **Parent's pi-ai `agent.prompt` after rehydrate.** Even with
-   deterministic ids and child hydration, the parent still needs a
-   valid transcript before pi-ai's call. Option E above covers this;
-   the open question is whether to land it in this PR or defer.
-   Recommendation: defer — compact-mode orchestrators are the v1
-   target; the sub-agent primitive is independently useful for
-   future-proofing.
-2. **Mid-tool crashes inside the sub-agent.** The child's transcript
-   could end with an unpaired toolCall (e.g. `bash` was running when
-   the daemon died). Same recursive problem. Acceptable v1 behavior:
-   the child rehydrates whatever's there, pi-ai sends the unpaired
-   toolCall to the provider, the provider rejects, the child's run()
-   returns `Outcome.fail(...)`, the parent gets a tool-error
-   `SubagentResult` and decides what to do. Not great but bounded —
-   the child can be re-spawned by the parent's LLM with a different
-   prompt.
-3. **Concurrent siblings sharing `parentIteration`.** Two `agent`
+These were genuine design choices when the proposal was first drafted;
+the user signed off on the recommendations on 2026-05-06.
+
+1. ~~**Parent rehydrate sanitisation — defer or in?**~~ **Decision: in.**
+   Option E ships in v1 as a generic pre-flight that runs at every
+   codergen dispatch. Closes the door on full-fidelity callers crashing
+   mid-spawn instead of leaving them to discover the unpaired-tool_use
+   rejection at runtime.
+2. ~~**Recursive mid-tool crashes inside the sub-agent — depth bound?**~~
+   **Decision: full fix regardless of depth.** Same generic sanitiser
+   covers parent and child. Depth is bounded at 2 by the no-nesting
+   invariant on `agent`, but the sanitiser doesn't care — it runs
+   wherever a codergen call rehydrates.
+3. ~~**Cost rollup on resumed `subagent.end` — per-spawn or
+   cumulative?**~~ **Decision: cumulative.** The resumed bracket
+   carries the truthful end-to-end cost of the logical sub-agent's
+   work, seeded from prior `subagent.end` events for the same
+   `subagent_id`. Documented that consumers summing cost across
+   spawns must dedupe by `subagent_id` and take the terminal bracket.
+
+## Open questions (still open)
+
+1. **Concurrent siblings sharing `parentIteration`.** Two `agent`
    toolcalls in one assistant message both have `parentIteration:0`;
-   their `tool_call_id`s differentiate them. Verified pi-ai
-   preserves these (anthropic.js:847). Test the deterministic-hash
-   collision avoidance explicitly.
-4. **Agent profile changes between crash and resume.** If
+   their `tool_call_id`s differentiate them. Verified pi-ai preserves
+   these (`anthropic.js:847`). Test the deterministic-hash collision
+   avoidance explicitly. **Operational, not a design risk.**
+2. **Agent profile drift between crash and resume.** If
    `~/.agents/agents/<name>.md` was edited mid-run, the resumed
-   sub-agent's system prompt would differ from the persisted system
-   message. Options: (a) ignore — let the new prompt take effect on
+   sub-agent's system prompt differs from the persisted system
+   message. Recommendation: ignore — let the new prompt take effect on
    the next turn (the persisted system message stays in the
-   transcript), (b) refuse to resume on system-prompt drift. The
-   resume signal already lands as `agent.info { event:
-   "thread_rehydrated" }`; adding a `system_prompt_drift: true` flag
-   when the SHA changes is cheap.
-5. **Quarantine semantics on child rehydration failure.** If
-   `JSON.parse` fails on a persisted message row, the child can't
-   recover. Should this halt the parent (`fact.run_quarantined`) or
-   surface as a tool-error (`SubagentResult { status: "halted",
-   haltReason: "rehydration_failed" }`)? Tool-error is the natural
-   shape — keeps the parent's LLM in control. Add a structured
-   `haltReason: "rehydration_failed"` so debug can spot it.
+   transcript). Add a `system_prompt_drift: true` flag on the existing
+   `agent.info { event: "thread_rehydrated" }` when the SHA changes,
+   so debug can spot it.
+3. **Quarantine semantics on rehydration failure.** If `JSON.parse`
+   fails on a persisted message row OR the sanitiser hits a malformed
+   `toolCall.arguments` (partial JSON from an aborted-mid-stream
+   message), the dispatch can't recover. For sub-agents: surface as
+   tool-error (`SubagentResult { status: "halted", haltReason:
+   "rehydration_failed" }`) — keeps the parent's LLM in control. For
+   parent-level rehydrate failure: `fact.run_quarantined { reason:
+   "rehydration_failed" }` — operator decides.
+4. **Idempotency classification on existing tools.** The opt-in
+   `idempotentOnReplay?: boolean` flag on `Tool<...>` needs an audit
+   pass: `read`, `grep`, `glob`, `ls`, `find` clearly yes; `bash`
+   sometimes (depends on the command, but we can't classify
+   per-invocation, so default no); `edit`/`write`/`agent` no by
+   default (`agent` has its own resume path that's safer than
+   re-execution). The safe-default is `false`; opt-in is the
+   conscious decision per tool.
 
 ## Implementation sketch
 
-Four commits, each independently shippable:
+Six commits, each independently shippable:
 
 1. **`[workspace,daemon]` deterministic subagent_id + required
-   tool_call_id.** Replace `randomUUID()` in `spawn-subagent.ts:87`.
-   Make `tool_call_id` required on `SubagentSpec`. Update tests for the
-   new contract.
+   tool_call_id.** Replace `randomUUID()` in `spawn-subagent.ts:87`
+   with `sha256(parentRunId, parentNodeId, parentIteration,
+   tool_call_id).slice(0,32)`. Make `tool_call_id` required on
+   `SubagentSpec`. Update tests for the new contract; add an explicit
+   collision test for two parallel siblings sharing `parentIteration`.
 2. **`[daemon]` hydrate child on respawn.** Query
-   `deps.store.getMessages(parentRunId, { nodeId: subagentNodeId })` in
-   `spawn-subagent.ts`, pass via `priorMessages`. Add a test that a
-   second spawn with the same deterministic id picks up where the
-   first left off.
+   `deps.store.getMessages(parentRunId, { nodeId: subagentNodeId })`
+   in `spawn-subagent.ts`, pass via `priorMessages`. Test: a second
+   spawn with the same deterministic id picks up where the first
+   left off.
 3. **`[daemon]` detect already-completed sub-agents on respawn.** Add
-   `isTranscriptComplete` + the synthesise-result branch. Emit
-   `subagent.resumed`. Add a test for the post-summary-pre-tool-result
-   crash case.
+   `isTranscriptComplete` + the synthesise-result branch (`stopReason
+   ∈ {"stop", "endTurn"}` and no unpaired toolCalls). Skip the LLM
+   call, synthesise `SubagentResult`. Test: post-summary-pre-tool-
+   result crash case.
 4. **`[types,web]` `subagent.resumed` event.** New event type in
    `packages/types/src/events.ts`; UI collapses the resumed slice.
-   `useRunLive` folds the new event into the existing `subagentByToolCallId`
-   map. Same-PR docs obligation: ARCH §3 event taxonomy.
+   `useRunLive` folds the new event into the existing
+   `subagentByToolCallId` map. Same-PR docs obligation: ARCH §3.
+5. **`[workspace,agent]` rehydrate sanitiser at every codergen
+   dispatch.** New `sanitiseUnpairedToolCalls` helper in
+   `packages/workspace/src/tools.ts` (or similar). Add
+   `idempotentOnReplay?: boolean` to `Tool<...>`. Mark `read` /
+   `grep` / `glob` / `ls` / `find` opt-in. In
+   `PiCodergenBackend.run`, call sanitiser on `hydrateMessages`
+   before `new Agent({...})`. Tests: agent-tool round-trip via
+   sanitiser (deterministic id resolves to completed child),
+   non-idempotent tool synthesises error toolResult, idempotent
+   read re-executes successfully.
+6. **`[daemon]` cumulative cost rollup on resumed `subagent.end`.**
+   In `spawn-subagent.ts`, query prior `subagent.end` events for
+   the same `subagent_id` before initialising local accumulators;
+   seed from the sum. Test: resumed bracket carries cancelled +
+   new totals. Same-PR doc update: ARCH §3 — note "consumers must
+   dedupe by `subagent_id` and take the terminal bracket".
 
-Total ~250–350 lines plus tests. Smaller than the [agent-tool](./agent-tool.md)
-landing.
+Total ~500–650 lines plus tests. Bigger than the original 4-commit
+sketch; the additions (#5, #6) close the door on full-fidelity
+callers.
 
 ## What this commits to
 
@@ -348,11 +442,18 @@ landing.
 
 - Resuming **compact-mode** orchestrator transcripts — those re-emit
   fresh tool_call_ids on restart, so deterministic hashing doesn't
-  apply. Scope of this proposal is sub-agent slices only.
+  apply. Compact orchestrators recover by re-decomposing from a
+  digest seed, finding any completed sub-agents via the deterministic
+  id only when the new decomposition happens to produce the same
+  tool_call_id (rare). Authors who want full crash-resilience flip
+  `default_fidelity="full"` and rely on primitive E.
 - Resuming **mid-LLM-stream** assistant messages where the partial
   toolCall arguments are malformed JSON. Pi-ai persists at
-  `message_end` only; partial streams aren't persisted. Out of scope
-  by construction.
-- Resuming **parent transcripts with unpaired toolCalls** (Option E
-  above). Deferred — only matters when full-fidelity orchestrators
-  exist in production.
+  `message_end` only; partial streams aren't persisted. The sanitiser
+  rejects malformed JSON it finds in priorMessages and surfaces
+  `rehydration_failed` per the open-question table.
+- Replaying **non-idempotent tools** silently. The opt-in
+  `idempotentOnReplay` flag is the only authorised re-run path;
+  everything else gets an error toolResult that surfaces the
+  interruption to the LLM. Operators who want a tool to re-run on
+  resume opt in explicitly per tool definition.
