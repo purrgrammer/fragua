@@ -134,14 +134,7 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
-  test("agent tool is structurally absent from sub-agent's pool even when spec asks for it", async () => {
-    // Earlier behaviour fell back to parentAllowedTools when spec
-    // omitted allowed_tools, so a parent like orchestrate (read-only
-    // pool, just spawns workers) gimped its sub-agents whenever the
-    // LLM forgot to pass allowed_tools. The parent-pool fallback was
-    // dropped: spec.allowed_tools wins; otherwise the child gets the
-    // full do-work pool. The `agent` tool stays structurally absent
-    // either way (stripAgentTool runs after select).
+  test("agent tool is structurally absent from sub-agent's pool even when parent allowed it", async () => {
     const store = freshStore();
     seedParent(store, "parent-2");
     const registry = freshRegistry();
@@ -169,8 +162,9 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    // Spec explicitly lists agent — it must still be stripped.
-    await spawn({ prompt: "x", allowed_tools: ["read", "write", "agent"] });
+    // Spec omitted; child inherits parentAllowedTools, then `agent`
+    // is stripped — so the child sees [read, write].
+    await spawn({ prompt: "x" });
     expect(observedChildPool).toBeDefined();
     expect(observedChildPool!).not.toContain("agent");
     expect(observedChildPool!.sort()).toEqual(["read", "write"]);
@@ -178,19 +172,18 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
-  test("when spec omits allowed_tools, child gets the do-work pool — NOT the parent's narrow pool", async () => {
-    // Regression for run 01kqyg8ymkd0ddsyg7: the orchestrate node has
-    // a read-only pool (read,grep,find,ls,agent) so it can't write
-    // directly. The orchestrator's first `agent({...})` call omitted
-    // allowed_tools — under the old behaviour, the sub-agent inherited
-    // the read-only pool and reported "I have no Write/Edit/Bash."
-    // Now: the sub-agent gets the do-work pool by default.
+  test("empty resolved pool errors out instead of spawning a useless sub-agent", async () => {
+    // Degenerate config: parent declares only `agent` (a pure
+    // spawn-only pool). After stripAgentTool the child has nothing.
+    // Without the guard the sub-agent would burn tokens reasoning
+    // about how to make progress with no tools; surface a clear
+    // halt to the LLM instead.
     const store = freshStore();
-    seedParent(store, "parent-3");
+    seedParent(store, "parent-empty");
     const registry = freshRegistry();
-    let observedChildPool: string[] | undefined;
-    const backend = new StubBackend((input) => {
-      observedChildPool = (input.node.attrs["allowed_tools"] as string[] | undefined)?.slice();
+    let backendCalled = false;
+    const backend = new StubBackend(() => {
+      backendCalled = true;
       return ok({ notes: "" });
     });
     const ctrl = new AbortController();
@@ -199,8 +192,8 @@ describe("makeSpawnSubagent", () => {
     const spawn = makeSpawnSubagent(
       { store, registry, backend, shutdownSignal: ctrl.signal },
       {
-        parentRunId: "parent-3",
-        parentNodeId: "orchestrate",
+        parentRunId: "parent-empty",
+        parentNodeId: "plan",
         parentIteration: 0,
         parentSystemPrompt: "P",
         parentSkills: [],
@@ -208,19 +201,14 @@ describe("makeSpawnSubagent", () => {
         parentModel: "claude-haiku-4-5",
         parentEnv: STUB_ENV,
         parentEmit: emit,
-        // Parent has the read-only pool — sub-agents must NOT inherit this.
-        parentAllowedTools: ["read", "grep", "find", "ls", "agent"],
+        parentAllowedTools: ["agent"],
       },
     );
 
-    await spawn({ prompt: "x" });
-    expect(observedChildPool).toBeDefined();
-    // Default do-work pool — at minimum write/edit/bash are present.
-    expect(observedChildPool!).toContain("write");
-    expect(observedChildPool!).toContain("edit");
-    expect(observedChildPool!).toContain("bash");
-    // agent is still stripped.
-    expect(observedChildPool!).not.toContain("agent");
+    const result = await spawn({ prompt: "x" });
+    expect(result.status).toBe("halted");
+    expect(result.haltReason).toBe("empty_tool_pool");
+    expect(backendCalled).toBe(false);
 
     store.close();
   });

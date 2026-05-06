@@ -132,25 +132,13 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       const systemPrompt = args.system_prompt ?? def?.body;
       if (systemPrompt !== undefined && systemPrompt.length > 0) spec.system_prompt = systemPrompt;
 
-      // Explicit > implicit: the calling LLM must say what tools the
-      // sub-agent can use. Inline `allowed_tools` wins; otherwise the
-      // resolved profile must declare them. Without either, return an
-      // immediate is_error so the LLM corrects the call cheaply
-      // instead of running a sub-agent on the wrong pool — the
-      // alternatives (inherit parent → silent narrowing if the parent
-      // is read-only; default to do-work → silent widening for audit
-      // workflows) both bit us in practice.
+      // Tool-pool resolution: inline > profile def > inherit parent
+      // (handled in spawn-subagent). Parent-default keeps the
+      // "child ≤ parent" invariant a workflow author expects from
+      // process-tree / capability semantics; widen the parent or
+      // pass `allowed_tools` per spawn to opt out.
       const allowedTools = inlineAllowed ?? def?.allowed_tools;
-      if (allowedTools === undefined) {
-        return {
-          text:
-            "agent tool requires `allowed_tools` to be specified. " +
-            "Pass an inline `allowed_tools: [\"read\", \"write\", \"edit\", \"bash\", ...]` argument, " +
-            "or invoke a named profile (`agent: <name>`) whose frontmatter declares `allowed_tools` (or `tools`).",
-          is_error: true,
-        };
-      }
-      spec.allowed_tools = allowedTools;
+      if (allowedTools !== undefined) spec.allowed_tools = allowedTools;
 
       if (args.disallowed_tools !== undefined) spec.disallowed_tools = args.disallowed_tools;
       if (args.skills !== undefined) spec.skills = args.skills;

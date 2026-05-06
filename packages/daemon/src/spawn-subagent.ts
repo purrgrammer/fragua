@@ -102,18 +102,12 @@ export function makeSpawnSubagent(
       parentCtx.parentSkills,
     );
 
-    // Tool pool: spec.allowed_tools wins; otherwise the child gets the
-    // full do-work pool (`registry.select({})` = all non-defaultDisabled
-    // tools — read/write/edit/bash/grep/find/ls/skill; `agent` and
-    // `web_fetch` stay defaultDisabled). The parent's `allowed_tools`
-    // does NOT cap children — a parent like orchestrate that runs
-    // read-only specifically because it just spawns workers should not
-    // gimp those workers when the LLM forgets to pass allowed_tools.
-    // Workflows that want narrower sub-agents pass `allowed_tools`
-    // explicitly on the spec (or via an agent profile's frontmatter).
-    // `disallowed_tools` falls through from the parent in the same
-    // sense it does for cross-cutting denies.
-    const allow = spec.allowed_tools;
+    // Tool pool: parent's pool, narrowed by `spec.allowed_tools` /
+    // `spec.disallowed_tools`, then strip `agent` so children can't
+    // recursively spawn. Parent-default keeps the "child ≤ parent"
+    // invariant — the universal capability/process-tree shape; widen
+    // the parent or pass `spec.allowed_tools` to opt out.
+    const allow = spec.allowed_tools ?? parentCtx.parentAllowedTools;
     const deny = spec.disallowed_tools ?? parentCtx.parentDeniedTools;
     const childPool: AnyTool[] = stripAgentTool(
       deps.registry.select({
@@ -121,6 +115,24 @@ export function makeSpawnSubagent(
         ...(deny !== undefined ? { deny: [...deny] } : {}),
       }),
     );
+
+    // Guard against degenerate configs: a parent that exposes only
+    // `agent` (a pure spawn-only pool) leaves the child with nothing
+    // after stripAgentTool. Don't burn tokens reasoning about how to
+    // make progress with no tools — surface a clear halt to the LLM.
+    if (childPool.length === 0) {
+      const allowDesc = allow ? `[${[...allow].join(", ")}]` : "(unconstrained)";
+      return {
+        summary:
+          `agent tool: cannot spawn sub-agent — resolved tool pool is empty (allowed_tools=${allowDesc}). ` +
+          "Widen the parent's `allowed_tools` (it likely lists only `agent`), or pass an explicit " +
+          '`allowed_tools: [...]` on the call.',
+        subagentId: randomUUID(),
+        status: "halted" as const,
+        haltReason: "empty_tool_pool",
+        totalToolCalls: 0,
+      };
+    }
 
     // Provider/model: a named-profile def (resolved by the `agent`
     // tool) can carry `model` / `provider` frontmatter, surfaced on

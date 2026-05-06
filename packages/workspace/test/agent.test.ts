@@ -111,35 +111,10 @@ describe("agent tool", () => {
       }),
     };
 
-    const out = await agentTool.execute({ prompt: "x", allowed_tools: ["read"] }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
     expect(out.is_error).toBe(true);
     const data = out.data as { halt_reason?: string };
     expect(data.halt_reason).toBe("max_loops");
-  });
-
-  test("is_error returned when neither inline allowed_tools nor a profile provides them", async () => {
-    // Explicit > implicit: rather than silently inheriting the parent
-    // pool (gimps spawn-a-worker workflows) or defaulting to the
-    // do-work pool (silently widens audit workflows), reject the call
-    // up front so the LLM can correct it cheaply.
-    const env = new LocalEnvironment();
-    let spawnCalled = false;
-    const swarmContext: SwarmToolContext = {
-      runId: "parent",
-      nodeId: "plan",
-      iteration: 0,
-      http: {} as SwarmToolContext["http"],
-      emit: () => {},
-      spawnSubagent: async () => {
-        spawnCalled = true;
-        return { summary: "", subagentId: "x", status: "completed", totalToolCalls: 0 };
-      },
-    };
-
-    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
-    expect(out.is_error).toBe(true);
-    expect(out.text).toMatch(/allowed_tools/);
-    expect(spawnCalled).toBe(false);
   });
 });
 
