@@ -25,6 +25,7 @@ digraph orchestrate {
     allowed_tools = "read, grep, find, ls, agent"
     llm_model     = "claude-opus-4-7"
     max_cost_usd  = 3.00
+    thread_id     = "orchestrate"
   ]
 
   done [shape=Msquare]
