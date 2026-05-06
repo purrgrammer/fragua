@@ -54,6 +54,21 @@ describe("agent tool", () => {
     expect(out.is_error).toBe(true);
   });
 
+  test("is_error returned when tool_call_id is missing from execute opts", async () => {
+    const env = new LocalEnvironment();
+    const swarmContext: SwarmToolContext = {
+      runId: "r",
+      nodeId: "n",
+      iteration: 0,
+      http: {} as SwarmToolContext["http"],
+      emit: () => {},
+      spawnSubagent: async () => ({ summary: "", subagentId: "x", status: "completed", totalToolCalls: 0 }),
+    };
+    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
+    expect(out.is_error).toBe(true);
+    expect(out.text).toContain("tool_call_id");
+  });
+
   test("mocked spawnSubagent round-trips: returns { text: summary, data: { subagent_id, status, total_tool_calls } }", async () => {
     const env = new LocalEnvironment();
     const calls: SubagentSpec[] = [];
@@ -78,7 +93,7 @@ describe("agent tool", () => {
     const out = await agentTool.execute(
       { prompt: "summarise this", name: "summary", allowed_tools: ["read", "agent"] },
       env,
-      { swarmContext },
+      { swarmContext, tool_call_id: "toolu_t1" },
     );
 
     expect(out.is_error).toBeFalsy();
@@ -111,7 +126,7 @@ describe("agent tool", () => {
       }),
     };
 
-    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "x" }, env, { swarmContext, tool_call_id: "toolu_t2" });
     expect(out.is_error).toBe(true);
     const data = out.data as { halt_reason?: string };
     expect(data.halt_reason).toBe("max_loops");
@@ -154,7 +169,10 @@ describe("agent tool — named-profile path", () => {
         return { summary: "ok", subagentId: "s1", status: "completed", totalToolCalls: 0 };
       },
     };
-    const out = await agentTool.execute({ prompt: "please review", agent: "reviewer" }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "please review", agent: "reviewer" }, env, {
+      swarmContext,
+      tool_call_id: "toolu_t3",
+    });
     expect(out.is_error).toBeFalsy();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.system_prompt).toBe("be a reviewer");
@@ -188,7 +206,7 @@ describe("agent tool — named-profile path", () => {
         allowed_tools: ["read"],
       },
       env,
-      { swarmContext },
+      { swarmContext, tool_call_id: "toolu_t4" },
     );
     expect(calls[0]!.system_prompt).toBe("inline persona");
     expect(calls[0]!.allowed_tools).toEqual(["read"]);
@@ -207,7 +225,10 @@ describe("agent tool — named-profile path", () => {
         throw new Error("should not be called");
       },
     };
-    const out = await agentTool.execute({ prompt: "x", agent: "missing" }, env, { swarmContext });
+    const out = await agentTool.execute({ prompt: "x", agent: "missing" }, env, {
+      swarmContext,
+      tool_call_id: "toolu_t5",
+    });
     expect(out.is_error).toBe(true);
     expect(out.text).toContain("missing");
     expect(out.text).toContain("alpha");
@@ -228,7 +249,10 @@ describe("agent tool — named-profile path", () => {
         return { summary: "", subagentId: "s", status: "completed", totalToolCalls: 0 };
       },
     };
-    await agentTool.execute({ prompt: "x", allowed_tools: ["Read", "WebFetch"] }, env, { swarmContext });
+    await agentTool.execute({ prompt: "x", allowed_tools: ["Read", "WebFetch"] }, env, {
+      swarmContext,
+      tool_call_id: "toolu_t6",
+    });
     expect(calls[0]!.allowed_tools).toEqual(["read", "web_fetch"]);
   });
 });

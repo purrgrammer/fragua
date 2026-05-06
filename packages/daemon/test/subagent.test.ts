@@ -98,11 +98,11 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    const result = await spawn({ prompt: "do the thing", name: "step 1" });
+    const result = await spawn({ prompt: "do the thing", name: "step 1", tool_call_id: "toolu_p1" });
 
     expect(result.summary).toBe("child summary text");
     expect(result.status).toBe("completed");
-    expect(result.subagentId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(result.subagentId).toMatch(/^[0-9a-f]{32}$/);
 
     // No child run row, no kind discriminator — sub-agents are not runs.
     expect(store.getState(result.subagentId)).toBeNull();
@@ -164,7 +164,7 @@ describe("makeSpawnSubagent", () => {
 
     // Spec omitted; child inherits parentAllowedTools, then `agent`
     // is stripped — so the child sees [read, write].
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_p2" });
     expect(observedChildPool).toBeDefined();
     expect(observedChildPool!).not.toContain("agent");
     expect(observedChildPool!.sort()).toEqual(["read", "write"]);
@@ -205,7 +205,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    const result = await spawn({ prompt: "x" });
+    const result = await spawn({ prompt: "x", tool_call_id: "toolu_pe" });
     expect(result.status).toBe("halted");
     expect(result.haltReason).toBe("empty_tool_pool");
     expect(backendCalled).toBe(false);
@@ -242,7 +242,7 @@ describe("makeSpawnSubagent", () => {
 
     const parentSpec = new AbortController();
     parentSpec.abort();
-    await spawn({ prompt: "x", signal: parentSpec.signal });
+    await spawn({ prompt: "x", signal: parentSpec.signal, tool_call_id: "toolu_p3" });
 
     expect(observedSignal?.aborted).toBe(true);
     store.close();
@@ -294,7 +294,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", skills: ["design"] });
+    await spawn({ prompt: "x", skills: ["design"], tool_call_id: "toolu_p4" });
     expect(observedSkills).toEqual(["design"]);
     store.close();
   });
@@ -340,7 +340,7 @@ describe("makeSpawnSubagent", () => {
     );
 
     // Must not throw, must not leak the parent's bloat onto the child.
-    const result = await spawn({ prompt: "user prompt", name: "regression" });
+    const result = await spawn({ prompt: "user prompt", name: "regression", tool_call_id: "toolu_pl" });
     expect(result.status).toBe("completed");
     expect(observedSystemPrompt).toBeUndefined();
     store.close();
@@ -376,7 +376,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", system_prompt: "FOCUSED REVIEWER PERSONA" });
+    await spawn({ prompt: "x", system_prompt: "FOCUSED REVIEWER PERSONA", tool_call_id: "toolu_pe2" });
     expect(observedSystemPrompt).toBeDefined();
     expect(observedSystemPrompt!).toContain("FOCUSED REVIEWER PERSONA");
     expect(observedSystemPrompt!).not.toContain("PARENT BLOAT");
@@ -408,7 +408,7 @@ describe("makeSpawnSubagent", () => {
 
     // Both fields populated independently — the inline `name` is the
     // free-form caller label, `agentName` is the resolved profile.
-    await spawn({ prompt: "x", agentName: "reviewer", name: "label-only" });
+    await spawn({ prompt: "x", agentName: "reviewer", name: "label-only", tool_call_id: "toolu_pa1" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data["name"]).toBe("label-only");
     expect(start.data["agent_def"]).toBe("reviewer");
@@ -438,7 +438,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_pb" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data).not.toHaveProperty("name");
     expect(start.data).not.toHaveProperty("agent_def");
@@ -468,7 +468,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", agentName: "reviewer" });
+    await spawn({ prompt: "x", agentName: "reviewer", tool_call_id: "toolu_pd" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data).not.toHaveProperty("name");
     expect(start.data["agent_def"]).toBe("reviewer");
@@ -540,7 +540,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", name: "with-cost" });
+    await spawn({ prompt: "x", name: "with-cost", tool_call_id: "toolu_pc" });
     const end = events.find((e) => e.type === "subagent.end")!;
     expect(end.data["costUsd"]).toBeCloseTo(0.042, 6);
     expect(end.data["totalTokens"]).toBe(155 + 280);
@@ -578,7 +578,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_pz" });
     const end = events.find((e) => e.type === "subagent.end")!;
     expect(end.data["costUsd"]).toBe(0);
     expect(end.data["totalTokens"]).toBe(0);
@@ -624,6 +624,7 @@ describe("makeSpawnSubagent", () => {
       prompt: "x",
       provider: "openai",
       model: "gpt-5",
+      tool_call_id: "toolu_pm",
     });
 
     expect(observedProvider).toBe("openai");
@@ -633,6 +634,67 @@ describe("makeSpawnSubagent", () => {
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data["provider"]).toBe("openai");
     expect(start.data["model"]).toBe("gpt-5");
+    store.close();
+  });
+
+  test("deterministic subagent_id is sha256(parentRunId, parentNodeId, parentIteration, tool_call_id) truncated to 32 hex chars", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-det");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-det",
+        parentNodeId: "plan",
+        parentIteration: 7,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const a = await spawn({ prompt: "x", tool_call_id: "toolu_same" });
+    const b = await spawn({ prompt: "y", tool_call_id: "toolu_same" });
+    expect(a.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    expect(b.subagentId).toBe(a.subagentId);
+    store.close();
+  });
+
+  test("parallel siblings sharing parentIteration but different tool_call_ids hash to distinct subagent_ids", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-siblings");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-siblings",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const a = await spawn({ prompt: "branch a", tool_call_id: "toolu_a" });
+    const b = await spawn({ prompt: "branch b", tool_call_id: "toolu_b" });
+    expect(a.subagentId).not.toBe(b.subagentId);
+    expect(a.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    expect(b.subagentId).toMatch(/^[0-9a-f]{32}$/);
     store.close();
   });
 });

@@ -94,12 +94,16 @@ export interface SubagentSpec {
    *  as `llm_provider` instead of inheriting the parent's. */
   provider?: string;
   /** Pi-agent-core tool-call id of the parent's `agent` invocation
-   *  (e.g. `toolu_01ABC…`). Stamped onto `subagent.start.tool_call_id`
-   *  so the web UI can link a parent toolCall card to its in-flight
-   *  sub-agent before the toolResult — which carries the canonical
-   *  link in `details.data.subagent_id` — has landed. Optional so
-   *  test harnesses that synthesise specs by hand still work. */
-  tool_call_id?: string;
+   *  (e.g. `toolu_01ABC…`). Required — feeds the deterministic
+   *  `subagent_id` hash (`sha256(parentRunId, parentNodeId,
+   *  parentIteration, tool_call_id)`) so a sub-agent respawned after a
+   *  daemon crash hashes to the same id and can rehydrate its
+   *  transcript. Pi-ai's anthropic provider preserves `block.id`
+   *  byte-identically on the wire, so this hash is stable across
+   *  restarts. Also stamped onto `subagent.start.tool_call_id` for the
+   *  web UI's parent-toolCall → in-flight-sub-agent link. See
+   *  `docs/proposals/sub-agent-crash-resilience.md`. */
+  tool_call_id: string;
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs

@@ -21,7 +21,7 @@
 // reducer / dispatcher / sweep / analytics logic on something that
 // isn't a run or a node.
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
 import type { CodergenBackend, ContextMap, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
@@ -84,7 +84,19 @@ export function makeSpawnSubagent(
   parentCtx: SpawnSubagentParentCtx,
 ): (spec: SubagentSpec) => Promise<SubagentResult> {
   return async (spec) => {
-    const subagentId = randomUUID();
+    // Deterministic subagent_id: sha256(parentRunId, parentNodeId,
+    // parentIteration, tool_call_id) truncated to 32 hex chars. Survives
+    // a daemon crash because pi-ai preserves `tool_call_id` byte-identically
+    // on the wire (anthropic.js:847), and the other inputs are stable
+    // across restarts. Two parallel siblings on one assistant message
+    // share parentIteration but get distinct tool_call_ids from pi-ai,
+    // so they hash to distinct ids without collision-handling.
+    const subagentId = createHash("sha256")
+      .update(
+        `${parentCtx.parentRunId}\u0000${parentCtx.parentNodeId}\u0000${parentCtx.parentIteration}\u0000${spec.tool_call_id}`,
+      )
+      .digest("hex")
+      .slice(0, 32);
     const subagentNodeId = `${SUBAGENT_NODE_PREFIX}${subagentId}`;
 
     // Materialise the child's system prompt + filter parent skills by
@@ -127,7 +139,7 @@ export function makeSpawnSubagent(
           `agent tool: cannot spawn sub-agent — resolved tool pool is empty (allowed_tools=${allowDesc}). ` +
           "Widen the parent's `allowed_tools` (it likely lists only `agent`), or pass an explicit " +
           "`allowed_tools: [...]` on the call.",
-        subagentId: randomUUID(),
+        subagentId,
         status: "halted" as const,
         haltReason: "empty_tool_pool",
         totalToolCalls: 0,
@@ -178,7 +190,7 @@ export function makeSpawnSubagent(
       model: childModel,
       ...(spec.name !== undefined ? { name: spec.name } : {}),
       ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
-      ...(spec.tool_call_id !== undefined ? { tool_call_id: spec.tool_call_id } : {}),
+      tool_call_id: spec.tool_call_id,
     });
 
     // Forward every observability event the sub-agent emits to the
