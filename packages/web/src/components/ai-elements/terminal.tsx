@@ -82,9 +82,11 @@ export function Terminal({
       <TerminalHeader>
         <TerminalTitle>
           <TerminalIcon className="size-3.5 text-sw-muted" aria-hidden />
-          <span className="truncate" title={title}>
-            {title ?? "Terminal"}
-          </span>
+          {title ? (
+            <span className="truncate" title={title}>
+              {title}
+            </span>
+          ) : null}
         </TerminalTitle>
         {status ? (
           <TerminalStatus tone={inferredTone} pulse={isStreaming || status === "running"}>
