@@ -5,6 +5,7 @@
 // for the sub-agent.
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { CodergenInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
@@ -695,6 +696,84 @@ describe("makeSpawnSubagent", () => {
     expect(a.subagentId).not.toBe(b.subagentId);
     expect(a.subagentId).toMatch(/^[0-9a-f]{32}$/);
     expect(b.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    store.close();
+  });
+
+  test("respawn with same deterministic id passes priorMessages from messages table to backend.run", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-resume");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    // Compute the deterministic id we'll be respawning under so we
+    // can pre-seed the messages table at __subagent:<id>.
+    const det = createHash("sha256")
+      .update(`parent-resume\u0000plan\u00000\u0000toolu_resume`)
+      .digest("hex")
+      .slice(0, 32);
+    const seededNodeId = `__subagent:${det}`;
+
+    // Pre-seed: one system row (must be filtered out), one user, one
+    // assistant with a toolCall (the in-flight pre-crash turn).
+    store.appendMessage("parent-resume", {
+      content: { role: "system", content: "prior system", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-resume", {
+      content: { role: "user", content: "prior user prompt", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-resume", {
+      content: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "thinking" },
+          { type: "toolCall", id: "toolu_inner", name: "read", arguments: { path: "a" } },
+        ],
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-resume",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "resume", tool_call_id: "toolu_resume" });
+
+    expect(backend.inputs).toHaveLength(1);
+    const seenPrior = backend.inputs[0]!.priorMessages;
+    expect(seenPrior).toBeDefined();
+    expect(seenPrior!.length).toBe(2);
+    expect(seenPrior!.every((m) => m.role !== "system")).toBe(true);
+    expect(seenPrior![0]!.role).toBe("user");
+    expect(seenPrior![1]!.role).toBe("assistant");
     store.close();
   });
 });

@@ -99,6 +99,20 @@ export function makeSpawnSubagent(
       .slice(0, 32);
     const subagentNodeId = `${SUBAGENT_NODE_PREFIX}${subagentId}`;
 
+    // Crash-resilience: hydrate the prior transcript for this
+    // deterministic subagent_id. On a fresh spawn the lookup returns
+    // [] and the backend runs from zero. On a respawn after a daemon
+    // crash, the messages table holds the pre-crash turns under
+    // `__subagent:<id>`; the backend feeds them into pi-agent-core's
+    // initialState so the child picks up where it left off. System
+    // rows are stripped — pi-ai carries the system prompt separately
+    // (PiCodergenBackend rebuilds it per call) and double-feeding
+    // would inject a stray turn into the transcript.
+    const priorMessages: AgentMessage[] = deps.store
+      .getMessages(parentCtx.parentRunId, { nodeId: subagentNodeId })
+      .map((r) => r.content as AgentMessage)
+      .filter((m) => m.role !== "system");
+
     // Materialise the child's system prompt + filter parent skills by
     // `spec.skills` (intersection by name). System-prompt override on
     // the spec wins outright.
@@ -323,6 +337,7 @@ export function makeSpawnSubagent(
         emit: subagentEmit,
         persistMessage,
         ...(spec.max_iterations !== undefined ? { iteration: { n: 0, max: spec.max_iterations } } : {}),
+        ...(priorMessages.length > 0 ? { priorMessages } : {}),
       });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
