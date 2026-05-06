@@ -11,7 +11,7 @@ function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
 describe("metaForEvent", () => {
   test("fact.run_resumed verb varies by fromStatus", () => {
     expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_hitl" })).verb).toBe("resumed");
-    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused" })).verb).toBe("resumed (retry)");
+    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused" })).verb).toBe("retrying");
     expect(metaForEvent(evt("fact.run_resumed", {})).verb).toBe("resumed");
   });
 

@@ -86,7 +86,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
   "fact.run_paused": {
     Icon: AlertTriangle,
-    verb: "paused — needs operator",
+    verb: "paused",
     iconClass: "text-sw-accent-warn",
     attention: true,
   },
@@ -94,7 +94,7 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   // see the chain in the feed without needing a separate UI surface.
   "fact.provider_retry_attempted": {
     Icon: Clock,
-    verb: "auto-retry queued",
+    verb: "retry queued",
     iconClass: "text-sw-accent-warn",
   },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
@@ -131,9 +131,9 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
-    if (fromStatus === "paused") return { ...base, verb: "resumed (retry)" };
-    if (fromStatus === "paused_provider_retry") return { ...base, verb: "auto-retry fired" };
-    if (fromStatus === "paused_retry") return { ...base, verb: "retry fired" };
+    if (fromStatus === "paused") return { ...base, verb: "retrying" };
+    if (fromStatus === "paused_provider_retry") return { ...base, verb: "retrying" };
+    if (fromStatus === "paused_retry") return { ...base, verb: "retrying" };
   }
   return base;
 }
