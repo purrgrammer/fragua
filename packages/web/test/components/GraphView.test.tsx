@@ -349,7 +349,7 @@ describe("GraphView — rendering", () => {
 });
 
 describe("toFlowGraph — model_stylesheet cascade surfaces in node data", () => {
-  it("wildcard rule populates model + provider + reasoningEffort on every node", () => {
+  it("wildcard rule populates model + provider + reasoningEffort on codergen nodes only", () => {
     const src = `digraph styled {
       graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: medium; }"]
       start [shape=Mdiamond]
@@ -360,11 +360,23 @@ describe("toFlowGraph — model_stylesheet cascade surfaces in node data", () =>
     }`;
     const graph = parseAndPrepare(src);
     const { flowNodes } = toFlowGraph(null, graph);
-    for (const n of flowNodes) {
-      const d = n.data as { model?: string; provider?: string; reasoningEffort?: string };
-      expect(d.model).toBe("opus");
-      expect(d.provider).toBe("anthropic");
-      expect(d.reasoningEffort).toBe("medium");
+    const byId = new Map(
+      flowNodes.map((n) => [n.id, n.data as { model?: string; provider?: string; reasoningEffort?: string }]),
+    );
+    // Codergen nodes (box) pick up the cascade.
+    for (const id of ["a", "b"]) {
+      const d = byId.get(id);
+      expect(d?.model).toBe("opus");
+      expect(d?.provider).toBe("anthropic");
+      expect(d?.reasoningEffort).toBe("medium");
+    }
+    // Lifecycle terminals never run an LLM, so the cascade values are
+    // suppressed even though the parser resolved them.
+    for (const id of ["start", "done"]) {
+      const d = byId.get(id);
+      expect(d?.model).toBeUndefined();
+      expect(d?.provider).toBeUndefined();
+      expect(d?.reasoningEffort).toBeUndefined();
     }
   });
 
@@ -385,6 +397,198 @@ describe("toFlowGraph — model_stylesheet cascade surfaces in node data", () =>
     expect(a.model).toBeUndefined();
     expect(a.provider).toBeUndefined();
     expect(a.reasoningEffort).toBeUndefined();
+  });
+});
+
+describe("toFlowGraph — metadata is gated by handler type", () => {
+  // Common wildcard cascade pinned via model_stylesheet: every node ends
+  // up with `llm_model` / `llm_provider` / `reasoning_effort` resolved by
+  // the parser (the stylesheet allow-list excludes `thread_id`, which we
+  // set directly on individual nodes when a test needs it). The point of
+  // these tests is that toFlowGraph throws those values away on handlers
+  // that don't run an LLM.
+  const CASCADE = `model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: high; }"`;
+
+  type Meta = {
+    model?: string;
+    provider?: string;
+    reasoningEffort?: string;
+    threadId?: string;
+    toolCommand?: string;
+    retryTarget?: string;
+    fanInTarget?: string;
+    joinPolicy?: string;
+    fanInRank?: string;
+    maxRetries?: number;
+  };
+
+  function dataOf(src: string, id: string): Meta {
+    const graph = parseAndPrepare(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const node = flowNodes.find((n) => n.id === id);
+    if (!node) throw new Error(`no node ${id} in flow graph`);
+    return node.data as Meta;
+  }
+
+  it("tool nodes expose toolCommand + maxRetries but not model/provider/effort/thread/retryTarget/fanIn fields", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      run [shape=parallelogram, tool_command="bun test", max_retries=2, retry_target="start"]
+      done [shape=Msquare]
+      start -> run -> done
+    }`;
+    const d = dataOf(src, "run");
+    expect(d.toolCommand).toBe("bun test");
+    expect(d.maxRetries).toBe(2);
+    expect(d.model).toBeUndefined();
+    expect(d.provider).toBeUndefined();
+    expect(d.reasoningEffort).toBeUndefined();
+    expect(d.threadId).toBeUndefined();
+    expect(d.retryTarget).toBeUndefined();
+    expect(d.fanInTarget).toBeUndefined();
+    expect(d.joinPolicy).toBeUndefined();
+    expect(d.fanInRank).toBeUndefined();
+  });
+
+  it("start and exit nodes expose no LLM, tool, retry, or fan_in metadata", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond, max_retries=5]
+      a [shape=box]
+      done [shape=Msquare, max_retries=5]
+      start -> a -> done
+    }`;
+    for (const id of ["start", "done"]) {
+      const d = dataOf(src, id);
+      expect(d.model).toBeUndefined();
+      expect(d.provider).toBeUndefined();
+      expect(d.reasoningEffort).toBeUndefined();
+      expect(d.threadId).toBeUndefined();
+      expect(d.toolCommand).toBeUndefined();
+      expect(d.retryTarget).toBeUndefined();
+      expect(d.fanInTarget).toBeUndefined();
+      expect(d.joinPolicy).toBeUndefined();
+      expect(d.fanInRank).toBeUndefined();
+      expect(d.maxRetries).toBeUndefined();
+    }
+  });
+
+  it("conditional nodes expose only state + maxRetries — no model/provider/effort/thread/cmd", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      pick [shape=diamond, max_retries=3]
+      done [shape=Msquare]
+      start -> pick -> done
+    }`;
+    const d = dataOf(src, "pick");
+    expect(d.maxRetries).toBe(3);
+    expect(d.model).toBeUndefined();
+    expect(d.provider).toBeUndefined();
+    expect(d.reasoningEffort).toBeUndefined();
+    expect(d.threadId).toBeUndefined();
+    expect(d.toolCommand).toBeUndefined();
+    expect(d.retryTarget).toBeUndefined();
+    expect(d.fanInTarget).toBeUndefined();
+    expect(d.joinPolicy).toBeUndefined();
+    expect(d.fanInRank).toBeUndefined();
+  });
+
+  it("wait.human nodes expose no LLM or tool metadata", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      gate [shape=hexagon]
+      done [shape=Msquare]
+      start -> gate -> done
+    }`;
+    const d = dataOf(src, "gate");
+    expect(d.model).toBeUndefined();
+    expect(d.provider).toBeUndefined();
+    expect(d.reasoningEffort).toBeUndefined();
+    expect(d.threadId).toBeUndefined();
+    expect(d.toolCommand).toBeUndefined();
+    expect(d.retryTarget).toBeUndefined();
+    expect(d.fanInTarget).toBeUndefined();
+    expect(d.joinPolicy).toBeUndefined();
+    expect(d.fanInRank).toBeUndefined();
+  });
+
+  it("parallel nodes expose fanInTarget + joinPolicy but not model/provider/effort/thread", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      fork [shape=component, fan_in="join", join_policy="wait_all", max_retries=4]
+      a [shape=box]
+      b [shape=box]
+      join [shape=tripleoctagon]
+      done [shape=Msquare]
+      start -> fork
+      fork -> a -> join
+      fork -> b -> join
+      join -> done
+    }`;
+    const d = dataOf(src, "fork");
+    expect(d.fanInTarget).toBe("join");
+    expect(d.joinPolicy).toBe("wait_all");
+    expect(d.model).toBeUndefined();
+    expect(d.provider).toBeUndefined();
+    expect(d.reasoningEffort).toBeUndefined();
+    expect(d.threadId).toBeUndefined();
+    expect(d.toolCommand).toBeUndefined();
+    expect(d.retryTarget).toBeUndefined();
+    expect(d.fanInRank).toBeUndefined();
+    // `parallel` is a structural fan-out — the branches retry, not the
+    // component itself — so max_retries is intentionally suppressed here.
+    expect(d.maxRetries).toBeUndefined();
+  });
+
+  it("parallel.fan_in nodes with a prompt expose model/provider/effort; without a prompt they don't", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      fork [shape=component]
+      a [shape=box]
+      b [shape=box]
+      rank [shape=tripleoctagon, prompt="rank these", thread_id="shared"]
+      heur [shape=tripleoctagon, thread_id="shared"]
+      done [shape=Msquare]
+      start -> fork
+      fork -> a -> rank
+      fork -> b -> rank
+      rank -> heur -> done
+    }`;
+    const ranked = dataOf(src, "rank");
+    expect(ranked.fanInRank).toBe("prompt");
+    expect(ranked.model).toBe("opus");
+    expect(ranked.provider).toBe("anthropic");
+    expect(ranked.reasoningEffort).toBe("high");
+    expect(ranked.threadId).toBe("shared");
+
+    const heuristic = dataOf(src, "heur");
+    expect(heuristic.fanInRank).toBe("heuristic");
+    expect(heuristic.model).toBeUndefined();
+    expect(heuristic.provider).toBeUndefined();
+    expect(heuristic.reasoningEffort).toBeUndefined();
+    expect(heuristic.threadId).toBeUndefined();
+  });
+
+  it("codergen retains the full LLM metadata set", () => {
+    const src = `digraph g {
+      graph [${CASCADE}]
+      start [shape=Mdiamond]
+      verify [shape=box, goal_gate=true, retry_target="start", max_retries=3, thread_id="shared"]
+      done [shape=Msquare]
+      start -> verify -> done
+    }`;
+    const d = dataOf(src, "verify");
+    expect(d.model).toBe("opus");
+    expect(d.provider).toBe("anthropic");
+    expect(d.reasoningEffort).toBe("high");
+    expect(d.threadId).toBe("shared");
+    expect(d.retryTarget).toBe("start");
+    expect(d.maxRetries).toBe(3);
   });
 });
 
