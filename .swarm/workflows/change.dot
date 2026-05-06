@@ -20,10 +20,8 @@ digraph change {
     default_fidelity      = "compact"
     max_goal_gate_retries = 2
     model_stylesheet      = "
-      *           { llm_provider: anthropic; llm_model: claude-opus-4-7; }
-      .fix        { llm_model: claude-sonnet-4-6; }
-      .commit     { llm_model: claude-sonnet-4-6; }
-      #review     { llm_model: claude-sonnet-4-6; }
+      *       { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
+      #plan   { llm_model: claude-opus-4-7; }
     "
   ]
 
