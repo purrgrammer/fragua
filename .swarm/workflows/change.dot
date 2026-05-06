@@ -1,0 +1,99 @@
+// change.dot — daily driver: plan → implement → review → ci → commit.
+//
+// REJECT loops back to implement automatically. Review is goal-gated with
+// retry_target=implement, and the §3.4 retarget chain is capped by
+// graph.max_goal_gate_retries (=2 here) so a stubborn reviewer can't burn
+// the run forever.
+//
+// CI runs as a tool node (zero LLM cost on the happy path). On failure
+// the `fix` codergen runs once and the backward edge re-enters ci; the
+// loop caps at max_retries=5 on ci. Merge is a separate workflow —
+// `swarm run merge` after.
+//
+//   bun run swarm run change \
+//     --input="add a `touch` tool to @swarm/workspace"
+
+digraph change {
+  graph [
+    goal                  = "Land a reviewable change on swarm. Plan, implement, review, verify, commit."
+    label                 = "change"
+    default_fidelity      = "compact"
+    max_goal_gate_retries = 2
+    model_stylesheet      = "
+      *           { llm_provider: anthropic; llm_model: claude-opus-4-7; }
+      .fix        { llm_model: claude-sonnet-4-6; }
+      .commit     { llm_model: claude-sonnet-4-6; }
+      #review     { llm_model: claude-sonnet-4-6; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+
+  plan [
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS names or references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. Implementation already landed; re-running burns Opus. Don't fall back to grepping the body — frontmatter is the source of truth.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - touches >3 packages OR shared contracts (HandlerContext, executor internals, store schema, event envelope)\n  - >500 lines of non-test code\n\nRead just enough to plan. Output a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers."
+    allowed_tools = "read, grep, find"
+    context_files = "AGENTS.md"
+  ]
+
+  // Cluster: implement + review share thread `dev` so the reviewer sees the
+  // implementer's session. The `cluster_dev` id derives class `dev` for any
+  // future stylesheet rule on that scope.
+  subgraph cluster_dev {
+    implement [
+      prompt = "Implement $plan.output. Stay inside the package(s) the plan names. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it). Don't touch docs/SPEC.md or AGENTS.md unless the plan says so.\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nSummarise: files touched, public surface, planned tests realised, skipped items + why."
+      allowed_tools = "read, write, edit, grep, bash"
+      thread_id     = "dev"
+    ]
+
+    review [
+      prompt = "Judge the diff. Inputs: $plan.output, $implement.output, `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less.\n  (b) Every plan §2 test is realised (file exists, name matches, assertion matches).\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files outside the plan OR shared contracts not listed.\n  (e) Doc-state claims match reality. Any prose edit that asserts shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`, don't trust the words on the page. Reality wins. If the diff says something is 'still outstanding' that already exists on disk, REJECT.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 2 cycles)."
+      allowed_tools = "read, grep, bash"
+      thread_id     = "dev"
+      goal_gate     = true
+      retry_target  = "implement"
+    ]
+  }
+
+  // CI is a tool node — happy path costs zero LLM tokens. Only on
+  // failure does `fix` spin up; the backward edge fix→ci retries up
+  // to max_retries=5 times (matching the original "5 fix rounds"
+  // cap). On the 6th attempt the runtime halts with
+  // reason=max_retries_exceeded.
+  ci [shape=parallelogram, tool_command="bun run ci", max_retries=5]
+
+  fix [
+    class         = "fix"
+    prompt        = "CI failed. Failure log: $ci.output. Read the failures, make the minimal change to fix them, then stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
+    allowed_tools = "read, write, edit, bash"
+    max_cost_usd  = 0.10
+    max_tokens    = 300000
+  ]
+
+  commit [
+    class         = "commit"
+    prompt        = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.\n\nIf `git status --short` is empty, emit `COMMITTED: no changes`.\n\nOtherwise: `git add` explicit paths, commit with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
+    allowed_tools = "read, write, edit, bash"
+    context_files = "AGENTS.md"
+  ]
+
+  done [shape=Msquare]
+
+  start  -> plan
+  plan   -> done [condition="outcome=fail"]
+  plan   -> implement
+
+  implement -> done [condition="outcome=fail"]
+  implement -> review
+
+  // REJECT routes via this fail edge to terminal. Goal-gate enforcement at
+  // the terminal sees review unsatisfied and retargets to retry_target=
+  // implement. The cycle caps at max_goal_gate_retries.
+  review -> done [condition="outcome=fail"]
+  review -> ci
+
+  ci  -> commit [condition="outcome=success"]
+  ci  -> fix    [condition="outcome=fail"]
+  fix -> ci
+
+  commit -> done
+}

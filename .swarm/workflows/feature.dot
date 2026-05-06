@@ -1,0 +1,90 @@
+// feature.dot — wider-scope sibling of change.dot: implement a proposal end-to-end.
+//
+// Use when a docs/proposals/*.md file is the source of truth and the work
+// crosses package boundaries or shared contracts (store schema, event
+// envelope, handler contracts) — exactly what change.dot is built to refuse.
+//
+// Same plan → implement → review → verify → commit shape; review is goal-
+// gated with retarget=implement; max_goal_gate_retries=3 gives one extra
+// cycle since multi-package work tends to surface late dependency issues.
+//
+//   bun run swarm run feature \
+//     --input="Implement docs/proposals/scheduled-runs.md end-to-end."
+
+digraph feature {
+  graph [
+    goal                  = "Implement a proposal that spans multiple packages or shared contracts. Plan, implement, review, verify, commit."
+    label                 = "feature"
+    default_fidelity      = "compact"
+    max_goal_gate_retries = 3
+    model_stylesheet      = "
+      *           { llm_provider: anthropic; llm_model: claude-opus-4-7; }
+      .fix        { llm_model: claude-sonnet-4-6; }
+      .commit     { llm_model: claude-sonnet-4-6; }
+      #review     { llm_model: claude-sonnet-4-6; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+
+  plan [
+    prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. If no proposal file is referenced, abort with reason `feature workflow requires a docs/proposals/*.md anchor; for ad-hoc work use change.dot`.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - no proposal anchor (per pre-flight above)\n\nMulti-package work and shared-contract changes (store schema, event envelope, handler contracts) ARE in scope here — that's why this workflow exists. Don't refuse them.\n\nRead the full proposal + the docs/proposals files it cross-references + the AGENTS.md doc-obligation table to identify same-PR doc updates. Survey the existing code at every package the proposal touches.\n\nOutput a numbered plan:\n  1. Files to create/modify (full paths). Group by package. Include same-PR doc updates from AGENTS.md §1.\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence. One per logical unit minimum.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers.\n  5. Cross-package dependencies: which packages must land/typecheck before which others, in what order."
+    allowed_tools = "read, grep, find, ls"
+    context_files = "AGENTS.md"
+  ]
+
+  subgraph cluster_dev {
+    implement [
+      prompt = "Implement $plan.output. Follow the cross-package dependency order from plan §5. Stay inside the package(s) and files the plan §1 names — anything else is scope creep. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it).\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package, in dependency order; fix errors before moving to the next package. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked in <pkg>: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nApply the same-PR doc updates from plan §1. Don't invent extras.\n\nSummarise: files touched grouped by package, public surface, planned tests realised, skipped items + why."
+      allowed_tools = "read, write, edit, grep, bash"
+      thread_id     = "dev"
+    ]
+
+    review [
+      prompt = "Judge the diff. Inputs: $plan.output, $implement.output, `git diff HEAD`.\n\nCheck:\n  (a) Diff implements the plan — no more, no less. Cross-package changes are expected; only flag files OUTSIDE plan §1.\n  (b) Every plan §2 test is realised (file exists, name matches, assertion matches).\n  (c) Bugs, type errors, security issues.\n  (d) Same-PR doc updates from plan §1 actually landed (ARCH §-references, README claims, skill cheat sheets where applicable).\n  (e) Doc-state claims match reality. Any prose edit asserting shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`. Reality wins.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 3 cycles)."
+      allowed_tools = "read, grep, bash"
+      thread_id     = "dev"
+      goal_gate     = true
+      retry_target  = "implement"
+    ]
+  }
+
+  // CI is a tool node — happy path costs zero LLM tokens. Only on
+  // failure does `fix` spin up; the backward edge fix→ci retries up
+  // to max_retries=5 times. On the 6th attempt the runtime halts
+  // with reason=max_retries_exceeded.
+  ci [shape=parallelogram, tool_command="bun run ci", max_retries=5]
+
+  fix [
+    class         = "fix"
+    prompt        = "CI failed. Failure log: $ci.output. Read the failures, make the minimal change to fix them, then stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
+    allowed_tools = "read, write, edit, bash"
+    max_cost_usd  = 0.30
+    max_tokens    = 800000
+  ]
+
+  commit [
+    class         = "commit"
+    prompt        = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.\n\nIf `git status --short` is empty, emit `COMMITTED: no changes`.\n\nOtherwise: `git add` explicit paths (group related files; multi-package features may warrant multiple commits, one per logical chunk), commit each with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha list>`. Don't push."
+    allowed_tools = "read, write, edit, bash"
+    context_files = "AGENTS.md"
+  ]
+
+  done [shape=Msquare]
+
+  start  -> plan
+  plan   -> done [condition="outcome=fail"]
+  plan   -> implement
+
+  implement -> done [condition="outcome=fail"]
+  implement -> review
+
+  review -> done [condition="outcome=fail"]
+  review -> ci
+
+  ci  -> commit [condition="outcome=success"]
+  ci  -> fix    [condition="outcome=fail"]
+  fix -> ci
+
+  commit -> done
+}
