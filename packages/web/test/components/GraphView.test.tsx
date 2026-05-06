@@ -263,6 +263,51 @@ describe("GraphView — rendering", () => {
     expect(byId.get("done")).toBe("pending");
   });
 
+  it("a running tool node renders with the active ring + thinking-pulse dot + teal handler strip", async () => {
+    const src = `digraph crowdin {
+      start [shape=Mdiamond]
+      find_pr [shape=parallelogram, tool_command="gh pr list --head l10n_crowdin"]
+      done [shape=Msquare]
+      start -> find_pr -> done
+    }`;
+    const detail: RunDetail = {
+      runId: "r-tool",
+      startedAt: "2024-01-01T00:00:00.000Z",
+      status: "running",
+      lastEventSeq: 2,
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2 },
+      ],
+      selectedEdges: [{ from: "start", to: "find_pr", iteration: 0 }],
+      workflowSource: src,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    const { container } = render(<GraphView detail={detail} activeNodeIds={new Set(["find_pr"])} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const node = canvas.querySelector('[data-node-id="find_pr"]') as HTMLElement | null;
+    expect(node).toBeTruthy();
+    // Stamped attributes for downstream styling / debugging.
+    expect(node?.getAttribute("data-state")).toBe("running");
+    expect(node?.getAttribute("data-handler")).toBe("tool");
+
+    // Active ring is on the card itself.
+    const cls = node?.getAttribute("class") ?? "";
+    expect(cls).toContain("ring-sw-accent-thinking");
+
+    // Tool handler-strip uses the loop tone (teal).
+    const strip = node?.querySelector(".bg-sw-accent-loop");
+    expect(strip).toBeTruthy();
+
+    // StateDot pulses with the thinking accent while running.
+    const dots = node?.querySelectorAll(".bg-sw-accent-thinking") ?? [];
+    expect(dots.length).toBeGreaterThan(0);
+    const pulsing = Array.from(dots).some((el) => el.className.includes("sw-pulse"));
+    expect(pulsing).toBe(true);
+  });
+
   it("shows the purpose-built empty state when workflowSource is absent", () => {
     const detail = makeDetail();
     const withoutSource: RunDetail = { ...detail, workflowSource: undefined };
@@ -677,6 +722,41 @@ describe("toFlowGraph — handler-specific body fields", () => {
     const byId = new Map(flowNodes.map((n) => [n.id, n.data as { threadId?: string }]));
     expect(byId.get("a")?.threadId).toBe("dev");
     expect(byId.get("start")?.threadId).toBeUndefined();
+  });
+
+  it("a running tool node propagates state='running' + active=true into FlowNode data", () => {
+    // Regression guard for the running-state highlight on parallelogram
+    // nodes. Codergen and tool nodes share the fact pipeline
+    // (`fact.dispatch_started` → "running" → `fact.node_completed` →
+    // "completed"), but only tool nodes were missing a focused test.
+    const src = `digraph crowdin {
+      start [shape=Mdiamond]
+      find_pr [shape=parallelogram, tool_command="gh pr list --head l10n_crowdin --json number"]
+      done [shape=Msquare]
+      start -> find_pr -> done
+    }`;
+    const graph = parseDotSource(src);
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "find_pr", iteration: 0, state: "running", lastEventSeq: 2 },
+      ],
+      selectedEdges: [{ from: "start", to: "find_pr", iteration: 0 }],
+    });
+    const { flowNodes } = toFlowGraph(detail, graph, {
+      activeNodeIds: new Set(["find_pr"]),
+    });
+    const findPr = flowNodes.find((n) => n.id === "find_pr")?.data as {
+      handler: string;
+      state: string;
+      active: boolean;
+      toolCommand?: string;
+    };
+    expect(findPr.handler).toBe("tool");
+    expect(findPr.state).toBe("running");
+    expect(findPr.active).toBe(true);
+    // Sanity: tool_command still surfaces while running.
+    expect(findPr.toolCommand?.startsWith("gh pr list")).toBe(true);
   });
 
   it("surfaces tool_command (truncated) only for tool nodes", () => {
