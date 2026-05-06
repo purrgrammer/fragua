@@ -36,5 +36,6 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | W008 | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
 | W009 | Codergen (`box`) node has empty `prompt` and empty `label`. |
 | W010 | `fidelity` value not recognised — runtime falls back to `compact`; surfaces typos like `compcat`. |
+| W011 | Codergen (`box`) node declares bare `model` / `provider` without the `llm_` prefix. The agent backend reads only `llm_model` / `llm_provider`; bare keys are silently dropped and the run falls through to the daemon default. Suppressed when the prefixed form is set OR a graph `model_stylesheet` rule covers the node. |
 
 `--strict` makes warnings fail the command. The CLI doesn't expose it yet; the API (`validate(graph, {strict:true})`) does.

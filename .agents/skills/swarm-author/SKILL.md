@@ -388,7 +388,7 @@ For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_
 
 `bun run swarm validate path/to/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
 
-Error codes range from E001 (no start node) through E015 (model_stylesheet syntax). Warning codes from W001 (orphan node) through W010 (unknown fidelity value). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
+Error codes range from E001 (no start node) through E015 (model_stylesheet syntax). Warning codes from W001 (orphan node) through W011 (bare `model`/`provider` without `llm_` prefix). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
 
 The most common ones to know without looking up:
 
