@@ -434,4 +434,16 @@ export interface SubagentEndData {
   total_tool_calls: number;
   /** Present when `status !== "completed"`. */
   halt_reason?: string;
+  /** Per-spawn cost rollup. Summed from every `cost.recorded` event
+   * the sub-agent forwarded onto the parent's stream during this
+   * bracket. Mirrors the `partial*` shape on `fact.node_aborted` so
+   * UIs and analytics can render a per-spawn total without scanning
+   * the slice. Required numbers — default 0 when no `cost.recorded`
+   * fired (e.g. spawn halted before any LLM call). */
+  costUsd: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }

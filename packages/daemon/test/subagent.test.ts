@@ -475,6 +475,120 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
+  test("subagent.end carries per-spawn cost rollup summed from forwarded cost.recorded events", async () => {
+    // Bug regression: SubagentEndData previously declared only
+    // {status, summary_chars, total_tool_calls, halt_reason?} — consumers
+    // reading subagent.end.payload.costUsd / .totalTokens got undefined,
+    // even though every cost.recorded the child emitted flowed onto the
+    // parent's stream and into the parent's accumulators. Fix: track a
+    // per-spawn delta inside subagentEmit's closure and stamp it onto
+    // subagent.end.
+    const store = freshStore();
+    seedParent(store, "parent-cost");
+    const registry = freshRegistry();
+    // Backend emits two cost.recorded events through the spawn's emit
+    // channel — exactly what the real codergen backend does at every
+    // assistant message_end via packages/agent/src/event-bridge.ts.
+    const backend = new StubBackend(async (input) => {
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 100,
+        output_tokens: 40,
+        cache_read_tokens: 10,
+        cache_write_tokens: 5,
+        total_tokens: 155,
+        cost_usd: 0.012,
+        cost_input_usd: 0.008,
+        cost_output_usd: 0.004,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 200,
+        output_tokens: 60,
+        cache_read_tokens: 20,
+        cache_write_tokens: 0,
+        total_tokens: 280,
+        cost_usd: 0.03,
+        cost_input_usd: 0.02,
+        cost_output_usd: 0.01,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      return ok({ notes: "" });
+    });
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-cost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x", name: "with-cost" });
+    const end = events.find((e) => e.type === "subagent.end")!;
+    expect(end.data["costUsd"]).toBeCloseTo(0.042, 6);
+    expect(end.data["totalTokens"]).toBe(155 + 280);
+    expect(end.data["inputTokens"]).toBe(300);
+    expect(end.data["outputTokens"]).toBe(100);
+    expect(end.data["cacheReadTokens"]).toBe(30);
+    expect(end.data["cacheWriteTokens"]).toBe(5);
+    store.close();
+  });
+
+  test("subagent.end cost rollup defaults to zero when no cost.recorded fired", async () => {
+    // Default-zero contract: required-number fields, not optional.
+    // A spawn that never produced a cost.recorded (e.g. a pure halt
+    // before any LLM call) must still surface 0/0/... so consumers
+    // don't have to re-introduce undefined-checks at every read.
+    const store = freshStore();
+    seedParent(store, "parent-zero-cost");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-zero-cost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "x" });
+    const end = events.find((e) => e.type === "subagent.end")!;
+    expect(end.data["costUsd"]).toBe(0);
+    expect(end.data["totalTokens"]).toBe(0);
+    expect(end.data["inputTokens"]).toBe(0);
+    expect(end.data["outputTokens"]).toBe(0);
+    expect(end.data["cacheReadTokens"]).toBe(0);
+    expect(end.data["cacheWriteTokens"]).toBe(0);
+    store.close();
+  });
+
   test("def-supplied model/provider override parent's on the synthesised child node", async () => {
     const store = freshStore();
     seedParent(store, "parent-modeloverride");
