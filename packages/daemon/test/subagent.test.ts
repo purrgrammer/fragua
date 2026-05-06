@@ -883,7 +883,7 @@ describe("makeSpawnSubagent", () => {
     // from the pre-crash bracket.
     const types = events.map((e) => e.type);
     expect(types).not.toContain("subagent.start");
-    const resumedIdx = types.indexOf("subagent.resumed" as EventType);
+    const resumedIdx = types.indexOf("subagent.resumed");
     const endIdx = types.indexOf("subagent.end");
     expect(resumedIdx).toBeGreaterThanOrEqual(0);
     expect(endIdx).toBe(resumedIdx + 1);

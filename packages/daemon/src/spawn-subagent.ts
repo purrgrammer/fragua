@@ -125,7 +125,7 @@ export function makeSpawnSubagent(
     if (priorMessages.length > 0 && isTranscriptComplete(priorMessages)) {
       const summary = extractAssistantText(priorMessages[priorMessages.length - 1]!);
       const totalToolCalls = countToolCalls(priorMessages);
-      await parentCtx.parentEmit("subagent.resumed" as EventType, {
+      await parentCtx.parentEmit("subagent.resumed", {
         subagent_id: subagentId,
         reason: "already_completed",
       });
