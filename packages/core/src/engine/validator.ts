@@ -6,7 +6,7 @@ import type { Edge, Graph } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
 import { discoverFanInTarget } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
-import { parseStylesheet, StylesheetParseError } from "./stylesheet.ts";
+import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
 
 function isEmptyCondition(cond: string | undefined): boolean {
   return !cond || cond.trim() === "";
@@ -441,6 +441,52 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
           severity: "error",
           code: "E015",
           message: `graph model_stylesheet failed to parse: ${detail}`,
+        });
+      }
+    }
+  }
+
+  // W011: codergen (box) node declares bare `model` / `provider` without
+  // the `llm_` prefix. The agent backend reads only `llm_model` /
+  // `llm_provider`; bare keys are silently dropped and the run falls
+  // through to the daemon default. Suppress the warning when the
+  // prefixed equivalent is set OR a graph `model_stylesheet` rule
+  // matches the node and supplies that property — both cases mean the
+  // backend will see a value.
+  {
+    let stylesheetRules: ReturnType<typeof parseStylesheet> = [];
+    const ssSrc = graph.attrs.model_stylesheet;
+    if (typeof ssSrc === "string" && ssSrc.trim() !== "") {
+      try {
+        stylesheetRules = parseStylesheet(ssSrc);
+      } catch {
+        // E015 already reports parse errors; treat as no coverage here.
+      }
+    }
+    const stylesheetCovers = (node: (typeof nodes)[number], prop: "llm_model" | "llm_provider"): boolean => {
+      for (const rule of stylesheetRules) {
+        if (rule.decls[prop] !== undefined && selectorMatches(rule.selector, node)) return true;
+      }
+      return false;
+    };
+    const PAIRS: Array<{ bare: "model" | "provider"; prefixed: "llm_model" | "llm_provider" }> = [
+      { bare: "model", prefixed: "llm_model" },
+      { bare: "provider", prefixed: "llm_provider" },
+    ];
+    for (const n of nodes) {
+      if (n.shape !== "box") continue;
+      for (const { bare, prefixed } of PAIRS) {
+        const bareVal = (n.attrs as Record<string, unknown>)[bare];
+        if (typeof bareVal !== "string" || bareVal === "") continue;
+        const prefixedVal = (n.attrs as Record<string, unknown>)[prefixed];
+        if (typeof prefixedVal === "string" && prefixedVal !== "") continue;
+        if (stylesheetCovers(n, prefixed)) continue;
+        diags.push({
+          severity: "warning",
+          code: "W011",
+          message: `codergen node "${n.id}" declares ${bare}="${bareVal}" but the agent backend only reads \`${prefixed}\` — value is silently ignored. Use \`${prefixed} = "${bareVal}"\` or a graph \`model_stylesheet = "* { ${prefixed}: ${bareVal}; }"\` rule.`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
         });
       }
     }

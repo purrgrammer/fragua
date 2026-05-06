@@ -680,6 +680,71 @@ describe("retry-policy lints (attractor §3.6)", () => {
     const w008 = diags.find((d) => d.code === "W008" && d.message.includes("graph"));
     expect(w008).toBeDefined();
   });
+
+  test("W011: codergen node declares bare `model` without llm_ prefix", () => {
+    // Repro for run 01kqwzpt0hyfws0a0j: orchestrate.dot used `model = "claude-opus-4-7"`
+    // and the backend (which only reads `llm_model`) silently fell through to
+    // the daemon default. The validator must warn loudly at upload time.
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, model="claude-opus-4-7", prompt="go"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w011 = diags.find((d) => d.code === "W011" && d.nodeId === "work");
+    expect(w011).toBeDefined();
+    expect(w011?.severity).toBe("warning");
+    expect(w011?.message).toMatch(/llm_model/);
+  });
+
+  test("W011: codergen node declares bare `provider` without llm_ prefix", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, provider="anthropic", prompt="go"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w011 = diags.find((d) => d.code === "W011" && d.nodeId === "work");
+    expect(w011).toBeDefined();
+    expect(w011?.message).toMatch(/llm_provider/);
+  });
+
+  test("W011 not raised when llm_model is set explicitly", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, llm_model="claude-opus-4-7", prompt="go"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W011")).toBe(false);
+  });
+
+  test("W011 not raised when a model_stylesheet covers the node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          model_stylesheet="* { llm_model: claude-opus-4-7; }"
+          s [shape=Mdiamond]
+          work [shape=box, model="claude-opus-4-7", prompt="go"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W011")).toBe(false);
+  });
 });
 
 describe("validateOrThrow", () => {
