@@ -291,6 +291,11 @@ function typeStripTone(handler: string, goalGate: boolean): string | null {
 function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   const d = data as SwarmNodeData;
   const handlerLabel = d.handler;
+  // start / exit are lifecycle markers — no metadata, no LLM, no
+  // retries — so they render as a compact header-only card. The
+  // archetype stays legible via the eyebrow + idle-gray strip; the
+  // body rows (id / model / retries / …) would only ever be empty.
+  const isTerminal = handlerLabel === "start" || handlerLabel === "exit";
   const stripTone = typeStripTone(handlerLabel, d.goalGate);
   // Extra handles carry back-edges ("loop" returns) so they route around
   // the forward-flow column. In TB flow the arc lives on the right; in
@@ -303,16 +308,25 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
   // Surface the DOT `label` in the header only when it carries meaning
   // beyond the id — otherwise the id (shown in the body) would appear
   // twice. Empty title ⇒ header reduces to handler + state dot.
-  const hasHeaderTitle = typeof d.customLabel === "string" && d.customLabel.length > 0 && d.customLabel !== d.nodeId;
+  // For terminals, the id (`start` / `done`) IS the name — render it
+  // as the title even when it duplicates the nodeId, so the card has
+  // something to anchor on. For everything else, suppress titles that
+  // just echo the id.
+  const headerTitle: string | undefined = isTerminal ? (d.customLabel ?? d.nodeId) : d.customLabel;
+  const hasHeaderTitle = isTerminal
+    ? (headerTitle ?? "").length > 0
+    : typeof d.customLabel === "string" && d.customLabel.length > 0 && d.customLabel !== d.nodeId;
   return (
     <AiNode
       handles={{ target: d.hasIncoming, source: d.hasOutgoing, orientation: d.orientation }}
       data-node-id={d.nodeId}
       data-state={d.state}
       data-handler={handlerLabel}
+      data-compact={isTerminal ? "true" : undefined}
       data-dim={d.dim ? "true" : undefined}
       className={cn(
-        "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
+        "relative overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
+        isTerminal ? "w-44" : "w-60",
         d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
         d.winner && !d.active && "ring-2 ring-sw-accent-success",
@@ -340,79 +354,81 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
           {d.state && <StateDot state={d.state} />}
         </div>
         {hasHeaderTitle ? (
-          <NodeTitle className="truncate text-sw-sm font-medium text-sw-text" title={d.customLabel}>
-            {d.customLabel}
+          <NodeTitle className="truncate text-sw-sm font-medium text-sw-text" title={headerTitle}>
+            {headerTitle}
           </NodeTitle>
         ) : null}
       </NodeHeader>
-      <NodeContent className="flex flex-col gap-0.5 p-2 text-sw-xs text-sw-muted">
-        <span className="truncate" title={d.nodeId}>
-          <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
-        </span>
-        {d.model ? (
-          <span className="flex items-center gap-1" title={d.provider ? `${d.provider} · ${d.model}` : d.model}>
-            <span className="uppercase tracking-[0.06em]">model</span>
-            {d.provider ? <ModelSelectorLogo className="shrink-0" provider={d.provider} /> : null}
-            <code className="truncate text-sw-text">{d.model}</code>
+      {isTerminal ? null : (
+        <NodeContent className="flex flex-col gap-0.5 p-2 text-sw-xs text-sw-muted">
+          <span className="truncate" title={d.nodeId}>
+            <span className="uppercase tracking-[0.06em]">id</span> <code className="text-sw-text">{d.nodeId}</code>
           </span>
-        ) : null}
-        {d.reasoningEffort ? (
-          <span className="truncate" title={`reasoning_effort=${d.reasoningEffort}`}>
-            <span className="uppercase tracking-[0.06em]">effort</span>{" "}
-            <code className="text-sw-text">{d.reasoningEffort}</code>
-          </span>
-        ) : null}
-        {/* thread_id — flags shared-session nodes (e.g. cluster_dev). */}
-        {d.threadId ? (
-          <span className="truncate" title={`thread_id=${d.threadId}`}>
-            <span className="uppercase tracking-[0.06em]">thread</span>{" "}
-            <code className="text-sw-text">{d.threadId}</code>
-          </span>
-        ) : null}
-        {/* Tool nodes — surface the shell command directly. */}
-        {d.toolCommand ? (
-          <span className="truncate" title={d.toolCommand}>
-            <span className="uppercase tracking-[0.06em]">cmd</span>{" "}
-            <code className="text-sw-text">{d.toolCommand}</code>
-          </span>
-        ) : null}
-        {/* goal_gate retarget — names where REJECT loops back to. */}
-        {d.retryTarget ? (
-          <span className="truncate" title={`retry_target=${d.retryTarget}`}>
-            <span className="uppercase tracking-[0.06em]">retry</span>{" "}
-            <code className="text-sw-text">{d.retryTarget}</code>
-          </span>
-        ) : null}
-        {/* Parallel nodes — fan_in target (declared) + join policy. */}
-        {d.fanInTarget ? (
-          <span className="truncate" title={`fan_in=${d.fanInTarget}`}>
-            <span className="uppercase tracking-[0.06em]">fan_in</span>{" "}
-            <code className="text-sw-text">{d.fanInTarget}</code>
-          </span>
-        ) : null}
-        {d.joinPolicy ? (
-          <span className="truncate" title={`join_policy=${d.joinPolicy}`}>
-            <span className="uppercase tracking-[0.06em]">join</span>{" "}
-            <code className="text-sw-text">{d.joinPolicy}</code>
-          </span>
-        ) : null}
-        {/* parallel.fan_in — distinguish LLM-rank (has prompt) vs heuristic. */}
-        {d.fanInRank ? (
-          <span className="truncate" title={`rank=${d.fanInRank}`}>
-            <span className="uppercase tracking-[0.06em]">rank</span>{" "}
-            <code className="text-sw-text">{d.fanInRank}</code>
-          </span>
-        ) : null}
-        {/* Handler-level retry cap. Only render when explicitly set; the
+          {d.model ? (
+            <span className="flex items-center gap-1" title={d.provider ? `${d.provider} · ${d.model}` : d.model}>
+              <span className="uppercase tracking-[0.06em]">model</span>
+              {d.provider ? <ModelSelectorLogo className="shrink-0" provider={d.provider} /> : null}
+              <code className="truncate text-sw-text">{d.model}</code>
+            </span>
+          ) : null}
+          {d.reasoningEffort ? (
+            <span className="truncate" title={`reasoning_effort=${d.reasoningEffort}`}>
+              <span className="uppercase tracking-[0.06em]">effort</span>{" "}
+              <code className="text-sw-text">{d.reasoningEffort}</code>
+            </span>
+          ) : null}
+          {/* thread_id — flags shared-session nodes (e.g. cluster_dev). */}
+          {d.threadId ? (
+            <span className="truncate" title={`thread_id=${d.threadId}`}>
+              <span className="uppercase tracking-[0.06em]">thread</span>{" "}
+              <code className="text-sw-text">{d.threadId}</code>
+            </span>
+          ) : null}
+          {/* Tool nodes — surface the shell command directly. */}
+          {d.toolCommand ? (
+            <span className="truncate" title={d.toolCommand}>
+              <span className="uppercase tracking-[0.06em]">cmd</span>{" "}
+              <code className="text-sw-text">{d.toolCommand}</code>
+            </span>
+          ) : null}
+          {/* goal_gate retarget — names where REJECT loops back to. */}
+          {d.retryTarget ? (
+            <span className="truncate" title={`retry_target=${d.retryTarget}`}>
+              <span className="uppercase tracking-[0.06em]">retry</span>{" "}
+              <code className="text-sw-text">{d.retryTarget}</code>
+            </span>
+          ) : null}
+          {/* Parallel nodes — fan_in target (declared) + join policy. */}
+          {d.fanInTarget ? (
+            <span className="truncate" title={`fan_in=${d.fanInTarget}`}>
+              <span className="uppercase tracking-[0.06em]">fan_in</span>{" "}
+              <code className="text-sw-text">{d.fanInTarget}</code>
+            </span>
+          ) : null}
+          {d.joinPolicy ? (
+            <span className="truncate" title={`join_policy=${d.joinPolicy}`}>
+              <span className="uppercase tracking-[0.06em]">join</span>{" "}
+              <code className="text-sw-text">{d.joinPolicy}</code>
+            </span>
+          ) : null}
+          {/* parallel.fan_in — distinguish LLM-rank (has prompt) vs heuristic. */}
+          {d.fanInRank ? (
+            <span className="truncate" title={`rank=${d.fanInRank}`}>
+              <span className="uppercase tracking-[0.06em]">rank</span>{" "}
+              <code className="text-sw-text">{d.fanInRank}</code>
+            </span>
+          ) : null}
+          {/* Handler-level retry cap. Only render when explicitly set; the
             implicit cascade (graph.default_max_retries → 0) isn't worth
             a line of chrome on every node. */}
-        {d.maxRetries !== undefined && d.maxRetries > 0 ? (
-          <span className="truncate" title={`max_retries=${d.maxRetries}`}>
-            <span className="uppercase tracking-[0.06em]">retries</span>{" "}
-            <code className="text-sw-text">{d.maxRetries}</code>
-          </span>
-        ) : null}
-      </NodeContent>
+          {d.maxRetries !== undefined && d.maxRetries > 0 ? (
+            <span className="truncate" title={`max_retries=${d.maxRetries}`}>
+              <span className="uppercase tracking-[0.06em]">retries</span>{" "}
+              <code className="text-sw-text">{d.maxRetries}</code>
+            </span>
+          ) : null}
+        </NodeContent>
+      )}
     </AiNode>
   );
 }

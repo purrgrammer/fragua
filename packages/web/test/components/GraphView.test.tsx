@@ -272,6 +272,37 @@ describe("GraphView — rendering", () => {
     expect(container.querySelector("[data-testid='graphview']")).toBeNull();
   });
 
+  it("renders start and exit nodes in a compact form (header only, no metadata rows)", async () => {
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const start = canvas.querySelector('[data-node-id="start"]') as HTMLElement | null;
+    const done = canvas.querySelector('[data-node-id="done"]') as HTMLElement | null;
+    const middle = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
+    expect(start).toBeTruthy();
+    expect(done).toBeTruthy();
+    expect(middle).toBeTruthy();
+
+    // Compact marker on lifecycle terminals only.
+    expect(start?.getAttribute("data-compact")).toBe("true");
+    expect(done?.getAttribute("data-compact")).toBe("true");
+    expect(middle?.getAttribute("data-compact")).toBeNull();
+
+    // Terminals drop the metadata body — no `id` / `model` / `effort` rows.
+    const wStart = within(start as HTMLElement);
+    const wDone = within(done as HTMLElement);
+    expect(wStart.queryByText("id")).toBeNull();
+    expect(wStart.queryByText("model")).toBeNull();
+    expect(wStart.queryByText("effort")).toBeNull();
+    expect(wDone.queryByText("id")).toBeNull();
+
+    // Regular box node still surfaces the id row — regression guard.
+    const wMiddle = within(middle as HTMLElement);
+    expect(wMiddle.getByText("id")).toBeTruthy();
+
+    // Header still anchors on the name.
+    expect(wStart.getAllByText("start").length).toBeGreaterThan(0);
+  });
+
   it("fires onNodeClick with the clicked node id", async () => {
     const clicks: string[] = [];
     const { container } = render(<GraphView detail={makeDetail()} onNodeClick={(id) => clicks.push(id)} />);

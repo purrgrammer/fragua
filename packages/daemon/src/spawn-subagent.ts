@@ -126,7 +126,7 @@ export function makeSpawnSubagent(
         summary:
           `agent tool: cannot spawn sub-agent — resolved tool pool is empty (allowed_tools=${allowDesc}). ` +
           "Widen the parent's `allowed_tools` (it likely lists only `agent`), or pass an explicit " +
-          '`allowed_tools: [...]` on the call.',
+          "`allowed_tools: [...]` on the call.",
         subagentId: randomUUID(),
         status: "halted" as const,
         haltReason: "empty_tool_pool",
