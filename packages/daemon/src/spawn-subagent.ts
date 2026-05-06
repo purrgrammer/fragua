@@ -113,6 +113,45 @@ export function makeSpawnSubagent(
       .map((r) => r.content as AgentMessage)
       .filter((m) => m.role !== "system");
 
+    // Cumulative cost rollup baseline. On a fresh spawn the lookup
+    // returns [] and the seeds stay 0. On a respawn after a daemon
+    // crash, every prior `subagent.end` for this deterministic
+    // `subagent_id` carries the partial cost from its bracket; the
+    // resumed bracket's `subagent.end.costUsd` is **cumulative** —
+    // operators reading the latest bracket get the truthful end-to-end
+    // cost of the logical sub-agent's work without scanning siblings.
+    // Consumers summing across `subagent.end` rows MUST dedupe by
+    // `subagent_id` and take the terminal (non-cancelled) bracket;
+    // see ARCH §3 and `docs/proposals/sub-agent-crash-resilience.md`.
+    const priorEnds = deps.store
+      .getEventsByType(parentCtx.parentRunId, "subagent.end")
+      .filter((e) => (e.payload as { subagent_id?: string }).subagent_id === subagentId);
+    const priorNum = (v: unknown): number => {
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const seedCostUsd = priorEnds.reduce((s, e) => s + priorNum((e.payload as Record<string, unknown>)["costUsd"]), 0);
+    const seedTotalTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["totalTokens"]),
+      0,
+    );
+    const seedInputTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["inputTokens"]),
+      0,
+    );
+    const seedOutputTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["outputTokens"]),
+      0,
+    );
+    const seedCacheReadTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["cacheReadTokens"]),
+      0,
+    );
+    const seedCacheWriteTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["cacheWriteTokens"]),
+      0,
+    );
+
     // Already-completed short-circuit: the sub-agent finished pre-crash
     // (last assistant message has stopReason ∈ {stop, endTurn} and no
     // pending toolCalls), but the daemon died before the parent's tool-
@@ -134,12 +173,12 @@ export function makeSpawnSubagent(
         status: "completed",
         summary_chars: summary.length,
         total_tool_calls: totalToolCalls,
-        costUsd: 0,
-        totalTokens: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
+        costUsd: seedCostUsd,
+        totalTokens: seedTotalTokens,
+        inputTokens: seedInputTokens,
+        outputTokens: seedOutputTokens,
+        cacheReadTokens: seedCacheReadTokens,
+        cacheWriteTokens: seedCacheWriteTokens,
       });
       return {
         summary,
@@ -266,12 +305,12 @@ export function makeSpawnSubagent(
     // `run_state.metrics`); this is a per-spawn view of the same
     // stream, not a duplicate accounting path. Field shape mirrors
     // `fact.node_aborted.partial*` for symmetry.
-    let localCostUsd = 0;
-    let localTotalTokens = 0;
-    let localInputTokens = 0;
-    let localOutputTokens = 0;
-    let localCacheReadTokens = 0;
-    let localCacheWriteTokens = 0;
+    let localCostUsd = seedCostUsd;
+    let localTotalTokens = seedTotalTokens;
+    let localInputTokens = seedInputTokens;
+    let localOutputTokens = seedOutputTokens;
+    let localCacheReadTokens = seedCacheReadTokens;
+    let localCacheWriteTokens = seedCacheWriteTokens;
 
     const subagentEmit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
       if (type === "cost.recorded") {

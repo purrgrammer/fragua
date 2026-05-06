@@ -665,6 +665,15 @@ export interface IEventReader {
   // ─── Event log
   getEvents(runId: string, opts?: GetEventsOpts): StoredEvent[];
   /**
+   * Every event of `type` for `runId` in seq order. SQL filter — the
+   * caller would otherwise have to scan `getEvents` and re-filter in
+   * JS. Currently used by `spawn-subagent.ts` to seed the cumulative
+   * cost rollup on a resumed `subagent.end` bracket from prior
+   * brackets sharing the same `subagent_id` (see
+   * `docs/proposals/sub-agent-crash-resilience.md`).
+   */
+  getEventsByType(runId: string, type: string): StoredEvent[];
+  /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
    * cursor, filtered by `kindIn`. Returns events in `(ts, run_id,

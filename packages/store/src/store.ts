@@ -55,6 +55,7 @@ import {
   type OrphanSideEffectRow,
   type PendingIntentRow,
   selectEvents,
+  selectEventsByType,
   selectFactSideEffectDone,
   selectFactSideEffectIntent,
   selectGlobalEventsAtFloor,
@@ -545,6 +546,10 @@ export class SqliteStore implements IEventStore {
       ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
     };
     return selectEvents(this.db, runId, queryOpts).map(rowToStoredEvent);
+  }
+
+  getEventsByType(runId: string, type: string): StoredEvent[] {
+    return selectEventsByType(this.db, runId, type).map(rowToStoredEvent);
   }
 
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {

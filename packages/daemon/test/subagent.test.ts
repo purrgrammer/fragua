@@ -777,6 +777,150 @@ describe("makeSpawnSubagent", () => {
     store.close();
   });
 
+  test("cumulative cost rollup on resumed subagent.end seeds from prior subagent.end events for same subagent_id", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-cumcost");
+    const registry = freshRegistry();
+    const ctrl = new AbortController();
+
+    const det = createHash("sha256")
+      .update(`parent-cumcost\u0000plan\u00000\u0000toolu_cum`)
+      .digest("hex")
+      .slice(0, 32);
+
+    // Spawn 1 — the daemon crashed mid-flight, so the bracket lands
+    // as cancelled with partial cost. Use a custom backend that
+    // bypasses the StubBackend's persistMessage helper (which would
+    // write a stopReason:'stop' assistant row, tripping the resume
+    // short-circuit on spawn 2) and instead emits two cost.recorded
+    // events plus a partial-success outcome. Persisted messages stay
+    // mid-flight so spawn 2 actually exercises the LLM path with the
+    // cumulative seed.
+    class PartialBackend {
+      public readonly inputs: CodergenInput[] = [];
+      constructor(private readonly factory: (input: CodergenInput) => Promise<Outcome>) {}
+      async run(input: CodergenInput): Promise<Outcome> {
+        this.inputs.push(input);
+        return await this.factory(input);
+      }
+    }
+    const backend1 = new PartialBackend(async (input) => {
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 100,
+        output_tokens: 40,
+        cache_read_tokens: 10,
+        cache_write_tokens: 5,
+        total_tokens: 155,
+        cost_usd: 0.025,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 50,
+        output_tokens: 20,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 70,
+        cost_usd: 0.015,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      return ok({ notes: "" });
+    });
+
+    // parentEmit that ALSO persists to the store so subagent.end
+    // lands as an actual event row — spawn 2 reads it via
+    // getEventsByType. Mirrors what the daemon's real bridge does.
+    const parentEmit1 = async (type: EventType, data: Record<string, unknown>) => {
+      store.appendObservabilityEvents("parent-cumcost", [{ type, payload: data }]);
+    };
+
+    const spawn1 = makeSpawnSubagent(
+      { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-cumcost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: parentEmit1,
+      },
+    );
+
+    const r1 = await spawn1({ prompt: "go", tool_call_id: "toolu_cum" });
+    expect(r1.subagentId).toBe(det);
+    const spawn1Ends = store
+      .getEventsByType("parent-cumcost", "subagent.end")
+      .filter((e) => (e.payload as { subagent_id?: string }).subagent_id === det);
+    expect(spawn1Ends.length).toBe(1);
+    expect((spawn1Ends[0]!.payload as { costUsd: number }).costUsd).toBeCloseTo(0.04, 6);
+
+    // Spawn 2 — same deterministic id (same parent ctx + tool_call_id),
+    // backend emits another $0.06 of cost. The resumed bracket's
+    // subagent.end must surface 0.04 + 0.06 = $0.10 cumulative.
+    const backend2 = new PartialBackend(async (input) => {
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 200,
+        output_tokens: 60,
+        cache_read_tokens: 20,
+        cache_write_tokens: 10,
+        total_tokens: 290,
+        cost_usd: 0.06,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      return ok({ notes: "" });
+    });
+    const spawn2Events: Array<{ type: EventType; data: Record<string, unknown> }> = [];
+    const parentEmit2 = async (type: EventType, data: Record<string, unknown>) => {
+      spawn2Events.push({ type, data });
+      store.appendObservabilityEvents("parent-cumcost", [{ type, payload: data }]);
+    };
+    const spawn2 = makeSpawnSubagent(
+      { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-cumcost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: parentEmit2,
+      },
+    );
+    await spawn2({ prompt: "resume", tool_call_id: "toolu_cum" });
+
+    const end2 = spawn2Events.find((e) => e.type === "subagent.end");
+    expect(end2).toBeDefined();
+    expect(end2!.data["costUsd"]).toBeCloseTo(0.1, 6);
+    expect(end2!.data["totalTokens"]).toBe(155 + 70 + 290);
+    expect(end2!.data["inputTokens"]).toBe(100 + 50 + 200);
+    expect(end2!.data["outputTokens"]).toBe(40 + 20 + 60);
+    expect(end2!.data["cacheReadTokens"]).toBe(10 + 0 + 20);
+    expect(end2!.data["cacheWriteTokens"]).toBe(5 + 0 + 10);
+    store.close();
+  });
+
   test("already-completed transcript bypasses backend.run and emits subagent.resumed before subagent.end", async () => {
     const store = freshStore();
     seedParent(store, "parent-postsummary");

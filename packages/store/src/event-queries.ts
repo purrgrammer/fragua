@@ -113,6 +113,24 @@ export function selectEvents(db: Database, runId: string, opts: { sinceSeq: numb
   return db.query<EventRow, [string, number, number]>(SELECT_EVENTS_BY_RUN_SQL).all(runId, opts.sinceSeq, limit);
 }
 
+const SELECT_EVENTS_BY_TYPE_SQL = `
+  SELECT run_id, seq, type, writer, payload, ts
+    FROM events
+   WHERE run_id = ?1 AND type = ?2
+   ORDER BY seq ASC
+`;
+
+/** Every event of `type` for `runId` in seq order. Cheap (covered by
+ *  the `events(run_id, seq)` primary key with a type filter scan).
+ *  Currently the only caller is `spawn-subagent.ts`, seeding the
+ *  cumulative cost rollup on a resumed `subagent.end` from prior
+ *  brackets carrying the same `subagent_id`. The result set is
+ *  bounded by the per-(run, subagent_id) bracket count — typically 1
+ *  pre-crash + 1 resumed bracket. */
+export function selectEventsByType(db: Database, runId: string, type: string): EventRow[] {
+  return db.query<EventRow, [string, string]>(SELECT_EVENTS_BY_TYPE_SQL).all(runId, type);
+}
+
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events
