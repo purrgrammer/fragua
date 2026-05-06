@@ -776,4 +776,124 @@ describe("makeSpawnSubagent", () => {
     expect(seenPrior![1]!.role).toBe("assistant");
     store.close();
   });
+
+  test("already-completed transcript bypasses backend.run and emits subagent.resumed before subagent.end", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-postsummary");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    // The pre-crash spawn produced a final answer (stopReason:"stop",
+    // text-only blocks) and persisted it. The daemon died before the
+    // parent's tool-execute promise resolved — so the resumed bracket
+    // must skip the LLM, synthesise SubagentResult, and emit
+    // resumed→end.
+    const det = createHash("sha256")
+      .update(`parent-postsummary\u0000plan\u00000\u0000toolu_done`)
+      .digest("hex")
+      .slice(0, 32);
+    const seededNodeId = `__subagent:${det}`;
+    store.appendMessage("parent-postsummary", {
+      content: { role: "user", content: "go", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "toolu_inner", name: "read", arguments: { path: "a" } }],
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+        api: "stub",
+        timestamp: 0,
+      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "toolResult",
+        toolCallId: "toolu_inner",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        details: {},
+        isError: false,
+        timestamp: 0,
+      },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "assistant",
+        content: [{ type: "text", text: "final summary text" }],
+        stopReason: "stop",
+        usage: {
+          input: 5,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 10,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+        api: "stub",
+        timestamp: 0,
+      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-postsummary",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const result = await spawn({ prompt: "resume", tool_call_id: "toolu_done" });
+
+    expect(backend.inputs).toHaveLength(0);
+    expect(result.status).toBe("completed");
+    expect(result.summary).toBe("final summary text");
+    expect(result.totalToolCalls).toBe(1);
+
+    // Bracket on resume: subagent.resumed immediately before subagent.end.
+    // No subagent.start — the original is already in the parent's stream
+    // from the pre-crash bracket.
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain("subagent.start");
+    const resumedIdx = types.indexOf("subagent.resumed" as EventType);
+    const endIdx = types.indexOf("subagent.end");
+    expect(resumedIdx).toBeGreaterThanOrEqual(0);
+    expect(endIdx).toBe(resumedIdx + 1);
+    const resumed = events[resumedIdx]!;
+    expect(resumed.data["subagent_id"]).toBe(result.subagentId);
+    expect(resumed.data["reason"]).toBe("already_completed");
+    const end = events[endIdx]!;
+    expect(end.data["status"]).toBe("completed");
+    expect(end.data["summary_chars"]).toBe("final summary text".length);
+    expect(end.data["total_tool_calls"]).toBe(1);
+    store.close();
+  });
 });

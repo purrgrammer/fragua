@@ -113,6 +113,42 @@ export function makeSpawnSubagent(
       .map((r) => r.content as AgentMessage)
       .filter((m) => m.role !== "system");
 
+    // Already-completed short-circuit: the sub-agent finished pre-crash
+    // (last assistant message has stopReason ∈ {stop, endTurn} and no
+    // pending toolCalls), but the daemon died before the parent's tool-
+    // execute promise resolved. Skip the LLM call entirely; synthesise
+    // SubagentResult from the persisted transcript and emit the
+    // resumed→end pair on the parent's stream. We do NOT re-emit
+    // subagent.start — the original start is still in the event log
+    // from the pre-crash bracket; the new resumed event closes the
+    // gap and the new end carries the cumulative totals (commit 6).
+    if (priorMessages.length > 0 && isTranscriptComplete(priorMessages)) {
+      const summary = extractAssistantText(priorMessages[priorMessages.length - 1]!);
+      const totalToolCalls = countToolCalls(priorMessages);
+      await parentCtx.parentEmit("subagent.resumed" as EventType, {
+        subagent_id: subagentId,
+        reason: "already_completed",
+      });
+      await parentCtx.parentEmit("subagent.end", {
+        subagent_id: subagentId,
+        status: "completed",
+        summary_chars: summary.length,
+        total_tool_calls: totalToolCalls,
+        costUsd: 0,
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      return {
+        summary,
+        subagentId,
+        status: "completed",
+        totalToolCalls,
+      };
+    }
+
     // Materialise the child's system prompt + filter parent skills by
     // `spec.skills` (intersection by name). System-prompt override on
     // the spec wins outright.
@@ -385,4 +421,47 @@ function deriveHaltReason(outcome: Outcome, status: SubagentResult["status"]): s
   if (status === "completed") return undefined;
   if (outcome.provider_error) return "provider_exhausted";
   return outcome.failure_reason ?? undefined;
+}
+
+/** True when a persisted sub-agent transcript represents a finished
+ *  conversation: last message is an assistant with `stopReason ===
+ *  "stop"` (pi-ai's universal terminal-without-toolcall reason — see
+ *  pi-ai/dist/providers/*.js) and no toolCall blocks pending. The
+ *  pre-crash spawn produced a final answer; the only thing missing
+ *  from the parent's stream is the toolResult — which we synthesise
+ *  on resume without burning another LLM turn. */
+function isTranscriptComplete(messages: readonly AgentMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return false;
+  if (last.stopReason !== "stop") return false;
+  if (!Array.isArray(last.content)) return true;
+  return !last.content.some((b: { type: string }) => b.type === "toolCall");
+}
+
+/** Concatenate every text block in an assistant message. Mirrors the
+ *  reduction the spawn-side `persistMessage` does inline so a resumed
+ *  bracket's `summary` matches the value the original (pre-crash)
+ *  `SubagentResult.summary` would have carried. */
+function extractAssistantText(message: AgentMessage): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+  const parts = message.content as Array<{ type: string; text?: string }>;
+  return parts
+    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text as string)
+    .join("\n");
+}
+
+/** Count toolCall blocks across every assistant message in a
+ *  transcript. Matches the in-flight `totalToolCalls` accumulator
+ *  the live-run path maintains so resumed brackets surface the same
+ *  count the original spawn would have. */
+function countToolCalls(messages: readonly AgentMessage[]): number {
+  let n = 0;
+  for (const m of messages) {
+    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+    for (const b of m.content as Array<{ type: string }>) {
+      if (b.type === "toolCall") n += 1;
+    }
+  }
+  return n;
 }
