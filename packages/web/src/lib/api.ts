@@ -704,22 +704,28 @@ export async function enqueueJob(input: {
  * registered (its sha is what GET /workflows returns), so the composer
  * doesn't re-upload DOT source. `cwd` lands on `run_state.cwd` and is
  * how the project filter on /projects/:id resolves the run later. */
+/**
+ * Web-side enqueue input. The web UI never computes or pins a workflow
+ * sha — the server resolves the named workflow off disk (latest
+ * contents) via the same listing it serves to the client. Required
+ * fields: `cwd` (project root the run targets) and `workflowName`. The
+ * upload-then-enqueue path with an explicit `workflowSha` is reserved
+ * for the CLI and is not exposed here.
+ */
 export interface CreateRunInput {
-  workflowSha: string;
-  workflowName?: string;
+  cwd: string;
+  workflowName: string;
   workflowScope?: "global" | "local" | "path" | "ephemeral";
-  workflowPath?: string;
-  cwd?: string;
   input?: string;
   priority?: number;
 }
 
 export async function createRun(args: CreateRunInput): Promise<{ runId: string }> {
-  const body: Record<string, unknown> = { workflowSha: args.workflowSha };
-  if (args.workflowName !== undefined) body["workflowName"] = args.workflowName;
+  const body: Record<string, unknown> = {
+    cwd: args.cwd,
+    workflowName: args.workflowName,
+  };
   if (args.workflowScope !== undefined) body["workflowScope"] = args.workflowScope;
-  if (args.workflowPath !== undefined) body["workflowPath"] = args.workflowPath;
-  if (args.cwd !== undefined) body["cwd"] = args.cwd;
   if (args.input !== undefined) body["input"] = args.input;
   if (args.priority !== undefined) body["priority"] = args.priority;
   return postJson(

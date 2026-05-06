@@ -136,7 +136,7 @@ describe("RunComposer", () => {
     }
   });
 
-  it("submit is enabled with empty textarea and POSTs /runs with the selected workflow's sha+name+scope+path+cwd+input", async () => {
+  it("submit is enabled with empty textarea and POSTs /runs with cwd, workflowName, workflowScope, and input — no sha or path", async () => {
     let lastBody: unknown;
     const mock = installFetchMock({
       "/api/runs": async ({ method, init }) => {
@@ -164,14 +164,19 @@ describe("RunComposer", () => {
         expect(lastBody).toBeTruthy();
       });
 
+      // The server resolves the workflow off disk (latest contents) by
+      // (cwd, workflowName, workflowScope) — the client never computes
+      // or pins a sha, so nothing about the listing's identity travels
+      // over the wire on enqueue.
       expect(lastBody).toEqual({
-        workflowSha: "sha-LA",
+        cwd: PROJECT_CWD,
         workflowName: "local-a",
         workflowScope: "local",
-        workflowPath: "/work/proj-a/.swarm/workflows/local-a.dot",
-        cwd: PROJECT_CWD,
         input: "",
       });
+      const body = lastBody as Record<string, unknown>;
+      expect(body).not.toHaveProperty("workflowSha");
+      expect(body).not.toHaveProperty("workflowPath");
     } finally {
       mock.restore();
     }
@@ -205,7 +210,9 @@ describe("RunComposer", () => {
       expect(body["workflowScope"]).toBe("global");
       // Run cwd is the project we're viewing, not the workflow source.
       expect(body["cwd"]).toBe(PROJECT_CWD);
-      expect(body["workflowSha"]).toBe("sha-GA");
+      expect(body["workflowName"]).toBe("global-a");
+      expect(body).not.toHaveProperty("workflowSha");
+      expect(body).not.toHaveProperty("workflowPath");
     } finally {
       mock.restore();
     }

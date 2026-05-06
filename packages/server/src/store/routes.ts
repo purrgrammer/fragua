@@ -4,7 +4,6 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
-import { readFile } from "node:fs/promises";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
@@ -17,6 +16,7 @@ import {
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { WorkflowReader } from "../ports.ts";
 import { newRunId } from "./run-id.ts";
 import { parseGlobalCursorFromHeader, parseSeqCursorMax, runGlobalFeedLoop, runSseLoop } from "./sse.ts";
 
@@ -65,6 +65,16 @@ export interface ServerDeps {
    * client that otherwise fills `run_state` without limit.
    */
   maxQueuedRuns?: number;
+  /**
+   * Disk-backed workflow source. When set, `POST /runs` accepts the
+   * simplified `{ cwd, workflowName, workflowScope? }` shape: the
+   * server resolves the named workflow against the same listing the
+   * web UI sees (`GET /workflows`), hashes its current contents, and
+   * registers it before enqueueing. The CLI's upload-then-enqueue path
+   * (`POST /workflows` returning a sha, then `POST /runs` with that
+   * sha) keeps working unchanged.
+   */
+  workflowReader?: WorkflowReader;
 }
 
 const DEFAULT_SSE_POLL_MS = 100;
@@ -213,7 +223,11 @@ export function createRoutes(deps: ServerDeps): Hono {
 
   app.post("/runs", async (c) => {
     const body = await readJson<{
-      workflowSha: string;
+      /** Optional sha for the upload-then-enqueue path: caller has
+       *  already POSTed the DOT to /workflows and is referencing the
+       *  returned sha. The web UI omits this — the server resolves the
+       *  workflow off disk via `workflowReader`. */
+      workflowSha?: string;
       priority?: number;
       runId?: string;
       routing?: Record<string, unknown>;
@@ -222,60 +236,83 @@ export function createRoutes(deps: ServerDeps): Hono {
       input?: string;
       /** Absolute project root the run was enqueued from. Surfaced on
        * `run_state.cwd`; the only project identifier in the
-       * harness-by-default model. Omit for ephemeral runs (CI, tests). */
+       * harness-by-default model. Required when `workflowSha` is
+       * omitted (used to scope disk lookup). */
       cwd?: string;
-      /** Resolved workflow name when the caller passed a bare name.
-       * Surfaced on `run_state.workflow_name`. */
+      /** Workflow name to resolve from disk when `workflowSha` is
+       *  omitted. Surfaced on `run_state.workflow_name`. */
       workflowName?: string;
-      /** How the workflow argument resolved. */
+      /** How the workflow argument resolved. When `workflowSha` is
+       *  omitted, "global" pins lookup to `~/.swarm/workflows/`,
+       *  "local" pins to `<cwd>/.swarm/workflows/`, anything else
+       *  falls back to the global → projects search order. */
       workflowScope?: "global" | "local" | "path" | "ephemeral";
-      /** Filesystem path of the .dot file at resolution time. */
+      /** Optional provenance: filesystem path of the .dot file the
+       *  caller resolved this run from. Stored on `run_state` for
+       *  display; not used for resolution. The CLI sets it when
+       *  invoking from disk; the web UI omits it (the server resolves
+       *  the path itself via `workflowReader`). */
       workflowPath?: string;
     }>(c);
-    if (!body || typeof body.workflowSha !== "string") {
-      return c.json({ error: "workflowSha required" }, 400);
+    if (!body) {
+      return c.json({ error: "request body required" }, 400);
     }
-    // Web composer flow: GET /workflows lists workflows scanned off
-    // disk and reports each one's content sha; the composer POSTs
-    // /runs with that sha + the source path before anyone has uploaded
-    // the DOT. When the sha is unknown but a workflowPath is provided,
-    // read the file, verify it hashes to the claimed sha, and register
-    // it so enqueueRun finds it. A mismatch means the on-disk file
-    // changed since the listing was fetched (or the path points
-    // somewhere else) — refuse rather than silently substitute.
-    if (
-      typeof body.workflowPath === "string" &&
-      body.workflowPath.length > 0 &&
-      deps.store.getWorkflow(body.workflowSha) == null
-    ) {
-      let dotSource: string;
-      try {
-        dotSource = await readFile(body.workflowPath, "utf8");
-      } catch (err) {
+
+    // ── Workflow resolution ────────────────────────────────────────
+    // Two paths into POST /runs:
+    //   1. CLI: caller already uploaded the DOT via POST /workflows
+    //      and passes the returned sha. Existence checked by
+    //      enqueueRun() below — no disk I/O here.
+    //   2. Web UI / simple clients: caller passes only
+    //      `{ cwd, workflowName, workflowScope? }`. The server reads
+    //      the latest contents off disk via `workflowReader`, hashes
+    //      the bytes, and registers the workflow so enqueueRun()
+    //      sees it. This avoids racing the listing's content sha
+    //      against the route's hash — clients never need to compute
+    //      or pin a sha.
+    let workflowSha: string;
+    let resolvedWorkflowName: string | undefined;
+    if (typeof body.workflowSha === "string" && body.workflowSha.length > 0) {
+      workflowSha = body.workflowSha;
+      if (typeof body.workflowName === "string") resolvedWorkflowName = body.workflowName;
+    } else {
+      if (typeof body.workflowName !== "string" || body.workflowName.length === 0) {
+        return c.json({ error: "workflowName required when workflowSha is omitted" }, 400);
+      }
+      if (typeof body.cwd !== "string" || body.cwd.length === 0) {
+        return c.json({ error: "cwd required when workflowSha is omitted" }, 400);
+      }
+      if (deps.workflowReader == null) {
+        return c.json(
+          { error: "this server is not configured to resolve workflows by name", code: "workflow_reader_unavailable" },
+          400,
+        );
+      }
+      // `cwd: ""` pins the lookup to the global source per
+      // `WorkflowReader.read`'s contract; "local" pins to the
+      // project root the run targets. Anything else falls back to
+      // the default global → projects search.
+      const readOpts: { cwd?: string } | undefined =
+        body.workflowScope === "global" ? { cwd: "" } : body.workflowScope === "local" ? { cwd: body.cwd } : undefined;
+      const detail = await deps.workflowReader.read(body.workflowName, readOpts);
+      if (!detail) {
         return c.json(
           {
-            error: `cannot read workflowPath ${body.workflowPath}: ${(err as Error).message}`,
-            code: "workflow_path_unreadable",
+            error: `workflow "${body.workflowName}" not found${
+              body.workflowScope ? ` in ${body.workflowScope} scope` : ""
+            }`,
+            code: "workflow_not_found",
           },
           400,
         );
       }
-      const actualSha = sha256Hex(dotSource);
-      if (actualSha !== body.workflowSha) {
-        return c.json(
-          {
-            error: `workflowPath content sha ${actualSha} does not match workflowSha ${body.workflowSha}`,
-            code: "workflow_sha_mismatch",
-            expected: body.workflowSha,
-            actual: actualSha,
-          },
-          400,
-        );
+      workflowSha = sha256Hex(detail.source);
+      resolvedWorkflowName = body.workflowName;
+      if (deps.store.getWorkflow(workflowSha) == null) {
+        deps.store.saveWorkflow(workflowSha, body.workflowName, detail.source);
       }
-      const name =
-        typeof body.workflowName === "string" && body.workflowName.length > 0 ? body.workflowName : actualSha;
-      deps.store.saveWorkflow(actualSha, name, dotSource);
     }
+
     if (deps.preflightProviders != null) {
       const check = deps.preflightProviders();
       if (!check.ok) {
@@ -303,11 +340,11 @@ export function createRoutes(deps: ServerDeps): Hono {
     try {
       deps.store.enqueueRun({
         runId,
-        workflowSha: body.workflowSha,
+        workflowSha,
         ...(body.priority !== undefined ? { priority: body.priority } : {}),
         ...(Object.keys(initialRouting).length > 0 ? { initialRouting } : {}),
         ...(typeof body.cwd === "string" ? { cwd: body.cwd } : {}),
-        ...(typeof body.workflowName === "string" ? { workflowName: body.workflowName } : {}),
+        ...(resolvedWorkflowName !== undefined ? { workflowName: resolvedWorkflowName } : {}),
         ...(body.workflowScope === "global" ||
         body.workflowScope === "local" ||
         body.workflowScope === "path" ||

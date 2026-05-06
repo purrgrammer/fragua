@@ -7,19 +7,55 @@
 //   - P19: SSE replay via Last-Event-ID
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { SqliteStore, sha256Hex } from "@swarm/store";
+import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
 let store: SqliteStore;
 let server: { fetch: (req: Request) => Response | Promise<Response> };
+let workflowReader: TestWorkflowReader;
+
+interface TestWorkflowReader extends WorkflowReader {
+  set(name: string, source: string, opts?: { cwd?: string }): void;
+}
+
+function createTestWorkflowReader(): TestWorkflowReader {
+  // Keyed by `${cwd ?? ""}::${name}` so the same name can live under
+  // distinct sources (global = "" cwd, project-local = an actual path).
+  // Lookup precedence with no `cwd` set in opts: global first, then any
+  // project — matches the multi-source filesystem reader's contract.
+  const entries = new Map<string, WorkflowDetail>();
+  const keyOf = (cwd: string, name: string): string => `${cwd}::${name}`;
+  return {
+    async list(): Promise<WorkflowSummary[]> {
+      return Array.from(entries.values()).map(({ source: _src, ...summary }) => summary);
+    },
+    async read(name: string, opts?: WorkflowReadOptions): Promise<WorkflowDetail | undefined> {
+      const requestedCwd = opts?.cwd;
+      if (requestedCwd === undefined) {
+        const globalHit = entries.get(keyOf("", name));
+        if (globalHit) return globalHit;
+        for (const [k, v] of entries) {
+          if (k.endsWith(`::${name}`)) return v;
+        }
+        return undefined;
+      }
+      return entries.get(keyOf(requestedCwd, name));
+    },
+    set(name, source, opts) {
+      const cwd = opts?.cwd ?? "";
+      const detail: WorkflowDetail = { name, path: `${cwd}/${name}.dot`, sha: "x", source };
+      if (cwd !== "") detail.cwd = cwd;
+      entries.set(keyOf(cwd, name), detail);
+    },
+  };
+}
 
 beforeEach(() => {
   store = new SqliteStore({ path: ":memory:" });
   store.saveWorkflow("wf", "t", "digraph {}");
-  server = createRoutes({ store });
+  workflowReader = createTestWorkflowReader();
+  server = createRoutes({ store, workflowReader });
 });
 
 afterEach(() => {
@@ -176,52 +212,107 @@ describe("POST /runs — enqueue", () => {
     expect(state!.priority).toBe(3);
   });
 
-  test("rejects when workflowSha is missing", async () => {
-    const res = await req("POST", "/runs", {});
+  test("rejects an empty body", async () => {
+    const res = await req("POST", "/runs");
     expect(res.status).toBe(400);
   });
 
-  test("rejects unknown workflow", async () => {
+  test("rejects unknown workflowSha (CLI upload-then-enqueue path)", async () => {
     const res = await req("POST", "/runs", { workflowSha: "nonexistent" });
     expect(res.status).toBe(400);
   });
 
-  test("web composer flow: sha computed from a filesystem-listed workflow enqueues via workflowPath", async () => {
-    // Reproduces the bug operators see when submitting from the
-    // ProjectDetail PromptInput (RunComposer): GET /workflows lists
-    // workflows scanned off disk and reports each one's content sha.
-    // The composer POSTs /runs with that sha + the workflow's path, but
-    // nothing has called saveWorkflow() for that sha yet, so today
-    // enqueueRun() rejects with "unknown workflow sha …" → the route
-    // surfaces it as 400 "Bad Request". The composer already sends
-    // workflowPath; the server should resolve the DOT from disk and
-    // register it before enqueuing so submitting from the web works
-    // without an explicit upload step.
-    const dir = mkdtempSync(join(tmpdir(), "swarm-runs-bug-"));
-    try {
-      const dotSource = "digraph WebComposer { a -> b }";
-      const dotPath = join(dir, "web-composer.dot");
-      writeFileSync(dotPath, dotSource);
-      const sha = sha256Hex(dotSource);
+  test("rejects when workflowSha is omitted and workflowName is missing", async () => {
+    const res = await req("POST", "/runs", { cwd: "/tmp/p" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/workflowName required/);
+  });
 
-      // Sha is NOT in the workflows table — mirrors what the composer
-      // sends after a fresh GET /workflows on a project that has never
-      // had a run enqueued.
-      const res = await req("POST", "/runs", {
-        workflowSha: sha,
-        workflowName: "web-composer",
-        workflowScope: "local",
-        workflowPath: dotPath,
-        cwd: dir,
-        input: "",
-      });
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { runId: string };
-      const state = store.getState(body.runId);
-      expect(state).not.toBeNull();
-      expect(state!.workflowSha).toBe(sha);
+  test("rejects when workflowSha is omitted and cwd is missing", async () => {
+    const res = await req("POST", "/runs", { workflowName: "change" });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/cwd required/);
+  });
+
+  test("simple flow: { cwd, workflowName, workflowScope:'local' } resolves via workflowReader", async () => {
+    // The web composer ships only the four fields the user types into
+    // the form: cwd, workflowName, workflowScope, input. The server
+    // reads the latest DOT off disk, hashes it, registers it, and
+    // enqueues — no sha or path travels over the wire. Replaces the
+    // earlier sha-pinned flow that mismatched the listing's short sha
+    // against the route's full sha and always 400'd.
+    const projectCwd = "/projects/alpha";
+    const dotSource = "digraph WebComposer { a -> b }";
+    workflowReader.set("change", dotSource, { cwd: projectCwd });
+
+    const res = await req("POST", "/runs", {
+      cwd: projectCwd,
+      workflowName: "change",
+      workflowScope: "local",
+      input: "rename foo to bar",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string };
+    const state = store.getState(body.runId);
+    expect(state).not.toBeNull();
+    expect(state!.workflowSha).toBe(sha256Hex(dotSource));
+    expect(state!.workflowName).toBe("change");
+    expect(state!.cwd).toBe(projectCwd);
+    // Server registered the resolved workflow so subsequent runs
+    // against the same sha skip the disk read.
+    expect(store.getWorkflow(state!.workflowSha)?.name).toBe("change");
+  });
+
+  test("simple flow: workflowScope:'global' pins lookup to the global source", async () => {
+    const dotSource = "digraph G { x -> y }";
+    workflowReader.set("change", "digraph LocalOnly { x -> y }", { cwd: "/projects/alpha" });
+    workflowReader.set("change", dotSource); // global
+
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "change",
+      workflowScope: "global",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { runId: string };
+    const state = store.getState(body.runId);
+    expect(state!.workflowSha).toBe(sha256Hex(dotSource));
+    expect(state!.workflowScope).toBe("global");
+  });
+
+  test("simple flow: workflow_not_found when the named workflow isn't on disk", async () => {
+    const res = await req("POST", "/runs", {
+      cwd: "/projects/alpha",
+      workflowName: "missing",
+      workflowScope: "local",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { code: string; error: string };
+    expect(body.code).toBe("workflow_not_found");
+    expect(body.error).toMatch(/missing/);
+  });
+
+  test("simple flow: workflow_reader_unavailable when the server has no reader configured", async () => {
+    // Bare server (no workflowReader injected) — same as a CI primitive
+    // that wires only POST /workflows + POST /runs with sha. The simple
+    // flow must surface a typed error rather than 500.
+    const bareStore = new SqliteStore({ path: ":memory:" });
+    try {
+      const bare = createRoutes({ store: bareStore });
+      const res = await bare.fetch(
+        new Request("http://test/runs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cwd: "/projects/alpha", workflowName: "change" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { code: string };
+      expect(body.code).toBe("workflow_reader_unavailable");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      bareStore.close();
     }
   });
 

@@ -15,7 +15,7 @@
 // global DOT.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SelectGroup, SelectLabel } from "@/components/ui/select";
 import { type CreateRunInput, createRun, type WorkflowSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
@@ -116,15 +116,27 @@ export function RunComposer({ cwd, workflows }: RunComposerProps): JSX.Element {
     if (!opt) return;
     const w = opt.workflow;
     const vars: CreateRunInput = {
-      workflowSha: w.sha,
+      cwd,
       workflowName: w.name,
       workflowScope: opt.scope,
-      workflowPath: w.path,
-      cwd,
       input: message.text,
     };
     mutation.mutate(vars);
   };
+
+  // Drop a stale enqueue error the moment the operator edits the
+  // input. The submit button's status="error" state (rendered as an X
+  // by PromptInputSubmit) and the inline error message both bind to
+  // `mutation.error`, so resetting the mutation drops both at once.
+  // isError + reset are read through a ref so this effect runs only
+  // when `input` changes; depending on isError would re-trigger when
+  // the error first appears and hide it instantly.
+  const mutationRef = useRef({ isError: mutation.isError, reset: mutation.reset });
+  mutationRef.current = { isError: mutation.isError, reset: mutation.reset };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `input` is the trigger; isError/reset are intentionally captured via ref so this effect only fires on input change.
+  useEffect(() => {
+    if (mutationRef.current.isError) mutationRef.current.reset();
+  }, [input]);
 
   const hasOptions = local.length + global.length > 0;
 
