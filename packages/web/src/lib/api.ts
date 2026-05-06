@@ -555,8 +555,15 @@ export async function getWorkflow(name: string, opts?: { cwd?: string }): Promis
   return getJson(`/workflows/${encodeURIComponent(name)}${qs}`, isWorkflowDetail);
 }
 
-export async function listSkills(opts?: { projectCwd?: string }): Promise<SkillSummary[]> {
-  const qs = opts?.projectCwd !== undefined ? `?project_cwd=${encodeURIComponent(opts.projectCwd)}` : "";
+function buildScopedListQs(opts?: { projectCwd?: string; projectOnly?: boolean }): string {
+  if (opts?.projectCwd === undefined) return "";
+  const parts = [`project_cwd=${encodeURIComponent(opts.projectCwd)}`];
+  if (opts.projectOnly) parts.push("scope=project_only");
+  return `?${parts.join("&")}`;
+}
+
+export async function listSkills(opts?: { projectCwd?: string; projectOnly?: boolean }): Promise<SkillSummary[]> {
+  const qs = buildScopedListQs(opts);
   const body = await getJson(
     `/skills${qs}`,
     (v): v is { skills: SkillSummary[] } =>
@@ -594,8 +601,8 @@ export async function getSkillFile(locId: string, path: string): Promise<{ bytes
   };
 }
 
-export async function listAgents(opts?: { projectCwd?: string }): Promise<AgentSummary[]> {
-  const qs = opts?.projectCwd !== undefined ? `?project_cwd=${encodeURIComponent(opts.projectCwd)}` : "";
+export async function listAgents(opts?: { projectCwd?: string; projectOnly?: boolean }): Promise<AgentSummary[]> {
+  const qs = buildScopedListQs(opts);
   const body = await getJson(
     `/agents${qs}`,
     (v): v is { agents: AgentSummary[] } =>

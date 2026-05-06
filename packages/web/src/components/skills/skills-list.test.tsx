@@ -58,6 +58,15 @@ describe("SkillsList", () => {
     expect(fetcher.last()).toContain(`/skills?project_cwd=${encodeURIComponent("/projects/a")}`);
   });
 
+  test("appends &scope=project_only when projectOnly is set", async () => {
+    const fetcher = captureFetch();
+    const { container } = renderWithProviders(<SkillsList projectCwd="/projects/a" projectOnly />);
+    await waitFor(() => within(container).getByTestId("skills-list-table"));
+    const url = fetcher.last() ?? "";
+    expect(url).toContain(`project_cwd=${encodeURIComponent("/projects/a")}`);
+    expect(url).toContain("scope=project_only");
+  });
+
   test("Project column is dropped when scoped to a project", async () => {
     captureFetch();
     const { container } = renderWithProviders(<SkillsList projectCwd="/projects/a" />);

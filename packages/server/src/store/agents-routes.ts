@@ -27,9 +27,16 @@ export function agentsRoutes(opts: AgentsRoutesOpts): Hono {
 
   app.get("/agents", async (c) => {
     const filterCwd = c.req.query("project_cwd");
+    const strict = c.req.query("scope") === "project_only";
     const projectCwds = filterCwd !== undefined ? [filterCwd] : enumerateProjectCwds(opts);
     const { agents } = await discoverAgents({ projectCwds, homeDir: opts.homeDir });
-    return c.json({ agents: agents.map(toListItem) });
+    // `scope=project_only` drops user-scope rows so the project detail
+    // tab shows exactly the profiles anchored to that project root.
+    const filtered =
+      strict && filterCwd !== undefined
+        ? agents.filter((a) => a.scope === "project" && a.project_cwd === filterCwd)
+        : agents;
+    return c.json({ agents: filtered.map(toListItem) });
   });
 
   app.get("/agents/:locId", async (c) => {

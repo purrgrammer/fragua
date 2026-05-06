@@ -84,6 +84,26 @@ describe("GET /skills", () => {
     expect(names).toEqual(["aOnly", "global"]);
   });
 
+  test("?project_cwd=<cwd>&scope=project_only excludes user-scope and other projects", async () => {
+    const projA = join(tmp, "projA");
+    const projB = join(tmp, "projB");
+    const home = join(tmp, "home");
+    await writeSkill(projA, ".agents/skills/aOnly", "aOnly", "from A");
+    await writeSkill(projB, ".agents/skills/bOnly", "bOnly", "from B");
+    await writeSkill(home, ".agents/skills/global", "global", "user");
+    build({ cwd: projA, homeDir: home });
+
+    const res = await get(`/skills?project_cwd=${encodeURIComponent(projA)}&scope=project_only`);
+    const body = (await res.json()) as { skills: Array<{ name: string; project_cwd?: string; scope: string }> };
+    const names = body.skills.map((s) => s.name).sort();
+    // user-scope `global` and other-project `bOnly` both dropped.
+    expect(names).toEqual(["aOnly"]);
+    for (const s of body.skills) {
+      expect(s.scope).toBe("project");
+      expect(s.project_cwd).toBe(projA);
+    }
+  });
+
   test("returns empty list when nothing is discovered", async () => {
     const cwd = join(tmp, "proj");
     await mkdir(cwd, { recursive: true });

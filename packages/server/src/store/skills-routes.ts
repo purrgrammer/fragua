@@ -12,7 +12,9 @@
 // Project enumeration: `cwd ∪ store.listCwds()`. Same set the daemon
 // walks at boot. Per-project filtering is via `?project_cwd=<cwd>` on
 // list endpoints — keeps user-scope records visible plus the one
-// project's project-scope records.
+// project's project-scope records. Add `&scope=project_only` to drop
+// user-scope rows entirely; the project-detail tabs use this so
+// operators see exactly what's anchored to that project root.
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -58,12 +60,19 @@ export function skillsRoutes(opts: SkillsRoutesOpts): Hono {
 
   app.get("/skills", async (c) => {
     const filterCwd = c.req.query("project_cwd");
+    const strict = c.req.query("scope") === "project_only";
     const projectCwds = filterCwd !== undefined ? [filterCwd] : enumerateProjectCwds(opts);
     const { skills } = await discoverFor(opts, projectCwds);
     // When `project_cwd` is supplied, the discovery walked only that
     // cwd's project roots — combined with user-scope, the response is
-    // already the right shape. No extra filtering needed.
-    return c.json({ skills: skills.map(toListItem) });
+    // already the right shape. With `scope=project_only` we additionally
+    // drop user-scope rows so the project detail tabs show exactly the
+    // skills anchored to that project root.
+    const filtered =
+      strict && filterCwd !== undefined
+        ? skills.filter((s) => s.scope === "project" && s.project_cwd === filterCwd)
+        : skills;
+    return c.json({ skills: filtered.map(toListItem) });
   });
 
   app.get("/skills/:locId", async (c) => {

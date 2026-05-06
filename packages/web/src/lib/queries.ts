@@ -106,12 +106,17 @@ export const queries = {
   skills: {
     all: () => ["skills"] as const,
     /** Discovery superset (or globals + one project when `projectCwd`
-     *  is set). The cache key splits on `projectCwd` so the global view
-     *  and per-project views don't collide. */
-    list: (projectCwd?: string) =>
+     *  is set; or just that project's skills when `projectOnly` is
+     *  also true). The cache key splits on both so the global view,
+     *  per-project (with globals), and project-only views each get
+     *  their own slot. */
+    list: (projectCwd?: string, projectOnly?: boolean) =>
       queryOptions({
-        queryKey: [...queries.skills.all(), "list", projectCwd ?? "__all__"] as const,
-        queryFn: () => api.listSkills(projectCwd !== undefined ? { projectCwd } : undefined),
+        queryKey: [...queries.skills.all(), "list", projectCwd ?? "__all__", projectOnly ? "strict" : "all"] as const,
+        queryFn: () =>
+          api.listSkills(
+            projectCwd !== undefined ? { projectCwd, ...(projectOnly ? { projectOnly: true } : {}) } : undefined,
+          ),
         // Long staleTime — file-system content rarely changes mid-session.
         // Manual refetch fires the rescan button.
         staleTime: 60_000,
@@ -142,10 +147,13 @@ export const queries = {
 
   agents: {
     all: () => ["agents"] as const,
-    list: (projectCwd?: string) =>
+    list: (projectCwd?: string, projectOnly?: boolean) =>
       queryOptions({
-        queryKey: [...queries.agents.all(), "list", projectCwd ?? "__all__"] as const,
-        queryFn: () => api.listAgents(projectCwd !== undefined ? { projectCwd } : undefined),
+        queryKey: [...queries.agents.all(), "list", projectCwd ?? "__all__", projectOnly ? "strict" : "all"] as const,
+        queryFn: () =>
+          api.listAgents(
+            projectCwd !== undefined ? { projectCwd, ...(projectOnly ? { projectOnly: true } : {}) } : undefined,
+          ),
         staleTime: 60_000,
       }),
     detail: (locId: string) =>

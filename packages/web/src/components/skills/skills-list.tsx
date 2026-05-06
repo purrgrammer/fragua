@@ -1,8 +1,11 @@
 // Shared skills table — used by /skills (global) and
 // /projects/:cwdEnc?tab=skills (per-project). The `projectCwd` prop
 // scopes the query; when set, the Project column is dropped because
-// every row anchors to the same cwd. The Rescan button stays in the
-// caller's header to keep this component layout-agnostic.
+// every row anchors to the same cwd. `projectOnly` further tightens
+// the request to drop user-scope rows entirely — the project detail
+// tab uses this so operators only see skills anchored to that
+// project root. The Rescan button stays in the caller's header to
+// keep this component layout-agnostic.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
@@ -15,12 +18,15 @@ export interface SkillsListProps {
   /** When set, the list is scoped to globals + this one project's
    * project-scope records. Drops the Project column. */
   projectCwd?: string;
+  /** When true (and `projectCwd` is set), drop user-scope records so
+   * the response only contains skills anchored to that project. */
+  projectOnly?: boolean;
   /** Test/observability anchor. Defaults to "skills-list". */
   testIdPrefix?: string;
 }
 
-export function SkillsList({ projectCwd, testIdPrefix = "skills-list" }: SkillsListProps): JSX.Element {
-  const { data, isPending, isError } = useQuery(queries.skills.list(projectCwd));
+export function SkillsList({ projectCwd, projectOnly, testIdPrefix = "skills-list" }: SkillsListProps): JSX.Element {
+  const { data, isPending, isError } = useQuery(queries.skills.list(projectCwd, projectOnly));
 
   if (isPending) {
     return (

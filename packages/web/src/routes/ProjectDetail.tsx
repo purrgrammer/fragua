@@ -327,7 +327,7 @@ export function ProjectDetail(): JSX.Element {
             className="flex w-full min-w-0 flex-col gap-2 p-3"
             data-testid="project-skills-section"
           >
-            <SkillsList projectCwd={cwd} testIdPrefix="project-skills" />
+            <SkillsList projectCwd={cwd} projectOnly testIdPrefix="project-skills" />
           </TabsContent>
 
           <TabsContent
@@ -335,7 +335,7 @@ export function ProjectDetail(): JSX.Element {
             className="flex w-full min-w-0 flex-col gap-2 p-3"
             data-testid="project-agents-section"
           >
-            <AgentsList projectCwd={cwd} testIdPrefix="project-agents" />
+            <AgentsList projectCwd={cwd} projectOnly testIdPrefix="project-agents" />
           </TabsContent>
 
           <TabsContent value="files" className="flex w-full min-w-0 flex-col gap-2 p-3">

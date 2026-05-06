@@ -74,6 +74,26 @@ describe("GET /agents", () => {
     // Only A's project profile + the global; B's bReviewer excluded.
     expect(names).toEqual(["aReviewer", "globalReviewer"]);
   });
+
+  test("?project_cwd=<cwd>&scope=project_only excludes user-scope and other projects", async () => {
+    const projA = join(tmp, "projA");
+    const projB = join(tmp, "projB");
+    const home = join(tmp, "home");
+    await writeAgent(projA, ".agents/agents", "aReviewer", "A's reviewer");
+    await writeAgent(projB, ".agents/agents", "bReviewer", "B's reviewer");
+    await writeAgent(home, ".agents/agents", "globalReviewer", "global");
+    build({ cwd: projA, homeDir: home });
+
+    const res = await get(`/agents?project_cwd=${encodeURIComponent(projA)}&scope=project_only`);
+    const body = (await res.json()) as { agents: Array<{ name: string; scope: string; project_cwd?: string }> };
+    const names = body.agents.map((a) => a.name).sort();
+    // user-scope `globalReviewer` and other-project `bReviewer` both dropped.
+    expect(names).toEqual(["aReviewer"]);
+    for (const a of body.agents) {
+      expect(a.scope).toBe("project");
+      expect(a.project_cwd).toBe(projA);
+    }
+  });
 });
 
 describe("GET /agents/:locId", () => {

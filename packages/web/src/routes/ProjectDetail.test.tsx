@@ -18,7 +18,14 @@ interface InstallOpts {
   runs?: unknown[];
 }
 
-function installFetch(opts: InstallOpts = {}): void {
+interface UrlCapture {
+  /** Last URL hit per endpoint family. Useful for tab tests that need
+   *  to assert on query string shape without intercepting every fetch. */
+  skills?: string;
+  agents?: string;
+}
+
+function installFetch(opts: InstallOpts = {}, capture?: UrlCapture): void {
   const workflows = opts.workflows ?? [];
   const runs = opts.runs ?? [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -28,6 +35,20 @@ function installFetch(opts: InstallOpts = {}): void {
     }
     if (url.includes("/projects/") && url.includes("/blob")) {
       return new Response("not found", { status: 404 });
+    }
+    if (url.includes("/skills")) {
+      if (capture) capture.skills = url;
+      return new Response(JSON.stringify({ skills: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("/agents")) {
+      if (capture) capture.agents = url;
+      return new Response(JSON.stringify({ agents: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     if (url.includes("/workflows")) {
       return new Response(JSON.stringify(workflows), {
@@ -135,6 +156,32 @@ describe("ProjectDetail · tabs", () => {
     const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
     const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
     expect(within(wfSection).queryByTestId("run-composer-form")).toBeNull();
+  });
+
+  test("Skills tab requests project-only scope", async () => {
+    const capture: UrlCapture = {};
+    installFetch({}, capture);
+    const { container } = renderAt(`/projects/${TEST_ENC}?tab=skills`, undefined);
+    await waitFor(() => within(container).getByTestId("project-skills-section"));
+    await waitFor(() => {
+      expect(capture.skills).toBeDefined();
+    });
+    const url = capture.skills ?? "";
+    expect(url).toContain(`project_cwd=${encodeURIComponent(TEST_CWD)}`);
+    expect(url).toContain("scope=project_only");
+  });
+
+  test("Agents tab requests project-only scope", async () => {
+    const capture: UrlCapture = {};
+    installFetch({}, capture);
+    const { container } = renderAt(`/projects/${TEST_ENC}?tab=agents`, undefined);
+    await waitFor(() => within(container).getByTestId("project-agents-section"));
+    await waitFor(() => {
+      expect(capture.agents).toBeDefined();
+    });
+    const url = capture.agents ?? "";
+    expect(url).toContain(`project_cwd=${encodeURIComponent(TEST_CWD)}`);
+    expect(url).toContain("scope=project_only");
   });
 
   test("links project workflows to /workflows/:name with the project cwd", async () => {

@@ -1,6 +1,9 @@
 // Shared agents table — used by /agents (global) and
 // /projects/:cwdEnc?tab=agents (per-project). Mirrors `SkillsList`'s
 // shape; the Project column drops when `projectCwd` is set.
+// `projectOnly` further tightens the request to drop user-scope rows
+// entirely — the project detail tab uses this so operators only see
+// profiles anchored to that project root.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot } from "lucide-react";
@@ -11,16 +14,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 
 export interface AgentsListProps {
   projectCwd?: string;
+  /** When true (and `projectCwd` is set), drop user-scope records so
+   * the response only contains profiles anchored to that project. */
+  projectOnly?: boolean;
   testIdPrefix?: string;
   compact?: boolean;
 }
 
 export function AgentsList({
   projectCwd,
+  projectOnly,
   testIdPrefix = "agents-list",
   compact = false,
 }: AgentsListProps): JSX.Element {
-  const { data, isPending, isError } = useQuery(queries.agents.list(projectCwd));
+  const { data, isPending, isError } = useQuery(queries.agents.list(projectCwd, projectOnly));
 
   if (isPending) {
     return (
