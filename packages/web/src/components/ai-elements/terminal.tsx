@@ -5,11 +5,11 @@
 //
 // Adapted from the ai-elements Terminal component to match the Swarm
 // design language: hairline border, no shadow, monospace voice, sw-*
-// tokens for surfaces/borders/spacing. The body keeps a darker
-// terminal-idiom background (.bg-zinc-950 fallback) so ANSI colors
-// from `ansi-to-react` read as designed in both light and dark themes —
-// the design language carves out an exception for "this thing IS a
-// terminal."
+// tokens for surfaces/borders/spacing. In dark mode the body keeps a
+// darker terminal-idiom surface so ANSI colors from `ansi-to-react`
+// read as designed; in light mode it sits on the standard sw-surface
+// so the component adapts to the theme instead of punching a dark
+// block into a light page.
 
 import Ansi from "ansi-to-react";
 import { CheckIcon, CopyIcon, EraserIcon, TerminalIcon } from "lucide-react";
@@ -227,10 +227,8 @@ export const TerminalContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDiv
     <div
       ref={ref}
       className={cn(
-        // Terminal-idiom dark surface for readable ANSI colors. Both
-        // themes use the same body so colors from foreign output (CI
-        // logs, gh CLI, eslint) read as authored.
-        "max-h-96 overflow-auto bg-zinc-950 px-3 py-2 text-zinc-100",
+        "max-h-96 overflow-auto px-3 py-2",
+        "bg-sw-surface text-sw-text dark:bg-zinc-950 dark:text-zinc-100",
         "font-mono text-sw-xs leading-relaxed",
         // ansi-to-react emits inline spans with ANSI colors; preserve
         // whitespace so ASCII tables and indentation render verbatim.
