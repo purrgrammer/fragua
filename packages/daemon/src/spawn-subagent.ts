@@ -196,7 +196,38 @@ export function makeSpawnSubagent(
     //     the override, the sub-agent gets its own row in the steps
     //     view; the parent's calling node still sees the cost rolled
     //     up via the handler-bridge's per-turn accumulator.
+    // Per-spawn cost rollup. Every `cost.recorded` the child forwards
+    // increments these locals; we read them at `subagent.end` to stamp
+    // the bracketed slice's totals onto the close marker. Cost still
+    // flows through to the parent's handler-bridge accumulator (that's
+    // what feeds the parent's terminal `fact.node_completed` /
+    // `run_state.metrics`); this is a per-spawn view of the same
+    // stream, not a duplicate accounting path. Field shape mirrors
+    // `fact.node_aborted.partial*` for symmetry.
+    let localCostUsd = 0;
+    let localTotalTokens = 0;
+    let localInputTokens = 0;
+    let localOutputTokens = 0;
+    let localCacheReadTokens = 0;
+    let localCacheWriteTokens = 0;
+
     const subagentEmit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
+      if (type === "cost.recorded") {
+        // Payload shape from `packages/agent/src/event-bridge.ts:costPayload`.
+        // Defensive `Number(... ?? 0)` keeps a malformed event from
+        // poisoning the running totals — a NaN here would cascade onto
+        // every subsequent spawn's rollup.
+        const num = (v: unknown): number => {
+          const n = typeof v === "number" ? v : Number(v);
+          return Number.isFinite(n) ? n : 0;
+        };
+        localCostUsd += num(data["cost_usd"]);
+        localTotalTokens += num(data["total_tokens"]);
+        localInputTokens += num(data["input_tokens"]);
+        localOutputTokens += num(data["output_tokens"]);
+        localCacheReadTokens += num(data["cache_read_tokens"]);
+        localCacheWriteTokens += num(data["cache_write_tokens"]);
+      }
       await parentCtx.parentEmit(type, {
         ...data,
         nodeId: subagentNodeId,
@@ -297,6 +328,12 @@ export function makeSpawnSubagent(
       status,
       summary_chars: lastAssistantSummary.length,
       total_tool_calls: totalToolCalls,
+      costUsd: localCostUsd,
+      totalTokens: localTotalTokens,
+      inputTokens: localInputTokens,
+      outputTokens: localOutputTokens,
+      cacheReadTokens: localCacheReadTokens,
+      cacheWriteTokens: localCacheWriteTokens,
       ...(haltReason !== undefined ? { halt_reason: haltReason } : {}),
     });
 
