@@ -114,6 +114,23 @@ describe("discoverAgents", () => {
     expect(warnings.filter((w) => w.includes("normalised")).length).toBe(2);
   });
 
+  test("Claude-Code-style `tools:` frontmatter is accepted as a synonym for `allowed_tools`", async () => {
+    // AGENTS.md advertises `.claude/agents/` as a cross-client fallback.
+    // Profiles authored for Claude Code use `tools: Read, Write, Edit, ...`
+    // (not swarm's canonical `allowed_tools:`); honour them so the
+    // explicit-required check on the `agent` tool passes without
+    // forcing every Claude-Code profile to be edited.
+    const cwd = tmp;
+    await writeAgent(
+      cwd,
+      ".claude/agents/backend-architect.md",
+      fm("backend-architect", "design backends", "tools: Read, Write, Edit, Bash, Grep"),
+    );
+    const { agents } = await discoverAgents({ projectCwds: [cwd], homeDir: "" });
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.allowed_tools).toEqual(["read", "write", "edit", "bash", "grep"]);
+  });
+
   test("missing scope directories are silently ignored", async () => {
     const cwd = join(tmp, "nope");
     const home = join(tmp, "alsono");

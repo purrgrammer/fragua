@@ -189,11 +189,16 @@ async function scanRoot(rootPath: string, scope: AgentDefinitionScope, warnings:
  *  mirroring skills' loose ingestion. Each entry is run through
  *  `normaliseToolName`; a warning fires per non-canonical input. */
 function readAllowedTools(fm: Record<string, unknown>, mdPath: string, warnings: string[]): string[] | undefined {
-  const raw = fm["allowed_tools"] ?? fm["allowed-tools"];
+  // `tools:` is the Claude Code convention; AGENTS.md advertises
+  // `.claude/agents/` as a cross-client fallback, so accept it as a
+  // synonym alongside swarm's canonical `allowed_tools` / `allowed-tools`.
+  const raw = fm["allowed_tools"] ?? fm["allowed-tools"] ?? fm["tools"];
   if (raw === undefined) return undefined;
   let parts: string[];
   if (typeof raw === "string") {
-    parts = raw.split(/\s+/).filter((s) => s.length > 0);
+    // Accept whitespace OR comma separators so Claude-Code-style
+    // `tools: Read, Write, Edit, Bash, Grep` parses correctly.
+    parts = raw.split(/[\s,]+/).filter((s) => s.length > 0);
   } else if (Array.isArray(raw)) {
     parts = raw.filter((t): t is string => typeof t === "string");
   } else {
