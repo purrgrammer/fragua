@@ -614,16 +614,49 @@ export class PiCodergenBackend implements CodergenBackend {
     // actually stops the in-flight LLM stream / tool loop. Without this the
     // executor trips its AbortController but the Agent keeps running to
     // completion, leaving the run streaming minutes after cancel landed.
+    //
+    // Escape hatch for wedged provider fetches: agent.abort() forwards the
+    // Agent's internal AbortController to streamSimple → provider SDK →
+    // fetch. A well-behaved SDK tears the socket down promptly. A misbehaving
+    // one (TCP wedge, lost signal wiring, slow upstream) leaves the awaited
+    // promise inside agent.prompt() suspended for minutes — long enough to
+    // blow past the executor's `maxMs + LEAK_GRACE_MS` window and trip
+    // `fact.handler_timeout_leaked`. Race the awaited prompt against
+    // `input.signal` plus a short cooperative-unwind grace; if the grace
+    // expires throw a synthetic AbortError so the executor's `wasAborted`
+    // path runs and the dispatch lands as `fact.node_aborted` instead of
+    // halting the run. The grace must stay tight enough that the wrapper
+    // exits inside the executor's 10s leak window.
     const abortListener = () => agent.abort();
     if (input.signal) {
       if (input.signal.aborted) agent.abort();
       else input.signal.addEventListener("abort", abortListener, { once: true });
     }
 
-    try {
+    let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    const promptDone = (async () => {
       await agent.prompt(effectivePrompt);
       await agent.waitForIdle();
+    })();
+    const abortRace = input.signal
+      ? new Promise<never>((_, reject) => {
+          const arm = () => {
+            abortGraceTimer = setTimeout(() => {
+              const err = new Error("stream aborted (signal teardown grace exceeded)");
+              err.name = "AbortError";
+              reject(err);
+            }, ABORT_TEARDOWN_GRACE_MS);
+          };
+          if (input.signal!.aborted) arm();
+          else input.signal!.addEventListener("abort", arm, { once: true });
+        })
+      : undefined;
+
+    try {
+      if (abortRace) await Promise.race([promptDone, abortRace]);
+      else await promptDone;
     } finally {
+      if (abortGraceTimer !== undefined) clearTimeout(abortGraceTimer);
       this.steering.endRun(runId, agent);
       unsubscribe();
       if (input.signal) input.signal.removeEventListener("abort", abortListener);
@@ -750,6 +783,14 @@ export class PiCodergenBackend implements CodergenBackend {
     }
   }
 }
+
+/** Cooperative-unwind window between `input.signal` aborting and the
+ *  wrapper synthesising an AbortError. Long enough for a well-behaved
+ *  provider SDK to tear its socket down (existing cancel-signal test
+ *  unwinds in ~50ms); short enough to stay well inside the executor's
+ *  10s `LEAK_GRACE_MS`, so a wedged fetch lands as `fact.node_aborted`
+ *  instead of `fact.handler_timeout_leaked`. */
+const ABORT_TEARDOWN_GRACE_MS = 2_000;
 
 function sessionKey(runId: string, threadId: string): string {
   return `${runId}::${threadId}`;
