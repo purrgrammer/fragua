@@ -212,6 +212,25 @@ describe("executor — budget enforcement", () => {
     expect((halt.payload as { reason: string }).reason).toBe("budget");
     expect(typeof (halt.payload as { detail?: string }).detail).toBe("string");
 
+    // Projection-on-halt: fact.node_completed for the breaching turn
+    // must land before the halt so total_cost_usd + nodeCosts capture
+    // the spend the gate halted on. Pre-fix, the halt branch overwrote
+    // result to `{kind:"halt"}` which made resultToFacts skip
+    // node_completed entirely; the projection lagged the gate's
+    // `actual` by exactly the breaching turn's cost.
+    const completedIdx = events.findIndex(
+      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "spend",
+    );
+    expect(completedIdx).toBeGreaterThanOrEqual(0);
+    expect(completedIdx).toBeLessThan(haltIdx);
+    expect(state.metrics.totalCostUsd).toBeCloseTo(1.5, 6);
+    expect(state.metrics.nodeCosts["spend"]?.costUsd).toBeCloseTo(1.5, 6);
+    // No competing terminal facts — the breaching turn's transition
+    // would have produced fact.run_completed; the halt block must
+    // strip it so the reducer doesn't see a successful completion.
+    expect(types.filter((t) => t === "fact.run_completed")).toHaveLength(0);
+    expect(types.filter((t) => t === "fact.run_halted")).toHaveLength(1);
+
     r.store.close();
   });
 
@@ -321,6 +340,125 @@ describe("executor — budget enforcement", () => {
     const warns = types.filter((t) => t === "budget.warn");
     expect(warns).toHaveLength(1);
     expect(r.store.getState("rb3")!.status).toBe("completed");
+    r.store.close();
+  });
+
+  test("reactive: cost.recorded mid-handler crosses stop ceiling → abort + halt with partial cost preserved", async () => {
+    // Models the orchestrate-with-sub-agents case: a single parent
+    // turn streams cost.recorded events as sub-agents return. Without
+    // the reactive check, the entire fan-out spends inside one turn
+    // before the post-handler boundary sees the breach (5×+ overshoot
+    // observed on real runs). The reactive gate trips the abort the
+    // first time cumulative spend crosses the ceiling, so overshoot
+    // is bounded by one in-flight LLM message rather than the whole
+    // sub-agent fan-out.
+    const dot = `digraph G {
+      graph [budget_usd=1.0, budget_policy="stop"];
+      start [shape=Mdiamond];
+      orchestrate [shape=box];
+      done [shape=Msquare];
+      start -> orchestrate;
+      orchestrate -> done;
+    }`;
+    const r = rig({ dot });
+    r.dispatcher.register(r.workflowSha, "start", {
+      kind: "start",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "orchestrate", tokens: 0, costUsd: 0 }),
+    });
+    let returnedCleanly = false;
+    r.dispatcher.register(r.workflowSha, "orchestrate", {
+      kind: "codergen",
+      sideEffect: "external",
+      maxMs: 1_000,
+      handler: async (ctx) => {
+        // Three "sub-agent" cost slices. The third pushes the running
+        // total past the ceiling (0.4 + 0.4 + 0.4 = 1.2 ≥ 1.0). The
+        // reactive gate must abort BEFORE we get a chance to "complete"
+        // the work and return.
+        ctx.emit("cost.recorded", {
+          total_tokens: 1000,
+          cost_usd: 0.4,
+          input_tokens: 500,
+          output_tokens: 500,
+          model: "test/model",
+        });
+        ctx.emit("cost.recorded", {
+          total_tokens: 1000,
+          cost_usd: 0.4,
+          input_tokens: 500,
+          output_tokens: 500,
+          model: "test/model",
+        });
+        ctx.emit("cost.recorded", {
+          total_tokens: 1000,
+          cost_usd: 0.4,
+          input_tokens: 500,
+          output_tokens: 500,
+          model: "test/model",
+        });
+        // Wait for the abort the reactive gate triggered; raise
+        // AbortError when it fires.
+        await new Promise<void>((_, reject) => {
+          const onAbort = (): void => {
+            ctx.signal.removeEventListener("abort", onAbort);
+            const e = new Error("aborted");
+            e.name = "AbortError";
+            reject(e);
+          };
+          if (ctx.signal.aborted) onAbort();
+          else ctx.signal.addEventListener("abort", onAbort, { once: true });
+        });
+        returnedCleanly = true;
+        return { kind: "transition", nextNode: "done", tokens: 0, costUsd: 0 } as const;
+      },
+    });
+    r.dispatcher.register(r.workflowSha, "done", {
+      kind: "exit",
+      sideEffect: "none",
+      maxMs: 100,
+      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+    });
+    enqueue(r, "rb-reactive", "start");
+    r.store.claimNextRun(1);
+    await runOne("rb-reactive", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
+
+    expect(returnedCleanly).toBe(false);
+    const state = r.store.getState("rb-reactive")!;
+    expect(state.status).toBe("halted");
+
+    const events = r.store.getEvents("rb-reactive");
+    const types = events.map((e) => e.type);
+    expect(types).toContain("budget.stop");
+    expect(types).toContain("fact.node_aborted");
+    expect(types).toContain("fact.run_halted");
+    // budget.stop emits before the abort fact (it's pushed into
+    // observability the moment the reactive check trips); abort fact
+    // and halt fact land in the same atomic commit.
+    expect(types.indexOf("budget.stop")).toBeLessThan(types.indexOf("fact.node_aborted"));
+    expect(types.indexOf("fact.node_aborted")).toBeLessThan(types.indexOf("fact.run_halted"));
+
+    const halt = events.find((e) => e.type === "fact.run_halted")!;
+    expect((halt.payload as { reason: string }).reason).toBe("budget");
+
+    // Partial cost on the abort fact captures every cost.recorded the
+    // handler emitted before the abort fired. That's at least the
+    // first three slices ($1.20); could be exactly that if the abort
+    // landed atomically before any further emits.
+    const aborted = events.find((e) => e.type === "fact.node_aborted")!;
+    const partial = aborted.payload as { partialCostUsd: number };
+    expect(partial.partialCostUsd).toBeCloseTo(1.2, 6);
+
     r.store.close();
   });
 });

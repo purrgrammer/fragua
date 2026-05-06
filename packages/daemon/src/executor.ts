@@ -598,6 +598,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       let totalCacheReadTokens = 0;
       let totalCacheWriteTokens = 0;
       let lastModel: string | undefined;
+      // Reactive budget halt: when a `cost.recorded` event mid-handler
+      // pushes cumulative spend over a `budget_policy="stop"` ceiling,
+      // we abort the in-flight handler and emit fact.run_halted{
+      // reason:"budget"} alongside fact.node_aborted (which captures
+      // partial spend). Without this bound, sub-agent fan-out spends
+      // freely between parent-turn boundaries — a single orchestrator
+      // turn can overshoot the cap by 5×+ before the post-handler
+      // boundary check runs.
+      let reactiveBudgetHaltDetail: string | undefined;
       const accounting: core.LlmAccounting = {
         addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
           turnBilled += tokens;
@@ -682,6 +691,40 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
             const model = p["model"];
             if (typeof model === "string") lastModel = model;
+
+            // Reactive budget gate. Bounds peak overshoot to one
+            // in-flight LLM message rather than the parent turn's full
+            // sub-agent fan-out. Only fires once per dispatch (the
+            // halt-pending flag short-circuits subsequent events).
+            // Pause-policy breaches still wait for the post-handler
+            // boundary so the operator-pause flow stays unchanged.
+            if (reactiveBudgetHaltDetail === undefined) {
+              const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
+              const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+              const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
+              const overrides = readBudgetOverrides(state.routing);
+              const reactive = evaluateBudget({
+                graphAttrs: graph?.attrs ?? {},
+                ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
+                completedNodeId: currentNode,
+                cumulativeCostUsd: state.metrics.totalCostUsd + totalCostUsd,
+                cumulativeTokens: priorRunFresh + turnBilled,
+                nodeCumulativeCostUsd: priorNodeBucket.costUsd + totalCostUsd,
+                nodeCumulativeTokens: priorNodeBucket.tokens + turnBilled,
+                alreadyWarned: readBudgetWarned(state.routing),
+                ...(overrides !== undefined ? { overrides } : {}),
+              });
+              if (reactive.shouldHalt) {
+                reactiveBudgetHaltDetail = reactive.haltReason ?? "";
+                for (const ev of reactive.events) {
+                  observability.push({
+                    type: ev.type,
+                    payload: { nodeId: currentNode, iteration, ...ev.payload },
+                  });
+                }
+                steerCtrl.abort(new Error("budget"));
+              }
+            }
           }
           // Hard ceiling — bound peak memory and per-batch render cost
           // when a provider streams a burst of deltas faster than the
@@ -791,6 +834,20 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           cacheReadTokens: totalCacheReadTokens,
           cacheWriteTokens: totalCacheWriteTokens,
         });
+        // Reactive budget halt: when the cost.recorded mirror tripped a
+        // stop-policy breach mid-handler and triggered the abort, append
+        // fact.run_halted{reason:"budget"} alongside fact.node_aborted in
+        // the same atomic commit so the run terminates immediately.
+        // Otherwise the abort would just bump consecutiveAborts and the
+        // next dispatch would re-enter the same node — exactly the
+        // overshoot we're trying to avoid.
+        if (reactiveBudgetHaltDetail !== undefined) {
+          const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+          if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
+          facts.push({ type: "fact.run_halted", payload: haltPayload });
+          await tryAppendFact(opts.store, runId, recorder.version(), facts);
+          return;
+        }
         await tryAppendFact(opts.store, runId, recorder.version(), facts);
         consecutiveAborts++;
         // One-shot warning the abort before the halt lands so a watcher
@@ -898,12 +955,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Budget enforcement at the post-handler boundary. The check sees
       // cumulative spend INCLUDING this turn (state.metrics doesn't have
       // the new fact applied yet, so we add result.{tokens,costUsd} in).
-      // On halt, rewrite `result` to a budget halt before resultToFacts
-      // runs so the resulting fact chain is `[budget.stop, fact.run_halted]`.
+      // On halt, defer the halt until after resultToFacts so
+      // fact.node_completed lands first — without that, the breaching
+      // turn's spend is visible to the gate but never folds into
+      // run_state.total_cost_usd or nodeCosts[currentNode]; the projection
+      // would lag the gate's `actual` by the breaching-turn cost.
       // On warn-only, prepend the warn event(s) to observability and let
       // the transition continue.
       let budgetWarnedTags: readonly string[] = [];
       let budgetPause: { scope: "node" | "run"; metric: "cost" | "tokens"; limit: number; actual: number } | undefined;
+      let budgetHaltDetail: string | undefined;
       if (result.kind === "transition") {
         const graph = graphFor(state.workflowSha);
         const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
@@ -929,11 +990,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
         budgetWarnedTags = decisionBudget.newlyWarned;
         if (decisionBudget.shouldHalt) {
-          result = {
-            kind: "halt",
-            reason: "budget",
-            ...(decisionBudget.haltReason !== undefined ? { detail: decisionBudget.haltReason } : {}),
-          };
+          budgetHaltDetail = decisionBudget.haltReason ?? "";
         } else if (decisionBudget.pauseBreach !== undefined) {
           budgetPause = decisionBudget.pauseBreach;
         }
@@ -1229,6 +1286,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             },
           });
         }
+      }
+
+      // Budget halt: preserve fact.node_completed (so projection +
+      // per-node cost rollup land), then replace whatever transition fact
+      // came (fact.run_completed for terminal-success, fact.run_halted{
+      // aborted_exit} for terminal-fail, fact.node_started for non-
+      // terminal) with fact.run_halted{reason:"budget"}. Mirrors the
+      // budgetPause shape immediately above — same fact-list mutation,
+      // halt instead of pause.
+      if (budgetHaltDetail !== undefined) {
+        facts = facts.filter(
+          (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
+        );
+        const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+        if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
+        facts.push({ type: "fact.run_halted", payload: haltPayload });
       }
 
       let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
