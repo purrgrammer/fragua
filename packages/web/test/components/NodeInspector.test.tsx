@@ -122,4 +122,84 @@ describe("NodeInspector", () => {
     expect(text).toContain("pick_best");
     expect(text).toContain("wait_all");
   });
+
+  // Per-handler relevance gating — stylesheet cascade can pin
+  // `llm_model` / `thread_id` / `max_retries` on nodes that never act
+  // on those attrs (terminals, tools, heuristic fan_ins). The drawer
+  // must hide the rows that don't apply so operators don't read
+  // misleading config.
+
+  it("hides model/provider/reasoning/thread/retry rows for a start terminal", () => {
+    // Stylesheet cascade pins LLM + retry attrs on every node, but the
+    // start terminal is a lifecycle marker that never calls them.
+    const src = `digraph demo {
+      node [llm_model="opus-4", llm_provider="anthropic", reasoning_effort="high", thread_id="shared", max_retries=3, retry_target="a"]
+      s [shape=Mdiamond, label="start"]
+      a [shape=box]
+      s -> a
+    }`;
+    const s = parseDotSource(src).nodes["s"];
+    expect(s).toBeTruthy();
+    if (!s) return;
+    const { container } = render(<NodeInspector node={s} />);
+    const text = container.textContent ?? "";
+    // Identity + handler still surface.
+    expect(text).toContain("identity");
+    expect(text).toContain("start");
+    // Suppressed rows.
+    expect(text).not.toContain("opus-4");
+    expect(text).not.toContain("anthropic");
+    expect(text).not.toContain("reasoning");
+    expect(text).not.toContain("thread");
+    expect(text).not.toContain("max retries");
+    expect(text).not.toContain("retry target");
+  });
+
+  it("hides model/provider/reasoning/thread for a tool node but keeps tool_command", () => {
+    // Tool handlers don't call an LLM — the cascade-resolved llm_model
+    // is dead config. tool_command is the load-bearing attr.
+    const src = `digraph demo {
+      node [llm_model="opus-4", llm_provider="anthropic", reasoning_effort="high", thread_id="shared"]
+      run_tests [shape=parallelogram, tool_command="bun test"]
+    }`;
+    const t = parseDotSource(src).nodes["run_tests"];
+    expect(t).toBeTruthy();
+    if (!t) return;
+    const { container } = render(<NodeInspector node={t} />);
+    const q = within(container);
+    const text = container.textContent ?? "";
+    // tool_command renders.
+    expect(q.getByTestId("node-inspector-tool-command").textContent).toBe("bun test");
+    // LLM section gone.
+    expect(text).not.toContain("opus-4");
+    expect(text).not.toContain("reasoning");
+    expect(text).not.toContain("thread");
+    expect(text).not.toContain("model & context");
+  });
+
+  it("heuristic parallel.fan_in (no prompt) hides the model section", () => {
+    const src = `digraph demo {
+      pick [shape=tripleoctagon, llm_model="opus-4"]
+    }`;
+    const pick = parseDotSource(src).nodes["pick"];
+    expect(pick).toBeTruthy();
+    if (!pick) return;
+    const { container } = render(<NodeInspector node={pick} />);
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("opus-4");
+    expect(text).not.toContain("model & context");
+  });
+
+  it("parallel.fan_in WITH prompt shows the model section", () => {
+    const src = `digraph demo {
+      pick [shape=tripleoctagon, llm_model="opus-4", prompt="rank the candidates"]
+    }`;
+    const pick = parseDotSource(src).nodes["pick"];
+    expect(pick).toBeTruthy();
+    if (!pick) return;
+    const { container } = render(<NodeInspector node={pick} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("opus-4");
+    expect(text).toContain("model & context");
+  });
 });

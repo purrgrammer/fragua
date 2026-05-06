@@ -214,6 +214,46 @@ describe("toFlowGraph — back-edge detection + edge labels", () => {
     expect(forward?.targetHandle).toBeUndefined();
   });
 
+  it("toFlowGraph attaches arcExtent to skip/back/loop edges based on intermediate-layer extent", () => {
+    // Wide parallel fan: start splits into a/b/c at depth 1, all
+    // converging at done (depth 2). The skip-edge `start -> done`
+    // (added below) jumps from depth 0 to depth 2, so its arc has to
+    // clear the layer-1 fan. arcExtent should reflect the lateral
+    // extent of {a, b, c}.
+    const src = `digraph fan {
+      start [shape=box]
+      a [shape=box]
+      b [shape=box]
+      c [shape=box]
+      done [shape=box]
+      start -> a
+      start -> b
+      start -> c
+      a -> done
+      b -> done
+      c -> done
+      start -> done [condition="outcome=skip"]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const skip = flowEdges.find((e) => e.source === "start" && e.target === "done");
+    expect(skip).toBeTruthy();
+    const data = skip?.data as { isSkipEdge?: boolean; arcExtent?: number };
+    expect(data?.isSkipEdge).toBe(true);
+    // Three nodes at depth 1 in TB layout share crossSize=280, so the
+    // outermost branches sit at ±280 from the axis. arcExtent reads
+    // the max |x| (280) so the renderer can push the bulge past it.
+    expect(typeof data?.arcExtent).toBe("number");
+    expect(data?.arcExtent ?? 0).toBeGreaterThanOrEqual(280);
+
+    // Forward edges that DON'T clear an intermediate layer don't get
+    // an arcExtent stamped (additive optional field).
+    const direct = flowEdges.find((e) => e.source === "start" && e.target === "a");
+    expect(direct).toBeTruthy();
+    const directData = direct?.data as { arcExtent?: number };
+    expect(directData?.arcExtent).toBeUndefined();
+  });
+
   it("strips the `outcome=` prefix from condition labels (label CSS-uppercases the rest)", () => {
     const src = `digraph g {
       a [shape=box]
@@ -346,6 +386,23 @@ describe("GraphView — rendering", () => {
 
     // Header still anchors on the name.
     expect(wStart.getAllByText("start").length).toBeGreaterThan(0);
+  });
+
+  it("terminal nodes render at the same width as regular nodes (column flush)", async () => {
+    // Regression: terminals used to render at w-44 vs. w-60 for regular
+    // nodes, breaking the column gridline. Width is now unified; the
+    // header-only compact body is preserved via `data-compact`.
+    const { container } = render(<GraphView detail={makeDetail()} />);
+    const canvas = await waitFor(() => within(container).getByTestId("graphview"));
+    const start = canvas.querySelector('[data-node-id="start"]') as HTMLElement | null;
+    const middle = canvas.querySelector('[data-node-id="middle"]') as HTMLElement | null;
+    expect(start).toBeTruthy();
+    expect(middle).toBeTruthy();
+    const startCls = start?.getAttribute("class") ?? "";
+    const middleCls = middle?.getAttribute("class") ?? "";
+    expect(startCls).toContain("w-60");
+    expect(middleCls).toContain("w-60");
+    expect(startCls).not.toContain("w-44");
   });
 
   it("fires onNodeClick with the clicked node id", async () => {

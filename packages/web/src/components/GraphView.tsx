@@ -41,6 +41,7 @@ import { useCallback, useMemo } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
+import { canRetry as canRetryHandler, fanInRank as fanInRankOf, showsLlm } from "../lib/node-metadata.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
@@ -97,7 +98,10 @@ const EDGE_TYPE = "swarmEdge";
 // Theme tokens via CSS vars — modern browsers resolve var() in SVG
 // presentation attributes, so markers follow light/dark mode.
 const arrow = (color: string) => ({ type: MarkerType.ArrowClosed, width: 14, height: 14, color }) as const;
-const MARKER_DEFAULT = arrow("var(--sw-border)");
+// Slightly lifted from --sw-border so the arrowhead stays visible on
+// the default forward edge in dark mode (border tone disappears against
+// --sw-bg). Taken / outcome / retry edges keep their semantic accents.
+const MARKER_DEFAULT = arrow("var(--sw-muted)");
 // Retry / loop / retarget edges share a neutral arrow tone. They're
 // structural backflow — the run intentionally re-traverses upstream
 // work — and shouldn't read as "negative" the way `outcome=fail`
@@ -325,8 +329,12 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
       data-compact={isTerminal ? "true" : undefined}
       data-dim={d.dim ? "true" : undefined}
       className={cn(
-        "relative overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
-        isTerminal ? "w-44" : "w-60",
+        // Unified width across archetypes — terminals used to render at
+        // w-44, which broke the column gridline against w-60 regular
+        // nodes. The compact form (header-only body, no metadata rows)
+        // is preserved via `data-compact` + the `isTerminal ? null` body
+        // branch below; only the bounding box widens.
+        "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
         d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
         d.winner && !d.active && "ring-2 ring-sw-accent-success",
@@ -527,6 +535,14 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  that bulges out via the right-side arc. AiEdge.Loop and
      *  AiEdge.Temporary (in `arcOut` mode) both read it. */
     arcIndex?: number;
+    /** Lateral-extent floor for the arc bulge (px). Equal to the max
+     *  `|x|` (TB) or `|y|` (LR) of any node sitting strictly between
+     *  source-depth and target-depth. The edge renderer pushes the
+     *  cubic Bezier control x outside this floor (plus a margin) so
+     *  the arc clears wide parallel fans. Set by `toFlowGraph` only
+     *  when the arc actually has to clear at least one intermediate
+     *  layer. */
+    arcExtent?: number;
   };
 };
 
@@ -680,6 +696,35 @@ export function toFlowGraph(
   const { backEdgeKeys, depthOf } = classifyGraph(layoutInput);
   const positions = new Map(layoutDag(layoutInput, { orientation }).map((p) => [p.id, p.position]));
 
+  // Per-depth max lateral extent. Used to size arc bulges so that a
+  // back-edge or skip-edge spanning a fanned-out parallel layer pushes
+  // its bulge OUTSIDE the rightmost (or leftmost) branch column instead
+  // of cutting through it. In TB orientation "lateral" is x; in LR the
+  // perpendicular axis is y — but arc-routed edges only use the right /
+  // left handles in TB (bottom / top in LR), so for arc geometry we
+  // care about the absolute value of the cross-axis coordinate.
+  const lateral = (p: { x: number; y: number }): number => (orientation === "TB" ? Math.abs(p.x) : Math.abs(p.y));
+  const lateralByDepth = new Map<number, number>();
+  for (const [id, pos] of positions) {
+    const d = depthOf.get(id) ?? 0;
+    lateralByDepth.set(d, Math.max(lateralByDepth.get(d) ?? 0, lateral(pos)));
+  }
+  // For an arc-routed edge between depths sd and td (either direction),
+  // return the max lateral extent of nodes sitting STRICTLY between
+  // them — the layers the arc has to clear. Endpoints' own column is
+  // ignored because the arc already starts/ends at those node edges.
+  const arcExtentBetween = (sd: number | undefined, td: number | undefined): number => {
+    if (sd === undefined || td === undefined) return 0;
+    const lo = Math.min(sd, td);
+    const hi = Math.max(sd, td);
+    let max = 0;
+    for (let d = lo + 1; d < hi; d += 1) {
+      const v = lateralByDepth.get(d);
+      if (v !== undefined && v > max) max = v;
+    }
+    return max;
+  };
+
   const flowNodes: FlowNode[] = [...ids].map((id) => {
     const stateEntry = stateById.get(id);
     const topo: GraphNode | undefined = graph.nodes[id];
@@ -689,18 +734,10 @@ export function toFlowGraph(
     // so operators can distinguish it from an actively-running node.
     const resolvedState: SwarmNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
     const a = topo?.attrs;
-    // parallel.fan_in is LLM-driven only when it carries a non-empty `prompt`
-    // (the same predicate that produces `fanInRank: "prompt"` below). Heuristic
-    // fan-in picks a winner without calling a model, so the cascade-resolved
-    // `llm_model` / `llm_provider` / `reasoning_effort` would be misleading.
-    const fanInHasPrompt = handler === "parallel.fan_in" && typeof a?.prompt === "string" && a.prompt.trim() !== "";
-    const isLlmHandler = handler === "codergen" || fanInHasPrompt;
-    const isStructuralHandler = handler === "start" || handler === "exit";
-    // Loop-capable handlers — anything that can be retried by the executor.
-    // start / exit are pure lifecycle markers and `parallel` is a structural
-    // fan-out (the branches retry, not the component itself), so neither
-    // benefits from a max_retries readout.
-    const canRetry = !isStructuralHandler && handler !== "parallel";
+    // Per-handler relevance predicates live in `lib/node-metadata.ts`
+    // so the GraphView card and the NodeInspector drawer can't drift.
+    const isLlmHandler = showsLlm(handler, a);
+    const canRetry = canRetryHandler(handler);
     const data: SwarmNodeData = {
       nodeId: id,
       label: a?.label ?? id,
@@ -724,12 +761,7 @@ export function toFlowGraph(
           ? (a["fan_in"] as string)
           : undefined,
       joinPolicy: handler === "parallel" && typeof a?.join_policy === "string" ? a.join_policy : undefined,
-      fanInRank:
-        handler === "parallel.fan_in"
-          ? typeof a?.prompt === "string" && a.prompt.trim() !== ""
-            ? "prompt"
-            : "heuristic"
-          : undefined,
+      fanInRank: fanInRankOf(handler, a),
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
       state: resolvedState,
       hasIncoming: incoming.has(id),
@@ -822,6 +854,11 @@ export function toFlowGraph(
     // pass, not a sequential counter. Topmost source → largest arcIndex
     // (widest bulge). Skip-edges share the lane with loop-channel edges.
     const arcIndex = rightArcIndexByEdge.get(i);
+    // Arc extent floor — measured against the nodes sitting between
+    // source-depth and target-depth. The edge renderer uses this to
+    // push the arc bulge past a wide parallel fan (otherwise the curve
+    // cuts through the rightmost / leftmost branch column).
+    const arcExtent = useSideHandles || loopRestart ? arcExtentBetween(sd, td) : 0;
     // HITL edges (outgoing from a hexagon `wait.human` node) carry
     // operator choices via `[K] Label` accelerators. They're routinely
     // overlooked at the default border tone, so promote them to the
@@ -857,6 +894,7 @@ export function toFlowGraph(
         loopRestart,
         isHitlEdge,
         ...(arcIndex !== undefined ? { arcIndex } : {}),
+        ...(arcExtent > 0 ? { arcExtent } : {}),
       },
       sourceHandle: useSideHandles || loopRestart ? LOOP_HANDLE_SOURCE : undefined,
       targetHandle: useSideHandles || loopRestart ? LOOP_HANDLE_TARGET : undefined,
@@ -885,6 +923,8 @@ export function toFlowGraph(
   }
   retargetCandidates.sort((a, b) => b.depth - a.depth || a.gateId.localeCompare(b.gateId));
   const synthEdges: FlowEdge[] = retargetCandidates.map((r, leftArcIndex) => {
+    const targetDepth = depthOf.get(r.target);
+    const synthExtent = arcExtentBetween(r.depth, targetDepth);
     const capLabel = `retarget · cap ${goalGateCap}${
       goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
     }`;
@@ -903,6 +943,7 @@ export function toFlowGraph(
         loopRestart: false,
         isRetargetEdge: true,
         arcIndex: leftArcIndex,
+        ...(synthExtent > 0 ? { arcExtent: synthExtent } : {}),
       },
       // Left-side handles so synthetic retargets visually separate from
       // real back-edges (which route through the right-side LOOP handles).

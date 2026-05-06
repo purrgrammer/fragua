@@ -42,7 +42,16 @@ const DIM_OPACITY = 0.3;
 // the curves overlapped near the shared target. 64px gives each arc its
 // own visual lane plus enough room for the label pill at the source end.
 const ARC_SPREAD_STEP = 64;
-const LABEL_T = 0.3;
+// Anchor labels slightly past 1/3 along the curve. Earlier values
+// (0.3) put the pill very close to the source node, so on short
+// skip-edges the pill landed on top of the source body. 0.35 keeps
+// the "this branch leaves <node>" reading while clearing the body.
+const LABEL_T = 0.35;
+// Margin beyond the measured lateral extent of intermediate-layer
+// nodes — the arc bulge is pushed at least `extent + ARC_MARGIN`
+// outward so it clears wide parallel fans without grazing the
+// rightmost (or leftmost) branch column.
+const ARC_EXTENT_MARGIN = 48;
 // Left-side arcs (synthetic retargets) carry a small base bump on top of
 // the shared offset so their labels — sitting at LABEL_T near the source —
 // don't land on top of the node column when the arc is short. Right-side
@@ -56,6 +65,13 @@ const wideArcPath = (
   ty: number,
   side: "right" | "left" = "right",
   arcIndex = 0,
+  /** Optional lateral-extent floor (px). When set, the control x is
+   *  clamped so the arc bulge sits at least `minExtent + margin` past
+   *  the origin on the chosen side. The xyflow handle coordinates are
+   *  in flow-canvas space (origin at the canvas root), so the same
+   *  scale that produced `minExtent` from `layoutDag` positions
+   *  applies directly here. */
+  minExtent = 0,
 ): [string, number, number] => {
   // Arc depth scales with the vertical span so short loops get a gentle
   // arc and long skip-edges push further out. 100 min keeps the label
@@ -64,7 +80,15 @@ const wideArcPath = (
   const baseOffset = Math.max(100, Math.min(180, 60 + span * 0.25)) + (side === "left" ? LEFT_ARC_BASE_BOOST : 0);
   const offset = baseOffset + Math.max(0, arcIndex) * ARC_SPREAD_STEP;
   const extreme = side === "right" ? Math.max(sx, tx) : Math.min(sx, tx);
-  const cx = side === "right" ? extreme + offset : extreme - offset;
+  let cx = side === "right" ? extreme + offset : extreme - offset;
+  // Push past the parallel-fan extent if the host measured one. The
+  // floor is a *lower* bound — if the arcIndex stagger already widens
+  // the bulge past it, the natural offset wins.
+  if (minExtent > 0) {
+    const floor = minExtent + ARC_EXTENT_MARGIN;
+    if (side === "right") cx = Math.max(cx, floor);
+    else cx = Math.min(cx, -floor);
+  }
   const path = `M ${sx},${sy} C ${cx},${sy} ${cx},${ty} ${tx},${ty}`;
   // Anchor the label at LABEL_T along the actual cubic Bézier so it
   // tracks the curve rather than a linear midpoint approximation. With
@@ -111,10 +135,12 @@ const EdgeLabel = ({ labelX, labelY, label, tone = "muted", dim }: EdgeLabelProp
         style={{
           position: "absolute",
           transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-          pointerEvents: "all",
+          // Non-interactive — click-throughs to underlying nodes when
+          // the pill overlaps a node body on dense graphs.
+          pointerEvents: "none",
           opacity: dim ? DIM_OPACITY : 1,
         }}
-        className={`pointer-events-auto rounded-sw-default border px-1 py-0.5 text-sw-xs uppercase tracking-[0.06em] ${toneClass}`}
+        className={`rounded-sw-default border px-1 py-0.5 text-sw-xs uppercase tracking-[0.06em] ${toneClass}`}
       >
         {label}
       </div>
@@ -129,6 +155,9 @@ type TemporaryData = {
    *  so back-edges and right-side skip-edges don't draw on top of each
    *  other. Ignored when `arcOut` is false. */
   arcIndex?: number;
+  /** Lateral-extent floor (px) for the arc bulge. Set by the host when
+   *  the arc has to clear a parallel fan; ignored when undefined or 0. */
+  arcExtent?: number;
   /** HITL edges (outgoing from `wait.human`) lift to the idle-gray retry
    *  tone instead of the default very-faint border. Hosts that want this
    *  signal set the flag; Temporary picks up the matching stroke + tone. */
@@ -174,8 +203,9 @@ const Temporary = ({
 }: TemporaryProps) => {
   const d = data as TemporaryData | undefined;
   const arcIndex = typeof d?.arcIndex === "number" ? d.arcIndex : 0;
+  const arcExtent = typeof d?.arcExtent === "number" ? d.arcExtent : 0;
   const [edgePath, labelX, labelY] = arcOut
-    ? wideArcPath(sourceX, sourceY, targetX, targetY, "right", arcIndex)
+    ? wideArcPath(sourceX, sourceY, targetX, targetY, "right", arcIndex, arcExtent)
     : getSimpleBezierPath({
         sourcePosition,
         sourceX,
@@ -233,7 +263,8 @@ type LoopProps = EdgeProps &
 const Loop = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data, outcome, arcSide = "right" }: LoopProps) => {
   const d = data as LoopData | undefined;
   const arcIndex = typeof d?.arcIndex === "number" ? d.arcIndex : 0;
-  const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY, arcSide, arcIndex);
+  const arcExtent = typeof d?.arcExtent === "number" ? d.arcExtent : 0;
+  const [edgePath, labelX, labelY] = wideArcPath(sourceX, sourceY, targetX, targetY, arcSide, arcIndex, arcExtent);
 
   const label = d?.label;
   const dim = d?.dim;
