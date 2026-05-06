@@ -657,6 +657,32 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type,
             payload: { nodeId: currentNode, iteration, ...payload },
           });
+          // Mirror handler-emitted `cost.recorded` into the per-turn
+          // accumulator. Codergen bypasses ctx.llm.call() and reports
+          // usage through ctx.emit (handler-bridge.ts forwards every
+          // pi-agent-core message_end → cost.recorded). Without this
+          // mirror, the abort branch's `partial` payload reads zero on
+          // codergen handlers — fact.node_aborted would land with
+          // partialTokens=0/partialCostUsd=0 and run_state.metrics +
+          // budget_usd would silently undercount aborted spend. The
+          // completion path is unaffected: it only backfills result
+          // fields when the handler returned zeros (executor.ts §below),
+          // and codergen's HandlerResult already carries populated
+          // tokens/costUsd from its own accumulator (handler-bridge
+          // surfaces the same cost.recorded stream into the result).
+          // Per cost.md + AGENTS.md ground rule #5: this accumulator is
+          // turn-local, not a reducer fold of cost.recorded.
+          if (type === "cost.recorded") {
+            const p = payload as Record<string, unknown>;
+            turnBilled += readNumber(p["total_tokens"]);
+            totalCostUsd += readNumber(p["cost_usd"]);
+            totalInputTokens += readNumber(p["input_tokens"]);
+            totalOutputTokens += readNumber(p["output_tokens"]);
+            totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
+            totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
+            const model = p["model"];
+            if (typeof model === "string") lastModel = model;
+          }
           // Hard ceiling — bound peak memory and per-batch render cost
           // when a provider streams a burst of deltas faster than the
           // soft timer can drain.
