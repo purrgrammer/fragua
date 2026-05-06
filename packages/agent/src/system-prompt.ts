@@ -174,6 +174,55 @@ export function renderProtocol(): string {
   return PROTOCOL_BLOCK;
 }
 
+/** Inputs for the framework-blocks-only assembly (everything except the
+ *  persona). Shared between the full `buildSystemPrompt` and the
+ *  sub-agent assembly in `materialiseForChild`. */
+export interface BuildFrameworkBlocksInput {
+  contextBlock: string;
+  skillsCatalog?: string;
+  agentsCatalog?: string;
+  runEnv?: RunEnvironment | undefined;
+  /** Whether to include the `<protocol>` block. Defaults to true.
+   *  Sub-agents pass `false` — they're tool invocations, not workflow
+   *  nodes, so the abort emit contract is meaningless (a sub-agent
+   *  returning `<abort>…</abort>` just shows up as toolResult text on
+   *  the parent's stream — it doesn't halt anything). */
+  includeProtocol?: boolean;
+}
+
+/** Assemble everything that frames a persona — env / protocol / agents
+ *  catalogue / skills catalogue / project conventions — without the
+ *  persona itself. The persona is appended by callers (`buildSystemPrompt`
+ *  for codergen nodes, `materialiseForChild` for sub-agents). Order is
+ *  identical to the full assembly so the framework parts compose
+ *  identically whether the consumer is a parent or a child. */
+export function buildFrameworkBlocks({
+  contextBlock,
+  skillsCatalog,
+  agentsCatalog,
+  runEnv,
+  includeProtocol = true,
+}: BuildFrameworkBlocksInput): string {
+  const skillsBlock = skillsCatalog ?? "";
+  const agentsBlock = agentsCatalog ?? "";
+  // Prepend order (top → bottom of the assembled framework block):
+  //   <environment>   — where the agent is running
+  //   <protocol>      — the abort emit contract; constant per call (nodes only)
+  //   agents catalog  — named sub-agents the LLM can spawn (when `agent` tool present)
+  //   skills catalog  — what tools / skills are available
+  //   project conv.   — AGENTS.md and friends
+  let out = contextBlock;
+  out = mergeSystemPrompt(out, skillsBlock);
+  out = mergeSystemPrompt(out, agentsBlock);
+  if (includeProtocol) {
+    out = mergeSystemPrompt(out, PROTOCOL_BLOCK);
+  }
+  if (runEnv !== undefined) {
+    out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
+  }
+  return out;
+}
+
 /** Assemble the final system prompt for a single agent call. Isolated from
  * the backend so tests can round-trip the combinator without standing up
  * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
@@ -187,24 +236,13 @@ export function buildSystemPrompt({
   runEnv,
 }: BuildSystemPromptInput): string {
   const base = perNode !== undefined && perNode.length > 0 ? perNode : global;
-  const skillsBlock = skillsCatalog ?? "";
-  const agentsBlock = agentsCatalog ?? "";
-  // Prepend order (top → bottom of the assembled prompt):
-  //   <environment>   — where the agent is running
-  //   <protocol>      — the abort emit contract; constant per call
-  //   agents catalog  — named sub-agents the LLM can spawn (when `agent` tool present)
-  //   skills catalog  — what tools / skills are available
-  //   project conv.   — AGENTS.md and friends
-  //   base persona    — the per-node or global system prompt
-  let out = base;
-  out = mergeSystemPrompt(out, contextBlock);
-  out = mergeSystemPrompt(out, skillsBlock);
-  out = mergeSystemPrompt(out, agentsBlock);
-  out = mergeSystemPrompt(out, PROTOCOL_BLOCK);
-  if (runEnv !== undefined) {
-    out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
-  }
-  return out;
+  const framework = buildFrameworkBlocks({
+    contextBlock,
+    ...(skillsCatalog !== undefined ? { skillsCatalog } : {}),
+    ...(agentsCatalog !== undefined ? { agentsCatalog } : {}),
+    runEnv,
+  });
+  return mergeSystemPrompt(base, framework);
 }
 
 /** Render the `<environment>` block. Kept pure + tiny so it can be
@@ -261,32 +299,52 @@ export interface MaterialiseChildResult {
   effectiveSkills: Skill[];
 }
 
+/** Project-conventions + run-env framing the parent assembled from
+ *  `loadContextFiles` + `deriveRunEnv`. Sub-agents reuse these verbatim
+ *  so they see the same project primer (AGENTS.md and friends) and
+ *  worktree facts (cwd, bootstrap status) the parent saw. Optional —
+ *  hand-rolled test specs may pass `{ contextBlock: "" }` and skip
+ *  the env block. */
+export interface ParentFrameworkInput {
+  /** Pre-rendered `<project-conventions>` block. Empty when no
+   *  context_files were declared on the parent node. */
+  contextBlock: string;
+  /** Pre-built RunEnvironment (cwd, bootstrap, runId). Omitted in
+   *  tests without a worktree. */
+  runEnv?: RunEnvironment;
+}
+
 /** Build the system prompt + skill catalog for a sub-agent run.
  *
- *  - `spec.system_prompt` overrides the parent's persona; otherwise the
- *    child inherits the parent's system prompt verbatim (the parent
- *    string already includes the protocol + environment blocks).
+ *  Order (top → bottom of the assembled child prompt):
+ *    <environment>   — same cwd/bootstrap the parent had
+ *    skills catalog  — child's filtered subset of the parent's catalog
+ *    project conv.   — same AGENTS.md the parent saw
+ *    persona         — `spec.system_prompt` (the agent definition body
+ *                      or inline `system_prompt` argument), LAST so it
+ *                      reads as the immediate task framing for the LLM.
+ *
+ *  No `<protocol>` block — sub-agents are tool invocations, not workflow
+ *  nodes, so the abort emit contract is meaningless (a sub-agent
+ *  returning `<abort>…</abort>` just shows up as toolResult text on the
+ *  parent's stream; it doesn't halt the parent's run).
+ *
+ *  No agents catalogue — sub-agents can't spawn grand-children (the
+ *  `agent` tool is stripped from the child pool).
+ *
+ *  - `spec.system_prompt` is the persona / role brief. The framework
+ *    blocks above frame it; this string is appended at the bottom.
  *  - `spec.skills` is intersected with the parent's loaded catalog
- *    (unknown names silently dropped, by design — the LLM gets a
- *    smaller catalog rather than a hard error).
- *  - The caller owns the sub-agent's persona. When `spec.system_prompt`
- *    is set, that string drives the prompt verbatim. When absent, the
- *    sub-agent gets no persona by default — framework injection (the
- *    `<protocol>` block, env-info, the global codergen persona) would
- *    surprise the calling LLM, which constructed the tool call
- *    expecting a specific context shape.
- *  - `spec.skills` is intersected with the parent's loaded catalog
- *    (unknown names silently dropped). When the filtered set is
- *    non-empty, an `<available_skills>` block IS rendered into the
- *    sub-agent's prompt — the sub-agent has to know what skills exist
- *    in order to invoke them. With both `system_prompt` + skills set,
- *    the catalog block sits below the persona.
- *  - When `spec.system_prompt` is absent AND no skills, the sub-agent
- *    runs with NO system prompt at all.
+ *    (unknown names silently dropped). The child sees ONLY the
+ *    intersected subset rendered as `<available_skills>` — never the
+ *    parent's full catalog.
+ *  - When the spec carries no persona AND no skills, the child still
+ *    runs with the framework blocks (env + project conv) so project
+ *    context survives.
  */
 export function materialiseForChild(
   spec: MaterialiseChildSpec,
-  _parentSystemPrompt: string,
+  parentFramework: ParentFrameworkInput,
   parentSkills: readonly Skill[],
 ): MaterialiseChildResult {
   const requested = spec.skills;
@@ -299,7 +357,16 @@ export function materialiseForChild(
         })();
 
   const persona = spec.system_prompt ?? "";
-  const catalog = effectiveSkills.length > 0 ? renderSkillsCatalog(effectiveSkills) : "";
-  const systemPrompt = catalog.length > 0 ? mergeSystemPrompt(persona, catalog) : persona;
+  const childSkillsCatalog = effectiveSkills.length > 0 ? renderSkillsCatalog(effectiveSkills) : "";
+  const framework = buildFrameworkBlocks({
+    contextBlock: parentFramework.contextBlock,
+    skillsCatalog: childSkillsCatalog,
+    agentsCatalog: "",
+    includeProtocol: false,
+    ...(parentFramework.runEnv !== undefined ? { runEnv: parentFramework.runEnv } : {}),
+  });
+  // Persona last: framework blocks frame the task, the persona is the
+  // last thing the model reads before the user prompt.
+  const systemPrompt = framework.length > 0 ? mergeSystemPrompt(persona, framework) : persona;
   return { systemPrompt, effectiveSkills };
 }

@@ -112,9 +112,18 @@ export interface SpawnSubagentParentCtx {
   parentNodeId: string;
   parentIteration: number;
   /** The fully-built parent system prompt (post-merge with protocol /
-   *  skills / context-files / environment). Used verbatim when the
-   *  child inherits. */
+   *  skills / context-files / environment). Kept for callers that want
+   *  to inspect the parent's full prompt; sub-agent assembly itself
+   *  uses `parentContextBlock` + `parentRunEnv` so the child sees the
+   *  same framework framing without inheriting the parent's persona. */
   parentSystemPrompt: string;
+  /** Pre-rendered `<project-conventions>` block from the parent's
+   *  `loadContextFiles` pass. Reused verbatim by the sub-agent so the
+   *  child sees the same project primer (AGENTS.md and friends). */
+  parentContextBlock: string;
+  /** Per-run isolation facts (cwd, bootstrap, runId) the parent saw.
+   *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
+  parentRunEnv?: RunEnvironment;
   /** Skills the parent codergen call had visible. Sub-agents intersect
    *  `spec.skills` against this set. */
   parentSkills: readonly Skill[];
@@ -408,11 +417,13 @@ export class PiCodergenBackend implements CodergenBackend {
         parentNodeId: input.node.id,
         parentIteration: input.iteration?.n ?? 0,
         parentSystemPrompt: systemPrompt,
+        parentContextBlock: contextBlock,
         parentSkills: effectiveSkills,
         parentProvider: provider,
         parentModel: modelId,
         parentEnv: effectiveEnv,
         parentEmit,
+        ...(effectiveRunEnv !== undefined ? { parentRunEnv: effectiveRunEnv } : {}),
         ...(allow !== undefined ? { parentAllowedTools: allow } : {}),
         ...(deny !== undefined ? { parentDeniedTools: deny } : {}),
       };

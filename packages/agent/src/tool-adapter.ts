@@ -75,7 +75,7 @@ export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment, swarmCon
     description: swarmTool.description,
     parameters: swarmTool.parameters,
     async execute(
-      _toolCallId,
+      toolCallId,
       params,
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback<AdapterDetails>,
@@ -102,6 +102,7 @@ export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment, swarmCon
         ...(signal ? { signal } : {}),
         ...(adaptedOnUpdate ? { onUpdate: adaptedOnUpdate } : {}),
         ...(swarmContext ? { swarmContext } : {}),
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
       });
       const built = buildContent(result, swarmTool.truncation);
       const data = result.data as { full_output_path?: string } | undefined;

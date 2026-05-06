@@ -42,6 +42,15 @@ export interface SpawnSubagentParentCtx {
   parentNodeId: string;
   parentIteration: number;
   parentSystemPrompt: string;
+  /** Pre-rendered `<project-conventions>` block from the parent's
+   *  `loadContextFiles` pass. Reused verbatim by the sub-agent so the
+   *  child sees the same project primer (AGENTS.md and friends).
+   *  Optional for back-compat with hand-rolled test fixtures; the
+   *  spawner falls back to an empty block. */
+  parentContextBlock?: string;
+  /** Per-run isolation facts (cwd, bootstrap, runId) the parent saw.
+   *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
+  parentRunEnv?: import("@swarm/agent").RunEnvironment;
   parentSkills: readonly Skill[];
   /** Provider/model the parent codergen call resolved to. The child
    *  inherits both verbatim — no per-call model selection from the LLM. */
@@ -86,7 +95,10 @@ export function makeSpawnSubagent(
         ...(spec.system_prompt !== undefined ? { system_prompt: spec.system_prompt } : {}),
         ...(spec.skills !== undefined ? { skills: spec.skills } : {}),
       },
-      parentCtx.parentSystemPrompt,
+      {
+        contextBlock: parentCtx.parentContextBlock ?? "",
+        ...(parentCtx.parentRunEnv !== undefined ? { runEnv: parentCtx.parentRunEnv } : {}),
+      },
       parentCtx.parentSkills,
     );
 
@@ -146,6 +158,7 @@ export function makeSpawnSubagent(
       model: childModel,
       ...(spec.name !== undefined ? { name: spec.name } : {}),
       ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
+      ...(spec.tool_call_id !== undefined ? { tool_call_id: spec.tool_call_id } : {}),
     });
 
     // Forward every observability event the sub-agent emits to the

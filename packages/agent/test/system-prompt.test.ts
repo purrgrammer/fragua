@@ -287,64 +287,82 @@ function makeSkill(name: string): Skill {
 }
 
 describe("materialiseForChild", () => {
-  const parentSystemPrompt = "PARENT BASE PERSONA\n<protocol>\n…\n</protocol>";
+  // Parent's pre-rendered framework inputs. Sub-agents consume these
+  // verbatim so the child sees the same project primer + worktree
+  // facts the parent saw, with the child's persona appended last.
+  const parentFramework = {
+    contextBlock: "<project-conventions>\nproject AGENTS.md\n</project-conventions>",
+    runEnv: { worktreePath: "/tmp/wt", runId: "run-1" } as const,
+  };
   const parentSkills: Skill[] = [makeSkill("a"), makeSkill("b"), makeSkill("c")];
 
-  test("returns empty per-node prompt when spec.system_prompt is undefined (backend builds fresh minimal prompt)", () => {
-    // Earlier behaviour was to inherit the parent's *fully-assembled*
-    // prompt (10s of KB of tools/skills/context-files for a pool the
-    // sub-agent doesn't even have). We now return empty so the
-    // codergen backend builds a fresh minimal prompt for the child's
-    // own pool — global framework persona stays automatic.
-    const out = materialiseForChild({}, parentSystemPrompt, parentSkills);
-    expect(out.systemPrompt).toBe("");
+  test("framework blocks render even when spec carries no persona / skills", () => {
+    // Old behaviour returned "" — sub-agents ran with no project
+    // conventions and no env block. New contract: env + project conv
+    // always land so the child reads the same primer the parent did.
+    const out = materialiseForChild({}, parentFramework, parentSkills);
+    expect(out.systemPrompt).toContain("<environment>");
+    expect(out.systemPrompt).toContain("project AGENTS.md");
     expect(out.effectiveSkills).toEqual([]);
   });
 
-  test("uses spec.system_prompt verbatim — no framework wraps", () => {
-    // Caller-owns-the-system-prompt rule: when spec.system_prompt is
-    // set we use it as-is. No `<protocol>` wrap, no skills catalog,
-    // no framework injection. If the caller wants the abort contract
-    // they include it themselves. (Earlier behaviour wrapped — was
-    // changed when sub-agents stopped inheriting the parent's
-    // assembled prompt; see the file-level docstring.)
-    const out = materialiseForChild({ system_prompt: "REVIEWER" }, parentSystemPrompt, parentSkills);
-    expect(out.systemPrompt).toBe("REVIEWER");
+  test("sub-agents do NOT see the <protocol> block — they're tool calls, not nodes", () => {
+    // The protocol block teaches the abort emit contract, which is
+    // meaningless for a sub-agent (a sub-agent returning
+    // `<abort>…</abort>` just shows up as toolResult text on the
+    // parent's stream — it doesn't halt the parent's run).
+    const bare = materialiseForChild({}, parentFramework, parentSkills);
+    expect(bare.systemPrompt).not.toContain("<protocol>");
+    const withPersona = materialiseForChild({ system_prompt: "REVIEWER" }, parentFramework, parentSkills);
+    expect(withPersona.systemPrompt).not.toContain("<protocol>");
+  });
+
+  test("persona is appended LAST, after framework blocks", () => {
+    const out = materialiseForChild({ system_prompt: "REVIEWER" }, parentFramework, parentSkills);
+    expect(out.systemPrompt).toContain("REVIEWER");
+    expect(out.systemPrompt).toContain("<environment>");
+    // Persona reads as the last framing the model sees before the user prompt.
+    const personaIdx = out.systemPrompt.indexOf("REVIEWER");
+    const envIdx = out.systemPrompt.indexOf("<environment>");
+    expect(personaIdx).toBeGreaterThan(envIdx);
   });
 
   test("filters skills to spec.skills set; empty / unset spec.skills means no skills", () => {
-    const filtered = materialiseForChild({ skills: ["b"] }, parentSystemPrompt, parentSkills);
+    const filtered = materialiseForChild({ skills: ["b"] }, parentFramework, parentSkills);
     expect(filtered.effectiveSkills.map((s) => s.name)).toEqual(["b"]);
 
-    const noSkills = materialiseForChild({}, parentSystemPrompt, parentSkills);
+    const noSkills = materialiseForChild({}, parentFramework, parentSkills);
     expect(noSkills.effectiveSkills).toEqual([]);
   });
 
   test("unknown skill names are silently dropped", () => {
-    const out = materialiseForChild({ skills: ["a", "does-not-exist"] }, parentSystemPrompt, parentSkills);
+    const out = materialiseForChild({ skills: ["a", "does-not-exist"] }, parentFramework, parentSkills);
     expect(out.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
   });
 
-  test("override + skills: catalog above persona — sub-agent needs to know what skills it can invoke", () => {
-    // Layer order matches `buildSystemPrompt`: extensions (skills
-    // catalog) sit above the base (persona), so the sub-agent reads
-    // the available-skills block before the role framing.
-    const out = materialiseForChild({ system_prompt: "REVIEWER", skills: ["a"] }, parentSystemPrompt, parentSkills);
+  test("child sees its own filtered skills catalogue, not the parent's full set", () => {
+    const out = materialiseForChild({ system_prompt: "REVIEWER", skills: ["a"] }, parentFramework, parentSkills);
     expect(out.systemPrompt).toContain("REVIEWER");
     expect(out.systemPrompt).toContain("<available_skills>");
     expect(out.systemPrompt).toContain("a skill description");
+    // Other parent skills are NOT exposed.
+    expect(out.systemPrompt).not.toContain("b skill description");
+    expect(out.systemPrompt).not.toContain("c skill description");
     expect(out.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
+    // Layer order: framework blocks → persona last.
     const personaIdx = out.systemPrompt.indexOf("REVIEWER");
     const skillsIdx = out.systemPrompt.indexOf("<available_skills>");
     expect(personaIdx).toBeGreaterThan(skillsIdx);
   });
 
-  test("skills with no spec.system_prompt: bare skills catalog is the entire prompt", () => {
-    const out = materialiseForChild({ skills: ["a"] }, parentSystemPrompt, parentSkills);
-    expect(out.systemPrompt).toContain("<available_skills>");
-    expect(out.systemPrompt).toContain("a skill description");
-    // No persona injected — just the catalog.
-    expect(out.systemPrompt).not.toContain("PARENT BASE PERSONA");
+  test("project conventions from parent's contextBlock land in the child", () => {
+    const out = materialiseForChild({ system_prompt: "PERSONA" }, parentFramework, parentSkills);
+    expect(out.systemPrompt).toContain("project AGENTS.md");
+  });
+
+  test("agents catalogue is empty for sub-agents — no nesting", () => {
+    const out = materialiseForChild({ system_prompt: "PERSONA" }, parentFramework, parentSkills);
+    expect(out.systemPrompt).not.toContain("## Available sub-agents");
   });
 });
 
@@ -377,7 +395,7 @@ describe("materialiseForChild — Skill tool inheritance", () => {
   ];
 
   test("child can call skill({name: A}) when spec.skills filters to {A}", async () => {
-    const filtered = materialiseForChild({ skills: ["a"] }, "", parentSkills);
+    const filtered = materialiseForChild({ skills: ["a"] }, { contextBlock: "" }, parentSkills);
     expect(filtered.effectiveSkills.map((s) => s.name)).toEqual(["a"]);
     const env = {
       readFile: async () => "---\nname: a\ndescription: a desc\n---\nbody-a",
@@ -387,7 +405,7 @@ describe("materialiseForChild — Skill tool inheritance", () => {
   });
 
   test("child gets unknown-name error for skill({name: B}) when spec.skills filters to {A}", async () => {
-    const filtered = materialiseForChild({ skills: ["a"] }, "", parentSkills);
+    const filtered = materialiseForChild({ skills: ["a"] }, { contextBlock: "" }, parentSkills);
     const env = { readFile: async () => "" };
     const out = await loadSkill(env, "b", undefined, filtered.effectiveSkills);
     expect(out.ok).toBe(false);

@@ -144,6 +144,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       if (def !== undefined) spec.agentName = def.name;
 
       if (opts?.signal !== undefined) spec.signal = opts.signal;
+      if (opts?.tool_call_id !== undefined) spec.tool_call_id = opts.tool_call_id;
 
       const result = await ctx.spawnSubagent(spec);
       const data: AgentToolData = {

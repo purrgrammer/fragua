@@ -69,6 +69,13 @@ export interface RunConversationProps {
    * Tabs collapse back into flat node sections once the branches
    * complete. Absent / empty → today's flat render. */
   activeBranchesByParent?: ReadonlyMap<string, readonly string[]>;
+  /** Live `tool_call_id → subagent_id` map sourced from `subagent.start`
+   * frames. Lets a parent `agent` toolCall card render its in-flight
+   * sub-agent transcript before the toolResult lands (the toolResult
+   * carries the canonical mapping in `details.data.subagent_id`, but
+   * only fires when the sub-agent terminates). Optional so non-live
+   * snapshots still render correctly off the persisted toolResult. */
+  subagentByToolCallId?: ReadonlyMap<string, string>;
   className?: string;
 }
 
@@ -81,6 +88,7 @@ export function RunConversation({
   isLoading = false,
   userInput,
   activeBranchesByParent,
+  subagentByToolCallId,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -254,6 +262,7 @@ export function RunConversation({
                         toolResultsById={toolResultsById}
                         subagentMessagesById={subagentMessagesById}
                         streamingSubagentId={streamingSubagentId}
+                        subagentByToolCallId={subagentByToolCallId}
                         streaming={streaming}
                         isLive={isLive}
                       />
@@ -274,6 +283,7 @@ export function RunConversation({
                   isLive={isLive}
                   isPaused={isPaused}
                   streaming={isTail && streamingInTab ? streaming : null}
+                  subagentByToolCallId={subagentByToolCallId}
                 />
               );
             })}
@@ -430,6 +440,7 @@ function BranchTabsSection({
   isLive,
   isPaused,
   streaming,
+  subagentByToolCallId,
 }: {
   parentNodeId: string;
   parentSection: Section | null;
@@ -440,6 +451,7 @@ function BranchTabsSection({
   isLive: boolean;
   isPaused: boolean;
   streaming: StreamingMessage | null;
+  subagentByToolCallId?: ReadonlyMap<string, string>;
 }): JSX.Element {
   const parentState = parentNodeId ? stateByNodeId.get(parentNodeId) : undefined;
   const initial = branches[0] ?? "";
@@ -448,7 +460,13 @@ function BranchTabsSection({
       {parentSection ? (
         <NodeSection nodeId={parentSection.nodeId} state={parentState} isLive={isLive} isPaused={isPaused}>
           {parentSection.rows.map((row) => (
-            <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+            <MessageRow
+              key={row.ordinal}
+              row={row}
+              toolResultsById={toolResultsById}
+              subagentByToolCallId={subagentByToolCallId}
+              isLive={isLive}
+            />
           ))}
         </NodeSection>
       ) : (
@@ -492,7 +510,13 @@ function BranchTabsSection({
             >
               <NodeSection nodeId={branchId} state={state} isLive={isLive} isPaused={isPaused}>
                 {section?.rows.map((row) => (
-                  <MessageRow key={row.ordinal} row={row} toolResultsById={toolResultsById} isLive={isLive} />
+                  <MessageRow
+                    key={row.ordinal}
+                    row={row}
+                    toolResultsById={toolResultsById}
+                    subagentByToolCallId={subagentByToolCallId}
+                    isLive={isLive}
+                  />
                 )) ?? null}
                 {showStreamHere && streaming != null && <StreamingMessageRow streaming={streaming} />}
               </NodeSection>
@@ -668,6 +692,11 @@ interface MessageRowProps {
    *  inline next to the call that spawned them, even when the
    *  sub-agent has no persisted rows yet. */
   streamingSubagentId?: string | null;
+  /** Live `tool_call_id → subagent_id` map from `subagent.start` frames.
+   *  Used to look up the sid of an `agent` toolCall whose toolResult
+   *  hasn't landed yet — keeps the sub-agent's transcript visible
+   *  during the run, not just after it terminates. */
+  subagentByToolCallId?: ReadonlyMap<string, string>;
   streaming?: StreamingMessage | null;
   isLive: boolean;
 }
@@ -677,6 +706,7 @@ function MessageRow({
   toolResultsById,
   subagentMessagesById,
   streamingSubagentId,
+  subagentByToolCallId,
   streaming,
   isLive,
 }: MessageRowProps): JSX.Element | null {
@@ -691,6 +721,7 @@ function MessageRow({
         toolResultsById={toolResultsById}
         subagentMessagesById={subagentMessagesById}
         streamingSubagentId={streamingSubagentId ?? null}
+        subagentByToolCallId={subagentByToolCallId}
         streaming={streaming ?? null}
         ordinal={row.ordinal}
         isLive={isLive}
@@ -766,6 +797,8 @@ interface AssistantRowProps {
    *  to this sid embeds the streaming row inline (next to or in place
    *  of the persisted sub-agent transcript). */
   streamingSubagentId?: string | null;
+  /** Live `tool_call_id → subagent_id` map. See `MessageRowProps`. */
+  subagentByToolCallId?: ReadonlyMap<string, string>;
   streaming?: StreamingMessage | null;
   ordinal: number;
   isLive: boolean;
@@ -777,6 +810,7 @@ function AssistantMessageRow({
   toolResultsById,
   subagentMessagesById,
   streamingSubagentId,
+  subagentByToolCallId,
   streaming,
   ordinal,
   isLive,
@@ -820,11 +854,23 @@ function AssistantMessageRow({
         const inlineLabel = typeof args?.name === "string" ? args.name : undefined;
         const profileLabel = typeof args?.agent === "string" ? args.agent : undefined;
         const subagentName = inlineLabel ?? profileLabel;
+        // Resolve the sub-agent id. Prefer the toolResult (canonical;
+        // present once the sub-agent ends). While the sub-agent is
+        // still running, fall back to the live `tool_call_id →
+        // subagent_id` map populated by `subagent.start` frames so
+        // the embedded transcript renders mid-flight instead of
+        // staying blank until termination.
+        let sid: string | undefined;
         if (result) {
           const details = (result as { details?: { data?: { subagent_id?: unknown } } }).details;
-          const sid = typeof details?.data?.subagent_id === "string" ? details.data.subagent_id : undefined;
-          const subagentRows = sid && subagentMessagesById ? subagentMessagesById.get(sid) : undefined;
-          const isStreamingHere = sid != null && streamingSubagentId === sid && streaming != null;
+          if (typeof details?.data?.subagent_id === "string") sid = details.data.subagent_id;
+        }
+        if (!sid && chunk.id && subagentByToolCallId) {
+          sid = subagentByToolCallId.get(chunk.id);
+        }
+        if (sid !== undefined) {
+          const subagentRows = subagentMessagesById?.get(sid);
+          const isStreamingHere = streamingSubagentId === sid && streaming != null;
           if ((subagentRows && subagentRows.length > 0) || isStreamingHere) {
             embeddedSubagent = (
               <div className="flex flex-col gap-2" data-testid={`subagent-transcript-${sid}`}>

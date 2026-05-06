@@ -93,6 +93,13 @@ export interface SubagentSpec {
    *  `provider:` frontmatter), the synthesised child node carries this
    *  as `llm_provider` instead of inheriting the parent's. */
   provider?: string;
+  /** Pi-agent-core tool-call id of the parent's `agent` invocation
+   *  (e.g. `toolu_01ABC…`). Stamped onto `subagent.start.tool_call_id`
+   *  so the web UI can link a parent toolCall card to its in-flight
+   *  sub-agent before the toolResult — which carries the canonical
+   *  link in `details.data.subagent_id` — has landed. Optional so
+   *  test harnesses that synthesise specs by hand still work. */
+  tool_call_id?: string;
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs
@@ -148,6 +155,11 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
   /** Swarm-side run context. Required by extension-supplied tools to
    * construct their `ExtensionContext`; ignored by built-ins. */
   swarmContext?: SwarmToolContext;
+  /** Pi-agent-core tool-call id (e.g. `toolu_01ABC…`). The `agent` tool
+   * stamps this onto the resulting `subagent.start` event so the web
+   * UI can link a parent toolCall card to its in-flight sub-agent
+   * before the toolResult lands; other tools ignore it. */
+  tool_call_id?: string;
 }
 
 /** Swarm tool definition. Names are bare identifiers — namespace

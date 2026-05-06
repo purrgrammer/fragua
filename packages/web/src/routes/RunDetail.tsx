@@ -104,6 +104,7 @@ export function RunDetail(): JSX.Element {
     totalEvents,
     liveCost,
     detailOverlay,
+    subagentByToolCallId,
   } = useRunLive(id || null, {
     sinceSeq: snapshot?.lastEventSeq,
     terminal: isTerminal,
@@ -214,6 +215,7 @@ export function RunDetail(): JSX.Element {
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
                 activeBranchesByParent={branchMeta.activeBranchesByParent}
+                subagentByToolCallId={subagentByToolCallId}
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">

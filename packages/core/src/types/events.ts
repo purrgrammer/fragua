@@ -412,6 +412,12 @@ export interface SubagentStartData {
   name?: string;
   /** Resolved profile name from `agent({ agent: <name> })`. See header. */
   agent_def?: string;
+  /** Pi-agent-core tool-call id of the parent's `agent` invocation
+   *  (e.g. `toolu_01ABC…`). Lets the web UI link a parent toolCall card
+   *  to its in-flight sub-agent before the toolResult — which carries
+   *  the canonical link in `details.data.subagent_id` — has landed.
+   *  Optional for back-compat with hand-rolled test events. */
+  tool_call_id?: string;
 }
 
 /** `subagent.end.data` — closes the bracket. Carries terminal status
