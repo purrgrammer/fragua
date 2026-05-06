@@ -285,6 +285,9 @@ export type HandlerResult =
       kind: "halt";
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
+      // `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted`, and
+      // `provider_exhausted` are also valid `fact.run_halted` reasons but the
+      // executor emits those itself — not constructible by handlers.
     }
   | {
       /** Recoverable LLM-provider transport failure (HTTP 402 / 429 / 5xx /

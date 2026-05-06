@@ -77,7 +77,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
    | If you touch | Update in the same PR |
    |---|---|
    | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
-   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` §8 if halt/quarantine reason changed; `README.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the README claims |
+   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `README.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the README claims |
    | `packages/core/src/handler/types.ts` | `handler-contract.md` |
    | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
    | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/swarm-author/SKILL.md` validator-codes table |

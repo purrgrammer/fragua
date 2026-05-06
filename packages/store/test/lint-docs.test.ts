@@ -20,6 +20,7 @@ import { join } from "node:path";
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const SCHEMA_SQL = join(REPO_ROOT, "packages", "store", "src", "schema.sql");
 const STORE_TYPES_TS = join(REPO_ROOT, "packages", "store", "src", "types.ts");
+const PRAGMAS_TS = join(REPO_ROOT, "packages", "store", "src", "pragmas.ts");
 const SWARM_EVENTS_TS = join(REPO_ROOT, "packages", "types", "src", "swarm-events.ts");
 const HANDLER_TYPES_TS = join(REPO_ROOT, "packages", "core", "src", "handler", "types.ts");
 const ARCH_MD = join(REPO_ROOT, "docs", "ARCHITECTURE.md");
@@ -861,6 +862,160 @@ export function auditDocumentedRoutes(opts: { archPath: string; archSection: str
   return findings;
 }
 
+// ──────────────── schema-version drift audits ─────────────
+
+/** Read `export const CURRENT_SCHEMA_VERSION = N;` from pragmas.ts. */
+export function readCurrentSchemaVersion(pragmasPath: string): number | null {
+  const src = readFileSync(pragmasPath, "utf8");
+  const m = /export\s+const\s+CURRENT_SCHEMA_VERSION\s*=\s*(\d+)\s*;/.exec(src);
+  return m ? Number(m[1]) : null;
+}
+
+/** Pull `Revision N` from the first non-blank comment line of schema.sql. */
+export function readSchemaRevisionHeader(schemaPath: string): number | null {
+  const src = readFileSync(schemaPath, "utf8");
+  for (const line of src.split("\n")) {
+    const t = line.trim();
+    if (t === "" || !t.startsWith("--")) continue;
+    const m = /Revision\s+(\d+)/i.exec(t);
+    return m ? Number(m[1]) : null;
+  }
+  return null;
+}
+
+/**
+ * `schema.sql`'s `-- … Revision N` header must match
+ * `pragmas.ts`'s `CURRENT_SCHEMA_VERSION` constant. Long-paused-run
+ * resumability reasoning depends on the constant; a stale header is
+ * exactly the drift class we keep finding.
+ */
+export function auditSchemaRevisionHeader(opts: { schemaPath: string; pragmasPath: string }): Finding[] {
+  const findings: Finding[] = [];
+  const constVersion = readCurrentSchemaVersion(opts.pragmasPath);
+  const headerVersion = readSchemaRevisionHeader(opts.schemaPath);
+  if (constVersion == null) {
+    findings.push({
+      token: "CURRENT_SCHEMA_VERSION",
+      doc: opts.pragmasPath,
+      section: "(constant declaration not found)",
+      source: "auditSchemaRevisionHeader",
+    });
+    return findings;
+  }
+  if (headerVersion == null) {
+    findings.push({
+      token: "Revision N header",
+      doc: opts.schemaPath,
+      section: "(file header)",
+      source: "auditSchemaRevisionHeader",
+    });
+    return findings;
+  }
+  if (headerVersion !== constVersion) {
+    findings.push({
+      token: `Revision ${headerVersion}`,
+      doc: opts.schemaPath,
+      section: "(file header)",
+      source: `schema.sql header is "Revision ${headerVersion}" but CURRENT_SCHEMA_VERSION = ${constVersion}`,
+    });
+  }
+  return findings;
+}
+
+/**
+ * The `CURRENT_SCHEMA_VERSION = N` claim that ARCH §1.11 prose makes
+ * must agree with the actual constant. The audit walks the §1 slice
+ * for every `CURRENT_SCHEMA_VERSION = <number>` mention and flags any
+ * that diverge from `pragmas.ts`.
+ */
+export function auditArchSchemaVersionClaim(opts: { archPath: string; pragmasPath: string }): Finding[] {
+  const findings: Finding[] = [];
+  const constVersion = readCurrentSchemaVersion(opts.pragmasPath);
+  if (constVersion == null) {
+    findings.push({
+      token: "CURRENT_SCHEMA_VERSION",
+      doc: opts.pragmasPath,
+      section: "(constant declaration not found)",
+      source: "auditArchSchemaVersionClaim",
+    });
+    return findings;
+  }
+  const md = readFileSync(opts.archPath, "utf8");
+  const section = sliceSection(md, /^## 1\. /, 2) ?? md;
+  const claimRe = /CURRENT_SCHEMA_VERSION\s*=\s*(\d+)/g;
+  for (const m of section.matchAll(claimRe)) {
+    const claimed = Number(m[1]);
+    if (claimed !== constVersion) {
+      findings.push({
+        token: `CURRENT_SCHEMA_VERSION = ${claimed}`,
+        doc: opts.archPath,
+        section: "## 1. Threat model",
+        source: `ARCH claims ${claimed}; pragmas.ts has ${constVersion}`,
+      });
+    }
+  }
+  return findings;
+}
+
+// ──────────────── HaltReason coverage audit ─────────────
+
+/**
+ * Every literal in `HaltReason` must appear either in the
+ * `kind: "halt"` reason union of `HandlerResult`, OR in the
+ * trailing executor-only comment immediately after that arm.
+ * Catches a new halt reason landing in `swarm-events.ts` without
+ * a corresponding handler/types.ts update — silent drift in a
+ * contract surface readers grep for coverage.
+ */
+export function auditHaltReasonCoverage(opts: { swarmEventsPath: string; handlerTypesPath: string }): Finding[] {
+  const findings: Finding[] = [];
+  const eventsTs = readFileSync(opts.swarmEventsPath, "utf8");
+  const handlerTs = readFileSync(opts.handlerTypesPath, "utf8");
+
+  const haltDecl = sliceTypeDecl(eventsTs, "HaltReason");
+  if (haltDecl == null) {
+    findings.push({
+      token: "HaltReason",
+      doc: opts.swarmEventsPath,
+      section: "(declaration not found)",
+      source: "auditHaltReasonCoverage",
+    });
+    return findings;
+  }
+  const haltLiterals = extractStringLiterals(haltDecl)
+    .filter((l) => !l.ignored)
+    .map((l) => l.value);
+
+  const haltIdx = handlerTs.search(/\bkind:\s*"halt"/);
+  if (haltIdx < 0) {
+    findings.push({
+      token: 'kind: "halt"',
+      doc: opts.handlerTypesPath,
+      section: "(arm not found)",
+      source: "auditHaltReasonCoverage",
+    });
+    return findings;
+  }
+  const tail = handlerTs.slice(haltIdx);
+  const closeIdx = tail.indexOf("}");
+  const arm = closeIdx >= 0 ? tail.slice(0, closeIdx) : tail;
+  const covered = new Set<string>();
+  for (const m of arm.matchAll(/"([^"\n]+)"/g)) covered.add(m[1] ?? "");
+  for (const m of arm.matchAll(/`([^`\n]+)`/g)) covered.add(m[1] ?? "");
+
+  for (const lit of haltLiterals) {
+    if (!covered.has(lit)) {
+      findings.push({
+        token: `"${lit}"`,
+        doc: opts.handlerTypesPath,
+        section: 'kind: "halt" arm or trailing executor-only comment',
+        source: `HaltReason literal "${lit}" missing from handler types coverage`,
+      });
+    }
+  }
+  return findings;
+}
+
 // ───────────────────────── tests ─────────────────────────
 
 describe("drift-lint — live repo", () => {
@@ -955,6 +1110,33 @@ describe("drift-lint — live repo", () => {
     });
     if (findings.length > 0) {
       throw new Error(`drift-lint findings (capability claims):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+
+  test("schema.sql Revision header matches CURRENT_SCHEMA_VERSION", () => {
+    const findings = auditSchemaRevisionHeader({ schemaPath: SCHEMA_SQL, pragmasPath: PRAGMAS_TS });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (schema revision header):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+
+  test("ARCH §1 CURRENT_SCHEMA_VERSION claims match the constant", () => {
+    const findings = auditArchSchemaVersionClaim({ archPath: ARCH_MD, pragmasPath: PRAGMAS_TS });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (ARCH §1 schema version):\n${formatFindings(findings)}`);
+    }
+    expect(findings).toEqual([]);
+  });
+
+  test("every HaltReason literal is covered in handler/types.ts (union or executor-only comment)", () => {
+    const findings = auditHaltReasonCoverage({
+      swarmEventsPath: SWARM_EVENTS_TS,
+      handlerTypesPath: HANDLER_TYPES_TS,
+    });
+    if (findings.length > 0) {
+      throw new Error(`drift-lint findings (HaltReason coverage):\n${formatFindings(findings)}`);
     }
     expect(findings).toEqual([]);
   });
@@ -1224,6 +1406,83 @@ describe("drift-lint — interface and route extractors", () => {
     } finally {
       rmSync(tmpTs, { force: true });
       rmSync(tmpMd, { force: true });
+    }
+  });
+
+  test("auditSchemaRevisionHeader flags a Revision header that lags CURRENT_SCHEMA_VERSION", () => {
+    const tmpSchema = join(FIXTURES_DIR, "_tmp-rev-schema.sql");
+    const tmpPragmas = join(FIXTURES_DIR, "_tmp-rev-pragmas.ts");
+    mkdirSync(FIXTURES_DIR, { recursive: true });
+    writeFileSync(tmpSchema, "-- swarm event store schema — Revision 4\n-- v1 → v2: ...\n");
+    writeFileSync(tmpPragmas, "export const CURRENT_SCHEMA_VERSION = 7;\n");
+    try {
+      const findings = auditSchemaRevisionHeader({ schemaPath: tmpSchema, pragmasPath: tmpPragmas });
+      expect(findings.length).toBe(1);
+      expect(findings[0]?.token).toBe("Revision 4");
+      expect(findings[0]?.source).toContain("CURRENT_SCHEMA_VERSION = 7");
+    } finally {
+      rmSync(tmpSchema, { force: true });
+      rmSync(tmpPragmas, { force: true });
+    }
+  });
+
+  test("auditArchSchemaVersionClaim flags a stale CURRENT_SCHEMA_VERSION mention in ARCH §1", () => {
+    const tmpArch = join(FIXTURES_DIR, "_tmp-arch-version.md");
+    const tmpPragmas = join(FIXTURES_DIR, "_tmp-arch-pragmas.ts");
+    mkdirSync(FIXTURES_DIR, { recursive: true });
+    writeFileSync(
+      tmpArch,
+      [
+        "## 1. Threat model",
+        "",
+        "Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 4`.",
+        "",
+        "## 2. End",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(tmpPragmas, "export const CURRENT_SCHEMA_VERSION = 7;\n");
+    try {
+      const findings = auditArchSchemaVersionClaim({ archPath: tmpArch, pragmasPath: tmpPragmas });
+      expect(findings.length).toBe(1);
+      expect(findings[0]?.token).toBe("CURRENT_SCHEMA_VERSION = 4");
+    } finally {
+      rmSync(tmpArch, { force: true });
+      rmSync(tmpPragmas, { force: true });
+    }
+  });
+
+  test("auditHaltReasonCoverage flags a HaltReason literal absent from handler/types.ts", () => {
+    const tmpEvents = join(FIXTURES_DIR, "_tmp-halt-events.ts");
+    const tmpHandler = join(FIXTURES_DIR, "_tmp-halt-handler.ts");
+    mkdirSync(FIXTURES_DIR, { recursive: true });
+    writeFileSync(
+      tmpEvents,
+      ["export type HaltReason =", '  | "budget"', '  | "max_loops"', '  | "newly_added_reason";', ""].join("\n"),
+    );
+    writeFileSync(
+      tmpHandler,
+      [
+        "export type HandlerResult =",
+        "  | {",
+        '      kind: "halt";',
+        '      reason: "budget" | "max_loops";',
+        "      detail?: string;",
+        "      // executor-only: `abort_loop`, `schema_drift`",
+        "    };",
+        "",
+      ].join("\n"),
+    );
+    try {
+      const findings = auditHaltReasonCoverage({
+        swarmEventsPath: tmpEvents,
+        handlerTypesPath: tmpHandler,
+      });
+      expect(findings.length).toBe(1);
+      expect(findings[0]?.token).toBe('"newly_added_reason"');
+    } finally {
+      rmSync(tmpEvents, { force: true });
+      rmSync(tmpHandler, { force: true });
     }
   });
 

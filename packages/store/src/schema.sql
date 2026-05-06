@@ -1,6 +1,8 @@
--- swarm event store schema — Revision 6
+-- swarm event store schema — Revision 7
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
+-- This file is the canonical shape every new DB starts at; the migration
+-- map in `migrations.ts` walks older DBs forward to the same shape.
 -- v1 → v2: pause unification. `paused_provider_error` collapses into the
 -- generic `paused` status; reason lives on `fact.run_paused.payload.reason`.
 -- v2 → v3: harness-by-default. `run_state.project_id` and the `projects`
@@ -11,20 +13,19 @@
 -- v3 → v4: `workflow_scope` enum widens to include 'local' so bare-name
 -- resolution can fall back to <cwd>/.swarm/workflows/<name>.dot when
 -- the global directory misses.
--- v4 → v5: conversation runs as a kind. `run_state` gains a `kind`
--- discriminator ('workflow' | 'conversation'), `workflow_sha` becomes
--- nullable (conversation runs have no DOT document), and parent
--- linkage columns (`parent_run_id`, `parent_node_id`,
--- `parent_iteration`) anchor sub-agent runs back to the codergen
--- iteration that spawned them. The workflow_sha NOT NULL invariant
--- for workflow runs is enforced at the writer paths (enqueueRun),
--- not by CHECK — SQLite has no conditional-NOT-NULL syntax.
+-- v4 → v5: conversation runs as a kind (since abandoned, see v7).
 -- v5 → v6: scheduled runs (docs/proposals/scheduled-runs.md). New
 -- `schedules` table holds the recurring (workflow_ref, cwd, interval)
 -- triples; `run_state.schedule_id` carries lineage from each fired run
 -- back to the schedule that produced it. Schedule deletion is hard
 -- DELETE while runs persist — `run_state.schedule_id` is informational,
 -- not a foreign-key cascade target.
+-- v6 → v7: drop the v5 conversation scaffolding. Sub-agents are a tool
+-- implementation that runs inline against the parent's stream, not a
+-- separate run kind, so `kind` and the parent-linkage columns
+-- (`parent_run_id` / `parent_node_id` / `parent_iteration`) are
+-- removed and `workflow_sha` returns to `NOT NULL`. See
+-- docs/proposals/agent-tool.md for the in-tool design.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),

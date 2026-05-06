@@ -3,7 +3,7 @@ title: Doc-vs-code drift CI lint
 summary: "Doc-vs-code drift CI lint"
 status: shipped
 maturity: specified
-last-reviewed: 2026-05-01
+last-reviewed: 2026-05-06
 ---
 
 # Doc-vs-code drift CI lint
@@ -51,3 +51,5 @@ Landed as `bun run lint:docs` (driven by `packages/store/test/lint-docs.test.ts`
 The capability-claim audit (item 5 in the original shape) ships in the same gate: `auditCapabilityClaims` walks every `status: shipped` proposal and asserts the README "What swarm delivers today" section contains its front-matter `summary` (falling back to `title`). Suppression for the capability audit is `// drift-lint: ignore <basename>.md` on its own line within the README section.
 
 Two further audits extend the gate to the larger doc surfaces: `auditIEventStoreInterface` parses `packages/store/src/types.ts` for every method declared inside `export interface IEventStore { ... }` and asserts each name appears in `ARCHITECTURE.md` §4; `auditDocumentedRoutes` extracts every `app.<method>("/path", ...)` call from `ARCHITECTURE.md` §7 code blocks and asserts each `(method, path)` pair is registered as a real route somewhere under `packages/server/src/`. The first catches "source added a method, doc didn't" drift; the second catches stale `(method, path)` examples — both real failure modes uncovered in the 2026-05-02 introspect run.
+
+Three more audits land alongside (added 2026-05-06 from the introspect cycle that found `CURRENT_SCHEMA_VERSION` was claimed `4` while the constant was `7`): `auditSchemaRevisionHeader` parses the `-- … Revision N` comment at the top of `schema.sql` and asserts `N === CURRENT_SCHEMA_VERSION` from `pragmas.ts`; `auditArchSchemaVersionClaim` walks ARCH §1 prose for every `CURRENT_SCHEMA_VERSION = <n>` mention and flags any that diverge from the constant; `auditHaltReasonCoverage` asserts every literal in `HaltReason` (in `swarm-events.ts`) is reachable from `packages/core/src/handler/types.ts` either via the `kind: "halt"` reason union or via the trailing executor-only comment, so a new halt reason can't ship in `swarm-events.ts` without either widening the handler-constructible union or being explicitly tagged executor-emitted.

@@ -1,7 +1,7 @@
 ---
 name: swarm-debug
-description: Post-mortem a swarm run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches swarm-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
-version: 0.2.1
+description: Post-mortem a swarm run. Load this when the user pastes a run id, asks "why did run X fail/hang/halt/pause", "what happened to <run>", "debug this run", "analyze logs for run …", "is that run stuck", or when steering/unquarantine decisions need evidence. Teaches swarm-instance discovery (where is the SQLite store), resolving partial run ids, reading the run_state projection, decoding the fact-event taxonomy, mining the messages transcript for prompt/context failures, inspecting artifacts and LLM step snapshots, process-level checks (daemon_lock, zombies), schedule and sub-agent post-mortems, and a failure-mode playbook (halt reasons, abort loops, orphan side effects, HITL pauses, schema drift). Assumes Claude Code with Bash / Read / Grep and direct filesystem + SQLite access.
+version: 0.3.0
 ---
 
 # swarm-debug — run post-mortem procedure
@@ -160,6 +160,36 @@ What to look for:
 
 Observability events outside fact/intent (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`, `agent.info`, `agent.warning`) carry `nodeId` + `iteration` and fold into step snapshots — don't read them raw, use §5.
 
+### 4.1 Fact-event quick reference
+
+Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`. The §8 playbook covers terminal / blocking facts in detail; this table covers the *informational* facts you'll see walking the timeline.
+
+| Fact type | Payload highlights | When you'd read it |
+|---|---|---|
+| `fact.dispatch_started` | `nodeId`, `iteration` | Marks the boundary where an executor pass picked up the run; `dispatch_started_at` on `run_state` syncs from this. Useful for active-time accounting. |
+| `fact.node_started` | `nodeId`, `iteration`, `parentNodeId?`, `parallelIndex?` | Node entered. Repeated rows on the same `(nodeId, iteration)` indicate a backward conditional edge looping; cap is the node's `max_retries`. |
+| `fact.node_completed` | `nodeId`, `iteration`, `outcomeStatus?`, `tokens`, `costUsd` + 4-bucket splits, `nextNode`, `outputRef?`, `parentNodeId?`, `parallelIndex?`, `score?` | Node finished. `outcomeStatus="fail"` here matches against `condition="outcome=fail"` edges; the run can still continue. |
+| `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partial*` | Mid-flight abort. `cause`: `steer \| pause \| cancel \| timeout \| shutdown \| abort_loop \| error`. |
+| `fact.intents_folded` | `intentSeq`, `folded` | Intent fold landed. Useful when the timeline shows a steer/pause/hitl that didn't visibly change behaviour — read `folded` to see what the fold did. |
+| `fact.message_appended` | `ordinal`, `role`, `nodeId\|null`, `iteration` | Message metadata. Don't read these raw; query `messages` (§6). |
+| `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result (skill-tool, agent-tool, read/edit/bash). The artifact at `artifactKey` carries the body. |
+| `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool dispatched. Followed by exactly one `_done` or `_failed`; missing pair → orphan-side-effect quarantine on next daemon start. |
+| `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed. Pair with the matching `_intent` row by `idempotencyKey`. |
+| `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly. `retriable=true` → handler will redrive; `false` → permanent. |
+| `fact.run_paused_hitl` | `nodeId`, `label`, `options[]` | HITL yield. See §8 playbook. |
+| `fact.run_paused` | `reason`, reason-specific fields | Unified operator-resumable pause. See §8 for reason-by-reason behaviour. |
+| `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Outcome=retry pause; slot freed during the wait. |
+| `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus\|null`, `delayMs` | One per attempt in an auto-retry chain. Walk these to reconstruct the retry timeline before a `provider_exhausted` halt. |
+| `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Run left a paused/quarantined state. `inputIntentSeq` points back at the operator intent that drove the wake (when applicable). |
+| `fact.run_completed` | `finalNode` | Terminal success. |
+| `fact.run_halted` | `reason: HaltReason`, `detail?`, `occContext?` | Terminal failure. See §8. |
+| `fact.run_cancelled` | `intentSeq` | Operator cancelled. `intentSeq` resolves the originating `intent.cancel_requested`. |
+| `fact.run_quarantined` | `reason: QuarantineReason`, `orphanedIntents?: seq[]` | Awaiting `intent.unquarantine`. |
+| `fact.run_requeued_after_crash` | `prevNode?`, `lastAliveAt?` | Startup sweep recovered a run that was `running` when the prior daemon died. The reducer credits `lastAliveAt − dispatchStartedAt` to `activeMs`. |
+| `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without honoring `ctx.signal`. Handler bug per `docs/handler-contract.md` §4 rule 1. Per-process leak counter advances; daemon shuts down at `LEAK_LIMIT`. |
+| `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` rows on in-flight runs nearby. |
+| `fact.run_branched` | `branch` | Post-terminal: `dispose()` preserved a branch because `git status --porcelain` was non-empty. Lands AFTER the terminal status fact. `swarm gc --branches` joins these against the refspace. |
+
 ---
 
 ## 5. LLM step snapshots
@@ -237,6 +267,13 @@ Conventional keys:
 
 Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
+**File-then-row commit ordering.** The blob bytes land on disk *before* the `artifacts` row commits — the store hashes content first, writes `<blobsDir>/<sha[0:2]>/<sha>` if missing, and only then runs the `INSERT INTO artifacts (...)` that points at it. Crash diagnosis follows from this ordering:
+
+- Orphan **file** (sha exists on disk, no `artifacts` row referencing it) → daemon crashed between the file write and the row commit. The next `daemon.blob_gc_completed` sweep removes it; harmless.
+- Orphan **row** (artifacts row references a sha that doesn't exist on disk) → impossible under correct ordering. If you see one, the blobs directory was tampered with externally.
+
+`MAX_BLOB_BYTES = 16 MiB` is a store-module check, not a SQL `CHECK` constraint. An over-cap insert raises before the file write, so neither the file nor the row lands.
+
 For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
 
 ```sh
@@ -272,6 +309,83 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without respecting `ctx.signal`. Handler bug. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
 | Status `paused_retry`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (§1). |
+
+---
+
+## 8.1 Schedule events (daemon_events table)
+
+Schedules are global primitives (proposal: `docs/proposals/scheduled-runs.md`) that fire workflows on a fixed interval. Their audit trail lives in `daemon_events`, not `events` — at the moment of `intent.schedule_create` no run yet exists, and `fact.schedule_skipped` may fire without a corresponding run id. Same 4 KB payload cap, separate AUTOINCREMENT seq space.
+
+```sh
+# All schedule activity in the last 24h.
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, datetime(ts/1000,'unixepoch','localtime') AS at, run_id, payload
+   FROM daemon_events
+   WHERE type LIKE 'fact.schedule_%' OR type LIKE 'intent.schedule_%'
+   ORDER BY seq DESC LIMIT 50;"
+
+# Trace a single schedule's history.
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, run_id, payload
+   FROM daemon_events
+   WHERE json_extract(payload, '\$.scheduleId') = '<id>'
+   ORDER BY seq;"
+
+# Current schedule rows (canonical state — daemon_events is audit-only).
+sqlite3 -readonly "$DB" \
+  "SELECT id, workflow_ref, cwd, interval_text,
+          datetime(next_fire_at/1000,'unixepoch','localtime') AS next,
+          datetime(last_fire_at/1000,'unixepoch','localtime') AS last,
+          last_run_id, paused_at IS NOT NULL AS paused
+   FROM schedules ORDER BY next_fire_at;"
+```
+
+| Type | Payload highlights | When you'd read it |
+|---|---|---|
+| `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `input?`, `overlapPolicy`, `fireOnCreate` | Audit only — the row in `schedules` is the canonical state. |
+| `intent.schedule_pause` / `_resume` / `_delete` | `scheduleId` | Operator action. |
+| `fact.schedule_fired` | `scheduleId`, `runId` | Tick produced a run; join against `run_state.schedule_id`. |
+| `fact.schedule_skipped` | `scheduleId`, `reason: "overlap" \| "paused"` | Tick fired but didn't enqueue. `overlap` → previous run still active under `overlap_policy="skip"`. |
+| `fact.schedule_late` | `scheduleId`, `missedIntervals`, `lastTargetAt` | Catch-up: ≥1 whole interval between `lastTargetAt` and `now`. Emitted *before* the catch-up fire. Daemon was down or under load. |
+| `fact.schedule_invalid_workflow` | `scheduleId`, `error` | `workflowRef` no longer resolves (workflow file deleted/renamed). The schedule keeps trying — fix the ref or delete the schedule. |
+
+`run_state.schedule_id` is the lineage key — every fired run carries the schedule it came from. `LEFT JOIN schedules ON run_state.schedule_id = schedules.id` to filter the run feed by schedule.
+
+---
+
+## 8.2 Subagent post-mortem
+
+Sub-agents (the `agent` tool) have no `run_state` row and no separate event stream. Every event the sub-agent emits rides the **parent's** event stream with `subagent_id` on the payload as a discriminator. Three observability events bracket each spawn:
+
+- `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`
+- `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`
+- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on respawn after a daemon crash (proposal: `docs/proposals/sub-agent-crash-resilience.md`).
+
+`subagent_id` is **deterministic**: `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars. A respawn after a daemon crash hashes to the same id, rehydrates the prior transcript under the `__subagent:<id>` namespace in `messages`, and emits `subagent.resumed` (no fresh `start`).
+
+```sh
+# Bracket events for one parent run, ordered.
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, datetime(ts/1000,'unixepoch','localtime') AS at, payload
+   FROM events WHERE run_id='$RUN' AND type LIKE 'subagent.%' ORDER BY seq;"
+
+# All events emitted by one specific sub-agent (start, end, plus everything the child emitted in between).
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, payload FROM events
+   WHERE run_id='$RUN'
+     AND json_extract(payload, '\$.subagent_id') = '<subagent_id>'
+   ORDER BY seq;"
+
+# Sub-agent transcript (parent + all children share the messages table; children sit under the __subagent:<id> namespace).
+sqlite3 -readonly "$DB" \
+  "SELECT ordinal, role, node_id, length(content) AS bytes
+   FROM messages WHERE run_id='$RUN' AND node_id LIKE '__subagent:%'
+   ORDER BY ordinal;"
+```
+
+The bidirectional handle the parent LLM sees back is the `agent` tool's result: `{ subagent_id, status, total_tool_calls, halt_reason? }`. UIs prefer `subagent.start.name` (caller-supplied label from `agent({ name: <label> })`) when present; fall back to `agent_def` (the resolved profile name from `agent({ agent: <def-name> })` matched against `.agents/agents/`).
+
+**Cost accounting trap.** `subagent.end.costUsd` and the token fields are **cumulative across every spawn of the same `subagent_id`** (the daemon seeds the rollup from prior `subagent.end` rows for that id when respawning). Consumers summing across a run's `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket — naive summation over-counts on resumed brackets. The parent's `total_cost_usd` projection is unaffected; it folds each `fact.node_completed.costUsd` once.
 
 ---
 
@@ -313,8 +427,8 @@ sqlite3 -readonly "$DB" \
 # Run summary
 curl -fsS "$URL/runs/$RUN" | jq .
 sqlite3 -readonly "$DB" \
-  "SELECT run_id, status, kind, current_node, version, workflow_sha,
-          parent_run_id, parent_node_id, parent_iteration, cwd, routing, metrics,
+  "SELECT run_id, status, current_node, version, workflow_sha,
+          schedule_id, cwd, routing, metrics,
           datetime(updated_at/1000,'unixepoch','localtime') AS updated
    FROM run_state WHERE run_id='$RUN';"
 
@@ -346,6 +460,18 @@ sqlite3 -readonly "$DB" \
   "SELECT pid, http_url, datetime(heartbeat_at/1000,'unixepoch','localtime') AS last_beat,
           (strftime('%s','now')*1000 - heartbeat_at)/1000.0 AS seconds_ago
    FROM daemon_lock;"
+
+# Schedule activity (separate seq space; see §8.1)
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, run_id, datetime(ts/1000,'unixepoch','localtime') AS at, payload
+   FROM daemon_events
+   WHERE type LIKE 'fact.schedule_%' OR type LIKE 'intent.schedule_%'
+   ORDER BY seq DESC LIMIT 20;"
+
+# Subagent brackets for one parent run (§8.2)
+sqlite3 -readonly "$DB" \
+  "SELECT seq, type, payload FROM events
+   WHERE run_id='$RUN' AND type LIKE 'subagent.%' ORDER BY seq;"
 ```
 
 Intent writes (steer/pause/cancel/hitl/unquarantine/priority) change state — they're not debugging tools. Present evidence; let the user decide whether to write one.
