@@ -102,10 +102,18 @@ export function makeSpawnSubagent(
       parentCtx.parentSkills,
     );
 
-    // Tool pool: parent's pool, narrowed by `spec.allowed_tools` /
-    // `spec.disallowed_tools`, then strip `agent` so children can't
-    // recursively spawn.
-    const allow = spec.allowed_tools ?? parentCtx.parentAllowedTools;
+    // Tool pool: spec.allowed_tools wins; otherwise the child gets the
+    // full do-work pool (`registry.select({})` = all non-defaultDisabled
+    // tools — read/write/edit/bash/grep/find/ls/skill; `agent` and
+    // `web_fetch` stay defaultDisabled). The parent's `allowed_tools`
+    // does NOT cap children — a parent like orchestrate that runs
+    // read-only specifically because it just spawns workers should not
+    // gimp those workers when the LLM forgets to pass allowed_tools.
+    // Workflows that want narrower sub-agents pass `allowed_tools`
+    // explicitly on the spec (or via an agent profile's frontmatter).
+    // `disallowed_tools` falls through from the parent in the same
+    // sense it does for cross-cutting denies.
+    const allow = spec.allowed_tools;
     const deny = spec.disallowed_tools ?? parentCtx.parentDeniedTools;
     const childPool: AnyTool[] = stripAgentTool(
       deps.registry.select({
