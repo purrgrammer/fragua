@@ -72,6 +72,7 @@ export const grepTool: Tool<GrepArgs, GrepResultData> = {
     limit: Type.Optional(Type.Number({ description: "Maximum number of matches to return (default: 100)" })),
   }),
   idempotent: true,
+  idempotentOnReplay: true,
   truncation: { max_chars: OUTPUT_BYTE_CAP, mode: "head_tail" },
   async execute(args, env) {
     try {

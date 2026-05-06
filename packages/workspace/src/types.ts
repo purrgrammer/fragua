@@ -177,6 +177,15 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
   /** Does running this tool twice with the same args have the same effect?
    * Non-idempotent tools require human approval on resume from a dangling call. */
   idempotent: boolean;
+  /** When true, the rehydrate sanitiser (`sanitiseUnpairedToolCalls`)
+   *  re-executes this tool to repair an unpaired toolCall left by a
+   *  daemon crash mid-execution. Default false. Only set on tools
+   *  with no observable side effect on the working tree (pure reads:
+   *  read / grep / find / ls). The safe default surfaces an error
+   *  toolResult to the LLM instead of silently re-running a
+   *  potentially destructive operation — the LLM decides whether to
+   *  retry. See `docs/proposals/sub-agent-crash-resilience.md`. */
+  idempotentOnReplay?: boolean;
   /** Truncation applied to the stringified result before it reaches the LLM. */
   truncation: TruncationPolicy;
   /** Optional compatibility shim for raw tool-call arguments before

@@ -35,6 +35,7 @@ export const findTool: Tool<FindArgs, FindResultData> = {
     limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
   }),
   idempotent: true,
+  idempotentOnReplay: true,
   truncation: { max_chars: OUTPUT_BYTE_CAP, mode: "head_tail" },
   async execute(args, env) {
     try {

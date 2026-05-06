@@ -29,6 +29,7 @@ export const lsTool: Tool<LsArgs, LsResultData> = {
     limit: Type.Optional(Type.Number({ description: "Maximum number of entries to return (default: 500)" })),
   }),
   idempotent: true,
+  idempotentOnReplay: true,
   truncation: { max_chars: OUTPUT_BYTE_CAP, mode: "head_tail" },
   async execute(args, env) {
     try {
