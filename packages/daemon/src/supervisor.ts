@@ -38,7 +38,8 @@ export interface SupervisorOpts {
 
 const DEFAULT_TICK_MS = 50;
 const DEFAULT_HEARTBEAT_MS = 5_000;
-const DEFAULT_LEAK_GRACE_MS = 10_000;
+// Matches the executor's grace; see docs/proposals/codergen-maxms-backstop.md.
+const DEFAULT_LEAK_GRACE_MS = 30_000;
 
 export function startSupervisor(opts: SupervisorOpts): {
   promise: Promise<void>;

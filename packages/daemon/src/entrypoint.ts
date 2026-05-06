@@ -88,8 +88,9 @@ const DEFAULT_LOCK_TTL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 8;
 // Matches @swarm/agent's codergen default — the supervisor must never
 // trip a legitimate long-running codergen node just because the spec
-// wasn't resolvable at the moment of the leak check.
-const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 30 * 60 * 1000;
+// wasn't resolvable at the moment of the leak check. See
+// docs/proposals/codergen-maxms-backstop.md for the framing.
+const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 4 * 60 * 60 * 1000;
 
 export interface DaemonHandle {
   /** Resolves when the daemon loop exits cleanly. */

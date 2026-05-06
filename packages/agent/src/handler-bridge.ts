@@ -48,11 +48,12 @@ type HandlerSpec = handler.HandlerSpec;
 type HandlerContext = handler.HandlerContext;
 type HandlerResult = handler.HandlerResult;
 
-// Safety net for runaway tool loops, not a policy ceiling for legitimately
-// long agent work. Drop this cap once budget enforcement lands
-// (docs/ARCHITECTURE.md §12.1) — the $-budget is the correct fence; a
-// wall-clock ceiling is just a proxy for "something is wedged".
-const DEFAULT_MAX_MS = 30 * 60 * 1000;
+// Wall-clock is a runaway-detection backstop, not a typical-completion
+// bound. Day-to-day capping is the job of cost / tokens / iterations /
+// operator intents. Set this high enough that no legitimate workflow
+// trips it; any handler that runs longer is pathologically stuck.
+// See docs/proposals/codergen-maxms-backstop.md for the framing.
+const DEFAULT_MAX_MS = 4 * 60 * 60 * 1000;
 
 export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec {
   const backend: CodergenBackend =

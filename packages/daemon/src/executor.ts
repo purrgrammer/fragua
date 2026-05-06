@@ -125,7 +125,11 @@ export interface ExecutorOpts {
 }
 
 const DEFAULT_POLL_MS = 50;
-const DEFAULT_LEAK_GRACE_MS = 10_000;
+// 30s gives a codergen handler mid-bash-tool room to honour `signal`
+// cleanly: SIGTERM → SIGKILL escalation, file-handle close, fdsync,
+// pi-ai abort latency, in-flight blob writes. 10s was too tight on
+// real long-running children; see docs/proposals/codergen-maxms-backstop.md.
+const DEFAULT_LEAK_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const DEFAULT_ABORT_LOOP_CEILING = 5;
 const DEFAULT_MAX_LOOPS = 1_000;

@@ -1,10 +1,21 @@
 ---
 title: Codergen handler maxMs is a runaway backstop, not a typical bound
-status: proposed
-maturity: designed
+summary: "Codergen handler `DEFAULT_MAX_MS` raised from 30 min to 4 h (runaway backstop, not typical bound) and `DEFAULT_LEAK_GRACE_MS` raised from 10s to 30s — wall-clock no longer the binding constraint on legitimate long-running LLM work."
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-06
 rationale: Feature run 01kqtna3ewdet7h6bd halted on `fact.handler_timeout_leaked` at 31m29s into a `verify` node whose diff was correct (local `bun run ci` green in 15s). The 30-min `DEFAULT_MAX_MS` in `handler-bridge.ts` was doing the wrong job — bounding wall-clock on legitimate LLM thinking time when the actual day-to-day bounds (cost, tokens, iterations, operator intents) already cap meaningful work. Raise the default to a runaway backstop and stop pretending it bounds typical completion.
 ---
+
+> **Shipped (2026-05-06).** `DEFAULT_MAX_MS` raised to 4h in
+> `packages/agent/src/handler-bridge.ts:55`; `DEFAULT_LEAK_GRACE_MS`
+> raised to 30s in `packages/daemon/src/executor.ts:128` and
+> `packages/daemon/src/supervisor.ts:41`;
+> `DEFAULT_UNKNOWN_SPEC_FALLBACK_MS` (which mirrors the codergen
+> default) raised to 4h in `packages/daemon/src/entrypoint.ts:92`.
+> Existing tests use explicit `maxMs` / `leakGraceMs` overrides and
+> survive unchanged. Workflow-author surface: nothing — the default
+> just stops being binding on healthy long-running work.
 
 # Codergen handler maxMs is a runaway backstop, not a typical bound
 

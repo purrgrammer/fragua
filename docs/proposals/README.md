@@ -47,7 +47,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
-| [Codergen maxMs is a runaway backstop, not a typical bound](./codergen-maxms-backstop.md) | designed | `DEFAULT_MAX_MS = 30 * 60 * 1000` is doing the wrong job — wall-clock is a poor proxy for the actual day-to-day bounds (cost / tokens / iterations / operator intents) that already cap meaningful work. Raise the default to 4h (true runaway backstop) and `LEAK_GRACE_MS` from 10s to 30s. One number, no per-class lookup. Driven by run `01kqtna3ewdet7h6bd` halting at 31m29s on healthy work; supersedes the rejected per-class ceiling proposal. Adjacent to but narrower than [`./timeouts.md`](./timeouts.md) |
 | [Watchdog timeout → pause-retry, not abort](./watchdog-timeout-pause-retry.md) | designed | re-categorise `fact.node_aborted{cause:"timeout"}` as `fact.run_paused{reason:"timeout_retry"}` with `auto_resume_at` so the codergen thread continuity falls out of the existing `paused_retry` plumbing. Operator cancel/steer keeps the abort/wipe path. Driven by run `01kqwzpt0hyfws0a0j` burning $17 across 4 watchdog-timeout-and-restart cycles |
 
 ## Deferred
@@ -84,5 +83,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Agent definitions — named, reusable sub-agent profiles](./agent-definitions.md)
 - [Agent base prompt — sub-agents inherit the parent's framing](./agent-base-prompt.md)
 - [Sub-agent crash resilience — resume up to last completed turn](./sub-agent-crash-resilience.md)
+- [Codergen maxMs is a runaway backstop, not a typical bound](./codergen-maxms-backstop.md)
 
 </details>
