@@ -673,18 +673,35 @@ export function toFlowGraph(
     // so operators can distinguish it from an actively-running node.
     const resolvedState: SwarmNodeData["state"] = hitlNodeId === id && rawState === "running" ? "waiting" : rawState;
     const a = topo?.attrs;
+    // parallel.fan_in is LLM-driven only when it carries a non-empty `prompt`
+    // (the same predicate that produces `fanInRank: "prompt"` below). Heuristic
+    // fan-in picks a winner without calling a model, so the cascade-resolved
+    // `llm_model` / `llm_provider` / `reasoning_effort` would be misleading.
+    const fanInHasPrompt = handler === "parallel.fan_in" && typeof a?.prompt === "string" && a.prompt.trim() !== "";
+    const isLlmHandler = handler === "codergen" || fanInHasPrompt;
+    const isStructuralHandler = handler === "start" || handler === "exit";
+    // Loop-capable handlers — anything that can be retried by the executor.
+    // start / exit are pure lifecycle markers and `parallel` is a structural
+    // fan-out (the branches retry, not the component itself), so neither
+    // benefits from a max_retries readout.
+    const canRetry = !isStructuralHandler && handler !== "parallel";
     const data: SwarmNodeData = {
       nodeId: id,
       label: a?.label ?? id,
       customLabel: a?.label,
       handler,
       goalGate: Boolean(a?.goal_gate),
-      model: a?.llm_model,
-      provider: a?.llm_provider,
-      reasoningEffort: a?.reasoning_effort,
-      threadId: typeof a?.thread_id === "string" ? a.thread_id : undefined,
+      model: isLlmHandler ? a?.llm_model : undefined,
+      provider: isLlmHandler ? a?.llm_provider : undefined,
+      reasoningEffort: isLlmHandler ? a?.reasoning_effort : undefined,
+      threadId: isLlmHandler && typeof a?.thread_id === "string" ? a.thread_id : undefined,
       toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,
-      retryTarget: typeof a?.retry_target === "string" && a.retry_target !== "" ? a.retry_target : undefined,
+      // goal_gate (and therefore the §3.4 retarget chain) is only meaningful
+      // on codergen nodes today — `typeStripTone` documents the precedence.
+      retryTarget:
+        handler === "codergen" && typeof a?.retry_target === "string" && a.retry_target !== ""
+          ? a.retry_target
+          : undefined,
       // `fan_in` is in the attr-extra catch-all; cast safely.
       fanInTarget:
         handler === "parallel" && typeof a?.["fan_in"] === "string" && (a["fan_in"] as string) !== ""
@@ -697,7 +714,7 @@ export function toFlowGraph(
             ? "prompt"
             : "heuristic"
           : undefined,
-      maxRetries: typeof a?.max_retries === "number" ? a.max_retries : undefined,
+      maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
       state: resolvedState,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
