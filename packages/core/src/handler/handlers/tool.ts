@@ -25,20 +25,29 @@
 //
 //   - Stdout + stderr are written as artifacts keyed by `${nodeId}:stdout`
 //     / `${nodeId}:stderr` so downstream nodes can `$toolNodeId.output`
-//     against them through the normal substitution path.
+//     against them through the normal substitution path. A
+//     `tool_node`-role message row is also appended to `messages`
+//     carrying the command, cwd, exit code, and a tail-truncated
+//     stdout/stderr — that's what RunConversation reads.
 //
-//   - The command runs via Bun.spawn with cwd = process.cwd(). Once
-//     worktree provisioning lands (task #16) this will flip to the run's
-//     worktree path.
+//   - Execution routes through `ctx.env.exec(...)` when an
+//     `ExecutionEnvironment` is wired (production; isolates per-run
+//     cwd to the worktree, and inherits the env adapter's blocklist
+//     and abort/timeout behaviour). Falls back to `Bun.spawn` against
+//     `process.cwd()` only when no env is available (bare daemon,
+//     unit tests). An explicit `cfg.spawner` overrides both for tests.
 //
-//   - AbortSignal is wired: ctx.signal abort → subprocess.kill().
+//   - AbortSignal is wired: ctx.signal abort → subprocess.kill() (Bun
+//     fallback) or env.exec abort (production path).
 //
 //   - externalCall envelope wraps the spawn — shell is inherently
 //     non-idempotent, but the intent / done facts let the startup sweep
 //     quarantine a run whose daemon crashed mid-spawn.
 
+import type { ToolNodeMessage } from "@swarm/types";
 import { substitute } from "../../engine/substitution.ts";
 import type { ContextMap } from "../../types/context.ts";
+import type { ExecutionEnvironment } from "../../types/execution.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
 export interface ToolConfig {
@@ -71,7 +80,8 @@ export type SpawnFn = (cmd: string, signal: AbortSignal) => Promise<ToolRunResul
 const DEFAULT_MAX_MS = 5 * 60 * 1000;
 
 export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
-  const spawner = cfg.spawner ?? runWithBun;
+  const explicitSpawner = cfg.spawner;
+  const maxMs = cfg.maxMs ?? DEFAULT_MAX_MS;
 
   const handler: Handler = async (ctx) => {
     const rawCommand = cfg.toolCommand;
@@ -86,11 +96,16 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     const context = mergeContext(cfg.defaultContext, ctx.routing);
     const command = substitute(rawCommand, { args: ctx.args, context, nodeOutputs: ctx.nodeOutputs });
 
+    // cwd resolution: prefer the run's ExecutionEnvironment so concurrent
+    // runs each see their own worktree; fall back to the daemon's process
+    // cwd only when no env is wired (tests, bare-LocalEnv daemon).
+    const cwd = ctx.env?.cwd() ?? process.cwd();
+
     let ranResult: ToolRunResult | undefined;
     try {
       ranResult = await ctx.externalCall(
-        { toolName: "tool.shell", args: { command }, attempt: ctx.iteration + 1 },
-        () => spawner(command, ctx.signal),
+        { toolName: "tool.shell", args: { command, cwd }, attempt: ctx.iteration + 1 },
+        () => runCommand(command, ctx.signal, ctx.env, explicitSpawner, maxMs),
       );
     } catch (err) {
       if (isAbortError(err)) {
@@ -113,7 +128,8 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     // within the same iteration legitimately produce different content —
     // pass `replace: true` so a quarantine-retry doesn't trip
     // ArtifactCollisionError.
-    ctx.artifacts.put(`${ctx.nodeId}:stdout`, ranResult.stdout, "text/plain", { replace: true });
+    const stdoutArtifactKey = `${ctx.nodeId}:stdout`;
+    ctx.artifacts.put(stdoutArtifactKey, ranResult.stdout, "text/plain", { replace: true });
     if (ranResult.stderr.length > 0) {
       ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
     }
@@ -122,8 +138,30 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     // resolves to stdout, the natural "what did the tool produce" default.
     const outputRef = ctx.artifacts.put("output", ranResult.stdout, "text/plain", { replace: true });
 
+    // Append a `tool_node` message so the conversation view can render
+    // the execution as a Terminal card without round-tripping to the
+    // artifacts store. Inline stdout/stderr is tail-truncated; the
+    // artifact is the source of truth for the full bytes.
+    const stdoutTail = truncateTail(ranResult.stdout, INLINE_OUTPUT_BYTES);
+    const stderrTail = truncateTail(ranResult.stderr, INLINE_OUTPUT_BYTES);
+    const message: ToolNodeMessage = {
+      role: "tool_node",
+      command,
+      cwd,
+      exitCode: ranResult.exitCode,
+      durationMs: ranResult.durationMs,
+      stdout: stdoutTail.text,
+      stderr: stderrTail.text,
+      ...(stdoutTail.truncated ? { stdoutTruncated: true } : {}),
+      ...(stderrTail.truncated ? { stderrTruncated: true } : {}),
+      outputArtifactKey: stdoutArtifactKey,
+      timestamp: Date.now(),
+    };
+    ctx.messages.append(message);
+
     ctx.emit("tool.completed", {
       command,
+      cwd,
       exitCode: ranResult.exitCode,
       durationMs: ranResult.durationMs,
       stdoutBytes: ranResult.stdout.length,
@@ -148,9 +186,39 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
   return {
     kind: "tool",
     sideEffect: "external",
-    maxMs: cfg.maxMs ?? DEFAULT_MAX_MS,
+    maxMs,
     handler,
   };
+}
+
+/** Inline cap for stdout/stderr stored on the `tool_node` message row.
+ * Larger output is tail-truncated; the full bytes live in the artifact
+ * keyed `${nodeId}:stdout` / `${nodeId}:stderr`. Matches the bash
+ * agent-tool's `DEFAULT_MAX_BYTES` so the UI behaviour reads the same
+ * regardless of which path produced the output. */
+const INLINE_OUTPUT_BYTES = 50 * 1024;
+
+function truncateTail(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  if (text.length <= maxBytes) return { text, truncated: false };
+  return { text: text.slice(text.length - maxBytes), truncated: true };
+}
+
+/** Dispatch resolution. Explicit `cfg.spawner` wins (test injection);
+ * else `ctx.env.exec` (production worktree path); else `runWithBun`
+ * against `process.cwd()` (bare-daemon fallback). */
+async function runCommand(
+  command: string,
+  signal: AbortSignal,
+  env: ExecutionEnvironment | undefined,
+  spawner: SpawnFn | undefined,
+  timeoutMs: number,
+): Promise<ToolRunResult> {
+  if (spawner) return spawner(command, signal);
+  if (env) {
+    const r = await env.exec(command, { signal, timeoutMs });
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
+  }
+  return runWithBun(command, signal);
 }
 
 function mergeContext(defaults: ContextMap | undefined, routing: Readonly<Record<string, unknown>>): ContextMap {

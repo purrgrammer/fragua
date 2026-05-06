@@ -313,15 +313,17 @@ function extractAssistantText(message: AgentMessage): string {
  * synthesis, no shape reconstruction. Filters by `node_id` when the
  * thread id equals a node id (the common case); falls back to all
  * messages otherwise so authors who set `thread_id="dev"` get their
- * cross-node history. Swarm-internal `role:"system"` rows (the stored
- * system prompt) are stripped — pi-ai carries the system prompt
- * separately on each call via `Context.systemPrompt`. Returns
- * `undefined` when nothing is persisted. */
+ * cross-node history. Swarm-internal `system` rows (the assembled
+ * system prompt — pi-ai carries it separately via
+ * `Context.systemPrompt`) and `tool_node` rows (graph-level shell
+ * step output, not conversational; pi-ai's `Message` union has no
+ * such role) are stripped. Returns `undefined` when nothing is
+ * persisted. */
 function loadPriorMessagesForThread(ctx: HandlerContext, threadId: string): readonly AgentMessage[] | undefined {
   const byNode = ctx.messages.since(0).filter((m) => m.nodeId === threadId);
   const rows = byNode.length > 0 ? byNode : ctx.messages.since(0);
   if (rows.length === 0) return undefined;
-  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system");
+  const messages = rows.map((row) => row.content).filter((m) => m.role !== "system" && m.role !== "tool_node");
   return messages.length > 0 ? messages : undefined;
 }
 

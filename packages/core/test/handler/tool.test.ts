@@ -5,9 +5,11 @@
 // default Bun spawner to confirm the shell path works end-to-end.
 
 import { describe, expect, test } from "bun:test";
+import type { AgentMessage } from "@swarm/types";
 import fc from "fast-check";
 import { makeToolHandler, runWithBun, type SpawnFn, type ToolRunResult } from "../../src/handler/handlers/tool.ts";
 import type { HandlerContext, SideEffectRecorder, ToolRegistry } from "../../src/handler/types.ts";
+import type { ExecutionEnvironment } from "../../src/types/execution.ts";
 
 interface ArtifactRecord {
   key: string;
@@ -26,10 +28,12 @@ const emptyRegistry: ToolRegistry = {
 function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
   __emitted: { type: string; payload: Record<string, unknown> }[];
   __artifacts: ArtifactRecord[];
+  __messages: AgentMessage[];
   __recorder: SideEffectRecorder;
 } {
   const emitted: { type: string; payload: Record<string, unknown> }[] = [];
   const artifacts: ArtifactRecord[] = [];
+  const messages: AgentMessage[] = [];
   const intents: Parameters<SideEffectRecorder["recordIntent"]>[0][] = [];
   const dones: Parameters<SideEffectRecorder["recordDone"]>[0][] = [];
   const faileds: Parameters<SideEffectRecorder["recordFailed"]>[0][] = [];
@@ -48,7 +52,10 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     http: { fetch: async () => new Response("") },
     tools: emptyRegistry,
     messages: {
-      append: () => ({ ordinal: 0 }),
+      append: (m) => {
+        messages.push(m);
+        return { ordinal: messages.length - 1 };
+      },
       recent: () => [],
       since: () => [],
     },
@@ -86,8 +93,35 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
   return Object.assign(merged, {
     __emitted: emitted,
     __artifacts: artifacts,
+    __messages: messages,
     __recorder: recorder,
   });
+}
+
+/** Minimal in-memory ExecutionEnvironment so tests can verify the
+ * handler routes through `env.exec` instead of the Bun fallback. Only
+ * `cwd()` and `exec()` are exercised. */
+function makeStubEnv(opts: {
+  cwd: string;
+  exec: (
+    command: string,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number; durationMs: number }>;
+}): ExecutionEnvironment {
+  return {
+    cwd: () => opts.cwd,
+    projectCwd: () => opts.cwd,
+    readFile: async () => {
+      throw new Error("not implemented");
+    },
+    writeFile: async () => {
+      throw new Error("not implemented");
+    },
+    exists: async () => false,
+    exec: async (command, options) => opts.exec(command, options),
+    listDir: async () => [],
+    glob: async () => [],
+  };
 }
 
 function fakeSpawner(run: Partial<ToolRunResult>): SpawnFn {
@@ -117,9 +151,10 @@ describe("makeToolHandler — happy path", () => {
     expect(stdoutArt?.content).toBe("OK\n");
     // No stderr artifact when stderr is empty.
     expect(ctx.__artifacts.find((a) => a.key === "lint:stderr")).toBeUndefined();
-    // Observability event emitted.
+    // Observability event emitted with cwd captured for diagnostics.
     const evt = ctx.__emitted.find((e) => e.type === "tool.completed");
     expect(evt?.payload["exitCode"]).toBe(0);
+    expect(typeof evt?.payload["cwd"]).toBe("string");
   });
 
   test("non-zero exit → outcome=fail; stderr captured", async () => {
@@ -275,6 +310,106 @@ describe("makeToolHandler — property: exit-code → outcome mapping is determi
         }
       }),
     );
+  });
+});
+
+describe("makeToolHandler — ExecutionEnvironment routing", () => {
+  test("ctx.env.exec is used when env is wired and no spawner override is set", async () => {
+    let ranCommand = "";
+    let observedCwd: string | undefined;
+    const env = makeStubEnv({
+      cwd: "/tmp/run-xyz",
+      exec: async (cmd, opts) => {
+        ranCommand = cmd;
+        observedCwd = "/tmp/run-xyz";
+        // Verify the handler threads ctx.signal through to env.exec so
+        // shutdown / steer aborts a long subprocess.
+        expect(opts?.signal).toBeDefined();
+        expect(typeof opts?.timeoutMs).toBe("number");
+        return { exitCode: 0, stdout: "ok\n", stderr: "", durationMs: 12 };
+      },
+    });
+    // No `spawner` in cfg → env.exec must be the dispatch.
+    const ctx = stubCtx({ nodeId: "lint", env });
+    const spec = makeToolHandler({ toolCommand: "echo ok" });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    expect(ranCommand).toBe("echo ok");
+    expect(observedCwd).toBe("/tmp/run-xyz");
+    // tool.completed payload carries the env's cwd, not process.cwd().
+    const evt = ctx.__emitted.find((e) => e.type === "tool.completed");
+    expect(evt?.payload["cwd"]).toBe("/tmp/run-xyz");
+  });
+
+  test("explicit spawner overrides env.exec (test injection point preserved)", async () => {
+    let envCalled = false;
+    const env = makeStubEnv({
+      cwd: "/tmp/run-xyz",
+      exec: async () => {
+        envCalled = true;
+        return { exitCode: 0, stdout: "from-env", stderr: "", durationMs: 1 };
+      },
+    });
+    const ctx = stubCtx({ env });
+    const spec = makeToolHandler({
+      toolCommand: "echo hi",
+      spawner: fakeSpawner({ exitCode: 0, stdout: "from-spawner", stderr: "" }),
+    });
+    await spec.handler(ctx);
+    expect(envCalled).toBe(false);
+    expect(ctx.__artifacts.find((a) => a.key.endsWith(":stdout"))?.content).toBe("from-spawner");
+  });
+
+  test("no env, no spawner → falls back to Bun (process.cwd)", async () => {
+    const ctx = stubCtx();
+    const spec = makeToolHandler({ toolCommand: "echo no-env-fallback" });
+    const result = await spec.handler(ctx);
+    expect(result.kind).toBe("transition");
+    const evt = ctx.__emitted.find((e) => e.type === "tool.completed");
+    expect(evt?.payload["cwd"]).toBe(process.cwd());
+  });
+});
+
+describe("makeToolHandler — synthetic tool_node message", () => {
+  test("appends a tool_node message carrying command, cwd, exit code, and stdout/stderr", async () => {
+    const env = makeStubEnv({
+      cwd: "/tmp/wt",
+      exec: async () => ({ exitCode: 1, stdout: "line1\nline2\n", stderr: "boom\n", durationMs: 7 }),
+    });
+    const ctx = stubCtx({ nodeId: "tests", env });
+    const spec = makeToolHandler({ toolCommand: "false" });
+    await spec.handler(ctx);
+
+    expect(ctx.__messages.length).toBe(1);
+    const msg = ctx.__messages[0]! as Extract<AgentMessage, { role: "tool_node" }>;
+    expect(msg.role).toBe("tool_node");
+    expect(msg.command).toBe("false");
+    expect(msg.cwd).toBe("/tmp/wt");
+    expect(msg.exitCode).toBe(1);
+    expect(msg.durationMs).toBe(7);
+    expect(msg.stdout).toBe("line1\nline2\n");
+    expect(msg.stderr).toBe("boom\n");
+    expect(msg.stdoutTruncated).toBeUndefined();
+    expect(msg.outputArtifactKey).toBe("tests:stdout");
+  });
+
+  test("very large stdout is tail-truncated inline; full bytes stay in the artifact", async () => {
+    const big = "x".repeat(200 * 1024); // 200 KB
+    const ctx = stubCtx({ nodeId: "build" });
+    const spec = makeToolHandler({
+      toolCommand: "echo big",
+      spawner: fakeSpawner({ exitCode: 0, stdout: big, stderr: "" }),
+    });
+    await spec.handler(ctx);
+
+    const msg = ctx.__messages[0]! as Extract<AgentMessage, { role: "tool_node" }>;
+    expect(msg.stdoutTruncated).toBe(true);
+    expect(msg.stdout.length).toBeLessThanOrEqual(50 * 1024);
+    // Last bytes preserved (tail).
+    expect(msg.stdout.endsWith("x")).toBe(true);
+    // Artifact has the full 200KB.
+    const stdoutArt = ctx.__artifacts.find((a) => a.key === "build:stdout");
+    expect(stdoutArt?.content.length).toBe(big.length);
   });
 });
 

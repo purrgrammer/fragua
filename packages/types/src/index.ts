@@ -58,8 +58,44 @@ export interface SystemPromptMessage {
   timestamp: number;
 }
 
+/** Swarm-specific custom message type: a graph-level `tool` node
+ * (parallelogram shape) execution. Captures the shell command, the
+ * cwd it ran in, the exit code, and a tail-truncated slice of
+ * stdout/stderr — enough for the UI to render a terminal card from
+ * the `messages` table alone, without round-tripping to artifacts.
+ * Full output stays in the artifacts (`<nodeId>:stdout` / `:stderr`);
+ * `outputArtifactKey` is the key the UI can fetch when the inline
+ * tail is truncated. Never feeds back into an LLM context — pi-ai
+ * doesn't know this role exists, and the daemon filters it out
+ * before assembling priorMessages, just like `system`. */
+export interface ToolNodeMessage {
+  role: "tool_node";
+  /** Final substituted shell command. */
+  command: string;
+  /** Absolute path the command ran in. Sourced from
+   * `ExecutionEnvironment.cwd()` when available, else the daemon's
+   * `process.cwd()` (the bare-LocalEnv fallback). */
+  cwd: string;
+  exitCode: number;
+  durationMs: number;
+  /** Tail of stdout, capped at ~50KB. Truncation is indicated by
+   * `stdoutTruncated`; the full bytes live in the artifact named in
+   * `outputArtifactKey`. */
+  stdout: string;
+  stderr: string;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  /** Artifact key for the canonical `output` artifact (full stdout).
+   * `${nodeId}:stdout` and `${nodeId}:stderr` carry the same data
+   * keyed to the producing node — kept here as the canonical pointer
+   * so the UI doesn't have to re-derive the convention. */
+  outputArtifactKey?: string;
+  timestamp: number;
+}
+
 declare module "@mariozechner/pi-agent-core" {
   interface CustomAgentMessages {
     system: SystemPromptMessage;
+    tool_node: ToolNodeMessage;
   }
 }

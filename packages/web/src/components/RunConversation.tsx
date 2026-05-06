@@ -24,7 +24,7 @@
 //   - `conversation-empty`         — empty state
 
 import { renderers as extensionRenderers } from "virtual:swarm-extensions";
-import type { AssistantMessage, TextContent, ToolResultMessage } from "@swarm/types";
+import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
 import { type ReactNode, useMemo, useState } from "react";
 import {
   Conversation,
@@ -34,6 +34,7 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
@@ -713,6 +714,7 @@ function MessageRow({
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
   if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
+  if (msg.role === "tool_node") return <ToolNodeRow message={msg} testid={testid} />;
   if (msg.role === "user") return <UserMessageRow message={msg} testid={testid} />;
   if (msg.role === "assistant") {
     return (
@@ -764,6 +766,46 @@ function SystemPromptRow({ content, testid }: { content: string; testid: string 
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+// ─── Tool-node row (graph-level shell step) ────────────────────────
+
+function ToolNodeRow({ message, testid }: { message: ToolNodeMessage; testid: string }): JSX.Element {
+  // Compose the terminal body: stdout first, then stderr separated by
+  // a hairline-style label so the operator can see both without
+  // scrolling between two cards. Either may be empty.
+  const stdout = message.stdout;
+  const stderr = message.stderr;
+  const body =
+    stderr.length > 0
+      ? `${stdout}${stdout.endsWith("\n") || stdout.length === 0 ? "" : "\n"}\x1b[2m── stderr ──\x1b[0m\n${stderr}`
+      : stdout;
+  const truncationNote = (() => {
+    const parts: string[] = [];
+    if (message.stdoutTruncated) parts.push("stdout truncated");
+    if (message.stderrTruncated) parts.push("stderr truncated");
+    if (parts.length === 0) return "";
+    const ref = message.outputArtifactKey ? ` · full output: ${message.outputArtifactKey}` : "";
+    return `\n\n\x1b[2m[${parts.join(", ")}${ref}]\x1b[0m`;
+  })();
+  const status = `exit ${message.exitCode} · ${formatDuration(message.durationMs)}`;
+  const tone: "success" | "error" = message.exitCode === 0 ? "success" : "error";
+  return (
+    <div data-testid={testid}>
+      <Terminal title={`$ ${message.command}`} status={status} tone={tone} output={`${body}${truncationNote || ""}`} />
+      <p className="mt-1 font-mono text-sw-xs text-sw-muted" title={message.cwd}>
+        cwd: {message.cwd}
+      </p>
+    </div>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}m${s.toString().padStart(2, "0")}s`;
 }
 
 // ─── User message (pi-ai UserMessage) ──────────────────────────────
