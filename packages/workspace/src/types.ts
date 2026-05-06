@@ -94,12 +94,16 @@ export interface SubagentSpec {
    *  as `llm_provider` instead of inheriting the parent's. */
   provider?: string;
   /** Pi-agent-core tool-call id of the parent's `agent` invocation
-   *  (e.g. `toolu_01ABC…`). Stamped onto `subagent.start.tool_call_id`
-   *  so the web UI can link a parent toolCall card to its in-flight
-   *  sub-agent before the toolResult — which carries the canonical
-   *  link in `details.data.subagent_id` — has landed. Optional so
-   *  test harnesses that synthesise specs by hand still work. */
-  tool_call_id?: string;
+   *  (e.g. `toolu_01ABC…`). Required — feeds the deterministic
+   *  `subagent_id` hash (`sha256(parentRunId, parentNodeId,
+   *  parentIteration, tool_call_id)`) so a sub-agent respawned after a
+   *  daemon crash hashes to the same id and can rehydrate its
+   *  transcript. Pi-ai's anthropic provider preserves `block.id`
+   *  byte-identically on the wire, so this hash is stable across
+   *  restarts. Also stamped onto `subagent.start.tool_call_id` for the
+   *  web UI's parent-toolCall → in-flight-sub-agent link. See
+   *  `docs/proposals/sub-agent-crash-resilience.md`. */
+  tool_call_id: string;
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs
@@ -173,6 +177,15 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
   /** Does running this tool twice with the same args have the same effect?
    * Non-idempotent tools require human approval on resume from a dangling call. */
   idempotent: boolean;
+  /** When true, the rehydrate sanitiser (`sanitiseUnpairedToolCalls`)
+   *  re-executes this tool to repair an unpaired toolCall left by a
+   *  daemon crash mid-execution. Default false. Only set on tools
+   *  with no observable side effect on the working tree (pure reads:
+   *  read / grep / find / ls). The safe default surfaces an error
+   *  toolResult to the LLM instead of silently re-running a
+   *  potentially destructive operation — the LLM decides whether to
+   *  retry. See `docs/proposals/sub-agent-crash-resilience.md`. */
+  idempotentOnReplay?: boolean;
   /** Truncation applied to the stringified result before it reaches the LLM. */
   truncation: TruncationPolicy;
   /** Optional compatibility shim for raw tool-call arguments before

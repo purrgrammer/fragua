@@ -5,6 +5,7 @@
 // for the sub-agent.
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { CodergenInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
@@ -98,11 +99,11 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    const result = await spawn({ prompt: "do the thing", name: "step 1" });
+    const result = await spawn({ prompt: "do the thing", name: "step 1", tool_call_id: "toolu_p1" });
 
     expect(result.summary).toBe("child summary text");
     expect(result.status).toBe("completed");
-    expect(result.subagentId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(result.subagentId).toMatch(/^[0-9a-f]{32}$/);
 
     // No child run row, no kind discriminator — sub-agents are not runs.
     expect(store.getState(result.subagentId)).toBeNull();
@@ -164,7 +165,7 @@ describe("makeSpawnSubagent", () => {
 
     // Spec omitted; child inherits parentAllowedTools, then `agent`
     // is stripped — so the child sees [read, write].
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_p2" });
     expect(observedChildPool).toBeDefined();
     expect(observedChildPool!).not.toContain("agent");
     expect(observedChildPool!.sort()).toEqual(["read", "write"]);
@@ -205,7 +206,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    const result = await spawn({ prompt: "x" });
+    const result = await spawn({ prompt: "x", tool_call_id: "toolu_pe" });
     expect(result.status).toBe("halted");
     expect(result.haltReason).toBe("empty_tool_pool");
     expect(backendCalled).toBe(false);
@@ -242,7 +243,7 @@ describe("makeSpawnSubagent", () => {
 
     const parentSpec = new AbortController();
     parentSpec.abort();
-    await spawn({ prompt: "x", signal: parentSpec.signal });
+    await spawn({ prompt: "x", signal: parentSpec.signal, tool_call_id: "toolu_p3" });
 
     expect(observedSignal?.aborted).toBe(true);
     store.close();
@@ -294,7 +295,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", skills: ["design"] });
+    await spawn({ prompt: "x", skills: ["design"], tool_call_id: "toolu_p4" });
     expect(observedSkills).toEqual(["design"]);
     store.close();
   });
@@ -340,7 +341,7 @@ describe("makeSpawnSubagent", () => {
     );
 
     // Must not throw, must not leak the parent's bloat onto the child.
-    const result = await spawn({ prompt: "user prompt", name: "regression" });
+    const result = await spawn({ prompt: "user prompt", name: "regression", tool_call_id: "toolu_pl" });
     expect(result.status).toBe("completed");
     expect(observedSystemPrompt).toBeUndefined();
     store.close();
@@ -376,7 +377,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", system_prompt: "FOCUSED REVIEWER PERSONA" });
+    await spawn({ prompt: "x", system_prompt: "FOCUSED REVIEWER PERSONA", tool_call_id: "toolu_pe2" });
     expect(observedSystemPrompt).toBeDefined();
     expect(observedSystemPrompt!).toContain("FOCUSED REVIEWER PERSONA");
     expect(observedSystemPrompt!).not.toContain("PARENT BLOAT");
@@ -408,7 +409,7 @@ describe("makeSpawnSubagent", () => {
 
     // Both fields populated independently — the inline `name` is the
     // free-form caller label, `agentName` is the resolved profile.
-    await spawn({ prompt: "x", agentName: "reviewer", name: "label-only" });
+    await spawn({ prompt: "x", agentName: "reviewer", name: "label-only", tool_call_id: "toolu_pa1" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data["name"]).toBe("label-only");
     expect(start.data["agent_def"]).toBe("reviewer");
@@ -438,7 +439,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_pb" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data).not.toHaveProperty("name");
     expect(start.data).not.toHaveProperty("agent_def");
@@ -468,7 +469,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", agentName: "reviewer" });
+    await spawn({ prompt: "x", agentName: "reviewer", tool_call_id: "toolu_pd" });
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data).not.toHaveProperty("name");
     expect(start.data["agent_def"]).toBe("reviewer");
@@ -540,7 +541,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x", name: "with-cost" });
+    await spawn({ prompt: "x", name: "with-cost", tool_call_id: "toolu_pc" });
     const end = events.find((e) => e.type === "subagent.end")!;
     expect(end.data["costUsd"]).toBeCloseTo(0.042, 6);
     expect(end.data["totalTokens"]).toBe(155 + 280);
@@ -578,7 +579,7 @@ describe("makeSpawnSubagent", () => {
       },
     );
 
-    await spawn({ prompt: "x" });
+    await spawn({ prompt: "x", tool_call_id: "toolu_pz" });
     const end = events.find((e) => e.type === "subagent.end")!;
     expect(end.data["costUsd"]).toBe(0);
     expect(end.data["totalTokens"]).toBe(0);
@@ -624,6 +625,7 @@ describe("makeSpawnSubagent", () => {
       prompt: "x",
       provider: "openai",
       model: "gpt-5",
+      tool_call_id: "toolu_pm",
     });
 
     expect(observedProvider).toBe("openai");
@@ -633,6 +635,409 @@ describe("makeSpawnSubagent", () => {
     const start = events.find((e) => e.type === "subagent.start")!;
     expect(start.data["provider"]).toBe("openai");
     expect(start.data["model"]).toBe("gpt-5");
+    store.close();
+  });
+
+  test("deterministic subagent_id is sha256(parentRunId, parentNodeId, parentIteration, tool_call_id) truncated to 32 hex chars", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-det");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-det",
+        parentNodeId: "plan",
+        parentIteration: 7,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const a = await spawn({ prompt: "x", tool_call_id: "toolu_same" });
+    const b = await spawn({ prompt: "y", tool_call_id: "toolu_same" });
+    expect(a.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    expect(b.subagentId).toBe(a.subagentId);
+    store.close();
+  });
+
+  test("parallel siblings sharing parentIteration but different tool_call_ids hash to distinct subagent_ids", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-siblings");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-siblings",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const a = await spawn({ prompt: "branch a", tool_call_id: "toolu_a" });
+    const b = await spawn({ prompt: "branch b", tool_call_id: "toolu_b" });
+    expect(a.subagentId).not.toBe(b.subagentId);
+    expect(a.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    expect(b.subagentId).toMatch(/^[0-9a-f]{32}$/);
+    store.close();
+  });
+
+  test("respawn with same deterministic id passes priorMessages from messages table to backend.run", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-resume");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { emit } = recordingEmit();
+
+    // Compute the deterministic id we'll be respawning under so we
+    // can pre-seed the messages table at __subagent:<id>.
+    const det = createHash("sha256")
+      .update(`parent-resume\u0000plan\u00000\u0000toolu_resume`)
+      .digest("hex")
+      .slice(0, 32);
+    const seededNodeId = `__subagent:${det}`;
+
+    // Pre-seed: one system row (must be filtered out), one user, one
+    // assistant with a toolCall (the in-flight pre-crash turn).
+    store.appendMessage("parent-resume", {
+      content: { role: "system", content: "prior system", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-resume", {
+      content: { role: "user", content: "prior user prompt", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-resume", {
+      content: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "thinking" },
+          { type: "toolCall", id: "toolu_inner", name: "read", arguments: { path: "a" } },
+        ],
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+      } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-resume",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    await spawn({ prompt: "resume", tool_call_id: "toolu_resume" });
+
+    expect(backend.inputs).toHaveLength(1);
+    const seenPrior = backend.inputs[0]!.priorMessages;
+    expect(seenPrior).toBeDefined();
+    expect(seenPrior!.length).toBe(2);
+    expect(seenPrior!.every((m) => m.role !== "system")).toBe(true);
+    expect(seenPrior![0]!.role).toBe("user");
+    expect(seenPrior![1]!.role).toBe("assistant");
+    store.close();
+  });
+
+  test("cumulative cost rollup on resumed subagent.end seeds from prior subagent.end events for same subagent_id", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-cumcost");
+    const registry = freshRegistry();
+    const ctrl = new AbortController();
+
+    const det = createHash("sha256")
+      .update(`parent-cumcost\u0000plan\u00000\u0000toolu_cum`)
+      .digest("hex")
+      .slice(0, 32);
+
+    // Spawn 1 — the daemon crashed mid-flight, so the bracket lands
+    // as cancelled with partial cost. Use a custom backend that
+    // bypasses the StubBackend's persistMessage helper (which would
+    // write a stopReason:'stop' assistant row, tripping the resume
+    // short-circuit on spawn 2) and instead emits two cost.recorded
+    // events plus a partial-success outcome. Persisted messages stay
+    // mid-flight so spawn 2 actually exercises the LLM path with the
+    // cumulative seed.
+    class PartialBackend {
+      public readonly inputs: CodergenInput[] = [];
+      constructor(private readonly factory: (input: CodergenInput) => Promise<Outcome>) {}
+      async run(input: CodergenInput): Promise<Outcome> {
+        this.inputs.push(input);
+        return await this.factory(input);
+      }
+    }
+    const backend1 = new PartialBackend(async (input) => {
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 100,
+        output_tokens: 40,
+        cache_read_tokens: 10,
+        cache_write_tokens: 5,
+        total_tokens: 155,
+        cost_usd: 0.025,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 50,
+        output_tokens: 20,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 70,
+        cost_usd: 0.015,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      return ok({ notes: "" });
+    });
+
+    // parentEmit that ALSO persists to the store so subagent.end
+    // lands as an actual event row — spawn 2 reads it via
+    // getEventsByType. Mirrors what the daemon's real bridge does.
+    const parentEmit1 = async (type: EventType, data: Record<string, unknown>) => {
+      store.appendObservabilityEvents("parent-cumcost", [{ type, payload: data }]);
+    };
+
+    const spawn1 = makeSpawnSubagent(
+      { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-cumcost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: parentEmit1,
+      },
+    );
+
+    const r1 = await spawn1({ prompt: "go", tool_call_id: "toolu_cum" });
+    expect(r1.subagentId).toBe(det);
+    const spawn1Ends = store
+      .getEventsByType("parent-cumcost", "subagent.end")
+      .filter((e) => (e.payload as { subagent_id?: string }).subagent_id === det);
+    expect(spawn1Ends.length).toBe(1);
+    expect((spawn1Ends[0]!.payload as { costUsd: number }).costUsd).toBeCloseTo(0.04, 6);
+
+    // Spawn 2 — same deterministic id (same parent ctx + tool_call_id),
+    // backend emits another $0.06 of cost. The resumed bracket's
+    // subagent.end must surface 0.04 + 0.06 = $0.10 cumulative.
+    const backend2 = new PartialBackend(async (input) => {
+      await input.emit?.("cost.recorded", {
+        provider: "stub",
+        model: "stub",
+        stop_reason: "stop",
+        input_tokens: 200,
+        output_tokens: 60,
+        cache_read_tokens: 20,
+        cache_write_tokens: 10,
+        total_tokens: 290,
+        cost_usd: 0.06,
+        cost_input_usd: 0,
+        cost_output_usd: 0,
+        cost_cache_read_usd: 0,
+        cost_cache_write_usd: 0,
+      });
+      return ok({ notes: "" });
+    });
+    const spawn2Events: Array<{ type: EventType; data: Record<string, unknown> }> = [];
+    const parentEmit2 = async (type: EventType, data: Record<string, unknown>) => {
+      spawn2Events.push({ type, data });
+      store.appendObservabilityEvents("parent-cumcost", [{ type, payload: data }]);
+    };
+    const spawn2 = makeSpawnSubagent(
+      { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-cumcost",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: parentEmit2,
+      },
+    );
+    await spawn2({ prompt: "resume", tool_call_id: "toolu_cum" });
+
+    const end2 = spawn2Events.find((e) => e.type === "subagent.end");
+    expect(end2).toBeDefined();
+    expect(end2!.data["costUsd"]).toBeCloseTo(0.1, 6);
+    expect(end2!.data["totalTokens"]).toBe(155 + 70 + 290);
+    expect(end2!.data["inputTokens"]).toBe(100 + 50 + 200);
+    expect(end2!.data["outputTokens"]).toBe(40 + 20 + 60);
+    expect(end2!.data["cacheReadTokens"]).toBe(10 + 0 + 20);
+    expect(end2!.data["cacheWriteTokens"]).toBe(5 + 0 + 10);
+    store.close();
+  });
+
+  test("already-completed transcript bypasses backend.run and emits subagent.resumed before subagent.end", async () => {
+    const store = freshStore();
+    seedParent(store, "parent-postsummary");
+    const registry = freshRegistry();
+    const backend = new StubBackend(() => ok({ notes: "" }));
+    const ctrl = new AbortController();
+    const { events, emit } = recordingEmit();
+
+    // The pre-crash spawn produced a final answer (stopReason:"stop",
+    // text-only blocks) and persisted it. The daemon died before the
+    // parent's tool-execute promise resolved — so the resumed bracket
+    // must skip the LLM, synthesise SubagentResult, and emit
+    // resumed→end.
+    const det = createHash("sha256")
+      .update(`parent-postsummary\u0000plan\u00000\u0000toolu_done`)
+      .digest("hex")
+      .slice(0, 32);
+    const seededNodeId = `__subagent:${det}`;
+    store.appendMessage("parent-postsummary", {
+      content: { role: "user", content: "go", timestamp: 0 },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "toolu_inner", name: "read", arguments: { path: "a" } }],
+        stopReason: "toolUse",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+        api: "stub",
+        timestamp: 0,
+      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "toolResult",
+        toolCallId: "toolu_inner",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        details: {},
+        isError: false,
+        timestamp: 0,
+      },
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+    store.appendMessage("parent-postsummary", {
+      content: {
+        role: "assistant",
+        content: [{ type: "text", text: "final summary text" }],
+        stopReason: "stop",
+        usage: {
+          input: 5,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 10,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        provider: "stub",
+        model: "stub",
+        api: "stub",
+        timestamp: 0,
+      } as unknown as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0],
+      nodeId: seededNodeId,
+      iteration: 0,
+    });
+
+    const spawn = makeSpawnSubagent(
+      { store, registry, backend, shutdownSignal: ctrl.signal },
+      {
+        parentRunId: "parent-postsummary",
+        parentNodeId: "plan",
+        parentIteration: 0,
+        parentSystemPrompt: "P",
+        parentSkills: [],
+        parentProvider: "anthropic",
+        parentModel: "claude-haiku-4-5",
+        parentEnv: STUB_ENV,
+        parentEmit: emit,
+      },
+    );
+
+    const result = await spawn({ prompt: "resume", tool_call_id: "toolu_done" });
+
+    expect(backend.inputs).toHaveLength(0);
+    expect(result.status).toBe("completed");
+    expect(result.summary).toBe("final summary text");
+    expect(result.totalToolCalls).toBe(1);
+
+    // Bracket on resume: subagent.resumed immediately before subagent.end.
+    // No subagent.start — the original is already in the parent's stream
+    // from the pre-crash bracket.
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain("subagent.start");
+    const resumedIdx = types.indexOf("subagent.resumed");
+    const endIdx = types.indexOf("subagent.end");
+    expect(resumedIdx).toBeGreaterThanOrEqual(0);
+    expect(endIdx).toBe(resumedIdx + 1);
+    const resumed = events[resumedIdx]!;
+    expect(resumed.data["subagent_id"]).toBe(result.subagentId);
+    expect(resumed.data["reason"]).toBe("already_completed");
+    const end = events[endIdx]!;
+    expect(end.data["status"]).toBe("completed");
+    expect(end.data["summary_chars"]).toBe("final summary text".length);
+    expect(end.data["total_tool_calls"]).toBe(1);
     store.close();
   });
 });

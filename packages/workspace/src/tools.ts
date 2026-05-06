@@ -40,6 +40,7 @@ import { createWriteStream } from "node:fs";
 import { readFile as fsReadFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { agentTool } from "./agent.ts";
@@ -56,7 +57,7 @@ import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { detectImageMimeType, resolveReadPath, withFileMutationQueue } from "./path-utils.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateTail } from "./truncate-v2.ts";
-import type { AnyTool, Tool } from "./types.ts";
+import type { AnyTool, ExecutionEnvironment, SwarmToolContext, Tool, ToolRegistry } from "./types.ts";
 
 // ─── read ──────────────────────────────────────────────────────────
 
@@ -77,6 +78,7 @@ export const readFileTool: Tool<{ path: string; offset?: number; limit?: number 
     limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
   }),
   idempotent: true,
+  idempotentOnReplay: true,
   truncation: { max_chars: 200_000, mode: "head_tail" },
   async execute(args, env) {
     try {
@@ -493,6 +495,119 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 }
 
 // ─── helpers ───────────────────────────────────────────────────────
+
+// ─── rehydrate sanitiser ───────────────────────────────────────────
+//
+// When a daemon crash interrupts a codergen call mid-tool-execution,
+// the persisted transcript ends with an unpaired toolCall block:
+// `[..., assistant{toolCall A, toolCall B}]` with no following user
+// message carrying matching toolResults. Anthropic's API (and pi-ai's
+// transport) rejects this shape — every tool_use block must be
+// followed by a user message containing tool_result blocks for every
+// id. The sanitiser pairs every trailing toolCall before the
+// transcript reaches `new Agent({initialState: {messages: ...}})` in
+// PiCodergenBackend.run.
+//
+// Per-block policy:
+//   - `name === "agent"`     re-execute via the registry. The agent
+//                            tool's deterministic-id resume path
+//                            handles the recursion: the child
+//                            rehydrates from __subagent:<id>,
+//                            detects already-completed, returns its
+//                            summary without burning another LLM
+//                            turn.
+//   - tool.idempotentOnReplay  re-execute. Pure reads (read / grep /
+//                              find / ls): same input, same output.
+//   - everything else        synthesise an error toolResult so the
+//                            LLM sees the interruption and decides
+//                            — retry, reverify, abandon. Never
+//                            silently re-run a destructive tool.
+//
+// See `docs/proposals/sub-agent-crash-resilience.md`.
+
+/** Per-call dependencies the sanitiser hands to re-executed tools.
+ *  Mirrors the shape `PiCodergenBackend.run` already builds for the
+ *  in-flight `toAgentTool` adapter. */
+export interface SanitiseUnpairedCtx {
+  toolRegistry: ToolRegistry;
+  env: ExecutionEnvironment;
+  swarmContext: SwarmToolContext;
+  signal?: AbortSignal;
+}
+
+/** Replace unpaired toolCall blocks at the tail of `messages` with a
+ *  paired `toolResult` user message. Returns the input array
+ *  reference unchanged when no pairing is needed (no trailing
+ *  assistant, no toolCalls). */
+export async function sanitiseUnpairedToolCalls(
+  messages: AgentMessage[],
+  ctx: SanitiseUnpairedCtx,
+): Promise<AgentMessage[]> {
+  if (messages.length === 0) return messages;
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant" || !Array.isArray(last.content)) return messages;
+
+  type ToolCallBlock = { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
+  const toolCalls = (last.content as Array<{ type: string }>).filter((b): b is ToolCallBlock => b.type === "toolCall");
+  if (toolCalls.length === 0) return messages;
+
+  const synthesised: AgentMessage[] = [];
+  for (const tc of toolCalls) {
+    const tool = ctx.toolRegistry.get(tc.name);
+    const canReExecute = tool !== undefined && (tc.name === "agent" || tool.idempotentOnReplay === true);
+    if (canReExecute && tool !== undefined) {
+      try {
+        const out = await tool.execute(tc.arguments, ctx.env, {
+          swarmContext: ctx.swarmContext,
+          tool_call_id: tc.id,
+          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        });
+        const content: (TextContent | ImageContent)[] =
+          out.content !== undefined && out.content.length > 0
+            ? out.content
+            : [{ type: "text", text: out.text } as TextContent];
+        synthesised.push({
+          role: "toolResult",
+          toolCallId: tc.id,
+          toolName: tc.name,
+          content,
+          isError: out.is_error === true,
+          timestamp: Date.now(),
+        } as unknown as AgentMessage);
+      } catch (err) {
+        synthesised.push({
+          role: "toolResult",
+          toolCallId: tc.id,
+          toolName: tc.name,
+          content: [
+            {
+              type: "text",
+              text: `Tool '${tc.name}' rehydrate re-execution threw: ${err instanceof Error ? err.message : String(err)}`,
+            } as TextContent,
+          ],
+          isError: true,
+          timestamp: Date.now(),
+        } as unknown as AgentMessage);
+      }
+    } else {
+      synthesised.push({
+        role: "toolResult",
+        toolCallId: tc.id,
+        toolName: tc.name,
+        content: [
+          {
+            type: "text",
+            text: `Tool '${tc.name}' execution was interrupted by a daemon restart and cannot be safely replayed (the prior partial effect on the working tree is unknown). Re-issue the call if you still need this work; verify state first if the operation was destructive.`,
+          } as TextContent,
+        ],
+        isError: true,
+        timestamp: Date.now(),
+      } as unknown as AgentMessage);
+    }
+  }
+
+  return [...messages, ...synthesised];
+}
 
 async function readFileBytes(absolutePath: string): Promise<Buffer> {
   // Direct fs read so we get bytes for image MIME sniffing. Tools

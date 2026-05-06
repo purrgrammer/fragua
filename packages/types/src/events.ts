@@ -72,9 +72,15 @@ export type EventType =
   // Sub-agent boundaries (observability-only). Bracket the slice of
   // events produced by an inline `agent`-tool spawn on the parent's
   // stream; every event in between carries `subagent_id` on its
-  // payload.
+  // payload. `subagent.resumed` fires when the daemon respawns a
+  // sub-agent under a deterministic subagent_id after a crash — it
+  // either announces transcript hydration (`reason:
+  // "transcript_hydrated"`) or short-circuits to `subagent.end` when
+  // the persisted transcript was already complete
+  // (`reason: "already_completed"`).
   | "subagent.start"
-  | "subagent.end";
+  | "subagent.end"
+  | "subagent.resumed";
 
 /** Every EventType value as a const array, suitable for iteration.
  * Consumers like `EventSource.addEventListener(<type>, ...)` register
@@ -131,4 +137,5 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
   "cost.recorded",
   "subagent.start",
   "subagent.end",
+  "subagent.resumed",
 ];

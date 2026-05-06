@@ -101,6 +101,12 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
         is_error: true,
       };
     }
+    if (opts?.tool_call_id === undefined) {
+      return {
+        text: "agent tool requires a tool_call_id from the runtime \u2014 pi-agent-core normally supplies this on every tool execute. Tests synthesising tool calls must pass it explicitly via ToolExecuteOptions.tool_call_id; the deterministic subagent_id hash depends on it.",
+        is_error: true,
+      };
+    }
 
     try {
       // Resolve the named profile (if any) before building the spec.
@@ -126,7 +132,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       const inlineAllowed =
         args.allowed_tools !== undefined ? args.allowed_tools.map((t) => normaliseToolName(t).name) : undefined;
 
-      const spec: SubagentSpec = { prompt: args.prompt };
+      const spec: SubagentSpec = { prompt: args.prompt, tool_call_id: opts.tool_call_id };
       if (args.name !== undefined) spec.name = args.name;
 
       const systemPrompt = args.system_prompt ?? def?.body;
@@ -149,7 +155,6 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       if (def !== undefined) spec.agentName = def.name;
 
       if (opts?.signal !== undefined) spec.signal = opts.signal;
-      if (opts?.tool_call_id !== undefined) spec.tool_call_id = opts.tool_call_id;
 
       const result = await ctx.spawnSubagent(spec);
       const data: AgentToolData = {

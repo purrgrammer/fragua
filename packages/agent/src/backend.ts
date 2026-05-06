@@ -21,6 +21,7 @@ import {
   filterSkillsForNode,
   renderAgentsCatalog,
   renderSkillsCatalog,
+  sanitiseUnpairedToolCalls,
   toCatalogRecord,
 } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
@@ -480,7 +481,24 @@ export class PiCodergenBackend implements CodergenBackend {
       });
     }
 
-    const hydrateMessages: AgentMessage[] = effectiveHydrate && threadId ? storedForThread : [];
+    let hydrateMessages: AgentMessage[] = effectiveHydrate && threadId ? storedForThread : [];
+
+    // Pair any unpaired toolCall left at the tail of the rehydrated
+    // transcript before pi-ai sees it. A daemon crash mid-tool-execute
+    // leaves `[..., assistant{toolCall}]` in the messages table; the
+    // anthropic API rejects an unpaired tool_use, so we either re-run
+    // the tool (agent / idempotentOnReplay reads) or synthesise an
+    // error toolResult. No-op when the trailing assistant has no
+    // toolCalls or the transcript is empty. See
+    // `docs/proposals/sub-agent-crash-resilience.md`.
+    if (hydrateMessages.length > 0) {
+      hydrateMessages = await sanitiseUnpairedToolCalls(hydrateMessages, {
+        toolRegistry: this.registry,
+        env: effectiveEnv,
+        swarmContext,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+    }
 
     // Build the fidelity seed prepended to the user prompt for non-full
     // modes. `full` returns "" and the user prompt is unchanged. `truncate`

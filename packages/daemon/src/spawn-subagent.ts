@@ -21,7 +21,7 @@
 // reducer / dispatcher / sweep / analytics logic on something that
 // isn't a run or a node.
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
 import type { CodergenBackend, ContextMap, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
@@ -84,8 +84,109 @@ export function makeSpawnSubagent(
   parentCtx: SpawnSubagentParentCtx,
 ): (spec: SubagentSpec) => Promise<SubagentResult> {
   return async (spec) => {
-    const subagentId = randomUUID();
+    // Deterministic subagent_id: sha256(parentRunId, parentNodeId,
+    // parentIteration, tool_call_id) truncated to 32 hex chars. Survives
+    // a daemon crash because pi-ai preserves `tool_call_id` byte-identically
+    // on the wire (anthropic.js:847), and the other inputs are stable
+    // across restarts. Two parallel siblings on one assistant message
+    // share parentIteration but get distinct tool_call_ids from pi-ai,
+    // so they hash to distinct ids without collision-handling.
+    const subagentId = createHash("sha256")
+      .update(
+        `${parentCtx.parentRunId}\u0000${parentCtx.parentNodeId}\u0000${parentCtx.parentIteration}\u0000${spec.tool_call_id}`,
+      )
+      .digest("hex")
+      .slice(0, 32);
     const subagentNodeId = `${SUBAGENT_NODE_PREFIX}${subagentId}`;
+
+    // Crash-resilience: hydrate the prior transcript for this
+    // deterministic subagent_id. On a fresh spawn the lookup returns
+    // [] and the backend runs from zero. On a respawn after a daemon
+    // crash, the messages table holds the pre-crash turns under
+    // `__subagent:<id>`; the backend feeds them into pi-agent-core's
+    // initialState so the child picks up where it left off. System
+    // rows are stripped — pi-ai carries the system prompt separately
+    // (PiCodergenBackend rebuilds it per call) and double-feeding
+    // would inject a stray turn into the transcript.
+    const priorMessages: AgentMessage[] = deps.store
+      .getMessages(parentCtx.parentRunId, { nodeId: subagentNodeId })
+      .map((r) => r.content as AgentMessage)
+      .filter((m) => m.role !== "system");
+
+    // Cumulative cost rollup baseline. On a fresh spawn the lookup
+    // returns [] and the seeds stay 0. On a respawn after a daemon
+    // crash, every prior `subagent.end` for this deterministic
+    // `subagent_id` carries the partial cost from its bracket; the
+    // resumed bracket's `subagent.end.costUsd` is **cumulative** —
+    // operators reading the latest bracket get the truthful end-to-end
+    // cost of the logical sub-agent's work without scanning siblings.
+    // Consumers summing across `subagent.end` rows MUST dedupe by
+    // `subagent_id` and take the terminal (non-cancelled) bracket;
+    // see ARCH §3 and `docs/proposals/sub-agent-crash-resilience.md`.
+    const priorEnds = deps.store
+      .getEventsByType(parentCtx.parentRunId, "subagent.end")
+      .filter((e) => (e.payload as { subagent_id?: string }).subagent_id === subagentId);
+    const priorNum = (v: unknown): number => {
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const seedCostUsd = priorEnds.reduce((s, e) => s + priorNum((e.payload as Record<string, unknown>)["costUsd"]), 0);
+    const seedTotalTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["totalTokens"]),
+      0,
+    );
+    const seedInputTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["inputTokens"]),
+      0,
+    );
+    const seedOutputTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["outputTokens"]),
+      0,
+    );
+    const seedCacheReadTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["cacheReadTokens"]),
+      0,
+    );
+    const seedCacheWriteTokens = priorEnds.reduce(
+      (s, e) => s + priorNum((e.payload as Record<string, unknown>)["cacheWriteTokens"]),
+      0,
+    );
+
+    // Already-completed short-circuit: the sub-agent finished pre-crash
+    // (last assistant message has stopReason ∈ {stop, endTurn} and no
+    // pending toolCalls), but the daemon died before the parent's tool-
+    // execute promise resolved. Skip the LLM call entirely; synthesise
+    // SubagentResult from the persisted transcript and emit the
+    // resumed→end pair on the parent's stream. We do NOT re-emit
+    // subagent.start — the original start is still in the event log
+    // from the pre-crash bracket; the new resumed event closes the
+    // gap and the new end carries the cumulative totals (commit 6).
+    if (priorMessages.length > 0 && isTranscriptComplete(priorMessages)) {
+      const summary = extractAssistantText(priorMessages[priorMessages.length - 1]!);
+      const totalToolCalls = countToolCalls(priorMessages);
+      await parentCtx.parentEmit("subagent.resumed", {
+        subagent_id: subagentId,
+        reason: "already_completed",
+      });
+      await parentCtx.parentEmit("subagent.end", {
+        subagent_id: subagentId,
+        status: "completed",
+        summary_chars: summary.length,
+        total_tool_calls: totalToolCalls,
+        costUsd: seedCostUsd,
+        totalTokens: seedTotalTokens,
+        inputTokens: seedInputTokens,
+        outputTokens: seedOutputTokens,
+        cacheReadTokens: seedCacheReadTokens,
+        cacheWriteTokens: seedCacheWriteTokens,
+      });
+      return {
+        summary,
+        subagentId,
+        status: "completed",
+        totalToolCalls,
+      };
+    }
 
     // Materialise the child's system prompt + filter parent skills by
     // `spec.skills` (intersection by name). System-prompt override on
@@ -127,7 +228,7 @@ export function makeSpawnSubagent(
           `agent tool: cannot spawn sub-agent — resolved tool pool is empty (allowed_tools=${allowDesc}). ` +
           "Widen the parent's `allowed_tools` (it likely lists only `agent`), or pass an explicit " +
           "`allowed_tools: [...]` on the call.",
-        subagentId: randomUUID(),
+        subagentId,
         status: "halted" as const,
         haltReason: "empty_tool_pool",
         totalToolCalls: 0,
@@ -178,7 +279,7 @@ export function makeSpawnSubagent(
       model: childModel,
       ...(spec.name !== undefined ? { name: spec.name } : {}),
       ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
-      ...(spec.tool_call_id !== undefined ? { tool_call_id: spec.tool_call_id } : {}),
+      tool_call_id: spec.tool_call_id,
     });
 
     // Forward every observability event the sub-agent emits to the
@@ -204,12 +305,12 @@ export function makeSpawnSubagent(
     // `run_state.metrics`); this is a per-spawn view of the same
     // stream, not a duplicate accounting path. Field shape mirrors
     // `fact.node_aborted.partial*` for symmetry.
-    let localCostUsd = 0;
-    let localTotalTokens = 0;
-    let localInputTokens = 0;
-    let localOutputTokens = 0;
-    let localCacheReadTokens = 0;
-    let localCacheWriteTokens = 0;
+    let localCostUsd = seedCostUsd;
+    let localTotalTokens = seedTotalTokens;
+    let localInputTokens = seedInputTokens;
+    let localOutputTokens = seedOutputTokens;
+    let localCacheReadTokens = seedCacheReadTokens;
+    let localCacheWriteTokens = seedCacheWriteTokens;
 
     const subagentEmit = async (type: EventType, data: Record<string, unknown>): Promise<void> => {
       if (type === "cost.recorded") {
@@ -311,6 +412,7 @@ export function makeSpawnSubagent(
         emit: subagentEmit,
         persistMessage,
         ...(spec.max_iterations !== undefined ? { iteration: { n: 0, max: spec.max_iterations } } : {}),
+        ...(priorMessages.length > 0 ? { priorMessages } : {}),
       });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -358,4 +460,47 @@ function deriveHaltReason(outcome: Outcome, status: SubagentResult["status"]): s
   if (status === "completed") return undefined;
   if (outcome.provider_error) return "provider_exhausted";
   return outcome.failure_reason ?? undefined;
+}
+
+/** True when a persisted sub-agent transcript represents a finished
+ *  conversation: last message is an assistant with `stopReason ===
+ *  "stop"` (pi-ai's universal terminal-without-toolcall reason — see
+ *  pi-ai/dist/providers/*.js) and no toolCall blocks pending. The
+ *  pre-crash spawn produced a final answer; the only thing missing
+ *  from the parent's stream is the toolResult — which we synthesise
+ *  on resume without burning another LLM turn. */
+function isTranscriptComplete(messages: readonly AgentMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return false;
+  if (last.stopReason !== "stop") return false;
+  if (!Array.isArray(last.content)) return true;
+  return !last.content.some((b: { type: string }) => b.type === "toolCall");
+}
+
+/** Concatenate every text block in an assistant message. Mirrors the
+ *  reduction the spawn-side `persistMessage` does inline so a resumed
+ *  bracket's `summary` matches the value the original (pre-crash)
+ *  `SubagentResult.summary` would have carried. */
+function extractAssistantText(message: AgentMessage): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+  const parts = message.content as Array<{ type: string; text?: string }>;
+  return parts
+    .filter((p) => p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text as string)
+    .join("\n");
+}
+
+/** Count toolCall blocks across every assistant message in a
+ *  transcript. Matches the in-flight `totalToolCalls` accumulator
+ *  the live-run path maintains so resumed brackets surface the same
+ *  count the original spawn would have. */
+function countToolCalls(messages: readonly AgentMessage[]): number {
+  let n = 0;
+  for (const m of messages) {
+    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+    for (const b of m.content as Array<{ type: string }>) {
+      if (b.type === "toolCall") n += 1;
+    }
+  }
+  return n;
 }

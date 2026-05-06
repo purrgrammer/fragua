@@ -231,6 +231,17 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         }
       }
 
+      // `subagent.resumed` fires on respawn after a daemon crash. The
+      // tool_call_id→subagent_id mapping was already captured by the
+      // original (pre-crash) subagent.start in the event log; the
+      // resumed event closes the bracket on its own without needing
+      // a fresh fold. Acknowledge the type so the SSE frame doesn't
+      // accidentally fall through into MESSAGE_SIGNAL_TYPES or the
+      // streaming-delta path below.
+      if (type === "subagent.resumed") {
+        return;
+      }
+
       if (MESSAGE_SIGNAL_TYPES.has(type)) {
         if (refetchTimerRef.current) return;
         const id = runId;
