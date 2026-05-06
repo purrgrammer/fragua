@@ -110,6 +110,33 @@ describe("ProjectDetail · tabs", () => {
     });
   });
 
+  test("RunComposer renders inside the Runs tab panel", async () => {
+    installFetch({
+      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.dot", sha: "deadbeefcafe", cwd: TEST_CWD }],
+    });
+    const { container } = renderAt(`/projects/${TEST_ENC}`);
+    // Default tab is `runs` (no ?tab= param). The composer must live inside the
+    // active runs panel, not the workflows section.
+    const tabs = await waitFor(() => within(container).getByTestId("project-tabs"));
+    const composer = await waitFor(() => within(tabs).getByTestId("run-composer-form"));
+    // Radix renders all tabpanels; the composer must sit inside the *active* one,
+    // and the workflows section must not contain it.
+    const ownerPanel = composer.closest('[role="tabpanel"]');
+    expect(ownerPanel).not.toBeNull();
+    expect(ownerPanel?.getAttribute("data-state")).toBe("active");
+    const wfSection = within(container).queryByTestId("project-workflows-section");
+    if (wfSection) expect(within(wfSection).queryByTestId("run-composer-form")).toBeNull();
+  });
+
+  test("RunComposer is not rendered inside the Workflows tab panel", async () => {
+    installFetch({
+      workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.dot", sha: "deadbeefcafe", cwd: TEST_CWD }],
+    });
+    const { container } = renderAt(`/projects/${TEST_ENC}?tab=workflows`);
+    const wfSection = await waitFor(() => within(container).getByTestId("project-workflows-section"));
+    expect(within(wfSection).queryByTestId("run-composer-form")).toBeNull();
+  });
+
   test("links project workflows to /workflows/:name with the project cwd", async () => {
     installFetch({
       workflows: [{ name: "ci-gate", path: ".swarm/workflows/ci-gate.dot", sha: "deadbeefcafe", cwd: TEST_CWD }],

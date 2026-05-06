@@ -216,6 +216,7 @@ export function ProjectDetail(): JSX.Element {
 
         <div className="min-w-0 overflow-auto rounded-md border bg-sw-bg">
           <TabsContent value="runs" className="flex w-full min-w-0 flex-col gap-2 p-3">
+            <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
             {isPending && (
               <p className="text-sw-muted text-sm" data-testid="project-runs-loading">
                 Loading…
@@ -270,7 +271,6 @@ export function ProjectDetail(): JSX.Element {
             className="flex w-full min-w-0 flex-col gap-2 p-3"
             data-testid="project-workflows-section"
           >
-            <RunComposer cwd={cwd} workflows={allWorkflows ?? []} />
             {projectWorkflows.length === 0 ? (
               <EmptyState
                 data-testid="project-workflows-empty"
