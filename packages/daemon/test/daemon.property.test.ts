@@ -131,20 +131,25 @@ describe("startDaemon — maxLoops plumbed through to executor", () => {
       shutdownSignal: shutdown.signal,
     });
 
-    // Poll the run state; halt should fire within a handful of ticks.
+    // Poll the run state; pause should fire within a handful of ticks.
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
       const s = r.store.getState("rml");
-      if (s?.status === "halted") break;
+      if (s?.status === "paused") break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     shutdown.abort();
     await handle.done.catch(() => undefined);
 
     const final = r.store.getState("rml")!;
-    expect(final.status).toBe("halted");
-    const halt = r.store.getEvents("rml").find((e) => e.type === "fact.run_halted")!;
-    expect((halt.payload as { reason: string }).reason).toBe("max_loops");
+    // Stage 3 of recoverable-budget-pause.md: max_loops is now an
+    // operator-resumable pause, not a terminal halt.
+    expect(final.status).toBe("paused");
+    const pause = r.store
+      .getEvents("rml")
+      .filter((e) => e.type === "fact.run_paused")
+      .pop()!;
+    expect((pause.payload as { reason: string }).reason).toBe("max_loops");
   });
 });
 

@@ -60,6 +60,11 @@ export type PauseReason =
   | "provider_error"
   | "payment_required"
   | "budget"
+  | "max_retries"
+  | "goal_gate"
+  | "max_loops"
+  | "abort_loop"
+  | "provider_exhausted"
   | "provider_retry"
   | "handler_retry"
   | "timeout_retry";
@@ -77,18 +82,15 @@ export const AUTO_WAKE_PAUSE_REASONS: ReadonlySet<PauseReason> = new Set<PauseRe
  * daemon writes facts (run lifecycle, observability). */
 export type EventWriter = "daemon" | "web";
 
-export type HaltReason =
-  | "budget"
-  | "max_loops"
-  | "abort_loop"
-  | "schema_drift"
-  | "error"
-  | "aborted_exit"
-  | "goal_gate_unsatisfied"
-  | "max_retries_exceeded"
-  | "occ_exhausted"
-  | "provider_exhausted"
-  | "timeout_exhausted";
+/** Terminal halt reasons. After Stage 3 of recoverable-budget-pause.md
+ * the previously-recoverable-class halts (`max_loops`, `abort_loop`,
+ * `goal_gate_unsatisfied`, `max_retries_exceeded`, `provider_exhausted`)
+ * have moved to {@link PauseReason} so operators can grant N more
+ * attempts. What remains here is genuinely terminal: schema/engine
+ * failures, the workflow author's `<abort>` sentinel, the opt-in
+ * `budget_policy="stop"` path, and the watchdog-cap exhaustion that
+ * paused-class `timeout_retry` escalates to. */
+export type HaltReason = "budget" | "schema_drift" | "error" | "aborted_exit" | "occ_exhausted" | "timeout_exhausted";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -126,6 +128,32 @@ export type IntentEvent =
         newLimit: number;
         note?: string;
       };
+    }
+  | {
+      /** Operator raises a node's `max_retries` cap on a
+       * `paused{reason:"max_retries"}` run. Recorded in
+       * `routing.max_retries_override.<nodeId>` so `resolveMaxRetries`
+       * picks it up before consulting the static node attr. Cap-
+       * adjustment intents follow the same Raise & Resume bundle
+       * pattern as `intent.budget_adjusted`. */
+      type: "intent.max_retries_adjusted";
+      payload: { nodeId: string; newLimit: number; note?: string };
+    }
+  | {
+      /** Operator raises `max_goal_gate_retries` on a
+       * `paused{reason:"goal_gate"}` run. Recorded in
+       * `routing.max_goal_gate_retries_override`; the goal-gate
+       * resolver reads it before consulting the graph attr. */
+      type: "intent.goal_gate_adjusted";
+      payload: { newLimit: number; note?: string };
+    }
+  | {
+      /** Operator raises the per-run dispatch ceiling on a
+       * `paused{reason:"max_loops"}` run. Recorded in
+       * `routing.max_loops_override`; the executor reads it on each
+       * dispatch tick. */
+      type: "intent.max_loops_adjusted";
+      payload: { newLimit: number; note?: string };
     };
 
 export type IntentType = IntentEvent["type"];
@@ -394,6 +422,56 @@ export type FactEvent =
              * UI banner so operators can read "watchdog at 30m" without
              * opening the graph. */
             attemptedMs: number;
+          }
+        | {
+            /** Node's retry counter exhausted (handler returned
+             * outcomeStatus="retry" past `max_retries`). Operator may
+             * grant more retries via `intent.max_retries_adjusted`
+             * (writes `routing.max_retries_override.<nodeId>`); naked
+             * `intent.resume` grants exactly one more attempt at the
+             * current cap. See recoverable-budget-pause.md Stage 3. */
+            reason: "max_retries";
+            nodeId: string;
+            currentLimit: number;
+            attempts: number;
+          }
+        | {
+            /** Goal-gate retarget chain capped at
+             * `max_goal_gate_retries`. Operator may grant more cycles
+             * via `intent.goal_gate_adjusted` (writes
+             * `routing.max_goal_gate_retries_override`). */
+            reason: "goal_gate";
+            gateNodeId: string;
+            currentLimit: number;
+          }
+        | {
+            /** Per-run dispatch ceiling exceeded. Operator may raise
+             * via `intent.max_loops_adjusted` (writes
+             * `routing.max_loops_override`); naked resume re-enters
+             * with a fresh JS-local counter and the same effective
+             * cap. */
+            reason: "max_loops";
+            currentLimit: number;
+            dispatches: number;
+          }
+        | {
+            /** Per-(nodeId) consecutive-abort counter saturated.
+             * Usually a real bug, but operator may know the underlying
+             * cause is fixed. Naked resume only — no per-run knob;
+             * the abort-loop ceiling is daemon config. */
+            reason: "abort_loop";
+            nodeId: string;
+            consecutiveAborts: number;
+          }
+        | {
+            /** Provider auto-retry chain capped (5 attempts or 5
+             * cumulative minutes, attractor §3.6). Naked resume
+             * re-enters and starts a fresh chain. No per-run knob —
+             * chain config is daemon-wide. */
+            reason: "provider_exhausted";
+            nodeId: string;
+            attempts: number;
+            cumulativeMs: number;
           };
     }
   | {

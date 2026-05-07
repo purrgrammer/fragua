@@ -283,12 +283,30 @@ export type HandlerResult =
     }
   | {
       kind: "halt";
+      // Executor-only HaltReason literals (drift-lint coverage):
+      // `"schema_drift"`, `"aborted_exit"`, `"occ_exhausted"`,
+      // `"timeout_exhausted"` are valid `fact.run_halted` reasons that
+      // the executor emits directly — not constructible by handlers.
+      // The reasons in this union below (`"max_retries_exceeded"`,
+      // `"goal_gate_unsatisfied"`, `"max_loops"`) are accepted on the
+      // handler-side type but get translated by result-to-facts into
+      // `fact.run_paused` with reason `"max_retries"` / `"goal_gate"`
+      // / `"max_loops"` (Stage 3 of recoverable-budget-pause.md). The
+      // sibling-halt converted reasons `"abort_loop"` and
+      // `"provider_exhausted"` are emitted by the executor directly
+      // as `fact.run_paused`, never as halts.
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
-      // `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted`,
-      // `provider_exhausted`, and `"timeout_exhausted"` are also valid
-      // `fact.run_halted` reasons but the executor emits those itself —
-      // not constructible by handlers.
+      /** Optional context for halts that result-to-facts converts into
+       * operator-resumable pauses. The executor sets
+       * `pauseContext.currentLimit` + `attempts` when it wants the
+       * resulting `fact.run_paused` payload to carry the cap-hit
+       * details for the operator banner. Ignored for halts that stay
+       * terminal (`budget`, `error`). */
+      pauseContext?: {
+        currentLimit?: number;
+        attempts?: number;
+      };
     }
   | {
       /** Recoverable LLM-provider transport failure (HTTP 402 / 429 / 5xx /

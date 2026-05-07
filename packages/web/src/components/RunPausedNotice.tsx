@@ -14,7 +14,15 @@ import { AlertCircle } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { adjustBudget, cancelRun, getRunEvents, resumeRun } from "@/lib/api";
+import {
+  adjustBudget,
+  adjustGoalGate,
+  adjustMaxLoops,
+  adjustMaxRetries,
+  cancelRun,
+  getRunEvents,
+  resumeRun,
+} from "@/lib/api";
 import { queries } from "@/lib/queries";
 
 export interface RunPausedNoticeProps {
@@ -69,7 +77,12 @@ type PausePayload =
       resumeAt: number;
       maxAttempts: number;
       attemptedMs: number;
-    };
+    }
+  | { reason: "max_retries"; nodeId: string; currentLimit: number; attempts: number }
+  | { reason: "goal_gate"; gateNodeId: string; currentLimit: number }
+  | { reason: "max_loops"; currentLimit: number; dispatches: number }
+  | { reason: "abort_loop"; nodeId: string; consecutiveAborts: number }
+  | { reason: "provider_exhausted"; nodeId: string; attempts: number; cumulativeMs: number };
 
 interface FactRow {
   type?: unknown;
@@ -148,6 +161,9 @@ interface RenderCtx {
   onResume: () => void;
   onCancel: () => void;
   onAdjustBudget: (input: { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number }) => Promise<void>;
+  onAdjustMaxRetries: (input: { nodeId: string; newLimit: number }) => Promise<void>;
+  onAdjustGoalGate: (input: { newLimit: number }) => Promise<void>;
+  onAdjustMaxLoops: (input: { newLimit: number }) => Promise<void>;
 }
 
 interface RenderOutput {
@@ -246,6 +262,75 @@ function BudgetActions({
           disabled={busy || !valid}
           onClick={async () => {
             await onAdjustBudget({ scope: payload.scope, metric: payload.metric, newLimit: parsed });
+            onResume();
+          }}
+          data-testid="run-paused-raise-resume"
+          title={valid ? `Raise to ${parsed} and resume` : "Enter a value greater than the current limit"}
+        >
+          Raise &amp; Resume
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Generic Raise & Resume / Resume / Cancel action set for sibling-
+ * halt pauses (max_retries, goal_gate, max_loops). The label /
+ * unit / step are caller-supplied; the underlying intent fires via
+ * the supplied async callback. Mirrors BudgetActions' layout for
+ * visual consistency. */
+function CapAdjustActions({
+  busy,
+  currentLimit,
+  unit,
+  onCancel,
+  onResume,
+  onAdjust,
+}: {
+  busy: boolean;
+  currentLimit: number;
+  unit: string;
+  onCancel: () => void;
+  onResume: () => void;
+  onAdjust: (newLimit: number) => Promise<void>;
+}): JSX.Element {
+  const inputId = useId();
+  const [draft, setDraft] = useState<string>(String(currentLimit));
+  const parsed = Number(draft);
+  const valid = Number.isFinite(parsed) && parsed > 0;
+  return (
+    <div className="col-start-2 mt-3 flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-sw-xs text-sw-muted">
+        <label htmlFor={inputId} className="shrink-0">
+          New {unit} limit:
+        </label>
+        <input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          step="1"
+          min={currentLimit}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={busy}
+          data-testid="run-paused-cap-input"
+          className="w-32 rounded-sw-card border border-sw-border bg-sw-bg px-2 py-1 text-sw-text focus:outline-none"
+        />
+        <span className="text-sw-muted">(current {currentLimit})</span>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel} data-testid="run-paused-cancel">
+          Cancel
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onResume} data-testid="run-paused-resume">
+          Resume as-is
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || !valid}
+          onClick={async () => {
+            await onAdjust(parsed);
             onResume();
           }}
           data-testid="run-paused-raise-resume"
@@ -378,6 +463,83 @@ const RENDERERS: Renderers = {
       <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} resumeLabel="Resume now" />
     ),
   }),
+  max_retries: ({ payload, ctx }) => ({
+    title: "Retries exhausted — paused",
+    body: (
+      <span data-testid="run-paused-message">
+        Node {payload.nodeId} exhausted {payload.attempts} of {payload.currentLimit} retries. Resume grants one more
+        attempt; raise the cap to grant several.
+      </span>
+    ),
+    actions: (
+      <CapAdjustActions
+        busy={ctx.busy}
+        currentLimit={payload.currentLimit}
+        unit="max_retries"
+        onCancel={ctx.onCancel}
+        onResume={ctx.onResume}
+        onAdjust={(newLimit) => ctx.onAdjustMaxRetries({ nodeId: payload.nodeId, newLimit })}
+      />
+    ),
+  }),
+  goal_gate: ({ payload, ctx }) => ({
+    title: "Goal gate unsatisfied — paused",
+    body: (
+      <span data-testid="run-paused-message">
+        Gate {payload.gateNodeId} failed after {payload.currentLimit} retarget cycles. Resume grants one more cycle;
+        raise the cap to grant several.
+      </span>
+    ),
+    actions: (
+      <CapAdjustActions
+        busy={ctx.busy}
+        currentLimit={payload.currentLimit}
+        unit="max_goal_gate_retries"
+        onCancel={ctx.onCancel}
+        onResume={ctx.onResume}
+        onAdjust={(newLimit) => ctx.onAdjustGoalGate({ newLimit })}
+      />
+    ),
+  }),
+  max_loops: ({ payload, ctx }) => ({
+    title: "Dispatch ceiling — paused",
+    body: (
+      <span data-testid="run-paused-message">
+        Run exceeded {payload.currentLimit} dispatches ({payload.dispatches} so far). Resume grants a fresh batch at the
+        same cap; raise the cap to permanently extend the ceiling.
+      </span>
+    ),
+    actions: (
+      <CapAdjustActions
+        busy={ctx.busy}
+        currentLimit={payload.currentLimit}
+        unit="max_loops"
+        onCancel={ctx.onCancel}
+        onResume={ctx.onResume}
+        onAdjust={(newLimit) => ctx.onAdjustMaxLoops({ newLimit })}
+      />
+    ),
+  }),
+  abort_loop: ({ payload, ctx }) => ({
+    title: "Abort loop — paused",
+    body: (
+      <span data-testid="run-paused-message">
+        Node {payload.nodeId} aborted {payload.consecutiveAborts} consecutive times. Resume to retry once, or cancel if
+        the node is wedged.
+      </span>
+    ),
+    actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
+  }),
+  provider_exhausted: ({ payload, ctx }) => ({
+    title: "Provider chain exhausted — paused",
+    body: (
+      <span data-testid="run-paused-message">
+        Provider chain exhausted after {payload.attempts} attempts. Resume to start a fresh chain (operator may have
+        fixed the underlying transport issue), or cancel.
+      </span>
+    ),
+    actions: <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} />,
+  }),
 };
 
 /** Dispatch a payload through the exhaustive renderer table. The
@@ -409,21 +571,45 @@ export function RunPausedNotice({ runId }: RunPausedNoticeProps): JSX.Element | 
     onSuccess: () => refreshAfterControl(qc, runId),
   });
 
-  const adjustMutation = useMutation({
+  const adjustBudgetMutation = useMutation({
     mutationFn: (input: { scope: "node" | "run"; metric: "cost" | "tokens"; newLimit: number }) =>
       adjustBudget(runId, input.scope, input.metric, input.newLimit),
+  });
+  const adjustMaxRetriesMutation = useMutation({
+    mutationFn: (input: { nodeId: string; newLimit: number }) => adjustMaxRetries(runId, input.nodeId, input.newLimit),
+  });
+  const adjustGoalGateMutation = useMutation({
+    mutationFn: (input: { newLimit: number }) => adjustGoalGate(runId, input.newLimit),
+  });
+  const adjustMaxLoopsMutation = useMutation({
+    mutationFn: (input: { newLimit: number }) => adjustMaxLoops(runId, input.newLimit),
   });
 
   const payload = eventsQuery.data ? findActivePause(eventsQuery.data.events) : null;
   if (payload == null) return null;
 
-  const busy = resumeMutation.isPending || cancelMutation.isPending || adjustMutation.isPending;
+  const busy =
+    resumeMutation.isPending ||
+    cancelMutation.isPending ||
+    adjustBudgetMutation.isPending ||
+    adjustMaxRetriesMutation.isPending ||
+    adjustGoalGateMutation.isPending ||
+    adjustMaxLoopsMutation.isPending;
   const ctx: RenderCtx = {
     busy,
     onResume: () => resumeMutation.mutate(),
     onCancel: () => cancelMutation.mutate(),
     onAdjustBudget: async (input) => {
-      await adjustMutation.mutateAsync(input);
+      await adjustBudgetMutation.mutateAsync(input);
+    },
+    onAdjustMaxRetries: async (input) => {
+      await adjustMaxRetriesMutation.mutateAsync(input);
+    },
+    onAdjustGoalGate: async (input) => {
+      await adjustGoalGateMutation.mutateAsync(input);
+    },
+    onAdjustMaxLoops: async (input) => {
+      await adjustMaxLoopsMutation.mutateAsync(input);
     },
   };
   const { title, body, actions } = renderPause(payload, ctx);

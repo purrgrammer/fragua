@@ -377,6 +377,151 @@ describe("RunPausedNotice", () => {
     }
   });
 
+  it("max_retries reason exposes Raise & Resume + per-node cap input", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "max_retries", nodeId: "verify", currentLimit: 3, attempts: 3 },
+          },
+        ]),
+      "/api/runs/run-1/max_retries": ({ url, method }) => {
+        calls.push({ url, method });
+        return json({ seq: 4 }, { status: 202 });
+      },
+      [RESUME_URL]: ({ url, method }) => {
+        calls.push({ url, method });
+        return json({ seq: 5 }, { status: 202 });
+      },
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("verify");
+      expect(message.textContent).toContain("3 of 3 retries");
+      const input = (await findByTestId("run-paused-cap-input")) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "5" } });
+      const raiseBtn = (await findByTestId("run-paused-raise-resume")) as HTMLButtonElement;
+      fireEvent.click(raiseBtn);
+      await waitFor(() => {
+        expect(calls.some((c) => c.url === "/api/runs/run-1/max_retries" && c.method === "POST")).toBe(true);
+        expect(calls.some((c) => c.url === RESUME_URL && c.method === "POST")).toBe(true);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("goal_gate reason exposes Raise & Resume targeting max_goal_gate_retries", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "goal_gate", gateNodeId: "review", currentLimit: 2 },
+          },
+        ]),
+      "/api/runs/run-1/goal_gate": ({ url, method }) => {
+        calls.push({ url, method });
+        return json({ seq: 4 }, { status: 202 });
+      },
+      [RESUME_URL]: ({ url, method }) => {
+        calls.push({ url, method });
+        return json({ seq: 5 }, { status: 202 });
+      },
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("review");
+      expect(message.textContent).toContain("2 retarget cycles");
+      const input = (await findByTestId("run-paused-cap-input")) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "5" } });
+      const raiseBtn = (await findByTestId("run-paused-raise-resume")) as HTMLButtonElement;
+      fireEvent.click(raiseBtn);
+      await waitFor(() => {
+        expect(calls.some((c) => c.url === "/api/runs/run-1/goal_gate" && c.method === "POST")).toBe(true);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("max_loops reason exposes Raise & Resume targeting the dispatch ceiling", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "max_loops", currentLimit: 1000, dispatches: 1000 },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("1000 dispatches");
+      expect(await findByTestId("run-paused-cap-input")).toBeDefined();
+      expect(await findByTestId("run-paused-raise-resume")).toBeDefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("abort_loop reason renders Resume / Cancel only (no per-run cap knob)", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "abort_loop", nodeId: "implement", consecutiveAborts: 5 },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId, queryByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("implement");
+      expect(message.textContent).toContain("5 consecutive");
+      // No cap input — abort-loop ceiling is daemon config, not per-run.
+      expect(queryByTestId("run-paused-cap-input")).toBeNull();
+      expect(await findByTestId("run-paused-resume")).toBeDefined();
+      expect(await findByTestId("run-paused-cancel")).toBeDefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("provider_exhausted reason renders Resume / Cancel only", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: { reason: "provider_exhausted", nodeId: "implement", attempts: 5, cumulativeMs: 300_000 },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId, queryByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("5 attempts");
+      // No cap input — chain config is daemon-wide, not per-run.
+      expect(queryByTestId("run-paused-cap-input")).toBeNull();
+      expect(await findByTestId("run-paused-resume")).toBeDefined();
+    } finally {
+      restore();
+    }
+  });
+
   it("auto-wake countdown renders 'now' once resumeAt is in the past", async () => {
     const { restore } = installFetchMock({
       [EVENTS_URL]: () =>

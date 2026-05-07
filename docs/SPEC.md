@@ -76,7 +76,8 @@ target node (attractor-spec §3.6 / §5.2) — there is no `loop` primitive.
 A node that should re-run on `outcome=retry` takes an edge back to itself
 or to an upstream node with `[condition="outcome=retry"]`, and its
 `max_retries` attribute caps how many times the retry counter can bump
-before the run halts with `reason=max_retries_exceeded`.
+before the run pauses with `fact.run_paused{reason:"max_retries"}`
+(operator-resumable; raise the cap via `intent.max_retries_adjusted`).
 
 Workflows are uploaded via `POST /workflows { name, dotSource }` which returns a `sha` (sha256 of the source). Runs reference workflows by sha.
 

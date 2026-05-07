@@ -205,4 +205,37 @@ describe("foldIntents", () => {
       expect(out.dropped).toEqual([]);
     }
   });
+
+  test("intent.max_retries_adjusted writes routing.max_retries_override.<nodeId>", () => {
+    const out = foldIntents([ev(1, "intent.max_retries_adjusted", { nodeId: "verify", newLimit: 5 })], "paused");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.routingDelta["max_retries_override.verify"]).toBe(5);
+      expect(out.dropped).toEqual([]);
+    }
+  });
+
+  test("intent.max_retries_adjusted with non-positive newLimit drops with wrong_state", () => {
+    const out = foldIntents([ev(1, "intent.max_retries_adjusted", { nodeId: "verify", newLimit: 0 })], "paused");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.dropped[0]?.reason).toBe("wrong_state");
+    }
+  });
+
+  test("intent.goal_gate_adjusted writes routing.max_goal_gate_retries_override", () => {
+    const out = foldIntents([ev(1, "intent.goal_gate_adjusted", { newLimit: 7 })], "paused");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.routingDelta["max_goal_gate_retries_override"]).toBe(7);
+    }
+  });
+
+  test("intent.max_loops_adjusted writes routing.max_loops_override", () => {
+    const out = foldIntents([ev(1, "intent.max_loops_adjusted", { newLimit: 2000 })], "paused");
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") {
+      expect(out.routingDelta["max_loops_override"]).toBe(2000);
+    }
+  });
 });

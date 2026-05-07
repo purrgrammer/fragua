@@ -505,6 +505,61 @@ export function createRoutes(deps: ServerDeps): Hono {
     });
   });
 
+  // Cap-adjustment intents for sibling-halt-converted pauses
+  // (recoverable-budget-pause.md Stage 3). All three follow the same
+  // shape: validate body → fold into a routing override key → the
+  // next turn-boundary check sees the higher cap. Web bundles a
+  // follow-up `intent.resume` (the "Raise & Resume" click).
+
+  app.post("/runs/:id/max_retries", async (c) => {
+    const body = await readJson<{ nodeId?: string; newLimit?: number; note?: string }>(c);
+    if (
+      !body ||
+      typeof body.nodeId !== "string" ||
+      body.nodeId.length === 0 ||
+      typeof body.newLimit !== "number" ||
+      !Number.isFinite(body.newLimit) ||
+      body.newLimit <= 0
+    ) {
+      return c.json({ error: "nodeId (non-empty) and newLimit > 0 required" }, 400);
+    }
+    const payload: { nodeId: string; newLimit: number; note?: string } = {
+      nodeId: body.nodeId,
+      newLimit: body.newLimit,
+    };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.max_retries_adjusted",
+      payload,
+    });
+  });
+
+  app.post("/runs/:id/goal_gate", async (c) => {
+    const body = await readJson<{ newLimit?: number; note?: string }>(c);
+    if (!body || typeof body.newLimit !== "number" || !Number.isFinite(body.newLimit) || body.newLimit <= 0) {
+      return c.json({ error: "newLimit > 0 required" }, 400);
+    }
+    const payload: { newLimit: number; note?: string } = { newLimit: body.newLimit };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.goal_gate_adjusted",
+      payload,
+    });
+  });
+
+  app.post("/runs/:id/max_loops", async (c) => {
+    const body = await readJson<{ newLimit?: number; note?: string }>(c);
+    if (!body || typeof body.newLimit !== "number" || !Number.isFinite(body.newLimit) || body.newLimit <= 0) {
+      return c.json({ error: "newLimit > 0 required" }, 400);
+    }
+    const payload: { newLimit: number; note?: string } = { newLimit: body.newLimit };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.max_loops_adjusted",
+      payload,
+    });
+  });
+
   // ─── Reads ──────────────────────────────────────────────────
   //
   // `GET /runs/:id` is served by `storeRunsRoutes` (RunDetail shape).

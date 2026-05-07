@@ -202,13 +202,15 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
     });
 
     const state = r.store.getState("gg3")!;
-    expect(state.status).toBe("halted");
+    // Stage 3 of recoverable-budget-pause.md: goal-gate exhaustion
+    // is now an operator-resumable pause, not a terminal halt.
+    expect(state.status).toBe("paused");
 
     const events = r.store.getEvents("gg3");
-    const halt = events.find((e) => e.type === "fact.run_halted");
-    expect(halt).toBeDefined();
-    expect((halt?.payload as { reason: string }).reason).toBe("goal_gate_unsatisfied");
-    expect((halt?.payload as { detail?: string }).detail).toBe("gate");
+    const pause = events.filter((e) => e.type === "fact.run_paused").pop();
+    expect(pause).toBeDefined();
+    expect((pause?.payload as { reason: string }).reason).toBe("goal_gate");
+    expect((pause?.payload as { gateNodeId: string }).gateNodeId).toBe("gate");
 
     const unsat = events.find((e) => e.type === "goal_gate.unsatisfied");
     expect(unsat).toBeDefined();
@@ -279,11 +281,11 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
     });
 
     const state = r.store.getState("gg4")!;
-    expect(state.status).toBe("halted");
+    expect(state.status).toBe("paused");
 
     const events = r.store.getEvents("gg4");
-    const halt = events.find((e) => e.type === "fact.run_halted");
-    expect((halt?.payload as { reason: string }).reason).toBe("goal_gate_unsatisfied");
+    const pause = events.filter((e) => e.type === "fact.run_paused").pop();
+    expect((pause?.payload as { reason: string }).reason).toBe("goal_gate");
 
     // Counted exactly one retarget before exhaustion.
     const retargets = events.filter((e) => e.type === "goal_gate.retarget");

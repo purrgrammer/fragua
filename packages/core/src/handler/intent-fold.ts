@@ -174,6 +174,38 @@ export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): Inten
         }
         break;
       }
+      case "intent.max_retries_adjusted": {
+        // Operator raises a node's `max_retries` cap on a
+        // `paused{reason:"max_retries"}` run. Stage 3 of
+        // docs/proposals/recoverable-budget-pause.md. Lands in
+        // `routing.max_retries_override.<nodeId>`; the executor reads
+        // it before consulting the static node attr.
+        const p = ev.payload as { nodeId: string; newLimit: number };
+        if (typeof p.nodeId === "string" && p.nodeId.length > 0 && typeof p.newLimit === "number" && p.newLimit > 0) {
+          routingDelta[`max_retries_override.${p.nodeId}`] = p.newLimit;
+        } else {
+          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
+        }
+        break;
+      }
+      case "intent.goal_gate_adjusted": {
+        const p = ev.payload as { newLimit: number };
+        if (typeof p.newLimit === "number" && p.newLimit > 0) {
+          routingDelta["max_goal_gate_retries_override"] = p.newLimit;
+        } else {
+          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
+        }
+        break;
+      }
+      case "intent.max_loops_adjusted": {
+        const p = ev.payload as { newLimit: number };
+        if (typeof p.newLimit === "number" && p.newLimit > 0) {
+          routingDelta["max_loops_override"] = p.newLimit;
+        } else {
+          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
+        }
+        break;
+      }
       case "intent.run_enqueued":
       case "intent.resume":
       case "intent.unquarantine":

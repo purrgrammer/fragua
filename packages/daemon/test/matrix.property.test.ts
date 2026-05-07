@@ -589,8 +589,14 @@ describe("P17 — schema drift refusal on resume", () => {
 });
 
 // ─────────────── P20 ───────────────
-describe("P20 — abort loop ceiling halts runaway runs", () => {
-  test("5 consecutive aborts with no progress → run_halted { reason: 'abort_loop' }", async () => {
+describe("P20 — abort loop ceiling pauses runaway runs (recoverable)", () => {
+  // Stage 3 of recoverable-budget-pause.md flipped abort_loop from
+  // terminal halt to operator-resumable pause: an operator who knows
+  // the underlying cause is fixed shouldn't have to re-enqueue the
+  // run from scratch. Naked `intent.resume` grants one more attempt;
+  // there's no per-run cap-adjustment intent because the ceiling is
+  // daemon config, not workflow-author authority.
+  test("5 consecutive aborts with no progress → fact.run_paused{reason:'abort_loop'}, status=paused", async () => {
     const r = rig();
     // A handler that always aborts before emitting any transition.
     r.dispatcher.register(r.workflowSha, "start", {
@@ -617,13 +623,16 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
     });
 
     const state = r.store.getState("rp20")!;
-    expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("rp20").find((e) => e.type === "fact.run_halted")!;
-    expect((halt.payload as { reason: string }).reason).toBe("abort_loop");
+    expect(state.status).toBe("paused");
+    const pause = r.store
+      .getEvents("rp20")
+      .filter((e) => e.type === "fact.run_paused")
+      .pop()!;
+    expect((pause.payload as { reason: string }).reason).toBe("abort_loop");
     r.store.close();
   });
 
-  test("abort_loop_warning observability event fires one abort before the halt", async () => {
+  test("abort_loop_warning observability event fires one abort before the pause", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
@@ -655,15 +664,17 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
     const warn = warns[0]!;
     expect((warn.payload as { consecutiveAborts: number }).consecutiveAborts).toBe(2);
     expect((warn.payload as { ceiling: number }).ceiling).toBe(3);
-    // Warning lands BEFORE the halt in causal order.
+    // Warning lands BEFORE the pause in causal order.
     const warnIdx = events.findIndex((e) => e.type === "abort_loop_warning");
-    const haltIdx = events.findIndex((e) => e.type === "fact.run_halted");
-    expect(warnIdx).toBeLessThan(haltIdx);
-    expect(r.store.getState("rp20w")!.status).toBe("halted");
+    const pauseIdx = events.findIndex(
+      (e) => e.type === "fact.run_paused" && (e.payload as { reason?: string }).reason === "abort_loop",
+    );
+    expect(warnIdx).toBeLessThan(pauseIdx);
+    expect(r.store.getState("rp20w")!.status).toBe("paused");
     r.store.close();
   });
 
-  test("abortLoopCeiling=2 halts after 2 aborts (knob honoured)", async () => {
+  test("abortLoopCeiling=2 pauses after 2 aborts (knob honoured)", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "noop",
@@ -690,7 +701,7 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
 
     const aborts = r.store.getEvents("rp20c").filter((e) => e.type === "fact.node_aborted");
     expect(aborts).toHaveLength(2);
-    expect(r.store.getState("rp20c")!.status).toBe("halted");
+    expect(r.store.getState("rp20c")!.status).toBe("paused");
     r.store.close();
   });
 });
@@ -700,8 +711,12 @@ describe("P20 — abort loop ceiling halts runaway runs", () => {
 // ever aborting still needs a ceiling. Non-P-numbered; fills the
 // ARCHITECTURE.md §3 HaltReason=max_loops contract that had no executor-
 // side enforcement prior.
-describe("max_loops ceiling halts non-aborting runaway runs", () => {
-  test("dispatches > maxLoops → run_halted { reason: 'max_loops' }", async () => {
+describe("max_loops ceiling pauses non-aborting runaway runs (recoverable)", () => {
+  // Stage 3 of recoverable-budget-pause.md flipped max_loops from
+  // terminal halt to operator-resumable pause. Operator may know the
+  // workflow needs more dispatches (rare but possible) and want to
+  // raise the ceiling via intent.max_loops_adjusted.
+  test("dispatches > maxLoops → fact.run_paused{reason:'max_loops'}, status=paused", async () => {
     const r = rig();
     // Self-looping handler: always transitions back to itself. Never aborts,
     // never retries, so ABORT_LOOP_CEILING does not apply.
@@ -733,9 +748,13 @@ describe("max_loops ceiling halts non-aborting runaway runs", () => {
     });
 
     const state = r.store.getState("rpml")!;
-    expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("rpml").find((e) => e.type === "fact.run_halted")!;
-    expect((halt.payload as { reason: string }).reason).toBe("max_loops");
+    expect(state.status).toBe("paused");
+    const pause = r.store
+      .getEvents("rpml")
+      .filter((e) => e.type === "fact.run_paused")
+      .pop()!;
+    expect((pause.payload as { reason: string }).reason).toBe("max_loops");
+    expect((pause.payload as { currentLimit: number }).currentLimit).toBe(3);
     r.store.close();
   });
 });

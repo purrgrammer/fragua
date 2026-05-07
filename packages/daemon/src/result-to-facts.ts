@@ -128,7 +128,43 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       return facts;
     }
     case "halt": {
-      const payload: Extract<FactEvent, { type: "fact.run_halted" }>["payload"] = { reason: result.reason };
+      // Stage 3 of docs/proposals/recoverable-budget-pause.md converts
+      // three reasons to operator-resumable pauses. The executor still
+      // sets `result = { kind: "halt", reason: <X> }` at each site for
+      // legibility (the rest of the post-handler flow shares one shape
+      // for "this turn doesn't advance the run") — the conversion lives
+      // here so adding a sibling-halt conversion stays a one-file
+      // change. Other halts pass through to fact.run_halted unchanged.
+      const reason = result.reason;
+      const nodeId = ctx.state.currentNode ?? "";
+      const ctxCurrentLimit = result.pauseContext?.currentLimit ?? 0;
+      const ctxAttempts = result.pauseContext?.attempts ?? 0;
+      if (reason === "max_retries_exceeded") {
+        facts.push({
+          type: "fact.run_paused",
+          payload: { reason: "max_retries", nodeId, currentLimit: ctxCurrentLimit, attempts: ctxAttempts },
+        });
+        return facts;
+      }
+      if (reason === "goal_gate_unsatisfied") {
+        // result.detail names the failed gate (set by the executor at
+        // the goal_gate halt site). Fall back to the current node when
+        // detail is missing — defensive, shouldn't normally fire.
+        const gateNodeId = result.detail && result.detail.length > 0 ? result.detail : nodeId;
+        facts.push({
+          type: "fact.run_paused",
+          payload: { reason: "goal_gate", gateNodeId, currentLimit: ctxCurrentLimit },
+        });
+        return facts;
+      }
+      if (reason === "max_loops") {
+        facts.push({
+          type: "fact.run_paused",
+          payload: { reason: "max_loops", currentLimit: ctxCurrentLimit, dispatches: ctxAttempts },
+        });
+        return facts;
+      }
+      const payload: Extract<FactEvent, { type: "fact.run_halted" }>["payload"] = { reason };
       if (result.detail != null) payload.detail = result.detail;
       facts.push({ type: "fact.run_halted", payload });
       return facts;

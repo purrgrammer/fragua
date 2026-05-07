@@ -93,7 +93,12 @@ describe("executor — retry-policy enforcement", () => {
     r.store.close();
   });
 
-  test("max_retries=0 + retry status → halt(max_retries_exceeded) immediately", async () => {
+  test("max_retries=0 + retry status → fact.run_paused{reason:'max_retries'} immediately", async () => {
+    // Stage 3 of recoverable-budget-pause.md: max_retries_exceeded
+    // is now an operator-resumable pause, not a terminal halt.
+    // Operator may know the underlying cause is fixed and resume
+    // (one more attempt) or raise the cap via
+    // intent.max_retries_adjusted.
     const dot = `digraph G {
       start [shape=Mdiamond];
       flaky [shape=box, max_retries=0];
@@ -125,12 +130,29 @@ describe("executor — retry-policy enforcement", () => {
       handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
     });
     enqueue(r, "rp2", "start");
-    await driveUntilTerminal(r, "rp2");
+    // driveUntilTerminal would loop forever now (paused isn't terminal),
+    // so drive runOne directly until we see the pause.
+    r.store.claimNextRun(1);
+    await runOne("rp2", {
+      store: r.store,
+      dispatcher: r.dispatcher,
+      registry: new AbortRegistry(),
+      tools: r.tools,
+      llmCall: r.llmCall,
+      maxConcurrentRuns: 1,
+      maxTurnsForTesting: 10,
+      shutdownSignal: new AbortController().signal,
+    });
 
     const state = r.store.getState("rp2")!;
-    expect(state.status).toBe("halted");
-    const halt = r.store.getEvents("rp2").find((e) => e.type === "fact.run_halted");
-    expect((halt?.payload as { reason: string }).reason).toBe("max_retries_exceeded");
+    expect(state.status).toBe("paused");
+    const pause = r.store
+      .getEvents("rp2")
+      .filter((e) => e.type === "fact.run_paused")
+      .pop();
+    expect((pause?.payload as { reason: string }).reason).toBe("max_retries");
+    expect((pause?.payload as { nodeId: string }).nodeId).toBe("flaky");
+    expect((pause?.payload as { currentLimit: number }).currentLimit).toBe(0);
     r.store.close();
   });
 

@@ -507,11 +507,22 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // otherwise run until budget or wall-clock killed it. This is the
       // last-resort guard; workflow authors should bound loops via
       // `max_retries` on backward edges.
-      if (dispatches >= maxLoops) {
+      //
+      // The override key is read on every iteration so a Raise & Resume
+      // adjustment takes effect on the next dispatch — `dispatches` is
+      // a JS-local counter that resets on every runOne entry, so the
+      // resume after a pause already starts at 0; the override raises
+      // the ceiling for *this* dispatch loop's pass.
+      const effectiveMaxLoops = readNumber(state.routing[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+      if (dispatches >= effectiveMaxLoops) {
         await tryAppendFact(opts.store, runId, state.version, [
           {
-            type: "fact.run_halted",
-            payload: { reason: "max_loops", detail: `exceeded ${maxLoops} dispatches` },
+            type: "fact.run_paused",
+            payload: {
+              reason: "max_loops",
+              currentLimit: effectiveMaxLoops,
+              dispatches,
+            },
           },
         ]);
         return;
@@ -941,8 +952,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             opts.store.getState(runId)?.version ?? state.version,
             [
               {
-                type: "fact.run_halted",
-                payload: { reason: "abort_loop" },
+                type: "fact.run_paused",
+                payload: {
+                  reason: "abort_loop",
+                  nodeId: currentNode,
+                  consecutiveAborts,
+                },
               },
             ],
           );
@@ -1101,10 +1116,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             synthOutcomes.set(currentNode, result.outcomeStatus);
           }
           if (isTerminalNext) {
+            const goalGateOverride = readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
             const action = goalGateStep({
               graph,
               outcomes: synthOutcomes,
               retries: readGoalGateRetries(state.routing),
+              ...(goalGateOverride > 0 ? { capOverride: goalGateOverride } : {}),
             });
             if (action.kind === "retarget") {
               goalGateRetargetTarget = action.target;
@@ -1119,10 +1136,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
                 type: "goal_gate.unsatisfied",
                 payload: { gate: action.gate },
               });
+              const goalGateLimit =
+                readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
+                (typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3);
               result = {
                 kind: "halt",
                 reason: "goal_gate_unsatisfied",
                 detail: action.gate,
+                pauseContext: { currentLimit: goalGateLimit },
               };
             }
           }
@@ -1165,7 +1186,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const completedNode = graph?.nodes[currentNode];
         if (graph != null && completedNode != null) {
           const backoff = resolveBackoff(completedNode.attrs, graph.attrs);
-          const maxRetries = resolveMaxRetries(completedNode.attrs, graph.attrs);
+          // Operator override (intent.max_retries_adjusted) takes
+          // precedence over the static node/graph attrs. Stage 3
+          // pause-converted halt: a Raise & Resume after a max_retries
+          // pause should let the next dispatch see the higher cap.
+          const maxRetriesOverride = readNumber(state.routing[maxRetriesOverrideKey(currentNode)]);
+          const maxRetries =
+            maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
           const allowPartial = completedNode.attrs.allow_partial === true;
           const counterKey = retryCountKey(currentNode);
           const priorRetries = readNumber(state.routing[counterKey]);
@@ -1211,6 +1238,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               kind: "halt",
               reason: "max_retries_exceeded",
               detail: `node "${currentNode}" exhausted ${maxRetries} retries`,
+              pauseContext: { currentLimit: maxRetries, attempts: priorRetries + 1 },
             };
           } else if (action.kind === "advance_partial") {
             observability.push({
@@ -1307,16 +1335,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
       }
 
-      // Provider exhausted: swap fact.run_paused for a terminal halt with
-      // reason="provider_exhausted". Carry the attempt count + cap-reason
-      // in detail for post-mortem.
+      // Provider exhausted: rewrite the existing
+      // fact.run_paused{reason:"provider_error"} (from result-to-facts'
+      // pause_provider arm) to a recoverable
+      // fact.run_paused{reason:"provider_exhausted"} pause. Stage 3 of
+      // recoverable-budget-pause.md flipped this from terminal halt to
+      // paused — operators may know the underlying transport issue is
+      // fixed and want to retry the chain. cumulativeMs is best-effort
+      // 0 because the executor doesn't track elapsed time across the
+      // chain locally; the per-attempt facts in fact.provider_retry_attempted
+      // carry the timeline.
       if (providerExhausted !== undefined) {
         facts = facts.filter((f) => f.type !== "fact.run_paused");
         facts.push({
-          type: "fact.run_halted",
+          type: "fact.run_paused",
           payload: {
             reason: "provider_exhausted",
-            detail: `provider retry chain exhausted after ${providerExhausted.attempt} attempts (${providerExhausted.reason})`,
+            nodeId: state.currentNode ?? "",
+            attempts: providerExhausted.attempt,
+            cumulativeMs: 0,
           },
         });
       }
@@ -1656,6 +1693,17 @@ function deriveResumeOf(
  * `budget.warn` event. The budget policy reads + extends it; the
  * executor merges new tags into the routing patch on commit. */
 const BUDGET_WARNED_KEY = "__budget_warned";
+
+/** Routing keys that operators write via cap-adjustment intents to
+ * raise the per-run ceiling for one of the sibling-halt-converted
+ * pause reasons. Stage 3 of recoverable-budget-pause.md. The executor
+ * reads these BEFORE consulting the static graph/node attrs. */
+const MAX_LOOPS_OVERRIDE_KEY = "max_loops_override";
+const MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY = "max_goal_gate_retries_override";
+/** Per-node max_retries override; key is `max_retries_override.<nodeId>`. */
+function maxRetriesOverrideKey(nodeId: string): string {
+  return `max_retries_override.${nodeId}`;
+}
 
 function readBudgetWarned(routing: Record<string, unknown>): ReadonlySet<string> {
   const v = routing[BUDGET_WARNED_KEY];

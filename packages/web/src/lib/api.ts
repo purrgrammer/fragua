@@ -794,6 +794,34 @@ export async function adjustBudget(
   return postJson(`/runs/${encodeURIComponent(id)}/budget`, body, isAcceptedSeq);
 }
 
+/** Raise a node's `max_retries` cap on a `paused{reason:"max_retries"}`
+ *  run. Stage 3 of recoverable-budget-pause.md. Sibling of
+ *  {@link adjustBudget}; same Raise & Resume bundle pattern. */
+export async function adjustMaxRetries(
+  id: string,
+  nodeId: string,
+  newLimit: number,
+  note?: string,
+): Promise<{ seq: number }> {
+  const body: { nodeId: string; newLimit: number; note?: string } = { nodeId, newLimit };
+  if (note !== undefined) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/max_retries`, body, isAcceptedSeq);
+}
+
+/** Raise `max_goal_gate_retries` on a `paused{reason:"goal_gate"}` run. */
+export async function adjustGoalGate(id: string, newLimit: number, note?: string): Promise<{ seq: number }> {
+  const body: { newLimit: number; note?: string } = { newLimit };
+  if (note !== undefined) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/goal_gate`, body, isAcceptedSeq);
+}
+
+/** Raise the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run. */
+export async function adjustMaxLoops(id: string, newLimit: number, note?: string): Promise<{ seq: number }> {
+  const body: { newLimit: number; note?: string } = { newLimit };
+  if (note !== undefined) body.note = note;
+  return postJson(`/runs/${encodeURIComponent(id)}/max_loops`, body, isAcceptedSeq);
+}
+
 // ── Schedules ────────────────────────────────────────────────────────
 // Mirror of `Schedule` from @swarm/store/types.ts. Camel-case on the wire
 // per the server's `schedule-routes.ts` payload (the store boundary

@@ -147,14 +147,14 @@ What to look for:
 
 - **Intent writes** (`intent.*`, `writer='web'`) preceding an abort — e.g. `intent.pause_requested` just before `fact.node_aborted { cause:"pause" }` explains the pause cleanly.
 - **`fact.node_aborted { cause }`** — `"steer" | "pause" | "cancel" | "timeout" | "shutdown" | "abort_loop"`. Steer aborts pair with a prior `intent.steering_requested`; timeouts don't.
-- **Repeated `fact.node_started { iteration: N }` on the same node** — loop through backward conditional edges. Hit on `max_retries` → `fact.run_halted { reason: "max_retries_exceeded" }`.
+- **Repeated `fact.node_started { iteration: N }` on the same node** — loop through backward conditional edges. Hit on `max_retries` → `fact.run_paused { reason: "max_retries" }` (operator-resumable; raise via `intent.max_retries_adjusted`).
 - **`fact.side_effect_intent` without a matching `_done`/`_failed`** by `idempotencyKey` — crash between the two quarantines on next daemon start. Orphan-side-effect invariant (ARCHITECTURE §1.1).
 - **`fact.handler_timeout_leaked`** — executor hard-timed-out a handler that ignored `ctx.signal`. Handler bug (`docs/handler-contract.md` §4 rule 1).
 - **`fact.daemon_takeover`** — another daemon reclaimed a stale lock. Expect `fact.run_requeued_after_crash` nearby on in-flight runs.
 - **`agent.info { event: "thread_rehydrated", thread_id, message_count }`** — a codergen node picked up a `thread_id` with prior messages from a previous backend instance. Fidelity is invariant; the Agent's `initialState.messages` is seeded byte-identical. Informational. If you see this during a "why did my run skip context?" investigation, the answer is it didn't.
 - **`run_state.routing` keys worth a glance:**
   - `goal_gates.<nodeId>` — last outcome of every visited gate.
-  - `goal_gates.__retries` — cumulative retarget count. Equals `max_goal_gate_retries` (default 3) → `fact.run_halted { reason: "goal_gate_unsatisfied" }`.
+  - `goal_gates.__retries` — cumulative retarget count. Equals `max_goal_gate_retries` (default 3) → `fact.run_paused { reason: "goal_gate" }` (operator-resumable; raise via `intent.goal_gate_adjusted`).
   - `internal.auto_resume_at` — wall-clock ms when a `paused_auto` run (reason `provider_retry` or `handler_retry`) is due to wake (one routing key powers both reasons; canonical declaration: `packages/core/src/types/context.ts` `AUTO_RESUME_AT_KEY`). In the past + still paused → wake-pending sweeper is wedged (check daemon heartbeat).
   - `__budget_warned.*` — tags suppressing duplicate `budget.warn` events.
 
@@ -288,15 +288,15 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | Terminal fact | `reason` / cause | What it means |
 |---|---|---|
 | `fact.run_halted` | `"aborted_exit"` | Codergen agent emitted `<abort>…</abort>`. Pull the assistant turn (§6). |
-| `fact.run_halted` | `"max_retries_exceeded"` | Backward conditional edge consumed the target's `max_retries`. |
-| `fact.run_halted` | `"goal_gate_unsatisfied"` | `goal_gate=true` node never settled in SUCCESS/PARTIAL_SUCCESS, retarget chain (SPEC §3.4) exhausted past `max_goal_gate_retries`. Authoritative source: `routing.goal_gates.<gateId>` for last outcomes, `goal_gates.__retries` for cumulative count. Payload `detail` may name the failed gate but isn't structured. |
-| `fact.run_halted` | `"abort_loop"` | 5 consecutive aborts without progress (`ABORT_LOOP_CEILING`). |
+| `fact.run_halted` | `"max_retries_exceeded"` (Stage 3 — converted) | Backward conditional edge consumed the target's `max_retries`. **Now emits `fact.run_paused{reason:"max_retries"}`** instead of halting. Operator may grant more retries via `intent.max_retries_adjusted`. |
+| `fact.run_halted` | `"goal_gate_unsatisfied"` (Stage 3 — converted) | `goal_gate=true` node never settled in SUCCESS/PARTIAL_SUCCESS, retarget chain (SPEC §3.4) exhausted past `max_goal_gate_retries`. **Now emits `fact.run_paused{reason:"goal_gate"}`** instead of halting. |
+| `fact.run_halted` | `"abort_loop"` (Stage 3 — converted) | 5 consecutive aborts without progress (`ABORT_LOOP_CEILING`). **Now emits `fact.run_paused{reason:"abort_loop"}`** instead of halting. |
 | `fact.run_halted` | `"schema_drift"` | Run's `schema_version` doesn't match daemon's `CURRENT_SCHEMA_VERSION`. Long-paused run across an upgrade. Not auto-recoverable. |
 | `fact.run_halted` | `"budget"` | Cumulative cost or tokens hit a declared ceiling — graph-level `budget_usd`/`budget_tokens` or node-level `max_cost_usd`/`max_tokens`. The preceding `budget.warn` event names which ceiling tripped. |
 | `fact.run_halted` | `"error"` | Generic handler error. `detail` is a string; cross-reference with `fact.node_aborted { cause:"error" }`. |
-| `fact.run_halted` | `"max_loops"` | `DEFAULT_MAX_LOOPS = 1000` tripped — workflow looped without aborting and without exhausting `max_retries`. |
+| `fact.run_halted` | `"max_loops"` (Stage 3 — converted) | `DEFAULT_MAX_LOOPS = 1000` tripped — workflow looped without aborting and without exhausting `max_retries`. **Now emits `fact.run_paused{reason:"max_loops"}`** instead of halting. |
 | `fact.run_halted` | `"occ_exhausted"` | OCC retry budget exhausted on one `(nodeId, iteration)`. Payload: `occContext: { count, nodeId, iteration, lastVersion, attemptedFactType }`. |
-| `fact.run_halted` | `"provider_exhausted"` | Auto-retry chain capped (5 attempts or 5 cumulative minutes). Operator decides via `intent.resume`, `intent.cancel`, or steer to a different provider. Walk the chain via `fact.provider_retry_attempted` events. |
+| `fact.run_halted` | `"provider_exhausted"` (Stage 3 — converted) | Auto-retry chain capped (5 attempts or 5 cumulative minutes). **Now emits `fact.run_paused{reason:"provider_exhausted"}`** instead of halting. Operator decides via `intent.resume` (start a fresh chain), `intent.cancel`, or steer to a different provider. Walk the chain via `fact.provider_retry_attempted` events. |
 | `fact.run_halted` | `"timeout_exhausted"` | Watchdog `maxMs` overrun fired 3 times on the same `(nodeId)` (per-`(nodeId)` counter at `routing.internal.timeout_retries.<nodeId>`). Detail names the node. Each prior watchdog fired a paired `fact.node_aborted{cause:"timeout"}` + `fact.run_paused{reason:"timeout_retry"}` so the chain is reconstructable; the third one halts directly without another pause. Operator action: bump the node's `max_ms` (workflow-level fix) or split the work into smaller nodes. |
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to `intent.cancel_requested`. |
@@ -308,6 +308,11 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_paused` | `reason: "provider_retry"` | Auto-retryable provider transport (408/429/5xx/529/network). Status: `paused_auto`. `resumeAt` on payload + `routing.internal.auto_resume_at`; wake-pending re-queues automatically. Operator may short-circuit with `intent.resume`. |
 | `fact.run_paused` | `reason: "handler_retry"` | Node returned `outcome=retry`; engine scheduled a backoff. Status: `paused_auto`. Slot freed during the wait. `routing.internal.auto_resume_at` (ms) tells you when wake-pending will re-queue it. |
 | `fact.run_paused` | `reason: "timeout_retry"` | Watchdog `maxMs` overrun. Status: `paused_auto`. Paired with `fact.node_aborted{cause:"timeout"}` for partial-spend metrics. Backoff: 5s on first timeout, doubling to 60s ceiling. Per-`(nodeId)` counter at `routing.internal.timeout_retries.<nodeId>`; cap is 3 → `fact.run_halted{reason:"timeout_exhausted"}`. Operator may short-circuit with `intent.resume`; transcript continuity is preserved (the same `(nodeId, iteration)` re-dispatches with `priorMessages` rehydrated). |
+| `fact.run_paused` | `reason: "max_retries"` | Node's retry counter exhausted. Status: `paused`. Naked `intent.resume` grants one more attempt; `intent.max_retries_adjusted{nodeId, newLimit}` raises the per-node cap (writes `routing.max_retries_override.<nodeId>`). |
+| `fact.run_paused` | `reason: "goal_gate"` | Goal-gate retarget chain exhausted past `max_goal_gate_retries`. Status: `paused`. `intent.goal_gate_adjusted{newLimit}` raises the cap (writes `routing.max_goal_gate_retries_override`). |
+| `fact.run_paused` | `reason: "max_loops"` | Per-run dispatch ceiling exceeded. Status: `paused`. `intent.max_loops_adjusted{newLimit}` raises the cap (writes `routing.max_loops_override`); naked resume re-enters with a fresh JS-local counter at the same effective cap. |
+| `fact.run_paused` | `reason: "abort_loop"` | `consecutiveAborts >= abortLoopCeiling` (default 5). Status: `paused`. No per-run knob — ceiling is daemon config. Naked `intent.resume` only. Usually a real bug; resume just to confirm or after fixing the underlying cause. |
+| `fact.run_paused` | `reason: "provider_exhausted"` | Provider auto-retry chain capped (5 attempts or 5 cumulative minutes). Status: `paused`. No per-run knob — chain config is daemon-wide. Naked `intent.resume` starts a fresh chain (operator may have fixed the underlying transport issue). |
 | `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without respecting `ctx.signal`. Handler bug. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
 | Status `paused_auto`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (§1). |

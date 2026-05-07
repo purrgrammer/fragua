@@ -142,6 +142,12 @@ export interface GoalGateInput {
   /** Cumulative retarget count for this run; starts at 0. Bumped each
    * time the executor jumps back via this reducer. */
   retries: number;
+  /** Operator override for the per-run retarget cap, threaded by the
+   * executor from `routing.max_goal_gate_retries_override` (set via
+   * `intent.goal_gate_adjusted`). Takes precedence over the static
+   * `graph.attrs.max_goal_gate_retries`. Stage 3 of
+   * docs/proposals/recoverable-budget-pause.md. */
+  capOverride?: number;
 }
 
 /** Decide what to do when traversal reaches a terminal. Pure. */
@@ -149,7 +155,7 @@ export function goalGateStep(input: GoalGateInput): GoalGateAction {
   const check = checkGoalGates(input.graph, input.outcomes);
   if (check.satisfied) return { kind: "exit" };
 
-  const cap = maxGoalGateRetries(input.graph.attrs);
+  const cap = input.capOverride && input.capOverride > 0 ? input.capOverride : maxGoalGateRetries(input.graph.attrs);
   if (input.retries >= cap) {
     return { kind: "halt", reason: "goal_gate_unsatisfied", gate: check.failedGate };
   }
