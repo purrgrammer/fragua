@@ -229,6 +229,38 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     const events: StoredEvent[] = [{ ...ev("edge.selected", { from: "a", to: "b" }), seq: 1 }];
     expect(deriveSelectedEdges(events)).toEqual([{ from: "a", to: "b", iteration: 0 }]);
   });
+
+  // The bug: the executor used to record edge.selected at edge-pick time,
+  // before the §3.4 goal-gate check could override result.nextNode with
+  // the gate's retry_target. Newer daemon suppresses these emissions at
+  // source, but historical runs still carry the misleading event;
+  // reconcile here so the projection is honest across both.
+  test("drops edge.selected when immediately followed by goal_gate.retarget for the same source", () => {
+    const events: StoredEvent[] = [
+      // Failing gate "selected" the configured fail-edge to done...
+      {
+        ...ev("edge.selected", { from: "review", to: "done", iteration: 0, rule: "condition" }),
+        seq: 100,
+      },
+      // ...but goal-gate retargeted to audit instead — the edge above was never traversed.
+      { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 101 },
+      { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 102 },
+      // Second-attempt success does fire and IS retained.
+      { ...ev("edge.selected", { from: "review", to: "done", iteration: 0, rule: "weight" }), seq: 200 },
+      { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 201 },
+    ];
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "review", to: "done", iteration: 0 }]);
+  });
+
+  test("keeps edge.selected when goal_gate.retarget targets a different source node", () => {
+    // A retarget on a different gate must not silently swallow an
+    // unrelated node's edge selection.
+    const events: StoredEvent[] = [
+      { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0 }), seq: 1 },
+      { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 2 },
+    ];
+    expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0 }]);
+  });
 });
 
 describe("deriveNodeStates — run-halt terminal patching", () => {
