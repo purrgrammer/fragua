@@ -75,6 +75,26 @@ describe("wait.human handler", () => {
     }
   });
 
+  // The bug: when multiple HITL options route to the same target (e.g.
+  // `[O] Output only -> done` and `[R] Reject -> done`), the engine's
+  // edge selector falls through to Step 3 (`suggested_next_ids`) and
+  // picks the first edge to that target — silently ambiguating which
+  // option the operator chose in `selectedEdges` / UI highlighting.
+  // The fix surfaces the chosen option's label as `preferredLabel` so
+  // Step 2 disambiguates by edge label first.
+  test("transition carries preferredLabel so the engine disambiguates parallel edges to the same target", async () => {
+    const spec = makeWaitHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ hitlInput: { selected: "R" } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.preferredLabel).toBe("[R] Revise");
+      // Both fields stay populated — preferredLabel narrows when labels
+      // disambiguate; suggestedNextIds remains the fallback when an
+      // author hasn't labelled their HITL edges.
+      expect(result.suggestedNextIds).toEqual(["draft"]);
+    }
+  });
+
   test("call with bare string hitlInput resolves option by key", async () => {
     const spec = makeWaitHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: "R" }));

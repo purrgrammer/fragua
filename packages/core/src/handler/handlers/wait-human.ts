@@ -71,6 +71,14 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
 
     return {
       kind: "transition",
+      // `preferredLabel` lets the engine's Step-2 selector pick the
+      // exact edge the operator chose when multiple HITL options route
+      // to the same target (e.g. `[O] Output only -> done` and `[R]
+      // Reject -> done` both terminate at `done`). Without it the
+      // selector falls through to Step 3 (`suggested_next_ids`) and
+      // picks the first edge to the target — silently ambiguating the
+      // operator's choice in `selectedEdges` / UI highlighting.
+      preferredLabel: chosen.label,
       suggestedNextIds: [chosen.to],
       routingDelta,
       tokens: 0,
