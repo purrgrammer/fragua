@@ -686,6 +686,17 @@ function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
                        WHERE status IN ('paused_provider_retry', 'paused_retry'));
     DELETE FROM run_state
       WHERE status IN ('paused_provider_retry', 'paused_retry');
+
+    -- Defensive orphan vacuum. Earlier migrations (notably v6 → v7's
+    -- DELETE FROM run_state WHERE kind='conversation', plus any past
+    -- crash-cleanup that ran with FKs off) could have left events /
+    -- messages / artifacts whose run_id no longer exists in run_state.
+    -- foreign_key_check at the end of this step would surface those
+    -- as v8 violations even though they predate v8. Sweep them now.
+    DELETE FROM events     WHERE run_id NOT IN (SELECT run_id FROM run_state);
+    DELETE FROM messages   WHERE run_id NOT IN (SELECT run_id FROM run_state);
+    DELETE FROM artifacts  WHERE run_id NOT IN (SELECT run_id FROM run_state);
+
     -- Orphan blobs: ref-counted by artifacts via blob_sha. Drop
     -- unreferenced rows so foreign_key_check passes after the migration.
     DELETE FROM blobs
@@ -693,6 +704,7 @@ function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
 
     -- (3) retire the historical fact-type. Surviving runs (after the
     --     deletes above) must not carry it.
+    DELETE FROM events WHERE type = 'fact.run_paused_retry';
 
     -- (1) CHECK rebuild — table swap. Same shape as v7.
     CREATE TABLE run_state_v8 (
