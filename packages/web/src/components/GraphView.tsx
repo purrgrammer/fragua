@@ -856,7 +856,7 @@ export function toFlowGraph(
     const isSkipEdge = !isBackEdge && !isSelfLoop && sd !== undefined && td !== undefined && td - sd > 1;
     const useSideHandles = isBackEdge || isSelfLoop || isSkipEdge;
     const baseLabel = edgeLabelOf(e);
-    const outcome = outcomeOf(e);
+    const declaredOutcome = outcomeOf(e);
     // `loop_restart=true` edges terminate the current run and re-launch
     // with a fresh log directory. Routed via the loop handles + loop
     // marker so direction reads as "cycle" not "data flow"; the label
@@ -880,6 +880,11 @@ export function toFlowGraph(
     const traversalCount = traversalCounts.get(edgeKey(e.from, e.to)) ?? 0;
     const taken = traversalCount > 0;
     const dim = hasRun && !taken;
+    // In a run, an `outcome=fail` edge that never fired is just topology —
+    // rendering it red would broadcast a failure that didn't happen.
+    // Suppress the outcome accent when the run exists and the edge wasn't
+    // taken; the workflow-detail view (no run) keeps it for topology reading.
+    const outcome = hasRun && !taken ? undefined : declaredOutcome;
     // Multi-fire edges (back-edges that re-traverse on REJECT, self-loops
     // hitting max_retries, retargets that loop) get an `×N` count badge
     // folded into the label pill so operators can see at a glance how

@@ -1269,4 +1269,65 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
     expect(byPair.get("a->b")?.traversalCount).toBe(1);
     expect(byPair.get("b->done")?.traversalCount).toBe(1);
   });
+
+  // The bug: an `outcome=fail` exit edge that never fired was rendering
+  // with the FAIL marker + red stroke + red label pill (just at 35%
+  // opacity). On a graph with several gate nodes this lit up the
+  // right-hand side with red FAIL pills even on a clean run, suggesting
+  // failures that never happened. Fix: in run view, suppress the
+  // outcome accent on untaken edges so they read as neutral hairlines.
+  // Workflow-detail view (no run) keeps the accent for topology reading.
+  it("suppresses outcome accent on untaken fail edges during a run", () => {
+    // Mirrors the user-reported screenshot: an audit gate has a
+    // success path (continue) and a skip-fail path (jump to `done`).
+    // On a clean run only the success edge fires; the fail skip-edge
+    // must NOT broadcast red.
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      audit [shape=box]
+      review [shape=box]
+      done [shape=Msquare]
+      start -> audit
+      audit -> review [condition="outcome=success"]
+      audit -> done [condition="outcome=fail"]
+      review -> done
+    }`;
+    const graph = parseDotSource(src);
+
+    // Run took the success path through review; the audit -> done
+    // fail skip-edge never fired.
+    const runDetail = makeDetail({
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "audit", iteration: 0, state: "completed", lastEventSeq: 2 },
+        { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 3 },
+        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 4 },
+      ],
+      selectedEdges: [
+        { from: "start", to: "audit", iteration: 0 },
+        { from: "audit", to: "review", iteration: 0 }, // success branch
+        { from: "review", to: "done", iteration: 0 },
+      ],
+      workflowSource: src,
+      status: "success",
+    });
+    const runEdges = toFlowGraph(runDetail, graph).flowEdges;
+    const failSkipRun = runEdges.find((e) => e.source === "audit" && e.target === "done");
+    expect(failSkipRun).toBeDefined();
+    expect((failSkipRun?.data as { dim?: boolean }).dim).toBe(true);
+    // Load-bearing: untaken fail edges drop the outcome accent in run
+    // view so they don't broadcast a failure that didn't happen.
+    expect((failSkipRun?.data as { outcome?: string }).outcome).toBeUndefined();
+
+    // The taken success edge keeps its outcome accent.
+    const successEdgeRun = runEdges.find((e) => e.source === "audit" && e.target === "review");
+    expect((successEdgeRun?.data as { outcome?: string }).outcome).toBe("success");
+
+    // Workflow-detail view (no run) preserves the declared outcome on
+    // every edge — operators reading the topology need the FAIL
+    // semantics visible.
+    const detailEdges = toFlowGraph(null, graph).flowEdges;
+    const failSkipDetail = detailEdges.find((e) => e.source === "audit" && e.target === "done");
+    expect((failSkipDetail?.data as { outcome?: string }).outcome).toBe("fail");
+  });
 });
