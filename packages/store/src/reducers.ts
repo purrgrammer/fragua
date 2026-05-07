@@ -1,4 +1,4 @@
-import type { FactEvent, RunMetrics, RunState, RunStatus } from "./types.ts";
+import { AUTO_WAKE_PAUSE_REASONS, type FactEvent, type RunMetrics, type RunState, type RunStatus } from "./types.ts";
 
 export function emptyMetrics(): RunMetrics {
   return {
@@ -140,21 +140,10 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.run_paused": {
       closeDispatchInterval(next, now);
-      // Only `provider_error` carries `policy`. Auto-retry policy →
-      // paused_provider_retry (wake-pending auto-resumes once
-      // `auto_resume_at` elapses). Everything else → paused (operator
-      // must intent.resume).
-      const policy = fact.payload.reason === "provider_error" ? fact.payload.policy : undefined;
-      next.status = policy === "auto-retry" ? "paused_provider_retry" : "paused";
-      next.nodeStartedAt = null;
-      return next;
-    }
-    case "fact.run_paused_retry": {
-      // Backoff between retries (attractor §3.5 / §3.6). The slot is
-      // released so other queued runs can claim — wake-pending re-queues
-      // this run once `payload.resumeAt` has elapsed.
-      closeDispatchInterval(next, now);
-      next.status = "paused_retry";
+      // Status follows reason 1:1: AUTO_WAKE_PAUSE_REASONS → paused_auto
+      // (daemon timer; wake-pending sweeps `auto_resume_at`); everything
+      // else → paused (operator must `intent.resume`).
+      next.status = AUTO_WAKE_PAUSE_REASONS.has(fact.payload.reason) ? "paused_auto" : "paused";
       next.nodeStartedAt = null;
       return next;
     }

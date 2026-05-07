@@ -145,12 +145,14 @@ export function foldDetailFrame(
       };
     }
     case "fact.run_paused": {
-      // Reason carries on the payload; status is `paused` at the wire
-      // level (the reducer projects auto-retry-policy provider errors
-      // to `paused_provider_retry`, but those don't ride this overlay
-      // path — they go through the auto-resume sweep). Operator-driven
-      // pauses (reason:"operator") and budget pauses arrive here too,
-      // so we can't unconditionally route to `paused_hitl`.
+      // Reason carries on the payload; the reducer projects status to
+      // `paused_auto` for AUTO_WAKE_PAUSE_REASONS (provider_retry /
+      // handler_retry), `paused` otherwise. The auto-wake projection
+      // doesn't ride this overlay path — it goes through the
+      // auto-resume sweep — so the reasons we can see here are
+      // operator-resumable: operator / provider_error / payment_required
+      // / budget. Set runStatus to `paused`; banner reads the reason
+      // from the latest fact payload.
       return { ...prev, status: "paused", runStatus: "paused" };
     }
     case "fact.run_resumed":

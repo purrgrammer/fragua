@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 7
+-- swarm event store schema — Revision 8
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -26,6 +26,15 @@
 -- (`parent_run_id` / `parent_node_id` / `parent_iteration`) are
 -- removed and `workflow_sha` returns to `NOT NULL`. See
 -- docs/proposals/agent-tool.md for the in-tool design.
+-- v7 → v8: pause unification — auto-wake family.
+-- `paused_provider_retry` and `paused_retry` collapse into one
+-- `paused_auto` status. `fact.run_paused_retry` retires; handler
+-- retries fold into `fact.run_paused{reason:"handler_retry"}`.
+-- Provider auto-retry promotes to its own reason `provider_retry`
+-- (was: `provider_error` + `policy:"auto-retry"`). Migration deletes
+-- in-flight runs in the legacy auto-wake states (pre-release, no
+-- prior-state compat — AGENTS.md ground rule #11). See
+-- docs/proposals/recoverable-budget-pause.md Stage 2.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -50,7 +59,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_hitl','paused_provider_retry','paused_retry',
+    'queued','running','paused','paused_hitl','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,

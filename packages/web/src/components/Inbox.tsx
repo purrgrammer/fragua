@@ -69,17 +69,16 @@ const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | und
   },
   // Non-attention statuses — the filter never reaches these, but we
   // exhaustively type the map so a new RunStatus literal forces a
-  // compile-time decision here. paused_provider_retry and paused_retry
-  // are auto-resuming on a timer (no operator action needed); the
-  // operator only sees them in the inbox if the auto-retry chain
-  // exhausts and transitions to halted/paused.
+  // compile-time decision here. paused_auto is auto-resuming on a
+  // timer (no operator action needed); the operator only sees it in
+  // the inbox if the auto-retry chain exhausts and transitions to
+  // halted/paused.
   queued: undefined,
   running: undefined,
   completed: undefined,
   cancelled: undefined,
   halted: undefined,
-  paused_provider_retry: undefined,
-  paused_retry: undefined,
+  paused_auto: undefined,
 };
 
 export interface InboxProps {

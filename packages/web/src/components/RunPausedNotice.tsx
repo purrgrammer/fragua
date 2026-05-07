@@ -42,6 +42,23 @@ type PausePayload =
       metric: "cost" | "tokens";
       limit: number;
       actual: number;
+    }
+  | {
+      reason: "provider_retry";
+      nodeId: string;
+      httpStatus: number | null;
+      provider: string;
+      errorMessage: string;
+      attempt: number;
+      resumeAt: number;
+    }
+  | {
+      reason: "handler_retry";
+      nodeId: string;
+      attempt: number;
+      delayMs: number;
+      resumeAt: number;
+      maxRetries: number;
     };
 
 interface FactRow {
@@ -124,6 +141,10 @@ function pauseTitle(reason: PausePayload["reason"]): string {
       return "Payment required — paused";
     case "budget":
       return "Budget reached — paused";
+    case "provider_retry":
+      return "Provider retry — auto";
+    case "handler_retry":
+      return "Retrying — auto";
   }
 }
 
@@ -139,6 +160,10 @@ function pauseBody(payload: PausePayload): string {
       const unit = payload.metric === "cost" ? "$" : "";
       return `Budget reached: ${payload.scope} ${payload.metric} ${unit}${payload.actual} ≥ ${unit}${payload.limit}.`;
     }
+    case "provider_retry":
+      return `${payload.provider} returned ${payload.httpStatus ?? "network error"}; retrying (attempt ${payload.attempt}). Resume to short-circuit the wait.`;
+    case "handler_retry":
+      return `Node ${payload.nodeId} retrying (attempt ${payload.attempt}/${payload.maxRetries}). Resume to short-circuit the wait.`;
   }
 }
 

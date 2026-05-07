@@ -20,7 +20,7 @@ async function driveUntilTerminal(r: ReturnType<typeof rig>, runId: string): Pro
     let state = r.store.getState(runId);
     if (state == null) return;
     if (TERMINAL.has(state.status)) return;
-    if (state.status === "paused_retry") {
+    if (state.status === "paused_auto") {
       // Skip past any pending resumeAt — tests use small delays anyway.
       wakePending(r.store, () => Date.now() + 60_000);
       state = r.store.getState(runId)!;
@@ -134,7 +134,7 @@ describe("executor — retry-policy enforcement", () => {
     r.store.close();
   });
 
-  test("paused_retry releases the concurrency slot — claimNextRun count excludes it", async () => {
+  test("paused_auto (handler_retry) releases the concurrency slot — claimNextRun count excludes it", async () => {
     // The whole point of the wake-pending move: a run sleeping during
     // backoff doesn't hold a `status='running'` slot. claimNextRun
     // counts running runs, so other queued runs can claim while this
@@ -183,9 +183,9 @@ describe("executor — retry-policy enforcement", () => {
     });
 
     const state = r.store.getState("rp4")!;
-    expect(state.status).toBe("paused_retry");
+    expect(state.status).toBe("paused_auto");
     // The slot is free — claimNextRun's `WHERE status = 'running'` count
-    // excludes paused_retry runs. With this test's single run sleeping,
+    // excludes paused_auto runs. With this test's single run sleeping,
     // the count is 0 not 1; another queued run could claim immediately.
     const counts = r.store.runStateCounts();
     expect(counts.running).toBe(0);

@@ -40,11 +40,12 @@ export type {
   IntentEvent,
   IntentType,
   MessageRole,
+  PauseReason,
   QuarantineReason,
   RawEvent,
   RunStatus,
 } from "./swarm-events.ts";
-export { ALL_DAEMON_EVENT_TYPES, FEED_EVENT_KINDS } from "./swarm-events.ts";
+export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS, FEED_EVENT_KINDS } from "./swarm-events.ts";
 
 /** Swarm-specific custom message type: the assembled system prompt
  * for a single LLM call. Persisted in the `messages` table so UIs

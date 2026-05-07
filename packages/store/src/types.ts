@@ -17,6 +17,7 @@ import type {
   IntentEvent as IntentEventFromTypes,
   IntentType as IntentTypeFromTypes,
   MessageRole as MessageRoleFromTypes,
+  PauseReason as PauseReasonFromTypes,
   QuarantineReason as QuarantineReasonFromTypes,
   RunStatus as RunStatusFromTypes,
 } from "@swarm/types";
@@ -60,11 +61,12 @@ export type {
   IntentEvent,
   IntentType,
   MessageRole,
+  PauseReason,
   QuarantineReason,
   RawEvent,
   RunStatus,
 } from "@swarm/types";
-export { ALL_DAEMON_EVENT_TYPES } from "@swarm/types";
+export { ALL_DAEMON_EVENT_TYPES, AUTO_WAKE_PAUSE_REASONS } from "@swarm/types";
 export type {
   AnalyticsWindow,
   BucketedWindow,
@@ -107,8 +109,17 @@ type QuarantineReason = QuarantineReasonFromTypes;
 type IntentType = IntentTypeFromTypes;
 type FactType = FactTypeFromTypes;
 type MessageRole = MessageRoleFromTypes;
+type PauseReason = PauseReasonFromTypes;
 // Re-affirm so unused-import check passes on the aliases above.
-type _Touch = AnyEventFromTypes | EventEnvelope | HaltReason | QuarantineReason | IntentType | FactType | MessageRole;
+type _Touch =
+  | AnyEventFromTypes
+  | EventEnvelope
+  | HaltReason
+  | QuarantineReason
+  | IntentType
+  | FactType
+  | MessageRole
+  | PauseReason;
 
 export interface RunMetrics {
   /** Sum across input + output + cacheRead + cacheWrite. The "what hits
@@ -698,8 +709,8 @@ export interface IEventReader {
   /**
    * Run rows in the requested statuses, optionally narrowed to those
    * whose `routing.internal.auto_resume_at` is at or before the given
-   * cutoff (used by the daemon's wake-pending sweep for paused_retry /
-   * paused_provider_retry timer wake). Returns `{ runId, version,
+   * cutoff (used by the daemon's wake-pending sweep for `paused_auto`
+   * timer wake — both provider and handler retries). Returns `{ runId, version,
    * lastAppliedSeq, status }` so the caller can attempt OCC-protected
    * fact appends without a second per-run round-trip. SQL filter — the
    * daemon reaching for `db` directly was the historical alternative.

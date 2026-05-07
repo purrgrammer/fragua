@@ -135,8 +135,10 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
     case "pause_provider": {
       // 402 → reason="payment_required" (top-up off-ledger). Anything else
-      // in the manual class (and any auto-retry path — that's decorated
-      // later in the executor with policy/attempt/resumeAt) → reason="provider_error".
+      // in the manual class lands as reason="provider_error"; the
+      // executor rewrites to reason="provider_retry" if the
+      // provider-retry decision returns auto-retry (transient transport
+      // class — 408/429/5xx/529/network).
       if (result.httpStatus === 402) {
         facts.push({
           type: "fact.run_paused",

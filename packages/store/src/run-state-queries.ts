@@ -177,8 +177,8 @@ const SELECT_WAKE_CANDIDATES_BASE_SQL = `
 
 /** Run rows in the given statuses. When `autoResumeBefore` is supplied
  *  the row also has to carry `routing.internal.auto_resume_at` ≤ that
- *  ms cutoff — used for paused_retry / paused_provider_retry timer
- *  wake. */
+ *  ms cutoff — used for `paused_auto` timer wake (covers both provider
+ *  and handler retries). */
 export function selectWakeCandidates(
   db: Database,
   opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number },

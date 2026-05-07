@@ -65,6 +65,43 @@ function pinV5(db: Database): void {
       billed_tokens INTEGER GENERATED ALWAYS AS
         (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
     ) STRICT;
+    -- Auxiliary v5 tables that the v8 migration touches when cascading
+    -- deletes for legacy auto-wake runs. Kept minimal — schemas mirror
+    -- schema.sql at v5 but only the columns the migration reads.
+    CREATE TABLE events (
+      run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+      payload TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      PRIMARY KEY (run_id, seq)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE messages (
+      run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+      ordinal INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      role TEXT,
+      node_id TEXT,
+      iteration INTEGER NOT NULL DEFAULT 0,
+      content_hash TEXT,
+      PRIMARY KEY (run_id, ordinal)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE blobs (
+      sha256 TEXT PRIMARY KEY,
+      size_bytes INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE artifacts (
+      run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL,
+      iteration INTEGER NOT NULL DEFAULT 0,
+      key TEXT NOT NULL,
+      blob_sha TEXT NOT NULL REFERENCES blobs(sha256),
+      mime TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (run_id, node_id, iteration, key)
+    ) STRICT, WITHOUT ROWID;
   `);
   db.exec("PRAGMA foreign_keys = ON");
 }

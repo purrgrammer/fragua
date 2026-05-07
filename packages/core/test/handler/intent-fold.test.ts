@@ -188,8 +188,8 @@ describe("foldIntents", () => {
     }
   });
 
-  test("steer on paused_retry is buffered (treated like paused_hitl)", () => {
-    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_retry");
+  test("steer on paused_auto is buffered (treated like paused_hitl)", () => {
+    const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_auto");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.steering).toBe("hint");
@@ -197,8 +197,8 @@ describe("foldIntents", () => {
     }
   });
 
-  test("hitl_input on paused_retry is buffered, not dropped", () => {
-    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "paused_retry");
+  test("hitl_input on paused_auto is buffered, not dropped", () => {
+    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "paused_auto");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.hitlInput).toEqual({ selected: "A" });

@@ -346,8 +346,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         state.status === "halted" ||
         state.status === "paused" ||
         state.status === "paused_hitl" ||
-        state.status === "paused_provider_retry" ||
-        state.status === "paused_retry" ||
+        state.status === "paused_auto" ||
         state.status === "quarantined"
       ) {
         return;
@@ -1076,14 +1075,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
       // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
       // returns outcomeStatus="retry", consult retryStep to decide:
-      //   - retry → emit fact.run_paused_retry (transitions to paused_retry,
-      //     freeing the slot); wake-pending re-queues the run after delayMs
+      //   - retry → emit fact.run_paused{reason:"handler_retry"}
+      //     (transitions to paused_auto, freeing the slot);
+      //     wake-pending re-queues the run after delayMs
       //   - halt → run halts with `max_retries_exceeded`
       //   - advance_partial → rewrite outcomeStatus to "partial_success"
       //     and let edge selection advance (allow_partial branch, §3.5)
       //
       // For the retry path we DO emit fact.node_completed first (metrics
-      // are real spend), THEN swap fact.node_started for fact.run_paused_retry
+      // are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
       // — the run sleeps without a slot held, and resume re-dispatches the
       // same node since state.currentNode points back at the retrying id.
       let retryCounterPatch: Record<string, number> | undefined;
@@ -1223,16 +1223,23 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         }
       }
 
-      // Retry pause: swap fact.node_started for fact.run_paused_retry so
-      // the run releases its concurrency slot during the backoff window.
-      // node_completed is preserved (metrics + the nextNode=currentNode
-      // routing fact). wake-pending re-queues the run once `resumeAt`
-      // has elapsed.
+      // Retry pause: swap fact.node_started for
+      // fact.run_paused{reason:"handler_retry"} so the run releases its
+      // concurrency slot during the backoff window. node_completed is
+      // preserved (metrics + the nextNode=currentNode routing fact).
+      // wake-pending re-queues the run once `resumeAt` has elapsed.
       if (retryPause !== undefined) {
         facts = facts.filter((f) => f.type !== "fact.node_started");
         facts.push({
-          type: "fact.run_paused_retry",
-          payload: retryPause,
+          type: "fact.run_paused",
+          payload: {
+            reason: "handler_retry",
+            nodeId: retryPause.nodeId,
+            attempt: retryPause.attempt,
+            delayMs: retryPause.delayMs,
+            resumeAt: retryPause.resumeAt,
+            maxRetries: retryPause.maxRetries,
+          },
         });
       }
 
@@ -1250,18 +1257,28 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         });
       }
 
-      // Provider auto-retry: extend the existing fact.run_paused payload
-      // (which carries reason="provider_error") with policy + attempt +
-      // resumeAt so the reducer projects status to `paused_provider_retry`
-      // and the wake-pending sweeper auto-resumes once `resumeAt` has
-      // elapsed. The chain is recorded separately via
+      // Provider auto-retry: rewrite the fact.run_paused payload from
+      // reason="provider_error" to reason="provider_retry" with
+      // attempt + resumeAt so the reducer projects status to
+      // `paused_auto` and the wake-pending sweeper auto-resumes once
+      // `resumeAt` has elapsed. The chain is recorded separately via
       // fact.provider_retry_attempted (one per attempt).
       if (providerRetryDecision?.kind === "auto-retry") {
-        for (const f of facts) {
+        for (let i = 0; i < facts.length; i++) {
+          const f = facts[i]!;
           if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
-            f.payload.policy = "auto-retry";
-            f.payload.attempt = providerRetryDecision.attempt;
-            f.payload.resumeAt = providerRetryDecision.resumeAt;
+            facts[i] = {
+              type: "fact.run_paused",
+              payload: {
+                reason: "provider_retry",
+                nodeId: f.payload.nodeId,
+                httpStatus: f.payload.httpStatus,
+                provider: f.payload.provider,
+                errorMessage: f.payload.errorMessage,
+                attempt: providerRetryDecision.attempt,
+                resumeAt: providerRetryDecision.resumeAt,
+              },
+            };
             break;
           }
         }
@@ -1540,7 +1557,7 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-type ResumeOf = "fresh" | "crash" | "paused" | "paused_hitl" | "paused_provider_retry" | "paused_retry" | "quarantined";
+type ResumeOf = "fresh" | "crash" | "paused" | "paused_hitl" | "paused_auto" | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
  * resumeOf field. Walks recent facts looking for the one that flipped
@@ -1561,14 +1578,7 @@ function deriveResumeOf(
     if (e == null) continue;
     if (e.type === "fact.run_resumed") {
       const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;
-      if (
-        fs === "paused" ||
-        fs === "paused_hitl" ||
-        fs === "paused_provider_retry" ||
-        fs === "paused_retry" ||
-        fs === "quarantined"
-      )
-        return fs;
+      if (fs === "paused" || fs === "paused_hitl" || fs === "paused_auto" || fs === "quarantined") return fs;
       return "fresh";
     }
     if (e.type === "fact.run_requeued_after_crash") return "crash";

@@ -25,7 +25,7 @@ bun run swarm providers ls   # at least one provider shows ✓
 bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
-The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused_retry | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
+The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
 
 If the fast path works, nothing else here matters.
 
@@ -133,8 +133,7 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 - `queued` — waiting for a daemon dispatch slot.
 - `paused_hitl` — `wait.human` gate yielded. Resume with `POST /runs/:id/hitl`.
 - `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
-- `paused_retry` — node returned `outcome=retry`; executor scheduled a backoff. The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_retry" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat).
-- `paused_provider_retry` — same shape, driven by an auto-retryable provider transport error (408/429/5xx/529/network).
+- `paused_auto` — daemon owes a clock tick. Reason on `fact.run_paused.payload.reason`: `handler_retry` (node returned `outcome=retry`, engine scheduled a backoff), or `provider_retry` (auto-retryable provider transport error — 408/429/5xx/529/network). The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_auto" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat); operators can short-circuit with `POST /runs/:id/resume`.
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
 - `halted` / `cancelled` — terminal. swarm-debug §8 has the `reason` codes.
 

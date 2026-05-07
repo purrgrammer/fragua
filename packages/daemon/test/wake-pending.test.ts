@@ -317,7 +317,7 @@ describe("wakePending — resume on paused (payment_required)", () => {
   });
 });
 
-describe("wakePending — paused_provider_retry auto-resume", () => {
+describe("wakePending — paused_auto auto-resume (provider_retry)", () => {
   function pauseProviderAutoRetry(r: ReturnType<typeof rig>, runId: string, resumeAt: number): void {
     const s = r.store.getState(runId)!;
     r.store.appendFact(
@@ -326,12 +326,11 @@ describe("wakePending — paused_provider_retry auto-resume", () => {
         {
           type: "fact.run_paused",
           payload: {
-            reason: "provider_error",
+            reason: "provider_retry",
             nodeId: "start",
             httpStatus: 429,
             provider: "stub",
             errorMessage: "rate limited",
-            policy: "auto-retry",
             attempt: 1,
             resumeAt,
           },
@@ -342,11 +341,11 @@ describe("wakePending — paused_provider_retry auto-resume", () => {
     );
   }
 
-  test("auto_resume_at in the past → fact.run_resumed, status=queued, fromStatus=paused_provider_retry", async () => {
+  test("auto_resume_at in the past → fact.run_resumed, status=queued, fromStatus=paused_auto", async () => {
     const r = rig();
     startRun(r, "rpa1");
     pauseProviderAutoRetry(r, "rpa1", Date.now() - 1000);
-    expect(r.store.getState("rpa1")!.status).toBe("paused_provider_retry");
+    expect(r.store.getState("rpa1")!.status).toBe("paused_auto");
     const result = wakePending(r.store);
     expect(result.retryResumed).toContain("rpa1");
     expect(r.store.getState("rpa1")!.status).toBe("queued");
@@ -355,7 +354,7 @@ describe("wakePending — paused_provider_retry auto-resume", () => {
       .filter((e) => e.type === "fact.run_resumed")
       .pop();
     expect(lastFact).toBeDefined();
-    expect((lastFact!.payload as { fromStatus: string }).fromStatus).toBe("paused_provider_retry");
+    expect((lastFact!.payload as { fromStatus: string }).fromStatus).toBe("paused_auto");
     r.store.close();
   });
 
@@ -365,11 +364,11 @@ describe("wakePending — paused_provider_retry auto-resume", () => {
     pauseProviderAutoRetry(r, "rpa2", Date.now() + 60_000);
     const result = wakePending(r.store);
     expect(result.retryResumed).not.toContain("rpa2");
-    expect(r.store.getState("rpa2")!.status).toBe("paused_provider_retry");
+    expect(r.store.getState("rpa2")!.status).toBe("paused_auto");
     r.store.close();
   });
 
-  test("intent.resume on paused_provider_retry also wakes (manual escape hatch)", async () => {
+  test("intent.resume on paused_auto also wakes (manual escape hatch)", async () => {
     const r = rig();
     startRun(r, "rpa3");
     pauseProviderAutoRetry(r, "rpa3", Date.now() + 60_000);

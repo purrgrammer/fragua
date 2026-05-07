@@ -54,7 +54,7 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
 function wakeCancel(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused", "paused_hitl", "quarantined"],
+    statuses: ["paused", "paused_hitl", "paused_auto", "quarantined"],
   });
   for (const row of candidates) {
     const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
@@ -106,15 +106,15 @@ function wakeHitl(store: IEventStore): string[] {
  * Wake any paused_* run that has an unapplied `intent.resume`. Emits
  * `fact.run_resumed { fromStatus, inputIntentSeq }`. Generic counterpart
  * to `intent.hitl_input` — operators use this when there's no payload to
- * deliver (the canonical case is resuming after a provider transport
- * error). Quarantined runs are NOT swept here; they require the typed
- * `intent.unquarantine { resolution }` because the operator has to pick
- * one of treat_as_done / retry / cancel.
+ * deliver (the canonical case is short-circuiting an auto-wake timer or
+ * resuming after a provider transport error). Quarantined runs are NOT
+ * swept here; they require the typed `intent.unquarantine { resolution }`
+ * because the operator has to pick one of treat_as_done / retry / cancel.
  */
 function wakeResume(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused", "paused_hitl", "paused_provider_retry"],
+    statuses: ["paused", "paused_hitl", "paused_auto"],
   });
   for (const row of candidates) {
     const intent = store.getNextPendingIntent(row.runId, "intent.resume", row.lastAppliedSeq);
@@ -143,22 +143,23 @@ function wakeResume(store: IEventStore): string[] {
 }
 
 /**
- * Wake any auto-resumable paused state whose timer has elapsed —
- * `paused_retry` (engine retry-policy backoff) and
- * `paused_provider_retry` (provider transport-error auto-retry). Both
- * write `routing.internal.auto_resume_at` (ms epoch); once `now()`
- * catches up we emit `fact.run_resumed { fromStatus: <status> }` and
- * the run goes back to queued for re-claim. The same node re-dispatches
- * because `fact.node_completed` already pointed nextNode at the
- * retrying node (paused_retry) or the executor still has the run on
- * its current node (paused_provider_retry). Manual-only pause states
+ * Wake any auto-resumable paused state whose timer has elapsed.
+ * `paused_auto` covers both the engine retry-policy backoff
+ * (`reason:"handler_retry"`) and the provider transport-error
+ * auto-retry (`reason:"provider_retry"`). Both write
+ * `routing.internal.auto_resume_at` (ms epoch); once `now()` catches
+ * up we emit `fact.run_resumed { fromStatus: "paused_auto" }` and the
+ * run goes back to queued for re-claim. The same node re-dispatches
+ * because either `fact.node_completed` already pointed nextNode at
+ * the retrying node (handler_retry) or the executor still has the
+ * run on its current node (provider_retry). Manual-only pause states
  * (`paused`, `paused_hitl`) ignore this routing key — they wake on
  * `intent.resume` only.
  */
 function wakeAutoResume(store: IEventStore, now: () => number): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused_retry", "paused_provider_retry"],
+    statuses: ["paused_auto"],
     autoResumeBefore: now(),
   });
   for (const row of candidates) {
@@ -168,7 +169,7 @@ function wakeAutoResume(store: IEventStore, now: () => number): string[] {
         [
           {
             type: "fact.run_resumed",
-            payload: { fromStatus: row.status as "paused_retry" | "paused_provider_retry" },
+            payload: { fromStatus: "paused_auto" },
           },
         ],
         row.version,

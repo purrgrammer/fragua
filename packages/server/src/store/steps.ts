@@ -293,12 +293,13 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
-    if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_hitl" || ev.type === "fact.run_paused_retry") {
-      // Operator-class pauses (operator / HITL / provider-error /
-      // budget / payment_required) do NOT emit `fact.node_completed`,
-      // so the node window stays open across the pause. The resume
-      // re-emits `fact.node_started` for the same nodeId; we want
-      // both halves to fold into a single Cost-breakdown row.
+    if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_hitl") {
+      // Pauses (operator / HITL / provider_error / payment_required /
+      // budget / provider_retry / handler_retry) do NOT emit
+      // `fact.node_completed`, so the node window stays open across
+      // the pause. The resume re-emits `fact.node_started` for the
+      // same nodeId; we want both halves to fold into a single
+      // Cost-breakdown row.
       const pausedNodeId = stringField(data, "nodeId");
       if (pausedNodeId) pausedOpenNodes.add(pausedNodeId);
       continue;

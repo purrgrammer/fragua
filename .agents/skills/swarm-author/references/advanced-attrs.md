@@ -21,7 +21,7 @@ Outcome flags that interact with retries:
 - **`non_retryable`** (Outcome flag set by the handler) — short-circuits retries. Use for auth errors, 4xx, validation: don't retry, just fail.
 - **`allow_partial`** (node attr, boolean) — converts retry-counter exhaustion into `PARTIAL_SUCCESS` instead of `FAIL`. The run continues forward as if it succeeded, with a note. Use when "best-effort" is acceptable.
 
-Backoff happens *outside the executor slot*: a retrying run transitions to `paused_retry`, frees its concurrency slot, and the wake-pending sweeper re-queues it once the backoff timer elapses. Heavy backoff doesn't starve other runs.
+Backoff happens *outside the executor slot*: a retrying run transitions to `paused_auto` (reason `handler_retry`), frees its concurrency slot, and the wake-pending sweeper re-queues it once the backoff timer elapses. Heavy backoff doesn't starve other runs.
 
 W008 catches typos in preset names — the runtime falls back to `none` silently otherwise.
 

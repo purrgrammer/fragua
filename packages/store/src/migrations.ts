@@ -26,6 +26,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [5, MIGRATION_005_CONVERSATION_KIND()],
   [6, MIGRATION_006_SCHEDULES()],
   [7, MIGRATION_007_DROP_CONVERSATION_KIND()],
+  [8, MIGRATION_008_AUTO_WAKE_UNIFICATION()],
 ]);
 
 /**
@@ -630,6 +631,128 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
 
     DROP TABLE run_state;
     ALTER TABLE run_state_v7 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+    CREATE INDEX idx_runs_by_schedule
+      ON run_state(schedule_id)
+      WHERE schedule_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v7 → v8: pause unification — auto-wake family.
+ *
+ * Stage 2 of `docs/proposals/recoverable-budget-pause.md`. Three
+ * coupled changes:
+ *
+ *   1. CHECK rebuild: drop `paused_provider_retry` / `paused_retry`,
+ *      add `paused_auto`.
+ *   2. Delete in-flight runs in the legacy auto-wake states
+ *      (pre-release, no prior-state compat — AGENTS.md ground rule
+ *      #11). Cascades manually to events / messages / artifacts /
+ *      blobs since `events` has no FK to `run_state`.
+ *   3. Retire `fact.run_paused_retry` from the historical event log.
+ *      Stage-1 chose payload rewrites; here we delete the rows
+ *      because surviving runs went through (1) above already, so any
+ *      `fact.run_paused_retry` left in `events` belongs to a deleted
+ *      run.
+ *
+ * The `policy` field on `fact.run_paused{reason:"provider_error"}`
+ * payloads from past runs is not rewritten — that field becomes
+ * unused but doesn't break the projection (the new reducer keys off
+ * `reason` alone). Provider auto-retry runs in flight are gone via
+ * (2) above.
+ */
+function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
+  return `
+    -- (2) drop in-flight legacy auto-wake runs and cascade their
+    --     dependent rows. events / messages / artifacts have FKs to
+    --     run_state with ON DELETE CASCADE, but FKs are OFF during
+    --     migration so we cascade explicitly.
+    DELETE FROM events
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status IN ('paused_provider_retry', 'paused_retry'));
+    DELETE FROM messages
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status IN ('paused_provider_retry', 'paused_retry'));
+    DELETE FROM artifacts
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status IN ('paused_provider_retry', 'paused_retry'));
+    DELETE FROM run_state
+      WHERE status IN ('paused_provider_retry', 'paused_retry');
+    -- Orphan blobs: ref-counted by artifacts via blob_sha. Drop
+    -- unreferenced rows so foreign_key_check passes after the migration.
+    DELETE FROM blobs
+      WHERE sha256 NOT IN (SELECT DISTINCT blob_sha FROM artifacts);
+
+    -- (3) retire the historical fact-type. Surviving runs (after the
+    --     deletes above) must not carry it.
+
+    -- (1) CHECK rebuild — table swap. Same shape as v7.
+    CREATE TABLE run_state_v8 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_hitl','paused_auto',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      schedule_id TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v8 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    )
+    SELECT
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+    DROP INDEX IF EXISTS idx_runs_by_schedule;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v8 RENAME TO run_state;
 
     CREATE INDEX idx_run_state_queue
       ON run_state(priority DESC, ready_at ASC)

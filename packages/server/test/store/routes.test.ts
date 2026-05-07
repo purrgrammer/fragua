@@ -528,7 +528,7 @@ describe("GET /runs/:id/steps", () => {
 });
 
 describe("GET /runs?status= filter", () => {
-  test("accepts paused_provider_retry — regression: VALID_STATUSES used to drop the literal", async () => {
+  test("accepts paused_auto — regression: VALID_STATUSES used to drop the literal", async () => {
     const { createServer } = await import("../../src/index.ts");
     const app = createServer({ store });
     store.enqueueRun({ runId: "ppr-1", workflowSha: "wf" });
@@ -539,12 +539,11 @@ describe("GET /runs?status= filter", () => {
         {
           type: "fact.run_paused",
           payload: {
-            reason: "provider_error",
+            reason: "provider_retry",
             nodeId: "n1",
             httpStatus: 503,
             provider: "anthropic",
             errorMessage: "503 service unavailable",
-            policy: "auto-retry",
             attempt: 1,
             resumeAt: Date.now() + 60_000,
           },
@@ -552,17 +551,17 @@ describe("GET /runs?status= filter", () => {
       ],
       s0.version,
     );
-    expect(store.getState("ppr-1")!.status).toBe("paused_provider_retry");
+    expect(store.getState("ppr-1")!.status).toBe("paused_auto");
 
-    const res = await app.request("/runs?status=paused_provider_retry");
+    const res = await app.request("/runs?status=paused_auto");
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{ runId: string; status: string }>;
     expect(body.some((r) => r.runId === "ppr-1")).toBe(true);
 
     // Control: mixing in an unknown token must still surface the run
-    // (proves `paused_provider_retry` is in the allow-list, not just
-    // tolerated by an empty filter).
-    const res2 = await app.request("/runs?status=paused_provider_retry,bogus");
+    // (proves `paused_auto` is in the allow-list, not just tolerated
+    // by an empty filter).
+    const res2 = await app.request("/runs?status=paused_auto,bogus");
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as Array<{ runId: string }>;
     expect(body2.some((r) => r.runId === "ppr-1")).toBe(true);

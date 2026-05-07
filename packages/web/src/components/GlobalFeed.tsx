@@ -132,8 +132,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
     if (fromStatus === "paused") return { ...base, verb: "retrying" };
-    if (fromStatus === "paused_provider_retry") return { ...base, verb: "retrying" };
-    if (fromStatus === "paused_retry") return { ...base, verb: "retrying" };
+    if (fromStatus === "paused_auto") return { ...base, verb: "retrying" };
   }
   return base;
 }

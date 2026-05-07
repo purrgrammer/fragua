@@ -9,40 +9,67 @@
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-/** Lifecycle states for a run. `paused`, `paused_hitl`, and
- * `quarantined` are operator-actionable; the rest are automatic.
- * Mirrored by `run_state.status` (CHECK constraint in schema.sql)
- * and the daemon's intent fold.
+/** Lifecycle states for a run. Three non-terminal pause statuses,
+ * partitioned 1:1 against the operator-attention category:
  *
- * `paused` is the unified operator-resumable state. Reason lives on
- * `fact.run_paused.payload.reason` — see {@link PauseReason}. */
+ * - `paused` — operator must act; reason on `fact.run_paused.payload.reason`
+ * - `paused_auto` — daemon owes a clock tick; operator may short-circuit via `intent.resume`
+ * - `paused_hitl` — workflow asked a question; answer via `intent.hitl_input`
+ *
+ * Mirrored by `run_state.status` (CHECK constraint in schema.sql) and
+ * the daemon's intent fold. See {@link PauseReason} for the reason
+ * partition; status follows reason 1:1. */
 export type RunStatus =
   | "queued"
   | "running"
   | "paused"
   | "paused_hitl"
-  | "paused_provider_retry"
-  | "paused_retry"
+  | "paused_auto"
   | "completed"
   | "cancelled"
   | "halted"
   | "quarantined";
 
-/** Reason discriminator on `fact.run_paused`. Each maps to a different
- * operator action shape:
+/** Reason discriminator on `fact.run_paused`. Status follows reason —
+ * the reducer reads `payload.reason` and projects without consulting
+ * any other field. Partition:
  *
+ * **→ `paused` (operator must act)**
  * - `operator` — operator hit pause from the UI/CLI; resume to continue.
- * - `provider_error` — non-payment provider HTTP failure (400/401/403/
- *   404/413/422 manual; 408/429/5xx/529/network with `policy:"auto-retry"`).
- *   Operator rotates creds / fixes request; resume retries.
+ * - `provider_error` — manual-class provider HTTP failure (400/401/403/
+ *   404/413/422). Operator rotates creds / fixes request; resume retries.
  * - `payment_required` — 402 from the provider; operator tops up
  *   off-ledger and resumes.
  * - `budget` — local cap (`graph.budget_*` / `node.max_*`) hit; operator
  *   raises the cap via `intent.budget_adjusted` and resumes.
  *
- * Adding a new reason (e.g. `max_retries`, `max_loops`, `goal_gate`)
- * is a one-line addition here plus a UI body branch — no new status. */
-export type PauseReason = "operator" | "provider_error" | "payment_required" | "budget";
+ * **→ `paused_auto` (daemon owes a clock tick)**
+ * - `provider_retry` — auto-retryable provider transport error
+ *   (408/429/5xx/529/network); wake-pending sweeps `auto_resume_at`.
+ * - `handler_retry` — handler returned `outcomeStatus="retry"`; engine
+ *   scheduled a backoff window per attractor §3.5/§3.6.
+ *
+ * Adding a new reason is a one-line addition here plus a UI renderer
+ * body branch (`Record<PauseReason, ReasonRenderer>` exhaustiveness
+ * fires until the branch lands). No new status, no schema migration.
+ * Stage 3 of the proposal will add `max_retries`, `goal_gate`,
+ * `max_loops`, `abort_loop`, `provider_exhausted`. PR 4 will add
+ * `timeout_retry`. */
+export type PauseReason =
+  | "operator"
+  | "provider_error"
+  | "payment_required"
+  | "budget"
+  | "provider_retry"
+  | "handler_retry";
+
+/** Reasons that project to `paused_auto` (daemon timer). Everything
+ * else in {@link PauseReason} projects to `paused` (operator must
+ * act). Single source of truth for the reducer + wake-pending. */
+export const AUTO_WAKE_PAUSE_REASONS: ReadonlySet<PauseReason> = new Set<PauseReason>([
+  "provider_retry",
+  "handler_retry",
+]);
 
 /** Who appended the event. Web writes intents (operator actions);
  * daemon writes facts (run lifecycle, observability). */
@@ -139,14 +166,7 @@ export type FactEvent =
          * run; the others = resuming from the named prior state. Lets
          * analytics distinguish "ran straight through" from "had to be
          * woken up after X". */
-        resumeOf:
-          | "fresh"
-          | "crash"
-          | "paused"
-          | "paused_hitl"
-          | "paused_provider_retry"
-          | "paused_retry"
-          | "quarantined";
+        resumeOf: "fresh" | "crash" | "paused" | "paused_hitl" | "paused_auto" | "quarantined";
       };
     }
   | {
@@ -290,15 +310,17 @@ export type FactEvent =
       };
     }
   | {
-      /** Unified operator-resumable pause. `payload.reason` discriminates
-       * the operator-action shape; the reducer projects status to
-       * `paused` (manual) or `paused_provider_retry` (only when reason
-       * is `provider_error` and `policy === "auto-retry"`).
+      /** Unified pause fact, reason-discriminated. The reducer projects
+       * `run_state.status` from `payload.reason`: reasons in
+       * {@link AUTO_WAKE_PAUSE_REASONS} → `paused_auto` (daemon timer),
+       * everything else → `paused` (operator must act).
        *
-       * 402 routes to `reason:"payment_required"`; everything else in
-       * the manual provider-error class routes to `reason:"provider_error"`.
-       * Local budget overruns route here when `budget_policy="pause"`
-       * (default); `budget_policy="stop"` keeps terminal halt semantics. */
+       * 402 routes to `reason:"payment_required"`; manual-class HTTP
+       * failures (400/401/403/404/413/422) → `provider_error`;
+       * auto-retryable transport (408/429/5xx/529/network) →
+       * `provider_retry`. Local budget overruns route here when
+       * `budget_policy="pause"` (default); `budget_policy="stop"`
+       * keeps terminal halt semantics. */
       type: "fact.run_paused";
       payload:
         | { reason: "operator"; nodeId: string }
@@ -308,13 +330,6 @@ export type FactEvent =
             httpStatus: number | null;
             provider: string;
             errorMessage: string;
-            /** When set to "auto-retry", the executor scheduled a backoff
-             * window (resumeAt) and the reducer projects status to
-             * `paused_provider_retry`; wake-pending auto-resumes once
-             * `now >= resumeAt`. Absent / "manual" → `paused`. */
-            policy?: "manual" | "auto-retry";
-            attempt?: number;
-            resumeAt?: number;
           }
         | {
             reason: "payment_required";
@@ -329,13 +344,40 @@ export type FactEvent =
             metric: "cost" | "tokens";
             limit: number;
             actual: number;
+          }
+        | {
+            /** Provider auto-retry. Daemon scheduled a backoff window;
+             * `routing.internal.auto_resume_at` carries `resumeAt` so
+             * wake-pending re-queues at the right moment. Operator may
+             * short-circuit via `intent.resume`. */
+            reason: "provider_retry";
+            nodeId: string;
+            httpStatus: number | null;
+            provider: string;
+            errorMessage: string;
+            attempt: number;
+            resumeAt: number;
+          }
+        | {
+            /** Handler returned `outcomeStatus="retry"` (attractor §3.5/
+             * §3.6). Concurrency slot released for the backoff window.
+             * Wake-pending re-queues at `resumeAt`; the same node
+             * re-dispatches because `fact.node_completed` already
+             * pointed `nextNode` back at it. Operator may short-circuit
+             * via `intent.resume`. */
+            reason: "handler_retry";
+            nodeId: string;
+            attempt: number;
+            delayMs: number;
+            resumeAt: number;
+            maxRetries: number;
           };
     }
   | {
       /** Emitted on every auto-retry attempt that fires after a
-       * `paused_provider_retry` wake. One fact per attempt — folding
-       * into a mutable chain on the pause fact would violate fact
-       * immutability (I3). Operators query `WHERE
+       * `paused_auto{reason:"provider_retry"}` wake. One fact per
+       * attempt — folding into a mutable chain on the pause fact would
+       * violate fact immutability (I3). Operators query `WHERE
        * type='fact.provider_retry_attempted' AND run_id=X ORDER BY seq`
        * to see the retry chain. */
       type: "fact.provider_retry_attempted";
@@ -344,23 +386,6 @@ export type FactEvent =
         attempt: number;
         httpStatus: number | null;
         delayMs: number;
-      };
-    }
-  | {
-      /** Emitted when retryStep returns `retry` and the executor decides
-       * to release the concurrency slot during the backoff window
-       * (attractor §3.5 / §3.6). The wake-pending sweeper observes
-       * `resumeAt` and emits `fact.run_resumed { fromStatus: "paused_retry" }`
-       * once the wall-clock has caught up. The same node re-dispatches
-       * on resume — `state.currentNode` is the retrying node since
-       * `fact.node_completed` already pointed `nextNode` back at it. */
-      type: "fact.run_paused_retry";
-      payload: {
-        nodeId: string;
-        attempt: number;
-        delayMs: number;
-        resumeAt: number;
-        maxRetries: number;
       };
     }
   | {
@@ -618,7 +643,6 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_paused_hitl",
   "fact.run_paused",
   "fact.provider_retry_attempted",
-  "fact.run_paused_retry",
   "fact.run_resumed",
   "fact.run_cancelled",
   "fact.run_halted",

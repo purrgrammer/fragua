@@ -155,7 +155,7 @@ What to look for:
 - **`run_state.routing` keys worth a glance:**
   - `goal_gates.<nodeId>` — last outcome of every visited gate.
   - `goal_gates.__retries` — cumulative retarget count. Equals `max_goal_gate_retries` (default 3) → `fact.run_halted { reason: "goal_gate_unsatisfied" }`.
-  - `internal.auto_resume_at` — wall-clock ms when a `paused_retry` or `paused_provider_retry` run is due to wake (one routing key powers both states; canonical declaration: `packages/core/src/types/context.ts` `AUTO_RESUME_AT_KEY`). In the past + still paused → wake-pending sweeper is wedged (check daemon heartbeat).
+  - `internal.auto_resume_at` — wall-clock ms when a `paused_auto` run (reason `provider_retry` or `handler_retry`) is due to wake (one routing key powers both reasons; canonical declaration: `packages/core/src/types/context.ts` `AUTO_RESUME_AT_KEY`). In the past + still paused → wake-pending sweeper is wedged (check daemon heartbeat).
   - `__budget_warned.*` — tags suppressing duplicate `budget.warn` events.
 
 Observability events outside fact/intent (`llm.start`, `llm.text_delta`, `llm.done`, `cost.recorded`, `summary.*`, `agent.info`, `agent.warning`) carry `nodeId` + `iteration` and fold into step snapshots — don't read them raw, use §5.
@@ -177,8 +177,7 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed. Pair with the matching `_intent` row by `idempotencyKey`. |
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly. `retriable=true` → handler will redrive; `false` → permanent. |
 | `fact.run_paused_hitl` | `nodeId`, `label`, `options[]` | HITL yield. See §8 playbook. |
-| `fact.run_paused` | `reason`, reason-specific fields | Unified operator-resumable pause. See §8 for reason-by-reason behaviour. |
-| `fact.run_paused_retry` | `nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries` | Outcome=retry pause; slot freed during the wait. |
+| `fact.run_paused` | `reason`, reason-specific fields | Unified pause. Reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`) project to `paused_auto`; rest → `paused`. See §8. |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus\|null`, `delayMs` | One per attempt in an auto-retry chain. Walk these to reconstruct the retry timeline before a `provider_exhausted` halt. |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Run left a paused/quarantined state. `inputIntentSeq` points back at the operator intent that drove the wake (when applicable). |
 | `fact.run_completed` | `finalNode` | Terminal success. |
@@ -301,14 +300,15 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to `intent.cancel_requested`. |
 | `fact.run_paused_hitl` | — | `wait.human` yielded. Payload: `{nodeId, label, options[]}`; resume via `/hitl`. |
-| `fact.run_paused_retry` | — | Node returned `outcome=retry`. `routing.internal.auto_resume_at` (ms) tells you when wake-pending will re-queue it. Slot freed during the wait. |
-| `fact.run_paused` | `reason: "operator"` | Operator hit Pause. Wake on `intent.resume`. |
-| `fact.run_paused` | `reason: "provider_error"` | Manual-class provider transport error (400/401/403/404/413/422). Wake on `intent.resume` after fixing creds/request. |
-| `fact.run_paused` | `reason: "payment_required"` | Provider returned 402. Top up, then `intent.resume`. |
-| `fact.run_paused` | `reason: "budget"` | Local budget cap hit. Raise via `POST /runs/:id/budget`, then `intent.resume`. |
+| `fact.run_paused` | `reason: "operator"` | Operator hit Pause. Status: `paused`. Wake on `intent.resume`. |
+| `fact.run_paused` | `reason: "provider_error"` | Manual-class provider transport error (400/401/403/404/413/422). Status: `paused`. Wake on `intent.resume` after fixing creds/request. |
+| `fact.run_paused` | `reason: "payment_required"` | Provider returned 402. Status: `paused`. Top up, then `intent.resume`. |
+| `fact.run_paused` | `reason: "budget"` | Local budget cap hit. Status: `paused`. Raise via `POST /runs/:id/budget`, then `intent.resume`. |
+| `fact.run_paused` | `reason: "provider_retry"` | Auto-retryable provider transport (408/429/5xx/529/network). Status: `paused_auto`. `resumeAt` on payload + `routing.internal.auto_resume_at`; wake-pending re-queues automatically. Operator may short-circuit with `intent.resume`. |
+| `fact.run_paused` | `reason: "handler_retry"` | Node returned `outcome=retry`; engine scheduled a backoff. Status: `paused_auto`. Slot freed during the wait. `routing.internal.auto_resume_at` (ms) tells you when wake-pending will re-queue it. |
 | `fact.handler_timeout_leaked` | — | Handler exceeded `maxMs + LEAK_GRACE_MS` (10s) without respecting `ctx.signal`. Handler bug. |
 | Status `running`, no recent fact | — | Handler may be wedged. If `node_started_at` older than the node's `maxMs`, watchdog should have fired. If not, check daemon heartbeat (§1). |
-| Status `paused_retry`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (§1). |
+| Status `paused_auto`, `resumeAt` in the past | — | Wake-pending sweeper hasn't fired. Daemon heartbeat (§1). |
 
 ---
 

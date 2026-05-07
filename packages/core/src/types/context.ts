@@ -20,10 +20,10 @@ export function retryCountKey(nodeId: string): string {
 }
 
 /** Routing key holding the wall-clock ms timestamp at which a paused
- * run with auto-resume becomes wake-eligible. Used by both engine
- * `paused_retry` (set when emitting `fact.run_paused_retry`) and
- * provider auto-retry `paused_provider_retry` (set when emitting
- * `fact.run_paused` with `reason: "provider_error", policy: "auto-retry"`).
+ * run with auto-resume becomes wake-eligible. Used by both reasons
+ * that project to `paused_auto`: `handler_retry` (set when emitting
+ * `fact.run_paused{reason:"handler_retry"}`) and `provider_retry`
+ * (set when emitting `fact.run_paused{reason:"provider_retry"}`).
  * Read by `wakeAutoResume` (daemon wake-pending). Cleared implicitly
  * when the run leaves an auto-paused state — the routing key persists
  * but is ignored once status moves on. */

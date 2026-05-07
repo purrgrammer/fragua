@@ -102,8 +102,8 @@ export function RunControls({
   //   - paused_hitl with options → HitlChoice (option buttons)
   // paused_hitl with NO options is the workflow-authored wait.human
   // resume case (operator pauses route to `paused` now).
-  // paused_provider_retry / paused_retry auto-resume on a timer;
-  // manual Resume short-circuits the wait.
+  // paused_auto auto-resumes on a timer; manual Resume short-circuits
+  // the wait — handled in RunPausedNotice for those reasons.
   const isOperatorHitlPause = runStatus === "paused_hitl" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
     status === "paused" && runStatus !== "paused" && (runStatus !== "paused_hitl" || isOperatorHitlPause);
