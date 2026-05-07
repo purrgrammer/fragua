@@ -261,10 +261,7 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
       // exactly once.
       const fresh = overlay.selectedEdges.filter((e) => e.seq > snapshot.lastEventSeq);
       if (fresh.length === 0) return snapshot.selectedEdges;
-      return [
-        ...snapshot.selectedEdges,
-        ...fresh.map(({ from, to, iteration }) => ({ from, to, iteration })),
-      ];
+      return [...snapshot.selectedEdges, ...fresh.map(({ from, to, iteration }) => ({ from, to, iteration }))];
     })(),
     status: overlay.status ?? snapshot.status,
     runStatus: overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
