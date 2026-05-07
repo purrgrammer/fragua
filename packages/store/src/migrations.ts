@@ -7,6 +7,16 @@ import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
 
+/** Thrown inside a migration step's transaction body when
+ * `foreign_key_check` reports violations. Carries the raw rows so the
+ * catch site can format the message — keeps JSON.stringify out of the
+ * txn body per AGENTS.md ground rule #10 / invariant I1. */
+class FkViolationError extends Error {
+  constructor(public readonly violations: { table: string; rowid: number; parent: string; fkid: number }[]) {
+    super("fk-violation");
+  }
+}
+
 /**
  * Step-delta migrations applied to existing DBs. Keyed by *target*
  * version: `STEP_MIGRATIONS.get(N)` is the SQL that takes a v(N-1) DB
@@ -95,15 +105,30 @@ export function migrate(db: Database): void {
         if (sql == null) {
           throw new Error(`no step-delta registered for v${v} → v${next}`);
         }
-        db.transaction(() => {
-          db.exec(sql);
-          db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(next);
-        })();
-        const violations = db
-          .query<{ table: string; rowid: number; parent: string; fkid: number }, []>("PRAGMA foreign_key_check")
-          .all();
-        if (violations.length > 0) {
-          throw new Error(`migration v${v} → v${next} left FK violations: ${JSON.stringify(violations)}`);
+        // foreign_key_check runs INSIDE the transaction, before the
+        // schema_version bump, so a violation rolls the whole step
+        // back. Putting it outside would commit a half-migrated state
+        // (schema_version advanced, but FK violations linger) —
+        // exactly the failure mode the v8 migration tripped before
+        // defensive orphan vacuuming landed. The throw carries the raw
+        // violations on the error so the catch site can format the
+        // message — keeps JSON.stringify out of the txn body (I1).
+        try {
+          db.transaction(() => {
+            db.exec(sql);
+            const violations = db
+              .query<{ table: string; rowid: number; parent: string; fkid: number }, []>("PRAGMA foreign_key_check")
+              .all();
+            if (violations.length > 0) {
+              throw new FkViolationError(violations);
+            }
+            db.query("UPDATE schema_version SET version = ? WHERE id = 1").run(next);
+          })();
+        } catch (err) {
+          if (err instanceof FkViolationError) {
+            throw new Error(`migration v${v} → v${next} left FK violations: ${JSON.stringify(err.violations)}`);
+          }
+          throw err;
         }
         v = next;
       }
