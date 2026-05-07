@@ -48,18 +48,23 @@ interface ReasonMeta {
   borderVar: string;
 }
 
+// Pause-family palette (recoverable-budget-pause.md Stage 2):
+//   paused_hitl → orange  (workflow asks; answer the question)
+//   paused      → yellow  (operator must act)
+// quarantined stays destructive (red): it's a code-contract failure,
+// not a recoverable pause.
 const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | undefined> = {
   paused_hitl: {
     Icon: Pause,
     label: "awaiting input",
-    iconClass: "text-sw-accent-human",
-    borderVar: "var(--sw-accent-human)",
+    iconClass: "text-sw-accent-pause-hitl",
+    borderVar: "var(--sw-accent-pause-hitl)",
   },
   paused: {
     Icon: AlertTriangle,
     label: "needs operator",
-    iconClass: "text-sw-accent-warn",
-    borderVar: "var(--sw-accent-warn)",
+    iconClass: "text-sw-accent-pause",
+    borderVar: "var(--sw-accent-pause)",
   },
   quarantined: {
     Icon: ShieldAlert,
@@ -165,7 +170,7 @@ function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.El
         data-testid={`inbox-run-${row.runId}`}
         data-reason={row.runStatus}
         style={{ borderLeftColor: borderVar }}
-        className="flex w-full min-w-0 items-center gap-3 rounded-sw-card border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
+        className="flex w-full min-w-0 items-center gap-3 rounded-sw-none border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
       >
         <Icon className={`size-4 shrink-0 ${iconClass}`} aria-hidden />
         <span className="inbox-row-title flex-1 min-w-0 truncate font-medium text-sw-text">{displayTitle(row)}</span>

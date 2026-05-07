@@ -15,7 +15,7 @@
 //     `useQuery(queries.runs.detail(id))`; TanStack dedupes
 //     concurrent reads of the same id.
 
-import type { FeedEvent } from "@swarm/types";
+import { AUTO_WAKE_PAUSE_REASONS, type FeedEvent, type PauseReason } from "@swarm/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import {
@@ -70,9 +70,15 @@ interface FeedKindMeta {
   /** Optional Tailwind class for the icon colour. Defaults to
    * `text-sw-muted` when absent. */
   iconClass?: string;
+  /** CSS var (e.g. `var(--sw-accent-error)`) for the row's left
+   * attention strip. When unset, the row uses the row's `iconClass`
+   * tone via fallback — keeps icon and strip visually paired so the
+   * strip never disagrees with the icon's mood. */
+  borderVar?: string;
   /** Reserved for events an operator might want to act on (paused
-   * runs, halts, quarantines, system-health warnings). Renders a
-   * left amber accent. The Inbox section will own actual CTAs. */
+   * runs, halts, quarantines, system-health warnings). When true the
+   * row renders a left strip in `borderVar`. The Inbox section owns
+   * actual CTAs. */
   attention?: boolean;
 }
 
@@ -80,27 +86,58 @@ interface FeedKindMeta {
 // and the attention border distinguishes "paused (awaiting input)"
 // from "paused (provider error)" without spelling that out in the
 // gutter. Hover tooltip on the row link carries the longer context.
+//
+// Pause-family palette (recoverable-budget-pause.md Stage 2):
+//   paused_hitl → orange  (workflow asks; answer the question)
+//   paused      → yellow  (operator must act)
+//   paused_auto → blue    (daemon timer; system on it) — applied
+//                          dynamically in `metaForEvent` based on
+//                          `fact.run_paused.payload.reason`.
+// Halted is destructive (red) — terminal failure, not a recoverable
+// pause; the strip + icon both carry the error tone so the row reads
+// as "this run died" without needing the verb.
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
-  "fact.run_paused_hitl": { Icon: Pause, verb: "awaiting input", iconClass: "text-sw-accent-human", attention: true },
+  "fact.run_paused_hitl": {
+    Icon: Pause,
+    verb: "awaiting input",
+    iconClass: "text-sw-accent-pause-hitl",
+    borderVar: "var(--sw-accent-pause-hitl)",
+    attention: true,
+  },
   "fact.run_paused": {
     Icon: AlertTriangle,
     verb: "paused",
-    iconClass: "text-sw-accent-warn",
+    iconClass: "text-sw-accent-pause",
+    borderVar: "var(--sw-accent-pause)",
     attention: true,
   },
   // Auto-retry chain: emitted once per scheduled retry attempt. Operators
   // see the chain in the feed without needing a separate UI surface.
+  // Tracks paused_auto's tone so a chain of (paused_auto, retry, retry,
+  // resumed) reads as one visually-coherent timeline.
   "fact.provider_retry_attempted": {
     Icon: Clock,
     verb: "retry queued",
-    iconClass: "text-sw-accent-warn",
+    iconClass: "text-sw-accent-pause-auto",
   },
   "fact.run_resumed": { Icon: Play, verb: "resumed", iconClass: "text-sw-accent-thinking" },
   "fact.run_cancelled": { Icon: X, verb: "cancelled" },
-  "fact.run_halted": { Icon: AlertOctagon, verb: "halted", attention: true },
-  "fact.run_quarantined": { Icon: ShieldAlert, verb: "quarantined", attention: true },
+  "fact.run_halted": {
+    Icon: AlertOctagon,
+    verb: "halted",
+    iconClass: "text-sw-accent-error",
+    borderVar: "var(--sw-accent-error)",
+    attention: true,
+  },
+  "fact.run_quarantined": {
+    Icon: ShieldAlert,
+    verb: "quarantined",
+    iconClass: "text-sw-accent-error",
+    borderVar: "var(--sw-accent-error)",
+    attention: true,
+  },
   "fact.run_requeued_after_crash": { Icon: RotateCcw, verb: "requeued" },
   "fact.daemon_takeover": { Icon: Server, verb: "takeover", attention: true },
   "fact.handler_timeout_leaked": { Icon: TimerOff, verb: "timeout", attention: true },
@@ -123,11 +160,24 @@ export function isFeedRowHidden(event: FeedEvent): boolean {
 }
 
 /** Resolve the row's icon + verb. For most kinds the static
- *  {@link KIND_META} is enough; `fact.run_resumed` is payload-aware so
- *  the operator can tell at a glance what kind of pause was just lifted.
- *  Exported for unit tests. */
+ *  {@link KIND_META} is enough; `fact.run_paused` peeks at
+ *  `payload.reason` to differentiate operator-resumable (yellow) from
+ *  auto-wake (blue), and `fact.run_resumed` peeks at `fromStatus` so
+ *  the operator can tell at a glance what kind of pause was just
+ *  lifted. Exported for unit tests. */
 export function metaForEvent(event: FeedEvent): FeedKindMeta {
   const base = KIND_META[event.type] ?? FALLBACK_META;
+  if (event.type === "fact.run_paused") {
+    const reason = (event.payload as { reason?: unknown } | null)?.reason;
+    if (typeof reason === "string" && AUTO_WAKE_PAUSE_REASONS.has(reason as PauseReason)) {
+      return {
+        ...base,
+        verb: "auto-retry",
+        iconClass: "text-sw-accent-pause-auto",
+        borderVar: "var(--sw-accent-pause-auto)",
+      };
+    }
+  }
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
     if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
@@ -156,7 +206,7 @@ export function GlobalFeed(): JSX.Element {
       {isLoading && rows.length === 0 ? (
         <ul
           aria-busy="true"
-          className="border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
+          className="rounded-sw-none border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3"
         >
           {(["a", "b", "c", "d"] as const).map((k) => (
             <FeedRowSkeleton key={k} />
@@ -182,7 +232,7 @@ export function GlobalFeed(): JSX.Element {
         // - Desktop (≥ sm): the `<ul>` is a 5-column grid and each row
         //   uses `grid-cols-subgrid`, so the icon / verb columns size
         //   to the widest content across every row.
-        <ul className="border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
+        <ul className="rounded-sw-none border border-sw-border bg-sw-surface sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] sm:gap-x-3">
           <AnimatePresence initial={false}>
             {rows.map((event) => (
               <FeedRow key={feedEventKey(event)} event={event} reduce={reduce} />
@@ -200,7 +250,7 @@ interface FeedRowProps {
 }
 
 const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Element {
-  const { Icon, verb, iconClass, attention } = metaForEvent(event);
+  const { Icon, verb, iconClass, attention, borderVar } = metaForEvent(event);
 
   // Dedicated detail query per runId. TanStack dedupes concurrent
   // reads of the same id, so 30 feed rows pointing at 12 distinct
@@ -214,6 +264,13 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
 
   const wf = run?.workflowName ?? run?.workflow;
 
+  // The strip color follows the row's mood: meta.borderVar when set
+  // (carried by attention-class kinds — paused, halted, quarantined
+  // etc.), otherwise the row's icon tone via the `--sw-accent-thinking`
+  // fallback for the legacy attention rows that don't carry an
+  // explicit borderVar (daemon_takeover, handler_timeout_leaked).
+  const stripColor = borderVar ?? "var(--sw-accent-thinking)";
+
   return (
     <motion.li
       layout
@@ -223,11 +280,15 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       transition={transition}
       style={
         attention
-          ? { willChange: reduce ? undefined : "transform", borderLeftColor: "var(--sw-accent-thinking)" }
+          ? { willChange: reduce ? undefined : "transform", borderLeftColor: stripColor }
           : { willChange: reduce ? undefined : "transform" }
       }
       className={cn(
-        "group grid items-center px-3 py-2 text-sw-sm",
+        // `rounded-sw-none` defeats the global `* { border-radius: 2px }`
+        // rule (globals.css) — the strip has to read as a flat
+        // edge-to-edge stripe, not a clipped curve, so it slots cleanly
+        // into the surrounding grid.
+        "group grid items-center rounded-sw-none px-3 py-2 text-sw-sm",
         // Mobile: 3-col, 2-row grid. Children placed via col-start /
         // row-start below. `gap-y-0.5` (2px) gives a tight visual
         // separation between the verb line and the title line.
@@ -314,7 +375,7 @@ function FeedRowSkeleton(): JSX.Element {
   return (
     <li
       className={cn(
-        "grid items-center px-3 py-2 text-sm",
+        "grid items-center rounded-sw-none px-3 py-2 text-sm",
         "grid-cols-[auto_minmax(0,1fr)_auto] gap-x-2 gap-y-0.5",
         "sm:col-span-full sm:grid-cols-subgrid sm:gap-x-3 sm:gap-y-0",
         "border-l-2 border-transparent",
