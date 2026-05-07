@@ -21,10 +21,12 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
+import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { ANALYTICS_COLORS } from "./palette.ts";
 
 // Stack order = bar order from bottom to top, mirroring the popover's
-// row order: Input · Cache write · Cache read · Output.
+// row order: Input · Cache write · Cache read · Output. Pairs with the
+// dark→light palette so the bar reads as a clean lightness ramp.
 const TOKEN_KEYS = ["inputTokens", "cacheWriteTokens", "cacheReadTokens", "outputTokens"] as const;
 type TokenKey = (typeof TOKEN_KEYS)[number];
 
@@ -39,10 +41,10 @@ export interface TokensChartProps {
 }
 
 const config: ChartConfig = {
-  inputTokens: { label: "Input", color: "var(--sw-chart-1)" },
-  cacheWriteTokens: { label: "Cache write", color: "var(--sw-chart-3)" },
-  cacheReadTokens: { label: "Cache read", color: "var(--sw-chart-4)" },
-  outputTokens: { label: "Output", color: "var(--sw-chart-2)" },
+  inputTokens: { label: "Input", color: ANALYTICS_COLORS.input },
+  cacheWriteTokens: { label: "Cache write", color: ANALYTICS_COLORS.cacheWrite },
+  cacheReadTokens: { label: "Cache read", color: ANALYTICS_COLORS.cacheRead },
+  outputTokens: { label: "Output", color: ANALYTICS_COLORS.output },
 };
 
 function rankOf(key: string): number {
@@ -121,11 +123,12 @@ export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: To
               stackId="tokens"
               fill={`var(--color-${key})`}
               shape={(barProps: unknown) => {
-                const p = barProps as { payload: TokensBucketRow };
+                const p = barProps as { payload: TokensBucketRow; height?: number };
+                const r = visibleSegmentRadius<TokenKey>(p.payload, TOKEN_KEYS, key);
                 return (
                   <Rectangle
                     {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={visibleSegmentRadius<TokenKey>(p.payload, TOKEN_KEYS, key)}
+                    radius={clampRadius(r, p.height ?? 0)}
                   />
                 );
               }}

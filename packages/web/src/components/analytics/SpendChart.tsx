@@ -21,11 +21,14 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
+import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { ANALYTICS_COLORS } from "./palette.ts";
 
 // Stack order = bar order from bottom to top: Input · Cache write ·
 // Cache read · Output. Mirrors the per-step popover's row order so
-// operators read both surfaces with the same vocabulary.
+// operators read both surfaces with the same vocabulary, and pairs
+// with the dark→light palette so the bar reads as a clean lightness
+// ramp from bottom (chart-1) to top (chart-4).
 const SPEND_KEYS = ["inputCostUsd", "cacheWriteCostUsd", "cacheReadCostUsd", "outputCostUsd"] as const;
 type SpendKey = (typeof SPEND_KEYS)[number];
 
@@ -38,15 +41,11 @@ export interface SpendChartProps {
   total: { current: number | undefined; previous: number | null };
 }
 
-// Input + Output get the two strong tones (sw-chart-1 / sw-chart-2);
-// cache write + cache read get the softer ones (sw-chart-3 / sw-chart-4).
-// Reads as "real work" (input/output) framing the cache layer, with
-// cache_read as the lightest segment since it's the discounted bucket.
 const config: ChartConfig = {
-  inputCostUsd: { label: "Input", color: "var(--sw-chart-1)" },
-  cacheWriteCostUsd: { label: "Cache write", color: "var(--sw-chart-3)" },
-  cacheReadCostUsd: { label: "Cache read", color: "var(--sw-chart-4)" },
-  outputCostUsd: { label: "Output", color: "var(--sw-chart-2)" },
+  inputCostUsd: { label: "Input", color: ANALYTICS_COLORS.input },
+  cacheWriteCostUsd: { label: "Cache write", color: ANALYTICS_COLORS.cacheWrite },
+  cacheReadCostUsd: { label: "Cache read", color: ANALYTICS_COLORS.cacheRead },
+  outputCostUsd: { label: "Output", color: ANALYTICS_COLORS.output },
 };
 
 function rankOf(key: string): number {
@@ -138,11 +137,12 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
               stackId="spend"
               fill={`var(--color-${key})`}
               shape={(barProps: unknown) => {
-                const p = barProps as { payload: SpendBucketRow };
+                const p = barProps as { payload: SpendBucketRow; height?: number };
+                const r = visibleSegmentRadius<SpendKey>(p.payload, SPEND_KEYS, key);
                 return (
                   <Rectangle
                     {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={visibleSegmentRadius<SpendKey>(p.payload, SPEND_KEYS, key)}
+                    radius={clampRadius(r, p.height ?? 0)}
                   />
                 );
               }}

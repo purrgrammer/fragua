@@ -32,7 +32,7 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
+import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
 
 export interface RunsChartProps {
   rows: readonly RunsBucketRow[];
@@ -140,11 +140,12 @@ export function RunsChart({ rows, bucket, loading, onSelectSlice, total }: RunsC
               stackId="runs"
               fill={`var(--color-${category})`}
               shape={(barProps: unknown) => {
-                const p = barProps as { payload: CategoryRow };
+                const p = barProps as { payload: CategoryRow; height?: number };
+                const r = visibleSegmentRadius<RunCategory>(p.payload, RUN_CATEGORIES, category);
                 return (
                   <Rectangle
                     {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={visibleSegmentRadius<RunCategory>(p.payload, RUN_CATEGORIES, category)}
+                    radius={clampRadius(r, p.height ?? 0)}
                   />
                 );
               }}

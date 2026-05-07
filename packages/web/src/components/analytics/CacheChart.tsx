@@ -19,9 +19,14 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { visibleSegmentRadius } from "./chart-stack.ts";
+import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { ANALYTICS_COLORS } from "./palette.ts";
 
-const CACHE_KEYS = ["cacheReadTokens", "cacheWriteTokens"] as const;
+// Stack order matches the Spend / Tokens convention so the same series
+// sits in the same vertical position across all three charts: Cache
+// write below, Cache read above. Colors come from the shared palette
+// so the grays match exactly.
+const CACHE_KEYS = ["cacheWriteTokens", "cacheReadTokens"] as const;
 type CacheKey = (typeof CACHE_KEYS)[number];
 
 export interface CacheChartProps {
@@ -34,8 +39,8 @@ export interface CacheChartProps {
 }
 
 const config: ChartConfig = {
-  cacheReadTokens: { label: "Cache reads", color: "var(--sw-chart-pair-primary)" },
-  cacheWriteTokens: { label: "Cache writes", color: "var(--sw-chart-pair-secondary)" },
+  cacheWriteTokens: { label: "Cache writes", color: ANALYTICS_COLORS.cacheWrite },
+  cacheReadTokens: { label: "Cache reads", color: ANALYTICS_COLORS.cacheRead },
 };
 
 function rankOf(key: string): number {
@@ -105,11 +110,12 @@ export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: Cac
               stackId="cache"
               fill={`var(--color-${key})`}
               shape={(barProps: unknown) => {
-                const p = barProps as { payload: CacheBucketRow };
+                const p = barProps as { payload: CacheBucketRow; height?: number };
+                const r = visibleSegmentRadius<CacheKey>(p.payload, CACHE_KEYS, key);
                 return (
                   <Rectangle
                     {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={visibleSegmentRadius<CacheKey>(p.payload, CACHE_KEYS, key)}
+                    radius={clampRadius(r, p.height ?? 0)}
                   />
                 );
               }}
