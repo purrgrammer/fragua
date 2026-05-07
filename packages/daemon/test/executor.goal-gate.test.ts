@@ -137,6 +137,23 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
     expect(retarget).toBeDefined();
     expect((retarget?.payload as { failedGate: string }).failedGate).toBe("gate");
     expect((retarget?.payload as { target: string }).target).toBe("fix");
+
+    // The originally-selected `gate -> done` edge on the failing attempt
+    // was overridden by the §3.4 retarget, so it was never actually
+    // traversed. Suppressing its `edge.selected` keeps the projection
+    // (and the UI's edge highlighting) honest. The second-attempt
+    // `gate -> done` (after the retry succeeds) IS traversed and is
+    // recorded.
+    const gateToDoneSelections = events.filter(
+      (e) =>
+        e.type === "edge.selected" &&
+        (e.payload as { from?: string; to?: string }).from === "gate" &&
+        (e.payload as { from?: string; to?: string }).to === "done",
+    );
+    expect(gateToDoneSelections).toHaveLength(1);
+    // The surviving selection is the success branch — no matched_condition
+    // because the success edge in the DOT is unconditional.
+    expect((gateToDoneSelections[0]?.payload as { matched_condition?: string }).matched_condition).toBeUndefined();
     r.store.close();
   });
 

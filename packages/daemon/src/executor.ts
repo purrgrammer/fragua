@@ -890,6 +890,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         consecutiveAborts = 0;
       }
 
+      // Edge selection is recorded with `edge.selected` AFTER the
+      // goal-gate retarget check, not at selection time. Goal-gate
+      // retarget can override `result.nextNode` to a different target
+      // (the retry_target), in which case the originally-selected edge
+      // is never actually traversed and `edge.selected` would lie. We
+      // hold the selection here, then emit it only if no retarget fired.
+      let pendingEdgeSelection: EdgeSelection | undefined;
+
       // Attach LLM accounting into the node_completed fact if the handler
       // didn't set these explicitly.
       if (result.kind === "transition") {
@@ -931,7 +939,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             });
             if (selection != null) {
               result.nextNode = selection.edge.to;
-              recordEdgeSelected(observability, currentNode, iteration, selection);
+              pendingEdgeSelection = selection;
             } else if (result.outcomeStatus === "fail") {
               // §3.7 step 2/3 — when no fail-edge claimed the failure,
               // consult the source node's retry_target / fallback_retry_target
@@ -1056,6 +1064,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             }
           }
         }
+      }
+
+      // Goal-gate retarget (or unsatisfied-halt) overrides the selected
+      // edge — the originally-picked edge was never actually traversed,
+      // so suppress its `edge.selected`. Otherwise emit it now, before
+      // node_completed lands, preserving the conventional ordering.
+      if (
+        pendingEdgeSelection !== undefined &&
+        goalGateRetargetTarget === undefined &&
+        result.kind === "transition"
+      ) {
+        recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
       }
 
       // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
