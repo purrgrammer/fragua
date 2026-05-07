@@ -39,7 +39,7 @@ Each node has a Graphviz shape; the shape picks the handler. There is no `kind=`
 | `diamond` | `conditional` | Pure edge-routing. No LLM, no prompt. Edge `condition=`s do the work. | — |
 | `hexagon` | `wait.human` | Pauses with `fact.run_paused_hitl`. | `prompt=` (what to ask) |
 | `parallelogram` | `tool` | Deterministic shell step. | `tool_command=` |
-| `component` | `parallel` | Fan-out branch spawner. Outgoing edges are the branches. | `fan_in=<id>` |
+| `component` | `parallel` | Fan-out branch spawner. Outgoing edges are the branches. | — (optional `join_policy=`) |
 | `tripleoctagon` | `parallel.fan_in` | Joins branches. Optional `prompt=` reduces branch outputs. | — |
 
 Loops and "wait" are *not* primitives. Loops are backward conditional edges (§7). Waits are `wait.human` nodes. Don't look for a `loop` shape; it doesn't exist.
@@ -70,8 +70,8 @@ This parses, validates, and runs. Build up from here.
 |---|---|---|
 | `prompt` | string | The user-message content. Substitution applies (§4). |
 | `allowed_tools` | string[] (CSV) | Whitelist. If absent, tools are unconstrained — usually wrong; name them. |
-| `model` | string | Pi-ai model id (e.g. `claude-sonnet-4-6`). Must be registered (§9). |
-| `provider` | string | Pi-ai provider (e.g. `anthropic`, `google`, `openai`). Defaults to the daemon's default. |
+| `llm_model` | string | Provider-native model id (e.g. `claude-sonnet-4-6`, `gpt-5.2`). Must be registered (§10). |
+| `llm_provider` | string | Provider key (e.g. `anthropic`, `openai`, `google`). Defaults to the daemon's default. |
 | `thread_id` | string | Shares the LLM thread across nodes that set the same `thread_id` (§5). |
 | `context_files` | string[] (CSV) | Files from the project root prepended to the system prompt as `<project-conventions>` blocks. `context_files = "AGENTS.md"` is the usual one. |
 | `fidelity` | enum | `full | truncate | compact | summary:low | summary:medium | summary:high`. Default `compact`. |
@@ -80,6 +80,8 @@ This parses, validates, and runs. Build up from here.
 | `system_prompt` | string | Override the backend's global system prompt. Useful for reviewer / planner subagents. |
 | `skills` | string[] (CSV) | Scope `<available_skills>` to this list. Absent = all discovered. |
 | `skills_disabled` | bool | Hard opt-out — no skills catalog in the system prompt for this node. |
+
+> **Anti-pattern:** bare `model=` and `provider=` are silently ignored by the runtime and trigger validator W011 — always use `llm_model=` and `llm_provider=`.
 
 Quote values with commas or spaces per DOT rules: `prompt = "with, commas, ok"`. String arrays are comma-separated inside a string: `allowed_tools = "read, write, edit, bash"`.
 
@@ -222,10 +224,10 @@ W007 fires on a `goal_gate=true` node with no retarget at any level — failure 
 
 ## 9. Parallel (component + fan_in)
 
-`component`-shaped nodes fan out: each outgoing edge becomes a concurrent branch. Branches must rejoin at a `tripleoctagon` named by `fan_in=`.
+`component`-shaped nodes fan out: each outgoing edge becomes a concurrent branch. Branches must converge on a `tripleoctagon` (the fan-in node). The fan-in target is discovered **structurally** from edges — it is the unique `tripleoctagon` reachable from every branch. There is no `fan_in=` node attribute; the convergence is expressed entirely by the edges leading to the tripleoctagon.
 
 ```dot
-explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
+explore [shape=component, join_policy="wait_all"]
 
 approach_correctness [prompt = "find CORRECTNESS risks — one per line", allowed_tools = "read, bash"]
 approach_style       [prompt = "find STYLE regressions",                allowed_tools = "read, bash"]
@@ -243,9 +245,9 @@ approach_security    -> pick_best
 
 - `join_policy="wait_all"` (default) — fan_in fires when every branch completes.
 - `join_policy="first_success"` — fan_in fires as soon as any branch returns success; others abort.
-- `fan_in`'s `prompt` (if present) reduces the branches; if omitted, a heuristic concatenates branch outputs.
+- The fan-in (tripleoctagon)'s `prompt` (if present) reduces the branch outputs; if omitted, a heuristic concatenates them.
 
-E007 catches missing/wrong `fan_in` targets. HITL inside a parallel branch is **not supported** in v1 (a `yield_hitl` inside a component coerces to `fail`) — put HITL outside the fan-out.
+E007 catches structural fan-in problems — branches that don't converge on a single tripleoctagon, ambiguous candidates, or no tripleoctagon reachable at all. HITL inside a parallel branch is **not supported** in v1 (a `yield_hitl` inside a component coerces to `fail`) — put HITL outside the fan-out.
 
 ---
 
