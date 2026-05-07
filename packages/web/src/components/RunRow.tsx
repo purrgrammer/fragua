@@ -24,6 +24,7 @@ import type { RunSummary } from "../lib/api.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { WorkflowLink } from "./WorkflowLink.tsx";
 
 // Run-id formatting moved to `lib/runId.ts` (`shortRunId`) so it
 // produces `prefix…suffix` and disambiguates runs queued in the same
@@ -56,15 +57,7 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
           {displayTitle(row)}
         </Link>
       </td>
-      <td className="py-2 pr-4 max-w-0">
-        {wf ? (
-          <Link to={`/workflows/${encodeURIComponent(wf)}`} className="inline-flex max-w-full">
-            <Badge variant="muted" className="max-w-full truncate hover:underline">
-              {wf}
-            </Badge>
-          </Link>
-        ) : null}
-      </td>
+      <td className="py-2 pr-4 max-w-0">{wf ? <WorkflowLink name={wf} variant="badge" /> : null}</td>
       <td className="py-2 pr-4 text-right">
         <RunStatusBadge status={row.status} />
       </td>

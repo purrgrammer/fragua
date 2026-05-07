@@ -44,10 +44,10 @@ import { shortRunId } from "../lib/runId.ts";
 import { formatRelative } from "../lib/time.ts";
 import { useNowSeconds } from "../lib/useNowExternal.ts";
 import { SseLiveDot } from "./SseLiveDot.tsx";
-import { Badge } from "./ui/badge.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { SectionTitle } from "./ui/section-title.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
+import { WorkflowLink } from "./WorkflowLink.tsx";
 
 /** Activity heading composes a live-stream dot inline with the title.
  * The dot is the only signal an operator gets that the timeline below
@@ -256,14 +256,11 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
         {displayRunTitle(event.runId, run)}
       </Link>
       {wf ? (
-        <Link
-          to={`/workflows/${encodeURIComponent(wf)}`}
-          className="col-start-3 row-start-2 inline-flex max-w-[10rem] justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
-        >
-          <Badge variant="muted" className="max-w-full truncate hover:underline">
-            {wf}
-          </Badge>
-        </Link>
+        <WorkflowLink
+          name={wf}
+          variant="badge"
+          className="col-start-3 row-start-2 max-w-[10rem] justify-self-end sm:col-start-4 sm:row-start-1 sm:justify-self-auto"
+        />
       ) : (
         <span aria-hidden className="hidden sm:inline" />
       )}

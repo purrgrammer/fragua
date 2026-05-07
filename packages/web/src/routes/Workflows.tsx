@@ -14,10 +14,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { FileCode2 } from "lucide-react";
 import { useEffect } from "react";
-import { Link } from "react-router-dom";
+import { ProjectLink } from "../components/ProjectLink.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import { encodeProjectId } from "../lib/projectId.ts";
+import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { queries } from "../lib/queries.ts";
 
 export function Workflows(): JSX.Element {
@@ -72,28 +72,25 @@ export function Workflows(): JSX.Element {
               {rows.map((row) => {
                 const sourceLabel = row.cwd ? basename(row.cwd) : "global";
                 const sourceTitle = row.cwd ?? "~/.swarm/workflows";
-                const linkQs = row.cwd !== undefined ? `?cwd=${encodeURIComponent(row.cwd)}` : "";
                 const rowKey = `${row.cwd ?? ""}::${row.path}`;
                 return (
                   <TableRow key={rowKey} data-testid={`workflow-row-${row.name}`}>
                     <TableCell className="max-w-0 truncate font-medium" title={row.label ?? row.name}>
-                      <Link
-                        to={`/workflows/${encodeURIComponent(row.name)}${linkQs}`}
+                      <WorkflowLink
+                        name={row.name}
+                        cwd={row.cwd}
+                        variant="plain"
                         className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
                         data-testid={`workflow-link-${row.name}`}
                       >
                         {row.label ?? row.name}
-                      </Link>
+                      </WorkflowLink>
                     </TableCell>
                     <TableCell className="max-w-0 truncate" title={sourceTitle}>
                       {row.cwd ? (
-                        <Link
-                          to={`/projects/${encodeProjectId(row.cwd)}`}
-                          className="font-mono text-xs text-sw-muted transition-colors duration-[var(--sw-duration-hover)] hover:text-sw-text hover:underline"
-                          data-testid={`workflow-source-link-${row.name}`}
-                        >
+                        <ProjectLink cwd={row.cwd} variant="mono" data-testid={`workflow-source-link-${row.name}`}>
                           {sourceLabel}
-                        </Link>
+                        </ProjectLink>
                       ) : (
                         <code className="font-mono text-xs text-sw-muted">{sourceLabel}</code>
                       )}

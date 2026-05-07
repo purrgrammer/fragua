@@ -35,6 +35,7 @@ import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { HitlChoice } from "../components/HitlChoice.tsx";
 import { NodeInspector } from "../components/NodeInspector.tsx";
+import { ProjectLink } from "../components/ProjectLink.tsx";
 import { RunControls } from "../components/RunControls.tsx";
 import { RunConversation } from "../components/RunConversation.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
@@ -44,6 +45,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
+import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import type { RunChange, RunDetail as RunDetailT } from "../lib/api.ts";
 import { ApiError } from "../lib/api.ts";
 import { useBranchMeta } from "../lib/branch-meta.ts";
@@ -51,7 +53,6 @@ import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
-import { encodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
@@ -294,26 +295,15 @@ const DetailHeader = memo(function DetailHeader({
         {detail?.workflowName && detail?.workflow && (
           <>
             <span className="text-xs text-sw-muted/40">·</span>
-            <Link
-              to={`/workflows/${encodeURIComponent(detail.workflow)}`}
-              className="truncate text-xs text-sw-muted hover:text-sw-text hover:underline"
-              title={detail.workflow}
-            >
-              {detail.workflowName}
-            </Link>
+            <WorkflowLink name={detail.workflow} label={detail.workflowName} variant="text" title={detail.workflow} />
           </>
         )}
         {detail?.cwd && (
           <>
             <span className="text-xs text-sw-muted/40">·</span>
-            <Link
-              to={`/projects/${encodeProjectId(detail.cwd)}`}
-              className="truncate text-xs text-sw-muted hover:text-sw-text hover:underline"
-              title={detail.cwd}
-              data-testid="detail-project-link"
-            >
+            <ProjectLink cwd={detail.cwd} variant="text" title={detail.cwd} data-testid="detail-project-link">
               {projectBasename(detail.cwd)}
-            </Link>
+            </ProjectLink>
           </>
         )}
         {showLive && (

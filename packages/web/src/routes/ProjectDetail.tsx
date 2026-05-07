@@ -23,6 +23,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
+import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import { ApiError } from "../lib/api.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
@@ -296,13 +297,15 @@ export function ProjectDetail(): JSX.Element {
                     {projectWorkflows.map((w) => (
                       <TableRow key={w.path} data-testid={`project-workflow-row-${w.name}`}>
                         <TableCell className="max-w-0 truncate font-medium" title={w.label ?? w.name}>
-                          <Link
-                            to={`/workflows/${encodeURIComponent(w.name)}?cwd=${encodeURIComponent(w.cwd ?? "")}`}
+                          <WorkflowLink
+                            name={w.name}
+                            cwd={w.cwd ?? ""}
+                            variant="plain"
                             className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
                             data-testid={`project-workflow-link-${w.name}`}
                           >
                             {w.label ?? w.name}
-                          </Link>
+                          </WorkflowLink>
                         </TableCell>
                         <TableCell className="max-w-0">
                           <code className="block truncate font-mono text-xs text-sw-muted" title={w.path}>

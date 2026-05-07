@@ -12,10 +12,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
 import { useEffect } from "react";
-import { Link } from "react-router-dom";
+import { ProjectLink } from "../components/ProjectLink.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
-import { encodeProjectId } from "../lib/projectId.ts";
 import { queries } from "../lib/queries.ts";
 import { formatRelative } from "../lib/time.ts";
 
@@ -69,13 +68,14 @@ export function Projects(): JSX.Element {
               {rows.map((row) => (
                 <TableRow key={row.cwd} data-testid={`project-row-${row.name}`}>
                   <TableCell className="max-w-0 truncate font-medium" title={row.name}>
-                    <Link
-                      to={`/projects/${encodeProjectId(row.cwd)}`}
+                    <ProjectLink
+                      cwd={row.cwd}
+                      variant="plain"
                       className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
                       data-testid={`project-link-${row.name}`}
                     >
                       {row.name}
-                    </Link>
+                    </ProjectLink>
                   </TableCell>
                   <TableCell className="max-w-0">
                     <code className="block truncate font-mono text-xs text-sw-muted" title={row.cwd}>

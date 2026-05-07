@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock } from "lucide-react";
 import { useEffect } from "react";
+import { ProjectLink } from "../components/ProjectLink.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,6 +23,7 @@ import {
 import { Button } from "../components/ui/button.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx";
+import { WorkflowLink } from "../components/WorkflowLink.tsx";
 import type { ScheduleRunRow, ScheduleWithStripe } from "../lib/api.ts";
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
@@ -102,10 +104,15 @@ function ScheduleRow({ row }: { row: ScheduleWithStripe }): JSX.Element {
   return (
     <TableRow data-testid={`schedule-row-${row.id}`}>
       <TableCell className="max-w-0 truncate font-medium" title={row.workflowRef}>
-        {row.workflowRef}
+        <WorkflowLink
+          name={row.workflowRef}
+          cwd={row.cwd}
+          variant="plain"
+          className="transition-colors duration-[var(--sw-duration-hover)] hover:underline"
+        />
       </TableCell>
       <TableCell className="max-w-0 truncate" title={row.cwd}>
-        <code className="font-mono text-xs text-sw-muted">{basename(row.cwd)}</code>
+        <ProjectLink cwd={row.cwd} variant="mono" />
       </TableCell>
       <TableCell>
         <code className="font-mono text-xs">{row.intervalText}</code>
