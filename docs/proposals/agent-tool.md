@@ -165,7 +165,7 @@ stepping stone toward the abandoned "child-run" design). v6's
 |---|---|
 | `packages/store/src/schema.sql` (v7 cleanup) | `docs/ARCHITECTURE.md` §2 (schema) |
 | `packages/types/src/swarm-events.ts` (no change to fact union; added two observability event types in `events.ts`) | `docs/ARCHITECTURE.md` §3 — explanatory note on sub-agent events |
-| New tool registered + new observability events | `README.md` "What swarm delivers today" |
+| New tool registered + new observability events | `STATUS.md` "What swarm delivers today" |
 
 ## Design history (for context)
 

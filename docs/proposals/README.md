@@ -7,7 +7,7 @@ as the design record. Each proposal carries YAML front-matter per
 - **status** — decision state: `proposed | accepted | in-progress | shipped | deferred | discarded`
 - **maturity** — design state: `sketch | designed | specified`
 
-A proposal flips to `shipped` only when the root [`README.md`](../../README.md)
+A proposal flips to `shipped` only when [`STATUS.md`](../../STATUS.md)'s
 "What swarm delivers today" section can claim its capability without
 qualification (drift-lint enforces this). Partially-landed work stays
 `in-progress` with the outstanding delta called out in the proposal body.
@@ -72,7 +72,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Harness](./harness.md)
 - [Schema additions for project-aware runs](./schema-additions.md)
 - [Workflow resolution by name](./workflow-resolution.md)
-- [One-off migration](./migration.md)
 - [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md)
 - [Recoverable pause unification](./recoverable-budget-pause.md)
 - [Run isolation via worktrees](./run-isolation.md)

@@ -683,8 +683,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // and codergen's HandlerResult already carries populated
           // tokens/costUsd from its own accumulator (handler-bridge
           // surfaces the same cost.recorded stream into the result).
-          // Per cost.md + AGENTS.md ground rule #5: this accumulator is
-          // turn-local, not a reducer fold of cost.recorded.
+          // Per AGENTS.md ground rule #5: this accumulator is turn-local,
+          // not a reducer fold of cost.recorded.
           if (type === "cost.recorded") {
             const p = payload as Record<string, unknown>;
             turnBilled += readNumber(p["total_tokens"]);

@@ -610,7 +610,7 @@ export function auditProposalIndex(opts: { proposalsDir: string }): Finding[] {
 
 // ────────────────── capability-claim lint ─────────────────
 
-// For every status: shipped proposal, the README "What swarm delivers today"
+// For every status: shipped proposal, STATUS.md's "What swarm delivers today"
 // section must contain a substring match for the proposal's front-matter
 // `summary` (preferred) or `title`. Suppression is a `// drift-lint: ignore
 // <basename>.md` line anywhere in the section — placed adjacent to a bullet
@@ -1102,10 +1102,10 @@ describe("drift-lint — live repo", () => {
     expect(findings).toEqual([]);
   });
 
-  test("every shipped proposal has a matching capability claim in README", () => {
+  test("every shipped proposal has a matching capability claim in STATUS.md", () => {
     const findings = auditCapabilityClaims({
       proposalsDir: PROPOSALS_DIR,
-      readmePath: join(REPO_ROOT, "README.md"),
+      readmePath: join(REPO_ROOT, "STATUS.md"),
       readmeSection: "What swarm delivers today",
     });
     if (findings.length > 0) {

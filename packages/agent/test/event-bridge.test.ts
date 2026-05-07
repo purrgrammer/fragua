@@ -1,8 +1,7 @@
 // Bridge coverage for the *_end events that mark content-block
 // boundaries in pi-ai's stream. Captured for partial-turn recovery on
-// resume — see cost.md finding ⑨ for context. Payloads stay minimal
-// (just content_index); the assembled content is reconstructable from
-// the deltas already in the event log.
+// resume. Payloads stay minimal (just content_index); the assembled
+// content is reconstructable from the deltas already in the event log.
 
 import { describe, expect, test } from "bun:test";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";

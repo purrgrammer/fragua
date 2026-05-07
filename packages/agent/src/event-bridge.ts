@@ -17,7 +17,7 @@ export interface BridgedEvent {
  * `usage` only on the final AssistantMessage at message_end, so we can't
  * fire cost.recorded mid-stream. On crash/abort before message_end the
  * partial-stream cost is dropped (no estimation per the no-guesswork
- * policy). See cost.md ⑨. */
+ * policy). */
 export function costPayload(msg: AssistantMessage): Record<string, unknown> {
   return {
     provider: msg.provider,

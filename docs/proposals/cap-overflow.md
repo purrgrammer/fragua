@@ -60,7 +60,7 @@ Extend `HaltReason` (declared in `packages/types/src/swarm-events.ts:51`) with `
 }
 ```
 
-Adding the literal triggers the AGENTS.md ground-rule #1 same-PR obligations (ARCHITECTURE.md §3, the schema-CHECK doc reference, `swarm-debug` SKILL §8, README "What swarm delivers today" if the new halt reason carries user-visible behaviour). The implementation PR owns those — this is a docs-only proposal-promotion PR.
+Adding the literal triggers the AGENTS.md ground-rule #1 same-PR obligations (ARCHITECTURE.md §3, the schema-CHECK doc reference, `swarm-debug` SKILL §8, `STATUS.md` "What swarm delivers today" if the new halt reason carries user-visible behaviour). The implementation PR owns those — this is a docs-only proposal-promotion PR.
 
 ### 2. Pre-flight check at the projection writer
 

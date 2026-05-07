@@ -13,8 +13,7 @@ last-reviewed: 2026-05-04
 > Downstream proposals ([token auth](./token-auth.md),
 > [project-config extensions](./project-config-extensions.md),
 > [project tools, hooks, skills](./project-extensions.md),
-> [file server](./file-server.md)) build on it. The one-off
-> [migration](./migration.md) script ran on this repo on 2026-05-04.
+> [file server](./file-server.md)) build on it.
 
 ## Shape
 
@@ -100,10 +99,6 @@ default install path. New users start on `~/.swarm/swarm.db` from
 the first `swarm harness` invocation. There's no per-cwd path to
 retire; the flagged form is a primitive that always existed and
 always will.
-
-The only one-off migration was for the swarm repo itself, which had
-months of pre-harness run history; see [migration](./migration.md).
-The script ran on 2026-05-04.
 
 ## What this enables (now live)
 

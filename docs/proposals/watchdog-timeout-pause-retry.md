@@ -91,7 +91,7 @@ Layer 2 of `docs/proposals/codergen-maxms-tuning.md` — separate ceilings for c
 - One schema-version-touching change: `fact.run_paused.reason` adds the literal `"timeout_retry"` (existing union covers `"operator" | "provider_error" | "payment_required" | "budget"`). Bump per AGENTS.md table.
 - One reducer change: `routing.internal.auto_resume_at` is already populated for `paused_provider_retry` / `paused_retry`; reuse without modification.
 - One executor change: in `executor.ts:782-794`, branch on `abortCause === "timeout"` to emit the pause shape instead of the abort shape. Bound by per-`(nodeId,iteration)` retry counter (carried in `routing.internal.timeout_retries.<nodeId>`, mirroring `goal_gates.__retries`).
-- README.md "What swarm delivers today" / "What swarm does not deliver today" — not currently load-bearing; no update needed unless a paragraph already calls out abort-on-timeout behaviour.
+- `STATUS.md` "What swarm delivers today" / "What swarm does not deliver today" — not currently load-bearing; no update needed unless a paragraph already calls out abort-on-timeout behaviour.
 - `.agents/skills/swarm-debug/SKILL.md` §8 failure-mode playbook — add `paused_retry{reason:"timeout_retry"}` row, drop or annotate the `fact.node_aborted{cause:"timeout"}` row.
 
 ## What this does not propose

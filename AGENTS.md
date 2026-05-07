@@ -77,7 +77,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
    | If you touch | Update in the same PR |
    |---|---|
    | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
-   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `README.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the README claims |
+   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `STATUS.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the doc claims |
    | `packages/core/src/handler/types.ts` | `handler-contract.md` |
    | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
    | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/swarm-author/SKILL.md` validator-codes table |
@@ -91,7 +91,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
 
    **Common drift patterns.** Three patterns the introspect workflow keeps re-finding — worth a 30-second self-check before merging:
 
-   - **Status-enum changes that don't propagate to README.** A new `RunStatus` literal (or a renamed one — e.g. `paused_provider_error` → unified `paused{reason}`) lands in `swarm-events.ts` + ARCH §3 + the schema CHECK, but README's "What swarm delivers today" still describes the old shape. `rg '<old-literal>' README.md docs/` before merging.
+   - **Status-enum changes that don't propagate to STATUS.md.** A new `RunStatus` literal (or a renamed one — e.g. `paused_provider_error` → unified `paused{reason}`) lands in `swarm-events.ts` + ARCH §3 + the schema CHECK, but `STATUS.md`'s "What swarm delivers today" still describes the old shape. `rg '<old-literal>' STATUS.md README.md docs/` before merging.
    - **Route additions that don't update ARCH §7.** A new `app.post("/runs/:id/<verb>", …)` in `routes.ts` ships without the corresponding row in §7's web-server routes table. §7 is the operator's index — if it's not there, the route is invisible.
    - **CLI default-changing flags that don't update README.** Renaming `--provider` → `--llm-provider`, changing a default port (3000 → 6767), or adding a new subcommand leaves the README quick-tour pointing at the wrong invocation. The quick-tour is the first thing new users copy verbatim.
 2. **Tests before done.** `bun test` green + monorepo typecheck clean are table stakes.

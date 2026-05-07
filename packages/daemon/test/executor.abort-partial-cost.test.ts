@@ -16,12 +16,11 @@
 // orchestrate-node node show partialCostUsd=0, run_state.metrics
 // .totalCostUsd=0, budget_usd never trips.
 //
-// Per cost.md and AGENTS.md ground rule #5: do NOT fold
-// cost.recorded directly in the reducer (observability events
-// deliberately bypass reducers; folding would double-count
-// completed-node turns whose cost.recorded events also fire).
-// The fix lives on the executor abort path / handler-bridge
-// accumulator surfacing.
+// Per AGENTS.md ground rule #5: do NOT fold cost.recorded directly
+// in the reducer (observability events deliberately bypass reducers;
+// folding would double-count completed-node turns whose cost.recorded
+// events also fire). The fix lives on the executor abort path /
+// handler-bridge accumulator surfacing.
 
 import { describe, expect, test } from "bun:test";
 import { AbortRegistry } from "../src/abort-registry.ts";

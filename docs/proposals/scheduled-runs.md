@@ -260,6 +260,6 @@ Per AGENTS.md ground rule #1:
 - `ARCHITECTURE.md` §7 — operator routes (5 new endpoints)
 - `packages/types/src/swarm-events.ts` — event declaration merges
 - `packages/store/src/schema.sql` — schema bump
-- `README.md` "What swarm delivers today" — add the schedule primitive
+- `STATUS.md` "What swarm delivers today" — add the schedule primitive
 - `.agents/skills/swarm-run/SKILL.md` — operator cheat sheet for
   schedule create/list/pause/rm

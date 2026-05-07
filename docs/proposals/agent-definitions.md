@@ -232,7 +232,7 @@ contents and parsed metadata are not persisted to the store.
 | `packages/daemon/src/spawn-subagent.ts` — def resolution | `agent-tool.md` "Goals" line saying "no named/registered profiles" must be updated to point here as V2.  |
 | `packages/types/src/events.ts` — `subagent.start.name` field | `docs/ARCHITECTURE.md` §3 explanatory note on sub-agent events.                                        |
 | New `.agents/agents/` directory pattern               | `AGENTS.md` codebase map (skills paragraph extends to mention agents).                                      |
-| Capability claim                                      | `README.md` "What swarm delivers today" — name profiles + catalogue.                                        |
+| Capability claim                                      | `STATUS.md` "What swarm delivers today" — name profiles + catalogue.                                        |
 
 ## Open questions for review
 
