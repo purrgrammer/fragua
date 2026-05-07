@@ -679,6 +679,17 @@ export function toFlowGraph(
     const k = edgeKey(e.from, e.to);
     traversalCounts.set(k, (traversalCounts.get(k) ?? 0) + 1);
   }
+  // Per-node max iteration. Goal-gate retargets bypass `edge.selected`
+  // (the executor sets `result.nextNode = action.target` without going
+  // through the edge selector), so the synthetic retarget edge can't
+  // read its fire count from `traversalCounts`. The signal is the gate's
+  // iteration count: a gate at iteration=N has been retargeted-into N
+  // times.
+  const maxIterationByNode = new Map<string, number>();
+  for (const n of detail?.nodes ?? []) {
+    const prev = maxIterationByNode.get(n.nodeId) ?? 0;
+    if (n.iteration > prev) maxIterationByNode.set(n.nodeId, n.iteration);
+  }
   // A node is "reached" if it received a `fact.node_*` event OR if some
   // selected edge points at it. Terminal nodes (Msquare) never emit their
   // own node_started/node_completed — the executor goes straight to
@@ -948,9 +959,17 @@ export function toFlowGraph(
   const synthEdges: FlowEdge[] = retargetCandidates.map((r, leftArcIndex) => {
     const targetDepth = depthOf.get(r.target);
     const synthExtent = arcExtentBetween(r.depth, targetDepth);
-    const capLabel = `retarget · cap ${goalGateCap}${
+    // Retarget firings == gate's max iteration (each retarget re-enters
+    // the gate's target, advancing the gate's next visit's iteration
+    // by one). Zero when the gate ran at most once; positive once any
+    // retarget actually fired, which is what flips this edge from dim
+    // to highlighted.
+    const retargetCount = maxIterationByNode.get(r.gateId) ?? 0;
+    const taken = retargetCount > 0;
+    const baseLabel = `retarget · cap ${goalGateCap}${
       goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""
     }`;
+    const capLabel = retargetCount > 0 ? `${baseLabel} · ×${retargetCount}` : baseLabel;
     return {
       id: `__retarget__${r.gateId}->${r.target}`,
       source: r.gateId,
@@ -962,10 +981,11 @@ export function toFlowGraph(
         isSkipEdge: false,
         label: capLabel,
         outcome: undefined,
-        dim: hasRun, // synthetic — never "taken", so dim during a run.
+        dim: hasRun && !taken,
         loopRestart: false,
         isRetargetEdge: true,
         arcIndex: leftArcIndex,
+        ...(retargetCount > 0 ? { traversalCount: retargetCount } : {}),
         ...(synthExtent > 0 ? { arcExtent: synthExtent } : {}),
       },
       // Left-side handles so synthetic retargets visually separate from

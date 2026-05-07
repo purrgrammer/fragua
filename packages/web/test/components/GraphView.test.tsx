@@ -1171,4 +1171,59 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
     expect(byPair.get("review->audit")?.isBackEdge).toBe(true);
     expect(byPair.get("review->done")?.traversalCount).toBe(1);
   });
+
+  // Bug: when the engine retargets through a goal_gate's implicit
+  // §3.4 jump (e.g. review -> implement via retry_target="implement"),
+  // the synthetic retarget edge stays dimmed even though the retarget
+  // actually fired. The signal is the gate's iteration count in
+  // detail.nodes: a gate with iteration > 0 has been retargeted-into at
+  // least once, so its synthetic back-edge should render highlighted
+  // (not dimmed) and carry a traversalCount.
+  it("highlights the synthetic goal-gate back-edge after a retarget fires", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      implement [shape=box]
+      review [shape=box, goal_gate=true, retry_target="implement"]
+      done [shape=Msquare]
+      start -> implement -> review -> done
+    }`;
+    const graph = parseDotSource(src);
+    // Simulate one retarget cycle: implement ran twice, review ran twice,
+    // then review approved on iteration 1 and the run reached done. The
+    // executor records `edge.selected` for the real DOT edges only; the
+    // implicit review->implement jump is NOT in selectedEdges. The gate's
+    // iteration=1 entry in detail.nodes is the load-bearing signal.
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "implement", iteration: 0, state: "completed", lastEventSeq: 2 },
+        { nodeId: "review", iteration: 0, state: "failed", lastEventSeq: 3 },
+        { nodeId: "implement", iteration: 1, state: "completed", lastEventSeq: 4 },
+        { nodeId: "review", iteration: 1, state: "completed", lastEventSeq: 5 },
+        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 6 },
+      ],
+      selectedEdges: [
+        { from: "start", to: "implement", iteration: 0 },
+        { from: "implement", to: "review", iteration: 0 },
+        // No (review, implement) entry — the engine's retarget bypasses
+        // the edge selector entirely.
+        { from: "implement", to: "review", iteration: 1 },
+        { from: "review", to: "done", iteration: 0 },
+      ],
+      workflowSource: src,
+      status: "success",
+    });
+    const { flowEdges } = toFlowGraph(detail, graph);
+    const synth = flowEdges.find(
+      (e) => e.id.startsWith("__retarget__") && e.source === "review" && e.target === "implement",
+    );
+    expect(synth).toBeDefined();
+    const data = synth?.data as { dim?: boolean; traversalCount?: number };
+    // The bug: this currently renders dimmed (data.dim === true) so the
+    // user can't tell the retarget actually fired.
+    expect(data.dim).toBe(false);
+    // And it should carry the retarget count so the ×N badge surfaces,
+    // matching how real back-edges report their re-traversal count.
+    expect(data.traversalCount).toBe(1);
+  });
 });
