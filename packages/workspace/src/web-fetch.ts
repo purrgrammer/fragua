@@ -140,7 +140,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
           redirect: "manual",
           ...(signal ? { signal } : {}),
           headers: {
-            "user-agent": "swarm-web-fetch/0 (+https://github.com/bitrefill/swarm)",
+            "user-agent": "swarm-web-fetch/0",
             accept: "text/html,application/xhtml+xml,text/plain,*/*;q=0.8",
           },
         });

@@ -24,6 +24,9 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: Lint docs (drift)
+        run: bun run lint:docs
+
       - name: Typecheck
         run: bun run typecheck
 
