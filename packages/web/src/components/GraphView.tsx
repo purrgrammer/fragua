@@ -543,6 +543,13 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  when the arc actually has to clear at least one intermediate
      *  layer. */
     arcExtent?: number;
+    /** Number of times the executor traversed this edge — aggregated
+     *  from `detail.selectedEdges` by (from, to). Absent when zero, so
+     *  the workflow-detail mode (no run) carries no count field. The
+     *  badge surfaces this on edges that fired more than once — the
+     *  load-bearing signal for back-edges, self-loops, and goal-gate
+     *  retargets. */
+    traversalCount?: number;
   };
 };
 
@@ -663,9 +670,15 @@ export function toFlowGraph(
   // default "show me where this node ended up" behaviour for loops.
   const stateById = new Map(detail?.nodes.map((n) => [n.nodeId, n]) ?? []);
   // `selectedEdges` is an ordered log of every (from,to,iteration) triple
-  // the executor traversed. The set ignores iteration: any traversal makes
-  // an edge "taken" for fade-styling purposes.
-  const takenEdges = new Set(detail?.selectedEdges.map((e) => edgeKey(e.from, e.to)) ?? []);
+  // the executor traversed. We aggregate by (from,to) into a count so the
+  // renderer can both (a) tell taken from un-taken (count > 0) and
+  // (b) show how many times each edge fired — the load-bearing signal for
+  // back-edges, self-loops, and goal-gate retargets that fire repeatedly.
+  const traversalCounts = new Map<string, number>();
+  for (const e of detail?.selectedEdges ?? []) {
+    const k = edgeKey(e.from, e.to);
+    traversalCounts.set(k, (traversalCounts.get(k) ?? 0) + 1);
+  }
   // A node is "reached" if it received a `fact.node_*` event OR if some
   // selected edge points at it. Terminal nodes (Msquare) never emit their
   // own node_started/node_completed — the executor goes straight to
@@ -843,8 +856,17 @@ export function toFlowGraph(
     // Untaken edges fade. During a run, an edge is "taken" iff it appears
     // in `detail.selectedEdges`; outside a run (workflow-detail view)
     // everything renders at full opacity.
-    const taken = takenEdges.has(edgeKey(e.from, e.to));
+    const traversalCount = traversalCounts.get(edgeKey(e.from, e.to)) ?? 0;
+    const taken = traversalCount > 0;
     const dim = hasRun && !taken;
+    // Multi-fire edges (back-edges that re-traverse on REJECT, self-loops
+    // hitting max_retries, retargets that loop) get an `×N` count badge
+    // folded into the label pill so operators can see at a glance how
+    // many times each edge fired. Single traversals are the baseline and
+    // don't add chrome.
+    if (traversalCount > 1) {
+      label = label !== undefined ? `${label} · ×${traversalCount}` : `×${traversalCount}`;
+    }
     // Loop-channel check wins over outcome: a `verify -> verify
     // [outcome=fail]` self-loop is a *retry*, not a negative-outcome
     // forward edge — rendering it red would misrepresent the semantic.
@@ -893,6 +915,7 @@ export function toFlowGraph(
         dim,
         loopRestart,
         isHitlEdge,
+        ...(traversalCount > 0 ? { traversalCount } : {}),
         ...(arcIndex !== undefined ? { arcIndex } : {}),
         ...(arcExtent > 0 ? { arcExtent } : {}),
       },

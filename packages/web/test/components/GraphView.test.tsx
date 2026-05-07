@@ -1123,3 +1123,52 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect((intoReview?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(false);
   });
 });
+
+describe("toFlowGraph — edge traversal counts (looped edges)", () => {
+  // The bug: edges that fire repeatedly (back-edges, self-loops, goal-gate
+  // retargets, max_retries loops) render identically to one-shot edges,
+  // and there's no signal of how many times each fired. The signal lives
+  // in `detail.selectedEdges` — an ordered (from, to, iteration) log —
+  // which `toFlowGraph` must aggregate by (from, to) and stamp on each
+  // FlowEdge.data so the renderer can highlight + badge them.
+  it("stamps a traversalCount on each edge derived from detail.selectedEdges", () => {
+    // `audit -> review -> audit` cycle: review REJECTs twice, then approves.
+    // The back-edge `review -> audit` therefore fires twice; the forward
+    // edge `audit -> review` fires three times (once per audit visit);
+    // `review -> done` fires once.
+    const src = `digraph loop {
+      audit [shape=box]
+      review [shape=diamond]
+      done [shape=Msquare]
+      audit -> review
+      review -> audit [condition="outcome=fail"]
+      review -> done [condition="outcome=success"]
+    }`;
+    const graph = parseDotSource(src);
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: "audit", iteration: 2, state: "completed", lastEventSeq: 9 },
+        { nodeId: "review", iteration: 2, state: "completed", lastEventSeq: 10 },
+      ],
+      selectedEdges: [
+        { from: "audit", to: "review", iteration: 0 },
+        { from: "review", to: "audit", iteration: 0 },
+        { from: "audit", to: "review", iteration: 1 },
+        { from: "review", to: "audit", iteration: 1 },
+        { from: "audit", to: "review", iteration: 2 },
+        { from: "review", to: "done", iteration: 0 },
+      ],
+      workflowSource: src,
+    });
+    const { flowEdges } = toFlowGraph(detail, graph);
+    const byPair = new Map(
+      flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { traversalCount?: number; isBackEdge?: boolean }]),
+    );
+    expect(byPair.get("audit->review")?.traversalCount).toBe(3);
+    // The looped back-edge — the centerpiece of the bug — must carry the
+    // count of every traversal (2), not just a boolean "taken" flag.
+    expect(byPair.get("review->audit")?.traversalCount).toBe(2);
+    expect(byPair.get("review->audit")?.isBackEdge).toBe(true);
+    expect(byPair.get("review->done")?.traversalCount).toBe(1);
+  });
+});
