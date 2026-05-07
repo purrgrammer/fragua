@@ -404,6 +404,37 @@ describe("runStateToDetail — HITL projection", () => {
   });
 });
 
+describe("runStateToDetail \u2014 lastEventSeq", () => {
+  function evWithSeq(seq: number, type: string, payload: Record<string, unknown> = {}): StoredEvent {
+    return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
+  }
+
+  // Regression: `lastEventSeq` is the SSE resume watermark + the
+  // mergeDetail dedup cursor. Producing `state.lastAppliedSeq` (the
+  // intent-fold cursor \u2014 only advanced via `advanceAppliedTo`) caused
+  // the run-detail Graph view to show `\u00b7 \u00d7N` badges on edges that
+  // fired exactly once, because SSE re-delivered events the snapshot
+  // already covered and overlay-side dedup couldn't drop them.
+  test("equals the seq of the latest event, not state.lastAppliedSeq", () => {
+    const state = makeState({ lastAppliedSeq: 1 });
+    const events: StoredEvent[] = [
+      evWithSeq(1, "fact.run_started", { startNode: "start" }),
+      evWithSeq(3, "edge.selected", { from: "start", to: "collect", iteration: 0 }),
+      evWithSeq(69, "edge.selected", { from: "collect", to: "analyze", iteration: 0 }),
+      evWithSeq(626, "edge.selected", { from: "analyze", to: "done", iteration: 0 }),
+      evWithSeq(628, "fact.run_completed", { finalNode: "done" }),
+    ];
+    const detail = runStateToDetail(state, events, undefined, undefined);
+    expect(detail.lastEventSeq).toBe(628);
+  });
+
+  test("falls back to 0 when the run has no events", () => {
+    const state = makeState({ lastAppliedSeq: 7 });
+    const detail = runStateToDetail(state, [], undefined, undefined);
+    expect(detail.lastEventSeq).toBe(0);
+  });
+});
+
 describe("runStateToDetail \u2014 worktreePath", () => {
   test("populates worktreePath when worktree directory exists", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "swarm-runs-adapter-wt-"));

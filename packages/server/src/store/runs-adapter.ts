@@ -96,7 +96,16 @@ export function runStateToDetail(
   const summary = runStateToSummary(state, events, workflowName);
   const detail: RunDetail = {
     ...summary,
-    lastEventSeq: state.lastAppliedSeq,
+    // Tail-of-events seq, NOT `state.lastAppliedSeq` — the latter is the
+    // intent-fold cursor (advanced only via `advanceAppliedTo` when an
+    // intent is folded into the projection) and stays at 1 for runs whose
+    // only intent was the initial enqueue. The web client uses this value
+    // both as the SSE resume watermark and as the dedup filter for
+    // overlay edges in `mergeDetail`; it must match the seq of the
+    // latest event reflected in `nodes` / `selectedEdges`, otherwise SSE
+    // re-delivers events the snapshot already covers and the run-detail
+    // Graph view shows `· ×N` on edges that fired exactly once.
+    lastEventSeq: events.at(-1)?.seq ?? 0,
     nodes: deriveNodeStates(events),
     selectedEdges: deriveSelectedEdges(events),
   };
