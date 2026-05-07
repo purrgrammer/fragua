@@ -166,7 +166,7 @@ async function scanRoot(rootPath: string, scope: AgentDefinitionScope, warnings:
 
     const model = typeof fm["model"] === "string" ? fm["model"] : undefined;
     const provider = typeof fm["provider"] === "string" ? fm["provider"] : undefined;
-    const allowed_tools = readAllowedTools(fm, filePath, warnings);
+    const allowed_tools = readAllowedTools(fm);
 
     out.push({
       name,
@@ -187,8 +187,9 @@ async function scanRoot(rootPath: string, scope: AgentDefinitionScope, warnings:
 
 /** Accept array form `[read, grep]` or space-separated string `read grep`,
  *  mirroring skills' loose ingestion. Each entry is run through
- *  `normaliseToolName`; a warning fires per non-canonical input. */
-function readAllowedTools(fm: Record<string, unknown>, mdPath: string, warnings: string[]): string[] | undefined {
+ *  `normaliseToolName` so cross-client casing (`Read`, `WebFetch`)
+ *  resolves to swarm's canonical lowercase snake_case silently. */
+function readAllowedTools(fm: Record<string, unknown>): string[] | undefined {
   // `tools:` is the Claude Code convention; AGENTS.md advertises
   // `.claude/agents/` as a cross-client fallback, so accept it as a
   // synonym alongside swarm's canonical `allowed_tools` / `allowed-tools`.
@@ -205,15 +206,7 @@ function readAllowedTools(fm: Record<string, unknown>, mdPath: string, warnings:
     return undefined;
   }
   if (parts.length === 0) return undefined;
-  const normalised: string[] = [];
-  for (const p of parts) {
-    const n = normaliseToolName(p);
-    if (n.changed) {
-      warnings.push(`agent at ${mdPath}: allowed_tools entry "${p}" normalised to "${n.name}"`);
-    }
-    normalised.push(n.name);
-  }
-  return normalised;
+  return parts.map((p) => normaliseToolName(p).name);
 }
 
 function sha256Hex(contents: string): string {

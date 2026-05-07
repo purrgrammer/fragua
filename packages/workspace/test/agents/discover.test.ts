@@ -101,7 +101,7 @@ describe("discoverAgents", () => {
     expect(warnings.some((w) => w.includes("does not match filename stem"))).toBe(true);
   });
 
-  test("non-canonical allowed_tools entries are normalised and warned", async () => {
+  test("non-canonical allowed_tools entries are silently normalised", async () => {
     const cwd = tmp;
     await writeAgent(
       cwd,
@@ -111,7 +111,10 @@ describe("discoverAgents", () => {
     const { agents, warnings } = await discoverAgents({ projectCwds: [cwd], homeDir: "" });
     expect(agents).toHaveLength(1);
     expect(agents[0]!.allowed_tools).toEqual(["read", "web_fetch"]);
-    expect(warnings.filter((w) => w.includes("normalised")).length).toBe(2);
+    // Casing differences are documented behaviour (lowercase snake_case
+    // is canonical) — surfacing one line per cross-client tool name is
+    // pure noise. Stay quiet.
+    expect(warnings.filter((w) => w.includes("normalised")).length).toBe(0);
   });
 
   test("Claude-Code-style `tools:` frontmatter is accepted as a synonym for `allowed_tools`", async () => {
