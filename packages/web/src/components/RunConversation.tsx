@@ -996,18 +996,14 @@ function AssistantMessageRow({
       // ToolInput + RichToolResult on top duplicates everything, so
       // we drop them — the card body is just the transcript.
       const isAgent = chunk.name === "agent";
-      // Open the card by default whenever the embedded sub-agent
-      // transcript has anything to show (persisted rows or an in-flight
-      // stream). Plain tool cards stay closed by default — the body
-      // is just args + textual output, the header is enough.
-      const defaultOpen = embeddedSubagent != null;
+      // All tool cards (including `agent` sub-agent transcripts)
+      // default to collapsed — the header is enough; the user clicks
+      // to expand. Per-card open state lives in Radix's uncontrolled
+      // Collapsible: as long as React keeps the same fiber for this
+      // card (stable `key={ordinal-c<i>}`), a user-expanded pane
+      // stays open as new sub-agent deltas stream in.
       blocks.push(
-        <Tool
-          key={`${ordinal}-c${i}`}
-          data-testid={`tool-${chunk.id}`}
-          className="mb-0"
-          {...(defaultOpen ? { defaultOpen: true } : {})}
-        >
+        <Tool key={`${ordinal}-c${i}`} data-testid={`tool-${chunk.id}`} className="mb-0">
           <ToolHeader
             type={toolTypeFromName(chunk.name)}
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}

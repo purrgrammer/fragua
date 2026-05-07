@@ -16,7 +16,7 @@
 // NodeSection — visually divorced from the parent's `agent` card.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { cleanup, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { RunConversation } from "../../src/components/RunConversation.tsx";
 import type { RunMessageRow } from "../../src/lib/api.ts";
 import type { StreamingMessage } from "../../src/lib/useRunLive.ts";
@@ -97,13 +97,23 @@ describe("RunConversation — parallel subagent streaming", () => {
     const { container } = renderWithClient(<RunConversation messages={messages} streaming={streaming} isLive />);
     const q = within(container);
 
+    // There must NOT be an orphan `__subagent:sidA` node section
+    // floating outside the parent's agent card.
+    expect(q.queryByTestId("node-section-__subagent:sidA")).toBeNull();
+
+    // Sub-agent toolCall cards default to collapsed (Radix unmounts
+    // children when closed). Expand subagent A's card to verify the
+    // streaming row is rendered inside it.
+    const cardA = q.getByTestId("tool-call-A");
+    const triggerA = cardA.querySelector('[data-slot="collapsible-trigger"]') as HTMLButtonElement | null;
+    expect(triggerA).not.toBeNull();
+    act(() => {
+      fireEvent.click(triggerA as HTMLButtonElement);
+    });
+
     // The parent's `agent` toolCall card for subagent A must contain the
     // streaming message row.
     const sidACard = q.getByTestId("subagent-transcript-sidA");
     expect(within(sidACard).getByTestId("streaming-message")).toBeTruthy();
-
-    // And there must NOT be an orphan `__subagent:sidA` node section
-    // floating outside the parent's agent card.
-    expect(q.queryByTestId("node-section-__subagent:sidA")).toBeNull();
   });
 });
