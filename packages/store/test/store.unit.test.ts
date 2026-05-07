@@ -765,6 +765,35 @@ describe("SqliteStore — messages", () => {
     expect(d.ordinal).not.toBe(a.ordinal);
     store.close();
   });
+
+  test("appendMessage emits fact.message_appended carrying ordinal/role/nodeId/iteration", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const before = store.getEvents(runId).length;
+    const r = store.appendMessage(runId, {
+      content: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      nodeId: "n1",
+      iteration: 2,
+    });
+    const events = store.getEvents(runId);
+    expect(events).toHaveLength(before + 1);
+    const last = events[events.length - 1]!;
+    expect(last.type).toBe("fact.message_appended");
+    expect(last.writer).toBe("daemon");
+    expect(last.payload).toEqual({ ordinal: r.ordinal, role: "user", nodeId: "n1", iteration: 2 });
+    store.close();
+  });
+
+  test("appendMessage dedup hit does not emit a duplicate fact.message_appended", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const msg = { role: "user" as const, content: [{ type: "text" as const, text: "deterministic" }], timestamp: 1 };
+    store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 0 }, { dedup: true });
+    const after1 = store.getEvents(runId).length;
+    store.appendMessage(runId, { content: msg, nodeId: "n", iteration: 0 }, { dedup: true });
+    expect(store.getEvents(runId).length).toBe(after1);
+    store.close();
+  });
 });
 
 describe("SqliteStore — message size bound", () => {

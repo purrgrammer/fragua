@@ -253,6 +253,24 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
               if (rows.length === 0) return;
               lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
               setMessages((prev) => [...prev, ...rows]);
+              // The persisted `tool_node` row is the authoritative
+              // Terminal card for that node — drop the live stream
+              // buffer so RunConversation swaps over to it without
+              // the brief blank gap a node_completed-keyed clear
+              // would leave between live and persisted renders.
+              const landedToolNodes = rows
+                .filter((r) => r.content.role === "tool_node" && typeof r.nodeId === "string")
+                .map((r) => r.nodeId as string);
+              if (landedToolNodes.length > 0) {
+                setToolStreams((prev) => {
+                  let changed = false;
+                  const next = new Map(prev);
+                  for (const id of landedToolNodes) {
+                    if (next.delete(id)) changed = true;
+                  }
+                  return changed ? next : prev;
+                });
+              }
             })
             .catch((err: unknown) => {
               console.warn("[useRunLive] messages fetch failed for", id, "—", err);
@@ -284,24 +302,16 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       // `tool.output_chunk` event carries a slice of stdout or
       // stderr; we accumulate into a per-node buffer so the UI can
       // render a live Terminal until the persisted `tool_node`
-      // message replaces it. Cleared per-node when:
-      //   - `fact.node_completed` lands (handler returned, persisted
-      //      row about to be fetched).
-      //   - The runId resets.
+      // message replaces it. The live entry is dropped only when
+      // its persisted row lands via the messages refetch above —
+      // not on `fact.node_completed`, which would leave a blank
+      // window before the row arrived.
       if (type === "tool.output_chunk" && nodeId != null) {
         const kind = payload?.["kind"];
         const delta = typeof payload?.["delta"] === "string" ? (payload["delta"] as string) : "";
         if ((kind === "stdout" || kind === "stderr") && delta.length > 0) {
           setToolStreams((prev) => appendToolChunk(prev, nodeId, kind, delta));
         }
-      }
-      if (type === "fact.node_completed" && nodeId != null) {
-        setToolStreams((prev) => {
-          if (!prev.has(nodeId)) return prev;
-          const next = new Map(prev);
-          next.delete(nodeId);
-          return next;
-        });
       }
     },
     [runId],

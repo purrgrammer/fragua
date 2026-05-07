@@ -599,6 +599,9 @@ export class SqliteStore implements IEventStore {
     const contentHash = sha256Hex(serialized);
     const iteration = row.iteration ?? 0;
     const dedup = opts?.dedup === true && row.nodeId !== null;
+    const ts = this.now();
+    const role = row.content.role;
+    const nodeId = row.nodeId;
     let ordinal = 0;
     this.writeTxn(() => {
       // Opt-in dedup. When the caller asserts the message is replay-safe
@@ -629,6 +632,15 @@ export class SqliteStore implements IEventStore {
         iteration,
         contentHash,
       });
+      // Signal the per-run SSE stream that a new message row landed, so
+      // clients can refetch the messages tail. Without this, tool-handler
+      // appends are invisible to the client until the next codergen
+      // emits `agent.message_end`. Dedup hits don't insert a row, so
+      // they don't emit either — the client's last refetch already
+      // covers the existing ordinal.
+      const eventPayload = this.validatePayload({ ordinal, role, nodeId, iteration });
+      const seq = bumpRunSeq(this.db, runId);
+      insertEventDaemon(this.db, runId, seq, "fact.message_appended", eventPayload, ts);
     });
     return { ordinal };
   }

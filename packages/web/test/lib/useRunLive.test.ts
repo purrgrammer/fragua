@@ -121,6 +121,114 @@ describe("useRunLive — bootstrap fetch is gated on a settled snapshot", () => 
     }
   });
 
+  it("tool_node row arriving via refetch clears the live tool stream — fact.node_completed alone does not", async () => {
+    // Lifecycle we lock here:
+    //   1. tool.output_chunk lands → toolStreams gains an entry, RunConversation
+    //      shows a live Terminal.
+    //   2. fact.node_completed lands → toolStreams stays (the persisted
+    //      Terminal card hasn't loaded yet — clearing now would leave a
+    //      blank gap until the next refetch).
+    //   3. fact.message_appended lands → triggers messages refetch.
+    //   4. Refetch returns a tool_node row → toolStreams entry drops in
+    //      the same React update as the persisted row appends, so the
+    //      swap is atomic for the renderer.
+    let messagesCall = 0;
+    const toolNodeRow = {
+      ordinal: 1,
+      nodeId: "find_pr",
+      content: {
+        role: "tool_node",
+        command: "echo hi",
+        cwd: "/tmp",
+        exitCode: 0,
+        durationMs: 5,
+        stdout: "hi\n",
+        stderr: "",
+        outputArtifactKey: "find_pr:stdout",
+        timestamp: 0,
+      },
+    };
+    const mock = installFetchMock({}, ({ url }) => {
+      if (url.includes("/messages")) {
+        messagesCall++;
+        // Bootstrap returns empty; first refetch returns the persisted tool_node row.
+        const body = messagesCall === 1 ? [] : [toolNodeRow];
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    try {
+      FakeEventSource.instances = [];
+      const { result } = renderHook(() =>
+        useRunLive("r1", {
+          terminal: false,
+          sinceSeq: 0,
+          eventSourceImpl: FakeEventSource as unknown as typeof EventSource,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(FakeEventSource.instances.length).toBe(1);
+      });
+      const es = FakeEventSource.instances[0]!;
+      act(() => es._open());
+
+      // Bootstrap /messages call landed.
+      await waitFor(() => {
+        expect(messagesCall).toBe(1);
+      });
+
+      // 1) Live stream chunk arrives.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "tool.output_chunk",
+            payload: { nodeId: "find_pr", kind: "stdout", delta: "hi\n", content_index: 0 },
+          }),
+          "1",
+        );
+      });
+      await waitFor(() => {
+        expect(result.current.toolStreams.has("find_pr")).toBe(true);
+      });
+
+      // 2) Node completion alone must NOT clear the live stream.
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.node_completed",
+            payload: { nodeId: "find_pr", iteration: 0 },
+          }),
+          "2",
+        );
+      });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(result.current.toolStreams.has("find_pr")).toBe(true);
+
+      // 3) message_appended triggers a refetch (coalesced 30ms in the hook).
+      act(() => {
+        es._emit(
+          JSON.stringify({
+            type: "fact.message_appended",
+            payload: { ordinal: 1, role: "tool_node", nodeId: "find_pr", iteration: 0 },
+          }),
+          "3",
+        );
+      });
+
+      // 4) Once the persisted row lands, the live stream entry drops.
+      await waitFor(() => {
+        expect(result.current.messages.some((m) => m.content.role === "tool_node")).toBe(true);
+        expect(result.current.toolStreams.has("find_pr")).toBe(false);
+      });
+    } finally {
+      mock.restore();
+    }
+  });
+
   it("subagent.resumed frames do not crash the fold and leave subagentByToolCallId stable", async () => {
     const mock = installFetchMock({
       "/api/runs/r1/messages": () =>
