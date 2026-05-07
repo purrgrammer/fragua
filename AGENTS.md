@@ -40,17 +40,18 @@ bun run dev:web                          # Vite dev server (:5173), proxies /api
 
 ## Codebase map
 
-Dependency direction: `web → server → store ← daemon → core ← agent`. `core` is pure (no `node:fs` / `node:child_process`); `store` is the only coordination surface.
+Dependency direction: `web → server → store ← daemon → core ← agent`. `core`'s main entry is browser-safe (no `node:fs` / `node:child_process`); the `./handler` sub-entry pulls in `@swarm/store` for server-side use and is intentionally excluded from the browser bundle. `store` is the only coordination surface.
 
 | Package | Entry points | What lives here |
 |---|---|---|
-| `@swarm/types` | `src/index.ts`, `src/events.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by agent, core, web |
+| `@swarm/types` | `src/index.ts`, `src/swarm-events.ts`, `src/agents.ts`, `src/skills.ts`, `src/events.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
 | `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
 | `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,fan-in,retry-policy}.ts`, `src/parser/` | Pure types; DOT parser; handler contract; engine reducers |
-| `@swarm/daemon` | `src/{executor,supervisor,auto-dispatcher,result-to-facts,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner |
+| `@swarm/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
 | `@swarm/agent` | `src/{backend,handler-bridge,system-prompt,fidelity,event-bridge,tool-adapter}.ts` | `PiCodergenBackend`; pi-ai → handler bridge; per-run system-prompt builder |
 | `@swarm/workspace` | `src/{worktree-env,local-env,tools}.ts`, `src/skills/`, `src/agents/` | `ExecutionEnvironment` adapters; read/write/edit/bash tools; skills + agent-definition discovery |
-| `@swarm/server` | `src/store/{routes,runs-routes,runs-adapter,steps}.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
+| `@swarm/extension` | `src/index.ts`, `src/web.ts` | Public type-only API for user-authored tool extensions (`ToolDefinition`, `ExtensionContext`, `SwarmAPI`, `ExtensionFactory`, `defineTool`); `src/web.ts` for paired React renderers; consumed by `@swarm/workspace` and `@swarm/web` |
+| `@swarm/server` | `src/index.ts`, `src/store/{routes,runs-routes,runs-adapter,steps,sse}.ts`, `src/ports.ts`, `src/schemas.ts` | Hono HTTP + SSE; intent endpoints; run/messages/events/steps reads |
 | `@swarm/web` | `src/routes/`, `src/components/`, `src/lib/` | React 18 dashboard. UI primitives: `src/components/ui/` (shadcn + Swarm primitives), `src/components/ai-elements/` (chat UI). See `.agents/skills/frontend/SKILL.md` § UI primitives and `.agents/skills/design/SKILL.md` for token rules. |
 | `@swarm/cli` | `bin/swarm.ts`, `src/commands/` | `harness` (default) / `daemon` / `serve` / `run` / `validate` / `init` / `providers` / `db` / `gc` |
 
