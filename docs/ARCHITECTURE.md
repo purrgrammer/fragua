@@ -939,13 +939,36 @@ app.get("/runs/:id/events", (c) => {
 // Per-run conversation transcript: pi-agent AgentMessage rows, ordered
 // by per-run `ordinal`. `nodeId` stamps which node appended each
 // message. Used by the web conversation view and post-mortem tooling.
-app.get("/runs/:id/messages", (c) => c.json(store.getMessages(c.req.param("id"))));
+// Returns the narrow wire shape `{ ordinal, nodeId, content }` —
+// `?nodeId=` filters to one thread, `?sinceOrdinal=` for resume-style
+// pagination, `?limit=` caps the result set.
+app.get("/runs/:id/messages", (c) => {
+  const runId = c.req.param("id");
+  if (store.getState(runId) == null) return c.json({ error: "not_found" }, 404);
+  const opts: { nodeId?: string; sinceOrdinal?: number; limit?: number } = {};
+  const nodeId = c.req.query("nodeId"); if (nodeId) opts.nodeId = nodeId;
+  const since = Number(c.req.query("sinceOrdinal")); if (Number.isFinite(since)) opts.sinceOrdinal = since;
+  const lim = Number(c.req.query("limit"));   if (Number.isFinite(lim) && lim > 0) opts.limit = lim;
+  return c.json(store.getMessagesNarrow(runId, opts));
+});
 
 // Per-LLM-call snapshots merged with SQL-aggregated cost/token totals.
 // Step rows for parallel branches carry optional `parentNodeId` +
 // `parallelIndex` so the UI can group child rows under their component
 // parent and render the parent as a non-leaf summary aggregating cost.
-app.get("/runs/:id/steps", (c) => c.json(store.getSteps(c.req.param("id"))));
+// Two-pass projection: eventsToSteps extracts static per-step fields
+// from the event log; getStepAggregates runs a SQL window aggregation
+// for cost/token totals; attachStepAggregates merges them; then
+// fillOrphanDurations backfills durationMs for steps with no llm.done.
+app.get("/runs/:id/steps", (c) => {
+  const runId = c.req.param("id");
+  const state = store.getState(runId);
+  if (state == null) return c.json({ error: "not_found" }, 404);
+  const events = store.getEvents(runId);
+  const steps = attachStepAggregates(eventsToSteps(events), store.getStepAggregates(runId));
+  const lastEventTs = events.at(-1)?.ts;
+  return c.json(fillOrphanDurations(steps, { lastEventTs, runIsTerminal: isTerminalStatus(state.status) }));
+});
 
 // SSE stream of the same events; resumable via Last-Event-ID or ?sinceSeq.
 app.get("/runs/:id/stream", (c) => streamSSE(c, async (stream) => {
