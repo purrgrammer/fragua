@@ -60,6 +60,15 @@ type PausePayload =
       delayMs: number;
       resumeAt: number;
       maxRetries: number;
+    }
+  | {
+      reason: "timeout_retry";
+      nodeId: string;
+      attempt: number;
+      delayMs: number;
+      resumeAt: number;
+      maxAttempts: number;
+      attemptedMs: number;
     };
 
 interface FactRow {
@@ -290,6 +299,18 @@ function HandlerRetryBody({ payload }: { payload: Extract<PausePayload, { reason
   );
 }
 
+function TimeoutRetryBody({ payload }: { payload: Extract<PausePayload, { reason: "timeout_retry" }> }): JSX.Element {
+  const eta = useCountdownToResume(payload.resumeAt);
+  const minutes = Math.round(payload.attemptedMs / 60_000);
+  const human = minutes >= 1 ? `${minutes}m` : `${Math.round(payload.attemptedMs / 1_000)}s`;
+  return (
+    <span data-testid="run-paused-message">
+      Watchdog fired on node {payload.nodeId} after {human}; retrying {eta} (attempt {payload.attempt}/
+      {payload.maxAttempts}). Transcript preserved; resume to short-circuit the wait.
+    </span>
+  );
+}
+
 // ─── Renderer table ────────────────────────────────────────────────
 
 const RENDERERS: Renderers = {
@@ -346,6 +367,13 @@ const RENDERERS: Renderers = {
   handler_retry: ({ payload, ctx }) => ({
     title: "Retrying — auto",
     body: <HandlerRetryBody payload={payload} />,
+    actions: (
+      <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} resumeLabel="Resume now" />
+    ),
+  }),
+  timeout_retry: ({ payload, ctx }) => ({
+    title: "Watchdog — retrying",
+    body: <TimeoutRetryBody payload={payload} />,
     actions: (
       <ResumeCancelActions busy={ctx.busy} onResume={ctx.onResume} onCancel={ctx.onCancel} resumeLabel="Resume now" />
     ),

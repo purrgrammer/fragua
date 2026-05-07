@@ -1,12 +1,30 @@
 ---
 title: Watchdog timeout should pause + auto-resume, not abort
-status: proposed
-maturity: designed
-last-reviewed: 2026-05-06
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-07
 rationale: Run 01kqwzpt0hyfws0a0j burned ~$17 across 4 dispatches because every watchdog `cause:"timeout"` abort threw away the orchestrator's accumulated transcript. Watchdog timeout is system-initiated and involuntary — closer to "supervisor pause" than to operator-intentional "abort" — but today it follows the same wipe-thread / fresh-dispatch path.
 ---
 
 # Watchdog timeout should pause + auto-resume, not abort
+
+> **Shipped under recoverable-budget-pause.md Stage 2 (PR 4).** A
+> watchdog `maxMs` overrun now emits
+> `fact.run_paused{reason:"timeout_retry", nodeId, attempt, delayMs,
+> resumeAt, maxAttempts, attemptedMs}` paired with the existing
+> `fact.node_aborted{cause:"timeout"}` (preserves partial-spend
+> metrics). Status projects to `paused_auto`. Backoff is 5s on
+> first timeout, doubling to a 60s ceiling — same curve the existing
+> `provider_retry` family uses. Per-`(nodeId)` counter at
+> `routing.internal.timeout_retries.<nodeId>` caps at 3 attempts;
+> exhaustion halts with `fact.run_halted{reason:"timeout_exhausted"}`.
+> `consecutiveAborts` is intentionally NOT bumped on timeout —
+> watchdog timeouts are system-initiated, so the abort-loop ceiling
+> never compounds with them. Operators may short-circuit the wait
+> with `intent.resume`; thread continuity falls out for free since
+> the same `(nodeId, iteration)` re-dispatches with `priorMessages`
+> restored from the messages table on the resume — the same
+> mechanism HITL + provider-retry resumes use.
 
 > A handler that hits `maxMs` is currently classified as
 > `fact.node_aborted{cause:"timeout"}` and the next dispatch starts

@@ -851,6 +851,70 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           await tryAppendFact(opts.store, runId, recorder.version(), facts);
           return;
         }
+        // Watchdog timeout: re-categorise the abort as a system-initiated
+        // pause-retry. The current dispatch's transcript stays on disk
+        // and the resume re-dispatches with it intact (handler-bridge
+        // restores priorMessages from the messages table on a paused_auto
+        // wake — the same mechanism HITL + provider-retry resumes use).
+        // Bounded by a per-nodeId counter at
+        // `routing.internal.timeout_retries.<nodeId>`; exhaustion halts
+        // with `timeout_exhausted`. fact.node_aborted still lands so
+        // partial-spend metrics accrue exactly as on the abort path.
+        // consecutiveAborts is intentionally NOT bumped — watchdog
+        // timeouts are system-initiated, not workflow-initiated, so the
+        // abort-loop ceiling shouldn't compound with them.
+        // See docs/proposals/watchdog-timeout-pause-retry.md.
+        if (abortCause === "timeout") {
+          const TIMEOUT_RETRY_COUNTER_KEY = `internal.timeout_retries.${currentNode}`;
+          const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
+          const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
+          const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
+          const priorAttempts = readNumber(state.routing[TIMEOUT_RETRY_COUNTER_KEY]);
+          const nextAttempt = priorAttempts + 1;
+          if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
+            const delayMs = Math.min(
+              TIMEOUT_RETRY_BACKOFF_MS_CEILING,
+              TIMEOUT_RETRY_BACKOFF_MS_BASE * 2 ** priorAttempts,
+            );
+            const resumeAt = clock() + delayMs;
+            facts.push({
+              type: "fact.run_paused",
+              payload: {
+                reason: "timeout_retry",
+                nodeId: currentNode,
+                attempt: nextAttempt,
+                delayMs,
+                resumeAt,
+                maxAttempts: TIMEOUT_RETRY_MAX_ATTEMPTS,
+                attemptedMs: spec.maxMs,
+              },
+            });
+            const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, {
+              routingPatch: {
+                [AUTO_RESUME_AT_KEY]: resumeAt,
+                [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
+              },
+            });
+            if (!ok) {
+              const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
+              if (halted) return;
+              continue;
+            }
+            return;
+          }
+          // Exhausted — terminal halt. fact.node_aborted lands first
+          // for metrics, then fact.run_halted with the operator-readable
+          // reason.
+          facts.push({
+            type: "fact.run_halted",
+            payload: {
+              reason: "timeout_exhausted",
+              detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
+            },
+          });
+          await tryAppendFact(opts.store, runId, recorder.version(), facts);
+          return;
+        }
         await tryAppendFact(opts.store, runId, recorder.version(), facts);
         consecutiveAborts++;
         // One-shot warning the abort before the halt lands so a watcher

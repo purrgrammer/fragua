@@ -61,7 +61,8 @@ export type PauseReason =
   | "payment_required"
   | "budget"
   | "provider_retry"
-  | "handler_retry";
+  | "handler_retry"
+  | "timeout_retry";
 
 /** Reasons that project to `paused_auto` (daemon timer). Everything
  * else in {@link PauseReason} projects to `paused` (operator must
@@ -69,6 +70,7 @@ export type PauseReason =
 export const AUTO_WAKE_PAUSE_REASONS: ReadonlySet<PauseReason> = new Set<PauseReason>([
   "provider_retry",
   "handler_retry",
+  "timeout_retry",
 ]);
 
 /** Who appended the event. Web writes intents (operator actions);
@@ -85,7 +87,8 @@ export type HaltReason =
   | "goal_gate_unsatisfied"
   | "max_retries_exceeded"
   | "occ_exhausted"
-  | "provider_exhausted";
+  | "provider_exhausted"
+  | "timeout_exhausted";
 
 export type QuarantineReason = "orphan_side_effect" | "other";
 
@@ -371,6 +374,26 @@ export type FactEvent =
             delayMs: number;
             resumeAt: number;
             maxRetries: number;
+          }
+        | {
+            /** Watchdog timeout (`maxMs` exceeded). System-initiated;
+             * the prior dispatch's transcript stays on disk and the
+             * resume re-dispatches with it intact. Bounded by
+             * `routing.internal.timeout_retries.<nodeId>` — past the
+             * cap (default 3) the run halts with
+             * `fact.run_halted{reason:"timeout_exhausted"}`. See
+             * docs/proposals/watchdog-timeout-pause-retry.md. */
+            reason: "timeout_retry";
+            nodeId: string;
+            attempt: number;
+            delayMs: number;
+            resumeAt: number;
+            maxAttempts: number;
+            /** Wall-clock ms the handler ran for before the watchdog
+             * fired (i.e. the node's resolved `maxMs`). Carried for the
+             * UI banner so operators can read "watchdog at 30m" without
+             * opening the graph. */
+            attemptedMs: number;
           };
     }
   | {

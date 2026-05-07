@@ -339,6 +339,44 @@ describe("RunPausedNotice", () => {
     }
   });
 
+  it("timeout_retry reason renders watchdog body with attempted-ms + countdown + Resume now", async () => {
+    const resumeAt = Date.now() + 5_000;
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "timeout_retry",
+              nodeId: "implement",
+              attempt: 1,
+              delayMs: 5_000,
+              resumeAt,
+              maxAttempts: 3,
+              attemptedMs: 30 * 60_000,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId, getByText } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("implement");
+      expect(message.textContent).toContain("attempt 1/3");
+      expect(message.textContent).toContain("30m");
+      expect(message.textContent).toMatch(/in \d+s/);
+      // Watchdog reads "Transcript preserved" so operators know the
+      // dispatch's prior work survives the resume.
+      expect(message.textContent).toContain("Transcript preserved");
+      expect(getByText("Resume now")).toBeDefined();
+      const notice = await findByTestId("run-paused-notice");
+      expect(notice.getAttribute("data-pause-reason")).toBe("timeout_retry");
+    } finally {
+      restore();
+    }
+  });
+
   it("auto-wake countdown renders 'now' once resumeAt is in the past", async () => {
     const { restore } = installFetchMock({
       [EVENTS_URL]: () =>
