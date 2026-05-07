@@ -242,6 +242,68 @@ describe("eventsToSteps", () => {
     expect(s.startedAt).toBe(new Date(1_000).toISOString());
   });
 
+  test("sub-agent step rows derive a wall duration from subagent.start/end timestamps (not from buffered llm.start neighbours)", () => {
+    // Reproduces the Cost-tab '0ms' bug for sub-agent rows. Wire shape
+    // when a parent codergen step spawns a sub-agent (see
+    // `packages/daemon/src/spawn-subagent.ts` + the `__subagent:<uuid>`
+    // synthetic nodeId in `eventsToSteps`):
+    //
+    //   fact.node_started{nodeId:"p1"}                ts=    900  (truthful)
+    //   llm.start       {nodeId:"p1"}                  ts=  9_950  (pi-agent-core buffered: flushed at end of parent's first turn)
+    //   subagent.start  {subagent_id:"abc", parent_node_id:"p1"}  ts=  1_000  (truthful — daemon parentEmit, sync)
+    //   llm.start       {nodeId:"__subagent:abc"}      ts=  9_900  (buffered: flushed when sub-agent's call ends)
+    //   subagent.end    {subagent_id:"abc", status:"completed"}  ts=  9_000  (truthful — daemon parentEmit, sync, after child returns)
+    //   llm.start       {nodeId:"p1"}                  ts= 10_050  (buffered: parent's second turn flush)
+    //
+    // The sub-agent ran from ts=1_000 → 9_000 wall-clock — 8 seconds.
+    // Today `eventsToSteps` anchors the sub-agent row's `startedAt` to
+    // its (buffered) `llm.start.ts`, and `fillOrphanDurations` derives
+    // the end from the next step's (also-buffered) `llm.start.ts`. Both
+    // come from the same flush window, so the delta collapses to a
+    // handful of ms — '0ms' in the UI. The fix anchors `startedAt` to
+    // the matching `subagent.start.ts` and stamps `durationMs` from
+    // `subagent.end.ts - subagent.start.ts` (both truthful), threaded
+    // through the same `durationMs` field codergen rows already use so
+    // the existing CostInspector renders it.
+    const events: StoredEvent[] = [
+      ev("fact.node_started", 900, { nodeId: "p1" }),
+      { runId: "r", seq: 1, type: "llm.start", writer: "daemon", payload: { nodeId: "p1" }, ts: 9_950 },
+      ev("subagent.start", 1_000, {
+        subagent_id: "abc",
+        parent_node_id: "p1",
+        iteration: 1,
+        provider: "openrouter",
+        model: "anthropic/claude-haiku-4.5",
+        name: "reviewer",
+      }),
+      {
+        runId: "r",
+        seq: 2,
+        type: "llm.start",
+        writer: "daemon",
+        payload: { nodeId: "__subagent:abc", subagent_id: "abc" },
+        ts: 9_900,
+      },
+      ev("subagent.end", 9_000, {
+        subagent_id: "abc",
+        status: "completed",
+        summary_chars: 42,
+        total_tool_calls: 1,
+      }),
+      { runId: "r", seq: 3, type: "llm.start", writer: "daemon", payload: { nodeId: "p1" }, ts: 10_050 },
+    ];
+    const steps = eventsToSteps(events);
+    const filled = fillOrphanDurations(steps, { lastEventTs: 11_000, runIsTerminal: true });
+    const subStep = filled.find((s) => s.nodeId === "__subagent:abc");
+    expect(subStep).toBeDefined();
+    expect(subStep!.subagentId).toBe("abc");
+    // Wall duration should be the truthful subagent.end − subagent.start
+    // = 9_000 − 1_000 = 8_000ms. Anything ≪ this (the buggy near-zero
+    // delta from buffered `llm.start` neighbours) means the sub-agent
+    // row is still showing '0ms' in the Cost tab.
+    expect(subStep!.durationMs).toBe(8_000);
+  });
+
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
     const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);

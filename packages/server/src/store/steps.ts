@@ -157,8 +157,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // nodeId → index of the most recent step opened for that nodeId.
   // Used to find the fold target when resuming.
   const lastStepIdxForNode = new Map<string, number>();
-  // subagent_id → { displayName?, parentNodeId } captured from
-  // `subagent.start` events. Drives two pieces of step enrichment:
+  // subagent_id → { displayName?, parentNodeId, startTs } captured
+  // from `subagent.start` events. Drives three pieces of step
+  // enrichment:
   //   - `subagentName` for the operator-friendly name in the UI. Pick
   //     the free-form `name` label first, fall back to the resolved
   //     `agent_def` profile name. Either can be present; both can
@@ -167,7 +168,17 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   //   - `parentNodeId` so sub-agent steps render as indented children
   //     under the calling parent step (same path the parallel-branch
   //     UI already uses for fan-out branches).
-  const subagentMetaById = new Map<string, { displayName?: string; parentNodeId?: string }>();
+  //   - `startTs` anchors the sub-agent step's `startedAt` to the
+  //     truthful `subagent.start.ts` (daemon parentEmit, sync) instead
+  //     of the pi-agent-core-buffered child `llm.start.ts`. Same
+  //     story as `fact.node_started` for normal nodes.
+  const subagentMetaById = new Map<string, { displayName?: string; parentNodeId?: string; startTs?: number }>();
+  // subagent_id → index of the step opened for that sub-agent's
+  // `llm.start`. Lets `subagent.end` (which arrives later, also
+  // truthful) stamp `durationMs = end.ts − start.ts` directly onto
+  // the row — both endpoints are daemon-written sync, so the wall
+  // figure exactly matches what the parent observed.
+  const subagentStepIdxById = new Map<string, number>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -176,12 +187,39 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     if (ev.type === "subagent.start") {
       const sid = stringField(data, "subagent_id");
       if (sid) {
-        const meta: { displayName?: string; parentNodeId?: string } = {};
+        const meta: { displayName?: string; parentNodeId?: string; startTs?: number } = {
+          startTs: ev.ts,
+        };
         const displayName = stringField(data, "name") || stringField(data, "agent_def");
         if (displayName) meta.displayName = displayName;
         const parentNode = stringField(data, "parent_node_id");
         if (parentNode) meta.parentNodeId = parentNode;
         subagentMetaById.set(sid, meta);
+      }
+      continue;
+    }
+
+    if (ev.type === "subagent.end") {
+      // Stamp the truthful wall duration onto the sub-agent's step
+      // row. `subagent.start` and `subagent.end` are both written
+      // synchronously by the daemon's parentEmit, so the delta is
+      // the operator-visible runtime of the bracketed slice. The
+      // child's own `llm.start` / `llm.done` timestamps are pi-
+      // agent-core-buffered (flushed at end-of-call) and collapse
+      // to a near-zero delta — that's the '0ms' the Cost tab used
+      // to render. `fillOrphanDurations` preserves this value
+      // rather than overwriting it from neighbour-step boundaries.
+      const sid = stringField(data, "subagent_id");
+      if (sid) {
+        const stepIdx = subagentStepIdxById.get(sid);
+        const meta = subagentMetaById.get(sid);
+        if (stepIdx !== undefined && meta?.startTs !== undefined) {
+          const target = steps[stepIdx];
+          if (target !== undefined) {
+            const dur = ev.ts - meta.startTs;
+            if (Number.isFinite(dur) && dur >= 0) target.durationMs = dur;
+          }
+        }
       }
       continue;
     }
@@ -286,6 +324,13 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         const meta = subagentMetaById.get(sid);
         if (meta?.displayName) step.subagentName = meta.displayName;
         if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
+        // Override the buffered `llm.start.ts` anchor with the
+        // truthful `subagent.start.ts` so the row's `startedAt`
+        // matches what the operator observed. The `subagent.end`
+        // handler later stamps `durationMs` against this same
+        // anchor.
+        if (meta?.startTs !== undefined) step.startedAt = new Date(meta.startTs).toISOString();
+        subagentStepIdxById.set(sid, steps.length);
       }
       steps.push(step);
       if (nodeId) {
@@ -336,6 +381,14 @@ export function fillOrphanDurations(
   opts: { lastEventTs: number | undefined; runIsTerminal: boolean },
 ): StepSnapshot[] {
   return steps.map((step, i) => {
+    // Sub-agent rows already carry a truthful `durationMs` stamped
+    // by `eventsToSteps` from `subagent.end.ts − subagent.start.ts`
+    // (both daemon-written sync). Don't overwrite it from
+    // neighbour-step boundaries — those boundaries come from
+    // pi-agent-core-buffered `llm.start.ts` values that flush
+    // back-to-back at end-of-call and produce a meaningless near-
+    // zero delta.
+    if (step.durationMs !== undefined) return step;
     const next = steps[i + 1];
     const endTs = next != null ? Date.parse(next.startedAt) : opts.runIsTerminal ? opts.lastEventTs : undefined;
     if (endTs === undefined || !Number.isFinite(endTs)) return step;
