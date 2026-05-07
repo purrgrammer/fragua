@@ -1175,10 +1175,14 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
   // Bug: when the engine retargets through a goal_gate's implicit
   // §3.4 jump (e.g. review -> implement via retry_target="implement"),
   // the synthetic retarget edge stays dimmed even though the retarget
-  // actually fired. The signal is the gate's iteration count in
-  // detail.nodes: a gate with iteration > 0 has been retargeted-into at
-  // least once, so its synthetic back-edge should render highlighted
-  // (not dimmed) and carry a traversalCount.
+  // actually fired. The earlier signal here used the gate's iteration
+  // field — that doesn't work because goal-gate retargets do NOT
+  // advance iteration: every visit to the same gate keeps `iteration=0`
+  // (verified empirically against `routing.goal_gates.__retries`-style
+  // retarget cycles in real runs). The right signal is the gate's
+  // outgoing edge selections: each visit produces exactly one
+  // `edge.selected` whose `from === gateId`, so N visits ⇒ N − 1
+  // retarget firings.
   it("highlights the synthetic goal-gate back-edge after a retarget fires", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
@@ -1188,27 +1192,25 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
       start -> implement -> review -> done
     }`;
     const graph = parseDotSource(src);
-    // Simulate one retarget cycle: implement ran twice, review ran twice,
-    // then review approved on iteration 1 and the run reached done. The
-    // executor records `edge.selected` for the real DOT edges only; the
-    // implicit review->implement jump is NOT in selectedEdges. The gate's
-    // iteration=1 entry in detail.nodes is the load-bearing signal.
+    // Simulate one retarget cycle: implement → review fires twice,
+    // review → done fires twice (the goal-gate enforcement at `done`
+    // observes `review` unsatisfied on the first hit and retargets back
+    // to `implement`; the second hit goes through cleanly). Iteration
+    // stays at 0 across the retarget — that's the runtime invariant
+    // this test pins.
     const detail = makeDetail({
       nodes: [
         { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "implement", iteration: 0, state: "completed", lastEventSeq: 2 },
-        { nodeId: "review", iteration: 0, state: "failed", lastEventSeq: 3 },
-        { nodeId: "implement", iteration: 1, state: "completed", lastEventSeq: 4 },
-        { nodeId: "review", iteration: 1, state: "completed", lastEventSeq: 5 },
+        { nodeId: "implement", iteration: 0, state: "completed", lastEventSeq: 4 },
+        { nodeId: "review", iteration: 0, state: "completed", lastEventSeq: 5 },
         { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 6 },
       ],
       selectedEdges: [
         { from: "start", to: "implement", iteration: 0 },
         { from: "implement", to: "review", iteration: 0 },
-        // No (review, implement) entry — the engine's retarget bypasses
-        // the edge selector entirely.
-        { from: "implement", to: "review", iteration: 1 },
-        { from: "review", to: "done", iteration: 0 },
+        { from: "review", to: "done", iteration: 0 }, // first visit → fail-then-retarget
+        { from: "implement", to: "review", iteration: 0 }, // cycle 2
+        { from: "review", to: "done", iteration: 0 }, // second visit → APPROVE
       ],
       workflowSource: src,
       status: "success",
@@ -1219,11 +1221,52 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
     );
     expect(synth).toBeDefined();
     const data = synth?.data as { dim?: boolean; traversalCount?: number };
-    // The bug: this currently renders dimmed (data.dim === true) so the
-    // user can't tell the retarget actually fired.
+    // The bug: this used to render dimmed because the prior logic asked
+    // `maxIterationByNode.get('review')` which is always 0 for goal-gate
+    // retargets. With the gate-outgoing-count signal it now flips to
+    // `dim:false` once the gate visited more than once.
     expect(data.dim).toBe(false);
-    // And it should carry the retarget count so the ×N badge surfaces,
-    // matching how real back-edges report their re-traversal count.
+    // ×1 badge surfaces because review was visited twice (one retarget
+    // fired between the visits).
     expect(data.traversalCount).toBe(1);
+  });
+
+  // Linear-edge ×N regression guard. Pre-fix, the snapshot+overlay merge
+  // in `useDetailOverlay.mergeDetail` appended overlay edges without
+  // dropping the ones the snapshot already covered, so every linear edge
+  // showed `· ×2` (or more). Pin that one-shot edges carry no count.
+  it("one-shot linear edges carry no traversalCount badge", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      a [shape=box]
+      b [shape=box]
+      done [shape=Msquare]
+      start -> a -> b -> done
+    }`;
+    const graph = parseDotSource(src);
+    const detail = makeDetail({
+      nodes: [
+        { nodeId: "start", iteration: 0, state: "completed", lastEventSeq: 1 },
+        { nodeId: "a", iteration: 0, state: "completed", lastEventSeq: 2 },
+        { nodeId: "b", iteration: 0, state: "completed", lastEventSeq: 3 },
+        { nodeId: "done", iteration: 0, state: "completed", lastEventSeq: 4 },
+      ],
+      selectedEdges: [
+        { from: "start", to: "a", iteration: 0 },
+        { from: "a", to: "b", iteration: 0 },
+        { from: "b", to: "done", iteration: 0 },
+      ],
+      workflowSource: src,
+      status: "success",
+    });
+    const { flowEdges } = toFlowGraph(detail, graph);
+    const byPair = new Map(
+      flowEdges
+        .filter((e) => !e.id.startsWith("__retarget__"))
+        .map((e) => [`${e.source}->${e.target}`, e.data as { traversalCount?: number }]),
+    );
+    expect(byPair.get("start->a")?.traversalCount).toBe(1);
+    expect(byPair.get("a->b")?.traversalCount).toBe(1);
+    expect(byPair.get("b->done")?.traversalCount).toBe(1);
   });
 });

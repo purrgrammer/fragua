@@ -679,16 +679,26 @@ export function toFlowGraph(
     const k = edgeKey(e.from, e.to);
     traversalCounts.set(k, (traversalCounts.get(k) ?? 0) + 1);
   }
-  // Per-node max iteration. Goal-gate retargets bypass `edge.selected`
+  // Per-gate visit count. Goal-gate retargets bypass `edge.selected`
   // (the executor sets `result.nextNode = action.target` without going
   // through the edge selector), so the synthetic retarget edge can't
-  // read its fire count from `traversalCounts`. The signal is the gate's
-  // iteration count: a gate at iteration=N has been retargeted-into N
-  // times.
-  const maxIterationByNode = new Map<string, number>();
-  for (const n of detail?.nodes ?? []) {
-    const prev = maxIterationByNode.get(n.nodeId) ?? 0;
-    if (n.iteration > prev) maxIterationByNode.set(n.nodeId, n.iteration);
+  // read its fire count from `traversalCounts`.
+  //
+  // The earlier signal here was the gate's iteration field, on the
+  // assumption that goal-gate retargets advance it. They don't: every
+  // retargeted re-entry of the gate keeps `iteration=0`, so
+  // `maxIteration` stayed stuck at 0 and the synthetic edge never
+  // un-dimmed.
+  //
+  // Right signal: the gate's outgoing edge selections. Each visit of the
+  // gate produces exactly one `edge.selected` whose `from === gateId`
+  // (the chosen successor). N visits ⇒ N outgoing selections ⇒ N − 1
+  // retargets fired. Holds for both the gate-eventually-approves and
+  // cap-exhausted paths (the final visit in either case is the one not
+  // followed by another retarget).
+  const gateOutgoingCounts = new Map<string, number>();
+  for (const e of detail?.selectedEdges ?? []) {
+    gateOutgoingCounts.set(e.from, (gateOutgoingCounts.get(e.from) ?? 0) + 1);
   }
   // A node is "reached" if it received a `fact.node_*` event OR if some
   // selected edge points at it. Terminal nodes (Msquare) never emit their
@@ -959,12 +969,13 @@ export function toFlowGraph(
   const synthEdges: FlowEdge[] = retargetCandidates.map((r, leftArcIndex) => {
     const targetDepth = depthOf.get(r.target);
     const synthExtent = arcExtentBetween(r.depth, targetDepth);
-    // Retarget firings == gate's max iteration (each retarget re-enters
-    // the gate's target, advancing the gate's next visit's iteration
-    // by one). Zero when the gate ran at most once; positive once any
-    // retarget actually fired, which is what flips this edge from dim
-    // to highlighted.
-    const retargetCount = maxIterationByNode.get(r.gateId) ?? 0;
+    // Retarget firings == (gate's outgoing edge selections) − 1. Each
+    // visit of the gate produces exactly one outgoing `edge.selected`;
+    // every visit but the last triggered a retarget. Zero when the
+    // gate ran at most once; positive once any retarget actually fired,
+    // which is what flips this edge from dim to highlighted.
+    const gateVisits = gateOutgoingCounts.get(r.gateId) ?? 0;
+    const retargetCount = gateVisits > 0 ? gateVisits - 1 : 0;
     const taken = retargetCount > 0;
     const baseLabel = `retarget · cap ${goalGateCap}${
       goalGateCap === DEFAULT_MAX_GOAL_GATE_RETRIES ? " (default)" : ""

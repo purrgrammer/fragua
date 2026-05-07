@@ -97,12 +97,17 @@ describe("foldDetailFrame", () => {
     expect(out.nodeStates.get("n1#0")?.state).toBe("running");
   });
 
-  test("edge.selected appends to selectedEdges in order, with iteration", () => {
+  test("edge.selected appends to selectedEdges in order, with iteration and seq", () => {
+    // The reducer tags each edge with its event seq so `mergeDetail` can
+    // drop overlay edges already represented in the snapshot — without
+    // this, every snapshot refetch that catches up to overlay events
+    // double-counts the same edge and the run-detail Graph view shows
+    // `· ×N` badges on edges that fired exactly once.
     let s = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 1);
     s = fold(s, "edge.selected", { from: "b", to: "c", iteration: 0 }, 2);
     expect(s.selectedEdges).toEqual([
-      { from: "a", to: "b", iteration: 0 },
-      { from: "b", to: "c", iteration: 0 },
+      { from: "a", to: "b", iteration: 0, seq: 1 },
+      { from: "b", to: "c", iteration: 0, seq: 2 },
     ]);
   });
 
@@ -252,17 +257,45 @@ describe("mergeDetail", () => {
     expect(merged.status).toBe("fail");
   });
 
-  test("selectedEdges concatenate snapshot + overlay in order", () => {
+  test("selectedEdges concatenate snapshot + overlay in order (overlay seq > snapshot.lastEventSeq)", () => {
+    // Snapshot covers events through `lastEventSeq: 100`. Overlay edges
+    // tagged with seqs 101 and 102 are strictly newer, so they pass the
+    // dedup filter and concatenate after the snapshot's edges.
     const snap = snapshot({
       selectedEdges: [{ from: "a", to: "b", iteration: 0 }],
     });
-    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c", iteration: 0 }, 11);
-    overlay = fold(overlay, "edge.selected", { from: "c", to: "d", iteration: 0 }, 12);
+    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "b", to: "c", iteration: 0 }, 101);
+    overlay = fold(overlay, "edge.selected", { from: "c", to: "d", iteration: 0 }, 102);
     const merged = mergeDetail(snap, overlay);
     expect(merged.selectedEdges).toEqual([
       { from: "a", to: "b", iteration: 0 },
       { from: "b", to: "c", iteration: 0 },
       { from: "c", to: "d", iteration: 0 },
+    ]);
+  });
+
+  test("mergeDetail drops overlay edges already covered by the snapshot (seq ≤ snapshot.lastEventSeq)", () => {
+    // Regression for the run-detail Graph view's `· ×2` bug. The overlay
+    // accumulates `edge.selected` events from-mount onwards regardless
+    // of the snapshot's seq frontier (the consumer doesn't trim on
+    // refetch). Without filtering, a snapshot refetch that catches up
+    // to overlay events would double-count them: every linear edge
+    // surfaces as `traversalCount === 2`.
+    const snap = snapshot({
+      lastEventSeq: 100,
+      // The snapshot already has a -> b derived server-side from the
+      // same edge.selected event the overlay also saw at seq 50.
+      selectedEdges: [{ from: "a", to: "b", iteration: 0 }],
+    });
+    // Overlay caught the SAME event the snapshot already covers
+    // (seq 50 ≤ snapshot.lastEventSeq=100) — must be dropped — plus a
+    // genuinely-newer one at seq 150.
+    let overlay = fold(EMPTY_DETAIL_OVERLAY, "edge.selected", { from: "a", to: "b", iteration: 0 }, 50);
+    overlay = fold(overlay, "edge.selected", { from: "b", to: "c", iteration: 0 }, 150);
+    const merged = mergeDetail(snap, overlay);
+    expect(merged.selectedEdges).toEqual([
+      { from: "a", to: "b", iteration: 0 }, // from snapshot, NOT duplicated
+      { from: "b", to: "c", iteration: 0 }, // genuinely fresh overlay event
     ]);
   });
 

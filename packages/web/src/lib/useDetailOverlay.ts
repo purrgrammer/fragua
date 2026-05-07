@@ -23,10 +23,15 @@ export interface DetailOverlay {
    * events. Keyed by iteration too so loops (backward edges, goal-gate
    * retargets) keep one entry per re-entry instead of last-write-wins. */
   nodeStates: Map<string, { nodeId: string; iteration: number; state: NodeState["state"]; lastEventSeq: number }>;
-  /** `edge.selected` events appended in order. Snapshot already includes
-   * its own; the overlay only carries events with seq > snapshot.lastEventSeq.
-   * `mergeDetail` concatenates rather than dedupes. */
-  selectedEdges: SelectedEdge[];
+  /** `edge.selected` events appended in order, each tagged with its own
+   * `seq`. Snapshot already includes every edge through
+   * `snapshot.lastEventSeq`; this overlay accumulates from-mount onwards
+   * regardless of the live snapshot's seq frontier (the consumer doesn't
+   * trim on snapshot refetch). `mergeDetail` therefore filters
+   * `e.seq > snapshot.lastEventSeq` before concatenation — without this,
+   * any snapshot refresh that catches up to overlay events double-counts
+   * them and the run-detail Graph view shows `· ×2` on every edge. */
+  selectedEdges: Array<SelectedEdge & { seq: number }>;
   /** Latest run-level status from `fact.run_*` events; null when no
    * status-changing event has arrived since mount. */
   status: UiStatus | null;
@@ -105,7 +110,7 @@ export function foldDetailFrame(
       const to = stringField(payload, "to");
       if (from === undefined || to === undefined) return prev;
       const iteration = numberField(payload, "iteration") ?? 0;
-      return { ...prev, selectedEdges: [...prev.selectedEdges, { from, to, iteration }] };
+      return { ...prev, selectedEdges: [...prev.selectedEdges, { from, to, iteration, seq }] };
     }
     case "fact.run_started":
       return { ...prev, status: "running" };
@@ -248,8 +253,19 @@ export function mergeDetail(snapshot: RunDetail, overlay: DetailOverlay): RunDet
   return {
     ...snapshot,
     nodes: nodesChanged ? nodes : snapshot.nodes,
-    selectedEdges:
-      overlay.selectedEdges.length > 0 ? [...snapshot.selectedEdges, ...overlay.selectedEdges] : snapshot.selectedEdges,
+    selectedEdges: (() => {
+      // Drop overlay edges already represented in the snapshot. Without
+      // this filter, every refetch of the snapshot that catches up to
+      // events the overlay has accumulated produces duplicates —
+      // surfacing as a `· ×N` traversal-count badge on edges that fired
+      // exactly once.
+      const fresh = overlay.selectedEdges.filter((e) => e.seq > snapshot.lastEventSeq);
+      if (fresh.length === 0) return snapshot.selectedEdges;
+      return [
+        ...snapshot.selectedEdges,
+        ...fresh.map(({ from, to, iteration }) => ({ from, to, iteration })),
+      ];
+    })(),
     status: overlay.status ?? snapshot.status,
     runStatus: overlay.runStatus !== null ? overlay.runStatus : snapshot.runStatus,
     hitlNodeId: overlay.hitlNodeId !== null ? overlay.hitlNodeId : snapshot.hitlNodeId,
