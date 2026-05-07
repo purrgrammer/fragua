@@ -89,6 +89,16 @@ export interface StepSnapshot {
   /** Branch index within the parallel parent's `children` list.
    * Populated only for parallel branches. */
   parallelIndex?: number;
+  /** Per-invocation discriminator for sub-agent steps: the parent
+   *  step's `startSeq` at the moment the sub-agent was spawned. Lets
+   *  the Cost-tab consumer group sub-agents under the right parent
+   *  invocation when a goal_gate retargets back to a `parentNodeId`
+   *  that has already spawned children — without this, the second
+   *  invocation's sub-agents pool with the first under the same
+   *  `parentNodeId` key. Optional for back-compat with parallel
+   *  branches (a parallel parent runs once per node window, no
+   *  collision risk). */
+  parentStartSeq?: number;
   /** Per-spawn discriminator for sub-agent steps. Populated when the
    *  step's `nodeId` starts with `__subagent:` — sub-agents emit their
    *  events under a synthetic nodeId so they don't conflate with the
@@ -172,7 +182,15 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   //     truthful `subagent.start.ts` (daemon parentEmit, sync) instead
   //     of the pi-agent-core-buffered child `llm.start.ts`. Same
   //     story as `fact.node_started` for normal nodes.
-  const subagentMetaById = new Map<string, { displayName?: string; parentNodeId?: string; startTs?: number }>();
+  //   - `parentStartSeq` captures the parent step's `startSeq` at
+  //     spawn time so the Cost-tab can group sub-agents per parent
+  //     invocation rather than per parentNodeId — the bug a
+  //     goal_gate-retargeted re-invocation of the same parent node
+  //     surfaces.
+  const subagentMetaById = new Map<
+    string,
+    { displayName?: string; parentNodeId?: string; startTs?: number; parentStartSeq?: number }
+  >();
   // subagent_id → index of the step opened for that sub-agent's
   // `llm.start`. Lets `subagent.end` (which arrives later, also
   // truthful) stamp `durationMs = end.ts − start.ts` directly onto
@@ -187,13 +205,28 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     if (ev.type === "subagent.start") {
       const sid = stringField(data, "subagent_id");
       if (sid) {
-        const meta: { displayName?: string; parentNodeId?: string; startTs?: number } = {
+        const meta: { displayName?: string; parentNodeId?: string; startTs?: number; parentStartSeq?: number } = {
           startTs: ev.ts,
         };
         const displayName = stringField(data, "name") || stringField(data, "agent_def");
         if (displayName) meta.displayName = displayName;
         const parentNode = stringField(data, "parent_node_id");
-        if (parentNode) meta.parentNodeId = parentNode;
+        if (parentNode) {
+          meta.parentNodeId = parentNode;
+          // Snapshot the parent's currently-open step's `startSeq`.
+          // The parent's `llm.start` always precedes its toolcall (the
+          // `agent({...})` call that triggered this `subagent.start`),
+          // so `lastStepIdxForNode.get(parentNode)` resolves to the
+          // step the sub-agent should be grouped under. A goal_gate
+          // retarget that re-opens the same `parentNode` later will
+          // give a fresh `startSeq` to its new step, so subsequent
+          // sub-agents key off a different value.
+          const parentStepIdx = lastStepIdxForNode.get(parentNode);
+          if (parentStepIdx !== undefined) {
+            const parentStep = steps[parentStepIdx];
+            if (parentStep !== undefined) meta.parentStartSeq = parentStep.startSeq;
+          }
+        }
         subagentMetaById.set(sid, meta);
       }
       continue;
@@ -324,6 +357,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         const meta = subagentMetaById.get(sid);
         if (meta?.displayName) step.subagentName = meta.displayName;
         if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
+        if (meta?.parentStartSeq !== undefined) step.parentStartSeq = meta.parentStartSeq;
         // Override the buffered `llm.start.ts` anchor with the
         // truthful `subagent.start.ts` so the row's `startedAt`
         // matches what the operator observed. The `subagent.end`

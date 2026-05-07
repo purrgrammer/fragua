@@ -304,6 +304,68 @@ describe("eventsToSteps", () => {
     expect(subStep!.durationMs).toBe(8_000);
   });
 
+  test("sub-agent steps carry parentStartSeq so a goal_gate retarget can group them per parent invocation", () => {
+    // When `review` REJECTs and the runtime retargets back to `audit`,
+    // the same parentNodeId opens a fresh step for the second invocation.
+    // Sub-agents spawned in each invocation must key off their parent's
+    // `startSeq` (not just `parentNodeId`) so the Cost-tab consumer
+    // doesn't pool them under one row. This test pins the producer
+    // half — the consumer half lives in CostInspector.test.tsx.
+    const events: StoredEvent[] = [
+      // First invocation of `audit` (startSeq 10), one sub-agent `s1`.
+      ev("fact.node_started", 1_000, { nodeId: "audit" }),
+      { runId: "r", seq: 10, type: "llm.start", writer: "daemon", payload: { nodeId: "audit" }, ts: 1_100 },
+      ev("subagent.start", 1_200, {
+        subagent_id: "s1",
+        parent_node_id: "audit",
+        iteration: 0,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        name: "store",
+      }),
+      {
+        runId: "r",
+        seq: 11,
+        type: "llm.start",
+        writer: "daemon",
+        payload: { nodeId: "__subagent:s1", subagent_id: "s1" },
+        ts: 1_300,
+      },
+      ev("subagent.end", 2_000, { subagent_id: "s1", status: "completed", summary_chars: 1, total_tool_calls: 0 }),
+      ev("fact.node_completed", 2_500, { nodeId: "audit" }),
+      // Goal-gate retarget: `audit` re-opens (startSeq 20), sub-agent `s2`.
+      ev("fact.node_started", 3_000, { nodeId: "audit" }),
+      { runId: "r", seq: 20, type: "llm.start", writer: "daemon", payload: { nodeId: "audit" }, ts: 3_100 },
+      ev("subagent.start", 3_200, {
+        subagent_id: "s2",
+        parent_node_id: "audit",
+        iteration: 0,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        name: "store",
+      }),
+      {
+        runId: "r",
+        seq: 21,
+        type: "llm.start",
+        writer: "daemon",
+        payload: { nodeId: "__subagent:s2", subagent_id: "s2" },
+        ts: 3_300,
+      },
+      ev("subagent.end", 4_000, { subagent_id: "s2", status: "completed", summary_chars: 1, total_tool_calls: 0 }),
+    ];
+    const steps = eventsToSteps(events);
+    const sub1 = steps.find((s) => s.subagentId === "s1");
+    const sub2 = steps.find((s) => s.subagentId === "s2");
+    expect(sub1?.parentNodeId).toBe("audit");
+    expect(sub2?.parentNodeId).toBe("audit");
+    // The whole point: the two sub-agents share parentNodeId but must
+    // NOT share parentStartSeq — that's what unblocks per-invocation
+    // grouping in the Cost tab.
+    expect(sub1?.parentStartSeq).toBe(10);
+    expect(sub2?.parentStartSeq).toBe(20);
+  });
+
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
     const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);

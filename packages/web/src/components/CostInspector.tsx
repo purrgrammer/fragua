@@ -98,13 +98,26 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // Partition into top-level vs branch rows. Branch rows are indented
   // under their parent and the parent renders as a non-leaf summary
   // (cost / tokens aggregated across itself + every child).
+  //
+  // Grouping key: `(parentNodeId, parentStartSeq)`. Sub-agent rows
+  // carry `parentStartSeq` = the parent step's `startSeq` at spawn
+  // time, so a goal-gate retarget that re-invokes the same parent
+  // node_id keeps each invocation's children scoped to its own row.
+  // Parallel branches don't carry `parentStartSeq` (a parallel parent
+  // runs once per node window, so there's no per-invocation collision
+  // to disambiguate); they fall back to a `parentNodeId|*` slot that
+  // every same-node parent row reads from.
+  const PARENT_NODE_WILDCARD = "*";
+  const groupKey = (parentNodeId: string, parentStartSeq: number | undefined): string =>
+    `${parentNodeId}|${parentStartSeq ?? PARENT_NODE_WILDCARD}`;
   const childrenByParent = new Map<string, StepSnapshot[]>();
   const topLevel: StepSnapshot[] = [];
   for (const s of steps) {
     if (typeof s.parentNodeId === "string" && s.parentNodeId.length > 0) {
-      const arr = childrenByParent.get(s.parentNodeId) ?? [];
+      const key = groupKey(s.parentNodeId, s.parentStartSeq);
+      const arr = childrenByParent.get(key) ?? [];
       arr.push(s);
-      childrenByParent.set(s.parentNodeId, arr);
+      childrenByParent.set(key, arr);
     } else {
       topLevel.push(s);
     }
@@ -118,7 +131,12 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   return (
     <div data-testid="cost-inspector" className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-y-2 p-3">
       {topLevel.map((step, i) => {
-        const branchChildren = childrenByParent.get(step.nodeId);
+        // A parent matches its own invocation's children first via
+        // `(nodeId, startSeq)`; parallel parents fall back to the
+        // wildcard slot populated by branches without `parentStartSeq`.
+        const branchChildren =
+          childrenByParent.get(groupKey(step.nodeId, step.startSeq)) ??
+          childrenByParent.get(groupKey(step.nodeId, undefined));
         const next = topLevel[i + 1] ?? branchChildren?.[0];
         return (
           <StepCostRowGroup

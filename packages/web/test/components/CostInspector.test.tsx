@@ -190,6 +190,123 @@ describe("CostInspector", () => {
     });
   });
 
+  describe("sub-agents — goal-gate retry scoping", () => {
+    // Bug: when a parent codergen is goal-gated and retargets to itself,
+    // the parent runs twice (two `llm.start`s → two parent step rows under
+    // the same `parent_node_id`), and each invocation spawns its own set
+    // of sub-agents. The Cost tab used to group sub-agent children by
+    // `parent_node_id` alone, so every sub-agent — from both invocations
+    // — clustered under each parent row, doubling the apparent fan-out.
+    //
+    // After the fix, sub-agent rows scope by `(parent_node_id,
+    // parent_invocation_seq)` (the parent step's own `startSeq`), so each
+    // parent row sees only its own invocation's children.
+    it("two parent invocations of the same parent_node_id do not share sub-agent children across invocations", async () => {
+      const steps: StepSnapshot[] = [
+        // First parent invocation of `audit` (startSeq 10).
+        makeStep({
+          stepIdx: 0,
+          startSeq: 10,
+          nodeId: "audit",
+          cost: { input_tokens: 100, output_tokens: 100, cost_usd: 0.01 },
+        }),
+        makeStep({
+          stepIdx: 1,
+          startSeq: 11,
+          nodeId: "__subagent:a1",
+          subagentId: "a1",
+          parentNodeId: "audit",
+          parentStartSeq: 10,
+          cost: { input_tokens: 50, output_tokens: 50, cost_usd: 0.02 },
+        }),
+        makeStep({
+          stepIdx: 2,
+          startSeq: 12,
+          nodeId: "__subagent:a2",
+          subagentId: "a2",
+          parentNodeId: "audit",
+          parentStartSeq: 10,
+          cost: { input_tokens: 50, output_tokens: 50, cost_usd: 0.03 },
+        }),
+        // Goal-gate fails → retarget back to `audit`. Second invocation
+        // (startSeq 20) spawns its own pair.
+        makeStep({
+          stepIdx: 3,
+          startSeq: 20,
+          nodeId: "audit",
+          cost: { input_tokens: 100, output_tokens: 100, cost_usd: 0.04 },
+        }),
+        makeStep({
+          stepIdx: 4,
+          startSeq: 21,
+          nodeId: "__subagent:b1",
+          subagentId: "b1",
+          parentNodeId: "audit",
+          parentStartSeq: 20,
+          cost: { input_tokens: 50, output_tokens: 50, cost_usd: 0.05 },
+        }),
+        makeStep({
+          stepIdx: 5,
+          startSeq: 22,
+          nodeId: "__subagent:b2",
+          subagentId: "b2",
+          parentNodeId: "audit",
+          parentStartSeq: 20,
+          cost: { input_tokens: 50, output_tokens: 50, cost_usd: 0.06 },
+        }),
+      ];
+      const { container } = mount("r1", steps);
+      const q = within(container);
+      await waitFor(() => {
+        expect(q.getByTestId("step-0")).toBeTruthy();
+      });
+
+      // Each parent invocation should see exactly its own two sub-agents
+      // indented underneath — not all four. Sub-agent rows are tagged
+      // with `data-parent-step={parent_node_id}`; we identify which
+      // invocation a given child belongs to by inspecting the DOM order:
+      // the four children rendered after parent step-0 are the ones
+      // grouped under it.
+      const root = q.getByTestId("cost-inspector");
+      // Match only outer step rows (`step-N`); the elapsed chip inside
+      // each row also matches `[data-testid^="step-"]` (`step-N-elapsed`)
+      // so a prefix-only selector double-counts and skews indices.
+      const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-testid^='step-']")).filter((el) =>
+        /^step-\d+$/.test(el.getAttribute("data-testid") ?? ""),
+      );
+      const indexOf = (id: string) => rows.findIndex((el) => el.getAttribute("data-testid") === id);
+
+      // Parent rows render in step order, and a parent's children render
+      // immediately after it. After the fix:
+      //   step-0 (audit#1) → step-1 (a1), step-2 (a2)
+      //   step-3 (audit#2) → step-4 (b1), step-5 (b2)
+      // Before the fix, all four sub-agents (a1, a2, b1, b2) cluster
+      // under whichever parent matches by `parent_node_id`, so
+      // step-3 sits AFTER step-5 in render order (parent appears after
+      // a full set of 4 children attributed to step-0).
+      expect(indexOf("step-0")).toBe(0);
+      expect(indexOf("step-1")).toBe(1);
+      expect(indexOf("step-2")).toBe(2);
+      expect(indexOf("step-3")).toBe(3);
+      expect(indexOf("step-4")).toBe(4);
+      expect(indexOf("step-5")).toBe(5);
+
+      // The first parent's summary cost = its own ($0.01) + only its
+      // two sub-agents ($0.02 + $0.03) = $0.06. If grouping leaks
+      // across invocations, the summary picks up $0.05 + $0.06 from
+      // the second invocation's children too and reads $0.17.
+      const parent1 = q.getByTestId("step-0");
+      expect(parent1.getAttribute("data-summary")).toBe("true");
+      expect(parent1.textContent).toMatch(/0\.06/);
+      expect(parent1.textContent).not.toMatch(/0\.17/);
+
+      // Same for the second parent: $0.04 + $0.05 + $0.06 = $0.15.
+      const parent2 = q.getByTestId("step-3");
+      expect(parent2.getAttribute("data-summary")).toBe("true");
+      expect(parent2.textContent).toMatch(/0\.15/);
+    });
+  });
+
   describe("billed token reconciliation", () => {
     // Pinned rate card so the four breakdown rows have predictable
     // dollar figures: input 3, output 15, cacheRead 0.3, cacheWrite

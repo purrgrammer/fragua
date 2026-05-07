@@ -285,6 +285,15 @@ export interface StepSnapshot {
   parentNodeId?: string;
   /** Branch index within the parallel parent's `children` list. */
   parallelIndex?: number;
+  /** Per-invocation discriminator for sub-agent steps. Equal to the
+   * parent's `startSeq` at the moment the sub-agent was spawned, so
+   * sub-agents from a goal-gate-retargeted re-invocation of the same
+   * `parentNodeId` don't pool with the prior invocation's children.
+   * `CostInspector` groups by `(parentNodeId, parentStartSeq)` rather
+   * than `parentNodeId` alone. Optional for back-compat with parallel
+   * branches (no per-invocation collision risk — a parallel parent
+   * runs once per node window). */
+  parentStartSeq?: number;
   /** Per-spawn discriminator for sub-agent steps. Set when nodeId
    * starts with `__subagent:`. */
   subagentId?: string;
