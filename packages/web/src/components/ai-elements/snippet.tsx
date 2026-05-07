@@ -130,7 +130,7 @@ export function SnippetCopyButton({
     <InputGroupButton
       type="button"
       variant="ghost"
-      size="icon-xs"
+      size="icon-sm"
       aria-label={copied ? "Copied" : "Copy"}
       onClick={() => {
         void handleCopy();
