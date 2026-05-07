@@ -9,15 +9,16 @@ import { randomBytes } from "node:crypto";
 import type { IEventStore } from "@swarm/store";
 import { Hono } from "hono";
 
-/** Whitelist of supported intervals. Proposal pins shorthand to four
- *  values (`30m`, `1h`, `6h`, `24h`) \u2014 cron expressions are explicitly
- *  out of scope. The `interval_ms` column is forward-compatible if cron
- *  is added later. */
+/** Whitelist of supported intervals (`30m`, `1h`, `6h`, `24h`, `3d`,
+ *  `7d`). Cron expressions are explicitly out of scope; the
+ *  `interval_ms` column is forward-compatible if cron is added later. */
 const ALLOWED_INTERVALS: Record<string, number> = {
   "30m": 30 * 60 * 1000,
   "1h": 60 * 60 * 1000,
   "6h": 6 * 60 * 60 * 1000,
   "24h": 24 * 60 * 60 * 1000,
+  "3d": 3 * 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
 };
 
 function parseInterval(text: unknown): { ms: number; text: string } | null {

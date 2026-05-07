@@ -78,7 +78,7 @@ describe("POST /schedules", () => {
     expect(body.code).toBe("invalid_overlap");
   });
 
-  test("rejects an interval outside {30m,1h,6h,24h} with 400", async () => {
+  test("rejects an interval outside the shorthand whitelist with 400", async () => {
     for (const bad of ["5m", "1d", "30s", "60", ""]) {
       const res = await req("POST", "/schedules", {
         workflow: "wf",

@@ -32,8 +32,9 @@ catch-up, no templating, no cron syntax.
 
 ## Non-goals
 
-- **Cron expressions.** Shorthand only (`30m`, `1h`, `6h`, `24h`).
-  `interval_ms` column is forward-compatible if cron is added later.
+- **Cron expressions.** Shorthand only (`30m`, `1h`, `6h`, `24h`, `3d`,
+  `7d`). `interval_ms` column is forward-compatible if cron is added
+  later.
 - **Templated input** (`$NOW`, `$ITERATION`, `$LAST_RUN_ID`). Single
   immutable text input or nothing.
 - **One-shot reminders** ("fire X at 3pm"). Out of scope; recurrence

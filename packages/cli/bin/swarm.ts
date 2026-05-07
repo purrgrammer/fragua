@@ -311,7 +311,7 @@ cli
 
 cli
   .command("schedule [action] [target]", "Manage recurring workflow runs (run without args for help)")
-  .option("--every <interval>", "`add` only: 30m | 1h | 6h | 24h (required)")
+  .option("--every <interval>", "`add` only: 30m | 1h | 6h | 24h | 3d | 7d (required)")
   .option("--cwd <dir>", "Project root for `add` / filter for `list`")
   .option("--input <text>", "`add` only: $ARGUMENTS piped to every fire")
   .option("--on-overlap <policy>", "`add` only: skip | queue | concurrent (default skip)")

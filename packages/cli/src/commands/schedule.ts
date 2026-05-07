@@ -14,7 +14,7 @@ import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 
-const ALLOWED_INTERVALS = new Set(["30m", "1h", "6h", "24h"]);
+const ALLOWED_INTERVALS = new Set(["30m", "1h", "6h", "24h", "3d", "7d"]);
 const ALLOWED_OVERLAP = new Set(["skip", "queue", "concurrent"]);
 
 interface DiscoveryOpts {
@@ -112,7 +112,7 @@ export interface ScheduleAddOptions extends DiscoveryOpts {
 
 export async function scheduleAddCommand(opts: ScheduleAddOptions): Promise<number> {
   if (!ALLOWED_INTERVALS.has(opts.every)) {
-    console.error(chalk.red(`schedule add: --every must be one of 30m, 1h, 6h, 24h`));
+    console.error(chalk.red(`schedule add: --every must be one of 30m, 1h, 6h, 24h, 3d, 7d`));
     return 1;
   }
   const overlap = opts.overlap ?? "skip";
@@ -251,7 +251,7 @@ export function scheduleHelp(): number {
   console.log(`  ${chalk.cyan("pause <id>")}       Pause a schedule`);
   console.log(`  ${chalk.cyan("resume <id>")}      Resume a paused schedule`);
   console.log("\nOptions on add:");
-  console.log("  --every <30m|1h|6h|24h>       Interval shorthand (required)");
+  console.log("  --every <30m|1h|6h|24h|3d|7d>  Interval shorthand (required)");
   console.log("  --cwd <dir>                   Project root (default cwd)");
   console.log("  --input <text>                $ARGUMENTS for every fire");
   console.log("  --on-overlap <skip|queue|concurrent>  Default skip");

@@ -1,7 +1,7 @@
-// Whitelist parser for the four supported schedule intervals
+// Whitelist parser for the supported schedule intervals
 // (proposal: docs/proposals/scheduled-runs.md).
 //
-// The proposal restricts shorthand to `30m`, `1h`, `6h`, `24h`. Cron
+// Shorthand whitelist: `30m`, `1h`, `6h`, `24h`, `3d`, `7d`. Cron
 // expressions are explicitly out of scope; the `interval_ms` column on
 // `schedules` is forward-compatible if cron is ever added later.
 
@@ -10,6 +10,8 @@ const TABLE: Record<string, number> = {
   "1h": 60 * 60 * 1000,
   "6h": 6 * 60 * 60 * 1000,
   "24h": 24 * 60 * 60 * 1000,
+  "3d": 3 * 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
 };
 
 export const SCHEDULE_INTERVALS: ReadonlyArray<string> = Object.keys(TABLE);
