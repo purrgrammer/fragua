@@ -1070,11 +1070,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // edge — the originally-picked edge was never actually traversed,
       // so suppress its `edge.selected`. Otherwise emit it now, before
       // node_completed lands, preserving the conventional ordering.
-      if (
-        pendingEdgeSelection !== undefined &&
-        goalGateRetargetTarget === undefined &&
-        result.kind === "transition"
-      ) {
+      if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
         recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
       }
 

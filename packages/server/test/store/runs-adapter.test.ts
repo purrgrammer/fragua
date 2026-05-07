@@ -234,8 +234,11 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
   // before the §3.4 goal-gate check could override result.nextNode with
   // the gate's retry_target. Newer daemon suppresses these emissions at
   // source, but historical runs still carry the misleading event;
-  // reconcile here so the projection is honest across both.
-  test("drops edge.selected when immediately followed by goal_gate.retarget for the same source", () => {
+  // reconcile here by rewriting the selectedEdge to point at the actual
+  // retarget destination. Rewrite (vs. drop) because GraphView counts
+  // gate-outgoing selectedEdges to derive retarget firings — dropping
+  // would silently undercount and dim the synthetic retarget edge.
+  test("rewrites edge.selected to the retarget target when goal_gate.retarget overrides", () => {
     const events: StoredEvent[] = [
       // Failing gate "selected" the configured fail-edge to done...
       {
@@ -245,15 +248,21 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       // ...but goal-gate retargeted to audit instead — the edge above was never traversed.
       { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 101 },
       { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 102 },
-      // Second-attempt success does fire and IS retained.
-      { ...ev("edge.selected", { from: "review", to: "done", iteration: 0, rule: "weight" }), seq: 200 },
+      // Second-attempt success does fire and IS retained verbatim.
+      { ...ev("edge.selected", { from: "review", to: "propose_patch", iteration: 0, rule: "weight" }), seq: 200 },
       { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 201 },
     ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "review", to: "done", iteration: 0 }]);
+    expect(deriveSelectedEdges(events)).toEqual([
+      // First entry rewritten: from review -> done to review -> audit
+      // (the actual traversal). One entry per gate visit is preserved
+      // so the synthetic retarget edge can count visits.
+      { from: "review", to: "audit", iteration: 0 },
+      { from: "review", to: "propose_patch", iteration: 0 },
+    ]);
   });
 
-  test("keeps edge.selected when goal_gate.retarget targets a different source node", () => {
-    // A retarget on a different gate must not silently swallow an
+  test("keeps edge.selected verbatim when goal_gate.retarget targets a different source node", () => {
+    // A retarget on a different gate must not silently rewrite an
     // unrelated node's edge selection.
     const events: StoredEvent[] = [
       { ...ev("edge.selected", { from: "diff", to: "review", iteration: 0 }), seq: 1 },

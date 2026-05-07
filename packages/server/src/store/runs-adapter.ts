@@ -214,13 +214,15 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
  *  `(from, to)` are emitted when a back-edge or goal-gate retarget
  *  re-traverses across iterations; `iteration` distinguishes them.
  *
- *  Reconciliation: when an `edge.selected` is immediately followed by a
+ *  Reconciliation: when an `edge.selected` is followed by a
  *  `goal_gate.retarget` for the same source node, the engine overrode
  *  the originally-picked edge with the gate's retry_target — the
  *  recorded edge was never actually traversed. The newer daemon
- *  suppresses these emissions at source, but historical runs still
- *  carry the misleading event; drop it here so the projection is
- *  honest across both. */
+ *  suppresses the misleading emission at source; historical runs still
+ *  carry it, so we rewrite it here to point at the actual retarget
+ *  destination. We rewrite (vs. drop) because consumers count one
+ *  selectedEdge per gate visit to derive retarget firings; dropping
+ *  would silently undercount and dim the synthetic retarget edge. */
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
   for (let i = 0; i < events.length; i++) {
@@ -229,35 +231,31 @@ function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
     const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
     if (typeof p.from !== "string" || typeof p.to !== "string") continue;
     const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
-    if (isOverriddenByGoalGateRetarget(events, i, p.from)) continue;
-    out.push({ from: p.from, to: p.to, iteration });
+    const retargetTo = goalGateRetargetTarget(events, i, p.from);
+    out.push({ from: p.from, to: retargetTo ?? p.to, iteration });
   }
   return out;
 }
 
-/** True iff the next non-observability event after `edgeSelectedIdx` is a
- *  `goal_gate.retarget` for the same source node. The engine emits these
- *  back-to-back when a retarget overrides a freshly-picked edge. */
-function isOverriddenByGoalGateRetarget(
-  events: StoredEvent[],
-  edgeSelectedIdx: number,
-  fromNode: string,
-): boolean {
+/** When the next event after `edgeSelectedIdx` is a `goal_gate.retarget`
+ *  for `fromNode`, return the retarget target; otherwise `undefined`.
+ *  The engine emits these back-to-back when a retarget overrides a
+ *  freshly-picked edge. Searches forward until the source's
+ *  `fact.node_completed` (which closes the window). */
+function goalGateRetargetTarget(events: StoredEvent[], edgeSelectedIdx: number, fromNode: string): string | undefined {
   for (let j = edgeSelectedIdx + 1; j < events.length; j++) {
     const ev = events[j];
     if (ev === undefined) continue;
     if (ev.type === "goal_gate.retarget") {
-      const failedGate = (ev.payload as { failedGate?: unknown }).failedGate;
-      return failedGate === fromNode;
+      const p = ev.payload as { failedGate?: unknown; target?: unknown };
+      if (p.failedGate === fromNode && typeof p.target === "string") return p.target;
     }
-    // `fact.node_completed` for the same source closes the window — any
-    // retarget would have come first. Stop scanning.
     if (ev.type === "fact.node_completed") {
       const nodeId = (ev.payload as { nodeId?: unknown }).nodeId;
-      if (nodeId === fromNode) return false;
+      if (nodeId === fromNode) return undefined;
     }
   }
-  return false;
+  return undefined;
 }
 
 function nodeIdOf(event: StoredEvent): string | null {
