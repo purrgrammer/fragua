@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-// introspect/health.ts — operational health probes against the harness
-// SQLite store. Replaces the original codergen `health` node, which
-// asked a haiku to compose explicit sqlite3 queries with explicit
-// thresholds — pure mechanics. Output is one JSON document on stdout,
-// consumed by `synthesize` via `$health.output`.
+// health/collect.ts — operational health probes against the harness
+// SQLite store. Lifted out of the original introspect.dot pipeline so it
+// can run on its own cadence (hourly, on-demand) without dragging the
+// drift workflows along. Output is one JSON document on stdout, consumed
+// by health.dot's terminal node and by rollup.dot's latest-runs query.
 //
 // DB resolution mirrors analyze/collect.ts: prefer
 // `<cwd>/.swarm/swarm.db` if it has rows, else fall back to

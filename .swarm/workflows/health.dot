@@ -1,0 +1,34 @@
+// health.dot — operational health snapshot of the swarm SQLite store.
+// One tool node wrapping .swarm/scripts/health/collect.ts. No LLM cost.
+//
+// Lifted out of the original introspect.dot pipeline so it can run on its
+// own cadence (hourly / on-demand) without dragging the drift workflows
+// along. The script labels each metric OK | WATCH | ALERT against
+// pre-defined thresholds — no LLM judgement needed.
+//
+// rollup.dot doesn't actually read this workflow's stored runs; it shells
+// out to the same script directly because health is a *now*-snapshot
+// (operational state, not historical findings). This workflow exists so
+// trends are queryable from `run_state` for future analysis and so a
+// missing snapshot is a visible run failure rather than silent.
+//
+//   bun run swarm run health
+
+digraph health {
+  graph [
+    goal  = "Snapshot operational health of the swarm event store: run-status mix, halt-reason distribution, payload-size pressure, routing-size pressure, handler-timeout leaks, quarantines, daemon-event types."
+    label = "health"
+  ]
+
+  start [shape=Mdiamond]
+
+  collect [
+    shape        = parallelogram
+    tool_command = "bun .swarm/scripts/health/collect.ts"
+  ]
+
+  done [shape=Msquare]
+
+  start   -> collect
+  collect -> done
+}

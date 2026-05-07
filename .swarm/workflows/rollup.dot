@@ -1,0 +1,55 @@
+// rollup.dot — weekly senior-engineer post-mortem.
+//
+// Reads the latest terminal run of each drift workflow (structural-drift,
+// narrative-drift, analyze) plus a fresh operational-health snapshot,
+// then asks the heavy reasoning model to produce a single prioritised
+// findings table + Idea/Architecture/Execution ratings + top
+// recommendations. Replaces introspect.dot's `synthesize` node with a
+// dedicated workflow whose cadence is decoupled from any individual probe.
+//
+// `collect_latest` queries ~/.swarm/swarm.db (project fallback) for the
+// last terminal run of each label, pulls the named output node's final
+// assistant message, and shells out to the health collector for now-state
+// metrics. If a workflow has never run, its slot is reported as a CADENCE
+// gap rather than a fabricated finding.
+//
+//   bun run swarm run rollup
+//
+// Cadence: weekly. Pairs with the per-probe cadences:
+//   structural-drift  — daily
+//   narrative-drift   — weekly
+//   health            — hourly (for trend storage; rollup re-runs it inline)
+//   analyze           — weekly
+
+digraph rollup {
+  graph [
+    goal             = "Consume the latest terminal run of each drift workflow + a fresh health snapshot; produce a prioritised findings table, Idea/Architecture/Execution ratings, and top recommendations."
+    label            = "rollup"
+    default_fidelity = "compact"
+    budget_usd       = 3.50
+    budget_policy    = "warn"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
+  ]
+
+  start [shape=Mdiamond]
+
+  collect_latest [
+    shape        = parallelogram
+    tool_command = "bun .swarm/scripts/rollup/latest.ts $ARGUMENTS"
+  ]
+
+  synthesize [
+    class         = "heavy"
+    allowed_tools = "read"
+    max_cost_usd  = 2.50
+    prompt        = "Final assessment using $collect_latest.output. The input is a JSON snapshot with `drift[]` (one entry per workflow: structural-drift, narrative-drift, analyze) and `health` (operational metrics).\n\nEach `drift[].output` is the full assistant message from that workflow's most recent terminal run — a markdown findings table (or a 'no findings' notice). Quote findings VERBATIM. Do not invent terms, rephrase, or paraphrase. If a finding is unclear or appears to reference something that is not a real code/doc symbol, flag it `[unclear — verify]` and pass it through unchanged rather than guessing.\n\nIf `drift[].output` is null or `drift[].run` is null, the corresponding workflow has no recent terminal run — record a CADENCE gap (HIGH severity) noting the workflow needs to run, do NOT fabricate findings.\n\n`health.snapshot` is the health probe JSON: `db_status` (ok / missing / empty), `window` (last 7 days), `metrics[]` each with id / label (OK | WATCH | ALERT) / value / note, and `worst_label`. Treat its labels as authoritative — don't relabel. If `health.error` is set, surface it under operational health as HIGH.\n\nProduce three sections in your final assistant message:\n\n1. Findings — every drift + health finding from all sources, grouped by severity (CRITICAL / HIGH / MEDIUM / LOW), with file:line refs. Tabular. Keep skill-drift findings (rows from narrative-drift's `## skill:<name>` subagents) as a labelled subgroup so swarm-* skill rot is visible at a glance. Include CADENCE rows for missing runs.\n\n2. Ratings — Idea / Architecture / Execution out of 10. Two sentences of rationale per axis. Calibrate against the prior baseline (Idea 8.5, Architecture 8, Execution 7.5 from the original introspect audit) — say whether each score has moved and why.\n\n3. Top recommendations — 3 to 5 prioritised actions ordered by leverage. Each: one-line action; why it is load-bearing; rough scope (hours / days / weeks); whether a new proposal is warranted under docs/proposals/.\n\nSenior-engineer post-mortem tone. No emoji. No marketing language. File:line backing beats hand-wavy claims; flag low-confidence calls explicitly."
+  ]
+
+  done [shape=Msquare]
+
+  start          -> collect_latest
+  collect_latest -> done [condition="outcome=fail"]
+  collect_latest -> synthesize
+
+  synthesize     -> done
+}

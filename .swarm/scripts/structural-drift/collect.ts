@@ -1,23 +1,25 @@
 #!/usr/bin/env bun
-// introspect/collect.ts — deterministic inventory for introspect.dot's
-// `drift` and `synthesize` nodes. Replaces the original codergen
-// `collect` node, which was a haiku acting as a glorified shell
-// scripter. Output is a single JSON document on stdout, consumed by
-// downstream nodes via `$collect.output`.
+// structural-drift/collect.ts — deterministic inventory for structural-drift.dot's
+// `drift` and `propose_patch` nodes. Narrower than the original introspect
+// collector: only the surfaces where literal code↔doc cross-reference makes
+// sense (schema, event taxonomy, handler contract, intent fold + the docs
+// that mirror them). Output is a single JSON document on stdout, consumed
+// downstream via `$collect.output`.
 //
 // Sections:
 //   1. contract_files       — line count + sha256(first 12) per surface
 //   2. taxonomy             — verbatim union literals from swarm-events.ts
 //   3. schema_sql           — verbatim contents of schema.sql
-//   4. readme               — verbatim 'delivers today' / 'does not' sections
-//   5. proposals            — front-matter (title/status/maturity) per file
-//   6. recent_commits       — last 30 across the repo
-//   7. contract_file_history — last 50 per contract file
-//   8. skill_files          — line count + sha256(first 12) per swarm-* skill
+//   4. recent_commits       — last 30 across the repo
+//   5. contract_file_history — last 50 per contract file (for AGENTS.md rule #1)
+//   6. doc_code_blocks      — fenced typescript / dot blocks in the structural docs
+//
+// Narrative surfaces (README "delivers today", proposals, swarm-* skills) live
+// in narrative-drift/collect.ts.
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const CONTRACT_FILES = [
@@ -29,16 +31,16 @@ const CONTRACT_FILES = [
   "docs/ARCHITECTURE.md",
   "docs/handler-contract.md",
   "docs/intent-fold.md",
-  "docs/PENDING.md",
-  "README.md",
-  "docs/proposals/README.md",
 ] as const;
 
-const SKILL_FILES = [
-  ".agents/skills/swarm-author/SKILL.md",
-  ".agents/skills/swarm-run/SKILL.md",
-  ".agents/skills/swarm-debug/SKILL.md",
+const DOC_FILES_FOR_CODE_BLOCKS = [
+  "docs/SPEC.md",
+  "docs/ARCHITECTURE.md",
+  "docs/handler-contract.md",
+  "docs/intent-fold.md",
 ] as const;
+
+const RELEVANT_BLOCK_LANGUAGES = new Set(["typescript", "ts", "tsx", "dot"]);
 
 interface FileSnapshot {
   path: string;
@@ -127,65 +129,40 @@ function extractTaxonomy(): Taxonomy {
   };
 }
 
-function extractReadmeSection(src: string, heading: string): string {
-  const lines = src.split("\n");
-  const start = lines.findIndex((l) => l.trim() === heading);
-  if (start < 0) return "";
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i] ?? "")) {
-      end = i;
-      break;
-    }
-  }
-  return lines.slice(start, end).join("\n").trimEnd();
-}
-
-interface Proposal {
+interface CodeBlock {
   file: string;
-  title: string | null;
-  status: string | null;
-  maturity: string | null;
-  last_reviewed: string | null;
+  line_start: number;
+  language: string;
+  content: string;
 }
 
-function parseFrontMatter(src: string): Record<string, string> {
-  if (!src.startsWith("---")) return {};
-  const end = src.indexOf("\n---", 3);
-  if (end < 0) return {};
-  const block = src.slice(3, end).trim();
-  const out: Record<string, string> = {};
-  for (const raw of block.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const i = line.indexOf(":");
-    if (i < 0) continue;
-    const key = line.slice(0, i).trim();
-    let val = line.slice(i + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
+function extractCodeBlocks(rel: string): CodeBlock[] {
+  const src = readOrEmpty(rel);
+  if (!src) return [];
+  const lines = src.split("\n");
+  const blocks: CodeBlock[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const m = line.match(/^```(\w+)/);
+    if (!m) {
+      i++;
+      continue;
     }
-    out[key] = val;
+    const lang = (m[1] ?? "").toLowerCase();
+    const start = i + 1;
+    const buf: string[] = [];
+    i++;
+    while (i < lines.length && !((lines[i] ?? "").startsWith("```"))) {
+      buf.push(lines[i] ?? "");
+      i++;
+    }
+    if (RELEVANT_BLOCK_LANGUAGES.has(lang)) {
+      blocks.push({ file: rel, line_start: start, language: lang, content: buf.join("\n") });
+    }
+    i++;
   }
-  return out;
-}
-
-function collectProposals(): Proposal[] {
-  const dir = resolve(process.cwd(), "docs/proposals");
-  if (!existsSync(dir)) return [];
-  const entries = readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "README.md");
-  entries.sort();
-  return entries.map((f) => {
-    const rel = `docs/proposals/${f}`;
-    const fm = parseFrontMatter(readOrEmpty(rel));
-    return {
-      file: rel,
-      title: fm.title ?? null,
-      status: fm.status ?? null,
-      maturity: fm.maturity ?? null,
-      last_reviewed: fm["last-reviewed"] ?? null,
-    };
-  });
+  return blocks;
 }
 
 function recentCommits(n: number): string[] {
@@ -208,19 +185,11 @@ const snapshot = {
   contract_files: CONTRACT_FILES.map(snapshotFile),
   taxonomy: extractTaxonomy(),
   schema_sql: readOrEmpty("packages/store/src/schema.sql"),
-  readme: {
-    delivers_today: extractReadmeSection(readOrEmpty("README.md"), "## What swarm delivers today"),
-    does_not_deliver: extractReadmeSection(
-      readOrEmpty("README.md"),
-      "## What swarm does not deliver today",
-    ),
-  },
-  proposals: collectProposals(),
+  doc_code_blocks: DOC_FILES_FOR_CODE_BLOCKS.flatMap(extractCodeBlocks),
   recent_commits: recentCommits(30),
   contract_file_history: Object.fromEntries(
     CONTRACT_FILES.map((p) => [p, fileHistory(p, 50)]),
   ),
-  skill_files: SKILL_FILES.map(snapshotFile),
 };
 
 process.stdout.write(JSON.stringify(snapshot, null, 2) + "\n");

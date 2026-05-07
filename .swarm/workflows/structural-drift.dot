@@ -1,0 +1,99 @@
+// structural-drift.dot — literal code↔doc cross-reference for the surfaces
+// where drift is mechanical: schema columns, event-taxonomy enums, handler
+// contract shapes, intent-fold table cells, doc code-block freshness, and
+// AGENTS.md rule #1 same-PR commit hygiene.
+//
+// One of three workflows that decompose the original introspect.dot:
+//   - structural-drift (this) — apply tail (auto-fixable surfaces)
+//   - narrative-drift          — findings-only (skill rot, claims, proposals)
+//   - health                   — operational metrics snapshot
+// Plus rollup.dot, which consumes the latest run of each.
+//
+//   bun run swarm run structural-drift
+//   bun run swarm run structural-drift --input="focus on event taxonomy"
+//
+// Cadence: per-PR or daily. The findings churn fastest after enum changes
+// land, and the apply tail pays off most when the doc edits are mechanical.
+//
+// Models: opus + reasoning_effort:high for `drift` (the genuine cross-ref
+// reasoning); sonnet for review/propose/apply/verify (mid-tier judgement
+// and mechanical work). `collect` is a deterministic tool node — no LLM cost.
+
+digraph structural_drift {
+  graph [
+    goal                  = "Cross-reference contract code surfaces against the docs that describe them; surface drift, propose mechanical doc edits, apply with HITL signoff."
+    label                 = "structural-drift"
+    default_fidelity      = "compact"
+    budget_usd            = 7.00
+    budget_policy         = "warn"
+    max_goal_gate_retries = 2
+    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
+  ]
+
+  start [shape=Mdiamond]
+
+  collect [
+    shape        = parallelogram
+    tool_command = "bun .swarm/scripts/structural-drift/collect.ts $ARGUMENTS"
+  ]
+
+  drift [
+    class         = "heavy"
+    allowed_tools = "read, grep, find, bash"
+    max_cost_usd  = 4.00
+    prompt        = "Cross-reference code↔docs using $collect.output. Read-only; you may re-read files for confirmation but do not modify.\n\n`$collect.output` is a JSON snapshot with: `contract_files[]` (path/lines/sha256_12), `taxonomy` (run_statuses, pause_reasons, halt_reasons, quarantine_reasons, intent_types, fact_types, daemon_event_types — verbatim union literals), `schema_sql` (full schema.sql), `doc_code_blocks[]` (file/line_start/language/content for typescript / dot blocks in the structural docs), `recent_commits[]`, `contract_file_history[path][]`. Trust those values verbatim; re-read source files only when you need surrounding context.\n\nWalk every check and flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) the code surface file:line, AND (b) the doc file:line where the surface is documented (or the explicit absence — 'NOT FOUND in ARCH §3 intent table'). A finding without both citations is invalid; re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nChecks:\n  1. Schema — every column / index / table / generated column / CHECK constraint in `schema_sql` against ARCHITECTURE.md §2.\n  2. Event taxonomy — every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and the SPEC §3.4 status table where applicable.\n  3. Handler contract — return-kind enum / halt reasons handlers can return / HandlerContext fields / messages / artifacts API shapes (handler/types.ts) against handler-contract.md.\n  4. Intent fold — precedence rules R1–R7, per-intent table including the required-state column (intent-fold.ts vs docs/intent-fold.md).\n  5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures (e.g. `messages.append(role, content)` when code is `messages.append(message)`).\n  6. Recent commits hygiene — for each contract file in `contract_file_history`, walk the listed commits and check whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. Flag any landed commit that did not.\n\nOutput a findings table grouped by severity, with file:line refs and the exact discrepancy. No prose preamble."
+  ]
+
+  review [
+    allowed_tools = "read"
+    goal_gate     = true
+    retry_target  = "drift"
+    max_cost_usd  = 0.80
+    prompt        = "Judge the findings table at $drift.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, reply with `<abort>REJECT: <one-line reason></abort>`. The run will retarget to `drift` and rebuild the report (capped by max_goal_gate_retries=2)."
+  ]
+
+  propose_patch [
+    allowed_tools = "read"
+    max_cost_usd  = 1.00
+    prompt        = "Translate $drift.output (the findings table) into a list of edit blocks for the affected files. The code is authoritative — target the *doc* side wherever possible.\n\nFor each finding row:\n  - CRITICAL/MEDIUM (incorrect doc text): `old_string` = misleading doc text VERBATIM with enough surrounding context to be unique within that file; `new_string` = the corrected text matching the doc's tone and markdown style.\n  - HIGH (missing): `old_string` = the existing line / section header the new content should be inserted AFTER (verbatim, unique anchor); `new_string` = anchor + newline + new section text.\n  - LOW (polish): include only if the fix is unambiguous — otherwise skip.\n\nIf a finding implies the *code* is wrong (rare — e.g. the spec was decided first and code drifted), DO NOT propose a code edit. Mark it `skipped: true` with `why: \"code-side fix needed, manual review\"`.\n\nDo NOT modify any file yet. Output a JSON array — your FINAL assistant message, no preamble, no postscript, no markdown fence:\n\n  [\n    { \"file\": \"docs/ARCHITECTURE.md\",\n      \"reason\": \"MEDIUM §2 — schema row missing `branch` column\",\n      \"old_string\": \"...verbatim text from doc...\",\n      \"new_string\": \"...corrected text...\" },\n    { \"file\": \"docs/handler-contract.md\",\n      \"reason\": \"CRITICAL — code uses ctx.messages.append(message), doc shows .append(role, content)\",\n      \"skipped\": true,\n      \"why\": \"code-side fix needed, manual review\" }\n  ]\n\nRules:\n  - `old_string` MUST be unique within the target file. If the natural target text appears more than once, expand it with surrounding context until unique.\n  - Preserve the doc's tone, casing, list style, and markdown conventions.\n  - PRESERVE UNRELATED EXISTING CONTENT. When a row asks you to add or correct items in a list, table row, or section, your `new_string` MUST include every existing item from `old_string` that the finding did NOT flag — plus the additions, plus the corrections to specifically-flagged claims. Targeted addition + correction, not editorial rewrite.\n  - One block per finding. Don't bundle multiple unrelated changes.\n\nIf no actionable rows after applying these rules, reply with `[]`."
+  ]
+
+  signoff [
+    shape  = hexagon
+    prompt = "Findings and proposed edit blocks are ready. The patch is the JSON array in $propose_patch.output ({file, reason, old_string, new_string} per block; or {file, reason, skipped, why} for blocks needing manual code-side fixes). Choose how to proceed."
+  ]
+
+  apply [
+    allowed_tools = "read, edit"
+    max_cost_usd  = 0.50
+    prompt        = "Apply the edit blocks from $propose_patch.output. Each block has `file` + `old_string` + `new_string` (or `skipped: true` with `why`).\n\nFor each block in order:\n  - If `skipped: true`, skip it.\n  - Otherwise call the `edit` tool exactly once: `file_path` = block.file, `old_string` and `new_string` from the block.\n  - The runtime enforces uniqueness of `old_string`. If a single block's edit fails, emit `<abort>edit failed for block <reason>: <error message></abort>` and stop. Do NOT continue with later blocks after a failure.\n\nAfter every block is processed, reply with EXACTLY:\n\n  applied: <count of edits that succeeded>\n  skipped: <count of blocks marked skipped>\n\nNo prose. No diff preview. The verify node will re-read the files and check."
+  ]
+
+  verify [
+    allowed_tools = "read"
+    max_cost_usd  = 0.50
+    prompt        = "Re-read each file mentioned in $propose_patch.output and confirm every non-skipped finding is now resolved.\n\nFor each non-skipped block:\n  - Confirm the `new_string` text is present at the expected location.\n  - Confirm the `old_string` text is gone (for corrections) or that the anchor + new content is present (for insertions).\n\nFor each `skipped: true` block: mark `unresolved (skipped)` — that's expected, not a verify failure.\n\nReply with a markdown table — your FINAL assistant message:\n\n  | Original finding | File | Status | Note |\n  |---|---|---|---|\n  | MEDIUM ARCH §2 — schema row missing branch | docs/ARCHITECTURE.md | resolved | new column row at line 88 |\n  | CRITICAL handler-contract typo | docs/handler-contract.md | unresolved (skipped) | code-side fix needed |\n\nIf any non-skipped row is unresolved (apply claimed success but the change isn't actually present), emit `<abort>verify failed: <count> rows applied but not present in docs; see table</abort>` AFTER the table."
+  ]
+
+  done [shape=Msquare]
+
+  start         -> collect
+  collect       -> done [condition="outcome=fail"]
+  collect       -> drift
+
+  drift         -> review
+
+  review        -> done [condition="outcome=fail"]
+  review        -> propose_patch
+
+  propose_patch -> signoff
+
+  signoff       -> apply [label="[A] Apply"]
+  signoff       -> done  [label="[O] Output only"]
+  signoff       -> done  [label="[R] Reject"]
+
+  apply         -> done [condition="outcome=fail"]
+  apply         -> verify
+
+  verify        -> done
+}
