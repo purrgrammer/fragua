@@ -267,4 +267,102 @@ describe("RunPausedNotice", () => {
       restore();
     }
   });
+
+  it("provider_retry reason renders countdown body + Resume now / Cancel actions", async () => {
+    const resumeAt = Date.now() + 30_000;
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "provider_retry",
+              nodeId: "implement",
+              httpStatus: 429,
+              provider: "anthropic",
+              errorMessage: "429 Too Many Requests",
+              attempt: 2,
+              resumeAt,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId, getByText } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      // Body carries the formatted provider error + attempt count + countdown.
+      expect(message.textContent).toContain("anthropic returned 429");
+      expect(message.textContent).toContain("attempt 2");
+      // Countdown reads "in 30s" (or similar — we ceil to the nearest second).
+      expect(message.textContent).toMatch(/in \d+s/);
+      // Resume button label is "Resume now" for auto-wake reasons.
+      expect(getByText("Resume now")).toBeDefined();
+      // The notice carries the reason discriminator for selector clarity.
+      const notice = await findByTestId("run-paused-notice");
+      expect(notice.getAttribute("data-pause-reason")).toBe("provider_retry");
+    } finally {
+      restore();
+    }
+  });
+
+  it("handler_retry reason renders countdown + attempt-of-max + Resume now / Cancel actions", async () => {
+    const resumeAt = Date.now() + 5_000;
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "handler_retry",
+              nodeId: "verify",
+              attempt: 2,
+              delayMs: 5_000,
+              resumeAt,
+              maxRetries: 3,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId, getByText } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("verify");
+      expect(message.textContent).toContain("attempt 2/3");
+      expect(message.textContent).toMatch(/in \d+s/);
+      expect(getByText("Resume now")).toBeDefined();
+      const notice = await findByTestId("run-paused-notice");
+      expect(notice.getAttribute("data-pause-reason")).toBe("handler_retry");
+    } finally {
+      restore();
+    }
+  });
+
+  it("auto-wake countdown renders 'now' once resumeAt is in the past", async () => {
+    const { restore } = installFetchMock({
+      [EVENTS_URL]: () =>
+        json([
+          {
+            seq: 1,
+            type: "fact.run_paused",
+            payload: {
+              reason: "handler_retry",
+              nodeId: "verify",
+              attempt: 1,
+              delayMs: 1,
+              resumeAt: Date.now() - 1_000,
+              maxRetries: 3,
+            },
+          },
+        ]),
+    });
+    try {
+      const { findByTestId } = renderWithClient(<RunPausedNotice runId="run-1" />);
+      const message = await findByTestId("run-paused-message");
+      expect(message.textContent).toContain("now");
+    } finally {
+      restore();
+    }
+  });
 });

@@ -196,6 +196,9 @@
   --color-sw-accent-warn: var(--sw-accent-warn);
   --color-sw-accent-human: var(--sw-accent-human);
   --color-sw-accent-loop: var(--sw-accent-loop);
+  --color-sw-accent-pause: var(--sw-accent-pause);
+  --color-sw-accent-pause-auto: var(--sw-accent-pause-auto);
+  --color-sw-accent-pause-hitl: var(--sw-accent-pause-hitl);
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);

@@ -166,7 +166,7 @@ export function RunDetail(): JSX.Element {
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
-      {detail?.runStatus === "paused" && <RunPausedNotice runId={id} />}
+      {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && <RunPausedNotice runId={id} />}
       {detail?.runStatus === "paused_hitl" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
@@ -330,6 +330,7 @@ const DetailHeader = memo(function DetailHeader({
           {detail && (
             <RunStatusBadge
               status={detail.status}
+              runStatus={detail.runStatus}
               data-testid="detail-status"
               className="px-1.5 py-0.5 text-[0.65rem]"
             />

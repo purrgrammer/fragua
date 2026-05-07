@@ -59,7 +59,7 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
       </td>
       <td className="py-2 pr-4 max-w-0">{wf ? <WorkflowLink name={wf} variant="badge" /> : null}</td>
       <td className="py-2 pr-4 text-right">
-        <RunStatusBadge status={row.status} />
+        <RunStatusBadge status={row.status} runStatus={row.runStatus} />
       </td>
     </tr>
   );
