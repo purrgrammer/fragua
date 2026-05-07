@@ -3,28 +3,35 @@
 // contract shapes, intent-fold table cells, doc code-block freshness, and
 // AGENTS.md rule #1 same-PR commit hygiene.
 //
-// One of three workflows that decompose the original introspect.dot:
-//   - structural-drift (this) — apply tail (auto-fixable surfaces)
-//   - narrative-drift          — findings-only (skill rot, claims, proposals)
+// Findings-only. Decision-making (which findings to fix, in what order)
+// happens in rollup.dot, which consumes this workflow's latest run alongside
+// narrative-drift, analyze, and a fresh health snapshot. For ergonomic
+// auto-applied doc fixes, use doc-sync.dot — it's the apply-tail variant
+// scoped to a single doc.
+//
+// One of three decomposed workflows that replaced the original introspect.dot:
+//   - structural-drift (this) — literal code↔doc cross-ref
+//   - narrative-drift          — skill rot, claims, proposals (reasoning-heavy)
 //   - health                   — operational metrics snapshot
 // Plus rollup.dot, which consumes the latest run of each.
 //
 //   bun run swarm run structural-drift
 //   bun run swarm run structural-drift --input="focus on event taxonomy"
 //
-// Cadence: per-PR or daily. The findings churn fastest after enum changes
-// land, and the apply tail pays off most when the doc edits are mechanical.
+// Cadence: daily. The findings churn fastest after enum changes land;
+// daily catches drift before it accumulates. No HITL gate — the cadence
+// runs unattended.
 //
 // Models: opus + reasoning_effort:high for `drift` (the genuine cross-ref
-// reasoning); sonnet for review/propose/apply/verify (mid-tier judgement
-// and mechanical work). `collect` is a deterministic tool node — no LLM cost.
+// reasoning); sonnet for review (mid-tier judgement). `collect` is a
+// deterministic tool node — no LLM cost.
 
 digraph structural_drift {
   graph [
-    goal                  = "Cross-reference contract code surfaces against the docs that describe them; surface drift, propose mechanical doc edits, apply with HITL signoff."
+    goal                  = "Cross-reference contract code surfaces against the docs that describe them; emit a severity-grouped findings table for the rollup to consume."
     label                 = "structural-drift"
     default_fidelity      = "compact"
-    budget_usd            = 7.00
+    budget_usd            = 5.00
     budget_policy         = "warn"
     max_goal_gate_retries = 2
     model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
@@ -52,48 +59,13 @@ digraph structural_drift {
     prompt        = "Judge the findings table at $drift.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, reply with `<abort>REJECT: <one-line reason></abort>`. The run will retarget to `drift` and rebuild the report (capped by max_goal_gate_retries=2)."
   ]
 
-  propose_patch [
-    allowed_tools = "read"
-    max_cost_usd  = 1.00
-    prompt        = "Translate $drift.output (the findings table) into a list of edit blocks for the affected files. The code is authoritative — target the *doc* side wherever possible.\n\nFor each finding row:\n  - CRITICAL/MEDIUM (incorrect doc text): `old_string` = misleading doc text VERBATIM with enough surrounding context to be unique within that file; `new_string` = the corrected text matching the doc's tone and markdown style.\n  - HIGH (missing): `old_string` = the existing line / section header the new content should be inserted AFTER (verbatim, unique anchor); `new_string` = anchor + newline + new section text.\n  - LOW (polish): include only if the fix is unambiguous — otherwise skip.\n\nIf a finding implies the *code* is wrong (rare — e.g. the spec was decided first and code drifted), DO NOT propose a code edit. Mark it `skipped: true` with `why: \"code-side fix needed, manual review\"`.\n\nDo NOT modify any file yet. Output a JSON array — your FINAL assistant message, no preamble, no postscript, no markdown fence:\n\n  [\n    { \"file\": \"docs/ARCHITECTURE.md\",\n      \"reason\": \"MEDIUM §2 — schema row missing `branch` column\",\n      \"old_string\": \"...verbatim text from doc...\",\n      \"new_string\": \"...corrected text...\" },\n    { \"file\": \"docs/handler-contract.md\",\n      \"reason\": \"CRITICAL — code uses ctx.messages.append(message), doc shows .append(role, content)\",\n      \"skipped\": true,\n      \"why\": \"code-side fix needed, manual review\" }\n  ]\n\nRules:\n  - `old_string` MUST be unique within the target file. If the natural target text appears more than once, expand it with surrounding context until unique.\n  - Preserve the doc's tone, casing, list style, and markdown conventions.\n  - PRESERVE UNRELATED EXISTING CONTENT. When a row asks you to add or correct items in a list, table row, or section, your `new_string` MUST include every existing item from `old_string` that the finding did NOT flag — plus the additions, plus the corrections to specifically-flagged claims. Targeted addition + correction, not editorial rewrite.\n  - One block per finding. Don't bundle multiple unrelated changes.\n\nIf no actionable rows after applying these rules, reply with `[]`."
-  ]
-
-  signoff [
-    shape  = hexagon
-    prompt = "Findings and proposed edit blocks are ready. The patch is the JSON array in $propose_patch.output ({file, reason, old_string, new_string} per block; or {file, reason, skipped, why} for blocks needing manual code-side fixes). Choose how to proceed."
-  ]
-
-  apply [
-    allowed_tools = "read, edit"
-    max_cost_usd  = 0.50
-    prompt        = "Apply the edit blocks from $propose_patch.output. Each block has `file` + `old_string` + `new_string` (or `skipped: true` with `why`).\n\nFor each block in order:\n  - If `skipped: true`, skip it.\n  - Otherwise call the `edit` tool exactly once: `file_path` = block.file, `old_string` and `new_string` from the block.\n  - The runtime enforces uniqueness of `old_string`. If a single block's edit fails, emit `<abort>edit failed for block <reason>: <error message></abort>` and stop. Do NOT continue with later blocks after a failure.\n\nAfter every block is processed, reply with EXACTLY:\n\n  applied: <count of edits that succeeded>\n  skipped: <count of blocks marked skipped>\n\nNo prose. No diff preview. The verify node will re-read the files and check."
-  ]
-
-  verify [
-    allowed_tools = "read"
-    max_cost_usd  = 0.50
-    prompt        = "Re-read each file mentioned in $propose_patch.output and confirm every non-skipped finding is now resolved.\n\nFor each non-skipped block:\n  - Confirm the `new_string` text is present at the expected location.\n  - Confirm the `old_string` text is gone (for corrections) or that the anchor + new content is present (for insertions).\n\nFor each `skipped: true` block: mark `unresolved (skipped)` — that's expected, not a verify failure.\n\nReply with a markdown table — your FINAL assistant message:\n\n  | Original finding | File | Status | Note |\n  |---|---|---|---|\n  | MEDIUM ARCH §2 — schema row missing branch | docs/ARCHITECTURE.md | resolved | new column row at line 88 |\n  | CRITICAL handler-contract typo | docs/handler-contract.md | unresolved (skipped) | code-side fix needed |\n\nIf any non-skipped row is unresolved (apply claimed success but the change isn't actually present), emit `<abort>verify failed: <count> rows applied but not present in docs; see table</abort>` AFTER the table."
-  ]
-
   done [shape=Msquare]
 
-  start         -> collect
-  collect       -> done [condition="outcome=fail"]
-  collect       -> drift
+  start    -> collect
+  collect  -> done [condition="outcome=fail"]
+  collect  -> drift
 
-  drift         -> review
+  drift    -> review
 
-  review        -> done [condition="outcome=fail"]
-  review        -> propose_patch
-
-  propose_patch -> signoff
-
-  signoff       -> apply [label="[A] Apply"]
-  signoff       -> done  [label="[O] Output only"]
-  signoff       -> done  [label="[R] Reject"]
-
-  apply         -> done [condition="outcome=fail"]
-  apply         -> verify
-
-  verify        -> done
+  review   -> done
 }
