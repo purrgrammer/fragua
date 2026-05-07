@@ -54,6 +54,14 @@ export interface StepSnapshot {
   /** Stream seq of the originating `llm.start`. Joins with the SQL
    * aggregate row for this step (`getStepAggregates(runId)`). */
   startSeq: number;
+  /** Additional `llm.start` seqs that fold into this same step — used
+   *  when a node is paused (operator / HITL / provider-error / budget /
+   *  payment) and resumes without an intervening `fact.node_completed`.
+   *  The post-resume `llm.start` belongs conceptually to the same node
+   *  activation; collapsing it into one row keeps the Cost breakdown
+   *  honest. `attachStepAggregates` folds cost rows for every entry
+   *  here onto the surviving step. */
+  extraStartSeqs?: number[];
   /** Real DOT node id (or a synthetic id for summariser steps). */
   nodeId: string;
   /** Iteration metadata when the caller is a loop. */
@@ -128,8 +136,27 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // current node window. The first step uses `fact.node_started.ts`;
   // subsequent loop iterations fall back to `llm.start.ts` (we have no
   // truthful per-iteration boundary). Cleared on each new
-  // `fact.node_started`.
+  // `fact.node_started`, except when the prior pause is operator-class
+  // (see `pendingResumeFold` below) — the resume re-emits
+  // `fact.node_started` for the same nodeId but the step window
+  // didn't close.
   const firstStepEmittedForNode = new Set<string>();
+  // nodeIds that were paused without an intervening `fact.node_completed`
+  // (operator / HITL / provider-error / budget / payment_required). The
+  // post-resume `fact.node_started` for such a node should NOT open a
+  // fresh step — the next `llm.start` for that node folds into the
+  // existing step's `extraStartSeqs` so the Cost breakdown shows one
+  // unified row. Cleared by `fact.node_completed` (real window close).
+  const pausedOpenNodes = new Set<string>();
+  // nodeIds whose next `llm.start` should fold into their existing
+  // step rather than open a new one. Set when a `fact.node_started`
+  // arrives for a node that's in `pausedOpenNodes`; cleared after the
+  // fold so subsequent normal events behave as usual. Maps nodeId →
+  // index into `steps` to fold into.
+  const pendingResumeFold = new Map<string, number>();
+  // nodeId → index of the most recent step opened for that nodeId.
+  // Used to find the fold target when resuming.
+  const lastStepIdxForNode = new Map<string, number>();
   // subagent_id → { displayName?, parentNodeId } captured from
   // `subagent.start` events. Drives two pieces of step enrichment:
   //   - `subagentName` for the operator-friendly name in the UI. Pick
@@ -161,22 +188,71 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
 
     if (ev.type === "fact.node_started") {
       if (nodeId) {
-        lastNodeStartedTs.set(nodeId, ev.ts);
-        firstStepEmittedForNode.delete(nodeId);
-        const parentNodeId = stringField(data, "parentNodeId");
-        if (parentNodeId) {
-          const piRaw = data["parallelIndex"];
-          const meta: { parentNodeId: string; parallelIndex?: number } = { parentNodeId };
-          if (typeof piRaw === "number") meta.parallelIndex = piRaw;
-          branchMetaByNode.set(nodeId, meta);
+        // Resumption-after-pause: the node window never closed (no
+        // `fact.node_completed`), so don't reset its anchors — mark
+        // the next `llm.start` for this node to fold into the
+        // existing step instead of opening a new one.
+        const isResumeFold = pausedOpenNodes.has(nodeId) && lastStepIdxForNode.has(nodeId);
+        if (isResumeFold) {
+          pendingResumeFold.set(nodeId, lastStepIdxForNode.get(nodeId) as number);
+          pausedOpenNodes.delete(nodeId);
         } else {
-          branchMetaByNode.delete(nodeId);
+          lastNodeStartedTs.set(nodeId, ev.ts);
+          firstStepEmittedForNode.delete(nodeId);
+          const parentNodeId = stringField(data, "parentNodeId");
+          if (parentNodeId) {
+            const piRaw = data["parallelIndex"];
+            const meta: { parentNodeId: string; parallelIndex?: number } = { parentNodeId };
+            if (typeof piRaw === "number") meta.parallelIndex = piRaw;
+            branchMetaByNode.set(nodeId, meta);
+          } else {
+            branchMetaByNode.delete(nodeId);
+          }
         }
       }
       continue;
     }
 
+    if (ev.type === "fact.node_completed") {
+      // Real window close: any pending fold for this node is moot.
+      if (nodeId) {
+        pausedOpenNodes.delete(nodeId);
+        pendingResumeFold.delete(nodeId);
+      }
+      continue;
+    }
+
+    if (ev.type === "fact.run_paused" || ev.type === "fact.run_paused_hitl" || ev.type === "fact.run_paused_retry") {
+      // Operator-class pauses (operator / HITL / provider-error /
+      // budget / payment_required) do NOT emit `fact.node_completed`,
+      // so the node window stays open across the pause. The resume
+      // re-emits `fact.node_started` for the same nodeId; we want
+      // both halves to fold into a single Cost-breakdown row.
+      const pausedNodeId = stringField(data, "nodeId");
+      if (pausedNodeId) pausedOpenNodes.add(pausedNodeId);
+      continue;
+    }
+
     if (ev.type === "llm.start") {
+      // Resume-fold: a paused node has just re-emitted `fact.node_started`
+      // and this is its post-resume `llm.start`. Append its seq to the
+      // existing step's `extraStartSeqs` so SQL aggregates from both
+      // halves fold onto one row, and skip pushing a new snapshot.
+      const foldIdx = nodeId !== "" ? pendingResumeFold.get(nodeId) : undefined;
+      if (foldIdx !== undefined) {
+        const target = steps[foldIdx];
+        if (target !== undefined) {
+          const seq = ev.seq;
+          if (typeof seq === "number") {
+            const extras = target.extraStartSeqs ?? [];
+            extras.push(seq);
+            target.extraStartSeqs = extras;
+          }
+        }
+        pendingResumeFold.delete(nodeId);
+        continue;
+      }
+
       // First step of this node window? Anchor to `fact.node_started.ts`
       // (truthful). Otherwise (loop iteration 2+) fall back to the
       // buffered `llm.start.ts`.
@@ -212,7 +288,10 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         if (meta?.parentNodeId) step.parentNodeId = meta.parentNodeId;
       }
       steps.push(step);
-      if (nodeId) firstStepEmittedForNode.add(nodeId);
+      if (nodeId) {
+        firstStepEmittedForNode.add(nodeId);
+        lastStepIdxForNode.set(nodeId, steps.length - 1);
+      }
     }
     // No other event types affect step boundaries — `llm.done` was
     // previously consulted to set `durationMs`, but that timestamp is
@@ -276,17 +355,38 @@ export function attachStepAggregates(steps: StepSnapshot[], aggregates: readonly
   const byStartSeq = new Map<number, StepCostAggregate>();
   for (const a of aggregates) byStartSeq.set(a.startSeq, a);
   return steps.map((s) => {
-    const agg = byStartSeq.get(s.startSeq);
-    if (!agg || agg.costEventCount === 0) return s;
+    // Pause/resume coalesces multiple `llm.start` halves into one
+    // step; sum the SQL aggregates across every seq that belongs to
+    // this step so the row's cost reflects the entire node activation.
+    const seqs = [s.startSeq, ...(s.extraStartSeqs ?? [])];
+    let costUsd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let billedTokens = 0;
+    let costEventCount = 0;
+    for (const seq of seqs) {
+      const agg = byStartSeq.get(seq);
+      if (!agg) continue;
+      costUsd += agg.costUsd;
+      inputTokens += agg.inputTokens;
+      outputTokens += agg.outputTokens;
+      cacheReadTokens += agg.cacheReadTokens;
+      cacheWriteTokens += agg.cacheWriteTokens;
+      billedTokens += agg.billedTokens;
+      costEventCount += agg.costEventCount;
+    }
+    if (costEventCount === 0) return s;
     return {
       ...s,
       cost: {
-        input_tokens: agg.inputTokens,
-        output_tokens: agg.outputTokens,
-        billed_tokens: agg.billedTokens,
-        cache_read_tokens: agg.cacheReadTokens,
-        cache_write_tokens: agg.cacheWriteTokens,
-        cost_usd: agg.costUsd,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        billed_tokens: billedTokens,
+        cache_read_tokens: cacheReadTokens,
+        cache_write_tokens: cacheWriteTokens,
+        cost_usd: costUsd,
       },
     };
   });

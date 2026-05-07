@@ -213,6 +213,35 @@ describe("eventsToSteps", () => {
     expect(steps[1]!.parentNodeId).toBeUndefined();
   });
 
+  test("a node paused then resumed coalesces into a single step (cost breakdown unifies pause/resume halves)", () => {
+    // Wire shape on the Run detail Cost breakdown for a paused+resumed
+    // node: the daemon emits fact.node_started → llm.start, then on
+    // operator pause writes fact.run_paused, and on resume re-dispatches
+    // the same node with a second fact.node_started → llm.start. Today
+    // eventsToSteps opens a separate step for each llm.start, so the UI
+    // shows two rows for what is conceptually one node activation.
+    //
+    // Expected: one step per node window, regardless of how many
+    // pause/resume cycles intervene. Both llm.start startSeqs are
+    // exposed on the surviving step so attachStepAggregates can fold
+    // every cost.recorded row from either half into the single row.
+    const events = [
+      ev("fact.node_started", 1_000, { nodeId: "n1" }),
+      { type: "llm.start", ts: 1_500, seq: 10, payload: { nodeId: "n1" } },
+      ev("fact.run_paused", 2_000, { reason: "operator", nodeId: "n1" }),
+      ev("fact.run_resumed", 5_000, { fromStatus: "paused" }),
+      ev("fact.node_started", 5_100, { nodeId: "n1" }),
+      { type: "llm.start", ts: 5_500, seq: 42, payload: { nodeId: "n1" } },
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(1);
+    const s = steps[0]!;
+    expect(s.nodeId).toBe("n1");
+    // startedAt anchors to the FIRST fact.node_started — the node
+    // really started at 1_000; the resume just unblocked it.
+    expect(s.startedAt).toBe(new Date(1_000).toISOString());
+  });
+
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
     const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);
