@@ -1,12 +1,12 @@
 ---
 name: backend
-description: Server-side patterns for packages/server, packages/store, packages/core, packages/agent. Load this skill before writing or modifying any .ts under those packages — adapters, route handlers, store methods, queries, reducers, daemon code, agent backends. Encodes SQL aggregations over in-memory event folding, queries.ts as the single audit point for every SQL statement, store-layer access via IEventStore (no raw db handles in routes), reducer purity (no clocks, no I/O), event-store invariants (4KB payload cap, seq monotonicity, observability events skip the reducer), and Hono route shape. Pair with the `swarm-debug` skill when the change touches replay or post-mortem behavior.
+description: Server-side patterns for packages/server, packages/store, packages/core, packages/agent. Load this skill before writing or modifying any .ts under those packages — adapters, route handlers, store methods, queries, reducers, daemon code, agent backends. Encodes SQL aggregations over in-memory event folding, per-module <domain>-queries.ts files in packages/store/src/ as the single audit point for every SQL statement, store-layer access via IEventStore (no raw db handles in routes), reducer purity (no clocks, no I/O), event-store invariants (4KB payload cap, seq monotonicity, observability events skip the reducer), and Hono route shape. Pair with the `swarm-debug` skill when the change touches replay or post-mortem behavior.
 version: 0.1.0
 ---
 
 # Backend code patterns
 
-*Aggregations live in SQL. Queries live in `queries.ts`. Reducers stay pure. The store keeps its own house.*
+*Aggregations live in SQL. Queries live in `<domain>-queries.ts` (`packages/store/src/`). Reducers stay pure. The store keeps its own house.*
 
 Foundational patterns only. If a situation isn't covered here, derive it from the principles.
 
@@ -15,12 +15,12 @@ Foundational patterns only. If a situation isn't covered here, derive it from th
 ## Principles (earlier wins on conflict)
 
 1. **Aggregations belong in SQL.** Sums, counts, max/min, grouped totals — never `.reduce()` over `getEvents(runId, { limit: BIG })`. SQL has the planner, the indexes, and one source of truth. In-memory folding is only correct when the projection is fundamentally non-aggregatable (a list of message blocks, a finalText built from streaming deltas, etc.). When you see a TypeScript loop accumulating a number, replace it with a query.
-2. **SQL lives in `queries.ts`, not in handlers.** Every named query gets a function in `<module>/queries.ts`. Route handlers and adapters import named functions; they never inline `db.prepare("SELECT …")`. The queries file is the audit point for what the database is asked, and the only place a column rename has to land.
+2. **SQL lives in `<domain>-queries.ts`, not in handlers.** Every named query gets a function in the matching `packages/store/src/<domain>-queries.ts` (one of: `analytics`, `artifact`, `daemon`, `event`, `message`, `run-state`, `schedule`, `workflow`). Route handlers and adapters in `packages/server` import named functions from `@swarm/store`; they never inline `db.prepare("SELECT …")`. The queries files are the audit point for what the database is asked, and the only place a column rename has to land.
 3. **Reducers are pure.** `applyFact` and `eventsToSteps` style folders take inputs, return outputs, and never read clocks, fetch the network, or mutate globals. Same input ⇒ same output, every time. They're called from tests AND production with the same contract.
 4. **The store guards its own invariants.** `IEventStore` enforces seq monotonicity, the 4KB payload cap, expected-version concurrency, and CASCADE on run deletion. Callers don't reimplement those checks. If you need a new invariant, push it into `store.ts` (not into a route handler).
 5. **Observability events skip the reducer.** `appendObservabilityEvents` (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`) shares the seq space but does NOT bump `run_state.version` and does NOT require `expectedVersion`. Handlers can emit them mid-step without racing the terminal `appendFact`.
 6. **No silent caps.** `getEvents(runId, { limit: 5000 })` quietly drops late events. If you reach for a limit, prove the output is bounded a different way (e.g. filtering to one event type via the index) — otherwise pass `Number.MAX_SAFE_INTEGER` and let SQLite stream.
-7. **Hono routes are thin.** A route validates input, calls one or two store/adapter functions, returns JSON. Business logic lives in adapters or `queries.ts`. If a route file grows past ~150 lines it's hiding logic that wants to move down a layer.
+7. **Hono routes are thin.** A route validates input, calls one or two store/adapter functions, returns JSON. Business logic lives in adapters or a `<domain>-queries.ts`. If a route file grows past ~150 lines it's hiding logic that wants to move down a layer.
 
 ---
 
@@ -47,64 +47,88 @@ const totalCost = sumCostUsd(db, runId);
 
 ### The shape
 
-Every named query is a function in a `queries.ts` co-located with the consumer:
+Every named query is a function in the matching `<domain>-queries.ts` under `packages/store/src/`:
 
 ```
+packages/store/src/
+  analytics-queries.ts    ← cross-run rollups (run counts by status, totals)
+  artifact-queries.ts     ← artifact blob lookups
+  daemon-queries.ts       ← supervisor / executor coordination reads
+  event-queries.ts        ← event log reads (getEvents, type-filtered scans)
+  message-queries.ts      ← messages table (uncapped LLM content)
+  run-state-queries.ts    ← per-run projections + aggregations (owns getStepAggregates)
+  schedule-queries.ts     ← schedule + run-of-schedule reads
+  workflow-queries.ts     ← workflow registry reads
 packages/server/src/store/
-  routes.ts          ← Hono handlers — never embed SQL
-  runs-routes.ts     ← Hono handlers — never embed SQL
-  runs-adapter.ts    ← projects rows into RunSummary / RunDetail
-  steps.ts           ← reducer for non-aggregatable step fields
-  queries.ts         ← every SQL statement this module needs
+  routes.ts               ← Hono handlers — never embed SQL, import from @swarm/store
+  runs-routes.ts          ← Hono handlers — never embed SQL
+  runs-adapter.ts         ← projects rows into RunSummary / RunDetail
+  steps.ts                ← reducer for non-aggregatable step fields
 ```
 
-`queries.ts` exports plain functions that take a `Database` and the parameters, and return rows. It owns the SQL strings — nothing else does.
+Each `<domain>-queries.ts` exports plain functions that take a `Database` and the parameters, and return rows. They own the SQL strings — nothing else does.
 
 ```ts
-// packages/server/src/store/queries.ts
+// packages/store/src/run-state-queries.ts
 import type { Database } from "bun:sqlite";
 
-export interface StepCostRow {
+export interface StepAggregateRow {
   startSeq: number;
+  startTs: number;
+  nodeId: string | null;
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  totalTokens: number;
+  billedTokens: number;
+  costEventCount: number;
   endedAtMs: number | null;
   stopReason: string | null;
 }
 
-const STEP_COST_AGGREGATES = `
+const STEP_AGGREGATES_SQL = `
   WITH starts AS (
     SELECT
       seq,
       ts,
       json_extract(payload, '$.nodeId') AS node_id,
-      LEAD(seq) OVER (PARTITION BY json_extract(payload, '$.nodeId') ORDER BY seq) AS next_seq
+      LEAD(seq) OVER (
+        PARTITION BY json_extract(payload, '$.nodeId')
+        ORDER BY seq
+      ) AS next_seq
     FROM events
     WHERE run_id = ?1 AND type = 'llm.start'
   )
   SELECT
-    s.seq                                                               AS startSeq,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.cost_usd')         AS REAL)),    0) AS costUsd,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.input_tokens')     AS INTEGER)), 0) AS inputTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.output_tokens')    AS INTEGER)), 0) AS outputTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_read_tokens') AS INTEGER)), 0) AS cacheReadTokens,
+    s.seq                                                                         AS startSeq,
+    s.ts                                                                          AS startTs,
+    s.node_id                                                                     AS nodeId,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.cost_usd')           AS REAL))   , 0) AS costUsd,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.input_tokens')       AS INTEGER)), 0) AS inputTokens,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.output_tokens')      AS INTEGER)), 0) AS outputTokens,
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_read_tokens')  AS INTEGER)), 0) AS cacheReadTokens,
     COALESCE(SUM(CAST(json_extract(c.payload, '$.cache_write_tokens') AS INTEGER)), 0) AS cacheWriteTokens,
-    COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')     AS INTEGER)), 0) AS totalTokens,
-    MAX(d.ts)                                                            AS endedAtMs,
-    -- last stop_reason in the window (deterministic by seq):
-    (SELECT json_extract(d2.payload, '$.stop_reason')
-       FROM events d2
-      WHERE d2.run_id = ?1
-        AND d2.type   = 'llm.done'
-        AND json_extract(d2.payload, '$.nodeId') = s.node_id
-        AND d2.seq    > s.seq
-        AND (s.next_seq IS NULL OR d2.seq < s.next_seq)
-      ORDER BY d2.seq DESC
-      LIMIT 1)                                                          AS stopReason
+    COALESCE(SUM(CAST(json_extract(c.payload, '$.total_tokens')       AS INTEGER)), 0) AS billedTokens,
+    COUNT(c.seq)                                                                  AS costEventCount,
+    (
+      SELECT MAX(d.ts) FROM events d
+      WHERE d.run_id = ?1
+        AND d.type   = 'llm.done'
+        AND json_extract(d.payload, '$.nodeId') = s.node_id
+        AND d.seq    > s.seq
+        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
+    )                                                                             AS endedAtMs,
+    (
+      SELECT json_extract(d.payload, '$.stop_reason') FROM events d
+      WHERE d.run_id = ?1
+        AND d.type   = 'llm.done'
+        AND json_extract(d.payload, '$.nodeId') = s.node_id
+        AND d.seq    > s.seq
+        AND (s.next_seq IS NULL OR d.seq < s.next_seq)
+      ORDER BY d.seq DESC
+      LIMIT 1
+    )                                                                             AS stopReason
   FROM starts s
   LEFT JOIN events c
     ON c.run_id = ?1
@@ -112,25 +136,19 @@ const STEP_COST_AGGREGATES = `
    AND json_extract(c.payload, '$.nodeId') = s.node_id
    AND c.seq    > s.seq
    AND (s.next_seq IS NULL OR c.seq < s.next_seq)
-  LEFT JOIN events d
-    ON d.run_id = ?1
-   AND d.type   = 'llm.done'
-   AND json_extract(d.payload, '$.nodeId') = s.node_id
-   AND d.seq    > s.seq
-   AND (s.next_seq IS NULL OR d.seq < s.next_seq)
-  GROUP BY s.seq
+  GROUP BY s.seq, s.ts, s.node_id
   ORDER BY s.seq
 `;
 
-export function getStepCostAggregates(db: Database, runId: string): StepCostRow[] {
-  return db.query<StepCostRow, [string]>(STEP_COST_AGGREGATES).all(runId);
+export function getStepAggregates(db: Database, runId: string): StepAggregateRow[] {
+  return db.query<StepAggregateRow, [string]>(STEP_AGGREGATES_SQL).all(runId);
 }
 ```
 
 Notes:
 - The query is a constant string at module top — easy to copy into `sqlite3` for verification.
 - The function returns typed rows shaped as the consumer expects (camelCase, sums coalesced to 0, not null).
-- The window is `(prev_llm.start, next_llm.start_for_same_node)` — that's the correct step boundary for `cost.recorded` events that fire AFTER `llm.done` (which closes the message, not the backend.run).
+- The window is `(prev_llm.start, next_llm.start_for_same_node)` — that's the correct step boundary for `cost.recorded` events. One `llm.start` opens the step; multiple `message_end → cost.recorded` events fire inside it on tool-using turns; `endedAtMs` and `stopReason` come from the LAST `llm.done` in the window.
 - Filter by `run_id` first (indexed), then by `type` (indexed via `idx_events_type`), then JSON-extract `nodeId` last.
 
 ### Tests for queries
@@ -169,7 +187,7 @@ A useful sanity check: if your TS code calls `.reduce()` on an array longer than
 
 ### Routes don't touch `db`
 
-Hono routes get a `store: IEventStore` (or a higher-level adapter). They call store methods and adapter functions. They do not import `bun:sqlite`. If a new query is needed, it goes in `queries.ts` *under the package that owns it* (server-side aggregations live in `packages/server/src/store/queries.ts`; intrinsic store invariants live next to `store.ts` itself).
+Hono routes get a `store: IEventStore` (or a higher-level adapter). They call store methods and adapter functions. They do not import `bun:sqlite`. If a new query is needed, it goes in the matching `packages/store/src/<domain>-queries.ts` and is imported from `@swarm/store`. Intrinsic store invariants (seq monotonicity, payload cap, expectedVersion) live in `store.ts` itself.
 
 ### Schema is `STRICT`
 
@@ -205,14 +223,14 @@ app.get("/runs/:id/steps", (c) => {
 
 - One existence check, one delegation. The route doesn't know the schema.
 - 404 payload uses `{ error, code, details }` — that's the project's error envelope.
-- Aggregations go through `queries.ts`; non-aggregations go through an adapter (`runs-adapter.ts`, `runStateToSummary`, etc.).
+- Aggregations go through the matching `<domain>-queries.ts` in `@swarm/store`; non-aggregations go through an adapter (`runs-adapter.ts`, `runStateToSummary`, etc.).
 
 ---
 
 ## Anti-patterns (caught in review)
 
 - `let total = 0; for (const e of events) total += e.payload.cost_usd` — folding what SQL can sum.
-- `db.prepare("SELECT …").all()` inside a route handler or adapter — SQL outside `queries.ts`.
+- `db.prepare("SELECT …").all()` inside a route handler or adapter — SQL outside a `<domain>-queries.ts` in `@swarm/store`.
 - `getEvents(runId, { limit: 5000 })` to "save memory" on a derivation that needs all events — silent data loss.
 - A reducer that calls `Date.now()`, `crypto.randomUUID()`, `fetch()`, or imports `process` — not pure.
 - A new event type that emits via `appendFact` but doesn't change `run_state.version` — picked the wrong lane.
@@ -223,7 +241,7 @@ app.get("/runs/:id/steps", (c) => {
 ## Checklist before merging a server change
 
 - [ ] Every numeric total on the wire comes from a SQL aggregation, not a TS fold.
-- [ ] Every SQL statement lives in a `queries.ts` file, named, exported, typed.
+- [ ] Every SQL statement lives in the matching `<domain>-queries.ts` under `packages/store/src/`, named, exported, typed.
 - [ ] New aggregation queries have unit tests against `:memory:` covering empty / single / multi / interleaved / iteration cases.
 - [ ] Routes are thin — no SQL, no large reducers inline.
 - [ ] If you added an observability field that consumers depend on, you also added it to the truncation marker.
