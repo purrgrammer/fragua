@@ -107,17 +107,51 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   // runs once per node window, so there's no per-invocation collision
   // to disambiguate); they fall back to a `parentNodeId|*` slot that
   // every same-node parent row reads from.
+  //
+  // Synthetic parents for parallel sections: a `parallel` handler opens
+  // no LLM call of its own, so no top-level step carries the parent's
+  // nodeId — but its children come back tagged with `parentNodeId` set
+  // to the parallel node. Without a stand-in, the panel either renders
+  // blank (children file into childrenByParent and never match a
+  // top-level row) or — if we hoist children flat — loses the nesting
+  // operators rely on to read the fan-out structure. Synthesise a
+  // parent row keyed on the parent's nodeId so the indented children
+  // attach correctly and the aggregate cost/tokens summary fires.
   const PARENT_NODE_WILDCARD = "*";
   const groupKey = (parentNodeId: string, parentStartSeq: number | undefined): string =>
     `${parentNodeId}|${parentStartSeq ?? PARENT_NODE_WILDCARD}`;
+  const topLevelParentNodeIds = new Set<string>();
+  for (const s of steps) {
+    const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
+    if (!isBranch) topLevelParentNodeIds.add(s.nodeId);
+  }
   const childrenByParent = new Map<string, StepSnapshot[]>();
   const topLevel: StepSnapshot[] = [];
+  const synthesisedParents = new Map<string, StepSnapshot>();
+  let synthCount = 0;
   for (const s of steps) {
-    if (typeof s.parentNodeId === "string" && s.parentNodeId.length > 0) {
-      const key = groupKey(s.parentNodeId, s.parentStartSeq);
+    const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
+    if (isBranch) {
+      const parentNodeId = s.parentNodeId as string;
+      const key = groupKey(parentNodeId, s.parentStartSeq);
       const arr = childrenByParent.get(key) ?? [];
       arr.push(s);
       childrenByParent.set(key, arr);
+      if (!topLevelParentNodeIds.has(parentNodeId) && !synthesisedParents.has(parentNodeId)) {
+        synthCount += 1;
+        const synthParent: StepSnapshot = {
+          // Negative ids — guaranteed not to collide with real (>=0)
+          // step indices or stream sequences. Stable across renders
+          // because `synthCount` increments deterministically as we
+          // walk `steps`.
+          stepIdx: -synthCount,
+          startSeq: -synthCount,
+          nodeId: parentNodeId,
+          startedAt: s.startedAt,
+        };
+        synthesisedParents.set(parentNodeId, synthParent);
+        topLevel.push(synthParent);
+      }
     } else {
       topLevel.push(s);
     }
