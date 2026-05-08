@@ -337,8 +337,7 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
         "relative w-60 overflow-hidden transition-[colors,opacity] duration-[var(--sw-duration-status)]",
         d.dim && "opacity-35",
         d.active && "ring-2 ring-sw-accent-thinking",
-        d.winner && !d.active && "ring-2 ring-sw-accent-success",
-        d.selected && !d.active && !d.winner && "ring-2 ring-sw-accent-idle",
+        d.selected && !d.active && "ring-2 ring-sw-accent-idle",
       )}
     >
       {stripTone ? (
