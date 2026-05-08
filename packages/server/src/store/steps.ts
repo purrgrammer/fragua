@@ -197,6 +197,19 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // the row — both endpoints are daemon-written sync, so the wall
   // figure exactly matches what the parent observed.
   const subagentStepIdxById = new Map<string, number>();
+  // nodeId → metadata captured on `fact.node_started` for a node
+  // that may turn out to be a tool node (parallelogram). If an
+  // `llm.start` arrives for the nodeId before its `fact.node_completed`,
+  // the entry is cleared (it's a codergen, the existing path handles
+  // it). If `fact.node_completed` arrives with the entry still
+  // present, we emit a synthetic tool step so tool nodes appear in
+  // the Cost breakdown alongside LLM steps — the parallelogram
+  // branches in a fan-out are otherwise invisible there. Real
+  // duration is `completed.ts − started.ts`; cost stays absent.
+  const pendingToolNode = new Map<
+    string,
+    { startTs: number; startSeq: number; parentNodeId?: string; parallelIndex?: number }
+  >();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -271,14 +284,26 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
           lastNodeStartedTs.set(nodeId, ev.ts);
           firstStepEmittedForNode.delete(nodeId);
           const parentNodeId = stringField(data, "parentNodeId");
+          const piRaw = data["parallelIndex"];
+          const parallelIndex = typeof piRaw === "number" ? piRaw : undefined;
           if (parentNodeId) {
-            const piRaw = data["parallelIndex"];
             const meta: { parentNodeId: string; parallelIndex?: number } = { parentNodeId };
-            if (typeof piRaw === "number") meta.parallelIndex = piRaw;
+            if (parallelIndex !== undefined) meta.parallelIndex = parallelIndex;
             branchMetaByNode.set(nodeId, meta);
           } else {
             branchMetaByNode.delete(nodeId);
           }
+          // Mark this node as a potential tool step. If an `llm.start`
+          // arrives before completion, this entry is cleared (it's a
+          // codergen and the existing path opens a real step for it).
+          // Otherwise we emit a tool step at completion.
+          const pending: { startTs: number; startSeq: number; parentNodeId?: string; parallelIndex?: number } = {
+            startTs: ev.ts,
+            startSeq: ev.seq ?? steps.length,
+          };
+          if (parentNodeId) pending.parentNodeId = parentNodeId;
+          if (parallelIndex !== undefined) pending.parallelIndex = parallelIndex;
+          pendingToolNode.set(nodeId, pending);
         }
       }
       continue;
@@ -289,6 +314,26 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       if (nodeId) {
         pausedOpenNodes.delete(nodeId);
         pendingResumeFold.delete(nodeId);
+        const pending = pendingToolNode.get(nodeId);
+        if (pending !== undefined) {
+          // Tool node — no `llm.start` ever opened a step for this
+          // window. Synthesise one from the lifecycle facts. Real
+          // duration (both endpoints are daemon-written sync); no
+          // cost (no LLM call → no `cost.recorded` events).
+          const dur = ev.ts - pending.startTs;
+          const step: StepSnapshot = {
+            stepIdx: steps.length,
+            startSeq: pending.startSeq,
+            nodeId,
+            startedAt: new Date(pending.startTs).toISOString(),
+          };
+          if (Number.isFinite(dur) && dur >= 0) step.durationMs = dur;
+          if (pending.parentNodeId !== undefined) step.parentNodeId = pending.parentNodeId;
+          if (pending.parallelIndex !== undefined) step.parallelIndex = pending.parallelIndex;
+          steps.push(step);
+          lastStepIdxForNode.set(nodeId, steps.length - 1);
+          pendingToolNode.delete(nodeId);
+        }
       }
       continue;
     }
@@ -306,6 +351,10 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     }
 
     if (ev.type === "llm.start") {
+      // This node opened an LLM call — it's a codergen, not a tool
+      // node. Clear any pending tool-step entry so we don't emit a
+      // duplicate row at fact.node_completed time.
+      if (nodeId !== "") pendingToolNode.delete(nodeId);
       // Resume-fold: a paused node has just re-emitted `fact.node_started`
       // and this is its post-resume `llm.start`. Append its seq to the
       // existing step's `extraStartSeqs` so SQL aggregates from both

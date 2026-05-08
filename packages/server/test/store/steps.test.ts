@@ -366,6 +366,61 @@ describe("eventsToSteps", () => {
     expect(sub2?.parentStartSeq).toBe(20);
   });
 
+  // Tool nodes (parallelogram in DOT) never open an `llm.start`. Without
+  // synthesis they're invisible in the Cost breakdown — for parallel
+  // sections that mix codergen + tool branches the tool branches just
+  // disappear from the panel.
+  test("emits a synthetic step for a tool node — no llm.start, just fact.node_started + completed", () => {
+    const events: StoredEvent[] = [
+      ev("fact.node_started", 1_000, { nodeId: "plugin_validate", iteration: 0 }),
+      ev("tool.execution_start", 1_010, { nodeId: "plugin_validate" }),
+      ev("tool.completed", 1_500, { nodeId: "plugin_validate", exitCode: 0 }),
+      ev("fact.node_completed", 1_520, { nodeId: "plugin_validate", iteration: 0, outcomeStatus: "success" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(1);
+    const tool = steps[0];
+    expect(tool?.nodeId).toBe("plugin_validate");
+    expect(tool?.startedAt).toBe(new Date(1_000).toISOString());
+    expect(tool?.durationMs).toBe(520);
+    expect(tool?.cost).toBeUndefined(); // no LLM call → no aggregate
+    expect(tool?.provider).toBeUndefined();
+    expect(tool?.model).toBeUndefined();
+  });
+
+  test("tool-node synthesis carries parentNodeId + parallelIndex when the tool ran as a parallel branch", () => {
+    const events: StoredEvent[] = [
+      ev("fact.node_started", 1_000, { nodeId: "fanout", iteration: 0 }),
+      ev("fact.node_started", 1_100, {
+        nodeId: "plugin_validate",
+        iteration: 0,
+        parentNodeId: "fanout",
+        parallelIndex: 0,
+      }),
+      ev("fact.node_completed", 1_500, { nodeId: "plugin_validate", iteration: 0, outcomeStatus: "success" }),
+    ];
+    const steps = eventsToSteps(events);
+    const tool = steps.find((s) => s.nodeId === "plugin_validate");
+    expect(tool).toBeDefined();
+    expect(tool?.parentNodeId).toBe("fanout");
+    expect(tool?.parallelIndex).toBe(0);
+    expect(tool?.durationMs).toBe(400);
+  });
+
+  test("a codergen node (with llm.start) does NOT also produce a tool-node step at completion", () => {
+    // Defensive: an llm.start arrives between fact.node_started and
+    // fact.node_completed for the same nodeId. Only one step should
+    // emit — the LLM-anchored one. The pending-tool entry must clear.
+    const events: StoredEvent[] = [
+      ev("fact.node_started", 1_000, { nodeId: "drift", iteration: 0 }),
+      ev("llm.start", 1_100, { nodeId: "drift", provider: "ppq", model: "gpt-5.4" }),
+      ev("fact.node_completed", 2_000, { nodeId: "drift", iteration: 0, outcomeStatus: "success" }),
+    ];
+    const steps = eventsToSteps(events);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.provider).toBe("ppq"); // the LLM-anchored row, not a tool stub
+  });
+
   test("attachStepAggregates leaves steps untouched when no aggregate matches their startSeq", () => {
     const events = [{ type: "llm.start", ts: 1000, seq: 99, payload: { nodeId: "n1" } }];
     const baseSteps = eventsToSteps(events);

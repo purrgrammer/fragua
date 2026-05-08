@@ -26,6 +26,21 @@ import { useEffect, useMemo } from "react";
 import type { NodeState, RunDetail } from "./api.ts";
 import { queries } from "./queries.ts";
 
+export interface FanInResult {
+  /** The fan_in node's own id — the `tripleoctagon` that did the join.
+   *  Distinct from `parentNodeId` (the parallel `component` that
+   *  fanned out). Surfaced so the conversation can label the result
+   *  panel with the actual fan_in node's name. */
+  nodeId: string;
+  /** Branch picked as winner. Empty string when `allFailed` is true. */
+  winner: string;
+  /** Branches in fan_in's ranked order (winner first). */
+  rankedOrder: readonly string[];
+  /** Every branch ended in failure. The fan_in still emits a result so
+   *  downstream nodes can react, but `winner` is meaningless. */
+  allFailed: boolean;
+}
+
 export interface BranchMeta {
   /** parentNodeId → ordered list of branch nodeIds (declaration order). */
   parentToBranches: ReadonlyMap<string, readonly string[]>;
@@ -35,6 +50,11 @@ export interface BranchMeta {
   activeBranchesByParent: ReadonlyMap<string, readonly string[]>;
   /** Every branchId picked as winner by a `fan_in.completed` event. */
   winnerBranchIds: ReadonlySet<string>;
+  /** parallelNodeId → fan_in result. A heuristic fan_in (no `prompt`)
+   *  produces no LLM messages and would otherwise leave the operator
+   *  with no record of the join's conclusion; surfacing the winner +
+   *  ranked order keeps the parallel section legible end-to-end. */
+  fanInResultsByParent: ReadonlyMap<string, FanInResult>;
 }
 
 const EMPTY_BRANCH_META: BranchMeta = {
@@ -42,6 +62,7 @@ const EMPTY_BRANCH_META: BranchMeta = {
   branchToParent: new Map(),
   activeBranchesByParent: new Map(),
   winnerBranchIds: new Set(),
+  fanInResultsByParent: new Map(),
 };
 
 interface MinimalEvent {
@@ -54,6 +75,7 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
   const parentToBranches = new Map<string, string[]>();
   const branchToParent = new Map<string, string>();
   const winnerBranchIds = new Set<string>();
+  const fanInResultsByParent = new Map<string, FanInResult>();
   const seenBranches = new Set<string>();
 
   for (const ev of events) {
@@ -64,6 +86,24 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
     if (ev.type === "fan_in.completed") {
       const w = p["winner"];
       if (typeof w === "string" && w.length > 0) winnerBranchIds.add(w);
+      const parallelNodeId = typeof p["parallelNodeId"] === "string" ? (p["parallelNodeId"] as string) : "";
+      const fanInNodeId =
+        typeof p["fanInNodeId"] === "string"
+          ? (p["fanInNodeId"] as string)
+          : typeof p["nodeId"] === "string"
+            ? (p["nodeId"] as string)
+            : "";
+      if (parallelNodeId && fanInNodeId) {
+        const ranked = Array.isArray(p["rankedOrder"])
+          ? (p["rankedOrder"] as unknown[]).filter((v): v is string => typeof v === "string")
+          : [];
+        fanInResultsByParent.set(parallelNodeId, {
+          nodeId: fanInNodeId,
+          winner: typeof w === "string" ? w : "",
+          rankedOrder: ranked,
+          allFailed: p["allFailed"] === true,
+        });
+      }
       continue;
     }
     const nodeId = typeof p["nodeId"] === "string" ? (p["nodeId"] as string) : "";
@@ -86,7 +126,7 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
     if (active.length > 0) activeBranchesByParent.set(parent, active);
   }
 
-  return { parentToBranches, branchToParent, activeBranchesByParent, winnerBranchIds };
+  return { parentToBranches, branchToParent, activeBranchesByParent, winnerBranchIds, fanInResultsByParent };
 }
 
 /** React hook: fetches the run's events, derives branch metadata.

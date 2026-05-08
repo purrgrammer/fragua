@@ -188,6 +188,42 @@ describe("CostInspector", () => {
       expect(lensA.textContent).toMatch(/0\.02/);
       expect(lensB.textContent).toMatch(/0\.03/);
     });
+
+    it("synthesises a parent row when branch children have no real top-level parent step (parallel handler)", async () => {
+      // The `parallel` handler opens no LLM call of its own — its branch
+      // children come back tagged with `parentNodeId="fanout"` but there's
+      // no top-level step with `nodeId="fanout"` to attach them to. We
+      // synthesise a stand-in parent so the children render NESTED under
+      // their parallel parent (operators rely on the indent to read the
+      // fan-out structure) and the aggregate cost/tokens summary fires.
+      const steps = [
+        makeStep({
+          stepIdx: 0,
+          startSeq: 17,
+          nodeId: "drift",
+          parentNodeId: "fanout",
+          parallelIndex: 3,
+          cost: { input_tokens: 6979, output_tokens: 640, cost_usd: 0.0284 },
+        }),
+      ];
+      const { container } = mount("r1", steps);
+      const q = within(container);
+      await waitFor(() => {
+        expect(q.getByTestId("cost-inspector")).toBeTruthy();
+      });
+      // Synth parent — negative stepIdx avoids collision with real ones.
+      const synth = q.getByTestId("step--1");
+      expect(synth.getAttribute("data-summary")).toBe("true");
+      expect(synth.textContent).toMatch(/fanout/);
+      // Aggregated cost from the single child.
+      expect(synth.textContent).toMatch(/0\.028/);
+      // Branch child renders nested under the synth parent.
+      const drift = q.getByTestId("step-0");
+      expect(drift.getAttribute("data-branch-child")).toBe("true");
+      expect(drift.getAttribute("data-parent-step")).toBe("fanout");
+      expect(drift.className).toMatch(/ml-6/);
+      expect(drift.textContent).toMatch(/drift/);
+    });
   });
 
   describe("sub-agents — goal-gate retry scoping", () => {

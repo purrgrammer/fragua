@@ -230,17 +230,63 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
  *  carry it, so we rewrite it here to point at the actual retarget
  *  destination. We rewrite (vs. drop) because consumers count one
  *  selectedEdge per gate visit to derive retarget firings; dropping
- *  would silently undercount and dim the synthetic retarget edge. */
+ *  would silently undercount and dim the synthetic retarget edge.
+ *
+ *  Parallel synthesis: the parallel handler dispatches every branch in
+ *  one shot without going through the standard edge selector, and
+ *  `parallel.fan_in` joins via `fan_in.completed` rather than picking an
+ *  edge — so neither the (parent → branch) fan-out nor the
+ *  (branch → fan_in) fan-in shows up as `edge.selected`. The Graph view
+ *  reads "taken" from `selectedEdges`, which leaves every parallel-section
+ *  edge dim/dashed even on a successfully-completed run. We synthesise
+ *  the missing traversals here:
+ *    - `fact.node_started` with `parentNodeId` ⇒ (parentNodeId → nodeId)
+ *    - `fact.node_completed` with `parentNodeId` + `nextNode`
+ *      ⇒ (nodeId → nextNode)
+ *  Dedup against any matching `edge.selected` already in `out` so a
+ *  future daemon that emits both at the same iteration won't double-count
+ *  this edge in the `· ×N` traversal badge. */
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
+  const seen = new Set<string>();
+  const pushEdge = (from: string, to: string, iteration: number) => {
+    const key = `${from} ${to} ${iteration}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ from, to, iteration });
+  };
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
-    if (ev === undefined || ev.type !== "edge.selected") continue;
-    const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
-    if (typeof p.from !== "string" || typeof p.to !== "string") continue;
-    const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
-    const retargetTo = goalGateRetargetTarget(events, i, p.from);
-    out.push({ from: p.from, to: retargetTo ?? p.to, iteration });
+    if (ev === undefined) continue;
+    if (ev.type === "edge.selected") {
+      const p = ev.payload as { from?: unknown; to?: unknown; iteration?: unknown };
+      if (typeof p.from !== "string" || typeof p.to !== "string") continue;
+      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      const retargetTo = goalGateRetargetTarget(events, i, p.from);
+      pushEdge(p.from, retargetTo ?? p.to, iteration);
+      continue;
+    }
+    if (ev.type === "fact.node_started") {
+      const p = ev.payload as { nodeId?: unknown; iteration?: unknown; parentNodeId?: unknown };
+      if (typeof p.nodeId !== "string" || typeof p.parentNodeId !== "string" || p.parentNodeId.length === 0) continue;
+      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      pushEdge(p.parentNodeId, p.nodeId, iteration);
+      continue;
+    }
+    if (ev.type === "fact.node_completed") {
+      const p = ev.payload as { nodeId?: unknown; iteration?: unknown; parentNodeId?: unknown; nextNode?: unknown };
+      if (
+        typeof p.nodeId !== "string" ||
+        typeof p.parentNodeId !== "string" ||
+        p.parentNodeId.length === 0 ||
+        typeof p.nextNode !== "string" ||
+        p.nextNode.length === 0
+      ) {
+        continue;
+      }
+      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
+      pushEdge(p.nodeId, p.nextNode, iteration);
+    }
   }
   return out;
 }
