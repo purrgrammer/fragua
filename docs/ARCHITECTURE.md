@@ -138,7 +138,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 ### 1.11 Remaining concerns
 - **sha256 oracle for blobs** — deferred to optional encryption later; single-user local tool has DB read = full read anyway.
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
-- **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `RUN_HALTED { reason: "abort_loop" }` after K=5 consecutive aborts without progress). HTTP rate-limit at web layer.
+- **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
 - **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 8`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade; v5 added a `kind` discriminator + parent-linkage columns on `run_state` to model conversation runs (since abandoned); v6 adds the `schedules` table and `run_state.schedule_id` for scheduled runs (proposal: `docs/proposals/scheduled-runs.md`); v7 drops the v5 conversation scaffolding (`kind`, `parent_run_id`, `parent_node_id`, `parent_iteration`) and restores `workflow_sha` to `NOT NULL` — sub-agents are an in-tool implementation, not runs (proposal: `docs/proposals/agent-tool.md`); v8 collapses `paused_provider_retry` and `paused_retry` into a single `paused_auto` status, retires `fact.run_paused_retry` (folded into `fact.run_paused{reason:"handler_retry"}`), and promotes provider auto-retry to its own reason `provider_retry` (was: `provider_error` + `policy:"auto-retry"`); legacy auto-wake runs in flight at migration time are deleted (proposal: `docs/proposals/recoverable-budget-pause.md`, Stage 2). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
@@ -726,9 +726,17 @@ export type HandlerResult =
       kind: "halt";
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
-      // `abort_loop`, `schema_drift`, `aborted_exit`, `occ_exhausted`, and
-      // `provider_exhausted` are also valid `fact.run_halted` reasons but the
-      // executor emits those itself — not constructible by handlers.
+      // Stage 3 of recoverable-budget-pause.md converts three reasons
+      // in this union to operator-resumable pauses at result-to-facts
+      // time: `max_retries_exceeded` → `fact.run_paused{reason:"max_retries"}`,
+      // `goal_gate_unsatisfied` → `fact.run_paused{reason:"goal_gate"}`,
+      // `max_loops` → `fact.run_paused{reason:"max_loops"}`. `pauseContext`
+      // (optional, omitted in this excerpt) carries `currentLimit` +
+      // `attempts` so the resulting pause payload reads "exhausted N of M".
+      // Genuinely-terminal HaltReasons (`schema_drift`, `aborted_exit`,
+      // `occ_exhausted`, `timeout_exhausted`) are emitted by the executor
+      // directly; `abort_loop` and `provider_exhausted` are also
+      // executor-only and convert to `fact.run_paused` directly.
     }
   | {
       kind: "pause_provider";                            // recoverable provider transport failure
@@ -1055,8 +1063,8 @@ content. `MAX_BLOB_BYTES` is the only honest-bytes constant.
 | `SUPERVISOR_TICK_MS` | 50 | Supervisor fiber |
 | `SSE_POLL_MS` | 100 | Web SSE handler |
 | `LEAK_GRACE_MS` | 10000 | Hard timeout grace |
-| `ABORT_LOOP_CEILING` | 5 | Reducer → `RUN_HALTED` |
-| `MAX_LOOPS` | 1000 (configurable via `ExecutorOpts.maxLoops`) | Executor → `fact.run_halted { reason: "max_loops" }` |
+| `ABORT_LOOP_CEILING` | 5 | Executor → `fact.run_paused{reason:"abort_loop"}` (operator-resumable per Stage 3) |
+| `MAX_LOOPS` | 1000 (configurable via `ExecutorOpts.maxLoops`; per-run override via `intent.max_loops_adjusted`) | Executor → `fact.run_paused{reason:"max_loops"}` (operator-resumable per Stage 3) |
 
 ---
 
@@ -1085,7 +1093,7 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P17 | Schema drift refusal | Resume with mismatched version | `RUN_HALTED { reason: "schema_drift" }` |
 | P18 | Zombie daemon commit | Force-acquire; original commits | Commit fails (OCC or lock check); original exits |
 | P19 | SSE replay | Reconnect with `Last-Event-ID=N` | Receives `seq > N` in order |
-| P20 | Abort loop ceiling | K>5 consecutive aborts, no progress | `RUN_HALTED { reason: "abort_loop" }` |
+| P20 | Abort loop ceiling | K>5 consecutive aborts, no progress | `fact.run_paused{reason:"abort_loop"}` (operator-resumable per Stage 3) |
 | P21 | Queue fairness | N priority-10 HITL wakes | Claim order = commit order of `intent.hitl_input` |
 | P22 | Cascade delete | Delete run_state row | events/messages/artifacts for that run all gone; blobs unchanged |
 | P23 | STRICT enforcement | Insert string into integer column | Throws; no row inserted |

@@ -16,8 +16,10 @@ deterministic even when the LLM bodies are not.
 
 - **Multi-step LLM work that survives crashes and provider hiccups.**
   Intent/fact event split with OCC; transient provider errors
-  auto-retry; budget hits pause instead of dying; daemon restart
-  resumes mid-flight runs to the last completed turn.
+  auto-retry; recoverable cap hits (budget, max_retries, goal_gate,
+  max_loops, abort_loop, provider_exhausted, watchdog timeout) pause
+  instead of dying — operators raise the cap and resume; daemon
+  restart resumes mid-flight runs to the last completed turn.
 - **Same workflow, any provider.** Per-node `llm_provider` /
   `llm_model` overrides; pre-flight against pi-ai's registry so bad
   combos fail in milliseconds, not after 30 retries.
