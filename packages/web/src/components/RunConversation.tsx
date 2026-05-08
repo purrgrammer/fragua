@@ -47,8 +47,8 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/componen
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { NodeState, RunMessageRow } from "@/lib/api";
+import type { FanInResult } from "@/lib/branch-meta";
 import type { StreamingBlock, StreamingMessage, ToolStream } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
 
@@ -72,12 +72,20 @@ export interface RunConversationProps {
    * user message at the top. The agent's event stream carries only
    * synthesized `role=user` shells, so the initial prompt lives here. */
   userInput?: string | null;
-  /** parentNodeId → currently-running branchIds. When non-empty for a
-   * given parent, the parent's section renders as a tabbed sub-view
-   * with one tab per active branch (filters messages by branch nodeId).
-   * Tabs collapse back into flat node sections once the branches
-   * complete. Absent / empty → today's flat render. */
-  activeBranchesByParent?: ReadonlyMap<string, readonly string[]>;
+  /** parentNodeId → every branchId observed under that parent across
+   *  the run's lifetime. Drives the tabbed sub-view: one tab per
+   *  branch (filters messages by branch nodeId). Per-tab status dots
+   *  reflect the live branch state from `nodeStates`, so tabs persist
+   *  after the parallel section completes — operators need to see the
+   *  fan-out / fan-in structure on a finished run, not just while it's
+   *  running. Absent / empty → flat render. */
+  branchesByParent?: ReadonlyMap<string, readonly string[]>;
+  /** parentNodeId → fan_in result. Heuristic fan_in nodes (no
+   *  `prompt`) emit `fan_in.completed` without LLM messages, leaving
+   *  the conversation with no record of the join's conclusion.
+   *  Surface winner + ranked order as a footer card under the branch
+   *  tabs so the parallel section reads end-to-end. */
+  fanInResultsByParent?: ReadonlyMap<string, FanInResult>;
   /** Live `tool_call_id → subagent_id` map sourced from `subagent.start`
    * frames. Lets a parent `agent` toolCall card render its in-flight
    * sub-agent transcript before the toolResult lands (the toolResult
@@ -103,7 +111,8 @@ export function RunConversation({
   isPaused = false,
   isLoading = false,
   userInput,
-  activeBranchesByParent,
+  branchesByParent,
+  fanInResultsByParent,
   subagentByToolCallId,
   toolStreams,
   className,
@@ -199,16 +208,16 @@ export function RunConversation({
   const visibleSections = sections.filter((s) => s.rows.some((r) => r.content.role !== "toolResult"));
 
   // Branch-tab planning: walk visibleSections; whenever we hit a section
-  // whose nodeId is a parent with active branches, fold every immediately
-  // following section whose nodeId is in that parent's branch set into
-  // a single "branch tabs" group. Once we hit a non-branch nodeId or
-  // run out of sections, the group closes and normal rendering resumes.
-  // Branches whose state has flipped to `completed` (no longer in the
-  // active set) fall back to a flat node section — this is exactly the
-  // "tabs collapse after fan_in" behaviour the proposal asks for.
+  // whose nodeId is a parent that ever had branches under it, fold every
+  // immediately following section whose nodeId is in that parent's branch
+  // set into a single "branch tabs" group. Once we hit a non-branch nodeId
+  // or run out of sections, the group closes and normal rendering resumes.
+  // Tabs persist after fan_in completes so operators inspecting a
+  // finished run can still see the parallel structure — per-tab status
+  // dots (driven by `nodeStates`) communicate liveness inside the tabs.
   const renderItems = useMemo<RenderItem[]>(
-    () => buildRenderItems(visibleSections, activeBranchesByParent),
-    [visibleSections, activeBranchesByParent],
+    () => buildRenderItems(visibleSections, branchesByParent),
+    [visibleSections, branchesByParent],
   );
 
   // The streaming buffer belongs to whichever node the last frame
@@ -327,6 +336,7 @@ export function RunConversation({
                   isPaused={isPaused}
                   streaming={isTail && streamingInTab ? streaming : null}
                   subagentByToolCallId={subagentByToolCallId}
+                  fanInResult={fanInResultsByParent?.get(item.parentNodeId)}
                 />
               );
             })}
@@ -401,22 +411,22 @@ type RenderItem =
 
 function buildRenderItems(
   sections: readonly Section[],
-  activeBranchesByParent: ReadonlyMap<string, readonly string[]> | undefined,
+  branchesByParent: ReadonlyMap<string, readonly string[]> | undefined,
 ): RenderItem[] {
-  if (!activeBranchesByParent || activeBranchesByParent.size === 0) {
+  if (!branchesByParent || branchesByParent.size === 0) {
     return sections.map((s) => ({ kind: "section", key: s.key, section: s }));
   }
   const out: RenderItem[] = [];
   let i = 0;
   while (i < sections.length) {
     const section = sections[i]!;
-    const branches = section.nodeId ? activeBranchesByParent.get(section.nodeId) : undefined;
+    const branches = section.nodeId ? branchesByParent.get(section.nodeId) : undefined;
     if (!branches || branches.length === 0) {
       // Also start a tabs group when a branch section appears without
       // its parent being in the section list (parent had no messages).
-      const parentForOrphan = section.nodeId ? findParentForBranch(section.nodeId, activeBranchesByParent) : null;
+      const parentForOrphan = section.nodeId ? findParentForBranch(section.nodeId, branchesByParent) : null;
       if (parentForOrphan) {
-        const parentBranches = activeBranchesByParent.get(parentForOrphan) ?? [];
+        const parentBranches = branchesByParent.get(parentForOrphan) ?? [];
         const consumed = collectBranchSections(sections, i, parentBranches);
         out.push({
           kind: "branch-tabs",
@@ -449,11 +459,8 @@ function buildRenderItems(
   return out;
 }
 
-function findParentForBranch(
-  nodeId: string,
-  activeBranchesByParent: ReadonlyMap<string, readonly string[]>,
-): string | null {
-  for (const [parent, branches] of activeBranchesByParent) {
+function findParentForBranch(nodeId: string, branchesByParent: ReadonlyMap<string, readonly string[]>): string | null {
+  for (const [parent, branches] of branchesByParent) {
     if (branches.includes(nodeId)) return parent;
   }
   return null;
@@ -495,6 +502,7 @@ function BranchTabsSection({
   isPaused,
   streaming,
   subagentByToolCallId,
+  fanInResult,
 }: {
   parentNodeId: string;
   parentSection: Section | null;
@@ -506,9 +514,14 @@ function BranchTabsSection({
   isPaused: boolean;
   streaming: StreamingMessage | null;
   subagentByToolCallId?: ReadonlyMap<string, string>;
+  fanInResult?: FanInResult;
 }): JSX.Element {
+  // Branches render as a vertical stack of collapsible cards rather
+  // than tabs — same shape as the `agent` toolCall card, so the
+  // parallel structure reads at a glance: every branch shows its
+  // nodeId + status dot + message count, and clicking a card expands
+  // its transcript. Tabs hid all but one branch behind interaction.
   const parentState = parentNodeId ? stateByNodeId.get(parentNodeId) : undefined;
-  const initial = branches[0] ?? "";
   return (
     <section data-testid={`branch-tabs-${parentNodeId}`} className="relative flex flex-col gap-3">
       {parentSection ? (
@@ -535,49 +548,130 @@ function BranchTabsSection({
           <div className="ml-2 h-px flex-1 bg-sw-border" aria-hidden />
         </header>
       )}
-      <Tabs defaultValue={initial} className="flex flex-col gap-2 pl-4">
-        <TabsList variant="line" className="self-start">
-          {branches.map((branchId) => {
-            const state = stateByNodeId.get(branchId);
-            return (
-              <TabsTrigger
-                key={branchId}
-                value={branchId}
-                data-testid={`branch-tab-${branchId}`}
-                data-branch-state={state?.state ?? "pending"}
-              >
-                <span className="font-mono text-[11px]">{branchId}</span>
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
+      <div className="flex flex-col gap-2 pl-4">
         {branches.map((branchId) => {
           const section = branchSections.get(branchId) ?? null;
           const state = stateByNodeId.get(branchId);
           const showStreamHere = streaming?.nodeId === branchId;
+          const messageCount = section?.rows.length ?? 0;
+          // Open by default for branches with active work — the in-flight
+          // branch (running or streaming). Everything else stays
+          // collapsed; the trigger row tells you what's there.
+          const defaultOpen = state?.state === "running" || showStreamHere;
           return (
-            <TabsContent
+            <BranchCard
               key={branchId}
-              value={branchId}
-              data-testid={`branch-tab-content-${branchId}`}
-              className="flex flex-col gap-3"
+              branchId={branchId}
+              state={state}
+              messageCount={messageCount}
+              defaultOpen={defaultOpen}
+              isLive={isLive}
+              isPaused={isPaused}
             >
-              <NodeSection nodeId={branchId} state={state} isLive={isLive} isPaused={isPaused}>
-                {section?.rows.map((row) => (
-                  <MessageRow
-                    key={row.ordinal}
-                    row={row}
-                    toolResultsById={toolResultsById}
-                    subagentByToolCallId={subagentByToolCallId}
-                    isLive={isLive}
-                  />
-                )) ?? null}
-                {showStreamHere && streaming != null && <StreamingMessageRow streaming={streaming} />}
-              </NodeSection>
-            </TabsContent>
+              {section?.rows.map((row) => (
+                <MessageRow
+                  key={row.ordinal}
+                  row={row}
+                  toolResultsById={toolResultsById}
+                  subagentByToolCallId={subagentByToolCallId}
+                  isLive={isLive}
+                />
+              )) ?? null}
+              {showStreamHere && streaming != null && <StreamingMessageRow streaming={streaming} />}
+            </BranchCard>
           );
         })}
-      </Tabs>
+      </div>
+      {fanInResult ? <FanInSummary parentNodeId={parentNodeId} result={fanInResult} /> : null}
+    </section>
+  );
+}
+
+/** One branch's card inside a parallel stack. Mirrors the `agent`
+ *  toolCall card shape: a click-to-expand header carrying nodeId +
+ *  status + message count, body is the branch's transcript. */
+function BranchCard({
+  branchId,
+  state,
+  messageCount,
+  defaultOpen,
+  isLive,
+  isPaused,
+  children,
+}: {
+  branchId: string;
+  state?: NodeState;
+  messageCount: number;
+  defaultOpen: boolean;
+  isLive: boolean;
+  isPaused: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      data-testid={`branch-card-${branchId}`}
+      data-branch-state={state?.state ?? "pending"}
+      className="rounded-md border border-sw-border bg-sw-surface/50"
+    >
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface">
+        <StatusDot status={state?.state ?? "pending"} isLive={isLive} isPaused={isPaused} />
+        <span className="font-mono text-[12px] font-medium text-sw-text">{branchId}</span>
+        <span className="ml-auto flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+          {messageCount > 0 ? <span className="tabular-nums">{messageCount} msg</span> : null}
+          <span aria-hidden className="transition-transform group-data-[state=open]:rotate-90">
+            ›
+          </span>
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent
+        data-testid={`branch-card-content-${branchId}`}
+        className="flex flex-col gap-3 border-t border-sw-border px-3 py-3"
+      >
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** Footer card under a parallel section's branch tabs that surfaces
+ *  the fan_in node's conclusion. Heuristic fan_in (no `prompt`)
+ *  produces no LLM messages, so without this the conversation has no
+ *  record of which branch was picked or how the rest were ranked. */
+function FanInSummary({ parentNodeId, result }: { parentNodeId: string; result: FanInResult }): JSX.Element {
+  const winnerLabel = result.allFailed ? "all branches failed" : result.winner || "(no winner)";
+  return (
+    <section
+      data-testid={`fan-in-summary-${parentNodeId}`}
+      data-fan-in-node={result.nodeId}
+      className="ml-4 flex flex-col gap-1 rounded-md border border-sw-border bg-sw-surface px-3 py-2"
+    >
+      <header className="flex items-center gap-2">
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-sw-text/80">
+          {result.nodeId}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">fan_in</span>
+        <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+          winner: <code className={cn("text-sw-text", result.allFailed && "text-sw-accent-error")}>{winnerLabel}</code>
+        </span>
+      </header>
+      {result.rankedOrder.length > 0 ? (
+        <ol className="flex flex-wrap items-center gap-1 text-[11px] text-sw-muted">
+          {result.rankedOrder.map((branchId, idx) => (
+            <li key={branchId} className="inline-flex items-center gap-1">
+              <span className="tabular-nums text-sw-muted/70">{idx + 1}.</span>
+              <code className={cn("font-mono", branchId === result.winner ? "text-sw-text" : "text-sw-muted")}>
+                {branchId}
+              </code>
+              {idx < result.rankedOrder.length - 1 ? (
+                <span aria-hidden className="text-sw-muted/50">
+                  ›
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
     </section>
   );
 }

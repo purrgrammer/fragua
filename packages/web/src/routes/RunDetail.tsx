@@ -217,7 +217,8 @@ export function RunDetail(): JSX.Element {
                 isPaused={detail?.status === "paused"}
                 isLoading={isLoading}
                 userInput={detail?.input ?? null}
-                activeBranchesByParent={branchMeta.activeBranchesByParent}
+                branchesByParent={branchMeta.parentToBranches}
+                fanInResultsByParent={branchMeta.fanInResultsByParent}
                 subagentByToolCallId={subagentByToolCallId}
               />
             </TabsContent>
