@@ -3,7 +3,7 @@
 // A graph-level tool node (parallelogram shape) is persisted as a
 // `role:"tool_node"` row carrying the command, cwd, exit code, and
 // tail-truncated stdout/stderr. RunConversation renders it as a
-// Terminal card inside the tool node's NodeSection.
+// CodeBlock (shell) + Terminal card inside the tool node's NodeSection.
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { cleanup, within } from "@testing-library/react";
@@ -46,7 +46,7 @@ describe("RunConversation — tool_node row", () => {
   useDom();
   afterEach(() => cleanup());
 
-  it("renders a Snippet for the command and a Terminal for the output, no cwd row, no terminal title", () => {
+  it("renders a CodeBlock for the command and a Terminal for the output, no cwd row, no terminal title", () => {
     const messages: RunMessageRow[] = [
       toolNodeRow({
         ordinal: 1,
@@ -63,11 +63,16 @@ describe("RunConversation — tool_node row", () => {
     const q = within(container);
 
     expect(q.getByTestId("node-section-find_pr")).toBeTruthy();
-    // Snippet carries the command (read from the readonly input value).
-    const snippet = container.querySelector('[data-slot="snippet"]');
-    expect(snippet).toBeTruthy();
-    const snippetInput = snippet?.querySelector('[data-slot="snippet-input"]') as HTMLInputElement | null;
-    expect(snippetInput?.value).toBe("gh pr list --head l10n_crowdin");
+
+    // CodeBlock renders with shell language attribute.
+    const codeBlock = container.querySelector('[data-language="shell"]');
+    expect(codeBlock).toBeTruthy();
+
+    // Command text is visible inside the code block.
+    expect(codeBlock?.textContent).toContain("gh pr list --head l10n_crowdin");
+
+    // Node name appears in the CodeBlock header.
+    expect(codeBlock?.textContent).toContain("find_pr");
 
     // Terminal renders the body with exit-code status, no `$ <cmd>` title.
     const terminal = q.getByTestId("terminal");
@@ -152,8 +157,36 @@ describe("RunConversation — tool_node row", () => {
     const { container } = renderWithClient(<RunConversation messages={messages} toolStreams={toolStreams} />);
     // No synthesized stream-only row when the persisted message exists.
     expect(within(container).queryByTestId("tool-stream-find_pr")).toBeNull();
-    // The persisted Terminal (with Snippet) is the only one rendered.
-    const snippetInput = container.querySelector('[data-slot="snippet-input"]') as HTMLInputElement | null;
-    expect(snippetInput?.value).toBe("gh pr list");
+    // The persisted command is inside a shell CodeBlock (no snippet input).
+    const codeBlock = container.querySelector('[data-language="shell"]');
+    expect(codeBlock).toBeTruthy();
+    expect(codeBlock?.textContent).toContain("gh pr list");
+    expect(container.querySelector('[data-slot="snippet-input"]')).toBeNull();
+  });
+
+  it("shows the node name in the CodeBlock header for multi-line shell commands", () => {
+    const multiLineCommand = "set -e\nbun install\nbun test";
+    const messages: RunMessageRow[] = [
+      toolNodeRow({
+        ordinal: 1,
+        nodeId: "ci_gate",
+        command: multiLineCommand,
+        cwd: "/repo",
+        exitCode: 0,
+        stdout: "All tests pass\n",
+      }),
+    ];
+    const { container } = renderWithClient(<RunConversation messages={messages} />);
+
+    const codeBlock = container.querySelector('[data-language="shell"]');
+    expect(codeBlock).toBeTruthy();
+
+    // Every line of the multi-line script is rendered (not collapsed).
+    expect(codeBlock?.textContent).toContain("set -e");
+    expect(codeBlock?.textContent).toContain("bun install");
+    expect(codeBlock?.textContent).toContain("bun test");
+
+    // Node name appears in the header.
+    expect(codeBlock?.textContent).toContain("ci_gate");
   });
 });

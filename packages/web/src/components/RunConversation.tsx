@@ -27,6 +27,14 @@ import { renderers as extensionRenderers } from "virtual:swarm-extensions";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
 import { type ReactNode, useMemo, useState } from "react";
 import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockCopyButton,
+  CodeBlockFilename,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "@/components/ai-elements/code-block";
+import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
@@ -34,7 +42,6 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message as AIMessage, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
-import { Snippet } from "@/components/ai-elements/snippet";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
@@ -760,7 +767,7 @@ function MessageRow({
   const msg = row.content;
   const testid = `message-${row.ordinal}`;
   if (msg.role === "system") return <SystemPromptRow content={msg.content} testid={testid} />;
-  if (msg.role === "tool_node") return <ToolNodeRow message={msg} testid={testid} />;
+  if (msg.role === "tool_node") return <ToolNodeRow message={msg} nodeId={row.nodeId ?? undefined} testid={testid} />;
   if (msg.role === "user") return <UserMessageRow message={msg} testid={testid} />;
   if (msg.role === "assistant") {
     return (
@@ -816,7 +823,15 @@ function SystemPromptRow({ content, testid }: { content: string; testid: string 
 
 // ─── Tool-node row (graph-level shell step) ────────────────────────
 
-function ToolNodeRow({ message, testid }: { message: ToolNodeMessage; testid: string }): JSX.Element {
+function ToolNodeRow({
+  message,
+  nodeId,
+  testid,
+}: {
+  message: ToolNodeMessage;
+  nodeId?: string;
+  testid: string;
+}): JSX.Element {
   const body = composeTerminalBody(message.stdout, message.stderr);
   const truncationNote = composeTruncationNote(
     message.stdoutTruncated ?? false,
@@ -827,7 +842,14 @@ function ToolNodeRow({ message, testid }: { message: ToolNodeMessage; testid: st
   const tone: "success" | "error" = message.exitCode === 0 ? "success" : "error";
   return (
     <div data-testid={testid} className="flex flex-col gap-2">
-      <Snippet code={message.command} prefix="$" />
+      <CodeBlock code={message.command} language="shell">
+        <CodeBlockHeader>
+          <CodeBlockTitle>{nodeId ? <CodeBlockFilename>{nodeId}</CodeBlockFilename> : null}</CodeBlockTitle>
+          <CodeBlockActions>
+            <CodeBlockCopyButton />
+          </CodeBlockActions>
+        </CodeBlockHeader>
+      </CodeBlock>
       <Terminal status={status} tone={tone} output={`${body}${truncationNote}`} />
     </div>
   );
@@ -836,7 +858,7 @@ function ToolNodeRow({ message, testid }: { message: ToolNodeMessage; testid: st
 /** In-flight tool node row: there's no persisted `tool_node` message
  * yet, but `tool.output_chunk` events have populated a streaming
  * buffer. Renders a Terminal with `isStreaming` showing accumulated
- * stdout/stderr. The Snippet (command) only appears after completion
+ * stdout/stderr. The CodeBlock (command) only appears after completion
  * since the substituted command isn't on the SSE stream during the
  * run — it lands on the persisted message. */
 function ToolNodeStreamingRow({ stream, testid }: { stream: ToolStream; testid: string }): JSX.Element {
