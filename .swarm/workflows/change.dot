@@ -30,7 +30,6 @@ digraph change {
   plan [
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS names or references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. Implementation already landed; re-running burns Opus. Don't fall back to grepping the body — frontmatter is the source of truth.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - touches >3 packages OR shared contracts (HandlerContext, executor internals, store schema, event envelope)\n  - >500 lines of non-test code\n\nRead just enough to plan. Output a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers."
     allowed_tools = "read, grep, find"
-    context_files = "AGENTS.md"
   ]
 
   // Cluster: implement + review share thread `dev` so the reviewer sees the
@@ -71,7 +70,6 @@ digraph change {
     class         = "commit"
     prompt        = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.\n\nIf `git status --short` is empty, emit `COMMITTED: no changes`.\n\nOtherwise: `git add` explicit paths, commit with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    context_files = "AGENTS.md"
   ]
 
   done [shape=Msquare]
