@@ -3,7 +3,7 @@
 // without a second chart.
 
 import { Database } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { formatTokensCompact, formatTokensLong, percentFormatOptions } from "@/lib/format";
 import { formatBucketTick, formatBucketTooltip } from "@/lib/humanize";
 import { useLocale } from "@/lib/locale";
@@ -19,7 +19,7 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { renderStackSegment } from "./chart-stack.tsx";
 import { ANALYTICS_COLORS } from "./palette.ts";
 
 // Stack order matches the Spend / Tokens convention so the same series
@@ -109,16 +109,7 @@ export function CacheChart({ rows, bucket, loading, onSelectBucket, total }: Cac
               dataKey={key}
               stackId="cache"
               fill={`var(--color-${key})`}
-              shape={(barProps: unknown) => {
-                const p = barProps as { payload: CacheBucketRow; height?: number };
-                const r = visibleSegmentRadius<CacheKey>(p.payload, CACHE_KEYS, key);
-                return (
-                  <Rectangle
-                    {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={clampRadius(r, p.height ?? 0)}
-                  />
-                );
-              }}
+              shape={(barProps: unknown) => renderStackSegment<CacheKey>(barProps, CACHE_KEYS, key)}
               animationDuration={animMs}
               animationEasing="ease-out"
               onClick={

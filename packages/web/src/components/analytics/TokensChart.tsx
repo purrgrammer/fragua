@@ -5,7 +5,7 @@
 // per-bucket stacks in the bars.
 
 import { Coins } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { formatTokensCompact, formatTokensLong, tokensCompactFormatOptions } from "@/lib/format";
 import { formatBucketTick, formatBucketTooltip } from "@/lib/humanize";
 import { useLocale } from "@/lib/locale";
@@ -21,7 +21,7 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { renderStackSegment } from "./chart-stack.tsx";
 import { ANALYTICS_COLORS } from "./palette.ts";
 
 // Stack order = bar order from bottom to top, mirroring the popover's
@@ -122,16 +122,7 @@ export function TokensChart({ rows, bucket, loading, onSelectBucket, total }: To
               dataKey={key}
               stackId="tokens"
               fill={`var(--color-${key})`}
-              shape={(barProps: unknown) => {
-                const p = barProps as { payload: TokensBucketRow; height?: number };
-                const r = visibleSegmentRadius<TokenKey>(p.payload, TOKEN_KEYS, key);
-                return (
-                  <Rectangle
-                    {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={clampRadius(r, p.height ?? 0)}
-                  />
-                );
-              }}
+              shape={(barProps: unknown) => renderStackSegment<TokenKey>(barProps, TOKEN_KEYS, key)}
               animationDuration={animMs}
               animationEasing="ease-out"
               onClick={

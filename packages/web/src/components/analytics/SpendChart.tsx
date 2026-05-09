@@ -5,7 +5,7 @@
 // of `total_cost_usd` so the bar isn't empty (see analytics-queries).
 
 import { DollarSign } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { formatUsd, pickSharedUsdOptions, usdFormatOptions } from "@/lib/format";
 import { formatBucketTick, formatBucketTooltip } from "@/lib/humanize";
 import { useLocale } from "@/lib/locale";
@@ -21,7 +21,7 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { renderStackSegment } from "./chart-stack.tsx";
 import { ANALYTICS_COLORS } from "./palette.ts";
 
 // Stack order = bar order from bottom to top: Input · Cache write ·
@@ -136,16 +136,7 @@ export function SpendChart({ rows, bucket, loading, onSelectBucket, total }: Spe
               dataKey={key}
               stackId="spend"
               fill={`var(--color-${key})`}
-              shape={(barProps: unknown) => {
-                const p = barProps as { payload: SpendBucketRow; height?: number };
-                const r = visibleSegmentRadius<SpendKey>(p.payload, SPEND_KEYS, key);
-                return (
-                  <Rectangle
-                    {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={clampRadius(r, p.height ?? 0)}
-                  />
-                );
-              }}
+              shape={(barProps: unknown) => renderStackSegment<SpendKey>(barProps, SPEND_KEYS, key)}
               animationDuration={animMs}
               animationEasing="ease-out"
               onClick={

@@ -9,7 +9,7 @@
 // category.
 
 import { Play } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   categoryAccentVar,
   categoryLabel,
@@ -32,7 +32,7 @@ import {
 } from "../ui/chart.tsx";
 import { ChartCard } from "./ChartCard.tsx";
 import { ChartTotal } from "./ChartTotal.tsx";
-import { clampRadius, visibleSegmentRadius } from "./chart-stack.ts";
+import { renderStackSegment } from "./chart-stack.tsx";
 
 export interface RunsChartProps {
   rows: readonly RunsBucketRow[];
@@ -139,16 +139,7 @@ export function RunsChart({ rows, bucket, loading, onSelectSlice, total }: RunsC
               dataKey={category}
               stackId="runs"
               fill={`var(--color-${category})`}
-              shape={(barProps: unknown) => {
-                const p = barProps as { payload: CategoryRow; height?: number };
-                const r = visibleSegmentRadius<RunCategory>(p.payload, RUN_CATEGORIES, category);
-                return (
-                  <Rectangle
-                    {...(barProps as React.ComponentProps<typeof Rectangle>)}
-                    radius={clampRadius(r, p.height ?? 0)}
-                  />
-                );
-              }}
+              shape={(barProps: unknown) => renderStackSegment<RunCategory>(barProps, RUN_CATEGORIES, category)}
               animationDuration={animMs}
               animationEasing="ease-out"
               onClick={

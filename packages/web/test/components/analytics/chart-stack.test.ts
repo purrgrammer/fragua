@@ -1,87 +1,98 @@
 import { describe, expect, it } from "bun:test";
-import {
-  clampRadius,
-  PROMOTION_THRESHOLD,
-  STACK_RADIUS_PX,
-  visibleSegmentRadius,
-} from "../../../src/components/analytics/chart-stack.ts";
+import { barOuterBounds, STACK_RADIUS_PX } from "../../../src/components/analytics/chart-stack.tsx";
 
 const KEYS = ["a", "b", "c", "d"] as const;
 type Key = (typeof KEYS)[number];
 
-const r = STACK_RADIUS_PX;
-
-describe("visibleSegmentRadius", () => {
-  it("returns no radius for an empty bucket", () => {
-    expect(visibleSegmentRadius<Key>({ a: 0, b: 0, c: 0, d: 0 }, KEYS, "a")).toEqual([0, 0, 0, 0]);
+describe("barOuterBounds", () => {
+  it("exposes the rounding radius", () => {
+    expect(STACK_RADIUS_PX).toBe(4);
   });
 
-  it("rounds all four corners on a single-segment bar", () => {
-    const row = { a: 0, b: 10, c: 0, d: 0 } as const;
-    expect(visibleSegmentRadius<Key>(row, KEYS, "b")).toEqual([r, r, r, r]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "a")).toEqual([0, 0, 0, 0]);
+  it("returns null when the segment has no value", () => {
+    expect(barOuterBounds<Key>({ a: 0, b: 0, c: 0, d: 0 }, KEYS, "a", 5, 100, 20, 0)).toBeNull();
   });
 
-  it("rounds top and bottom independently when the stack has multiple segments", () => {
-    const row = { a: 5, b: 5, c: 5, d: 5 } as const;
-    expect(visibleSegmentRadius<Key>(row, KEYS, "a")).toEqual([0, 0, r, r]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "b")).toEqual([0, 0, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "c")).toEqual([0, 0, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "d")).toEqual([r, r, 0, 0]);
+  it("returns null when geometry is missing", () => {
+    expect(barOuterBounds<Key>({ a: 10, b: 0, c: 0, d: 0 }, KEYS, "a", undefined, 100, 20, 50)).toBeNull();
+    expect(barOuterBounds<Key>({ a: 10, b: 0, c: 0, d: 0 }, KEYS, "a", 5, undefined, 20, 50)).toBeNull();
+    expect(barOuterBounds<Key>({ a: 10, b: 0, c: 0, d: 0 }, KEYS, "a", 5, 100, 0, 50)).toBeNull();
   });
 
-  it("promotes the rounded top to the next-larger segment when the topmost is thin", () => {
-    // d is well below the 5% threshold (0.5/100.5 ≈ 0.5%); c carries the
-    // bar's mass and should get the rounded top instead.
-    const row = { a: 0, b: 0, c: 100, d: 0.5 } as const;
-    expect(visibleSegmentRadius<Key>(row, KEYS, "d")).toEqual([0, 0, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "c")).toEqual([r, r, r, r]);
+  it("returns the segment bounds verbatim when it's the only visible segment", () => {
+    expect(barOuterBounds<Key>({ a: 10, b: 0, c: 0, d: 0 }, KEYS, "a", 5, 100, 20, 50)).toEqual({
+      x: 5,
+      y: 100,
+      width: 20,
+      height: 50,
+    });
   });
 
-  it("does not promote when the topmost segment is at the threshold", () => {
-    // d is exactly at 5%, c at 95%; the topmost stays the rounded top.
-    const row = { a: 0, b: 0, c: 95, d: 5 } as const;
-    expect(visibleSegmentRadius<Key>(row, KEYS, "d")).toEqual([r, r, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "c")).toEqual([0, 0, r, r]);
-    // Sanity: threshold matches the constant the util exposes.
-    expect(5 / 100).toBeGreaterThanOrEqual(PROMOTION_THRESHOLD);
+  it("extends bounds upward from the bottom segment to cover the rest of the stack", () => {
+    // a is bottom (10 units, 40 px → 4 px/unit). b is above (6 units →
+    // 24 px above a's top). Bar = a + b = 64 px tall, top = 90 - 24 = 66.
+    expect(barOuterBounds<Key>({ a: 10, b: 6, c: 0, d: 0 }, KEYS, "a", 5, 90, 20, 40)).toEqual({
+      x: 5,
+      y: 66,
+      width: 20,
+      height: 64,
+    });
   });
 
-  it("promotes through multiple thin segments to find a non-thin top", () => {
-    // c (1%) and d (1%) are both below threshold; b (98%) gets the round.
-    const row = { a: 0, b: 98, c: 1, d: 1 } as const;
-    expect(visibleSegmentRadius<Key>(row, KEYS, "d")).toEqual([0, 0, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "c")).toEqual([0, 0, 0, 0]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "b")).toEqual([r, r, r, r]);
+  it("extends bounds downward from the top segment to cover the rest of the stack", () => {
+    // d is top (4 units, 16 px → 4 px/unit). a + b + c below (10 units →
+    // 40 px below d's bottom). Bar = 4 + 10 = 14 units = 56 px tall,
+    // top = d.y = 30 (d is the topmost so valuesAbove = 0).
+    expect(barOuterBounds<Key>({ a: 4, b: 4, c: 2, d: 4 }, KEYS, "d", 5, 30, 20, 16)).toEqual({
+      x: 5,
+      y: 30,
+      width: 20,
+      height: 56,
+    });
   });
 
-  it("falls back to the topmost visible segment when every segment is thin", () => {
-    // Hypothetical 30-way stack where no segment clears 5% — promotion
-    // walks all the way to the bottom and rounds visible[0]. With only
-    // two equal visible keys here the bottom doubles as the rounded top.
-    const row = { a: 1, b: 0, c: 0, d: 1 } as const;
-    // Both a and d are at 50% — well above threshold, so this is the
-    // normal split: a gets bottom, d gets top.
-    expect(visibleSegmentRadius<Key>(row, KEYS, "a")).toEqual([0, 0, r, r]);
-    expect(visibleSegmentRadius<Key>(row, KEYS, "d")).toEqual([r, r, 0, 0]);
-  });
-});
-
-describe("clampRadius", () => {
-  it("returns the input untouched when the segment is taller than 2× the radius", () => {
-    expect(clampRadius([4, 4, 0, 0], 20)).toEqual([4, 4, 0, 0]);
+  it("extends bounds in both directions for a middle segment", () => {
+    // c is in the middle. value = 5, height = 20 → 4 px/unit.
+    // valuesAbove (d only) = 3 units → 12 px above.
+    // valuesBelow (a + b) = 6 units → 24 px below.
+    // Bar height = 12 + 20 + 24 = 56 px, top = c.y - 12 = 50 - 12 = 38.
+    expect(barOuterBounds<Key>({ a: 2, b: 4, c: 5, d: 3 }, KEYS, "c", 5, 50, 20, 20)).toEqual({
+      x: 5,
+      y: 38,
+      width: 20,
+      height: 56,
+    });
   });
 
-  it("caps each corner at half the segment height when the segment is short", () => {
-    expect(clampRadius([4, 4, 4, 4], 6)).toEqual([3, 3, 3, 3]);
-    expect(clampRadius([4, 4, 0, 0], 2)).toEqual([1, 1, 0, 0]);
+  it("agrees on bar bounds across every segment of the same bar", () => {
+    // The clip-path approach hinges on every segment in a bar reporting
+    // the same outer bounds. Verify with a four-segment stack at scale
+    // 4 px/unit: a=2 (8 px), b=4 (16 px), c=5 (20 px), d=3 (12 px).
+    // Bar total = 14 units = 56 px. Top = baseline - 56.
+    const baseline = 100;
+    const row = { a: 2, b: 4, c: 5, d: 3 } as const;
+    const segs = {
+      a: { y: baseline - 8, h: 8 },
+      b: { y: baseline - 8 - 16, h: 16 },
+      c: { y: baseline - 8 - 16 - 20, h: 20 },
+      d: { y: baseline - 8 - 16 - 20 - 12, h: 12 },
+    };
+    const bounds = (KEYS as readonly Key[]).map((k) =>
+      barOuterBounds<Key>(row, KEYS, k, 5, segs[k].y, 20, segs[k].h),
+    );
+    const expected = { x: 5, y: baseline - 56, width: 20, height: 56 };
+    for (const b of bounds) expect(b).toEqual(expected);
   });
 
-  it("zeroes the radius when the segment has zero height", () => {
-    expect(clampRadius([4, 4, 4, 4], 0)).toEqual([0, 0, 0, 0]);
-  });
-
-  it("treats a negative height as zero (defensive — recharts shouldn't pass it)", () => {
-    expect(clampRadius([4, 4, 4, 4], -10)).toEqual([0, 0, 0, 0]);
+  it("ignores negative or NaN payload entries defensively", () => {
+    // valuesAbove/valuesBelow clamp to 0 — a corrupt sibling shouldn't
+    // skew the bar bounds.
+    const row = { a: 10, b: -5, c: 0, d: Number.NaN } as Record<Key, number>;
+    expect(barOuterBounds<Key>(row, KEYS, "a", 5, 100, 20, 40)).toEqual({
+      x: 5,
+      y: 100,
+      width: 20,
+      height: 40,
+    });
   });
 });
