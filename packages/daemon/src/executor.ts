@@ -198,7 +198,12 @@ async function runOneSafe(runId: string, opts: ExecutorOpts, leakBudget: LeakBud
   } catch (err) {
     // runOne appends `fact.run_halted` before rethrowing on crash; this
     // catch just prevents an unhandled promise rejection from crashing
-    // the daemon.
+    // the daemon. Once shutdown is in progress, errors are expected
+    // unwind noise (handlers that ignored their abort hitting a torn-
+    // down store): the startup sweep will requeue the run on restart,
+    // and a real production crash mid-shutdown can't be distinguished
+    // here anyway. Stay silent.
+    if (opts.shutdownSignal.aborted) return;
     // eslint-disable-next-line no-console
     console.error(`[executor] run ${runId} crashed:`, err);
   }
