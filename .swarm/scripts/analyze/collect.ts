@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { HANDLER_BY_SHAPE, parseDotSource } from "@swarm/core";
 
 interface Args {
   storePath: string;
@@ -56,6 +57,7 @@ interface RunRow {
   run_id: string;
   workflow_name: string;
   workflow_sha: string;
+  dot_source: string;
   status: string;
   current_node: string | null;
   enqueued_at: number;
@@ -64,6 +66,27 @@ interface RunRow {
   metrics: string;
   routing: string;
   title: string | null;
+}
+
+// nodeId -> handler type ("codergen" | "tool" | "start" | "exit" | ...),
+// derived from the workflow DOT. Cached per workflow_sha — the same graph
+// underlies every run on that sha. Unparseable workflows yield an empty
+// map; affected nodes get handler_type: null.
+const handlerTypesByWorkflowSha = new Map<string, Map<string, string>>();
+function handlerTypesFor(sha: string, dotSource: string): Map<string, string> {
+  const cached = handlerTypesByWorkflowSha.get(sha);
+  if (cached) return cached;
+  const map = new Map<string, string>();
+  try {
+    const graph = parseDotSource(dotSource);
+    for (const [id, node] of Object.entries(graph.nodes)) {
+      map.set(id, HANDLER_BY_SHAPE[node.shape]);
+    }
+  } catch {
+    // leave empty — handler_type falls back to null downstream
+  }
+  handlerTypesByWorkflowSha.set(sha, map);
+  return map;
 }
 
 interface NodeCost { tokens: number; costUsd: number }
@@ -105,7 +128,7 @@ const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
 const runs = db.prepare(`
   SELECT
-    rs.run_id, w.name AS workflow_name, rs.workflow_sha,
+    rs.run_id, w.name AS workflow_name, rs.workflow_sha, w.dot_source,
     rs.status, rs.current_node,
     rs.enqueued_at, rs.updated_at, rs.node_started_at,
     rs.metrics, rs.routing, rs.title
@@ -118,13 +141,23 @@ const runs = db.prepare(`
 
 interface PerNodeSummary {
   node_id: string;
+  handler_type: string | null;
   loop_count: number;
   tokens: number;
   cost_usd: number;
+  // True when tokens/cost_usd came from un-flushed `cost.recorded` events
+  // because the node has no `fact.node_completed`/`fact.node_aborted` yet
+  // — i.e. the node is still in flight. Lets the analyzer reason about
+  // long-running executions before they terminate.
+  partial: boolean;
   models: string[];
   wall_seconds: number;
   llm_seconds: number;
   tool_seconds: number;
+  // wall_seconds not explained by LLM or tool work: scheduler backlog,
+  // provisioner / worktree setup, dispatch + network. max(0, …) — the
+  // three series are paired independently and can round past each other.
+  dispatch_seconds: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
   tool_calls: { tool: string; n: number; n_errors: number }[];
@@ -351,9 +384,17 @@ for (const r of runs) {
   `).all(r.run_id) as { payload: string }[];
   const cacheReadByNode = new Map<string, number>();
   const cacheWriteByNode = new Map<string, number>();
+  // Per-node fresh tokens (input+output) and cost summed straight from
+  // cost.recorded — populated even for in-flight nodes that have no
+  // fact.node_completed yet, so metrics.nodeCosts hasn't projected them.
+  const liveTokensByNode = new Map<string, number>();
+  const liveCostByNode = new Map<string, number>();
   for (const cr of costRows) {
     const p = JSON.parse(cr.payload) as {
       nodeId?: string;
+      input_tokens?: number;
+      output_tokens?: number;
+      cost_usd?: number;
       cache_read_tokens?: number;
       cache_write_tokens?: number;
     };
@@ -363,6 +404,11 @@ for (const r of runs) {
     }
     if (typeof p.cache_write_tokens === "number") {
       cacheWriteByNode.set(p.nodeId, (cacheWriteByNode.get(p.nodeId) ?? 0) + p.cache_write_tokens);
+    }
+    const fresh = (p.input_tokens ?? 0) + (p.output_tokens ?? 0);
+    if (fresh > 0) liveTokensByNode.set(p.nodeId, (liveTokensByNode.get(p.nodeId) ?? 0) + fresh);
+    if (typeof p.cost_usd === "number") {
+      liveCostByNode.set(p.nodeId, (liveCostByNode.get(p.nodeId) ?? 0) + p.cost_usd);
     }
   }
 
@@ -377,6 +423,8 @@ for (const r of runs) {
     return { seq: s.seq, ts: s.ts, text: (p.text ?? "").slice(0, 500) };
   });
 
+  const handlerTypes = handlerTypesFor(r.workflow_sha, r.dot_source);
+
   const perNode: PerNodeSummary[] = [];
   const allNodeIds = new Set<string>([
     ...Object.keys(metrics.loopCounts ?? {}),
@@ -388,6 +436,7 @@ for (const r of runs) {
     ...toolsByNode.keys(),
     ...cacheReadByNode.keys(),
     ...cacheWriteByNode.keys(),
+    ...liveTokensByNode.keys(),
   ]);
   for (const nid of allNodeIds) {
     const tools = toolsByNode.get(nid);
@@ -396,15 +445,31 @@ for (const r of runs) {
           .map(([tool, v]) => ({ tool, n: v.n, n_errors: v.n_errors }))
           .sort((a, b) => b.n - a.n)
       : [];
+    // Sub-agent execution contexts ("__subagent:<hash>") aren't DOT nodes:
+    // their cost.recorded rolls into the parent's fact.node_completed and
+    // never projects to metrics.nodeCosts. The cost.recorded sum is their
+    // only — and final — accounting, so they're never "partial".
+    const isSubagent = nid.startsWith("__subagent:");
+    // metrics.nodeCosts projects on fact.node_completed / fact.node_aborted.
+    // Absent there but present in cost.recorded => the node is still running;
+    // fall back to the live sums and flag the figures partial.
+    const flushed = metrics.nodeCosts?.[nid];
+    const partial = !isSubagent && flushed === undefined && liveTokensByNode.has(nid);
+    const wall = Math.round((wallMsByNode.get(nid) ?? 0) / 1000);
+    const llm = Math.round((llmMsByNode.get(nid) ?? 0) / 1000);
+    const tool = Math.round((toolMsByNode.get(nid) ?? 0) / 1000);
     perNode.push({
       node_id: nid,
+      handler_type: isSubagent ? "subagent" : handlerTypes.get(nid) ?? null,
       loop_count: metrics.loopCounts?.[nid] ?? 0,
-      tokens: metrics.nodeCosts?.[nid]?.tokens ?? 0,
-      cost_usd: metrics.nodeCosts?.[nid]?.costUsd ?? 0,
+      tokens: flushed?.tokens ?? liveTokensByNode.get(nid) ?? 0,
+      cost_usd: flushed?.costUsd ?? liveCostByNode.get(nid) ?? 0,
+      partial,
       models: [...(modelsByNode.get(nid) ?? [])],
-      wall_seconds: Math.round((wallMsByNode.get(nid) ?? 0) / 1000),
-      llm_seconds: Math.round((llmMsByNode.get(nid) ?? 0) / 1000),
-      tool_seconds: Math.round((toolMsByNode.get(nid) ?? 0) / 1000),
+      wall_seconds: wall,
+      llm_seconds: llm,
+      tool_seconds: tool,
+      dispatch_seconds: Math.max(0, wall - llm - tool),
       cache_read_tokens: cacheReadByNode.get(nid) ?? 0,
       cache_write_tokens: cacheWriteByNode.get(nid) ?? 0,
       tool_calls: toolList,
@@ -456,13 +521,18 @@ function pct(arr: number[], p: number): number {
 
 interface NodeProfile {
   node_id: string;
+  node_type: string | null;
   in_runs: number;
+  // Count of this node's runs whose tokens/cost were still partial (node
+  // in flight) at collection time — see PerNodeSummary.partial.
+  partial_in_runs: number;
   models: string[];
   mean_cost_usd: number;
   mean_tokens: number;
   mean_wall_seconds: number;
   mean_llm_seconds: number;
   mean_tool_seconds: number;
+  mean_dispatch_seconds: number;
   mean_cache_read_tokens: number;
   cache_read_ratio: number;
   mean_tool_calls: number;
@@ -508,11 +578,14 @@ for (const [wf, runs] of byWorkflow) {
   const abortNode: Record<string, number> = {};
   const nodeAcc = new Map<string, {
     n: number;
+    partialRuns: number;
+    handlerType: string | null;
     cost: number;
     tokens: number;
     wallSeconds: number;
     llmSeconds: number;
     toolSeconds: number;
+    dispatchSeconds: number;
     cacheReadTokens: number;
     cacheWriteTokens: number;
     toolCalls: number;
@@ -545,16 +618,20 @@ for (const [wf, runs] of byWorkflow) {
     for (const m of r.models) models.add(m);
     for (const pn of r.per_node) {
       const slot = nodeAcc.get(pn.node_id) ?? {
-        n: 0, cost: 0, tokens: 0, wallSeconds: 0, llmSeconds: 0, toolSeconds: 0,
-        cacheReadTokens: 0, cacheWriteTokens: 0, toolCalls: 0, maxLoop: 0,
+        n: 0, partialRuns: 0, handlerType: null as string | null,
+        cost: 0, tokens: 0, wallSeconds: 0, llmSeconds: 0, toolSeconds: 0,
+        dispatchSeconds: 0, cacheReadTokens: 0, cacheWriteTokens: 0, toolCalls: 0, maxLoop: 0,
         models: new Set<string>(), toolUse: new Map<string, { n: number; n_errors: number }>(),
       };
       slot.n++;
+      if (pn.partial) slot.partialRuns++;
+      if (pn.handler_type) slot.handlerType = pn.handler_type;
       slot.cost += pn.cost_usd;
       slot.tokens += pn.tokens;
       slot.wallSeconds += pn.wall_seconds;
       slot.llmSeconds += pn.llm_seconds;
       slot.toolSeconds += pn.tool_seconds;
+      slot.dispatchSeconds += pn.dispatch_seconds;
       slot.cacheReadTokens += pn.cache_read_tokens;
       slot.cacheWriteTokens += pn.cache_write_tokens;
       slot.toolCalls += pn.tool_call_total;
@@ -588,13 +665,16 @@ for (const [wf, runs] of byWorkflow) {
       const denom = cacheRead + fresh;
       return {
         node_id,
+        node_type: v.handlerType,
         in_runs: v.n,
+        partial_in_runs: v.partialRuns,
         models: [...v.models],
         mean_cost_usd: Number((v.cost / v.n).toFixed(4)),
         mean_tokens: Math.round(v.tokens / v.n),
         mean_wall_seconds: Math.round(v.wallSeconds / v.n),
         mean_llm_seconds: Math.round(v.llmSeconds / v.n),
         mean_tool_seconds: Math.round(v.toolSeconds / v.n),
+        mean_dispatch_seconds: Math.round(v.dispatchSeconds / v.n),
         mean_cache_read_tokens: Math.round(cacheRead / v.n),
         cache_read_ratio: denom === 0 ? 0 : Number((cacheRead / denom).toFixed(3)),
         mean_tool_calls: Number((v.toolCalls / v.n).toFixed(1)),
@@ -668,5 +748,5 @@ const report = {
   runs: summaries,
 };
 
-process.stdout.write(JSON.stringify(report, null, 2));
+process.stdout.write(JSON.stringify(report));
 db.close();
