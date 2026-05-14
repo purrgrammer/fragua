@@ -567,7 +567,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       const steerCtrl = new AbortController();
       const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
       const signal = AbortSignal.any(signals);
-      opts.registry.register(runId, steerCtrl);
 
       const iteration = nodeRetryCount(state.routing);
       // Pre-commit recorder: each recordIntent/recordDone/recordFailed
@@ -780,6 +779,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       let wasAborted = false;
       let abortCause: "timeout" | "aborted" = "aborted";
       let leakedTimeout = false;
+      // Register only here, not at steerCtrl creation: the build steps
+      // above (graph load, node-output fold, context build) can throw, and
+      // the `finally` below is the sole unregister — an earlier register
+      // leaks the entry on a build-path throw, and the next claim of this
+      // runId then trips `register`'s already-registered guard.
+      opts.registry.register(runId, steerCtrl);
       try {
         // Promise.race against a marker rather than a rejecting timer: a
         // rejection from the timer would mask an ignored-AbortSignal as
