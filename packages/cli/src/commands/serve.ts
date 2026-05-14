@@ -167,7 +167,9 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   while (true) {
     const tryPort = startPort === 0 ? 0 : startPort + attempt;
     try {
-      server = Bun.serve({ port: tryPort, hostname, fetch: app.fetch });
+      // idleTimeout: 0 — SSE streams and slow read endpoints must not be
+      // killed mid-flight under load.
+      server = Bun.serve({ port: tryPort, hostname, fetch: app.fetch, idleTimeout: 0 });
       break;
     } catch (err) {
       lastErr = err;
