@@ -289,12 +289,31 @@ export class ModelRegistry {
   private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
   private registeredProviders: Map<string, ProviderConfigInput> = new Map();
   private loadError: string | undefined = undefined;
+  /** Revision watermark captured at the end of `loadModels`. Compared
+   * against the store's current `getProviderConfigRevision()` at the
+   * start of every public read to detect out-of-process mutations
+   * (CLI `swarm providers add --custom` while the daemon runs). */
+  private lastConfigRevision: { maxUpdatedAt: number; rowCount: number } = {
+    maxUpdatedAt: 0,
+    rowCount: 0,
+  };
 
   private constructor(
     readonly authStorage: AuthStorage,
     private store: IProviderConfigStore | undefined,
   ) {
     this.loadModels();
+  }
+
+  /** Reload `loadModels` if another process has mutated `provider_config`
+   * since our last load. Cheap aggregate query against a small table —
+   * one short read per call, no rebuild when the revision matches. */
+  private ensureFresh(): void {
+    if (!this.store) return;
+    const rev = this.store.getProviderConfigRevision();
+    if (rev.maxUpdatedAt !== this.lastConfigRevision.maxUpdatedAt || rev.rowCount !== this.lastConfigRevision.rowCount) {
+      this.loadModels();
+    }
   }
 
   /** Store-backed. Reads custom-provider definitions from the global
@@ -328,6 +347,11 @@ export class ModelRegistry {
   }
 
   private loadModels(): void {
+    // Snapshot the revision BEFORE the load so a concurrent write that
+    // lands while we're rebuilding triggers a re-load on the next read
+    // (rather than getting swallowed by a post-load watermark that's
+    // newer than what we actually captured).
+    const revBefore = this.store?.getProviderConfigRevision() ?? { maxUpdatedAt: 0, rowCount: 0 };
     const {
       models: customModels,
       overrides,
@@ -344,6 +368,7 @@ export class ModelRegistry {
       }
     }
     this.models = combined;
+    this.lastConfigRevision = revBefore;
   }
 
   private loadBuiltInModels(
@@ -523,17 +548,20 @@ export class ModelRegistry {
 
   /** Every model — built-in + custom, post-override. */
   getAll(): Model<Api>[] {
+    this.ensureFresh();
     return this.models;
   }
 
   /** Models whose provider has *some* form of auth configured. Fast;
    * does not refresh OAuth. */
   getAvailable(): Model<Api>[] {
+    this.ensureFresh();
     return this.models.filter((m) => this.hasConfiguredAuth(m));
   }
 
   /** Find by `(provider, id)`. Exact match only. */
   find(provider: string, modelId: string): Model<Api> | undefined {
+    this.ensureFresh();
     return this.models.find((m) => m.provider === provider && m.id === modelId);
   }
 
@@ -570,6 +598,7 @@ export class ModelRegistry {
    * verbatim on the `provider_config` blob (no `!cmd` / env-var
    * resolution). */
   async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
+    this.ensureFresh();
     try {
       const providerConfig = this.providerRequestConfigs.get(model.provider);
       const apiKey = await this.authStorage.getApiKey(model.provider);

@@ -66,12 +66,26 @@ export { SqliteAuthStorageBackend };
 
 /** Credential storage backed by the global store (or in-memory, for tests). */
 export class AuthStorage {
-  private data: AuthStorageData = {};
-  private loadError: Error | null = null;
   private errors: Error[] = [];
 
-  private constructor(private storage: AuthStorageBackend) {
-    this.reload();
+  private constructor(private storage: AuthStorageBackend) {}
+
+  /** Read the current credential map from the backend on every call.
+   * No in-memory cache: a CLI process writing to `provider_credentials`
+   * is visible to a long-running daemon immediately. The backend's own
+   * lock semantics (file lock for `FileAuthStorageBackend`, txn for
+   * `SqliteAuthStorageBackend`) make this a small constant-time read. */
+  private current(): AuthStorageData {
+    let data: AuthStorageData = {};
+    try {
+      this.storage.withLock((str) => {
+        data = this.parseStorageData(str);
+        return { result: undefined };
+      });
+    } catch (error) {
+      this.recordError(error);
+    }
+    return data;
   }
 
   /** Canonical factory: read credentials from the swarm store's
@@ -102,24 +116,7 @@ export class AuthStorage {
     return JSON.parse(content) as AuthStorageData;
   }
 
-  /** Re-read credentials from the backend. */
-  reload(): void {
-    let content: string | undefined;
-    try {
-      this.storage.withLock((current) => {
-        content = current;
-        return { result: undefined };
-      });
-      this.data = this.parseStorageData(content);
-      this.loadError = null;
-    } catch (error) {
-      this.loadError = error as Error;
-      this.recordError(error);
-    }
-  }
-
   private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
-    if (this.loadError) return;
     try {
       this.storage.withLock((current) => {
         const currentData = this.parseStorageData(current);
@@ -134,43 +131,41 @@ export class AuthStorage {
   }
 
   get(provider: string): AuthCredential | undefined {
-    return this.data[provider] ?? undefined;
+    return this.current()[provider] ?? undefined;
   }
 
   set(provider: string, credential: AuthCredential): void {
-    this.data[provider] = credential;
     this.persistProviderChange(provider, credential);
   }
 
   remove(provider: string): void {
-    delete this.data[provider];
     this.persistProviderChange(provider, undefined);
   }
 
   list(): string[] {
-    return Object.keys(this.data);
+    return Object.keys(this.current());
   }
 
   has(provider: string): boolean {
-    return provider in this.data;
+    return provider in this.current();
   }
 
   /** Any form of auth configured? Doesn't refresh OAuth tokens. */
   hasAuth(provider: string): boolean {
-    return this.data[provider] != null;
+    return this.current()[provider] != null;
   }
 
   /** Describe where `getApiKey(provider)` would read from, for the
    * user-facing CLI diagnostic. Never returns the key itself. */
   describeAuthSource(provider: string): string | null {
-    const cred = this.data[provider];
+    const cred = this.current()[provider];
     if (cred?.type === "api_key") return "stored api_key";
     if (cred?.type === "oauth") return "stored oauth";
     return null;
   }
 
   getAll(): AuthStorageData {
-    return { ...this.data };
+    return this.current();
   }
 
   drainErrors(): Error[] {
@@ -203,8 +198,6 @@ export class AuthStorage {
     if (!provider) return null;
     const result = await this.storage.withLockAsync(async (current) => {
       const currentData = this.parseStorageData(current);
-      this.data = currentData;
-      this.loadError = null;
       const cred = currentData[providerId];
       if (cred?.type !== "oauth") return { result: null };
       if (Date.now() < cred.expires) {
@@ -220,8 +213,6 @@ export class AuthStorage {
         ...currentData,
         [providerId]: { type: "oauth", ...refreshed.newCredentials },
       };
-      this.data = merged;
-      this.loadError = null;
       return { result: refreshed, next: JSON.stringify(merged) };
     });
     return result;
@@ -237,7 +228,7 @@ export class AuthStorage {
    *   3. otherwise undefined.
    */
   async getApiKey(providerId: string): Promise<string | undefined> {
-    const cred = this.data[providerId];
+    const cred = this.current()[providerId];
     if (cred?.type === "api_key") return cred.key;
 
     if (cred?.type === "oauth") {
@@ -250,9 +241,8 @@ export class AuthStorage {
           if (result) return result.apiKey;
         } catch (error) {
           this.recordError(error);
-          // Another process may have refreshed meanwhile.
-          this.reload();
-          const updatedCred = this.data[providerId];
+          // Another process may have refreshed meanwhile — re-read.
+          const updatedCred = this.current()[providerId];
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
             return provider.getApiKey(updatedCred);
           }

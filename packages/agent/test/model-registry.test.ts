@@ -118,11 +118,36 @@ describe("ModelRegistry store-backed loadCustomModels", () => {
         }),
       });
 
-      // Pre-refresh: stale view.
-      expect(registry.find("late-provider", "m1")).toBeUndefined();
-      // Post-refresh: row surfaces.
+      // Public reads call `ensureFresh()` and pick up out-of-process
+      // writes automatically — no explicit `refresh()` required.
+      expect(registry.find("late-provider", "m1")).toBeDefined();
+      // Explicit refresh stays valid and is a no-op against an
+      // already-fresh revision.
       registry.refresh();
       expect(registry.find("late-provider", "m1")).toBeDefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("delete via the store invalidates the cached entry on next read", () => {
+    const store = freshStore();
+    try {
+      store.upsertProviderConfig({
+        provider: "soon-gone",
+        config: JSON.stringify({
+          baseUrl: "https://x.example/v1",
+          api: "openai-completions",
+          models: [{ id: "m", name: "m", api: "openai-completions", contextWindow: 1_000, maxTokens: 100 }],
+        }),
+      });
+      const auth = AuthStorage.fromStore(store);
+      const registry = ModelRegistry.create(auth, store);
+      expect(registry.find("soon-gone", "m")).toBeDefined();
+
+      store.deleteProviderConfig("soon-gone");
+      // Row-count drops; revision watermark changes; next read picks it up.
+      expect(registry.find("soon-gone", "m")).toBeUndefined();
     } finally {
       store.close();
     }

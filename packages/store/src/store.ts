@@ -85,6 +85,7 @@ import {
   upsertProviderConfig as queryUpsertProviderConfig,
   selectAllProviderConfigs,
   selectProviderConfig,
+  selectProviderConfigRevision,
 } from "./provider-config-queries.ts";
 import {
   type ProviderCredentialDbRow,
@@ -1224,6 +1225,11 @@ export class SqliteStore implements IEventStore {
     this.writeTxn(() => {
       queryDeleteProviderConfig(this.db, provider);
     });
+  }
+
+  getProviderConfigRevision(): { maxUpdatedAt: number; rowCount: number } {
+    const row = selectProviderConfigRevision(this.db);
+    return { maxUpdatedAt: row.max_updated_at, rowCount: row.row_count };
   }
 
   // ─────────────── Schedules ───────────────

@@ -66,3 +66,29 @@ const DELETE_PROVIDER_CONFIG_SQL = `
 export function deleteProviderConfig(db: Database, provider: string): void {
   db.query(DELETE_PROVIDER_CONFIG_SQL).run(provider);
 }
+
+// Lightweight watermark used by readers (e.g. `ModelRegistry`) to
+// invalidate cached projections when another process mutates a row.
+// `MAX(updated_at)` is cheap on a small table even without an index;
+// the few rows fit in one page. `COUNT(*)` is included so deletes
+// (which lower the row count without raising any timestamp) still
+// register as a change.
+const SELECT_PROVIDER_CONFIG_REVISION_SQL = `
+  SELECT COALESCE(MAX(updated_at), 0) AS max_updated_at,
+         COUNT(*) AS row_count
+    FROM provider_config
+`;
+
+export interface ProviderConfigRevision {
+  max_updated_at: number;
+  row_count: number;
+}
+
+export function selectProviderConfigRevision(db: Database): ProviderConfigRevision {
+  return (
+    db.query<ProviderConfigRevision, []>(SELECT_PROVIDER_CONFIG_REVISION_SQL).get() ?? {
+      max_updated_at: 0,
+      row_count: 0,
+    }
+  );
+}

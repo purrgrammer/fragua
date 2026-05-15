@@ -1223,6 +1223,12 @@ export interface IProviderConfigStore {
   upsertProviderConfig(args: { provider: string; config: string }): void;
   /** Hard delete. No-op when the row is absent. */
   deleteProviderConfig(provider: string): void;
+  /** Cheap (single-query) revision watermark for caches that want to
+   *  invalidate when another process mutates `provider_config`.
+   *  Pair of `(maxUpdatedAt, rowCount)` — rowCount catches deletes
+   *  that don't raise any timestamp. Readers compare against the pair
+   *  they saw at last reload. */
+  getProviderConfigRevision(): { maxUpdatedAt: number; rowCount: number };
 }
 
 /**
