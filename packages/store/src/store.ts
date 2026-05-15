@@ -114,7 +114,11 @@ import {
   type RunStateRow,
   type RunSummaryRow,
   type StepAggregateRow,
+  type ActiveDescendantNodeRow,
+  type ChildStatusDigestRow,
   selectActiveChildren,
+  selectActiveDescendantNodes,
+  selectChildStatusDigest,
   selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
@@ -828,6 +832,14 @@ export class SqliteStore implements IEventStore {
 
   activeChildRuns(parentRunId: string): string[] {
     return selectActiveChildren(this.db, parentRunId);
+  }
+
+  activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[] {
+    return selectActiveDescendantNodes(this.db, parentRunId);
+  }
+
+  childStatusDigest(parentRunId: string): ChildStatusDigestRow | null {
+    return selectChildStatusDigest(this.db, parentRunId);
   }
 
   getKpiTotals(window: AnalyticsWindow): KpiTotalsRow {

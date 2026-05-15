@@ -605,8 +605,15 @@ export interface IEventReader {
   // re-walking the events table. `activeChildRuns` returns the
   // non-terminal sub-run id list for cancel propagation (D10) — the
   // dispatch fold emits `intent.cancel_requested` on each.
+  // `activeDescendantNodes` walks the descendants recursively for the
+  // graph view's `effectiveActiveNodes` (branch nodes lit by the
+  // child's `current_node`). `childStatusDigest` returns the immediate
+  // children's status counts in one row — drives RunSummary /
+  // RunDetail digest chips for the runs list, Inbox, and detail header.
   getParentCostSnapshot(parentRunId: string): ParentCostSnapshot;
   activeChildRuns(parentRunId: string): string[];
+  activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[];
+  childStatusDigest(parentRunId: string): ChildStatusDigestRow | null;
 
   // Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;

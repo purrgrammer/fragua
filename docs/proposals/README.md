@@ -50,6 +50,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Codergen nodes — unbounded wall-clock time](./codergen-unbounded-time.md) | sketch | make `HandlerSpec.maxMs` optional for codergen handlers; per-codergen runs are bounded by tokens and USD spend, not wall-clock; cuts the "999h" ceiling pattern from configs |
 | [Multi-account support per provider](./multi-account.md) | sketch | first-class `(provider, account)` credentials with reserved `"default"` account; selection via run intent / schedule / project config / global config; workflows stay account-agnostic. Drivers: billing/org separation, per-run credentials. Composes with deferred [`credentials.md`](./credentials.md) — lower-cost ordering is multi-account first against `auth.json`, credentials-in-DB second with the two-level shape baked in |
+| [Per-model CLI ops for custom providers](./provider-model-ops.md) | sketch | `swarm providers add-model / rm-model / ls-models / edit-model` lets operators manage individual model entries inside a custom provider's `provider_config` row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable |
 
 ## Deferred
 

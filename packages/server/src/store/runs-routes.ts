@@ -22,14 +22,17 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
 
   app.get("/runs", (c) => {
     // Query params (all optional, all enforced server-side):
-    //   ?status=a,b,c — narrow to specific lifecycle statuses.
-    //   ?cwd=<path>   — narrow to a single project root (exact match
-    //                    against `run_state.cwd`). Powers per-project
-    //                    views; absent runs (NULL cwd) are unreachable.
-    //   ?order=oldest — surface longest-waiting first (Inbox semantics).
-    //                    Default is newest-first by updated_at.
-    //   ?limit=N      — cap the result. Clamped to [1, 200] so a
-    //                    malformed client can't ask for everything.
+    //   ?status=a,b,c                 — narrow to specific lifecycle statuses.
+    //   ?cwd=<path>                   — narrow to a single project root.
+    //   ?order=oldest                 — surface longest-waiting first (Inbox).
+    //   ?limit=N                      — cap the result, clamped to [1, 200].
+    //   ?includeChildAttention=true   — widen status filter to "self OR
+    //                                   immediate child matches". Used by
+    //                                   the Inbox so a parent whose child
+    //                                   paused on budget still surfaces.
+    //                                   No-op without ?status. Sub-runs
+    //                                   themselves are never returned
+    //                                   (topLevelOnly stays on).
     // Unknown statuses are dropped silently — a typo shouldn't 400 a
     // list endpoint that older clients hit on every page load.
     const statusParam = c.req.query("status");
@@ -37,10 +40,12 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const cwdParam = c.req.query("cwd");
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
+    const includeChildAttention = c.req.query("includeChildAttention") === "true";
     const queryOpts: Parameters<typeof store.listRunSummaryRows>[0] = { order, topLevelOnly: true };
     if (statuses !== undefined) queryOpts.statuses = statuses;
     if (cwdParam !== undefined && cwdParam.length > 0) queryOpts.cwd = cwdParam;
     if (limit !== undefined) queryOpts.limit = limit;
+    if (includeChildAttention && statuses !== undefined) queryOpts.includeChildAttention = true;
     return c.json(store.listRunSummaryRows(queryOpts).map(runSummaryRowToSummary));
   });
 
@@ -59,7 +64,30 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
     const name = wf?.name;
     const source = wf?.dotSource;
-    const detail = runStateToDetail(state, events, name, source);
+    // Pull descendant-derived projections so the run-detail page can
+    // light branches on the graph and render the digest in its header
+    // without a second round trip. Each is one cheap SQL query and
+    // collapses to a no-op when the run has no children.
+    const effectiveActiveNodes = store.activeDescendantNodes(runId);
+    const digestRow = store.childStatusDigest(runId);
+    const detailOpts: Parameters<typeof runStateToDetail>[4] = {};
+    if (effectiveActiveNodes.length > 0) detailOpts.effectiveActiveNodes = effectiveActiveNodes;
+    if (digestRow != null) {
+      detailOpts.childStatusDigest = {
+        total: digestRow.total,
+        running: digestRow.running,
+        runningChildren: digestRow.runningChildren,
+        paused: digestRow.paused,
+        pausedHitl: digestRow.pausedHitl,
+        pausedAuto: digestRow.pausedAuto,
+        queued: digestRow.queued,
+        completed: digestRow.completed,
+        cancelled: digestRow.cancelled,
+        halted: digestRow.halted,
+        quarantined: digestRow.quarantined,
+      };
+    }
+    const detail = runStateToDetail(state, events, name, source, detailOpts);
     detail.lastEventSeq = parentEvents.at(-1)?.seq ?? 0;
     return c.json(detail);
   });

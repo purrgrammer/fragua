@@ -253,6 +253,88 @@ describe("listRunSummaryRows", () => {
     expect(child!.parallelIndex).toBe(1);
     store.close();
   });
+
+  test("includeChildAttention widens status filter to surface parents whose children need attention", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    // Two parents: A in running_children with a paused child; B running
+    // cleanly with a completed child.
+    store.enqueueRun({ runId: "pA", workflowSha: sha });
+    store.enqueueRun({ runId: "pB", workflowSha: sha });
+    store.enqueueRun({
+      runId: "pA_child",
+      workflowSha: sha,
+      parentRunId: "pA",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_a",
+      subgraphTerminalNodeId: "join",
+    });
+    store.enqueueRun({
+      runId: "pB_child",
+      workflowSha: sha,
+      parentRunId: "pB",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_b",
+      subgraphTerminalNodeId: "join",
+    });
+    const db = (store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'running_children' WHERE run_id = ?").run("pA");
+    db.query("UPDATE run_state SET status = 'running'          WHERE run_id = ?").run("pB");
+    db.query("UPDATE run_state SET status = 'paused'           WHERE run_id = ?").run("pA_child");
+    db.query("UPDATE run_state SET status = 'completed'        WHERE run_id = ?").run("pB_child");
+
+    // Without the widen, status=paused returns nothing top-level.
+    const narrow = store.listRunSummaryRows({ statuses: ["paused"], topLevelOnly: true });
+    expect(narrow.map((r) => r.runId)).toEqual([]);
+
+    // With the widen, pA surfaces because its child is paused; pB
+    // doesn't (its child is completed, no attention).
+    const wide = store.listRunSummaryRows({
+      statuses: ["paused"],
+      topLevelOnly: true,
+      includeChildAttention: true,
+    });
+    expect(wide.map((r) => r.runId)).toEqual(["pA"]);
+    store.close();
+  });
+
+  test("parent rows carry a child-status digest aggregated by status", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "p_digest", workflowSha: sha });
+    for (const [i, name] of ["a", "b", "c"].entries()) {
+      store.enqueueRun({
+        runId: `p_digest__${name}`,
+        workflowSha: sha,
+        parentRunId: "p_digest",
+        parentNodeId: "fanout",
+        parallelIndex: i,
+        subgraphRootNodeId: `branch_${name}`,
+        subgraphTerminalNodeId: "join",
+      });
+    }
+    // Force the three children into distinct statuses via the DB layer
+    // (mimicking what the executor would do across the lifecycle).
+    const db = (store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'completed' WHERE run_id = ?").run("p_digest__a");
+    db.query("UPDATE run_state SET status = 'paused'    WHERE run_id = ?").run("p_digest__b");
+    db.query("UPDATE run_state SET status = 'running'   WHERE run_id = ?").run("p_digest__c");
+
+    const [parent] = store.listRunSummaryRows({ topLevelOnly: true });
+    expect(parent!.runId).toBe("p_digest");
+    expect(parent!.childTotal).toBe(3);
+    expect(parent!.childCompleted).toBe(1);
+    expect(parent!.childPaused).toBe(1);
+    expect(parent!.childRunning).toBe(1);
+    expect(parent!.childPausedHitl).toBe(0);
+
+    // Child rows themselves carry no digest (no grandchildren).
+    const children = store.listRunSummaryRows({ parentRunId: "p_digest" });
+    for (const c of children) expect(c.childTotal).toBeNull();
+    store.close();
+  });
 });
 
 describe("getGlobalEventsForward", () => {

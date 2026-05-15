@@ -1,0 +1,68 @@
+// parallel-hitl-smoke.dot — UX smoke for the parallel sub-runs + HITL combination.
+//
+// 3 branches, mixed concerns:
+//   - branch_hitl     hexagon  → wait.human gate (paused_hitl)
+//   - branch_quick    codergen → runs to completion (no operator action)
+//   - branch_budget   codergen → paused on budget (operator must raise & resume)
+//
+// Drives every operator-visible state in the sub-run lifecycle inside a
+// single deterministic workflow. Pair with the integration test at
+// packages/daemon/test/parallel-hitl-smoke.integration.test.ts and the
+// manual UI walkthrough in docs/proposals/parallel.md.
+//
+//   bun run swarm run parallel-hitl-smoke
+
+digraph parallel_hitl_smoke {
+  graph [
+    goal             = "Smoke test for parallel sub-runs UX: one branch HITL, one normal, one budget-paused."
+    label            = "parallel-hitl-smoke"
+    default_fidelity = "compact"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-haiku-4-5-20251001; }"
+  ]
+
+  start [shape=Mdiamond]
+
+  spawn [shape=component, join_policy="wait_all"]
+
+  // Branch 1 — HITL. Hexagon node yields paused_hitl on first dispatch.
+  // Outgoing edges define the operator's options.
+  branch_hitl [
+    shape  = hexagon
+    prompt = "Approve the smoke run?"
+  ]
+
+  // Branch 2 — codergen that runs to completion. Cheap (one turn).
+  branch_quick [
+    prompt        = "Reply with the single word: DONE. Then stop."
+    allowed_tools = ""
+  ]
+
+  // Branch 3 — codergen with a tight max_cost_usd cap so it pauses on
+  // budget after one or two LLM turns. Operator raises the cap to let
+  // it finish.
+  branch_budget [
+    prompt         = "Count from 1 to 100, one number per line. Continue until stopped."
+    allowed_tools  = ""
+    max_cost_usd   = 0.02
+  ]
+
+  combine [
+    shape  = tripleoctagon
+    prompt = "Summarise: did approval come in? Did the quick branch finish? How far did the budget branch get?"
+  ]
+
+  done [shape=Msquare]
+
+  start -> spawn
+
+  spawn -> branch_hitl
+  spawn -> branch_quick
+  spawn -> branch_budget
+
+  branch_hitl   -> combine [label="[A] Approve"]
+  branch_hitl   -> combine [label="[R] Reject"]
+  branch_quick  -> combine
+  branch_budget -> combine
+
+  combine -> done
+}

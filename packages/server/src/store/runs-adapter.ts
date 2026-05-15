@@ -6,8 +6,16 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@swarm/store";
-import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
+import type {
+  ActiveDescendantNodeRow,
+  IEventStore,
+  ListRunIdsOpts,
+  RunState,
+  RunStatus,
+  RunSummaryRow,
+  StoredEvent,
+} from "@swarm/store";
+import type { ChildStatusDigest, HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -129,7 +137,30 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   if (row.parentNodeId != null) summary.parentNodeId = row.parentNodeId;
   if (row.parallelIndex != null) summary.parallelIndex = row.parallelIndex;
   if (row.branchNodeId != null) summary.branchNodeId = row.branchNodeId;
+  const digest = digestFromRow(row);
+  if (digest != null) summary.childStatusDigest = digest;
   return summary;
+}
+
+/** Build the ChildStatusDigest from raw SQL counts. Returns undefined
+ *  when the row has no children (digest is omitted from the wire so
+ *  top-level runs stay clean). The SQL emits NULL for every count when
+ *  no child rows match the LEFT JOIN. */
+function digestFromRow(row: RunSummaryRow): ChildStatusDigest | undefined {
+  if (row.childTotal == null || row.childTotal === 0) return undefined;
+  return {
+    total: row.childTotal,
+    running: row.childRunning ?? 0,
+    runningChildren: row.childRunningChildren ?? 0,
+    paused: row.childPaused ?? 0,
+    pausedHitl: row.childPausedHitl ?? 0,
+    pausedAuto: row.childPausedAuto ?? 0,
+    queued: row.childQueued ?? 0,
+    completed: row.childCompleted ?? 0,
+    cancelled: row.childCancelled ?? 0,
+    halted: row.childHalted ?? 0,
+    quarantined: row.childQuarantined ?? 0,
+  };
 }
 
 /** Pick the most recent auto-generated title from the event stream.
@@ -157,6 +188,10 @@ export function runStateToDetail(
   events: StoredEvent[],
   workflowName: string | undefined,
   workflowSource: string | undefined,
+  opts: {
+    effectiveActiveNodes?: readonly ActiveDescendantNodeRow[];
+    childStatusDigest?: ChildStatusDigest;
+  } = {},
 ): RunDetail {
   const summary = runStateToSummary(state, events, workflowName);
   const detail: RunDetail = {
@@ -175,6 +210,17 @@ export function runStateToDetail(
     selectedEdges: deriveSelectedEdges(events),
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
+  if (opts.effectiveActiveNodes != null && opts.effectiveActiveNodes.length > 0) {
+    detail.effectiveActiveNodes = opts.effectiveActiveNodes.map((r) => {
+      const out: { runId: string; nodeId: string; branchNodeId?: string } = {
+        runId: r.runId,
+        nodeId: r.nodeId,
+      };
+      if (r.branchNodeId != null) out.branchNodeId = r.branchNodeId;
+      return out;
+    });
+  }
+  if (opts.childStatusDigest != null) detail.childStatusDigest = opts.childStatusDigest;
 
   if (state.cwd != null) {
     const candidate = join(state.cwd, ".swarm", "worktrees", state.runId);

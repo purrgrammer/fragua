@@ -38,6 +38,8 @@ import type {
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
+  ActiveDescendantNodeRow,
+  ChildStatusDigestRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
@@ -90,6 +92,8 @@ export type {
 export { decodeCursor, encodeCursor } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
+  ActiveDescendantNodeRow,
+  ChildStatusDigestRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
@@ -940,6 +944,21 @@ export interface IEventReader {
    * these. Returns an empty array for top-level runs.
    */
   activeChildRuns(parentRunId: string): string[];
+
+  /**
+   * Walk descendants recursively and return each non-terminal sub-run's
+   * current node. Used by `RunDetail.effectiveActiveNodes` so the
+   * graph view lights up branch nodes whose state lives in child runs.
+   * Returns empty for runs with no children or no active descendants.
+   */
+  activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[];
+
+  /**
+   * Counts of immediate sub-runs grouped by status. Returns null when
+   * the run has no children. Drives `RunSummary.childStatusDigest` and
+   * the parent's `RunDetail` header chips.
+   */
+  childStatusDigest(parentRunId: string): ChildStatusDigestRow | null;
 
   // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
