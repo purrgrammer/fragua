@@ -132,6 +132,22 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // invalidate.
         void qc.invalidateQueries({ queryKey: queries.runs.lists() });
         void qc.invalidateQueries({ queryKey: queries.runs.detail(evt.runId).queryKey });
+        // Sub-run lifecycle change: also refresh the parent's caches
+        // so the parent's run-detail page (SubRunList, branch cards,
+        // effective active nodes, child status digest) reflects the
+        // child's progress without waiting for a manual refetch.
+        // P11 of the sub-runs UI plan. The parent id is pulled from
+        // the cached child detail; if the child detail hasn't been
+        // fetched yet (cold cache) the invalidation falls through —
+        // a subsequent fetch will land it.
+        const childDetail = qc.getQueryData<{ parentRunId?: string }>(
+          queries.runs.detail(evt.runId).queryKey,
+        );
+        const parentRunId = childDetail?.parentRunId;
+        if (parentRunId != null && parentRunId.length > 0) {
+          void qc.invalidateQueries({ queryKey: queries.runs.detail(parentRunId).queryKey });
+          void qc.invalidateQueries({ queryKey: queries.runs.children(parentRunId).queryKey });
+        }
         // Project list rolls up `lastUpdatedAt` / `runCount` per cwd —
         // any run lifecycle change shifts at least one of those.
         void qc.invalidateQueries({ queryKey: queries.projects.all() });

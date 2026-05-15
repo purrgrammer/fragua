@@ -277,3 +277,87 @@ End-to-end: re-run `review.dot` against `~/backend` PR 9362. After P2:
 A patch-in-place stopgap was considered for the production overspend bug (`review.dot`'s `lens_correctness` at $1.72 vs $0.30 cap). It would have added per-branch budget gates and watchdog wrappers inside `parallel.ts` using `evaluateBudget` and `resolveMaxMs` directly.
 
 Explicitly rejected: it would build a parallel mini-executor that we tear out in P2. The overspend is acknowledged in SPEC.md §5 as a known limit until P2 lands.
+
+
+## UI walkthrough — parallel sub-runs first class
+
+Live operator's path through a fan-out from enqueue to completion.
+Use the smoke workflow at `.swarm/workflows/parallel-hitl-smoke.dot` —
+three branches, one each of: HITL gate, straight codergen, tight
+budget cap.
+
+```sh
+bun run swarm harness
+bun run swarm run parallel-hitl-smoke
+```
+
+**Inbox** — open http://localhost:6767/inbox. The parent surfaces
+with reason "branch: awaiting input" / "branch: needs operator"
+even though the parent itself is in `running_children`. The
+`?includeChildAttention=true` server flag widens the filter; the
+parent is the operator-facing row, the branch is the cited reason.
+Server-side: `GET /runs?status=paused_hitl,paused,quarantined&includeChildAttention=true`.
+
+**Run detail header** — the run's status pill reads "running" (the
+`running_children` enum collapses) with a `BranchDigestChip`
+glyph row alongside: "▶1 ⏸1 ❓1" (one running, one budget-paused,
+one HITL-paused). Hover reveals the per-status breakdown.
+
+**Sub-runs list** — sticky card above the tabs. Each row carries:
+ordinal, status badge, branch label, live cost, and inline
+`BranchActions` (Resume / Cancel / Manage →). Rows are
+non-clickable; sub-runs are an executor implementation detail.
+
+**Conversation tab** — the parent's transcript flows top-to-bottom.
+Where the workflow fans out, a "spawn" section opens with one
+collapsed `BranchCard` per branch. Each card's header carries the
+child's status badge, live cost, message count, and the same
+`BranchActions`. Expanding the card reveals the child's actual
+transcript — merged in via `GET /runs/:id/messages?include=descendants`
+(every row stamped with `originRunId`). Fractal: the card body is
+itself rendered by the same node-grouping logic as the parent, so
+multi-node subgraph branches Just Work once the underlying handler
+exposes them.
+
+**Graph tab** — branch nodes light up live. `RunDetail.effectiveActiveNodes`
+unions the parent's own running nodes with each non-terminal
+descendant's `current_node`, so `branch_hitl` glows while the
+HITL is open, `branch_budget` glows then dims at the cap, and
+`branch_quick` glows briefly then completes.
+
+**Cost tab** — `CostInspector` groups steps by parent component
+`(parallel.broadcast)` with indented child rows per branch. Each
+row carries `data-origin-run-id` so test selectors can pin to a
+specific sub-run's spend.
+
+**Activity log (home Activity / global feed)** — sub-run events
+render with a `[branchNodeId]` prefix chip in their title link;
+`data-origin-run-id` is stamped on the row's link so test selectors
+can distinguish child events from parent events.
+
+**Direct child URL** — paste a child run id into the URL bar
+(`/runs/<childId>`). `RunDetail` reads the child's `parentRunId`
++ `branchNodeId` from its detail snapshot and redirects to
+`/runs/<parentId>/<view>?branch=<branchNodeId>`. `?orphan=true`
+disables the redirect for debugging (shows the child page directly).
+
+**Operator actions on a paused branch** — from the parent's detail
+page (no navigation needed):
+- HITL: open the child via Manage → answer via the standard
+  `HitlChoice` panel on the child's page. The parent's view
+  updates via the invalidation cascade in `useGlobalEventStream`.
+- Budget: same — Manage → opens the `RunPausedNotice` with
+  Raise & Resume. Inline lighter-weight Resume / Cancel are
+  available directly on the row.
+- Cancel: cancels just the child; the parent's other branches
+  continue.
+
+**SSE descendant invalidation** — when a sub-run emits a lifecycle
+event, `useGlobalEventStream` reads the cached child `RunDetail`
+to find its `parentRunId` and invalidates the parent's
+`queries.runs.detail` + `queries.runs.children` caches. Result:
+the parent's run-detail page updates in real-time without a
+parent-level SSE descendant multiplex.
+
+See the integration test for the deterministic assertion path:
+`packages/daemon/test/parallel-hitl-smoke.integration.test.ts`.

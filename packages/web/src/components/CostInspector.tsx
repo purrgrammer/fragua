@@ -403,6 +403,7 @@ function StepCostRow({
       data-summary={hasChildren ? "true" : undefined}
       data-parent-step={step.parentNodeId}
       data-branch-child={isBranchChild ? "true" : undefined}
+      data-origin-run-id={step.originRunId}
       className={rowGridClass}
     >
       <span className="text-sm font-semibold text-sw-text truncate flex items-center gap-2">
