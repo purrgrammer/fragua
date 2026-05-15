@@ -189,6 +189,62 @@ describe("CostInspector", () => {
       expect(lensB.textContent).toMatch(/0\.03/);
     });
 
+    it("parent summary duration is the parent's own wall window, not parent + children (children run inside it)", async () => {
+      // Regression: branches run inline under the parent component's
+      // dispatch, so parent.durationMs already covers them. Summing
+      // produced ~5× the truth for a 4-branch fan-out.
+      const steps = [
+        makeStep({
+          stepIdx: 0,
+          startSeq: 1,
+          nodeId: "fork",
+          durationMs: 470_000, // parent's wall window
+        }),
+        makeStep({
+          stepIdx: 1,
+          startSeq: 2,
+          nodeId: "lensA",
+          parentNodeId: "fork",
+          parallelIndex: 0,
+          durationMs: 470_000, // slowest branch — same as parent
+        }),
+        makeStep({
+          stepIdx: 2,
+          startSeq: 3,
+          nodeId: "lensB",
+          parentNodeId: "fork",
+          parallelIndex: 1,
+          durationMs: 90_000,
+        }),
+        makeStep({
+          stepIdx: 3,
+          startSeq: 4,
+          nodeId: "lensC",
+          parentNodeId: "fork",
+          parallelIndex: 2,
+          durationMs: 157_000,
+        }),
+        makeStep({
+          stepIdx: 4,
+          startSeq: 5,
+          nodeId: "lensD",
+          parentNodeId: "fork",
+          parallelIndex: 3,
+          durationMs: 77_000,
+        }),
+      ];
+      const { container } = mount("r1", steps);
+      const q = within(container);
+      await waitFor(() => {
+        expect(q.getByTestId("step-0")).toBeTruthy();
+      });
+      const parent = q.getByTestId("step-0");
+      // Parent shows 7m 50s (470_000ms), NOT 21m 4s (sum 1,264,000ms).
+      // formatDuration renders 470s as "7m 50s".
+      expect(parent.textContent).toMatch(/7m 50s/);
+      expect(parent.textContent).not.toMatch(/21m/);
+    });
+
     it("synthesises a parent row when branch children have no real top-level parent step (parallel handler)", async () => {
       // The `parallel` handler opens no LLM call of its own — its branch
       // children come back tagged with `parentNodeId="fanout"` but there's

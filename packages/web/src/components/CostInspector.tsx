@@ -227,10 +227,18 @@ function StepCostRowGroup({
   );
 }
 
-/** Sum a parent step + its branch children into a single cost / token /
- *  duration row. `cost` defaults to zeros so the popover still renders
- *  even when the parent had no LLM call of its own (the parallel handler
- *  doesn't open one for the component shell). */
+/** Aggregate a parent step + its branch / sub-agent children into a
+ *  single summary row. `cost` defaults to zeros so the popover still
+ *  renders even when the parent had no LLM call of its own (the
+ *  parallel handler doesn't open one for the component shell).
+ *
+ *  Cost and tokens are summed: each child spent its own money on top
+ *  of whatever the parent spent. Duration is NOT summed — children
+ *  run inside the parent's wall window (parallel branches run inline
+ *  under the component's dispatch; sub-agents block the parent's LLM
+ *  turn). `parent.durationMs` already covers them. Summing would
+ *  produce a figure several times the actual wall clock — for a
+ *  4-branch fan-out, ~5× the truth. */
 function aggregateSteps(
   parent: StepSnapshot,
   children: readonly StepSnapshot[],
@@ -241,7 +249,6 @@ function aggregateSteps(
   let cacheWriteTokens = parent.cost?.cache_write_tokens ?? 0;
   let billedTokens = parent.cost?.billed_tokens ?? 0;
   let costUsd = parent.cost?.cost_usd ?? 0;
-  let durationMs = parent.durationMs;
   for (const c of children) {
     inputTokens += c.cost?.input_tokens ?? 0;
     outputTokens += c.cost?.output_tokens ?? 0;
@@ -249,9 +256,6 @@ function aggregateSteps(
     cacheWriteTokens += c.cost?.cache_write_tokens ?? 0;
     billedTokens += c.cost?.billed_tokens ?? 0;
     costUsd += c.cost?.cost_usd ?? 0;
-    if (c.durationMs !== undefined) {
-      durationMs = (durationMs ?? 0) + c.durationMs;
-    }
   }
   return {
     input_tokens: inputTokens,
@@ -260,7 +264,7 @@ function aggregateSteps(
     cache_write_tokens: cacheWriteTokens,
     billed_tokens: billedTokens,
     cost_usd: costUsd,
-    durationMs,
+    durationMs: parent.durationMs,
   };
 }
 
