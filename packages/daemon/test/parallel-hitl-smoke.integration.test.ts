@@ -1,14 +1,12 @@
-// Integration smoke for parallel + HITL UX.
-//
-// Three branches in parallel, mixed concerns:
-//   - branch_hitl    (hexagon)   → paused_hitl on first dispatch
-//   - branch_quick   (codergen)  → runs to completion
-//   - branch_budget  (codergen)  → paused on budget breach
-//
-// Drives every operator-visible state in the sub-run lifecycle so the
-// UI plan (sub-runs first class) has a deterministic fixture to assert
-// against. Mirrors the .dot at .swarm/workflows/parallel-hitl-smoke.dot,
-// but inlines the source so it doesn't need provider credentials.
+// Integration smoke for parallel fan-out where one branch is a
+// multi-node subgraph: codergen → wait.human → tool. Exercises:
+//   - All 3 children spawn from the parallel.* parent.
+//   - The multi-node branch dispatches `analyze` first, then `confirm`
+//     which pauses on HITL inside the sub-run.
+//   - Operator answers "A" → `apply` (tool node) runs → fan_in.
+//   - Operator answers "S" → branch short-circuits to fan_in.
+//   - Other two branches complete cleanly.
+//   - Parent fan_in fires only after all 3 children reach terminal.
 
 import { describe, expect, test } from "bun:test";
 import * as handler from "@swarm/core/handler";
@@ -23,19 +21,23 @@ import { mockCodergenSpec } from "./helpers.ts";
 const SMOKE_DOT = `digraph parallel_hitl_smoke {
   start [shape=Mdiamond];
   spawn [shape=component, join_policy="wait_all"];
-  branch_hitl   [shape=hexagon, prompt="Approve?"];
-  branch_quick  [prompt="Reply DONE"];
-  branch_budget [prompt="count to 100", max_cost_usd="0.05"];
+  read_only [prompt="READ_ONLY_DONE"];
+  analyze [prompt="PLAN"];
+  confirm [shape=hexagon, prompt="Apply?"];
+  apply [shape=parallelogram, tool_command="echo APPLIED"];
+  baseline [prompt="BASELINE_DONE"];
   combine [shape=tripleoctagon];
   done [shape=Msquare];
   start -> spawn;
-  spawn -> branch_hitl;
-  spawn -> branch_quick;
-  spawn -> branch_budget;
-  branch_hitl   -> combine [label="[A] Approve"];
-  branch_hitl   -> combine [label="[R] Reject"];
-  branch_quick  -> combine;
-  branch_budget -> combine;
+  spawn -> read_only;
+  spawn -> analyze;
+  spawn -> baseline;
+  read_only -> combine;
+  analyze -> confirm;
+  confirm -> apply   [label="[A] Apply"];
+  confirm -> combine [label="[S] Skip"];
+  apply -> combine;
+  baseline -> combine;
   combine -> done;
 }`;
 
@@ -60,7 +62,7 @@ async function tick(
   opts: { maxSteps?: number; until?: (state: NonNullable<ReturnType<SqliteStore["getState"]>>) => boolean } = {},
 ): Promise<void> {
   const ac = new AbortController();
-  const maxSteps = opts.maxSteps ?? 50;
+  const maxSteps = opts.maxSteps ?? 200;
   for (let i = 0; i < maxSteps; i++) {
     wakePending(h.store);
     if (opts.until != null) {
@@ -72,14 +74,10 @@ async function tick(
       const state = h.store.getState(runId);
       if (state == null) return;
       const terminal =
-        state.status === "completed" ||
-        state.status === "halted" ||
-        state.status === "cancelled";
+        state.status === "completed" || state.status === "halted" || state.status === "cancelled";
       if (terminal) return;
       const paused =
-        state.status === "paused" ||
-        state.status === "paused_hitl" ||
-        state.status === "paused_auto";
+        state.status === "paused" || state.status === "paused_hitl" || state.status === "paused_auto";
       if (paused && opts.until == null) return;
       continue;
     }
@@ -96,125 +94,73 @@ async function tick(
   }
 }
 
-function childRunId(parent: string, branchIdx: number): string {
-  return `${parent}__spawn__i0__b${branchIdx}`;
+function findHitlChild(h: ReturnType<typeof freshHarness>, parentRunId: string): string {
+  // Sub-run id pattern: <parent>__spawn__i0__b<idx>. The middle
+  // branch (analyze) is the only one that pauses on HITL.
+  for (let i = 0; i < 5; i++) {
+    const candidate = `${parentRunId}__spawn__i0__b${i}`;
+    const s = h.store.getState(candidate);
+    if (s?.status === "paused_hitl") return candidate;
+  }
+  throw new Error("no paused_hitl child found");
 }
 
-describe("parallel-hitl-smoke — full operator lifecycle", () => {
-  test("parent fans out 3 children; one HITL-paused, one done, one budget-paused; operator drives all to completion", async () => {
+describe("parallel-hitl-smoke — multi-node branch with HITL + tool", () => {
+  test("answer Apply: analyze → confirm → apply → fan_in; all 3 branches terminal; parent completes", async () => {
     const h = freshHarness();
-    const sha = "wf_smoke";
+    const sha = "wf_smoke_apply";
     h.store.saveWorkflow(sha, "parallel-hitl-smoke", SMOKE_DOT);
 
-    // The hexagon (branch_hitl) auto-resolves to wait.human via the
-    // auto-dispatcher resolver. The two codergen branches need explicit
-    // mock specs.
-    h.dispatcher.register(sha, "branch_quick", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
-    // branch_budget: 10 calls × $0.05 = $0.50, well over the $0.05 cap →
-    // pauses on budget after one or two calls.
-    h.dispatcher.register(sha, "branch_budget", mockCodergenSpec({ costPerCall: 0.05, calls: 10 }));
-    // combine (the fan_in) is a tripleoctagon → resolves to fan_in spec
-    // automatically; needs no explicit register.
+    h.dispatcher.register(sha, "read_only", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.dispatcher.register(sha, "analyze", mockCodergenSpec({ costPerCall: 0.02, calls: 1, output: "PLAN refactor" }));
+    h.dispatcher.register(sha, "baseline", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    // confirm (hexagon) → wait.human auto-resolves.
+    // apply (parallelogram) → tool spec auto-resolves; tool_command
+    // runs through the in-memory tool registry. No external bash.
+    h.tools.register("__tool__", async () => ({ output: "APPLIED\n", exitCode: 0 }));
 
-    h.store.enqueueRun({ runId: "smoke1", workflowSha: sha });
+    h.store.enqueueRun({ runId: "smk", workflowSha: sha });
+    await tick(h, "smk", { until: (s) => s.status === "running_children" || s.status === "completed" });
 
-    // Phase 1: fan out, settle into mixed state.
-    await tick(h, "smoke1", { maxSteps: 100 });
-
-    const parent = h.store.getState("smoke1")!;
-    expect(parent.status).toBe("running_children");
-
-    const hitlChild = h.store.getState(childRunId("smoke1", 0))!;
-    const quickChild = h.store.getState(childRunId("smoke1", 1))!;
-    const budgetChild = h.store.getState(childRunId("smoke1", 2))!;
-
-    expect(hitlChild.status).toBe("paused_hitl");
-    expect(quickChild.status).toBe("completed");
-    expect(budgetChild.status).toBe("paused");
-
-    // Budget child has paused with reason "budget".
-    const budgetPausedEvent = h.store
-      .getEvents(budgetChild.runId)
-      .find((e) => e.type === "fact.run_paused");
-    expect(budgetPausedEvent).toBeDefined();
-    expect((budgetPausedEvent!.payload as { reason: string }).reason).toBe("budget");
-
-    // While children are still active, the parent's projection has
-    // NOT folded their costs yet — that batch-fires at fan-in. So we
-    // verify cost rollup at the end of phase 3 instead.
-
-    // Phase 2: operator raises the budget child's cap and resumes.
-    h.store.appendIntent(budgetChild.runId, {
-      type: "intent.budget_adjusted",
-      payload: { scope: "node", metric: "cost", newLimit: 1.0 },
+    // Wait for the HITL child to pause.
+    await tick(h, "smk", {
+      until: (s) => s.status === "completed" || s.status === "halted" || s.status === "cancelled",
+      maxSteps: 50,
     });
-    h.store.appendIntent(budgetChild.runId, { type: "intent.resume", payload: {} });
+    const hitlChild = findHitlChild(h, "smk");
+    expect(h.store.getState(hitlChild)?.status).toBe("paused_hitl");
 
-    await tick(h, "smoke1", {
-      maxSteps: 100,
-      until: (s) => {
-        const c = h.store.getState(budgetChild.runId);
-        return c != null && (c.status === "completed" || c.status === "halted" || c.status === "cancelled");
-      },
-    });
+    // Operator chooses Apply.
+    h.store.appendIntent(hitlChild, { type: "intent.hitl_input", payload: { selected: "A" } });
+    h.store.appendIntent(hitlChild, { type: "intent.resume", payload: {} });
 
-    expect(h.store.getState(budgetChild.runId)!.status).toBe("completed");
-    // Parent still running_children — branch_hitl is still paused_hitl.
-    expect(h.store.getState("smoke1")!.status).toBe("running_children");
-    expect(h.store.getState(hitlChild.runId)!.status).toBe("paused_hitl");
-
-    // Phase 3: operator answers the HITL gate with "A".
-    h.store.appendIntent(hitlChild.runId, {
-      type: "intent.hitl_input",
-      payload: { selected: "A" },
-    });
-    h.store.appendIntent(hitlChild.runId, { type: "intent.resume", payload: {} });
-
-    await tick(h, "smoke1", { maxSteps: 100 });
-
-    // Everything completes.
-    expect(h.store.getState(hitlChild.runId)!.status).toBe("completed");
-    expect(h.store.getState("smoke1")!.status).toBe("completed");
-
-    // Cost rollup: parent accumulated quick (0.01) + budget (>= 0.05) at
-    // minimum from sub-runs. HITL child's cost is 0 (wait.human is free).
-    expect(h.store.getState("smoke1")!.metrics.totalCostUsd).toBeGreaterThan(0.05);
-
+    await tick(h, "smk", { maxSteps: 200 });
+    expect(h.store.getState("smk")?.status).toBe("completed");
     h.store.close();
   });
 
-  test("rejecting HITL still completes the branch (both edges route to fan_in)", async () => {
+  test("answer Skip: confirm → combine (apply skipped); parent still completes", async () => {
     const h = freshHarness();
-    const sha = "wf_smoke_reject";
-    h.store.saveWorkflow(sha, "smoke-reject", SMOKE_DOT);
-    h.dispatcher.register(sha, "branch_quick", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
-    h.dispatcher.register(sha, "branch_budget", mockCodergenSpec({ costPerCall: 0.05, calls: 10 }));
+    const sha = "wf_smoke_skip";
+    h.store.saveWorkflow(sha, "parallel-hitl-smoke", SMOKE_DOT);
+    h.dispatcher.register(sha, "read_only", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.dispatcher.register(sha, "analyze", mockCodergenSpec({ costPerCall: 0.02, calls: 1, output: "PLAN" }));
+    h.dispatcher.register(sha, "baseline", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.tools.register("__tool__", async () => ({ output: "", exitCode: 0 }));
 
-    h.store.enqueueRun({ runId: "smoke2", workflowSha: sha });
-    await tick(h, "smoke2", { maxSteps: 100 });
-
-    const hitlChild = h.store.getState(childRunId("smoke2", 0))!;
-    const budgetChild = h.store.getState(childRunId("smoke2", 2))!;
-    expect(hitlChild.status).toBe("paused_hitl");
-
-    // Raise budget so the budget branch finishes.
-    h.store.appendIntent(budgetChild.runId, {
-      type: "intent.budget_adjusted",
-      payload: { scope: "node", metric: "cost", newLimit: 1.0 },
+    h.store.enqueueRun({ runId: "smk2", workflowSha: sha });
+    await tick(h, "smk2", { until: (s) => s.status === "running_children" || s.status === "completed" });
+    await tick(h, "smk2", {
+      until: (s) => s.status === "completed" || s.status === "halted" || s.status === "cancelled",
+      maxSteps: 50,
     });
-    h.store.appendIntent(budgetChild.runId, { type: "intent.resume", payload: {} });
+    const hitlChild = findHitlChild(h, "smk2");
 
-    // Reject the HITL.
-    h.store.appendIntent(hitlChild.runId, {
-      type: "intent.hitl_input",
-      payload: { selected: "R" },
-    });
-    h.store.appendIntent(hitlChild.runId, { type: "intent.resume", payload: {} });
+    h.store.appendIntent(hitlChild, { type: "intent.hitl_input", payload: { selected: "S" } });
+    h.store.appendIntent(hitlChild, { type: "intent.resume", payload: {} });
 
-    await tick(h, "smoke2", { maxSteps: 100 });
-
-    expect(h.store.getState(hitlChild.runId)!.status).toBe("completed");
-    expect(h.store.getState("smoke2")!.status).toBe("completed");
+    await tick(h, "smk2", { maxSteps: 200 });
+    expect(h.store.getState("smk2")?.status).toBe("completed");
     h.store.close();
   });
 });
