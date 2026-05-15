@@ -662,6 +662,305 @@ describe("parallel stress — resume idempotence", () => {
   });
 });
 
+describe("parallel stress — latest budget_adjusted wins", () => {
+  test("two intent.budget_adjusted queued before resume → routing keeps the latest value; child finishes at that cap", async () => {
+    const h = freshHarness();
+    const sha = "wf_lb";
+    h.store.saveWorkflow(sha, "lb", buildFanoutDot(1, { budgets: [0.05] }));
+    // 6 calls × $0.05 = $0.30 — at cap=0.5 it overruns and pauses
+    // again; at cap=2.0 it finishes cleanly. So setting the FIRST raise
+    // too low and the SECOND high enough verifies the latest value
+    // sticks.
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.05, calls: 6 }));
+    h.store.enqueueRun({ runId: "lb", workflowSha: sha });
+    await drive(h, "lb", 80);
+    const childId = "lb__fanout__i0__b0";
+    expect(h.store.getState(childId)?.status).toBe("paused");
+
+    // Two raises before resume — first too low, second sufficient.
+    h.store.appendIntent(childId, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 0.5 },
+    });
+    h.store.appendIntent(childId, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 2.0 },
+    });
+    h.store.appendIntent(childId, { type: "intent.resume", payload: {} });
+
+    await drive(h, "lb", 80);
+    const final = h.store.getState(childId)!;
+    expect(final.status).toBe("completed");
+    // The persisted override is the LATEST value, not the first.
+    expect(final.routing["budget_override.node.cost"]).toBe(2.0);
+    h.store.close();
+  });
+});
+
+describe("parallel stress — quarantined sub-run blocks parent", () => {
+  test("quarantined child keeps parent in running_children until operator unquarantines", async () => {
+    const h = freshHarness();
+    const sha = "wf_quar";
+    h.store.saveWorkflow(sha, "quar", buildFanoutDot(2));
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+
+    h.store.enqueueRun({ runId: "q", workflowSha: sha });
+    // Drive only the parent's fan-out — children stay queued.
+    wakePending(h.store);
+    const claimed = h.store.claimNextRun(8);
+    const ac = new AbortController();
+    await runOne(claimed!.runId, {
+      store: h.store,
+      dispatcher: h.dispatcher,
+      registry: h.registry,
+      tools: h.tools,
+      llmCall: h.llmCall,
+      maxConcurrentRuns: 8,
+      maxTurnsForTesting: 30,
+      shutdownSignal: ac.signal,
+    });
+    expect(h.store.getState("q")?.status).toBe("running_children");
+
+    // Force the children into a quarantined + completed mix
+    // (mimicking the post-sweep state: one orphan side effect, one
+    // legit completion).
+    const db = (h.store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'quarantined' WHERE run_id = ?").run("q__fanout__i0__b0");
+    db.query("UPDATE run_state SET status = 'completed'   WHERE run_id = ?").run("q__fanout__i0__b1");
+
+    // wakeRunningChildren must NOT converge: quarantined is
+    // non-terminal for fan-in (operator must resolve).
+    for (let i = 0; i < 10; i++) wakePending(h.store);
+    expect(h.store.getState("q")?.status).toBe("running_children");
+
+    // Operator unquarantines with treat_as_done. The intent fold
+    // transitions the child to completed; fan-in then converges
+    // and the parent reaches a terminal.
+    h.store.appendIntent("q__fanout__i0__b0", {
+      type: "intent.unquarantine",
+      payload: { resolution: "treat_as_done" },
+    });
+    await drive(h, "q", 80);
+    expect(h.store.getState("q__fanout__i0__b0")?.status).toBe("completed");
+    expect(h.store.getState("q")?.status).toBe("completed");
+    h.store.close();
+  });
+});
+
+describe("parallel stress — nested fan-out (workflow-level constraint)", () => {
+  test("workflow with one branch fanning out to a different fan_in halts cleanly with the validator's convergence error (no orphans)", async () => {
+    // The parallel handler enforces "all branches converge on the
+    // same tripleoctagon" — meaningful nested fan-out at the
+    // workflow level would need that constraint relaxed (or sub-graph
+    // clusters with their own fan_in scope). Pin the current
+    // behaviour: the run halts with a deterministic error, no
+    // orphan sub-runs are created.
+    const h = freshHarness();
+    const sha = "wf_nest";
+    h.store.saveWorkflow(
+      sha,
+      "nest",
+      `digraph G {
+        start [shape=Mdiamond];
+        outer [shape=component, join_policy="wait_all"];
+        simple;
+        inner [shape=component, join_policy="wait_all"];
+        inner_a;
+        inner_b;
+        inner_join [shape=tripleoctagon];
+        outer_join [shape=tripleoctagon];
+        done [shape=Msquare];
+        start -> outer;
+        outer -> simple;
+        outer -> inner;
+        simple -> outer_join;
+        inner -> inner_a;
+        inner -> inner_b;
+        inner_a -> inner_join;
+        inner_b -> inner_join;
+        inner_join -> outer_join;
+        outer_join -> done;
+      }`,
+    );
+    h.dispatcher.register(sha, "simple", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.store.enqueueRun({ runId: "nest", workflowSha: sha });
+    await drive(h, "nest", 100);
+
+    const parent = h.store.getState("nest")!;
+    expect(parent.status).toBe("halted");
+    const halt = h.store.getEvents("nest").find((e) => e.type === "fact.run_halted");
+    expect(halt).toBeDefined();
+    expect((halt!.payload as { detail?: string }).detail).toContain("converge on different tripleoctagons");
+
+    // No sub-runs were created (halt fired during the parent's
+    // initial dispatch, before fan-out).
+    const db = (h.store as unknown as { db: { query: (s: string) => { all: () => Array<{ run_id: string }> } } }).db;
+    const subRuns = db.query("SELECT run_id FROM run_state WHERE parent_run_id = 'nest'").all();
+    expect(subRuns).toHaveLength(0);
+    h.store.close();
+  });
+});
+
+describe("parallel stress — multi-level data-model traversal", () => {
+  test("childStatusDigest + activeDescendantNodes both walk descendants recursively across a 3-level tree", async () => {
+    // Manually seed a 3-level tree (grandparent → parent → child) by
+    // chaining parent_run_id. Verifies the SQL helpers we expose
+    // traverse descendants correctly across multiple sub-run depths
+    // even if the workflow validator doesn't generate that shape
+    // today.
+    const h = freshHarness();
+    const sha = "wf_tree";
+    h.store.saveWorkflow(sha, "tree", "digraph G {}");
+    h.store.enqueueRun({ runId: "gp", workflowSha: sha });
+    h.store.enqueueRun({
+      runId: "gp__p",
+      workflowSha: sha,
+      parentRunId: "gp",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "p_root",
+      subgraphTerminalNodeId: "join",
+    });
+    h.store.enqueueRun({
+      runId: "gp__p__c",
+      workflowSha: sha,
+      parentRunId: "gp__p",
+      parentNodeId: "p_fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "c_root",
+      subgraphTerminalNodeId: "p_join",
+    });
+    const db = (h.store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'running_children', current_node = 'fanout' WHERE run_id = ?").run("gp");
+    db.query("UPDATE run_state SET status = 'running_children', current_node = 'p_fanout' WHERE run_id = ?").run(
+      "gp__p",
+    );
+    db.query("UPDATE run_state SET status = 'running', current_node = 'c_root' WHERE run_id = ?").run("gp__p__c");
+
+    // Digest is recursive: counts every descendant (parent + grandchild)
+    // grouped by status. Caller treats the digest as "anything live
+    // beneath me" — which is what the Inbox / detail page needs.
+    const gpDigest = h.store.childStatusDigest("gp");
+    expect(gpDigest?.total).toBe(2);
+    expect(gpDigest?.runningChildren).toBe(1); // gp__p
+    expect(gpDigest?.running).toBe(1); // gp__p__c
+
+    // From the intermediate parent: only the grandchild is below it.
+    const pDigest = h.store.childStatusDigest("gp__p");
+    expect(pDigest?.total).toBe(1);
+    expect(pDigest?.running).toBe(1);
+
+    // Effective active nodes also walks recursively.
+    const active = h.store.activeDescendantNodes("gp");
+    const nodeIds = active.map((r) => r.nodeId);
+    expect(nodeIds).toContain("p_fanout");
+    expect(nodeIds).toContain("c_root");
+    h.store.close();
+  });
+});
+
+describe("parallel stress — daemon restart sweep recovery", () => {
+  test("sub-run stuck in 'running' after crash → startup sweep requeues it; parent stays running_children; child re-dispatches", async () => {
+    const h = freshHarness();
+    const sha = "wf_crash";
+    h.store.saveWorkflow(sha, "crash", buildFanoutDot(2));
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.store.enqueueRun({ runId: "cr", workflowSha: sha });
+    // Parent fan-out only.
+    wakePending(h.store);
+    const claimed = h.store.claimNextRun(8);
+    const ac = new AbortController();
+    await runOne(claimed!.runId, {
+      store: h.store,
+      dispatcher: h.dispatcher,
+      registry: h.registry,
+      tools: h.tools,
+      llmCall: h.llmCall,
+      maxConcurrentRuns: 8,
+      maxTurnsForTesting: 30,
+      shutdownSignal: ac.signal,
+    });
+    expect(h.store.getState("cr")?.status).toBe("running_children");
+
+    // Simulate crash: forcibly mark child b0 as 'running' (as if it
+    // was mid-handler when the daemon died).
+    const db = (h.store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'running' WHERE run_id = ?").run("cr__fanout__i0__b0");
+
+    // Startup sweep on restart: requeues the stuck child.
+    const sweep = h.store.startupSweep();
+    expect(sweep.requeued).toContain("cr__fanout__i0__b0");
+    expect(h.store.getState("cr__fanout__i0__b0")?.status).toBe("queued");
+    // Parent untouched.
+    expect(h.store.getState("cr")?.status).toBe("running_children");
+
+    // Drive forward — children should dispatch + complete cleanly.
+    await drive(h, "cr", 80);
+    expect(h.store.getState("cr")?.status).toBe("completed");
+    expect(h.store.getState("cr__fanout__i0__b0")?.status).toBe("completed");
+    expect(h.store.getState("cr__fanout__i0__b1")?.status).toBe("completed");
+    h.store.close();
+  });
+});
+
+describe("parallel stress — cancel race against child completion", () => {
+  test("operator cancels parent right as child completes — cascade tolerates a now-terminal child without erroring", async () => {
+    const h = freshHarness();
+    const sha = "wf_race";
+    h.store.saveWorkflow(sha, "race", buildFanoutDot(2));
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.01, calls: 1, delayMs: 1 }));
+    h.store.enqueueRun({ runId: "rc", workflowSha: sha });
+
+    // Drive parent fanout; let b0 complete; b1 still queued.
+    wakePending(h.store);
+    let claimed = h.store.claimNextRun(8);
+    const ac = new AbortController();
+    await runOne(claimed!.runId, {
+      store: h.store,
+      dispatcher: h.dispatcher,
+      registry: h.registry,
+      tools: h.tools,
+      llmCall: h.llmCall,
+      maxConcurrentRuns: 8,
+      maxTurnsForTesting: 30,
+      shutdownSignal: ac.signal,
+    });
+    // Run b0 only.
+    wakePending(h.store);
+    claimed = h.store.claimNextRun(8);
+    if (claimed?.runId === "rc__fanout__i0__b0") {
+      await runOne(claimed.runId, {
+        store: h.store,
+        dispatcher: h.dispatcher,
+        registry: h.registry,
+        tools: h.tools,
+        llmCall: h.llmCall,
+        maxConcurrentRuns: 8,
+        maxTurnsForTesting: 30,
+        shutdownSignal: ac.signal,
+      });
+    }
+    expect(h.store.getState("rc__fanout__i0__b0")?.status).toBe("completed");
+    expect(h.store.getState("rc__fanout__i0__b1")?.status).toBe("queued");
+    expect(h.store.getState("rc")?.status).toBe("running_children");
+
+    // Cancel the parent — cascade will try to cancel b0 (terminal)
+    // AND b1 (queued). The terminal one shouldn't error.
+    h.store.appendIntent("rc", { type: "intent.cancel_requested", payload: {} });
+    for (let i = 0; i < 20; i++) wakePending(h.store);
+
+    expect(h.store.getState("rc")?.status).toBe("cancelled");
+    // b0 stays completed (terminal, cancel intent on it is a no-op).
+    expect(h.store.getState("rc__fanout__i0__b0")?.status).toBe("completed");
+    // b1 transitions to cancelled.
+    expect(h.store.getState("rc__fanout__i0__b1")?.status).toBe("cancelled");
+    h.store.close();
+  });
+});
+
 describe("parallel stress — wake convergence idempotence", () => {
   test("wake-pending fires multiple times on a parent whose children are all paused — no duplicate fact.subrun_completed", async () => {
     const h = freshHarness();
