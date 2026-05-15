@@ -123,14 +123,14 @@ describe("buildProviderEntry without apiKey", () => {
   const baseAnswers: CustomProviderAnswers = {
     providerName: "ollama",
     baseUrl: "http://localhost:11434/v1",
-    api: "openai_completions",
+    api: "openai-completions",
     modelIds: ["llama3.1:8b"],
   };
 
   test("builds entry with one model", () => {
     const entry = buildProviderEntry(baseAnswers);
     expect(entry.baseUrl).toBe("http://localhost:11434/v1");
-    expect(entry.api).toBe("openai_completions");
+    expect(entry.api).toBe("openai-completions");
     expect(entry.models).toHaveLength(1);
     expect(entry.models[0]!.id).toBe("llama3.1:8b");
   });
@@ -156,10 +156,10 @@ describe("buildProviderEntry without apiKey", () => {
     expect(entry.models[0]!.id).toBe("llama3.1:8b");
   });
 
-  test("uses openai_responses api correctly", () => {
-    const entry = buildProviderEntry({ ...baseAnswers, api: "openai_responses" });
-    expect(entry.api).toBe("openai_responses");
-    expect(entry.models[0]!.api).toBe("openai_responses");
+  test("uses openai-responses api correctly", () => {
+    const entry = buildProviderEntry({ ...baseAnswers, api: "openai-responses" });
+    expect(entry.api).toBe("openai-responses");
+    expect(entry.models[0]!.api).toBe("openai-responses");
   });
 });
 
@@ -169,14 +169,14 @@ describe("buildProviderEntry without apiKey", () => {
 describe("mergeProviderEntry", () => {
   const existing: ProviderEntry = {
     baseUrl: "http://localhost:11434/v1",
-    api: "openai_completions",
-    models: [buildModelEntry({ id: "llama3.1:8b", api: "openai_completions" })],
+    api: "openai-completions",
+    models: [buildModelEntry({ id: "llama3.1:8b", api: "openai-completions" })],
   };
 
   const newEntry: ProviderEntry = {
     baseUrl: "http://localhost:11434/v1",
-    api: "openai_completions",
-    models: [buildModelEntry({ id: "mistral:7b", api: "openai_completions" })],
+    api: "openai-completions",
+    models: [buildModelEntry({ id: "mistral:7b", api: "openai-completions" })],
   };
 
   test("overwrite=true replaces provider entirely", () => {
@@ -199,7 +199,7 @@ describe("mergeProviderEntry", () => {
       models: [
         buildModelEntry({
           id: "llama3.1:8b",
-          api: "openai_completions",
+          api: "openai-completions",
           name: "llama3.1 updated",
           contextWindow: 200_000,
           maxTokens: 16_384,
@@ -250,7 +250,7 @@ describe("providers add --custom writes a provider_config row", () => {
       const entry = buildProviderEntry({
         providerName: "ollama",
         baseUrl: "http://localhost:11434/v1",
-        api: "openai_completions",
+        api: "openai-completions",
         modelIds: ["llama3.1:8b"],
       });
       store.upsertProviderConfig({ provider: "ollama", config: JSON.stringify(entry) });

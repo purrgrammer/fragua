@@ -64,8 +64,8 @@ function readUpdatedAt(provider: string): number | null {
 function makeEntry(modelIds: string[]): ProviderEntry {
   return {
     baseUrl: "http://localhost:11434/v1",
-    api: "openai_completions",
-    models: modelIds.map((id) => buildModelEntry({ id, api: "openai_completions" })),
+    api: "openai-completions",
+    models: modelIds.map((id) => buildModelEntry({ id, api: "openai-completions" })),
   };
 }
 

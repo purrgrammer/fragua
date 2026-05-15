@@ -8,7 +8,7 @@
 //   - provider name (slug, e.g. "ollama")
 //   - base URL (e.g. "http://localhost:11434/v1")
 //   - one or more model IDs (e.g. "llama3.1:8b")
-//   - API shape (openai_completions | openai_responses)
+//   - API shape (openai-completions | openai-responses)
 //
 // Credentials are NOT prompted here — a custom provider that needs
 // auth uses the normal `swarm providers add <name>` flow into the
@@ -131,9 +131,9 @@ export function inferModelDefaults(modelId: string): { contextWindow: number; ma
 // ---------------------------------------------------------------------------
 
 /** The two OpenAI-compat API shapes pi-ai supports for custom providers.
- * "openai_completions" covers Ollama / vLLM / LM Studio.
- * "openai_responses" covers providers that use the newer Responses API. */
-export const SUPPORTED_APIS = ["openai_completions", "openai_responses"] as const;
+ * "openai-completions" covers Ollama / vLLM / LM Studio.
+ * "openai-responses" covers providers that use the newer Responses API. */
+export const SUPPORTED_APIS = ["openai-completions", "openai-responses"] as const;
 export type SupportedApi = (typeof SUPPORTED_APIS)[number];
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ export function buildModelEntry(
   return {
     id,
     name: args.name ?? id,
-    api: args.api ?? "openai_completions",
+    api: args.api ?? "openai-completions",
     contextWindow: args.contextWindow ?? heuristic.contextWindow,
     maxTokens: args.maxTokens ?? heuristic.maxTokens,
     reasoning: args.reasoning ?? false,
@@ -340,7 +340,7 @@ export async function providersAddModelCommand(
       return 1;
     }
     const overrides = flagsToOverrides(flags);
-    const next = buildModelEntry({ id: modelId, api: entry.api ?? "openai_completions", ...overrides });
+    const next = buildModelEntry({ id: modelId, api: entry.api ?? "openai-completions", ...overrides });
 
     if (!flags.yes) {
       const { confirm } = await prompts({
@@ -542,12 +542,12 @@ export async function providersAddCustomCommand(): Promise<number> {
       message: "API shape",
       choices: [
         {
-          title: "openai_completions — Ollama, vLLM, LM Studio, most local servers",
-          value: "openai_completions",
+          title: "openai-completions — Ollama, vLLM, LM Studio, most local servers",
+          value: "openai-completions",
         },
         {
-          title: "openai_responses — OpenAI Responses API (newer endpoints)",
-          value: "openai_responses",
+          title: "openai-responses — OpenAI Responses API (newer endpoints)",
+          value: "openai-responses",
         },
       ],
     });
