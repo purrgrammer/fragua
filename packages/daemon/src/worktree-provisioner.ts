@@ -24,7 +24,13 @@
 //   - Dispose uses `WorktreeEnvironment.dispose()` which is a best-
 //     effort cleanup: it tolerates already-removed worktrees and
 //     branches (user may have merged + deleted them out of band).
+//   - Per-run worktree-vs-local fallback: the daemon serves runs from
+//     many cwds. `create()` checks `isGitRepo(<run cwd>)` per run;
+//     non-git cwds get a `LocalEnvironment` rooted at the run's own
+//     cwd, not at the daemon's startup pwd. That keeps the daemon
+//     startable from anywhere while still honouring each run's cwd.
 
+import { spawn } from "node:child_process";
 import type { ExecutionEnvironment } from "@swarm/core";
 import {
   type BootstrapSpec,
@@ -183,6 +189,13 @@ export class WorktreeProvisioner implements Provisioner {
   private async create(runId: string, provisionOpts: ProvisionOpts): Promise<ExecutionEnvironment> {
     if (this.factory) return this.factory(runId);
     const repoRoot = provisionOpts.cwd ?? this.repoRoot;
+
+    if (!(await isGitRepo(repoRoot))) {
+      const localOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: repoRoot };
+      if (this.defaultShellTimeoutMs !== undefined) localOpts.defaultTimeoutMs = this.defaultShellTimeoutMs;
+      return new LocalEnvironment(localOpts);
+    }
+
     const { bootstrap, bootstrapTimeoutMs } = await this.resolveBootstrapFor(repoRoot);
     const opts: ConstructorParameters<typeof WorktreeEnvironment>[0] = {
       runId,
@@ -199,33 +212,13 @@ export class WorktreeProvisioner implements Provisioner {
   }
 }
 
-/** Fallback provisioner that hands back a per-run LocalEnvironment
- * rooted at the run's cwd (or the constructor default). Useful for
- * tests + daemons that don't want isolation. `dispose` is a no-op. */
-export class LocalEnvironmentProvisioner implements Provisioner {
-  private readonly defaultCwd: string;
-  private readonly shared: LocalEnvironment;
-
-  constructor(cwd: string = process.cwd(), opts: { defaultShellTimeoutMs?: number } = {}) {
-    this.defaultCwd = cwd;
-    const envOpts: ConstructorParameters<typeof LocalEnvironment>[0] = { cwd: this.defaultCwd };
-    if (opts.defaultShellTimeoutMs !== undefined) envOpts.defaultTimeoutMs = opts.defaultShellTimeoutMs;
-    this.shared = new LocalEnvironment(envOpts);
-  }
-
-  async ensure(_runId: string, _opts: ProvisionOpts = {}): Promise<ExecutionEnvironment> {
-    return this.shared;
-  }
-
-  async dispose(_runId: string, _ctx?: DisposeContext): Promise<DisposeResult> {
-    return { branch: null };
-  }
-
-  envFor(_runId: string): ExecutionEnvironment | undefined {
-    return this.shared;
-  }
-
-  baseGitSha(_runId: string): string | null {
-    return null;
-  }
+function isGitRepo(cwd: string): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.on("close", (code) => resolvePromise(code === 0));
+    child.on("error", () => resolvePromise(false));
+  });
 }

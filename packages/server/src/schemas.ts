@@ -120,7 +120,7 @@ export const RunDetail = Type.Object({
   /** Absolute path to the still-mounted worktree under
    * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree has
    * been disposed (run terminal + provisioner cleanup) or for runs
-   * that never had one (LocalEnvironmentProvisioner). */
+   * whose cwd wasn't a git repo (per-run LocalEnvironment fallback). */
   worktreePath: Type.Optional(Type.String()),
 });
 export type RunDetail = Static<typeof RunDetail>;

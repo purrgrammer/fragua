@@ -6,7 +6,6 @@
 // fire. Handlers of other shapes (Mdiamond start, Msquare exit, hexagon
 // wait.human, etc.) stay on the trivial transitions.
 
-import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { homedir, hostname as osHostname } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -28,7 +27,6 @@ import {
   AutoTitler,
   autoDispatcherResolver,
   Dispatcher,
-  LocalEnvironmentProvisioner,
   makeSpawnSubagent,
   type Provisioner,
   startDaemon,
@@ -473,9 +471,12 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // bootstrap gets no bootstrap (the previous behaviour silently
   // leaked the daemon's startup-cwd config to every project, which
   // broke as soon as a second project entered the picture).
-  // Falls back to a shared LocalEnvironment if the cwd isn't inside
-  // a git repo — tests + demo paths shouldn't require a worktree to
-  // get off the ground.
+  //
+  // The worktree/local choice itself is **per-run** (decided inside
+  // `WorktreeProvisioner.create()` against the run's cwd), so the
+  // daemon's own startup cwd is irrelevant — a run from a git-repo
+  // cwd gets a worktree, a run from a non-git cwd gets a
+  // LocalEnvironment rooted at *its own* cwd.
   const resolveRunBootstrap = async (runCwd: string) => {
     const projectCfg = await loadProjectConfig(runCwd);
     const projectTimeouts = resolveTimeouts(projectCfg);
@@ -492,20 +493,14 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     }
     return out;
   };
-  const provisioner: Provisioner = (await isGitRepo(cwd))
-    ? new WorktreeProvisioner({
-        repoRoot: cwd,
-        resolveRunBootstrap,
-        ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
-      })
-    : new LocalEnvironmentProvisioner(
-        cwd,
-        timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {},
-      );
+  const provisioner: Provisioner = new WorktreeProvisioner({
+    repoRoot: cwd,
+    resolveRunBootstrap,
+    ...(timeouts.shell !== undefined ? { defaultShellTimeoutMs: timeouts.shell } : {}),
+  });
   const provisionerLabel =
-    provisioner instanceof WorktreeProvisioner
-      ? `worktree (.swarm/worktrees/<run-id>, bootstrap: per-run from <project>/.swarm/config.jsonc)`
-      : `local (cwd=${cwd}, no git repo detected)`;
+    `worktree per-run when run cwd is a git repo, else LocalEnvironment rooted at run cwd ` +
+    `(bootstrap: per-run from <project>/.swarm/config.jsonc)`;
 
   console.log(chalk.green(`swarm daemon running`));
   console.log(chalk.dim(`  store: ${storePath}`));
@@ -576,20 +571,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     store.close();
   }
   return exitCode;
-}
-
-/** Cheap `git rev-parse --is-inside-work-tree` check. Non-git cwds
- * fall back to a LocalEnvironmentProvisioner so test suites / demo
- * runs don't require a repo. */
-function isGitRepo(cwd: string): Promise<boolean> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    child.on("close", (code) => resolvePromise(code === 0));
-    child.on("error", () => resolvePromise(false));
-  });
 }
 
 interface SummariserInfo {

@@ -1,27 +1,35 @@
-// WorktreeProvisioner — lifecycle invariants.
+// WorktreeProvisioner — lifecycle invariants + per-run env decision.
 //
-// Real `git worktree add` isn't exercised here (that's a workspace-
-// layer concern covered by worktree-env.test.ts). This file uses the
-// `factory` injection point so lifecycle semantics can be tested in
-// isolation without spawning git subprocesses:
+// Two test surfaces here:
 //
-//   1. `ensure(runId)` is idempotent — repeat calls return the same
-//      cached env without re-invoking the factory.
-//   2. Concurrent `ensure` calls for the same runId dedupe to a single
-//      factory invocation (no double-provisioning).
-//   3. `ensure` failures don't poison the cache — a retry calls the
-//      factory again.
-//   4. `dispose` evicts the cache so a subsequent `ensure` reprovisions.
-//   5. `envFor` surfaces the cached env synchronously without provisioning.
-//   6. `dispose` on an unknown runId is a no-op (idempotent across
-//      lifecycle ordering).
-//   7. End-to-end through a real `WorktreeProvisioner` with a git repo
-//      is covered by a dedicated slow test guarded behind whether the
-//      test host has a git CLI.
+//   A. Lifecycle (uses the `factory` injection point — no git
+//      subprocesses, deterministic):
+//        1. `ensure(runId)` is idempotent — repeat calls return the
+//           same cached env without re-invoking the factory.
+//        2. Concurrent `ensure` calls for the same runId dedupe to a
+//           single factory invocation (no double-provisioning).
+//        3. `ensure` failures don't poison the cache — a retry calls
+//           the factory again.
+//        4. `dispose` evicts the cache so a subsequent `ensure`
+//           reprovisions.
+//        5. `envFor` surfaces the cached env synchronously without
+//           provisioning.
+//        6. `dispose` on an unknown runId is a no-op (idempotent
+//           across lifecycle ordering).
+//
+//   B. Per-run env decision (real `git init` + `git worktree add` in
+//      temp dirs — slower, but the only way to cover the regression
+//      fix: a daemon serves runs from many cwds, and the provisioner
+//      picks worktree-vs-local per run against the *run's* cwd, never
+//      the daemon's startup pwd).
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExecutionEnvironment } from "@swarm/core";
-import { LocalEnvironmentProvisioner, WorktreeProvisioner } from "../src/worktree-provisioner.ts";
+import { LocalEnvironment, WorktreeEnvironment } from "@swarm/workspace";
+import { WorktreeProvisioner } from "../src/worktree-provisioner.ts";
 
 function stubEnv(cwd: string): ExecutionEnvironment {
   return {
@@ -176,20 +184,87 @@ describe("WorktreeProvisioner — bootstrap resolution", () => {
   });
 });
 
-describe("LocalEnvironmentProvisioner — fallback", () => {
-  test("ensure returns the same shared LocalEnvironment for every run", async () => {
-    const p = new LocalEnvironmentProvisioner(process.cwd());
-    const a = await p.ensure("r1");
-    const b = await p.ensure("r2");
-    expect(a).toBe(b);
-    expect(a.cwd()).toBe(process.cwd());
+describe("WorktreeProvisioner — per-run worktree-vs-local fallback", () => {
+  // The daemon serves runs from many cwds. The provisioner type is decided
+  // per run against the run's own cwd — NOT once, at boot, against the
+  // daemon's startup pwd. A run whose cwd isn't a git repo gets a
+  // LocalEnvironment rooted at *that run's* cwd; the daemon's pwd is
+  // irrelevant. Regression: a daemon launched outside a git repo was
+  // previously locked into a single shared LocalEnvironment for every run.
+  test("non-git run cwd → LocalEnvironment rooted at the run's cwd", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "swarm-prov-nogit-"));
+    try {
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r1", { cwd: nonGit });
+      expect(env).toBeInstanceOf(LocalEnvironment);
+      expect(env.cwd()).toBe(nonGit);
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
   });
 
-  test("dispose is a no-op (shared env survives)", async () => {
-    const p = new LocalEnvironmentProvisioner(process.cwd());
-    const a = await p.ensure("r1");
-    await p.dispose("r1");
-    const b = await p.ensure("r1");
-    expect(a).toBe(b);
+  test("two non-git runs from different cwds → distinct envs at their own cwds", async () => {
+    const a = mkdtempSync(join(tmpdir(), "swarm-prov-a-"));
+    const b = mkdtempSync(join(tmpdir(), "swarm-prov-b-"));
+    try {
+      const p = new WorktreeProvisioner();
+      const envA = await p.ensure("r-a", { cwd: a });
+      const envB = await p.ensure("r-b", { cwd: b });
+      expect(envA).not.toBe(envB);
+      expect(envA.cwd()).toBe(a);
+      expect(envB.cwd()).toBe(b);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  test("git run cwd → WorktreeEnvironment under that cwd", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "swarm-prov-git-"));
+    try {
+      const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: repo });
+      if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
+      // git worktree add needs a commit to anchor against.
+      Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+        cwd: repo,
+      });
+
+      const p = new WorktreeProvisioner();
+      const env = await p.ensure("r-git", { cwd: repo });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      expect(env.cwd().startsWith(repo)).toBe(true);
+      expect(env.cwd()).toContain(".swarm/worktrees/r-git");
+
+      // Clean up the worktree (registers + removes) so the temp dir is removable.
+      await p.dispose("r-git");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("daemon-startup pwd is irrelevant — non-git constructor default doesn't leak into a git run", async () => {
+    // Simulate a daemon launched from a non-git dir (this.repoRoot is non-git)
+    // but serving a run whose cwd IS a git repo. The provisioner must pick
+    // the git path based on the run's cwd, not the constructor default.
+    const nonGitRoot = mkdtempSync(join(tmpdir(), "swarm-prov-bootcwd-"));
+    const gitRoot = mkdtempSync(join(tmpdir(), "swarm-prov-runcwd-"));
+    try {
+      const initRes = Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: gitRoot });
+      if (initRes.exitCode !== 0) throw new Error(`git init failed (exit ${initRes.exitCode})`);
+      Bun.spawnSync({
+        cmd: ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init", "-q"],
+        cwd: gitRoot,
+      });
+
+      const p = new WorktreeProvisioner({ repoRoot: nonGitRoot });
+      const env = await p.ensure("r-mixed", { cwd: gitRoot });
+      expect(env).toBeInstanceOf(WorktreeEnvironment);
+      expect(env.cwd().startsWith(gitRoot)).toBe(true);
+      await p.dispose("r-mixed");
+    } finally {
+      rmSync(nonGitRoot, { recursive: true, force: true });
+      rmSync(gitRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -28,4 +28,4 @@ export { makeSpawnSubagent } from "./spawn-subagent.ts";
 export type { SupervisorOpts } from "./supervisor.ts";
 export { HandlerLeakedError, IntentArrivedError, startSupervisor } from "./supervisor.ts";
 export type { Provisioner, ProvisionOpts, WorktreeProvisionerOptions } from "./worktree-provisioner.ts";
-export { LocalEnvironmentProvisioner, WorktreeProvisioner } from "./worktree-provisioner.ts";
+export { WorktreeProvisioner } from "./worktree-provisioner.ts";
