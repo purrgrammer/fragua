@@ -142,14 +142,12 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     model: "stub",
   });
 
-  // Credentials + model registry. Credentials live in the daemon's
-  // store (`provider_credentials` table) since the credentials-in-the-
-  // store proposal landed; custom-provider model definitions still come
-  // from `~/.swarm/models.json` with the pi-coding-agent dir as a
-  // read-only fallback. Constructed once per daemon process; cheap to
-  // hold on to for the process lifetime.
+  // Credentials + model registry. Both live on the global store:
+  // `provider_credentials` (api_key + OAuth) and `provider_config`
+  // (custom-provider definitions). Constructed once per daemon
+  // process; cheap to hold on to for the process lifetime.
   const authStorage = AuthStorage.fromStore(store);
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const modelRegistry = ModelRegistry.create(authStorage, store);
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
   // Resolve llm_provider/llm_model. Precedence: CLI flags >
@@ -374,7 +372,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       registry,
       defaultModel: { provider: provider!, model: model! },
       // Route model resolution through the ModelRegistry so custom
-      // providers (Ollama etc.) and models.json overrides are honoured.
+      // providers (Ollama etc.) and provider_config overrides are honoured.
       // Throws if the id is unknown — backend.run catches and surfaces.
       resolveModel: (p: string, id: string): Model<string> => {
         const m = modelRegistry.find(p, id);

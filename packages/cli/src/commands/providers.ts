@@ -1,11 +1,10 @@
 // `swarm providers …` — inspect, credential, test, and OAuth-login
 // LLM providers.
 //
-// Credentials live in the global swarm store's `provider_credentials`
-// table (~/.swarm/swarm.db); custom-provider model definitions live in
-// ~/.swarm/models.json (until the provider-config-storage follow-up
-// lifts them too). Each command opens the global store briefly and
-// closes it before returning.
+// Credentials and custom-provider definitions both live in the global
+// swarm store (`~/.swarm/swarm.db`) under `provider_credentials` and
+// `provider_config` respectively. Each command opens the global store
+// briefly and closes it before returning.
 
 export { providersAddCustomCommand } from "./providers-custom.ts";
 
@@ -25,15 +24,16 @@ export function providersHelpCommand(): number {
   console.log("Subcommands:");
   console.log(`  ${chalk.cyan("ls")}                       List all providers + credentialed status`);
   console.log(`  ${chalk.cyan("add [provider]")}           Add API-key credentials interactively`);
-  console.log(`  ${chalk.cyan("add --custom")}             Add a custom (OpenAI-compatible) provider to models.json`);
+  console.log(
+    `  ${chalk.cyan("add --custom")}             Add a custom (OpenAI-compatible) provider to the global store`,
+  );
   console.log(`  ${chalk.cyan("rm <provider>")}            Remove stored credentials`);
   console.log(`  ${chalk.cyan("test <provider> [model]")}  Stream a 1-token call to verify the setup`);
   console.log(`  ${chalk.cyan("login [provider]")}         Run the OAuth flow for a subscription-based provider`);
   console.log(`  ${chalk.cyan("logout <provider>")}        Clear stored OAuth tokens`);
   console.log();
   console.log(chalk.dim("Credentials live in ~/.swarm/swarm.db (provider_credentials table)."));
-  console.log(chalk.dim("Custom providers + model overrides live at ~/.swarm/models.json."));
-  console.log(chalk.dim("Read-only models.json fallback: ~/.pi/agent/models.json (pi-coding-agent)."));
+  console.log(chalk.dim("Custom providers + model overrides live in ~/.swarm/swarm.db (provider_config table)."));
   return 0;
 }
 
@@ -41,7 +41,7 @@ export function providersListCommand(): number {
   const store = openGlobalStore();
   try {
     const auth = AuthStorage.fromStore(store);
-    const registry = ModelRegistry.create(auth);
+    const registry = ModelRegistry.create(auth, store);
 
     const byProvider = new Map<string, number>();
     for (const m of registry.getAll()) {
@@ -69,7 +69,7 @@ export function providersListCommand(): number {
     const err = registry.getError();
     if (err) {
       console.log();
-      console.log(chalk.yellow(`models.json: ${err}`));
+      console.log(chalk.yellow(`provider_config: ${err}`));
     }
     console.log(chalk.dim(`\n${credentialed}/${rows.length} providers credentialed`));
     console.log(chalk.dim(`swarm home: ${getSwarmHome()}`));
@@ -107,6 +107,12 @@ export async function providersRmCommand(provider: string | undefined): Promise<
       return 0;
     }
     auth.remove(provider);
+    // Symmetric cleanup: a custom provider has both a credentials row
+    // (this one we just removed) and a `provider_config` row. The two
+    // tables don't share a foreign key, so the cleanup is sequential
+    // — each write is its own short txn; the resulting state ends up
+    // consistent for the operator's mental model (rm = both gone).
+    store.deleteProviderConfig(provider);
     console.log(chalk.green(`✓ removed credentials for "${provider}"`));
     return 0;
   } finally {
@@ -156,7 +162,7 @@ export async function providersTestCommand(
   const store = openGlobalStore();
   try {
     const auth = AuthStorage.fromStore(store);
-    const registry = ModelRegistry.create(auth);
+    const registry = ModelRegistry.create(auth, store);
 
     // Resolve model: explicit override > provider default > first available
     // for provider. Falling back to "any model of this provider" keeps the
@@ -247,7 +253,7 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
   let chosenProvider: string | undefined;
   try {
     const auth = AuthStorage.fromStore(store);
-    const registry = ModelRegistry.create(auth);
+    const registry = ModelRegistry.create(auth, store);
 
     const knownProviders = [...new Set(registry.getAll().map((m) => m.provider))].sort();
 
@@ -268,7 +274,7 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
     if (!knownProviders.includes(provider)) {
       console.log(
         chalk.yellow(
-          `"${provider}" is not a pi-ai built-in — add it as a custom provider in models.json if you want models under it`,
+          `"${provider}" is not a pi-ai built-in — add it as a custom provider via \`swarm providers add --custom\` if you want models under it`,
         ),
       );
     }
@@ -287,9 +293,9 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
       }
     }
 
-    // The literal / env / shell chooser is gone: keys are stored verbatim
-    // in the global store (`provider_credentials` table). Single password
-    // prompt for the key.
+    // Keys are stored verbatim in the global store
+    // (`provider_credentials` table). Single password prompt for the
+    // key.
     const res = await prompts({ type: "password", name: "value", message: `Paste the API key for ${provider}` });
     const keyField: string | undefined = res.value;
     if (!keyField) {

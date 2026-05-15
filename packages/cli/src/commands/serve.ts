@@ -122,7 +122,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   // providers are credentialed. Credentials live in the same store as
   // every other coordination surface (`provider_credentials` table).
   const authStorage = AuthStorage.fromStore(store);
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const modelRegistry = ModelRegistry.create(authStorage, store);
   // Backpressure cap on `status='queued'` runs from `.swarm/config.jsonc`.
   // Opt-in (default uncapped); non-positive / unparseable values are
   // silently ignored.

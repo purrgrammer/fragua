@@ -28,7 +28,7 @@ swarm <cmd> --help           # detailed flags for a command
 swarm providers              # show subcommand help
 swarm providers ls           # list configured providers + their default models + a few valid model ids
 swarm providers add [name]   # interactively add credentials for a built-in provider
-swarm providers add --custom # add a custom OpenAI-compatible endpoint to ~/.swarm/models.json
+swarm providers add --custom # add a custom OpenAI-compatible endpoint (writes to ~/.swarm/swarm.db)
 swarm providers rm <name>    # remove credentials
 swarm providers test <name> [model]  # round-trip a tiny request to verify the credentials work
 swarm providers login <name> # OAuth login flow for providers that support it (e.g. github-copilot)
