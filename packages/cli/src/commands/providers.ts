@@ -1,10 +1,11 @@
 // `swarm providers …` — inspect, credential, test, and OAuth-login
 // LLM providers.
 //
-// All state lives in ~/.swarm/auth.json (AuthStorage) and
-// ~/.swarm/models.json (ModelRegistry, future). The commands below are
-// thin wrappers; auth.json remains human-editable and the CLI is one of
-// two ways to manage it.
+// Credentials live in the global swarm store's `provider_credentials`
+// table (~/.swarm/swarm.db); custom-provider model definitions live in
+// ~/.swarm/models.json (until the provider-config-storage follow-up
+// lifts them too). Each command opens the global store briefly and
+// closes it before returning.
 
 export { providersAddCustomCommand } from "./providers-custom.ts";
 
@@ -13,6 +14,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { AuthStorage, defaultModelPerProvider, getSwarmHome, ModelRegistry } from "@swarm/agent";
 import chalk from "chalk";
 import prompts from "prompts";
+import { openGlobalStore } from "./open-global-store.ts";
 
 // ---------------------------------------------------------------------------
 // help + ls
@@ -29,48 +31,53 @@ export function providersHelpCommand(): number {
   console.log(`  ${chalk.cyan("login [provider]")}         Run the OAuth flow for a subscription-based provider`);
   console.log(`  ${chalk.cyan("logout <provider>")}        Clear stored OAuth tokens`);
   console.log();
-  console.log(chalk.dim("Credentials live at ~/.swarm/auth.json (0600)."));
+  console.log(chalk.dim("Credentials live in ~/.swarm/swarm.db (provider_credentials table)."));
   console.log(chalk.dim("Custom providers + model overrides live at ~/.swarm/models.json."));
-  console.log(chalk.dim("Read-only fallback: ~/.pi/agent/{auth,models}.json (pi-coding-agent)."));
+  console.log(chalk.dim("Read-only models.json fallback: ~/.pi/agent/models.json (pi-coding-agent)."));
   return 0;
 }
 
 export function providersListCommand(): number {
-  const auth = AuthStorage.create();
-  const registry = ModelRegistry.create(auth);
+  const store = openGlobalStore();
+  try {
+    const auth = AuthStorage.fromStore(store);
+    const registry = ModelRegistry.create(auth);
 
-  const byProvider = new Map<string, number>();
-  for (const m of registry.getAll()) {
-    byProvider.set(m.provider, (byProvider.get(m.provider) ?? 0) + 1);
-  }
+    const byProvider = new Map<string, number>();
+    for (const m of registry.getAll()) {
+      byProvider.set(m.provider, (byProvider.get(m.provider) ?? 0) + 1);
+    }
 
-  if (byProvider.size === 0) {
-    console.log(chalk.dim("no providers registered — unexpected; pi-ai should bundle built-ins"));
+    if (byProvider.size === 0) {
+      console.log(chalk.dim("no providers registered — unexpected; pi-ai should bundle built-ins"));
+      return 0;
+    }
+
+    console.log(chalk.bold("Providers (via pi-ai registry):\n"));
+    const rows = [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    let credentialed = 0;
+    for (const [name, count] of rows) {
+      const ready = auth.hasAuth(name);
+      if (ready) credentialed++;
+      const source = ready ? auth.describeAuthSource(name) : null;
+      const mark = ready ? chalk.green("✓") : chalk.dim("·");
+      const nameCol = name.padEnd(24);
+      const countCol = `${count} model${count === 1 ? "" : "s"}`.padEnd(12);
+      const sourceCol = source ? ` ${source}` : "";
+      console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(sourceCol)}`);
+    }
+    const err = registry.getError();
+    if (err) {
+      console.log();
+      console.log(chalk.yellow(`models.json: ${err}`));
+    }
+    console.log(chalk.dim(`\n${credentialed}/${rows.length} providers credentialed`));
+    console.log(chalk.dim(`swarm home: ${getSwarmHome()}`));
+    console.log(chalk.dim("run `swarm providers add <provider>` to configure one, or `login <provider>` for OAuth"));
     return 0;
+  } finally {
+    store.close();
   }
-
-  console.log(chalk.bold("Providers (via pi-ai registry):\n"));
-  const rows = [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  let credentialed = 0;
-  for (const [name, count] of rows) {
-    const ready = auth.hasAuth(name);
-    if (ready) credentialed++;
-    const source = ready ? auth.describeAuthSource(name) : null;
-    const mark = ready ? chalk.green("✓") : chalk.dim("·");
-    const nameCol = name.padEnd(24);
-    const countCol = `${count} model${count === 1 ? "" : "s"}`.padEnd(12);
-    const sourceCol = source ? ` ${source}` : "";
-    console.log(`${mark} ${nameCol}${chalk.dim(countCol)}${chalk.dim(sourceCol)}`);
-  }
-  const err = registry.getError();
-  if (err) {
-    console.log();
-    console.log(chalk.yellow(`models.json: ${err}`));
-  }
-  console.log(chalk.dim(`\n${credentialed}/${rows.length} providers credentialed`));
-  console.log(chalk.dim(`swarm home: ${getSwarmHome()}`));
-  console.log(chalk.dim("run `swarm providers add <provider>` to configure one, or `login <provider>` for OAuth"));
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,24 +89,29 @@ export async function providersRmCommand(provider: string | undefined): Promise<
     console.error(chalk.red("usage: swarm providers rm <provider>"));
     return 1;
   }
-  const auth = AuthStorage.create();
-  if (!auth.has(provider)) {
-    console.log(chalk.dim(`no credentials stored for "${provider}"`));
+  const store = openGlobalStore();
+  try {
+    const auth = AuthStorage.fromStore(store);
+    if (!auth.has(provider)) {
+      console.log(chalk.dim(`no credentials stored for "${provider}"`));
+      return 0;
+    }
+    const { confirm } = await prompts({
+      type: "confirm",
+      name: "confirm",
+      message: `Remove stored credentials for "${provider}"?`,
+      initial: false,
+    });
+    if (!confirm) {
+      console.log(chalk.dim("cancelled"));
+      return 0;
+    }
+    auth.remove(provider);
+    console.log(chalk.green(`✓ removed credentials for "${provider}"`));
     return 0;
+  } finally {
+    store.close();
   }
-  const { confirm } = await prompts({
-    type: "confirm",
-    name: "confirm",
-    message: `Remove stored credentials for "${provider}"?`,
-    initial: false,
-  });
-  if (!confirm) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-  auth.remove(provider);
-  console.log(chalk.green(`✓ removed credentials for "${provider}"`));
-  return 0;
 }
 
 export async function providersLogoutCommand(provider: string | undefined): Promise<number> {
@@ -107,19 +119,26 @@ export async function providersLogoutCommand(provider: string | undefined): Prom
     console.error(chalk.red("usage: swarm providers logout <provider>"));
     return 1;
   }
-  const auth = AuthStorage.create();
-  const cred = auth.get(provider);
-  if (!cred) {
-    console.log(chalk.dim(`no credentials stored for "${provider}"`));
+  const store = openGlobalStore();
+  try {
+    const auth = AuthStorage.fromStore(store);
+    const cred = auth.get(provider);
+    if (!cred) {
+      console.log(chalk.dim(`no credentials stored for "${provider}"`));
+      return 0;
+    }
+    if (cred.type !== "oauth") {
+      console.error(
+        chalk.red(`"${provider}" is stored as ${cred.type}, not oauth — use \`swarm providers rm\` instead`),
+      );
+      return 1;
+    }
+    auth.logout(provider);
+    console.log(chalk.green(`✓ logged out of "${provider}"`));
     return 0;
+  } finally {
+    store.close();
   }
-  if (cred.type !== "oauth") {
-    console.error(chalk.red(`"${provider}" is stored as ${cred.type}, not oauth — use \`swarm providers rm\` instead`));
-    return 1;
-  }
-  auth.logout(provider);
-  console.log(chalk.green(`✓ logged out of "${provider}"`));
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,85 +153,89 @@ export async function providersTestCommand(
     console.error(chalk.red("usage: swarm providers test <provider> [model]"));
     return 1;
   }
-  const auth = AuthStorage.create();
-  const registry = ModelRegistry.create(auth);
-
-  // Resolve model: explicit override > provider default > first available
-  // for provider. Falling back to "any model of this provider" keeps the
-  // test command useful for custom Ollama-style providers that aren't in
-  // defaultModelPerProvider — but only when the user didn't specify one;
-  // a requested-but-missing model is always a hard error.
-  let model: ReturnType<ModelRegistry["find"]>;
-  if (modelOverride) {
-    model = registry.find(provider, modelOverride);
-    if (!model) {
-      console.error(chalk.red(`model "${provider}/${modelOverride}" not registered`));
-      console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
-      return 1;
-    }
-  } else {
-    const defaultId = defaultModelPerProvider[provider as keyof typeof defaultModelPerProvider];
-    model = defaultId ? registry.find(provider, defaultId) : undefined;
-    if (!model) model = registry.getAll().find((m) => m.provider === provider);
-    if (!model) {
-      console.error(chalk.red(`no models registered for provider "${provider}"`));
-      console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
-      return 1;
-    }
-  }
-
-  if (!auth.hasAuth(provider)) {
-    console.error(chalk.red(`no credentials configured for "${provider}"`));
-    console.error(
-      chalk.dim(`  run \`swarm providers add ${provider}\`, or \`swarm providers login ${provider}\` for OAuth`),
-    );
-    return 1;
-  }
-
-  const apiKey = await auth.getApiKey(provider);
-  if (!apiKey) {
-    console.error(chalk.red(`credentials configured for "${provider}" but getApiKey returned nothing`));
-    console.error(chalk.dim("  likely a !shell-command in auth.json failed — try running it directly"));
-    return 1;
-  }
-  const source = auth.describeAuthSource(provider) ?? "unknown";
-  const keyPreview = `${apiKey.slice(0, 6)}…${apiKey.slice(-4)} (${apiKey.length} chars)`;
-
-  console.log(chalk.dim(`testing ${provider}/${model.id} …`));
-  console.log(chalk.dim(`  source: ${source}`));
-  console.log(chalk.dim(`  key:    ${keyPreview}`));
-  const started = Date.now();
-  let firstDeltaMs: number | undefined;
-  let outputTokens = 0;
+  const store = openGlobalStore();
   try {
-    const stream = streamSimple(
-      model,
-      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [] },
-      // biome-ignore lint/suspicious/noExplicitAny: pi-ai accepts provider-specific options as an opaque bag.
-      { maxTokens: 1, apiKey } as any,
-    );
-    for await (const ev of stream) {
-      if (ev.type === "text_delta" && firstDeltaMs === undefined) firstDeltaMs = Date.now() - started;
-      if (ev.type === "done") outputTokens = ev.message.usage?.output ?? 0;
-      if (ev.type === "error") {
-        const msg = ev.error.errorMessage ?? "unknown provider error";
-        console.error(chalk.red(`✗ ${msg}`));
+    const auth = AuthStorage.fromStore(store);
+    const registry = ModelRegistry.create(auth);
+
+    // Resolve model: explicit override > provider default > first available
+    // for provider. Falling back to "any model of this provider" keeps the
+    // test command useful for custom Ollama-style providers that aren't in
+    // defaultModelPerProvider — but only when the user didn't specify one;
+    // a requested-but-missing model is always a hard error.
+    let model: ReturnType<ModelRegistry["find"]>;
+    if (modelOverride) {
+      model = registry.find(provider, modelOverride);
+      if (!model) {
+        console.error(chalk.red(`model "${provider}/${modelOverride}" not registered`));
+        console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
+        return 1;
+      }
+    } else {
+      const defaultId = defaultModelPerProvider[provider as keyof typeof defaultModelPerProvider];
+      model = defaultId ? registry.find(provider, defaultId) : undefined;
+      if (!model) model = registry.getAll().find((m) => m.provider === provider);
+      if (!model) {
+        console.error(chalk.red(`no models registered for provider "${provider}"`));
+        console.error(chalk.dim("  check `swarm providers ls` for the list of known providers"));
         return 1;
       }
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(chalk.red(`✗ ${msg}`));
-    return 1;
-  }
 
-  const total = Date.now() - started;
-  const firstLabel =
-    firstDeltaMs !== undefined
-      ? `${firstDeltaMs}ms to first token`
-      : `no text tokens (model emitted ${outputTokens} output tokens)`;
-  console.log(chalk.green(`✓ ${provider}/${model.id} responded — ${firstLabel}, ${total}ms total`));
-  return 0;
+    if (!auth.hasAuth(provider)) {
+      console.error(chalk.red(`no credentials configured for "${provider}"`));
+      console.error(
+        chalk.dim(`  run \`swarm providers add ${provider}\`, or \`swarm providers login ${provider}\` for OAuth`),
+      );
+      return 1;
+    }
+
+    const apiKey = await auth.getApiKey(provider);
+    if (!apiKey) {
+      console.error(chalk.red(`credentials configured for "${provider}" but getApiKey returned nothing`));
+      return 1;
+    }
+    const source = auth.describeAuthSource(provider) ?? "unknown";
+    const keyPreview = `${apiKey.slice(0, 6)}…${apiKey.slice(-4)} (${apiKey.length} chars)`;
+
+    console.log(chalk.dim(`testing ${provider}/${model.id} …`));
+    console.log(chalk.dim(`  source: ${source}`));
+    console.log(chalk.dim(`  key:    ${keyPreview}`));
+    const started = Date.now();
+    let firstDeltaMs: number | undefined;
+    let outputTokens = 0;
+    try {
+      const stream = streamSimple(
+        model,
+        { messages: [{ role: "user", content: "hi", timestamp: Date.now() }], tools: [] },
+        // biome-ignore lint/suspicious/noExplicitAny: pi-ai accepts provider-specific options as an opaque bag.
+        { maxTokens: 1, apiKey } as any,
+      );
+      for await (const ev of stream) {
+        if (ev.type === "text_delta" && firstDeltaMs === undefined) firstDeltaMs = Date.now() - started;
+        if (ev.type === "done") outputTokens = ev.message.usage?.output ?? 0;
+        if (ev.type === "error") {
+          const msg = ev.error.errorMessage ?? "unknown provider error";
+          console.error(chalk.red(`✗ ${msg}`));
+          return 1;
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(chalk.red(`✗ ${msg}`));
+      return 1;
+    }
+
+    const total = Date.now() - started;
+    const firstLabel =
+      firstDeltaMs !== undefined
+        ? `${firstDeltaMs}ms to first token`
+        : `no text tokens (model emitted ${outputTokens} output tokens)`;
+    console.log(chalk.green(`✓ ${provider}/${model.id} responded — ${firstLabel}, ${total}ms total`));
+    return 0;
+  } finally {
+    store.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,102 +243,77 @@ export async function providersTestCommand(
 // ---------------------------------------------------------------------------
 
 export async function providersAddCommand(providerArg: string | undefined): Promise<number> {
-  const auth = AuthStorage.create();
-  const registry = ModelRegistry.create(auth);
+  const store = openGlobalStore();
+  let chosenProvider: string | undefined;
+  try {
+    const auth = AuthStorage.fromStore(store);
+    const registry = ModelRegistry.create(auth);
 
-  const knownProviders = [...new Set(registry.getAll().map((m) => m.provider))].sort();
+    const knownProviders = [...new Set(registry.getAll().map((m) => m.provider))].sort();
 
-  let provider = providerArg;
-  if (!provider) {
-    const res = await prompts({
-      type: "autocomplete",
-      name: "provider",
-      message: "Provider",
-      choices: knownProviders.map((p) => ({ title: p, value: p })),
-    });
-    provider = res.provider;
-  }
-  if (!provider) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-  if (!knownProviders.includes(provider)) {
-    console.log(
-      chalk.yellow(
-        `"${provider}" is not a pi-ai built-in — add it as a custom provider in models.json if you want models under it`,
-      ),
-    );
-  }
-
-  if (auth.has(provider)) {
-    const existing = auth.get(provider);
-    const { overwrite } = await prompts({
-      type: "confirm",
-      name: "overwrite",
-      message: `credentials already stored for "${provider}" (${existing?.type}) — overwrite?`,
-      initial: false,
-    });
-    if (!overwrite) {
+    let provider = providerArg;
+    if (!provider) {
+      const res = await prompts({
+        type: "autocomplete",
+        name: "provider",
+        message: "Provider",
+        choices: knownProviders.map((p) => ({ title: p, value: p })),
+      });
+      provider = res.provider;
+    }
+    if (!provider) {
       console.log(chalk.dim("cancelled"));
       return 0;
     }
-  }
+    if (!knownProviders.includes(provider)) {
+      console.log(
+        chalk.yellow(
+          `"${provider}" is not a pi-ai built-in — add it as a custom provider in models.json if you want models under it`,
+        ),
+      );
+    }
 
-  // Form chooser: literal vs env-var-name vs !shell-command. All three
-  // are stored as `key` strings — resolve-config-value picks the
-  // strategy at read time based on the prefix.
-  const { form } = await prompts({
-    type: "select",
-    name: "form",
-    message: "How should swarm read the key at request time?",
-    choices: [
-      { title: "Literal — store the key directly in auth.json", value: "literal" },
-      { title: "Environment variable — auth.json stores only the var name", value: "env" },
-      { title: "Shell command — auth.json stores !cmd; executed on read", value: "shell" },
-    ],
-  });
-  if (!form) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
+    if (auth.has(provider)) {
+      const existing = auth.get(provider);
+      const { overwrite } = await prompts({
+        type: "confirm",
+        name: "overwrite",
+        message: `credentials already stored for "${provider}" (${existing?.type}) — overwrite?`,
+        initial: false,
+      });
+      if (!overwrite) {
+        console.log(chalk.dim("cancelled"));
+        return 0;
+      }
+    }
 
-  let keyField: string | undefined;
-  if (form === "literal") {
+    // The literal / env / shell chooser is gone: keys are stored verbatim
+    // in the global store (`provider_credentials` table). Single password
+    // prompt for the key.
     const res = await prompts({ type: "password", name: "value", message: `Paste the API key for ${provider}` });
-    keyField = res.value;
-  } else if (form === "env") {
-    const res = await prompts({
-      type: "text",
-      name: "value",
-      message: "Environment variable name (e.g. ANTHROPIC_API_KEY)",
-      validate: (v: string) => (v.length > 0 ? true : "must not be empty"),
-    });
-    keyField = res.value;
-  } else {
-    const res = await prompts({
-      type: "text",
-      name: "value",
-      message: "Shell command (leading ! optional; e.g. op read 'op://vault/item/credential')",
-      validate: (v: string) => (v.length > 0 ? true : "must not be empty"),
-    });
-    const raw = typeof res.value === "string" ? res.value.trim() : "";
-    keyField = raw.startsWith("!") ? raw : `!${raw}`;
-  }
-  if (!keyField) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
+    const keyField: string | undefined = res.value;
+    if (!keyField) {
+      console.log(chalk.dim("cancelled"));
+      return 0;
+    }
+
+    auth.set(provider, { type: "api_key", key: keyField });
+    console.log(chalk.green(`✓ stored credentials for "${provider}" in ${getSwarmHome()}/swarm.db`));
+    chosenProvider = provider;
+  } finally {
+    store.close();
   }
 
-  auth.set(provider, { type: "api_key", key: keyField });
-  console.log(chalk.green(`✓ stored credentials for "${provider}" at ${getSwarmHome()}/auth.json`));
-
+  // `providersTestCommand` reopens the store on its own. Closing first
+  // avoids holding two write handles to the same DB across the
+  // streamed test call.
   const { runTest } = await prompts({
     type: "confirm",
     name: "runTest",
     message: "Test now with a 1-token call?",
     initial: true,
   });
-  if (runTest) return providersTestCommand(provider, undefined);
+  if (runTest && chosenProvider) return providersTestCommand(chosenProvider, undefined);
   return 0;
 }
 
@@ -324,79 +322,84 @@ export async function providersAddCommand(providerArg: string | undefined): Prom
 // ---------------------------------------------------------------------------
 
 export async function providersLoginCommand(providerArg: string | undefined): Promise<number> {
-  const auth = AuthStorage.create();
-  const oauthProviders = auth.getOAuthProviders();
-  if (oauthProviders.length === 0) {
-    console.error(chalk.red("no OAuth providers registered in pi-ai"));
-    return 1;
-  }
+  const store = openGlobalStore();
+  try {
+    const auth = AuthStorage.fromStore(store);
+    const oauthProviders = auth.getOAuthProviders();
+    if (oauthProviders.length === 0) {
+      console.error(chalk.red("no OAuth providers registered in pi-ai"));
+      return 1;
+    }
 
-  let provider = providerArg;
-  if (!provider) {
-    const res = await prompts({
-      type: "select",
-      name: "provider",
-      message: "OAuth provider",
-      choices: oauthProviders.map((p) => ({ title: `${p.name} (${p.id})`, value: p.id })),
-    });
-    provider = res.provider;
-  }
-  if (!provider) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-  const oauth = oauthProviders.find((p) => p.id === provider);
-  if (!oauth) {
-    console.error(chalk.red(`"${provider}" is not a registered OAuth provider`));
-    console.error(chalk.dim(`  available: ${oauthProviders.map((p) => p.id).join(", ")}`));
-    return 1;
-  }
-
-  if (auth.has(provider)) {
-    const existing = auth.get(provider);
-    const { overwrite } = await prompts({
-      type: "confirm",
-      name: "overwrite",
-      message: `credentials already stored for "${provider}" (${existing?.type}) — re-login?`,
-      initial: false,
-    });
-    if (!overwrite) {
+    let provider = providerArg;
+    if (!provider) {
+      const res = await prompts({
+        type: "select",
+        name: "provider",
+        message: "OAuth provider",
+        choices: oauthProviders.map((p) => ({ title: `${p.name} (${p.id})`, value: p.id })),
+      });
+      provider = res.provider;
+    }
+    if (!provider) {
       console.log(chalk.dim("cancelled"));
       return 0;
     }
-  }
+    const oauth = oauthProviders.find((p) => p.id === provider);
+    if (!oauth) {
+      console.error(chalk.red(`"${provider}" is not a registered OAuth provider`));
+      console.error(chalk.dim(`  available: ${oauthProviders.map((p) => p.id).join(", ")}`));
+      return 1;
+    }
 
-  const callbacks: OAuthLoginCallbacks = {
-    onAuth: (info) => {
-      console.log(chalk.bold(`\nOpen this URL to authenticate:\n  ${info.url}\n`));
-      if (info.instructions) console.log(chalk.dim(info.instructions));
-    },
-    onPrompt: async (p) => {
-      const res = await prompts({
-        type: "text",
-        name: "value",
-        message: p.message,
-        ...(p.placeholder ? { initial: p.placeholder } : {}),
-        validate: (v: string) => (p.allowEmpty || v.length > 0 ? true : "must not be empty"),
+    if (auth.has(provider)) {
+      const existing = auth.get(provider);
+      const { overwrite } = await prompts({
+        type: "confirm",
+        name: "overwrite",
+        message: `credentials already stored for "${provider}" (${existing?.type}) — re-login?`,
+        initial: false,
       });
-      return typeof res.value === "string" ? res.value : "";
-    },
-    onProgress: (message) => {
-      console.log(chalk.dim(`  ${message}`));
-    },
-    onManualCodeInput: async () => {
-      const res = await prompts({ type: "text", name: "value", message: "Paste the authorization code" });
-      return typeof res.value === "string" ? res.value : "";
-    },
-  };
+      if (!overwrite) {
+        console.log(chalk.dim("cancelled"));
+        return 0;
+      }
+    }
 
-  try {
-    await auth.login(provider, callbacks);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(chalk.red(`✗ OAuth login failed: ${msg}`));
-    return 1;
+    const callbacks: OAuthLoginCallbacks = {
+      onAuth: (info) => {
+        console.log(chalk.bold(`\nOpen this URL to authenticate:\n  ${info.url}\n`));
+        if (info.instructions) console.log(chalk.dim(info.instructions));
+      },
+      onPrompt: async (p) => {
+        const res = await prompts({
+          type: "text",
+          name: "value",
+          message: p.message,
+          ...(p.placeholder ? { initial: p.placeholder } : {}),
+          validate: (v: string) => (p.allowEmpty || v.length > 0 ? true : "must not be empty"),
+        });
+        return typeof res.value === "string" ? res.value : "";
+      },
+      onProgress: (message) => {
+        console.log(chalk.dim(`  ${message}`));
+      },
+      onManualCodeInput: async () => {
+        const res = await prompts({ type: "text", name: "value", message: "Paste the authorization code" });
+        return typeof res.value === "string" ? res.value : "";
+      },
+    };
+
+    try {
+      await auth.login(provider, callbacks);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(chalk.red(`✗ OAuth login failed: ${msg}`));
+      return 1;
+    }
+    console.log(chalk.green(`✓ logged in to "${provider}"`));
+    return 0;
+  } finally {
+    store.close();
   }
-  console.log(chalk.green(`✓ logged in to "${provider}"`));
-  return 0;
 }

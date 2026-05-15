@@ -142,10 +142,13 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     model: "stub",
   });
 
-  // Credentials + model registry. Both are global (~/.swarm/{auth,models}.json)
-  // with the pi-coding-agent dirs as read-only fallback. Constructed once
-  // per daemon process; cheap to hold on to for the process lifetime.
-  const authStorage = AuthStorage.create();
+  // Credentials + model registry. Credentials live in the daemon's
+  // store (`provider_credentials` table) since the credentials-in-the-
+  // store proposal landed; custom-provider model definitions still come
+  // from `~/.swarm/models.json` with the pi-coding-agent dir as a
+  // read-only fallback. Constructed once per daemon process; cheap to
+  // hold on to for the process lifetime.
+  const authStorage = AuthStorage.fromStore(store);
   const modelRegistry = ModelRegistry.create(authStorage);
   const getApiKey = (p: string) => authStorage.getApiKey(p);
 
