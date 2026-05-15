@@ -1090,7 +1090,11 @@ export interface ProviderTestResult {
   error?: string;
 }
 
-export type ProviderCredentialKind = "literal" | "env" | "shell";
+// `kind` is no longer wire-relevant after the credentials-in-the-store
+// proposal landed — the server stores `key` verbatim. The literal-only
+// shape is kept exported so older callers don't break; new code should
+// just call `setProviderCredentials(name, key)` with a single string.
+export type ProviderCredentialKind = "literal";
 
 export async function listProviders(): Promise<ProvidersListResponse> {
   return getJson(
@@ -1118,14 +1122,10 @@ export async function testProvider(name: string, model?: string): Promise<Provid
   );
 }
 
-export async function setProviderCredentials(
-  name: string,
-  kind: ProviderCredentialKind,
-  value: string,
-): Promise<{ ok: boolean }> {
+export async function setProviderCredentials(name: string, key: string): Promise<{ ok: boolean }> {
   return postJson(
     `/providers/${encodeURIComponent(name)}/credentials`,
-    { kind, value },
+    { key },
     (v): v is { ok: boolean } => typeof v === "object" && v !== null && typeof (v as { ok?: unknown }).ok === "boolean",
   );
 }

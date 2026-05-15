@@ -27,8 +27,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 
-type FormKind = "literal" | "env" | "shell";
-
 export function ProviderDetail(): JSX.Element {
   const { name = "" } = useParams();
   const qc = useQueryClient();
@@ -138,12 +136,11 @@ interface CredentialPanelProps {
 }
 
 function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: CredentialPanelProps): JSX.Element {
-  const [kind, setKind] = useState<FormKind>("env");
   const [value, setValue] = useState("");
   const [testResult, setTestResult] = useState<api.ProviderTestResult | null>(null);
 
   const saveMutation = useMutation({
-    mutationFn: () => api.setProviderCredentials(name, kind, value),
+    mutationFn: () => api.setProviderCredentials(name, value),
     onSuccess: () => {
       setValue("");
       setTestResult(null);
@@ -164,11 +161,6 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
       onChange();
     },
   });
-
-  const isLocalhost =
-    typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-  const literalBlocked = kind === "literal" && !isLocalhost;
 
   return (
     <section className="rounded-md border border-sw-border p-4">
@@ -243,58 +235,29 @@ function CredentialPanel({ name, source, authKind, oauthAvailable, onChange }: C
         className="mt-4 flex flex-col gap-3"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!value || literalBlocked) return;
+          if (!value) return;
           saveMutation.mutate();
         }}
       >
         <div>
-          <div className="text-xs font-medium">How should swarm read the key at request time?</div>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {(["literal", "env", "shell"] as FormKind[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setKind(k)}
-                className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
-                  kind === k ? "border-primary bg-primary/10" : "border-sw-border hover:bg-sw-surface"
-                }`}
-                data-testid={`credential-kind-${k}`}
-              >
-                {k}
-              </button>
-            ))}
-          </div>
-          <p className="text-sw-muted mt-1 text-xs">
-            {kind === "literal" && "Stores the key verbatim in auth.json. Refused over non-localhost connections."}
-            {kind === "env" && "auth.json stores the env var name; the value is read at each request."}
-            {kind === "shell" && "auth.json stores `!cmd`; executed at each request (cached per process)."}
+          <p className="text-sw-muted text-xs">
+            Stored verbatim in the global swarm store (provider_credentials table). Protect the connection with TLS or a
+            loopback bind when adding keys from a remote browser.
           </p>
         </div>
         <div>
           <Input
-            type={kind === "literal" ? "password" : "text"}
-            placeholder={
-              kind === "literal"
-                ? "sk-ant-..."
-                : kind === "env"
-                  ? "ANTHROPIC_API_KEY"
-                  : "op read 'op://vault/item/credential'"
-            }
+            type="password"
+            placeholder="sk-..."
             value={value}
             onChange={(e) => setValue(e.target.value)}
             data-testid="credential-input"
             autoComplete="off"
             spellCheck={false}
           />
-          {literalBlocked && (
-            <p className="mt-1 text-xs text-sw-accent-warn">
-              Literal writes are only accepted over localhost. Use <span className="font-mono">env</span> or{" "}
-              <span className="font-mono">shell</span> from a remote browser.
-            </p>
-          )}
         </div>
         <div className="flex items-center gap-2">
-          <Button type="submit" size="sm" disabled={!value || literalBlocked || saveMutation.isPending}>
+          <Button type="submit" size="sm" disabled={!value || saveMutation.isPending}>
             {saveMutation.isPending ? "Saving…" : "Save credentials"}
           </Button>
           {saveMutation.isError && (
