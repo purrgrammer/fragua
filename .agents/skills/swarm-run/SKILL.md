@@ -94,7 +94,7 @@ URL=$(sqlite3 -readonly ~/.swarm/swarm.db "SELECT http_url FROM daemon_lock;")
 # 1. Upload (idempotent; sha is content-addressed).
 SHA=$(curl -fsS -X POST "$URL/workflows" \
   -H 'content-type: application/json' \
-  -d "$(jq -n --arg n change --rawfile s ~/.swarm/workflows/change.dot \
+  -d "$(jq -n --arg n change --rawfile s path/to/workflow.dot \
         '{name:$n, dotSource:$s}')" | jq -r .sha)
 
 # 2. Enqueue. `input` lands in routing.input → substituted as $ARGUMENTS.
@@ -283,7 +283,7 @@ bun run swarm run change --input="…"
 
 # Manual enqueue
 SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
-   -d "$(jq -n --arg n change --rawfile s ~/.swarm/workflows/change.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
+   -d "$(jq -n --arg n change --rawfile s path/to/workflow.dot '{name:$n, dotSource:$s}')" | jq -r .sha)
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" --arg cwd "$PWD" '{workflowSha:$sha, input:$in, cwd:$cwd}')" | jq -r .runId)
 

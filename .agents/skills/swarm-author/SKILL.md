@@ -17,8 +17,8 @@ For the validator code lookup table, see `references/validator-codes.md`. For re
 ## Fast path
 
 1. **Find a template.** Workflows live in two places:
-   - `~/.swarm/workflows/` (global, generic) — `change.dot` (daily driver: plan/implement/review/verify/commit), `fix-bug.dot` (reproduce → fix → verify), `merge.dot` (rebase + CAS-fast-forward).
-   - `<project>/.swarm/workflows/` (local, project-internal) — e.g. this repo's `introspect.dot`, `ci-gate.dot`, `analyze.dot`, `showcase.dot`, `abort-test.dot`.
+   - `~/.swarm/workflows/` (global) — generic workflows the user has authored or copied here so they're reachable from any project cwd.
+   - `<project>/.swarm/workflows/` (project-local) — workflows specific to one repo. This swarm repo ships `change.dot` (daily driver: plan/implement/review/verify/commit), `analyze.dot`, `ci-gate.dot`, `showcase.dot`, and a handful of smoke / drift workflows.
 2. **Sketch the shape, not the prose.** Nodes + edges first. Name nodes for what they *do* (`plan`, `implement`, `verify`), not what they are (`step1`, `llm_call`). Edges carry flow. Conditional edges route on `outcome=success|fail` or `context.<key>=<val>`.
 3. **Validate.** `bun run swarm validate path/to/my-thing.dot`. Fix every error; warnings are strong hints.
 4. **Smoke-run** with a cheap model first (§9) before wiring to Opus / Sonnet.
