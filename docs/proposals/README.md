@@ -34,6 +34,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Notes |
 |---|---|---|
+| [Parallel branches as first-class executor citizens (sub-runs)](./parallel.md) | specified | branches today are single-node, opaque to the executor's dispatch loop, and inherit none of its per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection). Concrete production symptom: `review.dot`'s `lens_correctness` spent $1.72 vs $0.30 cap (5.7× over). Approach: each branch becomes a child `run_state` row with `parent_run_id` linkage; reuses 100% of existing executor machinery. P0 extracts `dispatchOne`/`foldIntents`/`claimAndAdvance` from the executor's monolithic loop; P2 cuts `parallel.ts` over to sub-runs; P3 unlocks multi-node branch subgraphs + HITL inside branches. No feature flag; direct cutover with parity tests gating P2 |
 | [Extensions — custom tools and hooks (unified)](./project-extensions.md) | designed | folds tools and hooks back into one factory file riding the loader from `./extensions-tools.md`; four hook events — `tool.before_call` / `tool.after_call` / `agent.before_start` (feedback: `block` / mutate `input` / replace `content` / replace `systemPrompt`) and `agent.turn_end` (read-only `AssistantMessage`); ships after tools |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
