@@ -74,9 +74,8 @@ export function runStateToSummary(
   // it when the caller looked up the parent. Top-level runs ignore
   // parentTitle (parentRunId is null).
   const ownTitle = state.title && state.title.length > 0 ? state.title : undefined;
-  const inheritedTitle = state.parentRunId != null && parentTitle != null && parentTitle.length > 0
-    ? parentTitle
-    : undefined;
+  const inheritedTitle =
+    state.parentRunId != null && parentTitle != null && parentTitle.length > 0 ? parentTitle : undefined;
   const title = ownTitle ?? inheritedTitle ?? pickTitle(events);
   if (title !== undefined) summary.title = title;
   const input = pickInput(state.routing);

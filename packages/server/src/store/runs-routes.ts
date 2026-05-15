@@ -99,8 +99,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // up the parent's title so sub-runs inherit it (P5 — operator
     // surface treats fan-outs as one logical run).
     const parentState = store.getState(parentRunId);
-    const parentTitle =
-      parentState?.title && parentState.title.length > 0 ? parentState.title : undefined;
+    const parentTitle = parentState?.title && parentState.title.length > 0 ? parentState.title : undefined;
     const childRunIds = store.listRunIds({ parentRunId });
     const children = childRunIds
       .map((childId) => {

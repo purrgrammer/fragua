@@ -63,13 +63,22 @@ export const queries = {
       }),
     /** Full event log. Heavier than `/steps` — only use when something
      * needs the raw event stream (branch metadata, fan_in winner, etc.).
-     * Re-keying on `totalEvents` upstream gives a cheap invalidator. */
-    events: (id: string) =>
-      queryOptions({
-        queryKey: [...queries.runs.all(), "events", id] as const,
-        queryFn: () => api.getRunEvents(id),
+     * Re-keying on `totalEvents` upstream gives a cheap invalidator.
+     *
+     * Defaults to the merged descendants view (`?include=descendants`)
+     * so sub-run activity surfaces as inline branches on the parent's
+     * detail page — D2 of `docs/proposals/parallel.md`. Top-level runs
+     * without sub-runs return their own events with `originRunId =
+     * runId`. Pass `includeDescendants: false` for the raw per-run
+     * view (post-mortem tools that want the parent's log only). */
+    events: (id: string, opts: { includeDescendants?: boolean } = {}) => {
+      const includeDescendants = opts.includeDescendants ?? true;
+      return queryOptions({
+        queryKey: [...queries.runs.all(), "events", id, includeDescendants ? "merged" : "raw"] as const,
+        queryFn: () => api.getRunEvents(id, { includeDescendants }),
         enabled: id.length > 0,
-      }),
+      });
+    },
     tree: (id: string) =>
       queryOptions({
         queryKey: [...queries.runs.all(), id, "tree"] as const,

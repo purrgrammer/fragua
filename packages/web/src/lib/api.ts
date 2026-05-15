@@ -647,13 +647,20 @@ export async function getAgent(locId: string): Promise<AgentDetail> {
   return getJson(`/agents/${encodeURIComponent(locId)}`, isAgentDetail);
 }
 
-export async function getRunEvents(id: string): Promise<RunEventsPayload> {
+export async function getRunEvents(id: string, opts: { includeDescendants?: boolean } = {}): Promise<RunEventsPayload> {
   // The server returns a bare array of StoredEvents (see
   // packages/server/src/store/runs-routes.ts). Older call sites here
   // expected an `{events, lastSeq}` envelope; we adapt on the client so
   // the callers that need `lastSeq` for SSE resume still work, and we
   // don't tie the public REST surface to an envelope format.
-  const events = await getJson<unknown[]>(`/runs/${encodeURIComponent(id)}/events.json`, (v): v is unknown[] =>
+  //
+  // `includeDescendants` opts into the merged view (parent + every
+  // sub-run's events in ts order). The run-detail page uses this so
+  // branch-meta / RunConversation / GraphView / CostInspector all see
+  // sub-run activity as inline branches of the parent. D2 of
+  // `docs/proposals/parallel.md`.
+  const qs = opts.includeDescendants ? "?include=descendants" : "";
+  const events = await getJson<unknown[]>(`/runs/${encodeURIComponent(id)}/events.json${qs}`, (v): v is unknown[] =>
     Array.isArray(v),
   );
   const last = events[events.length - 1] as { seq?: unknown } | undefined;

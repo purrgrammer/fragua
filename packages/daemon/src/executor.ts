@@ -509,8 +509,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // controller (cause: "aborted", tokens=0), causing a spurious
       // re-dispatch. Fold's `applied` already includes the
       // run_enqueued seq; we just need to actually persist it.
-      const startAdvanceTo =
-        decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+      const startAdvanceTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
       const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
       if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
       if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;
@@ -1603,14 +1602,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     //      facts and emit the pause so the operator can raise the cap
     //      and resume. Mirrors the halt arm's strip pattern below.
     if (budgetPause !== undefined) {
-      const alreadyTerminal = facts.some(
-        (f) => f.type === "fact.run_completed" || f.type === "fact.run_halted",
-      );
+      const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
       if (alreadyTerminal && subgraphFenceTriggered) {
         // Sub-run subgraph-fence terminal: strip + replace.
         facts = facts.filter(
-          (f) =>
-            f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
+          (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
         );
         facts.push({
           type: "fact.run_paused",

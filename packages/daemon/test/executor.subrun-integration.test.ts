@@ -424,9 +424,7 @@ describe("parallel sub-runs — first_success live cancellation", () => {
     // Losing siblings each received intent.cancel_requested.
     for (const branchIdx of [1, 2]) {
       const childId = `p7__fanout__i0__b${branchIdx}`;
-      const cancelIntent = h.store
-        .getEvents(childId)
-        .find((e) => e.type === "intent.cancel_requested");
+      const cancelIntent = h.store.getEvents(childId).find((e) => e.type === "intent.cancel_requested");
       expect(cancelIntent).toBeDefined();
       const reason = (cancelIntent!.payload as { reason?: string }).reason;
       expect(reason).toBe("first_success_won");

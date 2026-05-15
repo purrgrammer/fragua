@@ -118,7 +118,8 @@ export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSp
     maxMs: 60_000,
     handler: async (ctx) => {
       ctx.emit("agent.start", { nodeId: ctx.nodeId, iteration: ctx.iteration });
-      const tokensTotal = (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.cacheRead ?? 0) + (tokens.cacheWrite ?? 0);
+      const tokensTotal =
+        (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.cacheRead ?? 0) + (tokens.cacheWrite ?? 0);
 
       let totalCost = 0;
       let totalIn = 0;

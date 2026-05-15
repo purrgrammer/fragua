@@ -54,10 +54,7 @@ export function SubRunList({ parentRunId }: SubRunListProps): JSX.Element | null
                 branch identity. Future: scroll to / highlight the relevant
                 section in the parent's conversation when the descendants
                 merge lands. */}
-            <span
-              className="flex-1 truncate font-mono text-xs text-sw-muted"
-              data-testid="sub-run-branch-label"
-            >
+            <span className="flex-1 truncate font-mono text-xs text-sw-muted" data-testid="sub-run-branch-label">
               {child.branchNodeId ?? child.parentNodeId ?? "branch"}
             </span>
             <span className="text-xs tabular-nums text-sw-muted shrink-0">{formatCost(child.costUsd)}</span>

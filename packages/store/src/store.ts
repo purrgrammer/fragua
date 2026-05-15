@@ -31,7 +31,6 @@ import {
   blobRowExists,
   deleteOrphanBlobs,
   insertBlobIfAbsent,
-  type NodeOutputRefRow,
   selectArtifactRef as querySelectArtifactRef,
   selectNodeOutputRefs,
   upsertArtifact,
@@ -157,6 +156,7 @@ import {
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_MESSAGE_CONTENT_BYTES,
   MAX_ROUTING_BYTES,
+  type MergedStoredEvent,
   type Message,
   MessageTooLargeError,
   type MetricsDelta,
@@ -166,7 +166,6 @@ import {
   type RunMetrics,
   type RunState,
   type Schedule,
-  type MergedStoredEvent,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
@@ -620,6 +619,29 @@ export class SqliteStore implements IEventStore {
       if (r.parentNodeIdForBranch != null) ev.parentNodeIdForBranch = r.parentNodeIdForBranch;
       if (r.parallelIndexForBranch != null) ev.parallelIndexForBranch = r.parallelIndexForBranch;
       if (r.branchNodeId != null) ev.branchNodeId = r.branchNodeId;
+      // Backward-compat shim: rewrite sub-run branch-root
+      // fact.node_started / fact.node_completed payloads to look like
+      // the legacy inline-branch shape (`parentNodeId` + `parallelIndex`
+      // on the payload). Existing client code (branch-meta,
+      // RunConversation, CostInspector) keys off those fields and
+      // works unchanged. Only the branch root's events get this
+      // treatment; internal multi-node subgraph events flow through
+      // without parentNodeId, which keeps branch-meta from
+      // mis-classifying them as additional branches.
+      if (
+        r.branchNodeId != null &&
+        r.parentNodeIdForBranch != null &&
+        (ev.type === "fact.node_started" || ev.type === "fact.node_completed")
+      ) {
+        const p = ev.payload as Record<string, unknown> | null;
+        if (p != null && p["nodeId"] === r.branchNodeId) {
+          ev.payload = {
+            ...p,
+            parentNodeId: r.parentNodeIdForBranch,
+            ...(r.parallelIndexForBranch != null ? { parallelIndex: r.parallelIndexForBranch } : {}),
+          };
+        }
+      }
       return ev;
     });
   }
