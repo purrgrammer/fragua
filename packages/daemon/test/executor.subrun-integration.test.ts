@@ -595,6 +595,129 @@ describe("parallel sub-runs — claim race regression", () => {
   });
 });
 
+describe("parallel sub-runs — raise & resume completes (not re-pause loop)", () => {
+  test("intent.budget_adjusted + intent.resume lifts the cap on the FIRST dispatch", async () => {
+    // Production bug: operator raises the lens's node cost cap from
+    // $0.30 to $1.00 and resumes, but the run re-pauses at $0.30
+    // immediately. Root cause: the executor's reactive gate reads
+    // `state.routing` (pre-fold projection), so the just-folded
+    // budget_override.node.cost isn't visible until the
+    // post-handler commit applies it — and the reactive abort skips
+    // that commit, leaving the intent unapplied. Loops indefinitely.
+    //
+    // Fix: merge `decision.routingDelta` into `effectiveRouting`
+    // before the handler runs; also persist the delta on the abort
+    // commit so the intent is marked applied.
+    const h = freshHarness();
+    const sha = "wf_raise_resume";
+    const dot = `digraph G {
+      start [shape=Mdiamond];
+      fanout [shape=component];
+      lens_a [max_cost_usd=0.10];
+      fan_in [shape=tripleoctagon];
+      done [shape=Msquare];
+      start -> fanout;
+      fanout -> lens_a;
+      lens_a -> fan_in;
+      fan_in -> done;
+    }`;
+    h.store.saveWorkflow(sha, "raise-resume", dot);
+    // 5 calls × $0.05 = $0.25 — exceeds the $0.10 cap. Will pause
+    // after ~2 calls (cap + one in-flight message).
+    h.dispatcher.register(sha, "lens_a", mockCodergenSpec({ costPerCall: 0.05, calls: 5 }));
+
+    h.store.enqueueRun({ runId: "pr", workflowSha: sha });
+    await driveTo(h, "pr", { maxSteps: 30 });
+
+    const childId = "pr__fanout__i0__b0";
+    const childPaused = h.store.getState(childId)!;
+    expect(childPaused.status).toBe("paused");
+    const firstCost = childPaused.metrics.totalCostUsd;
+    expect(firstCost).toBeGreaterThanOrEqual(0.1);
+    expect(firstCost).toBeLessThanOrEqual(0.2);
+
+    // Raise the cap on the lens to $1.00 (well above the $0.25 the
+    // handler would actually spend if allowed to complete).
+    h.store.appendIntent(childId, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 1.0 },
+    });
+    h.store.appendIntent(childId, { type: "intent.resume", payload: {} });
+
+    await driveTo(h, "pr", { maxSteps: 30 });
+
+    // Sub-run completed cleanly — no re-pause loop.
+    const childAfter = h.store.getState(childId)!;
+    expect(childAfter.status).toBe("completed");
+    // Total spend stayed under the new $1.00 cap. The fix is about
+    // not LOOPING — the actual cost depends on how many of the 5
+    // calls happened before vs after the raise.
+    expect(childAfter.metrics.totalCostUsd).toBeLessThanOrEqual(1.0);
+
+    // The override was persisted into routing (not just merged at
+    // handler time) — verify so future Raise & Resume cycles don't
+    // re-pause from a stale projection read.
+    const overridePersisted = childAfter.routing["budget_override.node.cost"];
+    expect(overridePersisted).toBe(1.0);
+
+    // Parent completed too.
+    expect(h.store.getState("pr")!.status).toBe("completed");
+    h.store.close();
+  });
+
+  test("two consecutive raises both take effect (no stale-state regression)", async () => {
+    // Stress the persistence: pause → raise → pause → raise → complete.
+    // Each raise must persist so subsequent ticks see the latest cap.
+    const h = freshHarness();
+    const sha = "wf_double_raise";
+    const dot = `digraph G {
+      start [shape=Mdiamond];
+      fanout [shape=component];
+      lens_a [max_cost_usd=0.10];
+      fan_in [shape=tripleoctagon];
+      done [shape=Msquare];
+      start -> fanout;
+      fanout -> lens_a;
+      lens_a -> fan_in;
+      fan_in -> done;
+    }`;
+    h.store.saveWorkflow(sha, "double-raise", dot);
+    h.dispatcher.register(sha, "lens_a", mockCodergenSpec({ costPerCall: 0.05, calls: 10 }));
+
+    h.store.enqueueRun({ runId: "pr2", workflowSha: sha });
+    await driveTo(h, "pr2", { maxSteps: 30 });
+    const childId = "pr2__fanout__i0__b0";
+    expect(h.store.getState(childId)!.status).toBe("paused");
+
+    // First raise — insufficient.
+    h.store.appendIntent(childId, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 0.2 },
+    });
+    h.store.appendIntent(childId, { type: "intent.resume", payload: {} });
+    await driveTo(h, "pr2", { maxSteps: 30 });
+
+    // Still paused — but at the new cap, not the original.
+    const afterFirstRaise = h.store.getState(childId)!;
+    expect(afterFirstRaise.status).toBe("paused");
+    expect(afterFirstRaise.routing["budget_override.node.cost"]).toBe(0.2);
+    expect(afterFirstRaise.metrics.totalCostUsd).toBeGreaterThanOrEqual(0.2);
+
+    // Second raise — sufficient to complete.
+    h.store.appendIntent(childId, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 2.0 },
+    });
+    h.store.appendIntent(childId, { type: "intent.resume", payload: {} });
+    await driveTo(h, "pr2", { maxSteps: 40 });
+
+    const final = h.store.getState(childId)!;
+    expect(final.status).toBe("completed");
+    expect(final.routing["budget_override.node.cost"]).toBe(2.0);
+    h.store.close();
+  });
+});
+
 describe("parallel sub-runs — terminal vs subgraph fence pause", () => {
   test("subgraph fence terminal does pause on budget breach (sub-run path)", async () => {
     // The legacy "alreadyTerminal skip" silently let sub-runs complete

@@ -46,7 +46,7 @@
 -- v9 → v10: `running_children` status (P1.2 of docs/proposals/parallel.md).
 -- Adds `running_children` to `run_state.status` CHECK. Parent runs that
 -- fanned out into sub-runs sit in this status until every sub-run
--- reaches a terminal-or-paused-class state; the wake-pending sweep
+-- reaches a terminal status; the wake-pending sweep
 -- transitions the parent back to `queued` (collect phase).
 
 CREATE TABLE IF NOT EXISTS schema_version (

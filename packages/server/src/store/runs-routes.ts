@@ -119,16 +119,34 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     //      under-counting because the agent fires multiple cost events
     //      per step (one per assistant message) and the previous
     //      reducer dropped everything after the first llm.done.
-    const events = store.getEvents(runId);
-    const baseSteps = eventsToSteps(events);
-    const aggregates = store.getStepAggregates(runId);
-    const merged = attachStepAggregates(baseSteps, aggregates);
+    const events = store.getEventsFeedWithDescendants(runId);
+    const eventsByRun = new Map<string, typeof events>();
+    for (const event of events) {
+      const originRunId = event.originRunId ?? event.runId;
+      const bucket = eventsByRun.get(originRunId) ?? [];
+      bucket.push(event);
+      eventsByRun.set(originRunId, bucket);
+    }
+    const merged = Array.from(eventsByRun.entries())
+      .flatMap(([originRunId, originEvents]) =>
+        attachStepAggregates(
+          eventsToSteps(originEvents.map((event) => ({ ...event, originRunId }))),
+          store.getStepAggregates(originRunId),
+        ),
+      )
+      .sort(
+        (a, b) =>
+          Date.parse(a.startedAt) - Date.parse(b.startedAt) ||
+          a.originRunId?.localeCompare(b.originRunId ?? "") ||
+          a.startSeq - b.startSeq,
+      )
+      .map((step, stepIdx) => ({ ...step, stepIdx }));
     // Fill `durationMs` for orphan steps (no `llm.done` in the window).
     // Each step's effective end is the next step's `startedAt`, falling
     // back to the run's last event timestamp when the run is terminal.
     // The truly-still-running last step on a live run keeps `durationMs`
     // undefined so the client ticks `now - startedAt`.
-    const lastEventTs = events.length > 0 ? events[events.length - 1]!.ts : undefined;
+    const lastEventTs = events.length > 0 ? Math.max(...events.map((event) => event.ts)) : undefined;
     const filled = fillOrphanDurations(merged, {
       lastEventTs,
       runIsTerminal: isTerminalStatus(state.status),

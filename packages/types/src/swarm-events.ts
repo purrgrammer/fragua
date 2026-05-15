@@ -20,7 +20,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  * for its sub-runs to converge. Not a pause: the parent's worktree and
  * provisioner state stay live, the wake-pending sweep advances the
  * parent back to `queued` (collect phase) when every sub-run reaches a
- * terminal-or-paused-class state. P1.2 of `docs/proposals/parallel.md`.
+ * terminal status. Paused/quarantined sub-runs block convergence until
+ * they resume, cancel, halt, or complete. P1.2 of
+ * `docs/proposals/parallel.md`.
  *
  * Mirrored by `run_state.status` (CHECK constraint in schema.sql) and
  * the daemon's intent fold. See {@link PauseReason} for the reason
@@ -589,7 +591,7 @@ export type FactEvent =
     }
   | {
       /** Every sub-run from a prior `fact.fanout_started` has reached a
-       * terminal-or-paused-class state. Emitted by the wake-pending
+       * terminal status. Emitted by the wake-pending
        * sweep on the parent's log; transitions the parent from
        * `running_children` back to `queued` so the next executor turn
        * runs the collect phase. The `outcomes` array carries the inline
@@ -602,7 +604,7 @@ export type FactEvent =
         outcomes: readonly {
           subRunId: string;
           parallelIndex: number;
-          finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+          finalStatus: "completed" | "halted" | "cancelled";
           /** Aggregated final cost the sub-run reported through its own
            * projection's `metrics.totalCostUsd`. */
           costUsd: number;
@@ -621,7 +623,7 @@ export type FactEvent =
         subRunId: string;
         parentNodeId: string;
         parallelIndex: number;
-        finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+        finalStatus: "completed" | "halted" | "cancelled";
         costUsd: number;
         billedTokens: number;
         /** Per-bucket token split — same shape as `fact.node_completed`.

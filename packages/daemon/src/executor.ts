@@ -406,6 +406,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       return { kind: "terminal" };
     }
 
+    // Effective routing for this dispatch: state.routing is the
+    // PROJECTION view (pre-fold). The fold's `routingDelta` is what
+    // operator intents queued for this turn would write — e.g.
+    // `intent.budget_adjusted` writes `budget_override.<scope>.<metric>`,
+    // `intent.max_retries_adjusted` writes `max_retries_override.<nodeId>`,
+    // etc. Without this merge the reactive budget gate (and other
+    // per-turn override readers) would see the pre-fold values on the
+    // FIRST dispatch after a Raise & Resume — handler aborts at the
+    // old ceiling, intent stays unapplied because the abort skips the
+    // post-handler commit, resume loops indefinitely. Compute once so
+    // every per-turn reader (budget overrides, max_retries override,
+    // max_loops override, etc.) sees the same view.
+    const effectiveRouting: Readonly<Record<string, unknown>> =
+      Object.keys(decision.routingDelta).length > 0 ? { ...state.routing, ...decision.routingDelta } : state.routing;
+
     if (decision.shouldPause) {
       await tryAppendFact(
         opts.store,
@@ -554,7 +569,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // a JS-local counter that resets on every runOne entry, so the
     // resume after a pause already starts at 0; the override raises
     // the ceiling for *this* dispatch loop's pass.
-    const effectiveMaxLoops = readNumber(state.routing[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+    const effectiveMaxLoops = readNumber(effectiveRouting[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
     if (dispatches >= effectiveMaxLoops) {
       await tryAppendFact(opts.store, runId, state.version, [
         {
@@ -711,7 +726,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       nodeId: currentNode,
       iteration,
       signal,
-      routing: state.routing,
+      routing: effectiveRouting,
       store: opts.store,
       llm: core.makeLlmClient({
         signal,
@@ -723,7 +738,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       ),
       tools: opts.tools,
       recorder,
-      args: buildSubstitutionArgs(runId, state.routing),
+      args: buildSubstitutionArgs(runId, effectiveRouting),
       nodeOutputs,
       subRunOutcomes,
       emitObservability: (type, payload) => {
@@ -772,7 +787,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
             const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
             const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
-            const overrides = readBudgetOverrides(state.routing);
+            // Read overrides from effective routing (post-fold) so the
+            // Raise & Resume flow takes effect on the FIRST dispatch
+            // after resume, not the second. Same for warned-tags.
+            const overrides = readBudgetOverrides(effectiveRouting);
             const reactive = evaluateBudget({
               graphAttrs: graph?.attrs ?? {},
               ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
@@ -781,7 +799,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               cumulativeTokens: priorRunFresh + turnBilled,
               nodeCumulativeCostUsd: priorNodeBucket.costUsd + totalCostUsd,
               nodeCumulativeTokens: priorNodeBucket.tokens + turnBilled,
-              alreadyWarned: readBudgetWarned(state.routing),
+              alreadyWarned: readBudgetWarned(effectiveRouting),
               ...(overrides !== undefined ? { overrides } : {}),
             });
             if (reactive.shouldHalt) {
@@ -924,11 +942,25 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Otherwise the abort would just bump consecutiveAborts and the
       // next dispatch would re-enter the same node — exactly the
       // overshoot we're trying to avoid.
+      // Build the abort commit's routing patch + applied-seq advance
+      // from this turn's fold. Without this, an operator intent queued
+      // for this dispatch (e.g. intent.budget_adjusted that the resume
+      // chain folded in) would be left UNAPPLIED — the next resume
+      // would re-fold the same intent, dispatch the same handler,
+      // re-trip the abort, ad infinitum. The post-handler commit path
+      // (further below) does the same merge for the success arm; the
+      // abort arms need it equally.
+      const abortAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
+      if (Object.keys(decision.routingDelta).length > 0) abortAppendOpts.routingPatch = decision.routingDelta;
+      if (decision.appliedSeqs.length > 0) {
+        abortAppendOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+      }
+
       if (reactiveBudgetHaltDetail !== undefined) {
         const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
         if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
         facts.push({ type: "fact.run_halted", payload: haltPayload });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
         return { kind: "terminal" };
       }
       // Reactive budget pause: same shape as the halt arm above but
@@ -951,7 +983,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             actual: reactiveBudgetPauseBreach.actual,
           },
         });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
         return { kind: "terminal" };
       }
       // Watchdog timeout: re-categorise the abort as a system-initiated
@@ -972,7 +1004,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
         const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
         const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
-        const priorAttempts = readNumber(state.routing[TIMEOUT_RETRY_COUNTER_KEY]);
+        const priorAttempts = readNumber(effectiveRouting[TIMEOUT_RETRY_COUNTER_KEY]);
         const nextAttempt = priorAttempts + 1;
         if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
           const delayMs = Math.min(
@@ -992,12 +1024,21 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               attemptedMs: spec.maxMs,
             },
           });
-          const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, {
-            routingPatch: {
-              [AUTO_RESUME_AT_KEY]: resumeAt,
-              [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
-            },
-          });
+          // Merge timeout-retry routing keys with the fold's delta so
+          // operator intents queued during the dying turn (steer text,
+          // cap raises, etc.) persist into the resumed dispatch.
+          const timeoutRoutingPatch: Record<string, unknown> = {
+            ...decision.routingDelta,
+            [AUTO_RESUME_AT_KEY]: resumeAt,
+            [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
+          };
+          const timeoutAppendOpts: { routingPatch: Record<string, unknown>; advanceAppliedTo?: number } = {
+            routingPatch: timeoutRoutingPatch,
+          };
+          if (decision.appliedSeqs.length > 0) {
+            timeoutAppendOpts.advanceAppliedTo = Math.max(...decision.appliedSeqs);
+          }
+          const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, timeoutAppendOpts);
           if (!ok) {
             const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
             if (halted) return { kind: "terminal" };
@@ -1015,10 +1056,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
           },
         });
-        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
         return { kind: "terminal" };
       }
-      await tryAppendFact(opts.store, runId, recorder.version(), facts);
+      await tryAppendFact(opts.store, runId, recorder.version(), facts, abortAppendOpts);
       consecutiveAborts++;
       // One-shot warning the abort before the halt lands so a watcher
       // sees the trend before the run dies. Observability (no version
@@ -1075,7 +1116,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     //      routing so the collect-phase handler reads them on resume.
     // The wake-pending sweep promotes the parent back to `queued` on
     // `fact.fanout_completed` once every sub-run reaches a
-    // terminal-or-paused-class state. The parent's runOneInner
+    // terminal status. The parent's runOneInner
     // terminates here (returns terminal) — the slot is released for
     // sub-runs to claim.
     if (result.kind === "fanout_pending") {
@@ -1251,8 +1292,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       const turnCost = result.costUsd ?? 0;
       const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
       const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
-      const alreadyWarned = readBudgetWarned(state.routing);
-      const overrides = readBudgetOverrides(state.routing);
+      const alreadyWarned = readBudgetWarned(effectiveRouting);
+      const overrides = readBudgetOverrides(effectiveRouting);
       const decisionBudget = evaluateBudget({
         graphAttrs: graph?.attrs ?? {},
         ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
@@ -1657,7 +1698,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
     let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
     if (budgetWarnedTags.length > 0) {
-      const prior = readBudgetWarned(state.routing);
+      const prior = readBudgetWarned(effectiveRouting);
       const merged = new Set(prior);
       for (const tag of budgetWarnedTags) merged.add(tag);
       routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
@@ -1824,7 +1865,7 @@ function foldSubRunOutcomes(store: IEventStore, runId: string): Map<string, core
       subRunId?: string;
       parentNodeId?: string;
       parallelIndex?: number;
-      finalStatus?: "completed" | "halted" | "cancelled" | "quarantined";
+      finalStatus?: "completed" | "halted" | "cancelled";
       costUsd?: number;
       billedTokens?: number;
       outputRef?: { nodeId: string; key: string };

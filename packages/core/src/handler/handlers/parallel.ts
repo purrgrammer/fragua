@@ -3,7 +3,7 @@
 // Each fan-out enqueues N child `run_state` rows (one per branch) and
 // transitions the parent to `running_children`. The wake-pending sweep
 // promotes the parent back to `queued` once every sub-run reaches a
-// terminal-or-paused-class state; the parent's next dispatch re-enters
+// terminal status; the parent's next dispatch re-enters
 // this handler in **collect phase**, builds the `ParallelBranchResult[]`
 // from the parent's projection-folded sub-run outcomes, and hands off
 // to fan_in.
@@ -78,9 +78,6 @@ function mapOutcome(branchNodeId: string, outcome: SubRunOutcome): ParallelBranc
       status = "success";
       break;
     case "halted":
-    case "quarantined":
-      status = "fail";
-      break;
     case "cancelled":
       status = "fail";
       break;

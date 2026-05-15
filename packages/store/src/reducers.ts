@@ -201,7 +201,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.fanout_completed": {
-      // Every sub-run has reached terminal-or-paused-class. Move the
+      // Every sub-run has reached a terminal status. Move the
       // parent back into the queue so the next claim runs the collect
       // phase on the component node. `readyAt = now` so the wake puts
       // it at the front of the priority/ready_at sort.

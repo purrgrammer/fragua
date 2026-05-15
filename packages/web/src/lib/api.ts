@@ -275,6 +275,9 @@ export interface StepSnapshot {
   /** Stream seq of the originating `llm.start`. Joins this snapshot to
    * the SQL cost-aggregate row produced by the server. Stable React key. */
   startSeq: number;
+  /** Run that wrote the step. Present on merged parent+descendant views;
+   * combine with `startSeq` for stable keys because seq is per-run. */
+  originRunId?: string;
   nodeId: string;
   iteration?: { n: number; max: number };
   /** ISO timestamp of the originating `llm.start`. The UI ticks

@@ -750,7 +750,7 @@ function MIGRATION_009_SUBRUN_COLUMNS(): string {
  * converge — it is NOT paused (worktree + provisioner state stay live)
  * and NOT queued (claim loop must not re-pick it). The wake-pending
  * sweep transitions it back to `queued` (collect phase) when every
- * sub-run reaches a terminal-or-paused-class state.
+ * sub-run reaches a terminal status.
  *
  * SQLite has no `ALTER TABLE … ADD CHECK`, so the status CHECK update
  * goes through a table rebuild. Indexes recreate identically. The v9

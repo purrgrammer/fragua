@@ -132,6 +132,19 @@ function wakeResume(store: IEventStore): string[] {
     const intent = store.getNextPendingIntent(row.runId, "intent.resume", row.lastAppliedSeq);
     if (intent == null) continue;
     try {
+      // Don't advance lastAppliedSeq here. The fold on the next
+      // dispatch consumes `intent.resume` as a no-op (it's a wake
+      // marker; the wake fact already transitions status), but
+      // crucially it ALSO consumes any EARLIER unapplied intents
+      // queued before this resume — e.g. an `intent.budget_adjusted`
+      // that should write `budget_override.<scope>.<metric>` into
+      // routing. If we advance applied seq past `intent.resume.seq`
+      // here, those earlier intents get silently marked applied
+      // WITHOUT the fold processing their routing deltas; the
+      // dispatch reads stale caps and re-pauses immediately,
+      // producing the production "Raise & Resume re-pauses" loop.
+      // The fold's `applied` includes this resume seq too, so the
+      // post-handler commit advances naturally; no refire.
       store.appendFact(
         row.runId,
         [
@@ -144,7 +157,6 @@ function wakeResume(store: IEventStore): string[] {
           },
         ],
         row.version,
-        { advanceAppliedTo: intent.seq },
       );
       out.push(row.runId);
     } catch (err) {
@@ -309,7 +321,7 @@ function wakeRunningChildren(store: IEventStore): string[] {
     const outcomes: Array<{
       subRunId: string;
       parallelIndex: number;
-      finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+      finalStatus: "completed" | "halted" | "cancelled";
       costUsd: number;
       billedTokens: number;
     }> = [];
@@ -358,13 +370,14 @@ function wakeRunningChildren(store: IEventStore): string[] {
         subRunId: string;
         parentNodeId: string;
         parallelIndex: number;
-        finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+        finalStatus: "completed" | "halted" | "cancelled";
         costUsd: number;
         billedTokens: number;
         inputTokens?: number;
         outputTokens?: number;
         cacheReadTokens?: number;
         cacheWriteTokens?: number;
+        fanInScore?: number;
       } = {
         subRunId: childId,
         parentNodeId,
@@ -377,6 +390,8 @@ function wakeRunningChildren(store: IEventStore): string[] {
       if (child.metrics.totalOutputTokens > 0) payload.outputTokens = child.metrics.totalOutputTokens;
       if (child.metrics.totalCacheReadTokens > 0) payload.cacheReadTokens = child.metrics.totalCacheReadTokens;
       if (child.metrics.totalCacheWriteTokens > 0) payload.cacheWriteTokens = child.metrics.totalCacheWriteTokens;
+      const score = child.routing["score"];
+      if (typeof score === "number" && Number.isFinite(score)) payload.fanInScore = score;
       facts.push({ type: "fact.subrun_completed", payload });
     }
     if (!allTerminal) continue;
@@ -444,8 +459,7 @@ function wakeFirstSuccess(store: IEventStore): string[] {
 
     // Cascade cancels onto every non-terminal sibling.
     for (const c of childStates) {
-      const terminal =
-        c.status === "completed" || c.status === "cancelled" || c.status === "halted" || c.status === "quarantined";
+      const terminal = c.status === "completed" || c.status === "cancelled" || c.status === "halted";
       if (terminal) continue;
       // Skip if a cancel intent is already pending and unapplied — no
       // need to flood the event log.
@@ -469,10 +483,9 @@ function wakeFirstSuccess(store: IEventStore): string[] {
   return out;
 }
 
-function mapTerminalStatus(status: string): "completed" | "halted" | "cancelled" | "quarantined" | null {
+function mapTerminalStatus(status: string): "completed" | "halted" | "cancelled" | null {
   if (status === "completed") return "completed";
   if (status === "halted") return "halted";
   if (status === "cancelled") return "cancelled";
-  if (status === "quarantined") return "quarantined";
   return null;
 }

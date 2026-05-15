@@ -152,7 +152,7 @@ export interface SubRunOutcome {
   subRunId: string;
   parentNodeId: string;
   parallelIndex: number;
-  finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+  finalStatus: "completed" | "halted" | "cancelled";
   costUsd: number;
   billedTokens: number;
   outputRef?: { nodeId: string; key: string };
@@ -381,7 +381,7 @@ export type HandlerResult =
        * row, and transitions the parent to `running_children` via
        * `fact.fanout_started`. The wake-pending sweep promotes the
        * parent back to `queued` once every sub-run reaches a
-       * terminal-or-paused-class state; the next dispatch re-enters the
+       * terminal status; the next dispatch re-enters the
        * parallel handler in collect phase (detected via the
        * `parallel.<nodeId>.sub_run_ids` routing key). P2.2 of
        * `docs/proposals/parallel.md`. */

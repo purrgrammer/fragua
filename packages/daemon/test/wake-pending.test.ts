@@ -473,6 +473,19 @@ describe("wakePending — running_children convergence (P2.3)", () => {
     r.store.close();
   });
 
+  test("parent stays in running_children while any sub-run is quarantined", () => {
+    const r = rig();
+    startFanout(r, "pq", "fanout", ["pq_c0", "pq_c1"], "fan_in");
+    forceChildTerminal(r, "pq_c0", "completed");
+    forceChildTerminal(r, "pq_c1", "quarantined");
+
+    const result = wakePending(r.store);
+    expect(result.fanoutConverged).not.toContain("pq");
+    expect(r.store.getState("pq")!.status).toBe("running_children");
+    expect(r.store.activeChildRuns("pq")).toContain("pq_c1");
+    r.store.close();
+  });
+
   test("cancelled sub-runs converge to fanout_completed with finalStatus=cancelled", () => {
     const r = rig();
     startFanout(r, "p3", "fanout", ["p3_c0", "p3_c1"], "fan_in");
@@ -497,6 +510,21 @@ describe("wakePending — running_children convergence (P2.3)", () => {
     wakePending(r.store);
     const subrunFacts = r.store.getEvents("p4").filter((e) => e.type === "fact.subrun_completed");
     expect(subrunFacts.map((e) => (e.payload as { parallelIndex: number }).parallelIndex)).toEqual([0, 1, 2]);
+    r.store.close();
+  });
+
+  test("subrun_completed carries child routing score for fan_in ranking", () => {
+    const r = rig();
+    startFanout(r, "ps", "fanout", ["ps_c0", "ps_c1"], "fan_in");
+    forceChildTerminal(r, "ps_c0", "completed");
+    forceChildTerminal(r, "ps_c1", "completed");
+    const db = (r.store as unknown as { db: { query: (sql: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET routing = json_set(routing, '$.score', ?) WHERE run_id = ?").run(0.87, "ps_c1");
+
+    wakePending(r.store);
+    const subrunFacts = r.store.getEvents("ps").filter((e) => e.type === "fact.subrun_completed");
+    const scored = subrunFacts.find((e) => (e.payload as { subRunId?: string }).subRunId === "ps_c1");
+    expect((scored!.payload as { fanInScore?: number }).fanInScore).toBe(0.87);
     r.store.close();
   });
 

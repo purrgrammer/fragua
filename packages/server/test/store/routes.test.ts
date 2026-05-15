@@ -525,6 +525,76 @@ describe("GET /runs/:id/steps", () => {
     expect(typeof body[0]!.durationMs).toBe("number");
     expect(body[0]!.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  test("parent steps include descendant sub-run LLM calls with per-run cost aggregates", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    store.enqueueRun({ runId: "steps-parent", workflowSha: "wf" });
+    store.enqueueRun({
+      runId: "steps-child",
+      workflowSha: "wf",
+      parentRunId: "steps-parent",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "lens",
+      subgraphTerminalNodeId: "fan_in",
+    });
+
+    const c0 = store.getState("steps-child")!;
+    store.appendFact(
+      "steps-child",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "lens" },
+        },
+      ],
+      c0.version,
+    );
+    const c1 = store.getState("steps-child")!;
+    store.appendFact(
+      "steps-child",
+      [{ type: "fact.node_started", payload: { nodeId: "lens", iteration: 0 } }],
+      c1.version,
+    );
+    store.appendObservabilityEvents("steps-child", [
+      { type: "llm.start", payload: { nodeId: "lens", model: "stub" } },
+      {
+        type: "cost.recorded",
+        payload: { nodeId: "lens", input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.012 },
+      },
+    ]);
+    const c2 = store.getState("steps-child")!;
+    store.appendFact(
+      "steps-child",
+      [
+        {
+          type: "fact.node_completed",
+          payload: { nodeId: "lens", iteration: 0, tokens: 15, costUsd: 0.012, nextNode: "__end__" },
+        },
+        { type: "fact.run_completed", payload: { finalNode: "__end__" } },
+      ],
+      c2.version,
+    );
+
+    const res = await app.request("/runs/steps-parent/steps");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{
+      nodeId: string;
+      originRunId?: string;
+      parentNodeId?: string;
+      parallelIndex?: number;
+      cost?: { cost_usd: number; input_tokens: number; output_tokens: number };
+    }>;
+    expect(body).toHaveLength(1);
+    expect(body[0]!.nodeId).toBe("lens");
+    expect(body[0]!.originRunId).toBe("steps-child");
+    expect(body[0]!.parentNodeId).toBe("fanout");
+    expect(body[0]!.parallelIndex).toBe(0);
+    expect(body[0]!.cost?.cost_usd).toBeCloseTo(0.012);
+    expect(body[0]!.cost?.input_tokens).toBe(10);
+    expect(body[0]!.cost?.output_tokens).toBe(5);
+  });
 });
 
 describe("GET /runs?status= filter", () => {

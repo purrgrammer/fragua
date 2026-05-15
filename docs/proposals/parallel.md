@@ -107,7 +107,7 @@ Each refactor lands as its own PR with green CI. No externally observable behavi
 ### P1 — Sub-run shape (additive schema, no parallel changes yet)
 
 - **P1.1** Schema: `run_state.parent_run_id NULL`, `parent_node_id NULL`, `parallel_index NULL INTEGER`, `subgraph_root_node_id NULL`, `subgraph_terminal_node_id NULL`. Indexes on `(parent_run_id)`.
-- **P1.2** New `running_children` status. Reducer: a parent enters this when its parallel handler emits `fact.fanout_started { childRunIds, fanInNode }`. Wake condition: all `childRunIds` are in a terminal-or-paused-class state.
+- **P1.2** New `running_children` status. Reducer: a parent enters this when its parallel handler emits `fact.fanout_started { childRunIds, fanInNode }`. Wake condition: all `childRunIds` are in a terminal status (`completed`, `cancelled`, or `halted`); paused or quarantined sub-runs block convergence until resolved.
 - **P1.3** Events: `intent.fanout_requested`, `fact.fanout_started`, `fact.fanout_completed`, `fact.subrun_completed`. Daemon-scoped, not per-sub-run.
 - **P1.4** Cost rollup: parent's `total_cost_usd` projection adds sub-run totals on `fact.subrun_completed` (the fact carries the inline outcome). Running-children gate queries `parent.totalCostUsd + parent.totalSubrunCostUsd + SUM(in-flight subrun.totalCostUsd)` at gate-check time.
 - **P1.5** Cancel propagation: cancelling a parent in `running_children` emits `intent.cancel_requested` on every child sub-run.

@@ -140,6 +140,7 @@ export function useBranchMeta(
   const eventsQuery = useQuery({
     ...queries.runs.events(runId ?? ""),
     enabled: !!runId,
+    refetchInterval: detail?.status === "running" ? 1_000 : false,
   });
   const events = eventsQuery.data?.events;
   const eventsLen = Array.isArray(events) ? events.length : 0;

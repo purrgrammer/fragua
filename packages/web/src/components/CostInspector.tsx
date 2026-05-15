@@ -66,7 +66,14 @@ export interface CostInspectorProps {
 export function CostInspector({ runId, totalEvents, isLive = false }: CostInspectorProps): JSX.Element {
   const qc = useQueryClient();
   const stepsQuery = queries.runs.steps(runId);
-  const { data: steps, isPending, isError } = useQuery(stepsQuery);
+  const {
+    data: steps,
+    isPending,
+    isError,
+  } = useQuery({
+    ...stepsQuery,
+    refetchInterval: isLive ? 1_000 : false,
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: totalEvents is the intentional trigger; qc + stepsQuery.queryKey are stable.
   useEffect(() => {
@@ -174,7 +181,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
         const next = topLevel[i + 1] ?? branchChildren?.[0];
         return (
           <StepCostRowGroup
-            key={step.startSeq}
+            key={stepIdentityKey(step, runId)}
             step={step}
             branchChildren={branchChildren}
             nextStartedAt={next?.startedAt}
@@ -184,6 +191,10 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
       })}
     </div>
   );
+}
+
+function stepIdentityKey(step: StepSnapshot, fallbackRunId: string): string {
+  return `${step.originRunId ?? fallbackRunId}:${step.startSeq}`;
 }
 
 /** A top-level step plus any indented branch rows that ride underneath it. */
@@ -215,7 +226,7 @@ function StepCostRowGroup({
       {hasBranchChildren
         ? branchChildren.map((child, j) => (
             <StepCostRow
-              key={child.startSeq}
+              key={stepIdentityKey(child, step.originRunId ?? "")}
               step={child}
               nextStartedAt={branchChildren[j + 1]?.startedAt ?? nextStartedAt}
               isLive={isLive}

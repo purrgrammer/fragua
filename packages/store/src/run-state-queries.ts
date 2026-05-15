@@ -562,7 +562,7 @@ const PARENT_COST_SNAPSHOT_SQL = `
     COALESCE(SUM(c.billed_tokens), 0) AS inFlightBilledTokens
     FROM run_state c
    WHERE c.parent_run_id = ?
-     AND c.status NOT IN ('completed','cancelled','halted','quarantined')
+     AND c.status NOT IN ('completed','cancelled','halted')
 `;
 
 /** Aggregate the cost-gate snapshot for a parent run currently in
@@ -594,7 +594,7 @@ const SELECT_ACTIVE_CHILDREN_SQL = `
   SELECT run_id
     FROM run_state
    WHERE parent_run_id = ?
-     AND status NOT IN ('completed','cancelled','halted','quarantined')
+     AND status NOT IN ('completed','cancelled','halted')
 `;
 
 /** Returns the run-id list of every sub-run linked to `parentRunId`
