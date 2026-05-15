@@ -1,10 +1,12 @@
 ---
 title: Provider credentials in the store — built-in pi-ai providers
 summary: "Move built-in provider credentials from ~/.swarm/auth.json into a provider_credentials table on the global store. AuthStorage becomes store-backed; !cmd/env credential resolution is cut from the main path. Custom providers stay on models.json until the follow-up proposal lands."
-status: proposed
+status: shipped
 maturity: designed
-last-reviewed: 2026-05-15
+last-reviewed: 2026-05-22
 ---
+
+> **Note (implementation).** Migration landed as step 11 (v10 → v11), not v8 → v9 — the schema had advanced since the proposal was drafted (running_children + parallel sub-runs landed in between). Behaviour matches the design below; only the migration-step number differs.
 
 # Provider credentials in the store — built-in pi-ai providers
 

@@ -273,6 +273,17 @@ Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
 `MAX_BLOB_BYTES = 16 MiB` is a store-module check, not a SQL `CHECK` constraint. An over-cap insert raises before the file write, so neither the file nor the row lands.
 
+### Provider credentials
+
+Credentials live in the global store (`~/.swarm/swarm.db`, table `provider_credentials`) since the credentials-in-the-store proposal landed. Use it during post-mortems when a run halts with `provider_unavailable` or `paused{reason:"provider_error"}`:
+
+```sh
+sqlite3 -readonly ~/.swarm/swarm.db \
+  "SELECT provider, kind, updated_at FROM provider_credentials ORDER BY provider;"
+```
+
+`kind` is denormalised from `payload.type` so you can spot the shape (`api_key` vs `oauth`) without JSON-parsing. The `payload` blob carries the full credential; **never echo it to logs** — it contains live secrets. `updated_at` jumps on OAuth refresh (last-writer-wins across racers); a stale `updated_at` plus a `paused_auto{reason:"provider_retry"}` run usually means refresh failed.
+
 For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
 
 ```sh

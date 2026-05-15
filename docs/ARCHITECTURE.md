@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 10`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade; v5 added a `kind` discriminator + parent-linkage columns on `run_state` to model conversation runs (since abandoned); v6 adds the `schedules` table and `run_state.schedule_id` for scheduled runs (proposal: `docs/proposals/scheduled-runs.md`); v7 drops the v5 conversation scaffolding (`kind`, `parent_run_id`, `parent_node_id`, `parent_iteration`) and restores `workflow_sha` to `NOT NULL` — sub-agents are an in-tool implementation, not runs (proposal: `docs/proposals/agent-tool.md`); v8 collapses `paused_provider_retry` and `paused_retry` into a single `paused_auto` status, retires `fact.run_paused_retry` (folded into `fact.run_paused{reason:"handler_retry"}`), and promotes provider auto-retry to its own reason `provider_retry` (was: `provider_error` + `policy:"auto-retry"`); legacy auto-wake runs in flight at migration time are deleted (proposal: `docs/proposals/recoverable-budget-pause.md`, Stage 2); v9 re-introduces sub-run linkage columns (`parent_run_id`, `parent_node_id`, `parallel_index`, `subgraph_root_node_id`, `subgraph_terminal_node_id`) on `run_state` plus an `idx_run_state_parent` partial index — this time for parallel sub-runs (proposal: `docs/proposals/parallel.md`, P1.1); v10 adds `running_children` to `run_state.status` CHECK — parents that fanned out into sub-runs sit in this status until every sub-run reaches a terminal-or-paused-class state (proposal: `docs/proposals/parallel.md`, P1.2). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 11`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade; v5 added a `kind` discriminator + parent-linkage columns on `run_state` to model conversation runs (since abandoned); v6 adds the `schedules` table and `run_state.schedule_id` for scheduled runs (proposal: `docs/proposals/scheduled-runs.md`); v7 drops the v5 conversation scaffolding (`kind`, `parent_run_id`, `parent_node_id`, `parent_iteration`) and restores `workflow_sha` to `NOT NULL` — sub-agents are an in-tool implementation, not runs (proposal: `docs/proposals/agent-tool.md`); v8 collapses `paused_provider_retry` and `paused_retry` into a single `paused_auto` status, retires `fact.run_paused_retry` (folded into `fact.run_paused{reason:"handler_retry"}`), and promotes provider auto-retry to its own reason `provider_retry` (was: `provider_error` + `policy:"auto-retry"`); legacy auto-wake runs in flight at migration time are deleted (proposal: `docs/proposals/recoverable-budget-pause.md`, Stage 2); v9 re-introduces sub-run linkage columns (`parent_run_id`, `parent_node_id`, `parallel_index`, `subgraph_root_node_id`, `subgraph_terminal_node_id`) on `run_state` plus an `idx_run_state_parent` partial index — this time for parallel sub-runs (proposal: `docs/proposals/parallel.md`, P1.1); v10 adds `running_children` to `run_state.status` CHECK — parents that fanned out into sub-runs sit in this status until every sub-run reaches a terminal-or-paused-class state (proposal: `docs/proposals/parallel.md`, P1.2); v11 adds the `provider_credentials` table backing the store-resident credential model — `~/.swarm/auth.json` is retired, `!cmd`/env resolution is cut from the main path, and the store is the only credential coordination surface (proposal: `docs/proposals/provider-credentials-storage.md`). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -347,6 +347,24 @@ CREATE TABLE schedules (
 CREATE INDEX idx_schedules_due
   ON schedules(next_fire_at) WHERE paused_at IS NULL;
 CREATE INDEX idx_schedules_cwd ON schedules(cwd);
+
+-- Built-in provider credentials. One row per provider id; `payload` is
+-- the full AuthCredential JSON (api_key form or OAuthCredentials).
+-- `kind` denormalises `payload.type` so post-mortems can SELECT row
+-- shapes without JSON-parsing. No indexes — the PK on `provider` is
+-- the only access pattern (lookup by id, full table scan for `list`,
+-- both <20 rows in practice). The agent layer's
+-- `SqliteAuthStorageBackend` rebuilds the in-memory AuthStorageData
+-- blob from these rows on read and applies a returned `next` blob by
+-- full-replace (upsert + delete-missing). See proposal:
+-- `docs/proposals/provider-credentials-storage.md`.
+CREATE TABLE provider_credentials (
+  provider   TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+  payload    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
 ```
 
 **Size targets:**
@@ -899,6 +917,20 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 ```
 
 ---
+
+### Credential storage
+
+Built-in pi-ai provider credentials (api_key + OAuth tokens) live in
+the `provider_credentials` table on the global store
+(`~/.swarm/swarm.db`). The store is the only credential coordination
+surface: the harness daemon, `swarm serve`, and `swarm providers`
+share one view of which providers are credentialed, and OAuth refresh
+is last-writer-wins under SQLite WAL rather than file-locked. `!cmd`
+and env-var resolution are gone from the main `AuthStorage.getApiKey`
+path — keys are stored verbatim. The custom-provider `apiKey` field
+on `~/.swarm/models.json` is the only remaining corner where
+`!cmd` / env still resolve; the follow-up proposal
+(`docs/proposals/provider-config-storage.md`) closes it.
 
 ## 7. Web server
 
