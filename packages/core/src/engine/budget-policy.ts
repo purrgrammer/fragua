@@ -20,7 +20,6 @@
 //   "stop"            — `shouldHalt` set; executor emits the budget halt.
 //   "warn"            — non-blocking; just the events fire.
 
-import type { ObservabilityEvent } from "@swarm/store";
 import type { GraphAttrs, NodeAttrs } from "../types/graph.ts";
 
 export const BUDGET_WARN_RATIO = 0.8;
@@ -54,7 +53,7 @@ export interface BudgetInput {
 
 export interface BudgetDecision {
   /** Observability events to emit (`budget.warn` and/or `budget.stop`). */
-  events: ObservabilityEvent[];
+  events: BudgetObservabilityEvent[];
   /** Halt the run with reason="budget" when true. Set only when
    * `budget_policy="stop"` and a breach fired. */
   shouldHalt: boolean;
@@ -76,6 +75,11 @@ export interface BudgetDecision {
   newlyWarned: string[];
 }
 
+export interface BudgetObservabilityEvent {
+  type: string;
+  payload: Record<string, unknown>;
+}
+
 interface Check {
   scope: "run" | "node";
   metric: "cost" | "tokens";
@@ -95,7 +99,7 @@ export function evaluateBudget(input: BudgetInput): BudgetDecision {
   }
 
   const policy = input.graphAttrs.budget_policy ?? "pause";
-  const events: ObservabilityEvent[] = [];
+  const events: BudgetObservabilityEvent[] = [];
   const newlyWarned: string[] = [];
   let stopFired = false;
   let haltReason: string | undefined;

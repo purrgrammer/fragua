@@ -16,5 +16,6 @@ export type { IntentDecision } from "./intent-fold.ts";
 export { foldIntents } from "./intent-fold.ts";
 export type { LlmAccounting, LlmCallFn, LlmClientOpts } from "./llm-client.ts";
 export { makeLlmClient } from "./llm-client.ts";
+export { sha256Hex } from "./sha256.ts";
 export { InMemoryToolRegistry } from "./tool-registry.ts";
 export * from "./types.ts";

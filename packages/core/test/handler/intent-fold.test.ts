@@ -1,16 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type { RunStatus, StoredEvent } from "@swarm/store";
+import type { RunStatus } from "@swarm/types";
 import fc from "fast-check";
-import { foldIntents } from "../../src/handler/intent-fold.ts";
+import { foldIntents, type IntentFoldEvent } from "../../src/handler/intent-fold.ts";
 
-function ev(seq: number, type: string, payload: unknown): StoredEvent {
+function ev(seq: number, type: string, payload: unknown): IntentFoldEvent {
   return {
-    runId: "r",
     seq,
-    type: type as StoredEvent["type"],
-    writer: "web",
-    payload: payload as StoredEvent["payload"],
-    ts: seq,
+    type,
+    payload,
   };
 }
 
@@ -311,14 +308,11 @@ describe("foldIntents — purity contract", () => {
     }),
   );
 
-  function buildEvent(seq: number, sample: { type: string; payload: unknown }): StoredEvent {
+  function buildEvent(seq: number, sample: { type: string; payload: unknown }): IntentFoldEvent {
     return {
-      runId: "r",
       seq,
-      type: sample.type as StoredEvent["type"],
-      writer: "web",
-      payload: sample.payload as StoredEvent["payload"],
-      ts: seq,
+      type: sample.type,
+      payload: sample.payload,
     };
   }
 

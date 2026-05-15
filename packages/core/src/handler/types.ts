@@ -5,7 +5,6 @@
 // reach into the store directly. All side effects route through the context
 // helpers, which the executor wires to the event store.
 
-import type { ArtifactRef, ArtifactScope, Message } from "@swarm/store";
 import type { AgentMessage, Message as PiMessage } from "@swarm/types";
 import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
@@ -70,14 +69,35 @@ export interface ToolRegistry {
   select(opts: { allow?: readonly string[]; deny?: readonly string[] }): ToolRegistry;
 }
 
+export interface HandlerMessage {
+  runId: string;
+  ordinal: number;
+  content: AgentMessage;
+  nodeId: string | null;
+  iteration: number;
+}
+
+export interface ArtifactScope {
+  runId: string;
+  nodeId: string;
+  iteration: number;
+  key: string;
+}
+
+export interface ArtifactRef extends ArtifactScope {
+  sha256: string;
+  sizeBytes: number;
+  mime: string | null;
+}
+
 export interface MessagesApi {
   /** Append an LLM-visible message row. Stores the full pi-agent-core
    * `AgentMessage` shape (including tool_use / tool_result / thinking
    * block structure, signatures, custom types). Round-trips through
    * JSON losslessly. */
   append(message: AgentMessage): { ordinal: number };
-  recent(n: number): Message[];
-  since(ordinal: number): Message[];
+  recent(n: number): HandlerMessage[];
+  since(ordinal: number): HandlerMessage[];
 }
 
 export interface ArtifactsApi {

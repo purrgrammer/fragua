@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.41",
-    "@swarm/store": "workspace:*",
     "@swarm/types": "workspace:*"
   },
   "devDependencies": {
+    "@swarm/store": "workspace:*",
     "fast-check": "3.23.1",
     "typescript": "5.7.3"
   }

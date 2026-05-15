@@ -33,7 +33,7 @@
 //
 // See `docs/intent-fold.md` for the full truth table.
 
-import type { RunStatus, StoredEvent } from "@swarm/store";
+import type { RunStatus } from "@swarm/types";
 
 export type DroppedReason = "wrong_state" | "superseded_by_cancel" | "later_input_won" | "already_paused";
 
@@ -41,6 +41,12 @@ export interface DroppedIntent {
   seq: number;
   type: string;
   reason: DroppedReason;
+}
+
+export interface IntentFoldEvent {
+  seq: number;
+  type: string;
+  payload: unknown;
 }
 
 export type IntentDecision =
@@ -74,10 +80,10 @@ export type IntentDecision =
       dropped: DroppedIntent[];
     };
 
-export function foldIntents(intents: StoredEvent[], runStatus: RunStatus): IntentDecision {
+export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): IntentDecision {
   // R1 / R2 — cancel short-circuits. First cancel by seq wins; later cancels
   // and every other intent in the batch are recorded as dropped for audit.
-  let firstCancel: StoredEvent | undefined;
+  let firstCancel: IntentFoldEvent | undefined;
   for (const ev of intents) {
     if (ev.type === "intent.cancel_requested") {
       if (firstCancel === undefined || ev.seq < firstCancel.seq) {

@@ -1,14 +1,16 @@
-import type { ArtifactRef, ArtifactScope, IEventStore, Message } from "@swarm/store";
 import type { AgentMessage } from "@swarm/types";
 import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
 import type {
+  ArtifactRef,
+  ArtifactScope,
   ArtifactsApi,
   BudgetSnapshotInput,
   ExternalCall,
   HandlerContext,
+  HandlerMessage,
   HttpClient,
   LlmClient,
   MessagesApi,
@@ -18,13 +20,25 @@ import type {
   ToolRegistry,
 } from "./types.ts";
 
+export interface HandlerStore {
+  appendMessage(
+    runId: string,
+    row: { content: AgentMessage; nodeId: string | null; iteration: number },
+    opts?: { dedup?: boolean },
+  ): { ordinal: number };
+  getMessages(runId: string, opts?: { sinceOrdinal?: number; limit?: number; nodeId?: string }): HandlerMessage[];
+  putArtifact(scope: ArtifactScope, content: Uint8Array, mime?: string, opts?: { replace?: boolean }): ArtifactRef;
+  getArtifact(scope: ArtifactScope): Uint8Array;
+  getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
+}
+
 export interface BuildContextOpts {
   runId: string;
   nodeId: string;
   iteration: number;
   signal: AbortSignal;
   routing: Readonly<Record<string, unknown>>;
-  store: IEventStore;
+  store: HandlerStore;
   llm: LlmClient;
   http: HttpClient;
   tools: ToolRegistry;
@@ -76,7 +90,7 @@ interface CtxUpstream {
   runId: string;
   signal: AbortSignal;
   routing: Readonly<Record<string, unknown>>;
-  store: IEventStore;
+  store: HandlerStore;
   llm: LlmClient;
   http: HttpClient;
   /** Un-narrowed root registry. Per-scope `allowedTools` / `deniedTools`
@@ -256,5 +270,3 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
   };
   return ctx;
 }
-
-export type { Message };

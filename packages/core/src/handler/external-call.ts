@@ -1,5 +1,5 @@
-import { sha256Hex } from "@swarm/store";
 import { canonicalStringify } from "./canonical-stringify.ts";
+import { sha256Hex } from "./sha256.ts";
 import type { ExternalCall, ExternalCallParams, SideEffectRecorder } from "./types.ts";
 
 export interface MakeExternalCallOpts {

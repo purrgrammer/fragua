@@ -8,9 +8,9 @@
 // (store, llm, http, recorder, signal, routing, …).
 
 import { describe, expect, test } from "bun:test";
-import { sha256Hex } from "@swarm/store";
 import { canonicalStringify } from "../../src/handler/canonical-stringify.ts";
 import { buildHandlerContext } from "../../src/handler/context.ts";
+import { sha256Hex } from "../../src/handler/sha256.ts";
 import { InMemoryToolRegistry } from "../../src/handler/tool-registry.ts";
 import type { SideEffectRecorder } from "../../src/handler/types.ts";
 import type { ExecutionEnvironment } from "../../src/types/execution.ts";
