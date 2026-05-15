@@ -40,7 +40,7 @@ export interface PiCodergenBackendOptions {
   env?: ExecutionEnvironment;
   /** Resolve an LLM model by provider + id. Defaults to pi-ai's getModel.
    * Daemons wire a ModelRegistry here so custom providers (Ollama etc.)
-   * and models.json overrides are honoured. */
+   * and `provider_config` overrides are honoured. */
   resolveModel?: (provider: string, modelId: string) => Model<string>;
   /** Optional API-key resolver forwarded to pi-agent-core's `Agent`.
    * When wired, the Agent calls this per-request to fetch credentials,
