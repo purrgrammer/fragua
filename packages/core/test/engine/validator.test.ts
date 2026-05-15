@@ -747,6 +747,189 @@ describe("retry-policy lints (attractor §3.6)", () => {
   });
 });
 
+describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", () => {
+  test("E016: type= references an unknown handler", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [type="codrgen"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const e016 = diags.find((d) => d.code === "E016");
+    expect(e016).toBeDefined();
+    expect(e016?.severity).toBe("error");
+    expect(e016?.nodeId).toBe("work");
+    expect(e016?.message).toMatch(/codrgen/);
+  });
+
+  test("E016 not raised when type= names a known handler", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [type="codergen"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "E016")).toBe(false);
+  });
+
+  test("W012: type= and shape resolve to different handlers", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          gate [shape=hexagon, type="codergen", prompt="re-purpose hexagon"]
+          done [shape=Msquare]
+          s -> gate -> done
+        }
+      `),
+    );
+    const w012 = diags.find((d) => d.code === "W012");
+    expect(w012).toBeDefined();
+    expect(w012?.severity).toBe("warning");
+    expect(w012?.nodeId).toBe("gate");
+    expect(w012?.message).toMatch(/overrides/);
+  });
+
+  test("W012 not raised when type= matches the shape's canonical handler (redundant-explicit)", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [shape=box, type="codergen"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W012")).toBe(false);
+  });
+
+  test("W013: unrecognised node attribute", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [goalgate=true]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w013 = diags.find((d) => d.code === "W013" && d.nodeId === "work");
+    expect(w013).toBeDefined();
+    expect(w013?.severity).toBe("warning");
+    expect(w013?.message).toMatch(/goalgate/);
+  });
+
+  test("W013: unrecognised edge attribute", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work
+          done [shape=Msquare]
+          s -> work -> done [foo="bar"]
+        }
+      `),
+    );
+    const w013 = diags.find((d) => d.code === "W013" && d.edge?.to === "done");
+    expect(w013).toBeDefined();
+    expect(w013?.message).toMatch(/foo/);
+  });
+
+  test("W013: unrecognised graph attribute", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [budjet_usd=5.0]
+          s [shape=Mdiamond]
+          done [shape=Msquare]
+          s -> done
+        }
+      `),
+    );
+    const w013 = diags.find((d) => d.code === "W013" && d.message.includes("graph"));
+    expect(w013).toBeDefined();
+    expect(w013?.message).toMatch(/budjet_usd/);
+  });
+
+  test("W013 not raised for canonical attributes", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          graph [goal="x", default_fidelity="compact", budget_usd=5.0]
+          s [shape=Mdiamond]
+          work [prompt="hi", allowed_tools="read", llm_model="claude-sonnet-4-6"]
+          done [shape=Msquare]
+          s -> work -> done [label="ok", condition="outcome=success", weight=1]
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W013")).toBe(false);
+  });
+
+  test("W014: auto_status on a node", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [auto_status=true, prompt="hi"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    const w014 = diags.find((d) => d.code === "W014");
+    expect(w014).toBeDefined();
+    expect(w014?.severity).toBe("warning");
+    expect(w014?.nodeId).toBe("work");
+    expect(w014?.message).toMatch(/SPEC\.md §6\.5/);
+  });
+
+  test("W014: loop_restart on an edge", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          a [prompt="a"]
+          b [prompt="b"]
+          done [shape=Msquare]
+          s -> a -> b -> done
+          b -> a [loop_restart=true, label="restart"]
+        }
+      `),
+    );
+    const w014 = diags.find((d) => d.code === "W014");
+    expect(w014).toBeDefined();
+    expect(w014?.edge).toEqual({ from: "b", to: "a" });
+    expect(w014?.message).toMatch(/loop_restart/);
+  });
+
+  test("W014 does NOT double-fire with W013 (attractor-only attrs are in the whitelist)", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          s [shape=Mdiamond]
+          work [auto_status=true, prompt="hi"]
+          done [shape=Msquare]
+          s -> work -> done
+        }
+      `),
+    );
+    // auto_status: one W014, zero W013.
+    expect(diags.filter((d) => d.code === "W014").length).toBe(1);
+    expect(diags.some((d) => d.code === "W013" && d.message.includes("auto_status"))).toBe(false);
+  });
+});
+
 describe("validateOrThrow", () => {
   test("ok graph does not throw", () => {
     validateOrThrow(

@@ -394,6 +394,7 @@ const INT_KEYS: ReadonlySet<string> = new Set([
   "default_max_retries",
   "idle_timeout",
   "max_goal_gate_retries",
+  "max_ms",
   "retry_initial_delay_ms",
   "retry_max_delay_ms",
 ]);

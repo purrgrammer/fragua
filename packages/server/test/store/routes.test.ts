@@ -112,10 +112,10 @@ describe("POST /workflows — upload", () => {
     expect(body.error).toMatch(/garbage/);
   });
 
-  test("rejects zero / negative maxMs", async () => {
+  test("rejects zero / negative max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, maxMs=0]; done [shape=Msquare]; start -> a -> done; }`,
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=0]; done [shape=Msquare]; start -> a -> done; }`,
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { code: string };
@@ -132,10 +132,10 @@ describe("POST /workflows — upload", () => {
     }
   });
 
-  test("accepts valid numeric maxMs", async () => {
+  test("accepts valid numeric max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, maxMs=1500]; done [shape=Msquare]; start -> a -> done; }`,
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=1500]; done [shape=Msquare]; start -> a -> done; }`,
     });
     expect(res.status).toBe(200);
   });

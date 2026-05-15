@@ -277,13 +277,13 @@ describe("resolveMaxMs — properties", () => {
     );
   });
 
-  test("numeric maxMs wins over fallback", () => {
+  test("numeric max_ms wins over fallback", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 1, max: 10_000_000 }),
         fc.option(fc.integer({ min: 1, max: 1_000_000 })),
         (ms, fb) => {
-          expect(resolveMaxMs({ maxMs: ms }, fb ?? undefined)).toBe(ms);
+          expect(resolveMaxMs({ max_ms: ms }, fb ?? undefined)).toBe(ms);
         },
       ),
     );
@@ -298,10 +298,10 @@ describe("resolveMaxMs — properties", () => {
     );
   });
 
-  test("maxMs wins over timeout when both present", () => {
+  test("max_ms wins over timeout when both present", () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 1_000_000 }), fc.integer({ min: 1, max: 10_000 }), (ms, secs) => {
-        const attrs = { maxMs: ms, timeout: `${secs}s` };
+        const attrs = { max_ms: ms, timeout: `${secs}s` };
         expect(resolveMaxMs(attrs, undefined)).toBe(ms);
       }),
     );

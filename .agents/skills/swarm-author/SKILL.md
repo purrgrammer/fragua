@@ -29,7 +29,7 @@ For the validator code lookup table, see `references/validator-codes.md`. For re
 
 ## 1. The shape vocabulary
 
-Each node has a Graphviz shape; the shape picks the handler. There is no `kind=` attribute — shape *is* kind.
+Each node has a Graphviz shape; the shape picks the handler. An explicit `type="<handler>"` overrides the shape (attractor §2.6) — useful when you want the visual cue of one shape but the runtime of another. The validator warns on shape/type divergence (W012) and rejects unknown handler names (E016).
 
 | Shape | Handler | What it does | Required attrs |
 |---|---|---|---|
@@ -390,7 +390,7 @@ For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_
 
 `bun run swarm validate path/to/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
 
-Error codes range from E001 (no start node) through E015 (model_stylesheet syntax). Warning codes from W001 (orphan node) through W011 (bare `model`/`provider` without `llm_` prefix). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
+Error codes range from E001 (no start node) through E016 (`type=` names an unknown handler). Warning codes from W001 (orphan node) through W014 (attractor-only attribute swarm does not honor). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
 
 The most common ones to know without looking up:
 
@@ -400,6 +400,7 @@ The most common ones to know without looking up:
 - **W003** — only conditional edges, no `outcome=fail` catch-all.
 - **W004** — hexagon edge using legacy `context.hitl.*` (use `[K] Label`).
 - **W007** — `goal_gate=true` with no retarget chain.
+- **W013** — unrecognised attribute name (typo like `goalgate=` or `max_ms=`). The most common silent-failure source.
 
 ---
 

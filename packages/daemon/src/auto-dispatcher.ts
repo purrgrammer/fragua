@@ -33,12 +33,12 @@ export interface AutoDispatcherOpts {
    * executed via a real LLM backend. `nextNode` is passed as a legacy
    * fallback for factories that don't rely on the executor's edge
    * selector; factories are free to ignore it. `maxMs` is resolved from
-   * the node's `timeout=`/`maxMs=` attrs (see `resolveMaxMs` below);
+   * the node's `timeout=`/`max_ms=` attrs (see `resolveMaxMs` below);
    * factories forward it into the HandlerSpec.
    */
   codergenFactory?: (node: Node, nextNode: string, maxMs: number | undefined) => HandlerSpec;
   /** Per-kind fallback `maxMs` when the DOT node declares neither
-   * `timeout` nor `maxMs`. Keyed by handler kind (`codergen`, `tool`).
+   * `timeout` nor `max_ms`. Keyed by handler kind (`codergen`, `tool`).
    * Absent kind → handler's own built-in default applies. */
   defaultMaxMs?: { codergen?: number; tool?: number };
 }
@@ -47,7 +47,7 @@ export interface AutoDispatcherOpts {
  * Resolve a handler's `maxMs` from a DOT node's attrs, falling back to
  * `fallbackMs` (per-kind config) and finally the handler's own default.
  * Precedence:
- *   1. `attrs.maxMs` — numeric literal in ms
+ *   1. `attrs.max_ms` — numeric literal in ms
  *   2. `attrs.timeout` — duration string ("30s", "5m", "2h", etc.)
  *   3. caller-supplied fallback (undefined → handler default applies)
  *
@@ -58,7 +58,7 @@ export interface AutoDispatcherOpts {
  * the dispatcher.
  */
 export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): number | undefined {
-  if (typeof attrs.maxMs === "number") return parseDurationMs(attrs.maxMs);
+  if (typeof attrs.max_ms === "number") return parseDurationMs(attrs.max_ms);
   if (typeof attrs.timeout === "string") return parseDurationMs(attrs.timeout);
   return fallbackMs;
 }

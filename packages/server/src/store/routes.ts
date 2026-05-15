@@ -107,7 +107,7 @@ export function envProviderPreflight(): { ok: true } | { ok: false; detail: stri
 }
 
 /**
- * Scan a DOT source for nodes with malformed `timeout=` or `maxMs=`
+ * Scan a DOT source for nodes with malformed `timeout=` or `max_ms=`
  * attrs. Returns the first offender so the API can reject before a
  * workflow is saved (and therefore before any run is enqueued against
  * a broken sha). Returns `null` when every timeout attr parses, the
@@ -116,7 +116,7 @@ export function envProviderPreflight(): { ok: true } | { ok: false; detail: stri
  */
 function findInvalidTimeoutAttr(
   dotSource: string,
-): { nodeId: string; attr: "timeout" | "maxMs"; value: unknown; detail: string } | null {
+): { nodeId: string; attr: "timeout" | "max_ms"; value: unknown; detail: string } | null {
   let graph: ReturnType<typeof parseDotSource>;
   try {
     graph = parseDotSource(dotSource);
@@ -124,20 +124,20 @@ function findInvalidTimeoutAttr(
     return null;
   }
   for (const node of Object.values(graph.nodes)) {
-    const { timeout, maxMs } = node.attrs;
-    if (typeof maxMs === "number") {
+    const { timeout, max_ms } = node.attrs;
+    if (typeof max_ms === "number") {
       try {
-        parseDurationMs(maxMs);
+        parseDurationMs(max_ms);
       } catch (err) {
         return {
           nodeId: node.id,
-          attr: "maxMs",
-          value: maxMs,
+          attr: "max_ms",
+          value: max_ms,
           detail: err instanceof InvalidDurationError ? err.message : String(err),
         };
       }
-    } else if (maxMs != null) {
-      return { nodeId: node.id, attr: "maxMs", value: maxMs, detail: "maxMs must be a positive integer (ms)" };
+    } else if (max_ms != null) {
+      return { nodeId: node.id, attr: "max_ms", value: max_ms, detail: "max_ms must be a positive integer (ms)" };
     }
     if (typeof timeout === "string") {
       try {

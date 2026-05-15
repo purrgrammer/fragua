@@ -72,7 +72,7 @@ export interface NodeAttrs {
   timeout?: string;
   /** Per-node hard timeout in raw milliseconds. Same precedence as
    * `timeout` — either may be set, not both. */
-  maxMs?: number;
+  max_ms?: number;
   idle_timeout?: number;
   reasoning_effort?: "low" | "medium" | "high";
   context?: ContextMode;
@@ -205,7 +205,21 @@ export interface Graph {
   subgraphs: Subgraph[];
 }
 
+const KNOWN_HANDLER_TYPES: ReadonlySet<HandlerType> = new Set(Object.values(HANDLER_BY_SHAPE));
+
+function isHandlerType(s: string): s is HandlerType {
+  return (KNOWN_HANDLER_TYPES as ReadonlySet<string>).has(s);
+}
+
+/** Resolve a node's handler. `type=` takes precedence over shape-based
+ * resolution when it names a known handler (attractor §2.6 + §4.2). The
+ * validator (E016 / W012) catches mismatches and unknown `type=` values at
+ * validate-time; this helper is defensive — an unknown `type=` falls back
+ * to the shape so the runtime stays well-defined even on an unvalidated
+ * graph. */
 export function handlerOf(node: Node): HandlerType {
+  const t = node.attrs.type;
+  if (typeof t === "string" && t.length > 0 && isHandlerType(t)) return t;
   return HANDLER_BY_SHAPE[node.shape];
 }
 

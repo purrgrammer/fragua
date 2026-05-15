@@ -71,6 +71,8 @@ A workflow is a Graphviz DOT graph. Each node has a shape that maps to a handler
 | `component` | `parallel` |
 | `tripleoctagon` | `parallel.fan_in` |
 
+An explicit `type=` node attribute overrides the shape→handler mapping (attractor §2.6 + §4.2); the value must name one of the eight handler kinds above (`E016`). A shape/`type=` divergence is legal but flagged with `W012` so authors notice they're decoupling the visual cue from the runtime kind.
+
 Loops are **backward conditional edges** bounded by `max_retries` on the
 target node (attractor-spec §3.6 / §5.2) — there is no `loop` primitive.
 A node that should re-run on `outcome=retry` takes an edge back to itself
@@ -135,7 +137,14 @@ After a node completes, the executor picks the next edge from the source node's 
 4. **Weight** — highest-weight unconditional edge.
 5. **Lexical** — tiebreak by `edge.to` (lower wins).
 
-**Fail-halt clarification.** When `outcome.status === "fail"` and step 1 produces no match, the executor halts the run with `fact.run_halted` instead of falling through to steps 2–5. Authors recovering from failure declare an explicit `condition="outcome=fail"` edge; absence of one is the halt signal. This is the swarm interpretation of attractor §3.7 step 1 ("fail edge: an outgoing edge with `condition=\"outcome=fail\"`"); the halt corresponds to attractor's "pipeline termination" (step 4) once `retry_target` / `fallback_retry_target` retargeting is exhausted.
+**Fail routing.** When `outcome.status === "fail"` and step 1 produces no match, the executor does **not** fall through to steps 2–5 (those are reserved for success-path resolution). Instead it follows the attractor §3.7 fail-routing chain (`packages/daemon/src/executor.ts:1031-1042`):
+
+1. **Fail edge** — a condition-matched edge from step 1 above. If found, follow it.
+2. **`retry_target`** on the failing node — jump to that node id (validated against the graph).
+3. **`fallback_retry_target`** on the failing node — secondary jump target.
+4. **Halt** — `fact.run_halted` with the original failure reason.
+
+Authors recovering from failure declare a `condition="outcome=fail"` edge (step 1) or a per-node `retry_target` (steps 2-3); absence of all three is the halt signal. Graph-level `retry_target` / `fallback_retry_target` belong to §3.4 (goal-gate retargeting), not §3.7 — they are deliberately not consulted on per-node failure.
 
 ---
 
@@ -201,7 +210,11 @@ swarm is *inspired by* the attractor specification (`attractor-spec.md`) — its
 
 ### 6.5 Deliberate omissions
 
+Attractor attributes the swarm runtime intentionally does not honor. The validator emits a dedicated warning (`W014`) when an author sets one of these, with a pointer back to this section.
+
 - **`stack.manager_loop`** (attractor §4.11, `house` shape). Composition lives at the workflow level via separate runs sharing artifacts. swarm does not ship a supervisor-loop primitive.
-- **`loop_restart` edge attribute** (attractor §2.7). Same rationale; loops are backward conditional edges bounded by `max_retries`.
+- **`auto_status` node attribute** (attractor §2.6 / Appendix C). Attractor handlers communicate outcomes by writing `status.json`; `auto_status=true` synthesizes SUCCESS when the file is missing. Swarm handlers return a typed `HandlerResult` — there is no missing-status path, so the attribute has no runtime meaning. **W014** flags it.
+- **`loop_restart` edge attribute** (attractor §2.7). Attractor uses it to terminate the run and relaunch with a fresh `logs_root` for context-window resets. Swarm achieves the same outcomes via per-edge `fidelity=truncate|compact|summary:*` (in-run reset) or by enqueueing a new run (full reset). Loops are otherwise backward conditional edges bounded by `max_retries`. **W014** flags it.
 - **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception; not orchestration.
 - **Interviewer pattern** (attractor §6). swarm replaces the question/answer Interviewer interface with `wait.human` nodes plus the `intent.hitl_input { selected, note? }` event. Different shape, same purpose.
+- **Unrecognised attributes pass-through.** Parser type signatures (`NodeAttrs`/`EdgeAttrs`/`GraphAttrs`) have index signatures, so the DOT parser accepts any attribute name. The validator's **W013** catches typos at validate-time by warning on any name outside the canonical whitelist — `goalgate=true` no longer silently no-ops.

@@ -2,11 +2,100 @@
 // See docs/SPEC.md §4.1 (validation phase).
 
 import { parseAcceleratorKey } from "../accelerator.ts";
-import type { Edge, Graph } from "../types/graph.ts";
+import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
 import { discoverFanInTarget } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
+
+/** The handler kinds a `type=` attribute may name. Union of `HANDLER_BY_SHAPE`
+ * values — attractor §4.2's registry. Swarm has no extension surface for
+ * custom handlers; anything outside this set is a typo (E016). */
+const KNOWN_HANDLER_TYPES: ReadonlySet<HandlerType> = new Set(Object.values(HANDLER_BY_SHAPE));
+
+/** Whitelist of known node attribute names. Anything outside this set
+ * triggers W013 — surfaces typos like `goalgate=true` and parser passthrough
+ * (`NodeAttrs[extra: string]`) that would otherwise silently no-op. The list
+ * is the union of `NodeAttrs` declared fields plus bare aliases (`model`,
+ * `provider`) that have their own dedicated W011. */
+const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
+  "label",
+  "shape",
+  "type",
+  "prompt",
+  "system_prompt",
+  "llm_model",
+  "llm_provider",
+  "fidelity",
+  "thread_id",
+  "goal_gate",
+  "max_retries",
+  "retry_policy",
+  "retry_initial_delay_ms",
+  "retry_backoff_factor",
+  "retry_max_delay_ms",
+  "retry_jitter",
+  "timeout",
+  "max_ms",
+  "idle_timeout",
+  "reasoning_effort",
+  "context",
+  "allowed_tools",
+  "denied_tools",
+  "context_files",
+  "class",
+  "retry_target",
+  "fallback_retry_target",
+  "auto_status",
+  "allow_partial",
+  "join_policy",
+  "tool_command",
+  "max_cost_usd",
+  "max_tokens",
+  "skills",
+  "skills_disabled",
+  "model",
+  "provider",
+]);
+
+/** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
+const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set([
+  "label",
+  "condition",
+  "weight",
+  "fidelity",
+  "thread_id",
+  "loop_restart",
+]);
+
+/** Whitelist of known graph attribute names. See KNOWN_NODE_ATTRS. */
+const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
+  "goal",
+  "label",
+  "default_fidelity",
+  "default_max_retries",
+  "default_max_retry", // attractor §2.5 legacy alias
+  "default_retry_policy",
+  "retry_target",
+  "fallback_retry_target",
+  "max_goal_gate_retries",
+  "model_stylesheet",
+  "thread_id",
+  "budget_usd",
+  "budget_tokens",
+  "budget_policy",
+]);
+
+/** Attributes attractor defines but swarm's architecture makes meaningless.
+ * Authors who set them get W014 with a pointer to SPEC.md §6.5 — better
+ * than the previous silent no-op. */
+const ATTRACTOR_ONLY_NODE_ATTRS: ReadonlyMap<string, string> = new Map([
+  ["auto_status", "swarm handlers return typed HandlerResult directly — there is no missing-status path to synthesize"],
+]);
+
+const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([
+  ["loop_restart", "swarm's fidelity model (per-edge truncate/compact/summary) supersedes the run-restart use case"],
+]);
 
 function isEmptyCondition(cond: string | undefined): boolean {
   return !cond || cond.trim() === "";
@@ -570,6 +659,112 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "error",
         code: "E006",
         message: `cycle ${sccNodes.join(" → ")} has no reachable exit node`,
+      });
+    }
+  }
+
+  // E016: node `type=` names a handler outside the known set (attractor
+  // §4.2 registry, swarm has no extension surface). Silent fall-through
+  // to the shape would mask typos like `type="codrgen"`; error so the
+  // workflow fails at validate-time.
+  for (const n of nodes) {
+    const t = n.attrs.type;
+    if (typeof t !== "string" || t === "") continue;
+    if (!(KNOWN_HANDLER_TYPES as ReadonlySet<string>).has(t)) {
+      diags.push({
+        severity: "error",
+        code: "E016",
+        message: `node "${n.id}" type="${t}" is not a known handler (${[...KNOWN_HANDLER_TYPES].join(", ")})`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // W012: node's `type=` resolves to a different handler than its shape.
+  // `type` wins at dispatch (attractor §2.6 + §4.2); the warning flags
+  // the visual/runtime divergence so authors notice they're overriding
+  // the shape's natural mapping. Suppressed when type matches the shape's
+  // canonical handler (the redundant-explicit case is harmless).
+  for (const n of nodes) {
+    const t = n.attrs.type;
+    if (typeof t !== "string" || t === "") continue;
+    if (!(KNOWN_HANDLER_TYPES as ReadonlySet<string>).has(t)) continue; // E016 already fired
+    const shapeKind = HANDLER_BY_SHAPE[n.shape];
+    if (shapeKind !== t) {
+      diags.push({
+        severity: "warning",
+        code: "W012",
+        message: `node "${n.id}" shape="${n.shape}" resolves to "${shapeKind}" but type="${t}" overrides — using "${t}". Align the shape or drop type= to suppress.`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+
+  // W013: unrecognised attribute name. Parser passthrough (NodeAttrs /
+  // EdgeAttrs / GraphAttrs index signatures) accepts anything; this lint
+  // catches typos at validate-time. Authors who genuinely need a custom
+  // attribute can either extend the whitelist or accept the warning.
+  for (const n of nodes) {
+    for (const key of Object.keys(n.attrs)) {
+      if (KNOWN_NODE_ATTRS.has(key)) continue;
+      diags.push({
+        severity: "warning",
+        code: "W013",
+        message: `node "${n.id}" has unrecognised attribute "${key}" — typo? (see packages/core/src/types/graph.ts NodeAttrs for the canonical list)`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+  for (const e of graph.edges) {
+    for (const key of Object.keys(e.attrs)) {
+      if (KNOWN_EDGE_ATTRS.has(key)) continue;
+      diags.push({
+        severity: "warning",
+        code: "W013",
+        message: `edge "${e.from}" → "${e.to}" has unrecognised attribute "${key}" — typo? (see EdgeAttrs for the canonical list)`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
+      });
+    }
+  }
+  for (const key of Object.keys(graph.attrs)) {
+    if (KNOWN_GRAPH_ATTRS.has(key)) continue;
+    diags.push({
+      severity: "warning",
+      code: "W013",
+      message: `graph has unrecognised attribute "${key}" — typo? (see GraphAttrs for the canonical list)`,
+    });
+  }
+
+  // W014: attractor attribute that swarm's architecture makes inert.
+  // `auto_status` (node) and `loop_restart` (edge) are documented in
+  // attractor but the swarm runtime has no path that consults them; see
+  // SPEC.md §6.5 for rationale. The whitelist (W013) accepts them so
+  // they don't double-warn — this lint is their dedicated signal.
+  for (const n of nodes) {
+    for (const [key, why] of ATTRACTOR_ONLY_NODE_ATTRS) {
+      if (n.attrs[key] === undefined) continue;
+      diags.push({
+        severity: "warning",
+        code: "W014",
+        message: `node "${n.id}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §6.5`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
+  }
+  for (const e of graph.edges) {
+    for (const [key, why] of ATTRACTOR_ONLY_EDGE_ATTRS) {
+      if (e.attrs[key] === undefined) continue;
+      diags.push({
+        severity: "warning",
+        code: "W014",
+        message: `edge "${e.from}" → "${e.to}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §6.5`,
+        edge: { from: e.from, to: e.to },
+        ...(e.loc !== undefined ? { loc: e.loc } : {}),
       });
     }
   }
