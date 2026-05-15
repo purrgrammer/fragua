@@ -80,32 +80,6 @@ export interface ServerDeps {
 const DEFAULT_SSE_POLL_MS = 100;
 const DEFAULT_SSE_BATCH_SIZE = 500;
 
-/** Known provider env vars. Order matches `swarm providers` display. */
-const PROVIDER_ENV_KEYS: ReadonlyArray<{ provider: string; envKey: string }> = [
-  { provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
-  { provider: "openrouter", envKey: "OPENROUTER_API_KEY" },
-  { provider: "openai", envKey: "OPENAI_API_KEY" },
-  { provider: "google", envKey: "GEMINI_API_KEY" },
-  { provider: "groq", envKey: "GROQ_API_KEY" },
-];
-
-/** Legacy env-based preflight. Retained for callers that haven't been
- * updated to the registry-backed version. New code should construct a
- * preflight from an `AuthStorage` / `ModelRegistry` pair so it sees
- * auth.json / OAuth tokens too — see `registryPreflight` below. */
-export function envProviderPreflight(): { ok: true } | { ok: false; detail: string } {
-  const present: string[] = [];
-  for (const { provider, envKey } of PROVIDER_ENV_KEYS) {
-    if ((process.env[envKey] ?? "").length > 0) present.push(provider);
-  }
-  if (present.length > 0) return { ok: true };
-  const expected = PROVIDER_ENV_KEYS.map((p) => p.envKey).join(", ");
-  return {
-    ok: false,
-    detail: `no provider API key set on the daemon (expected one of ${expected})`,
-  };
-}
-
 /**
  * Scan a DOT source for nodes with malformed `timeout=` or `max_ms=`
  * attrs. Returns the first offender so the API can reject before a
@@ -156,9 +130,10 @@ function findInvalidTimeoutAttr(
 }
 
 /** Registry-backed preflight. Rejects only when no provider in the
- * registry has any configured credential — honours auth.json api_key,
- * auth.json oauth, env vars, and custom models.json providers. Returned
- * as a closure so the caller can share one AuthStorage across calls. */
+ * registry has any configured credential — reads the global store's
+ * `provider_credentials` table plus any custom-provider keys still on
+ * `models.json` (via the AuthStorage fallback resolver). Returned as a
+ * closure so the caller can share one AuthStorage across calls. */
 export function registryPreflight(args: {
   hasAnyAuth: () => boolean;
 }): () => { ok: true } | { ok: false; detail: string } {
@@ -167,7 +142,7 @@ export function registryPreflight(args: {
     return {
       ok: false,
       detail:
-        "no provider credentials configured (auth.json, env, or models.json). run `swarm providers add <provider>` or `swarm providers login <provider>`.",
+        "no provider credentials configured. run `swarm providers add <provider>` or `swarm providers login <provider>`.",
     };
   };
 }

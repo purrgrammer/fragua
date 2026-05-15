@@ -1124,9 +1124,48 @@ export interface IDaemonCoordinator {
 }
 
 /**
+ * Built-in provider credentials (docs/proposals/provider-credentials-storage.md).
+ *
+ * One row per `provider` id; the JSON `payload` carries the full
+ * AuthCredential object (api_key form or OAuthCredentials). The
+ * `kind` discriminator is denormalised from `payload.type` so
+ * post-mortems can `SELECT provider, kind FROM provider_credentials`
+ * without JSON-parsing. `payload` typing stays `unknown` at this
+ * layer — the agent package owns the AuthCredential shape and keeps
+ * the store free of pi-ai types.
+ */
+export interface ProviderCredentialRow {
+  provider: string;
+  kind: "api_key" | "oauth";
+  payload: unknown;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IProviderCredentialStore {
+  /** Single row by provider id, or `null` if missing. `payload` is
+   *  parsed JSON. */
+  getProviderCredential(provider: string): ProviderCredentialRow | null;
+  /** All rows ordered by provider ASC. Cheap (full scan; <20 rows in
+   *  practice). */
+  listProviderCredentials(): ProviderCredentialRow[];
+  /** Upsert. On conflict, `created_at` is preserved and `updated_at`
+   *  advances. `payload` must already be a JSON-serialised string;
+   *  serialisation happens in the caller per invariant I1 (no
+   *  `JSON.stringify` inside the write txn). */
+  upsertProviderCredential(args: { provider: string; kind: "api_key" | "oauth"; payload: string }): void;
+  /** Hard delete. No-op when the row is absent. */
+  deleteProviderCredential(provider: string): void;
+}
+
+/**
  * Composite store contract — backward-compatible alias for the original
  * `IEventStore` shape. New code should depend on the narrowest sub-
  * interface that fits its needs (e.g. analytics routes only need
  * `IAnalyticsReader`, the daemon supervisor only needs `IDaemonCoordinator`).
  */
-export type IEventStore = IEventWriter & IEventReader & IAnalyticsReader & IDaemonCoordinator;
+export type IEventStore = IEventWriter &
+  IEventReader &
+  IAnalyticsReader &
+  IDaemonCoordinator &
+  IProviderCredentialStore;

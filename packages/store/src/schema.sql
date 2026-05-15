@@ -48,11 +48,12 @@
 -- fanned out into sub-runs sit in this status until every sub-run
 -- reaches a terminal status; the wake-pending sweep
 -- transitions the parent back to `queued` (collect phase).
--- v10 → v11: `provider_credentials` table (proposal:
--- docs/proposals/provider-credentials-storage.md). Schema slot landed
--- ahead of the consuming code so dev DBs that ran an earlier draft of
--- the credential work replay through `migrate()` cleanly. Empty by
--- default; the store doesn't read or write this table yet.
+-- v10 → v11: provider credentials in the store
+-- (docs/proposals/provider-credentials-storage.md). New
+-- `provider_credentials` table holds built-in pi-ai provider keys +
+-- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is
+-- denormalised from `payload.type` so swarm-debug can SELECT the
+-- shape without JSON-parsing. Pure additive; no row migrations.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -291,10 +292,12 @@ CREATE INDEX IF NOT EXISTS idx_schedules_due
   WHERE paused_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);
 
--- Provider credentials (proposal: docs/proposals/provider-credentials-storage.md).
--- Schema slot landed ahead of the consuming code. Empty by default; the
--- store doesn't read or write this table yet. `payload` is a JSON blob
--- whose shape depends on `kind` (api_key: `{key}`; oauth: full token set).
+-- Built-in provider credentials (docs/proposals/provider-credentials-storage.md).
+-- One row per provider id; `payload` carries the full AuthCredential JSON
+-- (api_key form or OAuthCredentials). `kind` is denormalised from
+-- `payload.type` for cheap SELECTs in post-mortems. No indexes — the PK
+-- on `provider` is the only access pattern (lookup by id, full table
+-- scan for `list`, both <20 rows in practice).
 CREATE TABLE IF NOT EXISTS provider_credentials (
   provider   TEXT PRIMARY KEY,
   kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),

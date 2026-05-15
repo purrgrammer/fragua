@@ -119,8 +119,9 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   };
   // Credential + model state for the /providers routes. Same pair the
   // daemon uses, so the web UI and backend share a single view of which
-  // providers are credentialed.
-  const authStorage = AuthStorage.create();
+  // providers are credentialed. Credentials live in the same store as
+  // every other coordination surface (`provider_credentials` table).
+  const authStorage = AuthStorage.fromStore(store);
   const modelRegistry = ModelRegistry.create(authStorage);
   // Backpressure cap on `status='queued'` runs from `.swarm/config.jsonc`.
   // Opt-in (default uncapped); non-positive / unparseable values are

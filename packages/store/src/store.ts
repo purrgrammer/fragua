@@ -77,6 +77,13 @@ import {
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
+import {
+  type ProviderCredentialDbRow,
+  deleteProviderCredential as queryDeleteProviderCredential,
+  upsertProviderCredential as queryUpsertProviderCredential,
+  selectAllProviderCredentials,
+  selectProviderCredential,
+} from "./provider-credentials-queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
   applyMetricsDelta,
@@ -92,6 +99,8 @@ import {
   type ListRunSummaryRowsOpts,
   type MetricsDeltaRow,
   type ParentCostSnapshot,
+  // queryRunCostTotals renamed at import for symmetry with the other
+  // `query*` imports below; original symbol used by tests directly.
   getRunCostTotals as queryRunCostTotals,
   getStepAggregates as queryStepAggregates,
   type RunCostTotalsRow,
@@ -166,6 +175,7 @@ import {
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
+  type ProviderCredentialRow,
   type RunMetrics,
   type RunState,
   type Schedule,
@@ -261,6 +271,16 @@ function rowToRunState(row: RunStateRow): RunState {
     parallelIndex: row.parallel_index,
     subgraphRootNodeId: row.subgraph_root_node_id,
     subgraphTerminalNodeId: row.subgraph_terminal_node_id,
+  };
+}
+
+function rowToProviderCredential(row: ProviderCredentialDbRow): ProviderCredentialRow {
+  return {
+    provider: row.provider,
+    kind: row.kind,
+    payload: JSON.parse(row.payload),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -1095,6 +1115,37 @@ export class SqliteStore implements IEventStore {
   setDaemonLockHttp(args: { url: string | null; port: number | null; version: string | null }): void {
     this.writeTxn(() => {
       updateDaemonLockHttp(this.db, args.url, args.port, args.version);
+    });
+  }
+
+  // ─────────────── Provider credentials ───────────────
+
+  getProviderCredential(provider: string): ProviderCredentialRow | null {
+    const row = selectProviderCredential(this.db, provider);
+    return row == null ? null : rowToProviderCredential(row);
+  }
+
+  listProviderCredentials(): ProviderCredentialRow[] {
+    return selectAllProviderCredentials(this.db).map(rowToProviderCredential);
+  }
+
+  upsertProviderCredential(args: { provider: string; kind: "api_key" | "oauth"; payload: string }): void {
+    // Caller passes pre-stringified `payload` per invariant I1 —
+    // JSON.stringify must not run inside the write txn.
+    const now = this.now();
+    this.writeTxn(() => {
+      queryUpsertProviderCredential(this.db, {
+        provider: args.provider,
+        kind: args.kind,
+        payload: args.payload,
+        now,
+      });
+    });
+  }
+
+  deleteProviderCredential(provider: string): void {
+    this.writeTxn(() => {
+      queryDeleteProviderCredential(this.db, provider);
     });
   }
 

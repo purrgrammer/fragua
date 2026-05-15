@@ -731,20 +731,18 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  * because every existing `parent_run_id` is NULL.
  */
 /**
- * v10 → v11: provider credentials table (proposal:
+ * v10 → v11: provider credentials in the store (proposal:
  * `docs/proposals/provider-credentials-storage.md`).
  *
- * Creates an empty `provider_credentials` table keyed on
- * `(provider TEXT PRIMARY KEY)` with `kind` ∈ {`api_key`, `oauth`} and
- * a JSON `payload` blob. The proposal moves built-in provider creds
- * out of `~/.swarm/auth.json` into the store; this migration lands the
- * schema slot ahead of the consuming code so dev DBs that ran an
- * earlier draft of the credential work (which bumped the table into
- * existence) replay through `migrate()` cleanly. The store doesn't
- * read or write the table yet — wiring lands when the credentials
- * proposal does. `IF NOT EXISTS` is intentional: DBs that already
- * have the table from the in-flight experiment are a no-op match,
- * and the post-migration `foreign_key_check` passes trivially.
+ * Pure additive: `provider_credentials` is one row per provider, holds
+ * api_key + oauth credentials, backs the new `SqliteAuthStorageBackend`,
+ * replaces `~/.swarm/auth.json`. No data migration — the old file is
+ * dropped outright per ground rule #11 (pre-release, no backwards-compat).
+ *
+ * `IF NOT EXISTS` is intentional: dev DBs that ran an earlier draft of
+ * the credentials work bumped the table into existence directly; this
+ * migration is a no-op match for those rows and the post-migration
+ * `foreign_key_check` passes trivially.
  */
 function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
   return `

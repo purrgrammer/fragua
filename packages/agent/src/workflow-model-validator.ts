@@ -19,9 +19,11 @@
 // Codergen nodes only — other handler kinds (start/exit/tool/wait.human/
 // conditional/parallel) don't LLM-dispatch.
 
+import { join } from "node:path";
 import { parseDotSource, prepareGraph } from "@swarm/core";
+import { SqliteStore } from "@swarm/store";
 import type { ModelRegistry } from "./credentials/index.ts";
-import { AuthStorage, findByBareId, ModelRegistry as Registry } from "./credentials/index.ts";
+import { AuthStorage, findByBareId, getSwarmHome, ModelRegistry as Registry } from "./credentials/index.ts";
 
 export interface ModelOffender {
   nodeId: string;
@@ -34,10 +36,19 @@ export type WorkflowModelValidationResult = { ok: true } | { ok: false; offender
 
 /** Lazy process-wide registry used when the caller didn't pass one.
  * Covers legacy call sites (validate command, tests) without forcing
- * them to construct + pass a registry they don't otherwise need. */
+ * them to construct + pass a registry they don't otherwise need. The
+ * paired store handle is opened against the global swarm DB; it lives
+ * for the process lifetime (same shape as the prior file-backed
+ * default). PR2 (provider-config-storage) will replace this with an
+ * injected `IEventStore` once ModelRegistry stops reading
+ * `~/.swarm/models.json`. */
 let cachedRegistry: ModelRegistry | undefined;
+let cachedStore: SqliteStore | undefined;
 function getDefaultRegistry(): ModelRegistry {
-  if (!cachedRegistry) cachedRegistry = Registry.create(AuthStorage.create());
+  if (!cachedRegistry) {
+    if (!cachedStore) cachedStore = new SqliteStore({ path: join(getSwarmHome(), "swarm.db") });
+    cachedRegistry = Registry.create(AuthStorage.fromStore(cachedStore));
+  }
   return cachedRegistry;
 }
 
