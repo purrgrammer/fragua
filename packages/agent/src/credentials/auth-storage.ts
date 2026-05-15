@@ -1,17 +1,20 @@
 // Credential storage for API keys and OAuth tokens. Persists into the
 // global swarm store (`provider_credentials` table) — see
-// docs/proposals/provider-credentials-storage.md.
+// docs/proposals/provider-credentials-storage.md and the follow-up
+// docs/proposals/provider-config-storage.md.
 //
-// Resolution order (much shorter than the prior file-backed version):
+// Resolution order:
 //   1. provider_credentials row, kind=api_key → return the stored key verbatim.
 //      No !cmd / env-var resolution: keys are short literal strings;
 //      the indirection served no one and was a second coordination surface.
 //   2. provider_credentials row, kind=oauth → refresh-under-lock when
 //      expired, return the access token. Locking is per-row in SQLite
 //      (last-writer-wins, no torn JSON) rather than via a file lock.
-//   3. fallback resolver — for custom-provider keys still living in
-//      ~/.swarm/models.json. The follow-up provider-config-storage
-//      proposal moves these too; the hook stays until then.
+//
+// Custom-provider credentials live in the same `provider_credentials`
+// table as everyone else's — there is no separate models.json /
+// fallback resolver path. A keyless custom provider (Ollama) simply
+// has no row, and `hasAuth` returns false.
 //
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/auth-storage.ts) — MIT.
@@ -64,7 +67,6 @@ export { SqliteAuthStorageBackend };
 /** Credential storage backed by the global store (or in-memory, for tests). */
 export class AuthStorage {
   private data: AuthStorageData = {};
-  private fallbackResolver?: (provider: string) => string | undefined;
   private loadError: Error | null = null;
   private errors: Error[] = [];
 
@@ -88,13 +90,6 @@ export class AuthStorage {
     const storage = new InMemoryAuthStorageBackend();
     storage.withLock(() => ({ result: undefined, next: JSON.stringify(data) }));
     return AuthStorage.fromStorage(storage);
-  }
-
-  /** ModelRegistry registers its custom-provider key resolver here so
-   * the `getApiKey(provider)` chain can fall through to models.json.
-   * Removed in the follow-up provider-config-storage proposal. */
-  setFallbackResolver(resolver: (provider: string) => string | undefined): void {
-    this.fallbackResolver = resolver;
   }
 
   private recordError(error: unknown): void {
@@ -162,9 +157,7 @@ export class AuthStorage {
 
   /** Any form of auth configured? Doesn't refresh OAuth tokens. */
   hasAuth(provider: string): boolean {
-    if (this.data[provider]) return true;
-    if (this.fallbackResolver?.(provider)) return true;
-    return false;
+    return this.data[provider] != null;
   }
 
   /** Describe where `getApiKey(provider)` would read from, for the
@@ -173,7 +166,6 @@ export class AuthStorage {
     const cred = this.data[provider];
     if (cred?.type === "api_key") return "stored api_key";
     if (cred?.type === "oauth") return "stored oauth";
-    if (this.fallbackResolver?.(provider)) return "models.json custom provider";
     return null;
   }
 
@@ -239,10 +231,12 @@ export class AuthStorage {
    * Resolve the provider's API key.
    *
    * Priority:
-   *   1. provider_credentials row (api_key → verbatim; oauth → locked refresh)
-   *   2. Fallback resolver (ModelRegistry custom providers from models.json)
+   *   1. provider_credentials row, kind=api_key → verbatim key.
+   *   2. provider_credentials row, kind=oauth   → locked refresh
+   *      when expired, otherwise the cached access token.
+   *   3. otherwise undefined.
    */
-  async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
+  async getApiKey(providerId: string): Promise<string | undefined> {
     const cred = this.data[providerId];
     if (cred?.type === "api_key") return cred.key;
 
@@ -269,9 +263,6 @@ export class AuthStorage {
       }
     }
 
-    if (options?.includeFallback !== false) {
-      return this.fallbackResolver?.(providerId) ?? undefined;
-    }
     return undefined;
   }
 

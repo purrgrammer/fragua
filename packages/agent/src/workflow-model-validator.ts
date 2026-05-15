@@ -2,7 +2,8 @@
 //
 // Walks every node in a parsed DOT workflow and rejects those whose
 // declared `(provider, model)` pair does not resolve in the ModelRegistry
-// (pi-ai built-ins + any custom providers in models.json). Catches the
+// (pi-ai built-ins + any custom providers in the `provider_config`
+// table on the global swarm store). Catches the
 // `claude-sonnet-4-6` (hyphen form) typo that silently runs a plan node,
 // then halts on the first downstream LLM dispatch — wasting real tokens
 // before the misconfiguration surfaces.
@@ -38,16 +39,14 @@ export type WorkflowModelValidationResult = { ok: true } | { ok: false; offender
  * Covers legacy call sites (validate command, tests) without forcing
  * them to construct + pass a registry they don't otherwise need. The
  * paired store handle is opened against the global swarm DB; it lives
- * for the process lifetime (same shape as the prior file-backed
- * default). PR2 (provider-config-storage) will replace this with an
- * injected `IEventStore` once ModelRegistry stops reading
- * `~/.swarm/models.json`. */
+ * for the process lifetime. The store is also the source of
+ * custom-provider definitions (`provider_config` table). */
 let cachedRegistry: ModelRegistry | undefined;
 let cachedStore: SqliteStore | undefined;
 function getDefaultRegistry(): ModelRegistry {
   if (!cachedRegistry) {
     if (!cachedStore) cachedStore = new SqliteStore({ path: join(getSwarmHome(), "swarm.db") });
-    cachedRegistry = Registry.create(AuthStorage.fromStore(cachedStore));
+    cachedRegistry = Registry.create(AuthStorage.fromStore(cachedStore), cachedStore);
   }
   return cachedRegistry;
 }

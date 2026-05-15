@@ -59,7 +59,7 @@ Common failures:
 - **Heartbeat > 30s old** — daemon dead. Runs stay `queued` until a new one claims the lock. Restart the harness.
 - **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`swarm daemon` + `swarm serve` separately) — in that case, fall back to `<cwd>/.swarm/serve.json` for discovery.
 - **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `swarm providers add <provider>` or `swarm providers login <provider>`.
-- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model (`~/.swarm/models.json`) or switch the workflow's `model=` attr.
+- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model (`swarm providers add --custom`, which writes to `~/.swarm/swarm.db`'s `provider_config` table) or switch the workflow's `model=` attr.
 
 The user should run `swarm harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
 

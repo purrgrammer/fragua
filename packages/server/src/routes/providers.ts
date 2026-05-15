@@ -33,13 +33,10 @@ interface ProviderSummary {
   credentialed: boolean;
   /** Describes *where* the credential came from — matches
    * `AuthStorage.describeAuthSource`. One of `"stored api_key"`,
-   * `"stored oauth"`, `"models.json custom provider"`, or `null`.
-   * Never includes the key itself. */
+   * `"stored oauth"`, or `null`. Never includes the key itself. */
   auth_source: string | null;
   /** `api_key` | `oauth` when stored in `provider_credentials`, else
-   * `null`. Fallback (custom-provider models.json) credentials report
-   * `null` here — they're "credentialed" from swarm's perspective but
-   * there's no row to `rm`. */
+   * `null`. */
   auth_kind: "api_key" | "oauth" | null;
   /** Surface OAuth-login availability so the UI can show a "Sign in"
    * affordance only for providers that actually support it. */
@@ -78,7 +75,7 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([name, count]) => summarize(name, count, authStorage, oauthIds));
     const loadError = modelRegistry.getError() ?? null;
-    return c.json({ providers: rows, models_json_error: loadError });
+    return c.json({ providers: rows, provider_config_error: loadError });
   });
 
   app.get("/providers/:name", (c) => {

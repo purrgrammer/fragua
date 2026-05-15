@@ -131,9 +131,8 @@ function findInvalidTimeoutAttr(
 
 /** Registry-backed preflight. Rejects only when no provider in the
  * registry has any configured credential — reads the global store's
- * `provider_credentials` table plus any custom-provider keys still on
- * `models.json` (via the AuthStorage fallback resolver). Returned as a
- * closure so the caller can share one AuthStorage across calls. */
+ * `provider_credentials` table. Returned as a closure so the caller
+ * can share one AuthStorage across calls. */
 export function registryPreflight(args: {
   hasAnyAuth: () => boolean;
 }): () => { ok: true } | { ok: false; detail: string } {

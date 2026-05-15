@@ -6,7 +6,6 @@
 // rearchitecture. They will be reintroduced in M5 as thin shells over the
 // HTTP intent routes once the store-backed runtime is the default.
 
-import { resolveModelsPath } from "@swarm/agent";
 import cac from "cac";
 import chalk from "chalk";
 import { daemonCommand, daemonStopCommand } from "../src/commands/daemon.ts";
@@ -62,7 +61,7 @@ cli
     "providers [action] [target] [extra]",
     "Manage LLM provider credentials + custom models (run without args for help)",
   )
-  .option("--custom", "`add` only: add a custom (OpenAI-compatible) provider to models.json")
+  .option("--custom", "`add` only: add a custom (OpenAI-compatible) provider to the global store")
   .action(
     async (
       action: string | undefined,
@@ -79,7 +78,7 @@ cli
           break;
         case "add":
           if (options["custom"]) {
-            process.exit(await providersAddCustomCommand(resolveModelsPath()));
+            process.exit(await providersAddCustomCommand());
           } else {
             process.exit(await providersAddCommand(target));
           }

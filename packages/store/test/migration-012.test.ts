@@ -1,9 +1,9 @@
-// v10 → v11 migration: provider credentials in the store
-// (docs/proposals/provider-credentials-storage.md).
+// v11 \u2192 v12 migration: custom-provider config in the store
+// (docs/proposals/provider-config-storage.md).
 //
-// Verifies the migration adds the `provider_credentials` table without
-// touching any existing run/event/schedule data and pins the schema
-// version to 11. Idempotent re-runs are no-ops.
+// Verifies the migration adds the `provider_config` table without
+// touching any existing run/event/schedule/credential data and pins
+// the schema version to 12. Idempotent re-runs are no-ops.
 
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
@@ -17,15 +17,14 @@ function freshDb(): Database {
   return db;
 }
 
-/** Hand-pin a v10-shaped DB so a subsequent `migrate(db)` walks v10 →
- *  v11. We can't bootstrap-then-revert because the current schema.sql
- *  is already at v11; we recreate the v10 column shape + the v10
- *  schema_version row. */
-function pinV10(db: Database): void {
+/** Hand-pin a v11-shaped DB so a subsequent `migrate(db)` walks v11 \u2192
+ *  v12. The current schema.sql is at v12 already; we recreate the v11
+ *  column shape + the v11 schema_version row. */
+function pinV11(db: Database): void {
   db.exec("PRAGMA foreign_keys = OFF");
   db.exec(`
     CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL) STRICT;
-    INSERT INTO schema_version (id, version) VALUES (1, 10);
+    INSERT INTO schema_version (id, version) VALUES (1, 11);
     CREATE TABLE workflows (
       sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL
     ) STRICT;
@@ -118,6 +117,13 @@ function pinV10(db: Database): void {
       next_fire_at INTEGER NOT NULL, last_fire_at INTEGER, last_run_id TEXT,
       paused_at INTEGER, created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE provider_credentials (
+      provider   TEXT PRIMARY KEY,
+      kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+      payload    TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
   `);
   db.exec("PRAGMA foreign_keys = ON");
 }
@@ -135,48 +141,38 @@ function schemaVersion(db: Database): number {
   return row.version;
 }
 
-describe("migration v10 \u2192 v11", () => {
-  test("adds provider_credentials table on a pinned v10 DB", () => {
+describe("migration v11 \u2192 v12", () => {
+  test("adds provider_config table on a pinned v11 DB", () => {
     const db = freshDb();
     try {
-      pinV10(db);
-      expect(schemaVersion(db)).toBe(10);
-      expect(tableExists(db, "provider_credentials")).toBe(false);
+      pinV11(db);
+      expect(schemaVersion(db)).toBe(11);
+      expect(tableExists(db, "provider_config")).toBe(false);
+      // Sanity: v11 carried provider_credentials.
+      expect(tableExists(db, "provider_credentials")).toBe(true);
 
       migrate(db);
 
-      // v10-pinned DBs walk forward through every registered step;
-      // schema_version pins to the current head. We only care that
-      // the v10→v11 step landed provider_credentials.
       expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(CURRENT_SCHEMA_VERSION).toBe(12);
+      expect(tableExists(db, "provider_config")).toBe(true);
+      // Credentials table still present (additive migration).
       expect(tableExists(db, "provider_credentials")).toBe(true);
-
-      // CHECK constraint applied: kind must be api_key | oauth.
-      expect(() =>
-        db
-          .query(
-            "INSERT INTO provider_credentials (provider, kind, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-          )
-          .run("x", "bogus", "{}", 1, 1),
-      ).toThrow(/CHECK|constraint/i);
     } finally {
       db.close();
     }
   });
 
-  test("migration is idempotent on a fresh v11 DB", () => {
+  test("migration is idempotent on a fresh v12 DB", () => {
     const db = freshDb();
     try {
-      // Fresh DB \u2014 schema.sql pins to CURRENT_SCHEMA_VERSION on the
-      // first call and is a no-op on the second. provider_credentials
-      // (added at v11) is present at every later version.
       migrate(db);
-      expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-      expect(tableExists(db, "provider_credentials")).toBe(true);
+      expect(schemaVersion(db)).toBe(12);
+      expect(tableExists(db, "provider_config")).toBe(true);
 
       migrate(db);
-      expect(schemaVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-      expect(tableExists(db, "provider_credentials")).toBe(true);
+      expect(schemaVersion(db)).toBe(12);
+      expect(tableExists(db, "provider_config")).toBe(true);
     } finally {
       db.close();
     }

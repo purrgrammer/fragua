@@ -1,31 +1,35 @@
-// `swarm providers add --custom` — interactively add a custom provider
-// entry to ~/.swarm/models.json.
+// `swarm providers add --custom` \u2014 interactively add a custom provider
+// to the global swarm store's `provider_config` table.
 //
 // A "custom provider" means an OpenAI-completions-compatible endpoint
 // (Ollama, vLLM, LM Studio, a corporate proxy, etc.) that is NOT built
-// into pi-ai.  The user supplies:
+// into pi-ai. The user supplies:
 //   - provider name (slug, e.g. "ollama")
 //   - base URL (e.g. "http://localhost:11434/v1")
 //   - one or more model IDs (e.g. "llama3.1:8b")
-//   - API key strategy: literal / env-var / shell-command / none
+//   - API shape (openai_completions | openai_responses)
 //
-// The resulting entry is merged into providers.<name> in models.json.
-// If the file already contains that provider the user is asked whether
-// to overwrite or merge model lists.
+// Credentials are NOT prompted here \u2014 a custom provider that needs
+// auth uses the normal `swarm providers add <name>` flow into the
+// `provider_credentials` table. Keyless providers (Ollama) need no
+// credential row at all.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import chalk from "chalk";
 import prompts from "prompts";
+import { openGlobalStore } from "./open-global-store.ts";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-/** Minimal models.json shape that we care about.  The registry accepts
- * more fields; we only write the ones we collect. */
-export interface ModelsJson {
-  providers: Record<string, ProviderEntry>;
+/** Per-provider definition body. Mirrors the agent layer's
+ * `ProviderConfigSchema` shape minus `apiKey` (which lives in
+ * `provider_credentials`). */
+export interface ProviderEntry {
+  baseUrl: string;
+  api?: string;
+  compat?: Record<string, unknown>;
+  models: ModelEntry[];
 }
 
 export interface ModelEntry {
@@ -36,98 +40,18 @@ export interface ModelEntry {
   maxTokens?: number;
 }
 
-export interface ProviderEntry {
-  baseUrl: string;
-  apiKey?: string;
-  api?: string;
-  compat?: Record<string, unknown>;
-  models: ModelEntry[];
-}
-
-// ---------------------------------------------------------------------------
-// Serialisation helpers (pure — no I/O, fully testable)
-// ---------------------------------------------------------------------------
-
-/** Parse models.json content.  Returns the object on success, or a
- * string describing the parse / schema error. */
-export function parseModelsJson(content: string): ModelsJson | string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch (err) {
-    return `JSON parse error: ${err instanceof Error ? err.message : String(err)}`;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return "models.json must be a JSON object";
-  }
-  const obj = parsed as Record<string, unknown>;
-  if ("providers" in obj) {
-    if (typeof obj["providers"] !== "object" || obj["providers"] === null || Array.isArray(obj["providers"])) {
-      return `"providers" must be an object`;
-    }
-  }
-  return { providers: (obj["providers"] ?? {}) as Record<string, ProviderEntry> };
-}
-
-/** Merge a new ProviderEntry into an existing ModelsJson.
- *
- * Strategy:
- *  - `overwrite=true` → replace the entire provider entry.
- *  - `overwrite=false` → keep existing fields; append models whose id
- *    is not yet present; overwrite models whose id already exists. */
-export function mergeProviderEntry(
-  existing: ModelsJson,
-  providerName: string,
-  entry: ProviderEntry,
-  overwrite: boolean,
-): ModelsJson {
-  if (overwrite || !existing.providers[providerName]) {
-    return {
-      providers: {
-        ...existing.providers,
-        [providerName]: entry,
-      },
-    };
-  }
-  // Merge: keep existing top-level fields, upsert models by id.
-  const base = existing.providers[providerName]!;
-  const modelMap = new Map<string, ModelEntry>();
-  for (const m of base.models ?? []) modelMap.set(m.id, m);
-  for (const m of entry.models) modelMap.set(m.id, m);
-  const merged: ProviderEntry = {
-    ...base,
-    // new values win for connection fields
-    baseUrl: entry.baseUrl,
-    ...(entry.apiKey !== undefined ? { apiKey: entry.apiKey } : {}),
-    ...(entry.api !== undefined ? { api: entry.api } : {}),
-    ...(entry.compat !== undefined ? { compat: entry.compat } : {}),
-    models: [...modelMap.values()],
-  };
-  return {
-    providers: {
-      ...existing.providers,
-      [providerName]: merged,
-    },
-  };
-}
-
-/** Serialise ModelsJson → pretty-printed string. */
-export function serialiseModelsJson(data: ModelsJson): string {
-  return `${JSON.stringify(data, null, 2)}\n`;
-}
-
 // ---------------------------------------------------------------------------
 // Input validation helpers (pure)
 // ---------------------------------------------------------------------------
 
-/** Validate a provider name slug.  Returns an error string or `true`. */
+/** Validate a provider name slug. Returns an error string or `true`. */
 export function validateProviderName(value: string): true | string {
   if (!value || value.trim().length === 0) return "provider name must not be empty";
   if (!/^[a-z0-9_-]+$/i.test(value)) return "provider name must be alphanumeric (hyphens/underscores allowed)";
   return true;
 }
 
-/** Validate a base URL.  Returns an error string or `true`. */
+/** Validate a base URL. Returns an error string or `true`. */
 export function validateBaseUrl(value: string): true | string {
   if (!value || value.trim().length === 0) return "base URL must not be empty";
   try {
@@ -141,28 +65,25 @@ export function validateBaseUrl(value: string): true | string {
   }
 }
 
-/** Validate a model ID.  Returns an error string or `true`. */
+/** Validate a model ID. Returns an error string or `true`. */
 export function validateModelId(value: string): true | string {
   if (!value || value.trim().length === 0) return "model ID must not be empty";
   return true;
 }
 
 // ---------------------------------------------------------------------------
-// Default model-id → context-window / max-tokens heuristics
+// Default model-id \u2192 context-window / max-tokens heuristics
 // ---------------------------------------------------------------------------
 
-/** Infer sensible contextWindow / maxTokens defaults from a model id.
- * Returns undefined for both when the id gives no signal. */
+/** Infer sensible contextWindow / maxTokens defaults from a model id. */
 export function inferModelDefaults(modelId: string): { contextWindow: number; maxTokens: number } {
   const id = modelId.toLowerCase();
-  // Llama-family context windows
   if (id.includes("llama3") || id.includes("llama-3")) return { contextWindow: 128_000, maxTokens: 8_192 };
   if (id.includes("llama2") || id.includes("llama-2")) return { contextWindow: 4_096, maxTokens: 2_048 };
   if (id.includes("mistral") || id.includes("mixtral")) return { contextWindow: 32_768, maxTokens: 8_192 };
   if (id.includes("gemma")) return { contextWindow: 8_192, maxTokens: 4_096 };
   if (id.includes("phi")) return { contextWindow: 16_384, maxTokens: 4_096 };
   if (id.includes("qwen")) return { contextWindow: 32_768, maxTokens: 8_192 };
-  // Fallback conservative defaults
   return { contextWindow: 128_000, maxTokens: 16_384 };
 }
 
@@ -183,76 +104,57 @@ export type SupportedApi = (typeof SUPPORTED_APIS)[number];
 export interface CustomProviderAnswers {
   providerName: string;
   baseUrl: string;
-  apiKeyField: string | undefined; // undefined = no auth needed
   api: SupportedApi;
   modelIds: string[];
 }
 
-/** Build a ProviderEntry from wizard answers.  Pure — no I/O. */
+/** Build a ProviderEntry from wizard answers. Pure \u2014 no I/O. The
+ * resulting object is the JSON body persisted under
+ * `provider_config.config`; no `apiKey` field (credentials live in
+ * `provider_credentials`). */
 export function buildProviderEntry(answers: CustomProviderAnswers): ProviderEntry {
-  const { contextWindow: defaultCw, maxTokens: defaultMt } = inferModelDefaults(answers.modelIds[0] ?? "");
   const models: ModelEntry[] = answers.modelIds.map((id) => {
-    const { contextWindow, maxTokens } = inferModelDefaults(id);
+    const trimmed = id.trim();
+    const { contextWindow, maxTokens } = inferModelDefaults(trimmed);
     return {
-      id: id.trim(),
-      name: id.trim(),
+      id: trimmed,
+      name: trimmed,
       api: answers.api,
-      contextWindow: contextWindow ?? defaultCw,
-      maxTokens: maxTokens ?? defaultMt,
+      contextWindow,
+      maxTokens,
     };
   });
 
-  const entry: ProviderEntry = {
+  return {
     baseUrl: answers.baseUrl,
     api: answers.api,
     models,
   };
-
-  // apiKey field is required by models.json schema for custom providers;
-  // use a placeholder sentinel when user says "no auth" so the schema
-  // validator accepts the entry (the registry reads "" as "no key").
-  if (answers.apiKeyField !== undefined) {
-    entry.apiKey = answers.apiKeyField;
-  } else {
-    // No auth — pass an empty string; pi-ai treats absent/empty as no key.
-    entry.apiKey = "";
-  }
-
-  return entry;
 }
 
-// ---------------------------------------------------------------------------
-// File I/O helpers
-// ---------------------------------------------------------------------------
-
-function readModelsJson(path: string): ModelsJson {
-  if (!existsSync(path)) return { providers: {} };
-  let content: string;
-  try {
-    content = readFileSync(path, "utf-8");
-  } catch (err) {
-    throw new Error(`Cannot read ${path}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (content.trim().length === 0) return { providers: {} };
-  const result = parseModelsJson(content);
-  if (typeof result === "string") throw new Error(`Invalid models.json: ${result}`);
-  return result;
-}
-
-function writeModelsJson(path: string, data: ModelsJson): void {
-  const parent = dirname(path);
-  if (!existsSync(parent)) mkdirSync(parent, { recursive: true, mode: 0o700 });
-  writeFileSync(path, serialiseModelsJson(data), { encoding: "utf-8", mode: 0o644 });
+/** Merge a new ProviderEntry into an existing one. Pure. */
+export function mergeProviderEntry(existing: ProviderEntry, next: ProviderEntry, overwrite: boolean): ProviderEntry {
+  if (overwrite) return next;
+  const modelMap = new Map<string, ModelEntry>();
+  for (const m of existing.models) modelMap.set(m.id, m);
+  for (const m of next.models) modelMap.set(m.id, m);
+  return {
+    ...existing,
+    baseUrl: next.baseUrl,
+    ...(next.api !== undefined ? { api: next.api } : {}),
+    ...(next.compat !== undefined ? { compat: next.compat } : {}),
+    models: [...modelMap.values()],
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Main wizard
 // ---------------------------------------------------------------------------
 
-export async function providersAddCustomCommand(modelsJsonPath: string): Promise<number> {
+export async function providersAddCustomCommand(): Promise<number> {
   console.log(chalk.bold("Add a custom (OpenAI-compatible) provider\n"));
 
-  // ── Step 1: provider name ──────────────────────────────────────────────
+  // \u2500\u2500 Step 1: provider name \u2500\u2500
   const { providerName } = await prompts({
     type: "text",
     name: "providerName",
@@ -264,187 +166,128 @@ export async function providersAddCustomCommand(modelsJsonPath: string): Promise
     return 0;
   }
 
-  // ── Step 2: existing provider conflict? ───────────────────────────────
-  let overwrite = false;
-  let existingData: ModelsJson;
+  const store = openGlobalStore();
   try {
-    existingData = readModelsJson(modelsJsonPath);
-  } catch (err) {
-    console.error(chalk.red(String(err)));
-    return 1;
-  }
+    // \u2500\u2500 Step 2: existing provider conflict? \u2500\u2500
+    let overwrite = false;
+    let existingEntry: ProviderEntry | null = null;
+    const existingRow = store.getProviderConfig(providerName as string);
+    if (existingRow != null) {
+      existingEntry = existingRow.config as ProviderEntry;
+      const { choice } = await prompts({
+        type: "select",
+        name: "choice",
+        message: `"${providerName}" already exists in provider_config \u2014 what should swarm do?`,
+        choices: [
+          { title: "Merge \u2014 keep existing models, add/update the ones I specify", value: "merge" },
+          { title: "Overwrite \u2014 replace the entire provider entry", value: "overwrite" },
+          { title: "Cancel", value: "cancel" },
+        ],
+      });
+      if (!choice || choice === "cancel") {
+        console.log(chalk.dim("cancelled"));
+        return 0;
+      }
+      overwrite = choice === "overwrite";
+    }
 
-  if (existingData.providers[providerName]) {
-    const { choice } = await prompts({
+    // \u2500\u2500 Step 3: base URL \u2500\u2500
+    const { baseUrl } = await prompts({
+      type: "text",
+      name: "baseUrl",
+      message: "Base URL (e.g. http://localhost:11434/v1)",
+      validate: (v: string) => validateBaseUrl(v),
+    });
+    if (!baseUrl) {
+      console.log(chalk.dim("cancelled"));
+      return 0;
+    }
+
+    // \u2500\u2500 Step 4: API shape \u2500\u2500
+    const { api } = await prompts({
       type: "select",
-      name: "choice",
-      message: `"${providerName}" already exists in models.json — what should swarm do?`,
+      name: "api",
+      message: "API shape",
       choices: [
-        { title: "Merge — keep existing models, add/update the ones I specify", value: "merge" },
-        { title: "Overwrite — replace the entire provider entry", value: "overwrite" },
-        { title: "Cancel", value: "cancel" },
+        {
+          title: "openai_completions \u2014 Ollama, vLLM, LM Studio, most local servers",
+          value: "openai_completions",
+        },
+        {
+          title: "openai_responses \u2014 OpenAI Responses API (newer endpoints)",
+          value: "openai_responses",
+        },
       ],
     });
-    if (!choice || choice === "cancel") {
+    if (!api) {
       console.log(chalk.dim("cancelled"));
       return 0;
     }
-    overwrite = choice === "overwrite";
-  }
 
-  // ── Step 3: base URL ──────────────────────────────────────────────────
-  const { baseUrl } = await prompts({
-    type: "text",
-    name: "baseUrl",
-    message: "Base URL (e.g. http://localhost:11434/v1)",
-    validate: (v: string) => validateBaseUrl(v),
-  });
-  if (!baseUrl) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-
-  // ── Step 4: API shape ─────────────────────────────────────────────────
-  const { api } = await prompts({
-    type: "select",
-    name: "api",
-    message: "API shape",
-    choices: [
-      {
-        title: "openai_completions — Ollama, vLLM, LM Studio, most local servers",
-        value: "openai_completions",
-      },
-      {
-        title: "openai_responses — OpenAI Responses API (newer endpoints)",
-        value: "openai_responses",
-      },
-    ],
-  });
-  if (!api) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-
-  // ── Step 5: API key / auth ────────────────────────────────────────────
-  const { authChoice } = await prompts({
-    type: "select",
-    name: "authChoice",
-    message: "Authentication",
-    choices: [
-      { title: "No auth required (local / trusted server)", value: "none" },
-      { title: "Literal key — stored in models.json directly", value: "literal" },
-      { title: "Environment variable — models.json stores the var name", value: "env" },
-      { title: "Shell command — models.json stores !cmd; executed on read", value: "shell" },
-    ],
-  });
-  if (authChoice === undefined) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-
-  let apiKeyField: string | undefined;
-  if (authChoice === "literal") {
-    const { value } = await prompts({
-      type: "password",
-      name: "value",
-      message: "Paste the API key",
-      validate: (v: string) => (v.length > 0 ? true : "must not be empty"),
-    });
-    if (!value) {
-      console.log(chalk.dim("cancelled"));
-      return 0;
-    }
-    apiKeyField = value as string;
-  } else if (authChoice === "env") {
-    const { value } = await prompts({
+    // \u2500\u2500 Step 5: model IDs \u2500\u2500
+    const { firstModel } = await prompts({
       type: "text",
-      name: "value",
-      message: "Environment variable name (e.g. OLLAMA_API_KEY)",
-      validate: (v: string) => (v.length > 0 ? true : "must not be empty"),
-    });
-    if (!value) {
-      console.log(chalk.dim("cancelled"));
-      return 0;
-    }
-    apiKeyField = value as string;
-  } else if (authChoice === "shell") {
-    const { value } = await prompts({
-      type: "text",
-      name: "value",
-      message: "Shell command (leading ! optional, e.g. op read 'op://vault/item/key')",
-      validate: (v: string) => (v.length > 0 ? true : "must not be empty"),
-    });
-    if (!value) {
-      console.log(chalk.dim("cancelled"));
-      return 0;
-    }
-    const raw = typeof value === "string" ? value.trim() : "";
-    apiKeyField = raw.startsWith("!") ? raw : `!${raw}`;
-  } else {
-    // "none"
-    apiKeyField = undefined;
-  }
-
-  // ── Step 6: model IDs ─────────────────────────────────────────────────
-  const { firstModel } = await prompts({
-    type: "text",
-    name: "firstModel",
-    message: "First model ID (e.g. llama3.1:8b, gpt-4o-mini)",
-    validate: (v: string) => validateModelId(v),
-  });
-  if (!firstModel) {
-    console.log(chalk.dim("cancelled"));
-    return 0;
-  }
-
-  const modelIds: string[] = [firstModel as string];
-  let addAnother = true;
-  while (addAnother) {
-    const { more } = await prompts({
-      type: "confirm",
-      name: "more",
-      message: "Add another model?",
-      initial: false,
-    });
-    if (!more) {
-      addAnother = false;
-      break;
-    }
-    const { modelId } = await prompts({
-      type: "text",
-      name: "modelId",
-      message: "Model ID",
+      name: "firstModel",
+      message: "First model ID (e.g. llama3.1:8b, gpt-4o-mini)",
       validate: (v: string) => validateModelId(v),
     });
-    if (!modelId) break; // user cancelled
-    modelIds.push(modelId as string);
+    if (!firstModel) {
+      console.log(chalk.dim("cancelled"));
+      return 0;
+    }
+
+    const modelIds: string[] = [firstModel as string];
+    while (true) {
+      const { more } = await prompts({
+        type: "confirm",
+        name: "more",
+        message: "Add another model?",
+        initial: false,
+      });
+      if (!more) break;
+      const { modelId } = await prompts({
+        type: "text",
+        name: "modelId",
+        message: "Model ID",
+        validate: (v: string) => validateModelId(v),
+      });
+      if (!modelId) break;
+      modelIds.push(modelId as string);
+    }
+
+    // \u2500\u2500 Build + write \u2500\u2500
+    const answers: CustomProviderAnswers = {
+      providerName: providerName as string,
+      baseUrl: baseUrl as string,
+      api: api as SupportedApi,
+      modelIds,
+    };
+
+    const fresh = buildProviderEntry(answers);
+    const merged = existingEntry != null ? mergeProviderEntry(existingEntry, fresh, overwrite) : fresh;
+
+    try {
+      store.upsertProviderConfig({
+        provider: providerName as string,
+        config: JSON.stringify(merged),
+      });
+    } catch (err) {
+      console.error(chalk.red(`Failed to write provider_config: ${err instanceof Error ? err.message : String(err)}`));
+      return 1;
+    }
+
+    console.log();
+    console.log(chalk.green(`\u2713 added provider "${providerName}" to provider_config`));
+    console.log(chalk.dim(`  models:   ${modelIds.join(", ")}`));
+    console.log(chalk.dim(`  base URL: ${baseUrl}`));
+    console.log();
+    console.log(
+      chalk.dim(`If this provider needs auth, run \`swarm providers add ${providerName}\` to store a credential.`),
+    );
+    console.log(chalk.dim(`Use \`swarm providers test ${providerName} ${modelIds[0]}\` to verify the connection.`));
+
+    return 0;
+  } finally {
+    store.close();
   }
-
-  // ── Build + write ─────────────────────────────────────────────────────
-  const answers: CustomProviderAnswers = {
-    providerName: providerName as string,
-    baseUrl: baseUrl as string,
-    apiKeyField,
-    api: api as SupportedApi,
-    modelIds,
-  };
-
-  const entry = buildProviderEntry(answers);
-  const updated = mergeProviderEntry(existingData, providerName as string, entry, overwrite);
-
-  try {
-    writeModelsJson(modelsJsonPath, updated);
-  } catch (err) {
-    console.error(chalk.red(`Failed to write models.json: ${err instanceof Error ? err.message : String(err)}`));
-    return 1;
-  }
-
-  console.log();
-  console.log(chalk.green(`✓ added provider "${providerName}" to ${modelsJsonPath}`));
-  console.log(chalk.dim(`  models: ${modelIds.join(", ")}`));
-  console.log(chalk.dim(`  base URL: ${baseUrl}`));
-  console.log();
-  console.log(chalk.dim(`Use \`swarm providers test ${providerName} ${modelIds[0]}\` to verify the connection.`));
-
-  return 0;
 }

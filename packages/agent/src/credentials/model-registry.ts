@@ -2,32 +2,34 @@
 // per-request auth + headers via AuthStorage.
 //
 // Built-in models come from pi-ai's registry (getProviders + getModels).
-// ~/.swarm/models.json lets the user:
+// The `provider_config` table on the global swarm store (one row per
+// provider id) lets the user:
 //   - add custom providers (Ollama, vLLM, LM Studio, proxies)
 //   - override a built-in provider's baseUrl / compat (route through a
 //     proxy without redefining every model)
 //   - override specific built-in models (fix stale cost, pin routing)
 //   - add custom models under a built-in provider
 //
+// Per-row Ajv validation lives in `loadCustomModels`: one corrupt row
+// is skipped (surfaced via `getError()`) without poisoning the rest
+// of the registry.
+//
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/model-registry.ts) — MIT. Upstream in
 // @mariozechner/pi-mono. Revisit if the pi project splits this out.
 //
 // Swarm-specific deltas:
-// - `getAgentDir()` → swarm's `resolveModelsPath()`.
-// - Constructor auto-wires `AuthStorage.setFallbackResolver` so custom
-//   providers declared in models.json surface through every AuthStorage
-//   touchpoint (`hasAuth`, `describeAuthSource`, `getApiKey`). Pi's
-//   call sites all go through `getApiKeyAndHeaders` which already
-//   reads the registry directly; swarm's daemon threads a bare
-//   `getApiKey(provider)` callback into the agent backend, so without
-//   the wire a models.json-only provider looks uncredentialed end-
-//   to-end.
-// - Otherwise a near-verbatim port; extension registration (custom
-//   streamSimple + OAuth provider) preserved since summariser /
-//   custom-provider flows may need it.
+// - Custom-provider definitions live in `provider_config` rows, not
+//   on disk. `ModelRegistry.create(authStorage, store)` reads them at
+//   construction; `refresh()` re-reads.
+// - The `apiKey` field is gone from `ProviderConfigSchema` /
+//   `ProviderConfigInput`. Credentials always come from
+//   `provider_credentials` via `AuthStorage`.
+// - `!cmd` / env-var resolution is gone repo-wide — keys and headers
+//   are stored verbatim.
+// - Extension registration (custom streamSimple + OAuth provider) is
+//   preserved since summariser / custom-provider flows may need it.
 
-import { existsSync, readFileSync } from "node:fs";
 import {
   type Api,
   type AssistantMessageEventStream,
@@ -45,16 +47,9 @@ import {
 } from "@mariozechner/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { type Static, Type } from "@sinclair/typebox";
+import type { IProviderConfigStore } from "@swarm/store";
 import AjvModule from "ajv";
 import type { AuthStorage } from "./auth-storage.ts";
-import { resolveModelsPath } from "./paths.ts";
-import {
-  clearConfigValueCache,
-  resolveConfigValue,
-  resolveConfigValueOrThrow,
-  resolveConfigValueUncached,
-  resolveHeadersOrThrow,
-} from "./resolve-config-value.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: Ajv's default export is runtime-dependent.
 const Ajv = (AjvModule as any).default || AjvModule;
@@ -188,7 +183,6 @@ type ModelOverride = Static<typeof ModelOverrideSchema>;
 
 const ProviderConfigSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
-  apiKey: Type.Optional(Type.String({ minLength: 1 })),
   api: Type.Optional(Type.String({ minLength: 1 })),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(OpenAICompatSchema),
@@ -202,6 +196,10 @@ const ModelsConfigSchema = Type.Object({
 });
 
 ajv.addSchema(ModelsConfigSchema, "ModelsConfig");
+// Per-row validation surface for `provider_config` writers (CLI). The
+// schema mirrors the per-provider body — minus `apiKey`, which lives
+// in `provider_credentials`.
+export { ProviderConfigSchema };
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
 
@@ -215,7 +213,6 @@ interface ProviderOverride {
 }
 
 interface ProviderRequestConfig {
-  apiKey: string | undefined;
   headers: Record<string, string> | undefined;
   authHeader: boolean | undefined;
 }
@@ -282,10 +279,6 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
   return result;
 }
 
-/** Re-exported so callers can drop the `!cmd` cache without importing
- * from resolve-config-value directly. */
-export const clearApiKeyCache = clearConfigValueCache;
-
 // ---------------------------------------------------------------------------
 // ModelRegistry
 // ---------------------------------------------------------------------------
@@ -299,29 +292,25 @@ export class ModelRegistry {
 
   private constructor(
     readonly authStorage: AuthStorage,
-    private modelsJsonPath: string | undefined,
+    private store: IProviderConfigStore | undefined,
   ) {
     this.loadModels();
-    authStorage.setFallbackResolver((provider) => this.resolveCustomProviderApiKey(provider));
   }
 
-  private resolveCustomProviderApiKey(provider: string): string | undefined {
-    const cfg = this.providerRequestConfigs.get(provider);
-    if (!cfg?.apiKey) return undefined;
-    return resolveConfigValue(cfg.apiKey);
+  /** Store-backed. Reads custom-provider definitions from the global
+   * store's `provider_config` table. */
+  static create(authStorage: AuthStorage, store: IProviderConfigStore): ModelRegistry {
+    return new ModelRegistry(authStorage, store);
   }
 
-  /** File-backed. Reads ~/.swarm/models.json (with pi fallback). */
-  static create(authStorage: AuthStorage, modelsJsonPath: string = resolveModelsPath()): ModelRegistry {
-    return new ModelRegistry(authStorage, modelsJsonPath);
-  }
-
-  /** No file backing — tests. */
+  /** No store backing — tests that don't exercise the custom-provider
+   * path. Built-in pi-ai models still load. */
   static inMemory(authStorage: AuthStorage): ModelRegistry {
     return new ModelRegistry(authStorage, undefined);
   }
 
-  /** Re-read models.json + re-apply any dynamically-registered providers. */
+  /** Re-read provider_config rows + re-apply any dynamically-registered
+   * providers. */
   refresh(): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
@@ -344,7 +333,7 @@ export class ModelRegistry {
       overrides,
       modelOverrides,
       error,
-    } = this.modelsJsonPath ? this.loadCustomModels(this.modelsJsonPath) : emptyCustomModelsResult();
+    } = this.store ? this.loadCustomModels(this.store) : emptyCustomModelsResult();
     if (error) this.loadError = error;
     const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
     let combined = this.mergeCustomModels(builtInModels, customModels);
@@ -394,46 +383,61 @@ export class ModelRegistry {
     return merged;
   }
 
-  private loadCustomModels(modelsJsonPath: string): CustomModelsResult {
-    if (!existsSync(modelsJsonPath)) return emptyCustomModelsResult();
+  private loadCustomModels(store: IProviderConfigStore): CustomModelsResult {
+    const overrides = new Map<string, ProviderOverride>();
+    const modelOverrides = new Map<string, Map<string, ModelOverride>>();
+    const acceptedProviders: Record<string, Static<typeof ProviderConfigSchema>> = {};
+    const errors: string[] = [];
+    const validate = ajv.getSchema("ModelsConfig")!;
+
+    let rows: Array<{ provider: string; config: unknown }>;
     try {
-      const content = readFileSync(modelsJsonPath, "utf-8");
-      const config: ModelsConfig = JSON.parse(content);
-      const validate = ajv.getSchema("ModelsConfig")!;
-      if (!validate(config)) {
-        const errors =
+      rows = store.listProviderConfigs();
+    } catch (error) {
+      return emptyCustomModelsResult(
+        `Failed to read provider_config: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
+    for (const row of rows) {
+      // Per-row Ajv validation. Wrap the row in the whole-file shape so
+      // the existing compiled schema applies; a corrupt row is logged
+      // and skipped, sibling rows still load.
+      const wrapped = { providers: { [row.provider]: row.config } };
+      if (!validate(wrapped)) {
+        const details =
           // biome-ignore lint/suspicious/noExplicitAny: Ajv error shape is loose.
           validate.errors?.map((e: any) => `  - ${e.instancePath || "root"}: ${e.message}`).join("\n") ||
           "Unknown schema error";
-        return emptyCustomModelsResult(`Invalid models.json schema:\n${errors}\n\nFile: ${modelsJsonPath}`);
+        errors.push(`provider_config[${row.provider}]: invalid schema\n${details}`);
+        continue;
       }
-      this.validateConfig(config);
-      const overrides = new Map<string, ProviderOverride>();
-      const modelOverrides = new Map<string, Map<string, ModelOverride>>();
-      for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-        if (providerConfig.baseUrl || providerConfig.compat) {
-          overrides.set(providerName, {
-            baseUrl: providerConfig.baseUrl ?? undefined,
-            compat: providerConfig.compat ?? undefined,
-          });
+      const providerConfig = (wrapped as ModelsConfig).providers[row.provider]!;
+      try {
+        this.validateConfig({ providers: { [row.provider]: providerConfig } });
+      } catch (err) {
+        errors.push(`provider_config[${row.provider}]: ${err instanceof Error ? err.message : err}`);
+        continue;
+      }
+      acceptedProviders[row.provider] = providerConfig;
+      if (providerConfig.baseUrl || providerConfig.compat) {
+        overrides.set(row.provider, {
+          baseUrl: providerConfig.baseUrl ?? undefined,
+          compat: providerConfig.compat ?? undefined,
+        });
+      }
+      this.storeProviderRequestConfig(row.provider, providerConfig);
+      if (providerConfig.modelOverrides) {
+        modelOverrides.set(row.provider, new Map(Object.entries(providerConfig.modelOverrides)));
+        for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides)) {
+          this.storeModelHeaders(row.provider, modelId, modelOverride.headers);
         }
-        this.storeProviderRequestConfig(providerName, providerConfig);
-        if (providerConfig.modelOverrides) {
-          modelOverrides.set(providerName, new Map(Object.entries(providerConfig.modelOverrides)));
-          for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides)) {
-            this.storeModelHeaders(providerName, modelId, modelOverride.headers);
-          }
-        }
       }
-      return { models: this.parseModels(config), overrides, modelOverrides, error: undefined };
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        return emptyCustomModelsResult(`Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`);
-      }
-      return emptyCustomModelsResult(
-        `Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${modelsJsonPath}`,
-      );
     }
+
+    const error = errors.length === 0 ? undefined : errors.join("\n\n");
+    const combined: ModelsConfig = { providers: acceptedProviders };
+    return { models: this.parseModels(combined), overrides, modelOverrides, error };
   }
 
   private validateConfig(config: ModelsConfig): void {
@@ -451,9 +455,10 @@ export class ModelRegistry {
         if (!providerConfig.baseUrl) {
           throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
         }
-        if (!providerConfig.apiKey) {
-          throw new Error(`Provider ${providerName}: "apiKey" is required when defining custom models.`);
-        }
+        // Credentials live in `provider_credentials`, not on this
+        // config blob — keyless custom providers (Ollama) are valid;
+        // `hasAuth(name)` returns false and `getAvailable()` filters
+        // them out at request time.
       }
       for (const modelDef of models) {
         const hasModelApi = !!modelDef.api;
@@ -533,9 +538,7 @@ export class ModelRegistry {
   }
 
   hasConfiguredAuth(model: Model<Api>): boolean {
-    return (
-      this.authStorage.hasAuth(model.provider) || this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
-    );
+    return this.authStorage.hasAuth(model.provider);
   }
 
   private getModelRequestKey(provider: string, modelId: string): string {
@@ -544,11 +547,10 @@ export class ModelRegistry {
 
   private storeProviderRequestConfig(
     providerName: string,
-    config: { apiKey?: string; headers?: Record<string, string>; authHeader?: boolean },
+    config: { headers?: Record<string, string>; authHeader?: boolean },
   ): void {
-    if (!config.apiKey && !config.headers && !config.authHeader) return;
+    if (!config.headers && !config.authHeader) return;
     this.providerRequestConfigs.set(providerName, {
-      apiKey: config.apiKey ?? undefined,
       headers: config.headers ?? undefined,
       authHeader: config.authHeader ?? undefined,
     });
@@ -563,23 +565,17 @@ export class ModelRegistry {
     this.modelRequestHeaders.set(key, headers);
   }
 
-  /** Resolve API key + request headers for a specific model. Triggers
-   * `!cmd` / env-var / literal resolution on both apiKey and headers. */
+  /** Resolve API key + request headers for a specific model. Keys come
+   * from `provider_credentials` via `AuthStorage`; headers are stored
+   * verbatim on the `provider_config` blob (no `!cmd` / env-var
+   * resolution). */
   async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
     try {
       const providerConfig = this.providerRequestConfigs.get(model.provider);
-      const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, { includeFallback: false });
-      const apiKey =
-        apiKeyFromAuthStorage ??
-        (providerConfig?.apiKey
-          ? resolveConfigValueOrThrow(providerConfig.apiKey, `API key for provider "${model.provider}"`)
-          : undefined);
-      const providerHeaders = resolveHeadersOrThrow(providerConfig?.headers, `provider "${model.provider}"`);
-      const modelHeaders = resolveHeadersOrThrow(
-        this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
-        `model "${model.provider}/${model.id}"`,
-      );
-      let headers =
+      const apiKey = await this.authStorage.getApiKey(model.provider);
+      const providerHeaders = providerConfig?.headers;
+      const modelHeaders = this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id));
+      let headers: Record<string, string> | undefined =
         model.headers || providerHeaders || modelHeaders
           ? { ...model.headers, ...providerHeaders, ...modelHeaders }
           : undefined;
@@ -597,10 +593,7 @@ export class ModelRegistry {
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-    const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
-    if (apiKey !== undefined) return apiKey;
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
-    return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+    return this.authStorage.getApiKey(provider);
   }
 
   isUsingOAuth(model: Model<Api>): boolean {
@@ -632,9 +625,8 @@ export class ModelRegistry {
     if (!config.baseUrl) {
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
     }
-    if (!config.apiKey && !config.oauth) {
-      throw new Error(`Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`);
-    }
+    // Credentials live in `provider_credentials` (api_key) or via the
+    // OAuth provider hook — not on this registration input.
     for (const modelDef of config.models) {
       const api = modelDef.api || config.api;
       if (!api) {
@@ -696,10 +688,11 @@ export class ModelRegistry {
 }
 
 /** Programmatic registration input. Used by extensions / tests that
- * want to add a provider without dropping a models.json on disk. */
+ * want to add a provider without writing a `provider_config` row.
+ * Credentials always come from `provider_credentials` via
+ * `AuthStorage`; no `apiKey` field on this shape. */
 export interface ProviderConfigInput {
   baseUrl?: string;
-  apiKey?: string;
   api?: Api;
   streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
   headers?: Record<string, string>;

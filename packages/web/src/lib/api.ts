@@ -1052,11 +1052,11 @@ export interface ProviderSummary {
   name: string;
   model_count: number;
   credentialed: boolean;
-  /** Human label — "auth.json api_key (literal)", "env", "auth.json oauth", etc.
+  /** Human label — "stored api_key", "stored oauth", or null.
    * Never contains the key itself. */
   auth_source: string | null;
-  /** `api_key` / `oauth` when stored in ~/.swarm/auth.json; `null` when
-   * sourced from env or a custom models.json provider. */
+  /** `api_key` / `oauth` when a row exists in `provider_credentials`;
+   * `null` when no credential is configured. */
   auth_kind: "api_key" | "oauth" | null;
   oauth_available: boolean;
   default_model: string | null;
@@ -1080,7 +1080,7 @@ export interface ProviderDetail extends ProviderSummary {
 
 export interface ProvidersListResponse {
   providers: ProviderSummary[];
-  models_json_error: string | null;
+  provider_config_error: string | null;
 }
 
 export interface ProviderTestResult {

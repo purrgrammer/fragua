@@ -1,12 +1,13 @@
 // /providers — list of LLM providers registered in pi-ai + custom
-// entries from ~/.swarm/models.json. Shows credentialed status and
-// model count per provider; row click drills into the detail page.
+// entries from the global store's `provider_config` table. Shows
+// credentialed status and model count per provider; row click drills
+// into the detail page.
 //
 // Data comes from `GET /providers` (see @swarm/server's
 // routes/providers.ts). The server never exposes the key itself — just
-// the human-readable source label ("auth.json api_key (literal)", "env",
-// etc.) — so this page is safe to render even if the daemon is serving
-// over a non-local socket.
+// the human-readable source label ("stored api_key" / "stored oauth" /
+// null) — so this page is safe to render even if the daemon is
+// serving over a non-local socket.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cpu, KeyRound, Trash2 } from "lucide-react";
@@ -70,7 +71,7 @@ export function Providers(): JSX.Element {
       <header className="flex items-baseline justify-between">
         <h2 className="font-heading text-base font-semibold">Providers</h2>
         <p className="text-sw-muted text-xs">
-          <code className="font-mono">~/.swarm/auth.json</code> + <code className="font-mono">models.json</code>
+          <code className="font-mono">~/.swarm/swarm.db</code> (provider_credentials + provider_config)
         </p>
       </header>
 
@@ -86,13 +87,13 @@ export function Providers(): JSX.Element {
           description="The server didn't respond as expected. Check the console for details, or retry shortly."
         />
       )}
-      {data?.models_json_error && (
+      {data?.provider_config_error && (
         <div
-          data-testid="providers-models-json-error"
+          data-testid="providers-config-error"
           className="rounded-md border border-sw-accent-warn/30 bg-sw-accent-warn/10 p-3 text-xs text-sw-accent-warn"
         >
-          <div className="font-medium">models.json had errors — built-in providers are still shown.</div>
-          <pre className="mt-1 whitespace-pre-wrap font-mono">{data.models_json_error}</pre>
+          <div className="font-medium">provider_config had errors — unaffected providers are still shown.</div>
+          <pre className="mt-1 whitespace-pre-wrap font-mono">{data.provider_config_error}</pre>
         </div>
       )}
       {data && data.providers.length === 0 && (
