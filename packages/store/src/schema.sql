@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 10
+-- swarm event store schema — Revision 11
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -48,6 +48,12 @@
 -- fanned out into sub-runs sit in this status until every sub-run
 -- reaches a terminal-or-paused-class state; the wake-pending sweep
 -- transitions the parent back to `queued` (collect phase).
+-- v10 → v11: provider credentials in the store
+-- (docs/proposals/provider-credentials-storage.md). New
+-- `provider_credentials` table holds built-in pi-ai provider keys +
+-- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is
+-- denormalised from `payload.type` so swarm-debug can SELECT the
+-- shape without JSON-parsing. Pure additive; no row migrations.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -285,3 +291,17 @@ CREATE INDEX IF NOT EXISTS idx_schedules_due
   ON schedules(next_fire_at)
   WHERE paused_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);
+
+-- Built-in provider credentials (docs/proposals/provider-credentials-storage.md).
+-- One row per provider id; `payload` carries the full AuthCredential JSON
+-- (api_key form or OAuthCredentials). `kind` is denormalised from
+-- `payload.type` for cheap SELECTs in post-mortems. No indexes — the PK
+-- on `provider` is the only access pattern (lookup by id, full table
+-- scan for `list`, both <20 rows in practice).
+CREATE TABLE IF NOT EXISTS provider_credentials (
+  provider   TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+  payload    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;

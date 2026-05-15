@@ -39,6 +39,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [8, MIGRATION_008_AUTO_WAKE_UNIFICATION()],
   [9, MIGRATION_009_SUBRUN_COLUMNS()],
   [10, MIGRATION_010_RUNNING_CHILDREN_STATUS()],
+  [11, MIGRATION_011_PROVIDER_CREDENTIALS()],
 ]);
 
 /**
@@ -840,6 +841,30 @@ function MIGRATION_010_RUNNING_CHILDREN_STATUS(): string {
     CREATE INDEX idx_run_state_parent
       ON run_state(parent_run_id)
       WHERE parent_run_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v10 → v11: provider credentials in the store
+ * (docs/proposals/provider-credentials-storage.md).
+ *
+ * Pure additive: introduces `provider_credentials`, a per-provider
+ * key/oauth row backing the new `SqliteAuthStorageBackend`. No data
+ * migration — the old `~/.swarm/auth.json` file is dropped outright
+ * per ground rule #11 (pre-release, no backwards-compat). Users
+ * re-run `swarm providers add` / `login` after the upgrade.
+ *
+ * Pattern matches `MIGRATION_006_SCHEDULES` (additive table, no rebuild).
+ */
+function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
+  return `
+    CREATE TABLE provider_credentials (
+      provider   TEXT PRIMARY KEY,
+      kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+      payload    TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
   `;
 }
 
