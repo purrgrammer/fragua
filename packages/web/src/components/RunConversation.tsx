@@ -494,13 +494,17 @@ function collectBranchSections(
   while (i < sections.length) {
     const s = sections[i]!;
     if (s.nodeId == null || !branchSet.has(s.nodeId)) break;
-    if (branchSections.get(s.nodeId) == null) {
-      branchSections.set(s.nodeId, s);
+    const existing = branchSections.get(s.nodeId);
+    if (existing == null) {
+      // Clone so we don't share the row array with the source —
+      // subsequent merges below append to OUR copy. Without this,
+      // re-running `buildRenderItems` against the same memoized
+      // `sections` (via useMemo) would push the same rows again on
+      // every render, growing the array unboundedly and duplicating
+      // the branch's transcript in the UI.
+      branchSections.set(s.nodeId, { ...s, rows: [...s.rows] });
     } else {
-      // A branch already had a section earlier — keep both by merging
-      // rows so message order is preserved.
-      const existing = branchSections.get(s.nodeId) as Section;
-      existing.rows.push(...s.rows);
+      branchSections.set(s.nodeId, { ...existing, rows: [...existing.rows, ...s.rows] });
     }
     i += 1;
   }
