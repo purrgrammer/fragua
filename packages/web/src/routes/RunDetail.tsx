@@ -83,6 +83,7 @@ function isTabId(x: string | undefined): x is TabId {
 export function RunDetail(): JSX.Element {
   const { id = "", view: rawView } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const view: TabId = isTabId(rawView) ? rawView : "conversation";
   const shouldCanonicalize = !!id && rawView !== view;
@@ -94,6 +95,21 @@ export function RunDetail(): JSX.Element {
   // `qc.refetchQueries(detail)` on every SSE frame — on a 1k-events/sec
   // run that was a thousand full-payload refetches per second.
   const { data: snapshot, isError } = useQuery({ ...queries.runs.detail(id), enabled: !!id });
+
+  // P6 of the sub-runs UI plan: a child run is an implementation
+  // detail of its parent. If someone navigates directly to a child id
+  // (deep link, scripted curl, old bookmark), redirect to the parent
+  // with the branch anchor so the operator lands on the right
+  // surface. `?orphan=true` is an escape hatch for debugging.
+  const orphan = searchParams.get("orphan") === "true";
+  const isChildRun = snapshot?.parentRunId != null && snapshot.parentRunId.length > 0 && !orphan;
+  const childRedirectTo = isChildRun
+    ? `/runs/${snapshot.parentRunId}/${view}${
+        snapshot.branchNodeId != null && snapshot.branchNodeId.length > 0
+          ? `?branch=${encodeURIComponent(snapshot.branchNodeId)}`
+          : ""
+      }`
+    : null;
   // Tri-state: `undefined` while the snapshot is loading; `true` only
   // when we've confirmed a terminal status. `useRunLive` defers opening
   // SSE until this lands as a boolean so we don't flash a transient
@@ -126,10 +142,20 @@ export function RunDetail(): JSX.Element {
   // Branch metadata for parallel fan-outs. Empty maps for runs without
   // parallel sections — consumers no-op.
   const branchMeta = useBranchMeta(id || null, detail, totalEvents);
-  const activeNodeIds = useMemo<ReadonlySet<string>>(
-    () => new Set((detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId)),
-    [detail?.nodes],
-  );
+  const activeNodeIds = useMemo<ReadonlySet<string>>(() => {
+    // Union the parent's own running nodes with each non-terminal
+    // descendant's current_node (P3 / P7 of the sub-runs UI plan).
+    // Without the descendant nodes, the graph stays frozen on
+    // `parallel.*` while the lenses are actually running inside child
+    // runs.
+    const out = new Set<string>(
+      (detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId),
+    );
+    for (const active of detail?.effectiveActiveNodes ?? []) {
+      out.add(active.nodeId);
+    }
+    return out;
+  }, [detail?.nodes, detail?.effectiveActiveNodes]);
 
   // `isLive` here means "actively dispatching", not just "SSE connected".
   // A paused run keeps the SSE socket open (so resume facts still arrive)
@@ -147,6 +173,10 @@ export function RunDetail(): JSX.Element {
   // Canonicalize the URL: bare /runs/:id → /runs/:id/conversation,
   // invalid view → same. Runs AFTER all hooks to stay rules-compliant.
   if (shouldCanonicalize) return <Navigate to={`/runs/${id}/${view}`} replace />;
+
+  // P6: redirect direct child-run URLs to the parent. Runs after the
+  // snapshot lands so we can read `parentRunId` / `branchNodeId`.
+  if (childRedirectTo != null) return <Navigate to={childRedirectTo} replace />;
 
   if (!id) {
     return (

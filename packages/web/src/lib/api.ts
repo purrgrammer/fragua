@@ -86,6 +86,26 @@ export interface RunSummary {
   parentNodeId?: string;
   parallelIndex?: number;
   branchNodeId?: string;
+  /** Counts of immediate sub-runs grouped by status. Present only on
+   * parents with at least one child row. Drives the runs-list /
+   * Inbox / detail-header digest chips. */
+  childStatusDigest?: ChildStatusDigest;
+}
+
+/** Status counts of a parent's immediate sub-runs. Server-side
+ * aggregate; renders as a compact chip ("▶3 ⏸1") in lists + detail. */
+export interface ChildStatusDigest {
+  total: number;
+  running: number;
+  runningChildren: number;
+  paused: number;
+  pausedHitl: number;
+  pausedAuto: number;
+  queued: number;
+  completed: number;
+  cancelled: number;
+  halted: number;
+  quarantined: number;
 }
 
 export interface NodeState {
@@ -159,6 +179,20 @@ export interface RunDetail {
    * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree was
    * disposed or for runs that never had one. */
   worktreePath?: string;
+  /** Sub-run linkage when this detail belongs to a child run.
+   * Direct-URL navigations to a child id redirect to the parent's
+   * page with `?branch=<branchNodeId>` anchored. */
+  parentRunId?: string;
+  parentNodeId?: string;
+  parallelIndex?: number;
+  branchNodeId?: string;
+  /** Current node ids active inside descendant sub-runs. Empty for
+   * runs with no children or no active descendants. The Graph view
+   * unions this set with the run's own running nodes. */
+  effectiveActiveNodes?: Array<{ runId: string; nodeId: string; branchNodeId?: string }>;
+  /** Counts of immediate sub-runs grouped by status. Mirrors the
+   * field on `RunSummary`; drives the run-detail header summary. */
+  childStatusDigest?: ChildStatusDigest;
 }
 
 /** One row in `GET /runs/:runId/changes`. Server projects
@@ -465,6 +499,12 @@ export interface ListRunsFilter {
   limit?: number;
   /** Narrow to a single project root (exact `run_state.cwd` match). */
   cwd?: string;
+  /** Widen the status filter so parents whose ACTIVE CHILDREN match
+   * one of the requested statuses also surface (without ever returning
+   * sub-runs themselves). Used by the Inbox so a parent in
+   * `running_children` whose branch paused on budget still shows up.
+   * No-op without `status`. */
+  includeChildAttention?: boolean;
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -476,6 +516,7 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
   if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
+  if (filter?.includeChildAttention === true) params.set("includeChildAttention", "true");
   const qs = params.toString();
   const path = qs ? `/runs?${qs}` : "/runs";
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));

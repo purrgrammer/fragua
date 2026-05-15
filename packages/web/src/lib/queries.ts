@@ -21,6 +21,7 @@ function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null 
   if (filter.order && filter.order !== "newest") out.order = filter.order;
   if (filter.limit !== undefined) out.limit = filter.limit;
   if (filter.cwd && filter.cwd.length > 0) out.cwd = filter.cwd;
+  if (filter.includeChildAttention === true) out.includeChildAttention = true;
   return Object.keys(out).length === 0 ? null : out;
 }
 
