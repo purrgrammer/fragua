@@ -47,7 +47,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { StatTile } from "../components/ui/stat-tile.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { WorkflowLink } from "../components/WorkflowLink.tsx";
-import type { RunChange, RunDetail as RunDetailT } from "../lib/api.ts";
+import type { RunChange, RunDetail as RunDetailT, RunSummary } from "../lib/api.ts";
 import { ApiError } from "../lib/api.ts";
 import { useBranchMeta } from "../lib/branch-meta.ts";
 import { cn } from "../lib/cn.ts";
@@ -138,6 +138,20 @@ export function RunDetail(): JSX.Element {
     () => (snapshot != null ? mergeDetail(snapshot, detailOverlay) : undefined),
     [snapshot, detailOverlay],
   );
+
+  // Sub-runs for the parent. Used to surface per-branch status pills
+  // and inline operator actions inside RunConversation's branch cards.
+  // Self-empty for runs without sub-runs; cached + invalidated by the
+  // global event stream alongside the parent's snapshot.
+  const { data: subRuns } = useQuery({ ...queries.runs.children(id), enabled: !!id });
+  const childRunByBranch = useMemo(() => {
+    const map = new Map<string, RunSummary>();
+    for (const c of subRuns ?? []) {
+      const key = c.branchNodeId ?? c.parentNodeId;
+      if (typeof key === "string" && key.length > 0) map.set(key, c);
+    }
+    return map;
+  }, [subRuns]);
 
   // Branch metadata for parallel fan-outs. Empty maps for runs without
   // parallel sections — consumers no-op.
@@ -256,6 +270,8 @@ export function RunDetail(): JSX.Element {
                 branchesByParent={branchMeta.parentToBranches}
                 fanInResultsByParent={branchMeta.fanInResultsByParent}
                 subagentByToolCallId={subagentByToolCallId}
+                childRunByBranch={childRunByBranch}
+                parentRunId={id}
               />
             </TabsContent>
             <TabsContent value="graph" className="h-full">

@@ -582,6 +582,15 @@ export interface IEventReader {
   // Messages (read)
   getMessages(runId: string, opts?: GetMessagesOpts): Message[];
   getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
+
+  // Merged messages for a parent + all sub-runs, each row stamped with
+  // `originRunId` so the run-detail conversation view can route rows
+  // into per-branch sections without losing the source identity.
+  // P8 of the sub-runs UI plan.
+  getMessagesNarrowWithDescendants(
+    runId: string,
+    opts?: { sinceOrdinal?: number; limit?: number },
+  ): Array<NarrowMessage & { originRunId: string }>;
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 
   // Per-run aggregates

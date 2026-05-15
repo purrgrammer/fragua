@@ -723,17 +723,31 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
  * (lossless JSON round-trip). `nodeId` is swarm's projection of which
  * graph node emitted the turn.
  *
- * `runId` and `iteration` are intentionally absent from the wire shape:
- * the URL already pins `runId`, and `iteration` is unused by the UI. */
+ * `runId` is intentionally absent — the URL pins it. `originRunId` is
+ * stamped only when the parent fetched with `?include=descendants`
+ * and the row came from a sub-run; same-run rows omit it. */
 export interface RunMessageRow {
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
+  /** Set only on rows that came from a sub-run when the parent's
+   * messages were fetched with `includeDescendants: true`. Lets
+   * RunConversation route each row into its branch's section
+   * regardless of the row's nodeId. */
+  originRunId?: string;
 }
 
-export async function getRunMessages(id: string, sinceOrdinal?: number): Promise<RunMessageRow[]> {
-  const qs = sinceOrdinal != null && sinceOrdinal > 0 ? `?sinceOrdinal=${sinceOrdinal}` : "";
-  return getJson(`/runs/${encodeURIComponent(id)}/messages${qs}`, (v): v is RunMessageRow[] => Array.isArray(v));
+export async function getRunMessages(
+  id: string,
+  sinceOrdinal?: number,
+  opts: { includeDescendants?: boolean } = {},
+): Promise<RunMessageRow[]> {
+  const params = new URLSearchParams();
+  if (sinceOrdinal != null && sinceOrdinal > 0) params.set("sinceOrdinal", String(sinceOrdinal));
+  if (opts.includeDescendants) params.set("include", "descendants");
+  const qs = params.toString();
+  const path = qs ? `/runs/${encodeURIComponent(id)}/messages?${qs}` : `/runs/${encodeURIComponent(id)}/messages`;
+  return getJson(path, (v): v is RunMessageRow[] => Array.isArray(v));
 }
 
 export async function listJobs(filter?: { status?: JobStatus; limit?: number }): Promise<JobSummary[]> {

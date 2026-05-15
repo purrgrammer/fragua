@@ -68,11 +68,13 @@ import {
 } from "./event-queries.ts";
 import {
   insertMessage,
+  type NarrowMessageWithOriginRow,
   selectActiveThreads,
   selectMaxMessageOrdinal,
   selectMessageByDedup,
   selectMessages,
   selectMessagesNarrow,
+  selectMessagesNarrowWithDescendants,
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
@@ -813,6 +815,22 @@ export class SqliteStore implements IEventStore {
       ordinal: r.ordinal,
       content: JSON.parse(r.content),
       nodeId: r.node_id,
+    }));
+  }
+
+  getMessagesNarrowWithDescendants(
+    runId: string,
+    opts: { sinceOrdinal?: number; limit?: number } = {},
+  ): Array<NarrowMessage & { originRunId: string }> {
+    const queryOpts: Parameters<typeof selectMessagesNarrowWithDescendants>[2] = {
+      sinceOrdinal: opts.sinceOrdinal ?? 0,
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    };
+    return selectMessagesNarrowWithDescendants(this.db, runId, queryOpts).map((r: NarrowMessageWithOriginRow) => ({
+      ordinal: r.ordinal,
+      content: JSON.parse(r.content),
+      nodeId: r.node_id,
+      originRunId: r.originRunId,
     }));
   }
 

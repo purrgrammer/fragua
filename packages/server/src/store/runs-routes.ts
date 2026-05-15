@@ -207,6 +207,26 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const nodeIdParam = c.req.query("nodeId");
     const sinceParam = c.req.query("sinceOrdinal");
     const limitParam = c.req.query("limit");
+    const includeParam = c.req.query("include");
+    // `?include=descendants` merges parent + sub-run messages, each
+    // row stamped with `originRunId`. P8 of the sub-runs UI plan —
+    // drives the conversation surface for parents with parallel
+    // sub-runs. The per-node filter is incompatible with the merge
+    // (different runs have independent node ids; merging would mix
+    // unrelated streams), so we ignore `?nodeId` when descendants
+    // is set.
+    if (includeParam === "descendants") {
+      const opts: Parameters<typeof store.getMessagesNarrowWithDescendants>[1] = {};
+      if (sinceParam) {
+        const n = Number(sinceParam);
+        if (Number.isFinite(n) && n >= 0) opts.sinceOrdinal = Math.floor(n);
+      }
+      if (limitParam) {
+        const n = Number(limitParam);
+        if (Number.isFinite(n) && n > 0) opts.limit = Math.floor(n);
+      }
+      return c.json(store.getMessagesNarrowWithDescendants(runId, opts));
+    }
     const opts: Parameters<typeof store.getMessagesNarrow>[1] = {};
     if (nodeIdParam) opts.nodeId = nodeIdParam;
     if (sinceParam) {

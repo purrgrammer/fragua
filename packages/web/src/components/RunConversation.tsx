@@ -25,7 +25,7 @@
 
 import { renderers as extensionRenderers } from "virtual:swarm-extensions";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
-import { type ReactNode, useMemo, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, type ReactNode, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -44,11 +44,13 @@ import { Message as AIMessage, MessageContent, MessageResponse } from "@/compone
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { BranchActions } from "@/components/BranchActions";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
+import { RunStatusBadge } from "@/components/RunStatusBadge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { NodeState, RunMessageRow } from "@/lib/api";
+import type { NodeState, RunMessageRow, RunSummary } from "@/lib/api";
 import type { FanInResult } from "@/lib/branch-meta";
 import type { StreamingBlock, StreamingMessage, ToolStream } from "@/lib/useRunLive";
 import { cn } from "@/lib/utils";
@@ -101,6 +103,15 @@ export interface RunConversationProps {
    * streaming Terminal for any nodeId in this map that doesn't
    * already have a `tool_node` message in `messages`. */
   toolStreams?: ReadonlyMap<string, ToolStream>;
+  /** branchNodeId → child RunSummary for each parallel sub-run, keyed
+   *  by the branch's root nodeId so BranchCard can show the child's
+   *  status pill + inline operator actions when paused (P8 of the
+   *  sub-runs UI plan). Absent / empty: branch cards fall back to
+   *  parent's `nodeStates` and skip the actions. */
+  childRunByBranch?: ReadonlyMap<string, RunSummary>;
+  /** Parent run id, threaded into BranchActions so its query
+   *  invalidations target the right `runs.children(parent)` cache. */
+  parentRunId?: string;
   className?: string;
 }
 
@@ -116,6 +127,8 @@ export function RunConversation({
   fanInResultsByParent,
   subagentByToolCallId,
   toolStreams,
+  childRunByBranch,
+  parentRunId,
   className,
 }: RunConversationProps): JSX.Element {
   // toolCallId → result map, so each toolCall inside an assistant
@@ -338,6 +351,8 @@ export function RunConversation({
                   streaming={isTail && streamingInTab ? streaming : null}
                   subagentByToolCallId={subagentByToolCallId}
                   fanInResult={fanInResultsByParent?.get(item.parentNodeId)}
+                  childRunByBranch={childRunByBranch}
+                  parentRunId={parentRunId}
                 />
               );
             })}
@@ -504,6 +519,8 @@ function BranchTabsSection({
   streaming,
   subagentByToolCallId,
   fanInResult,
+  childRunByBranch,
+  parentRunId,
 }: {
   parentNodeId: string;
   parentSection: Section | null;
@@ -516,6 +533,8 @@ function BranchTabsSection({
   streaming: StreamingMessage | null;
   subagentByToolCallId?: ReadonlyMap<string, string>;
   fanInResult?: FanInResult;
+  childRunByBranch?: ReadonlyMap<string, RunSummary>;
+  parentRunId?: string;
 }): JSX.Element {
   // Branches render as a vertical stack of collapsible cards rather
   // than tabs — same shape as the `agent` toolCall card, so the
@@ -564,6 +583,7 @@ function BranchTabsSection({
           // Collapsible is keyed by the stable `branchId` — same trick as
           // the sub-agent card.
           const defaultOpen = false;
+          const childRun = childRunByBranch?.get(branchId);
           return (
             <BranchCard
               key={branchId}
@@ -573,6 +593,8 @@ function BranchTabsSection({
               defaultOpen={defaultOpen}
               isLive={isLive}
               isPaused={isPaused}
+              childRun={childRun}
+              parentRunId={parentRunId}
             >
               {section?.rows.map((row) => (
                 <MessageRow
@@ -595,7 +617,13 @@ function BranchTabsSection({
 
 /** One branch's card inside a parallel stack. Mirrors the `agent`
  *  toolCall card shape: a click-to-expand header carrying nodeId +
- *  status + message count, body is the branch's transcript. */
+ *  status + message count, body is the branch's transcript.
+ *
+ *  When this branch is a sub-run (`childRun` set), the header also
+ *  shows the child's lifecycle status pill, the live cost, and inline
+ *  operator actions when the child is paused. Operators can act on a
+ *  paused branch without leaving the parent's surface (P8 of the
+ *  sub-runs UI plan). */
 function BranchCard({
   branchId,
   state,
@@ -603,6 +631,8 @@ function BranchCard({
   defaultOpen,
   isLive,
   isPaused,
+  childRun,
+  parentRunId,
   children,
 }: {
   branchId: string;
@@ -611,19 +641,41 @@ function BranchCard({
   defaultOpen: boolean;
   isLive: boolean;
   isPaused: boolean;
+  childRun?: RunSummary;
+  parentRunId?: string;
   children: ReactNode;
 }): JSX.Element {
+  // Stop the trigger from toggling collapse when the operator clicks
+  // a button in the header — `event.stopPropagation()` keeps the
+  // expand/collapse only on the chrome.
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
   return (
     <Collapsible
       defaultOpen={defaultOpen}
       data-testid={`branch-card-${branchId}`}
       data-branch-state={state?.state ?? "pending"}
+      data-child-status={childRun?.runStatus}
       className="rounded-md border border-sw-border bg-sw-surface/50"
     >
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface">
         <StatusDot status={state?.state ?? "pending"} isLive={isLive} isPaused={isPaused} />
         <span className="font-mono text-[12px] font-medium text-sw-text">{branchId}</span>
+        {childRun ? (
+          <RunStatusBadge status={childRun.status} runStatus={childRun.runStatus} className="ml-1" />
+        ) : null}
+        {childRun != null && childRun.costUsd > 0 ? (
+          <span className="font-mono text-[10px] tabular-nums text-sw-muted">${childRun.costUsd.toFixed(2)}</span>
+        ) : null}
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+          {childRun ? (
+            <span onClick={stop} className="normal-case">
+              <BranchActions
+                runId={childRun.runId}
+                runStatus={childRun.runStatus}
+                parentRunId={parentRunId}
+              />
+            </span>
+          ) : null}
           {messageCount > 0 ? <span className="tabular-nums">{messageCount} msg</span> : null}
           <span aria-hidden className="transition-transform group-data-[state=open]:rotate-90">
             ›

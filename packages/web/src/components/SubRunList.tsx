@@ -7,6 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { RunSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
+import { BranchActions } from "./BranchActions.tsx";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 
 interface SubRunListProps {
@@ -49,15 +50,15 @@ export function SubRunList({ parentRunId }: SubRunListProps): JSX.Element | null
             </span>
             <RunStatusBadge status={mapStatus(child)} runStatus={child.runStatus} />
             {/* Sub-runs are an executor implementation detail — operators
-                shouldn't navigate into them. Clicking a branch row stays on
-                the parent's detail page (no `to=`) and just renders the
-                branch identity. Future: scroll to / highlight the relevant
-                section in the parent's conversation when the descendants
-                merge lands. */}
+                shouldn't navigate into them. The row stays on the
+                parent's detail page; BranchActions exposes the per-child
+                operator controls (Resume / Cancel / Manage →) inline so
+                the operator can act without leaving the parent's surface. */}
             <span className="flex-1 truncate font-mono text-xs text-sw-muted" data-testid="sub-run-branch-label">
               {child.branchNodeId ?? child.parentNodeId ?? "branch"}
             </span>
             <span className="text-xs tabular-nums text-sw-muted shrink-0">{formatCost(child.costUsd)}</span>
+            <BranchActions runId={child.runId} runStatus={child.runStatus} parentRunId={parentRunId} />
           </li>
         ))}
       </ul>

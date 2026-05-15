@@ -885,6 +885,18 @@ export interface IEventReader {
    * Output is the wire shape the `/runs/:id/messages` HTTP route ships.
    */
   getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
+
+  /**
+   * Narrow message stream for a run + every descendant (sub-runs,
+   * sub-sub-runs, …) in `(ordinal, runId)` order, each row stamped
+   * with `originRunId` so the UI can group / label by branch. Drives
+   * the run-detail conversation surface for parents with parallel
+   * sub-runs (P8 of the sub-runs UI plan).
+   */
+  getMessagesNarrowWithDescendants(
+    runId: string,
+    opts?: { sinceOrdinal?: number; limit?: number },
+  ): Array<NarrowMessage & { originRunId: string }>;
   /**
    * Distinct `(runId, threadId)` pairs that have ≥1 persisted message or
    * `llm.start` event under a non-terminal run. Used at daemon boot to
