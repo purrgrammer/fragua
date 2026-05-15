@@ -545,6 +545,12 @@ export interface IEventReader {
   // Per-run aggregates
   getStepAggregates(runId: string): StepAggregateRow[];
   getRunCostTotals(runId: string): RunCostTotalsRow;
+  // Parent + every descendant sub-run, in (ts, run_id, seq) order.
+  // Each sub-run row carries the branch linkage (parentNodeIdForBranch,
+  // parallelIndexForBranch, branchNodeId) so the parent's UI renders
+  // sub-run activity as inline branches without re-querying. D2 of
+  // `docs/proposals/parallel.md`. Backend for `GET /runs/:id/events.json?include=descendants`.
+  getEventsWithDescendants(runId: string, opts?: { sinceTs?: number; limit?: number }): MergedStoredEvent[];
 
   // Parallel sub-runs — see docs/proposals/parallel.md §P1.4 / §P1.5.
   // `getParentCostSnapshot` aggregates the parent's own cost (already

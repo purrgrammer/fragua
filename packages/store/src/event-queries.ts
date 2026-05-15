@@ -131,6 +131,66 @@ export function selectEventsByType(db: Database, runId: string, type: string): E
   return db.query<EventRow, [string, string]>(SELECT_EVENTS_BY_TYPE_SQL).all(runId, type);
 }
 
+/** Event row plus the descendant linkage the merge view stamps onto
+ *  sub-run events so client-side renderers (branch-meta, conversation,
+ *  graph) see them as inline branches. `originRunId` is the run id the
+ *  event was actually written to; `parentBranchNodeId` / `parentBranchIndex`
+ *  identify which branch slot the sub-run occupies under its parent. */
+export interface DescendantEventRow extends EventRow {
+  originRunId: string;
+  parentNodeIdForBranch?: string;
+  parallelIndexForBranch?: number;
+  branchNodeId?: string;
+}
+
+const SELECT_EVENTS_WITH_DESCENDANTS_SQL = `
+  WITH RECURSIVE descendants AS (
+    SELECT run_id,
+           CAST(NULL AS TEXT) AS parent_node_id_for_branch,
+           CAST(NULL AS INTEGER) AS parallel_index_for_branch,
+           CAST(NULL AS TEXT) AS branch_node_id
+      FROM run_state
+     WHERE run_id = ?1
+    UNION ALL
+    SELECT child.run_id,
+           child.parent_node_id AS parent_node_id_for_branch,
+           child.parallel_index AS parallel_index_for_branch,
+           child.subgraph_root_node_id AS branch_node_id
+      FROM run_state child
+      JOIN descendants d ON child.parent_run_id = d.run_id
+  )
+  SELECT e.run_id, e.seq, e.type, e.writer, e.payload, e.ts,
+         e.run_id AS originRunId,
+         d.parent_node_id_for_branch AS parentNodeIdForBranch,
+         d.parallel_index_for_branch AS parallelIndexForBranch,
+         d.branch_node_id AS branchNodeId
+    FROM events e
+    JOIN descendants d ON d.run_id = e.run_id
+   WHERE e.ts >= ?2
+   ORDER BY e.ts ASC, e.run_id ASC, e.seq ASC
+   LIMIT ?3
+`;
+
+/** Merged event stream: parent + every descendant sub-run, in
+ *  (ts, run_id, seq) order. Each row carries `originRunId` plus the
+ *  sub-run's branch linkage so renderers can stamp inline-branch
+ *  parentNodeId/parallelIndex on events that didn't carry them.
+ *
+ *  D2 of `docs/proposals/parallel.md` — the unified view a parent's
+ *  detail page needs so RunConversation, branch-meta, GraphView, and
+ *  CostInspector see sub-run activity as branches of the parent. */
+export function selectEventsWithDescendants(
+  db: Database,
+  parentRunId: string,
+  opts: { sinceTs?: number; limit?: number } = {},
+): DescendantEventRow[] {
+  const sinceTs = opts.sinceTs ?? 0;
+  const limit = opts.limit ?? NO_LIMIT;
+  return db
+    .query<DescendantEventRow, [string, number, number]>(SELECT_EVENTS_WITH_DESCENDANTS_SQL)
+    .all(parentRunId, sinceTs, limit);
+}
+
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events

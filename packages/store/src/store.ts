@@ -49,6 +49,7 @@ import {
   upsertDaemonLock,
 } from "./daemon-queries.ts";
 import {
+  type DescendantEventRow,
   insertEventDaemon,
   insertEventRunEnqueued,
   insertEventWeb,
@@ -56,6 +57,7 @@ import {
   type PendingIntentRow,
   selectEvents,
   selectEventsByType,
+  selectEventsWithDescendants,
   selectFactSideEffectDone,
   selectFactSideEffectIntent,
   selectGlobalEventsAtFloor,
@@ -164,6 +166,7 @@ import {
   type RunMetrics,
   type RunState,
   type Schedule,
+  type MergedStoredEvent,
   type StoredEvent,
   type SweepResult,
   type WorkflowRow,
@@ -596,6 +599,29 @@ export class SqliteStore implements IEventStore {
 
   getEventsByType(runId: string, type: string): StoredEvent[] {
     return selectEventsByType(this.db, runId, type).map(rowToStoredEvent);
+  }
+
+  /**
+   * Merged event stream covering this run AND every descendant sub-run,
+   * in (ts, runId, seq) order. Sub-run events are returned with
+   * `parentNodeIdForBranch` / `parallelIndexForBranch` / `branchNodeId`
+   * stamped on each row so the parent's UI can render them as inline
+   * branches without re-querying. D2 of `docs/proposals/parallel.md`.
+   *
+   * Cost: one recursive CTE join per call; bounded by the descendant
+   * count (typically O(fanout-width)). Use for the run-detail page's
+   * unified view; per-run drill-downs should keep using `getEvents`.
+   */
+  getEventsWithDescendants(runId: string, opts: { sinceTs?: number; limit?: number } = {}): MergedStoredEvent[] {
+    const rows: DescendantEventRow[] = selectEventsWithDescendants(this.db, runId, opts);
+    return rows.map((r) => {
+      const base = rowToStoredEvent(r);
+      const ev: MergedStoredEvent = { ...base, originRunId: r.originRunId };
+      if (r.parentNodeIdForBranch != null) ev.parentNodeIdForBranch = r.parentNodeIdForBranch;
+      if (r.parallelIndexForBranch != null) ev.parallelIndexForBranch = r.parallelIndexForBranch;
+      if (r.branchNodeId != null) ev.branchNodeId = r.branchNodeId;
+      return ev;
+    });
   }
 
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {

@@ -173,10 +173,10 @@ export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSp
       // Write output artifact if requested. Lets cross-run
       // substitution tests assert that `$<nodeId>.output` resolves
       // through the artifact namespace.
-      let outputRef: { runId: string; nodeId: string; iteration: number; key: string } | undefined;
+      let outputRef: ReturnType<typeof ctx.artifacts.put> | undefined;
       const outputContent = opts.outputFn != null ? opts.outputFn(ctx.nodeOutputs) : opts.output;
       if (outputContent != null) {
-        outputRef = ctx.artifacts.put("output", outputContent, "text/plain") as typeof outputRef;
+        outputRef = ctx.artifacts.put("output", outputContent, "text/plain");
       }
 
       const result: handler.HandlerResult = {

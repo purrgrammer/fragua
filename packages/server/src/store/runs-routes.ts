@@ -126,6 +126,16 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     if (store.getState(runId) == null) {
       return c.json({ error: "run not found" }, 404);
     }
+    // `?include=descendants` returns the parent + every sub-run's
+    // events merged into one (ts, runId, seq)-ordered stream, with
+    // each sub-run row carrying its branch linkage. D2 of
+    // `docs/proposals/parallel.md`. The web run-detail page uses this
+    // so the conversation, graph, and cost surfaces stay coherent
+    // when parallel sub-runs are involved. Default (no param) is the
+    // simple per-run query for backward compat and lightweight tools.
+    if (c.req.query("include") === "descendants") {
+      return c.json(store.getEventsWithDescendants(runId));
+    }
     return c.json(store.getEvents(runId));
   });
 

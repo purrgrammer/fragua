@@ -327,6 +327,31 @@ export interface StoredEvent {
 }
 
 /**
+ * StoredEvent enriched with the descendant linkage that the parent-run
+ * merged view stamps onto sub-run events. `originRunId` is which run
+ * actually wrote the event (parent vs sub-run); `parentNodeIdForBranch`
+ * / `parallelIndexForBranch` / `branchNodeId` carry the sub-run's
+ * fan-out slot so client renderers can treat sub-run events as inline
+ * branches without re-querying. D2 of `docs/proposals/parallel.md`.
+ */
+export interface MergedStoredEvent extends StoredEvent {
+  /** The runId that wrote this event. Equal to `runId` for parent
+   *  events; differs for sub-run events. */
+  originRunId: string;
+  /** Component node id on the parent that fanned out into the
+   *  sub-run that produced this event. Undefined on parent-origin
+   *  rows. */
+  parentNodeIdForBranch?: string;
+  /** 0-based branch slot on the parent's fan-out. Undefined on
+   *  parent-origin rows. */
+  parallelIndexForBranch?: number;
+  /** Branch root node id (the sub-run's `subgraph_root_node_id`).
+   *  Operator-facing label for the branch. Undefined on parent-origin
+   *  rows. */
+  branchNodeId?: string;
+}
+
+/**
  * Read shape for a row in the `daemon_events` table. `seq` is the
  * AUTOINCREMENT primary key — disjoint from any per-run `seq` space.
  * `runId` is set for run-scoped daemon events; global lifecycle / sweep
@@ -774,6 +799,17 @@ export interface IEventReader {
    * `docs/proposals/sub-agent-crash-resilience.md`).
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
+  /**
+   * Merged event stream for a parent run AND every descendant sub-run,
+   * in `(ts, run_id, seq)` order. Each sub-run row carries the branch
+   * linkage (`parentNodeIdForBranch`, `parallelIndexForBranch`,
+   * `branchNodeId`) so a UI that previously read inline-branch
+   * `fact.node_started`/`fact.node_completed` events from the parent's
+   * log stays coherent when those events live on sub-run logs. D2 of
+   * `docs/proposals/parallel.md`. Top-level runs without descendants
+   * return their own events with `originRunId = runId`.
+   */
+  getEventsWithDescendants(runId: string, opts?: { sinceTs?: number; limit?: number }): MergedStoredEvent[];
   /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
