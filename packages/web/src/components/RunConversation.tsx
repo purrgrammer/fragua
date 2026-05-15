@@ -555,10 +555,15 @@ function BranchTabsSection({
           const state = stateByNodeId.get(branchId);
           const showStreamHere = streaming?.nodeId === branchId;
           const messageCount = section?.rows.length ?? 0;
-          // Open by default for branches with active work — the in-flight
-          // branch (running or streaming). Everything else stays
-          // collapsed; the trigger row tells you what's there.
-          const defaultOpen = state?.state === "running" || showStreamHere;
+          // Match the sub-agent toolCall card: every branch card defaults to
+          // COLLAPSED, even while running or streaming. Running branches pile
+          // transcripts into the fan-out group otherwise, making the structure
+          // unreadable. The header (status dot + nodeId + message count) is
+          // enough; the operator clicks to expand. Per-card user-expanded
+          // state survives streaming deltas because Radix's uncontrolled
+          // Collapsible is keyed by the stable `branchId` — same trick as
+          // the sub-agent card.
+          const defaultOpen = false;
           return (
             <BranchCard
               key={branchId}
