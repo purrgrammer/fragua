@@ -27,7 +27,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     //   ?order=oldest                 — surface longest-waiting first (Inbox).
     //   ?limit=N                      — cap the result, clamped to [1, 200].
     //   ?includeChildAttention=true   — widen status filter to "self OR
-    //                                   immediate child matches". Used by
+    //                                   descendant matches". Used by
     //                                   the Inbox so a parent whose child
     //                                   paused on budget still surfaces.
     //                                   No-op without ?status. Sub-runs
@@ -188,9 +188,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
         // already carry one (some sub-run steps may come from a
         // nested toolCall — preserve those).
         return steps.map((s) =>
-          s.parentNodeId == null
-            ? { ...s, parentNodeId: meta.parentNodeId, parallelIndex: meta.parallelIndex }
-            : s,
+          s.parentNodeId == null ? { ...s, parentNodeId: meta.parentNodeId, parallelIndex: meta.parallelIndex } : s,
         );
       })
       .sort(
@@ -241,14 +239,10 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // drives the conversation surface for parents with parallel
     // sub-runs. The per-node filter is incompatible with the merge
     // (different runs have independent node ids; merging would mix
-    // unrelated streams), so we ignore `?nodeId` when descendants
-    // is set.
+    // unrelated streams), and per-run ordinals are independent too,
+    // so descendants mode ignores both `?nodeId` and `?sinceOrdinal`.
     if (includeParam === "descendants") {
       const opts: Parameters<typeof store.getMessagesNarrowWithDescendants>[1] = {};
-      if (sinceParam) {
-        const n = Number(sinceParam);
-        if (Number.isFinite(n) && n >= 0) opts.sinceOrdinal = Math.floor(n);
-      }
       if (limitParam) {
         const n = Number(limitParam);
         if (Number.isFinite(n) && n > 0) opts.limit = Math.floor(n);

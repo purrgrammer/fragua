@@ -60,18 +60,39 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
 }
 
 /**
- * Cancel any paused_* / quarantined run with an unapplied
- * `intent.cancel_requested`. Emits `fact.run_cancelled { intentSeq }`.
+ * Cancel any paused_* / quarantined / running_children run with an
+ * unapplied `intent.cancel_requested`. Emits `fact.run_cancelled
+ * { intentSeq }`. Cascades to active children for `running_children`
+ * parents — without that, the parent's cancel intent sits unapplied
+ * because no executor dispatch ever picks up a parent in that state.
  */
 function wakeCancel(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused", "paused_hitl", "paused_auto", "quarantined"],
+    // `queued` covers sub-runs whose parent already cancelled (parent
+    // is no longer `running_children` so the claim picker can't see
+    // them — they'd sit queued forever otherwise). `running_children`
+    // covers parents themselves whose cancel intent was appended
+    // while their handler had already exited at fact.fanout_started.
+    statuses: ["paused", "paused_hitl", "paused_auto", "quarantined", "running_children", "queued"],
   });
   for (const row of candidates) {
     const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
     if (cancel == null) continue;
     try {
+      // For running_children parents, cascade the cancel to every
+      // active child BEFORE marking the parent cancelled so the
+      // children pick it up on the next wake. The parent's own
+      // fact.run_cancelled lands in the same call; children
+      // transition independently via their own wakeCancel pass.
+      if (row.status === "running_children") {
+        for (const childId of store.activeChildRuns(row.runId)) {
+          store.appendIntent(childId, {
+            type: "intent.cancel_requested",
+            payload: { reason: "parent_cancelled" },
+          });
+        }
+      }
       store.appendFact(row.runId, [{ type: "fact.run_cancelled", payload: { intentSeq: cancel.seq } }], row.version, {
         advanceAppliedTo: cancel.seq,
       });

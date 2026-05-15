@@ -45,10 +45,10 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { BranchActions } from "@/components/BranchActions";
+import { RunStatusBadge } from "@/components/RunStatusBadge";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
-import { RunStatusBadge } from "@/components/RunStatusBadge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { NodeState, RunMessageRow, RunSummary } from "@/lib/api";
 import type { FanInResult } from "@/lib/branch-meta";
@@ -323,7 +323,7 @@ export function RunConversation({
                   >
                     {section.rows.map((row) => (
                       <MessageRow
-                        key={row.ordinal}
+                        key={messageKey(row)}
                         row={row}
                         toolResultsById={toolResultsById}
                         subagentMessagesById={subagentMessagesById}
@@ -402,10 +402,14 @@ function groupByNode(messages: RunMessageRow[]): Section[] {
     if (last && last.nodeId === nodeId) {
       last.rows.push(row);
     } else {
-      out.push({ key: `${nodeId ?? "∅"}-${row.ordinal}`, nodeId, rows: [row] });
+      out.push({ key: `${nodeId ?? "unscoped"}-${messageKey(row)}`, nodeId, rows: [row] });
     }
   }
   return out;
+}
+
+function messageKey(row: RunMessageRow): string {
+  return `${row.originRunId ?? "self"}:${row.ordinal}`;
 }
 
 // ─── Branch-tabs render planning ──────────────────────────────────
@@ -552,7 +556,7 @@ function BranchTabsSection({
         <NodeSection nodeId={parentSection.nodeId} state={parentState} isLive={isLive} isPaused={isPaused}>
           {parentSection.rows.map((row) => (
             <MessageRow
-              key={row.ordinal}
+              key={messageKey(row)}
               row={row}
               toolResultsById={toolResultsById}
               subagentByToolCallId={subagentByToolCallId}
@@ -602,7 +606,7 @@ function BranchTabsSection({
             >
               {section?.rows.map((row) => (
                 <MessageRow
-                  key={row.ordinal}
+                  key={messageKey(row)}
                   row={row}
                   toolResultsById={toolResultsById}
                   subagentByToolCallId={subagentByToolCallId}

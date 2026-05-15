@@ -131,7 +131,7 @@ export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
   /** Exclude sub-runs. Used by top-level `GET /runs`; child lists pass
    *  `parentRunId` instead. */
   topLevelOnly?: boolean;
-  /** Widen the status filter to "self matches OR an immediate child
+  /** Widen the status filter to "self matches OR a descendant
    *  matches". Used by the Inbox so a parent in `running_children`
    *  whose child paused on budget still surfaces as needing attention,
    *  without leaking sub-runs into the list. No-op when `statuses` is
@@ -162,7 +162,7 @@ export interface RunSummaryRow {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
-  // Child-status digest — counts of immediate children grouped by
+  // Child-status digest — counts of descendants grouped by
   // status. Populated for any row that has at least one child row
   // pointing at it via `parent_run_id`; zero/null for top-level rows
   // with no children. The wire-level digest object is assembled by the
@@ -221,16 +221,23 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   const args: (RunStatus | string | number)[] = [];
   if (statuses) {
     if (includeChildAttention === true) {
-      // Widen: self status matches OR any IMMEDIATE child's status
-      // matches. The EXISTS subquery is O(1) per row via
-      // idx_run_state_parent. Used by the Inbox so a parent whose
-      // child paused on budget still appears in the attention list.
+      // Widen: self status matches OR any descendant's status matches.
+      // Used by the Inbox so a parent whose branch (or nested branch)
+      // paused on budget still appears in the attention list.
       const ph = statuses.map(() => "?").join(",");
       clauses.push(
         `(r.status IN (${ph}) OR EXISTS (
-            SELECT 1 FROM run_state c
-             WHERE c.parent_run_id = r.run_id
-               AND c.status IN (${ph})
+            WITH RECURSIVE descendants(run_id, status) AS (
+              SELECT c.run_id, c.status
+                FROM run_state c
+               WHERE c.parent_run_id = r.run_id
+              UNION ALL
+              SELECT c.run_id, c.status
+                FROM run_state c
+                JOIN descendants d ON c.parent_run_id = d.run_id
+            )
+            SELECT 1 FROM descendants
+             WHERE status IN (${ph})
           ))`,
       );
       args.push(...statuses, ...statuses);
@@ -281,22 +288,34 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
        WHERE e.type = 'run.title_generated'
        GROUP BY e.run_id
     ),
+    descendants AS (
+      SELECT s.run_id AS root_run_id,
+             c.run_id,
+             c.status
+        FROM selected s
+        JOIN run_state c ON c.parent_run_id = s.run_id
+      UNION ALL
+      SELECT d.root_run_id,
+             c.run_id,
+             c.status
+        FROM descendants d
+        JOIN run_state c ON c.parent_run_id = d.run_id
+    ),
     child_counts AS (
-      SELECT c.parent_run_id,
+      SELECT root_run_id,
              COUNT(*)                                                  AS childTotal,
-             SUM(CASE WHEN c.status = 'running'          THEN 1 ELSE 0 END) AS childRunning,
-             SUM(CASE WHEN c.status = 'running_children' THEN 1 ELSE 0 END) AS childRunningChildren,
-             SUM(CASE WHEN c.status = 'paused'           THEN 1 ELSE 0 END) AS childPaused,
-             SUM(CASE WHEN c.status = 'paused_hitl'      THEN 1 ELSE 0 END) AS childPausedHitl,
-             SUM(CASE WHEN c.status = 'paused_auto'      THEN 1 ELSE 0 END) AS childPausedAuto,
-             SUM(CASE WHEN c.status = 'queued'           THEN 1 ELSE 0 END) AS childQueued,
-             SUM(CASE WHEN c.status = 'completed'        THEN 1 ELSE 0 END) AS childCompleted,
-             SUM(CASE WHEN c.status = 'cancelled'        THEN 1 ELSE 0 END) AS childCancelled,
-             SUM(CASE WHEN c.status = 'halted'           THEN 1 ELSE 0 END) AS childHalted,
-             SUM(CASE WHEN c.status = 'quarantined'      THEN 1 ELSE 0 END) AS childQuarantined
-        FROM run_state c
-        JOIN selected s ON s.run_id = c.parent_run_id
-       GROUP BY c.parent_run_id
+             SUM(CASE WHEN status = 'running'          THEN 1 ELSE 0 END) AS childRunning,
+             SUM(CASE WHEN status = 'running_children' THEN 1 ELSE 0 END) AS childRunningChildren,
+             SUM(CASE WHEN status = 'paused'           THEN 1 ELSE 0 END) AS childPaused,
+             SUM(CASE WHEN status = 'paused_hitl'      THEN 1 ELSE 0 END) AS childPausedHitl,
+             SUM(CASE WHEN status = 'paused_auto'      THEN 1 ELSE 0 END) AS childPausedAuto,
+             SUM(CASE WHEN status = 'queued'           THEN 1 ELSE 0 END) AS childQueued,
+             SUM(CASE WHEN status = 'completed'        THEN 1 ELSE 0 END) AS childCompleted,
+             SUM(CASE WHEN status = 'cancelled'        THEN 1 ELSE 0 END) AS childCancelled,
+             SUM(CASE WHEN status = 'halted'           THEN 1 ELSE 0 END) AS childHalted,
+             SUM(CASE WHEN status = 'quarantined'      THEN 1 ELSE 0 END) AS childQuarantined
+        FROM descendants
+       GROUP BY root_run_id
     )
     SELECT s.run_id AS runId,
            s.workflow_sha AS workflowSha,
@@ -337,7 +356,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id
       LEFT JOIN latest_title_seq lts ON lts.run_id = s.run_id
       LEFT JOIN events title_event ON title_event.run_id = lts.run_id AND title_event.seq = lts.seq
-      LEFT JOIN child_counts cc ON cc.parent_run_id = s.run_id
+      LEFT JOIN child_counts cc ON cc.root_run_id = s.run_id
      ORDER BY ${order === "oldest" ? "s.enqueued_at ASC" : "s.updated_at DESC"}, s.run_id ASC
   `;
 
@@ -693,7 +712,7 @@ const SELECT_ACTIVE_DESCENDANT_NODES_SQL = `
     FROM descendants d
     JOIN run_state r ON r.run_id = d.run_id
    WHERE r.current_node IS NOT NULL
-     AND r.status NOT IN ('completed','cancelled','halted')
+     AND r.status NOT IN ('completed','cancelled','halted','quarantined')
 `;
 
 /** Walk descendants recursively and return each non-terminal sub-run's
@@ -719,6 +738,15 @@ export interface ChildStatusDigestRow {
 }
 
 const SELECT_CHILD_STATUS_DIGEST_SQL = `
+  WITH RECURSIVE descendants(run_id, status) AS (
+    SELECT run_id, status
+      FROM run_state
+     WHERE parent_run_id = ?
+    UNION ALL
+    SELECT c.run_id, c.status
+      FROM run_state c
+      JOIN descendants d ON c.parent_run_id = d.run_id
+  )
   SELECT COUNT(*)                                                AS total,
          SUM(CASE WHEN status = 'running'          THEN 1 ELSE 0 END) AS running,
          SUM(CASE WHEN status = 'running_children' THEN 1 ELSE 0 END) AS runningChildren,
@@ -730,11 +758,10 @@ const SELECT_CHILD_STATUS_DIGEST_SQL = `
          SUM(CASE WHEN status = 'cancelled'        THEN 1 ELSE 0 END) AS cancelled,
          SUM(CASE WHEN status = 'halted'           THEN 1 ELSE 0 END) AS halted,
          SUM(CASE WHEN status = 'quarantined'      THEN 1 ELSE 0 END) AS quarantined
-    FROM run_state
-   WHERE parent_run_id = ?
+    FROM descendants
 `;
 
-/** Single-row digest of immediate child status counts. Returns null
+/** Single-row digest of descendant status counts. Returns null
  *  when the run has no children — caller treats that as "no digest". */
 export function selectChildStatusDigest(db: Database, parentRunId: string): ChildStatusDigestRow | null {
   const row = db.query<ChildStatusDigestRow, [string]>(SELECT_CHILD_STATUS_DIGEST_SQL).get(parentRunId);

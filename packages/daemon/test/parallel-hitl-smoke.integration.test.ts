@@ -73,11 +73,9 @@ async function tick(
     if (claimed == null) {
       const state = h.store.getState(runId);
       if (state == null) return;
-      const terminal =
-        state.status === "completed" || state.status === "halted" || state.status === "cancelled";
+      const terminal = state.status === "completed" || state.status === "halted" || state.status === "cancelled";
       if (terminal) return;
-      const paused =
-        state.status === "paused" || state.status === "paused_hitl" || state.status === "paused_auto";
+      const paused = state.status === "paused" || state.status === "paused_hitl" || state.status === "paused_auto";
       if (paused && opts.until == null) return;
       continue;
     }
@@ -117,7 +115,11 @@ describe("parallel-hitl-smoke — multi-node branch with HITL + tool", () => {
     // confirm (hexagon) → wait.human auto-resolves.
     // apply (parallelogram) → tool spec auto-resolves; tool_command
     // runs through the in-memory tool registry. No external bash.
-    h.tools.register("__tool__", async () => ({ output: "APPLIED\n", exitCode: 0 }));
+    h.tools.register({
+      name: "__tool__",
+      sideEffect: "none",
+      handler: async () => ({ output: "APPLIED\n", exitCode: 0 }),
+    });
 
     h.store.enqueueRun({ runId: "smk", workflowSha: sha });
     await tick(h, "smk", { until: (s) => s.status === "running_children" || s.status === "completed" });
@@ -146,7 +148,11 @@ describe("parallel-hitl-smoke — multi-node branch with HITL + tool", () => {
     h.dispatcher.register(sha, "read_only", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
     h.dispatcher.register(sha, "analyze", mockCodergenSpec({ costPerCall: 0.02, calls: 1, output: "PLAN" }));
     h.dispatcher.register(sha, "baseline", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
-    h.tools.register("__tool__", async () => ({ output: "", exitCode: 0 }));
+    h.tools.register({
+      name: "__tool__",
+      sideEffect: "none",
+      handler: async () => ({ output: "", exitCode: 0 }),
+    });
 
     h.store.enqueueRun({ runId: "smk2", workflowSha: sha });
     await tick(h, "smk2", { until: (s) => s.status === "running_children" || s.status === "completed" });

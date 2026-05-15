@@ -140,9 +140,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
         // the cached child detail; if the child detail hasn't been
         // fetched yet (cold cache) the invalidation falls through —
         // a subsequent fetch will land it.
-        const childDetail = qc.getQueryData<{ parentRunId?: string }>(
-          queries.runs.detail(evt.runId).queryKey,
-        );
+        const childDetail = qc.getQueryData<{ parentRunId?: string }>(queries.runs.detail(evt.runId).queryKey);
         const parentRunId = childDetail?.parentRunId;
         if (parentRunId != null && parentRunId.length > 0) {
           void qc.invalidateQueries({ queryKey: queries.runs.detail(parentRunId).queryKey });

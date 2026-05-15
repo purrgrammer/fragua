@@ -7,17 +7,17 @@
 // shared with any other place that uses queries.runs.detail.
 
 import { useQueries } from "@tanstack/react-query";
-import * as api from "../lib/api.ts";
+import type * as api from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { HitlChoice } from "./HitlChoice.tsx";
 
 export interface ChildHitlChoicesProps {
   /** Parent's sub-run list. Only `paused_hitl` rows produce a panel. */
-  children: readonly api.RunSummary[] | undefined;
+  runs: readonly api.RunSummary[] | undefined;
 }
 
-export function ChildHitlChoices({ children }: ChildHitlChoicesProps): JSX.Element | null {
-  const pausedHitlChildren = (children ?? []).filter((c) => c.runStatus === "paused_hitl");
+export function ChildHitlChoices({ runs }: ChildHitlChoicesProps): JSX.Element | null {
+  const pausedHitlChildren = (runs ?? []).filter((c) => c.runStatus === "paused_hitl");
   const detailQueries = useQueries({
     queries: pausedHitlChildren.map((c) => queries.runs.detail(c.runId)),
   });
@@ -28,8 +28,7 @@ export function ChildHitlChoices({ children }: ChildHitlChoicesProps): JSX.Eleme
         const detail = detailQueries[idx]?.data as api.RunDetail | undefined;
         const options = detail?.hitlOptions ?? [];
         if (options.length === 0) return null;
-        const label =
-          detail?.hitlLabel ?? `${c.branchNodeId ?? c.parentNodeId ?? "branch"} — awaiting input`;
+        const label = detail?.hitlLabel ?? `${c.branchNodeId ?? c.parentNodeId ?? "branch"} — awaiting input`;
         return <HitlChoice key={c.runId} runId={c.runId} label={label} options={options} />;
       })}
     </div>

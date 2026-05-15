@@ -103,6 +103,9 @@ export interface UseRunLiveOptions {
    * runs that never need a stream — and the connection has to close +
    * reopen once the snapshot settles. */
   terminal?: boolean;
+  /** Changes when descendant sub-runs emit hidden global-feed events that
+   * should refresh the merged parent transcript. */
+  descendantRefreshToken?: string;
 }
 
 /** Event types that imply new rows have landed in the messages table.
@@ -164,6 +167,24 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
       }
     };
   }, [runId, opts.terminal]);
+
+  useEffect(() => {
+    if (!runId || opts.terminal === undefined || !opts.descendantRefreshToken) return;
+    let cancelled = false;
+    getRunMessages(runId, 0, { includeDescendants: true })
+      .then((rows) => {
+        if (cancelled || rows.length === 0) return;
+        lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
+        setMessages(rows);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.warn("[useRunLive] descendant messages fetch failed for", runId, "—", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, opts.terminal, opts.descendantRefreshToken]);
 
   // SSE subscription. URL is null when:
   //   - runId is missing (no run to watch).

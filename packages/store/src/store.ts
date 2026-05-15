@@ -96,8 +96,10 @@ import {
 } from "./provider-credentials-queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
+  type ActiveDescendantNodeRow,
   applyMetricsDelta,
   bumpRunSeq,
+  type ChildStatusDigestRow,
   type CwdSummaryRow,
   claimQueuedRun,
   countQueuedRuns,
@@ -117,8 +119,6 @@ import {
   type RunStateRow,
   type RunSummaryRow,
   type StepAggregateRow,
-  type ActiveDescendantNodeRow,
-  type ChildStatusDigestRow,
   selectActiveChildren,
   selectActiveDescendantNodes,
   selectChildStatusDigest,

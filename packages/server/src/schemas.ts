@@ -39,7 +39,7 @@ const RawRunStatus = Type.Union([
   Type.Literal("quarantined"),
 ]);
 
-/** Counts of immediate sub-runs grouped by their lifecycle status.
+/** Counts of descendant sub-runs grouped by their lifecycle status.
  * Present on a parent's `RunSummary` whenever the parent has at least
  * one child row in `run_state` (whether terminal or in-flight). Absent
  * for top-level runs with no children. Drives badges + Inbox surfacing
@@ -90,7 +90,7 @@ export const RunSummary = Type.Object({
   parentNodeId: Type.Optional(Type.String()),
   parallelIndex: Type.Optional(Type.Integer({ minimum: 0 })),
   branchNodeId: Type.Optional(Type.String()),
-  /** Counts of immediate sub-runs grouped by status. Present only when
+  /** Counts of descendant sub-runs grouped by status. Present only when
    * the row has children. Used by the runs list / Inbox to render
    * "▶3 ⏸1" digest chips without fetching `/runs/:id/children`. */
   childStatusDigest: Type.Optional(ChildStatusDigest),
@@ -171,7 +171,7 @@ export const RunDetail = Type.Object({
       }),
     ),
   ),
-  /** Counts of immediate sub-runs grouped by status. Mirrors the field
+  /** Counts of descendant sub-runs grouped by status. Mirrors the field
    * on `RunSummary`; present whenever the run has at least one child
    * row. The run-detail header uses this to render the branch summary
    * pill ("running · 3 branches: 2✓ 1⏸"). */

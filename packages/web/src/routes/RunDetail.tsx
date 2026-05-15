@@ -14,6 +14,7 @@
 // a run's essentials: status, duration, cost, tokens, current node.
 
 import { useQuery } from "@tanstack/react-query";
+import { useAtomValue } from "jotai";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -54,6 +55,7 @@ import { useBranchMeta } from "../lib/branch-meta.ts";
 import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
+import { feedAtom } from "../lib/globalFeed.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
@@ -76,6 +78,43 @@ const LIVE_STATUSES = new Set<string>(["queued", "running"]);
  * skipped entirely so we don't waste a server connection per historical
  * run view. */
 const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
+const TERMINAL_RUN_STATUSES = new Set<NonNullable<RunSummary["runStatus"]>>(["completed", "cancelled", "halted"]);
+const DESCENDANT_REFRESH_TYPES = new Set<string>([
+  "fact.message_appended",
+  "fact.run_started",
+  "fact.run_completed",
+  "fact.run_paused_hitl",
+  "fact.run_paused",
+  "fact.run_resumed",
+  "fact.run_cancelled",
+  "fact.run_halted",
+  "fact.run_quarantined",
+]);
+
+function aggregateActiveChildMetrics(children: readonly RunSummary[] | undefined): {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+} {
+  const totals = {
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  for (const child of children ?? []) {
+    if (child.runStatus != null && TERMINAL_RUN_STATUSES.has(child.runStatus)) continue;
+    totals.costUsd += child.costUsd;
+    totals.inputTokens += child.inputTokens;
+    totals.outputTokens += child.outputTokens;
+    totals.cacheReadTokens += child.cacheReadTokens ?? 0;
+    totals.cacheWriteTokens += child.cacheWriteTokens ?? 0;
+  }
+  return totals;
+}
 
 function isTabId(x: string | undefined): x is TabId {
   return !!x && (VIEWS as readonly string[]).includes(x);
@@ -116,6 +155,25 @@ export function RunDetail(): JSX.Element {
   // SSE until this lands as a boolean so we don't flash a transient
   // connection during the snapshot's first ~50ms.
   const isTerminal: boolean | undefined = snapshot == null ? undefined : TERMINAL_STATUSES.has(snapshot.status);
+
+  const { data: subRuns } = useQuery({
+    ...queries.runs.children(id),
+    enabled: !!id,
+    refetchInterval: snapshot?.runStatus === "running_children" ? 1_000 : false,
+  });
+  const childRunIds = useMemo(() => new Set((subRuns ?? []).map((r) => r.runId)), [subRuns]);
+  const feedEvents = useAtomValue(feedAtom);
+  const descendantRefreshToken = useMemo(() => {
+    if (childRunIds.size === 0) return "";
+    let token = "";
+    for (const event of feedEvents) {
+      if (!childRunIds.has(event.runId)) continue;
+      if (!DESCENDANT_REFRESH_TYPES.has(event.type)) continue;
+      token = `${event.runId}:${event.seq}`;
+    }
+    return token;
+  }, [feedEvents, childRunIds]);
+
   const {
     messages,
     streaming,
@@ -128,6 +186,7 @@ export function RunDetail(): JSX.Element {
   } = useRunLive(id || null, {
     sinceSeq: snapshot?.lastEventSeq,
     terminal: isTerminal,
+    descendantRefreshToken,
   });
   const isLoading = liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -140,11 +199,6 @@ export function RunDetail(): JSX.Element {
     [snapshot, detailOverlay],
   );
 
-  // Sub-runs for the parent. Used to surface per-branch status pills
-  // and inline operator actions inside RunConversation's branch cards.
-  // Self-empty for runs without sub-runs; cached + invalidated by the
-  // global event stream alongside the parent's snapshot.
-  const { data: subRuns } = useQuery({ ...queries.runs.children(id), enabled: !!id });
   const childRunByBranch = useMemo(() => {
     const map = new Map<string, RunSummary>();
     for (const c of subRuns ?? []) {
@@ -163,9 +217,7 @@ export function RunDetail(): JSX.Element {
     // Without the descendant nodes, the graph stays frozen on
     // `parallel.*` while the lenses are actually running inside child
     // runs.
-    const out = new Set<string>(
-      (detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId),
-    );
+    const out = new Set<string>((detail?.nodes ?? []).filter((n) => n.state === "running").map((n) => n.nodeId));
     for (const active of detail?.effectiveActiveNodes ?? []) {
       out.add(active.nodeId);
     }
@@ -210,7 +262,14 @@ export function RunDetail(): JSX.Element {
 
   return (
     <section className="flex h-full w-full min-w-0 flex-col gap-4">
-      <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
+      <DetailHeader
+        detail={detail ?? null}
+        id={id}
+        isLive={isLive}
+        liveCost={liveCost}
+        runId={id}
+        childRuns={subRuns}
+      />
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && <RunPausedNotice runId={id} />}
       {detail?.runStatus === "paused_hitl" && (
@@ -220,7 +279,7 @@ export function RunDetail(): JSX.Element {
       {/* Sub-run HITL gates surface here so the operator can answer
           without navigating into the child run. One panel per
           paused_hitl child; self-empty when no child is awaiting input. */}
-      <ChildHitlChoices children={subRuns} />
+      <ChildHitlChoices runs={subRuns} />
 
       {/* P5 of docs/proposals/parallel.md: render the parent's
           sub-runs (parallel branches) above the tabs. Self-renders
@@ -320,12 +379,14 @@ const DetailHeader = memo(function DetailHeader({
   isLive,
   liveCost,
   runId,
+  childRuns,
 }: {
   detail: RunDetailT | null;
   id: string;
   isLive: boolean;
   liveCost: CostAggregate;
   runId: string;
+  childRuns?: readonly RunSummary[];
 }): JSX.Element {
   const showLive = isLive && detail?.status === "running";
   const nodes = detail?.nodes ?? [];
@@ -426,7 +487,7 @@ const DetailHeader = memo(function DetailHeader({
           )}
         </div>
       </div>
-      <StatsStrip detail={detail} liveCost={liveCost} />
+      <StatsStrip detail={detail} liveCost={liveCost} childRuns={childRuns} />
     </header>
   );
 });
@@ -438,9 +499,11 @@ const DetailHeader = memo(function DetailHeader({
 export const StatsStrip = memo(function StatsStrip({
   detail,
   liveCost,
+  childRuns,
 }: {
   detail: RunDetailT | null;
   liveCost?: CostAggregate;
+  childRuns?: readonly RunSummary[];
 }): JSX.Element {
   const loading = detail == null;
   const isLiveRun = detail != null && LIVE_STATUSES.has(detail.status);
@@ -461,16 +524,21 @@ export const StatsStrip = memo(function StatsStrip({
   const liveOutputTokens = liveCost?.totalOutputTokens ?? 0;
   const liveCacheReadTokens = liveCost?.totalCacheReadTokens ?? 0;
   const liveCacheWriteTokens = liveCost?.totalCacheWriteTokens ?? 0;
-  const costUsd = (detail?.costUsd ?? 0) + liveCostUsd;
-  const inputTokens = (detail?.inputTokens ?? 0) + liveInputTokens;
-  const outputTokens = (detail?.outputTokens ?? 0) + liveOutputTokens;
+  const activeChildMetrics = useMemo(() => aggregateActiveChildMetrics(childRuns), [childRuns]);
+  const costUsd = (detail?.costUsd ?? 0) + liveCostUsd + activeChildMetrics.costUsd;
+  const inputTokens = (detail?.inputTokens ?? 0) + liveInputTokens + activeChildMetrics.inputTokens;
+  const outputTokens = (detail?.outputTokens ?? 0) + liveOutputTokens + activeChildMetrics.outputTokens;
   // Preserve undefined while the snapshot itself hasn't loaded — the
   // AnimatedNumber fallback ("—") is the right loading sentinel. A
   // loaded snapshot post-rename always carries a number for cacheReadTokens.
   const cacheReadTokens: number | undefined =
-    detail?.cacheReadTokens === undefined ? undefined : detail.cacheReadTokens + liveCacheReadTokens;
+    detail?.cacheReadTokens === undefined
+      ? undefined
+      : detail.cacheReadTokens + liveCacheReadTokens + activeChildMetrics.cacheReadTokens;
   const cacheWriteTokens: number | undefined =
-    detail?.cacheWriteTokens === undefined ? undefined : detail.cacheWriteTokens + liveCacheWriteTokens;
+    detail?.cacheWriteTokens === undefined
+      ? undefined
+      : detail.cacheWriteTokens + liveCacheWriteTokens + activeChildMetrics.cacheWriteTokens;
   const billedTokens = inputTokens + outputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
   // Denominator includes cacheWrite — see lib/format.ts formatCacheHitRate.
   // A warm thread otherwise reads as ~100% on a single-turn re-dispatch.

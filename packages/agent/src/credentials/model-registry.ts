@@ -311,7 +311,10 @@ export class ModelRegistry {
   private ensureFresh(): void {
     if (!this.store) return;
     const rev = this.store.getProviderConfigRevision();
-    if (rev.maxUpdatedAt !== this.lastConfigRevision.maxUpdatedAt || rev.rowCount !== this.lastConfigRevision.rowCount) {
+    if (
+      rev.maxUpdatedAt !== this.lastConfigRevision.maxUpdatedAt ||
+      rev.rowCount !== this.lastConfigRevision.rowCount
+    ) {
       this.loadModels();
     }
   }

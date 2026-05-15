@@ -68,7 +68,9 @@ export function RunStatusBadge({
     (childStatusDigest?.quarantined ?? 0) > 0;
   const effectiveRunStatus =
     childAttention && (runStatus === "running_children" || runStatus === "running")
-      ? ((childStatusDigest?.pausedHitl ?? 0) > 0 ? "paused_hitl" : "paused")
+      ? (childStatusDigest?.pausedHitl ?? 0) > 0
+        ? "paused_hitl"
+        : "paused"
       : runStatus;
   const effectiveStatus = childAttention && (status === "running" || status === "queued") ? "paused" : status;
   const tone =

@@ -254,7 +254,7 @@ describe("listRunSummaryRows", () => {
     store.close();
   });
 
-  test("includeChildAttention widens status filter to surface parents whose children need attention", async () => {
+  test("includeChildAttention widens status filter to surface parents whose descendants need attention", async () => {
     const store = freshStore();
     const sha = await seedWorkflow(store);
     // Two parents: A in running_children with a paused child; B running
@@ -279,17 +279,27 @@ describe("listRunSummaryRows", () => {
       subgraphRootNodeId: "branch_b",
       subgraphTerminalNodeId: "join",
     });
+    store.enqueueRun({
+      runId: "pA_grandchild",
+      workflowSha: sha,
+      parentRunId: "pA_child",
+      parentNodeId: "nested",
+      parallelIndex: 0,
+      subgraphRootNodeId: "nested_branch",
+      subgraphTerminalNodeId: "join",
+    });
     const db = (store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
     db.query("UPDATE run_state SET status = 'running_children' WHERE run_id = ?").run("pA");
     db.query("UPDATE run_state SET status = 'running'          WHERE run_id = ?").run("pB");
-    db.query("UPDATE run_state SET status = 'paused'           WHERE run_id = ?").run("pA_child");
+    db.query("UPDATE run_state SET status = 'running_children' WHERE run_id = ?").run("pA_child");
+    db.query("UPDATE run_state SET status = 'paused'           WHERE run_id = ?").run("pA_grandchild");
     db.query("UPDATE run_state SET status = 'completed'        WHERE run_id = ?").run("pB_child");
 
     // Without the widen, status=paused returns nothing top-level.
     const narrow = store.listRunSummaryRows({ statuses: ["paused"], topLevelOnly: true });
     expect(narrow.map((r) => r.runId)).toEqual([]);
 
-    // With the widen, pA surfaces because its child is paused; pB
+    // With the widen, pA surfaces because its grandchild is paused; pB
     // doesn't (its child is completed, no attention).
     const wide = store.listRunSummaryRows({
       statuses: ["paused"],
@@ -300,7 +310,7 @@ describe("listRunSummaryRows", () => {
     store.close();
   });
 
-  test("parent rows carry a child-status digest aggregated by status", async () => {
+  test("parent rows carry a descendant-status digest aggregated by status", async () => {
     const store = freshStore();
     const sha = await seedWorkflow(store);
     store.enqueueRun({ runId: "p_digest", workflowSha: sha });
@@ -315,24 +325,72 @@ describe("listRunSummaryRows", () => {
         subgraphTerminalNodeId: "join",
       });
     }
+    store.enqueueRun({
+      runId: "p_digest__b__nested",
+      workflowSha: sha,
+      parentRunId: "p_digest__b",
+      parentNodeId: "nested",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_nested",
+      subgraphTerminalNodeId: "join",
+    });
     // Force the three children into distinct statuses via the DB layer
     // (mimicking what the executor would do across the lifecycle).
     const db = (store as unknown as { db: { query: (s: string) => { run: (...a: unknown[]) => void } } }).db;
     db.query("UPDATE run_state SET status = 'completed' WHERE run_id = ?").run("p_digest__a");
     db.query("UPDATE run_state SET status = 'paused'    WHERE run_id = ?").run("p_digest__b");
     db.query("UPDATE run_state SET status = 'running'   WHERE run_id = ?").run("p_digest__c");
+    db.query("UPDATE run_state SET status = 'paused_hitl' WHERE run_id = ?").run("p_digest__b__nested");
 
     const [parent] = store.listRunSummaryRows({ topLevelOnly: true });
     expect(parent!.runId).toBe("p_digest");
-    expect(parent!.childTotal).toBe(3);
+    expect(parent!.childTotal).toBe(4);
     expect(parent!.childCompleted).toBe(1);
     expect(parent!.childPaused).toBe(1);
     expect(parent!.childRunning).toBe(1);
-    expect(parent!.childPausedHitl).toBe(0);
+    expect(parent!.childPausedHitl).toBe(1);
 
-    // Child rows themselves carry no digest (no grandchildren).
+    // Child rows include their own descendants.
     const children = store.listRunSummaryRows({ parentRunId: "p_digest" });
-    for (const c of children) expect(c.childTotal).toBeNull();
+    expect(children.find((c) => c.runId === "p_digest__b")!.childTotal).toBe(1);
+    expect(children.find((c) => c.runId === "p_digest__a")!.childTotal).toBeNull();
+    store.close();
+  });
+});
+
+describe("getMessagesNarrowWithDescendants", () => {
+  test("orders rows by append event time rather than per-run ordinal", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "msg_parent", workflowSha: sha });
+    store.enqueueRun({
+      runId: "msg_child",
+      workflowSha: sha,
+      parentRunId: "msg_parent",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch",
+      subgraphTerminalNodeId: "join",
+    });
+
+    store.appendMessage("msg_parent", {
+      content: { role: "user", content: [{ type: "text", text: "parent one" }], timestamp: 1 },
+      nodeId: "fanout",
+      iteration: 0,
+    });
+    store.appendMessage("msg_parent", {
+      content: { role: "user", content: [{ type: "text", text: "parent two" }], timestamp: 2 },
+      nodeId: "fanout",
+      iteration: 0,
+    });
+    store.appendMessage("msg_child", {
+      content: { role: "user", content: [{ type: "text", text: "child one" }], timestamp: 3 },
+      nodeId: "branch",
+      iteration: 0,
+    });
+
+    const rows = store.getMessagesNarrowWithDescendants("msg_parent");
+    expect(rows.map((r) => `${r.originRunId}:${r.ordinal}`)).toEqual(["msg_parent:1", "msg_parent:2", "msg_child:1"]);
     store.close();
   });
 });

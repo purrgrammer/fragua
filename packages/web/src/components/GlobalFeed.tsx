@@ -160,6 +160,7 @@ const HIDDEN_FEED_TYPES: ReadonlySet<string> = new Set([
   "fact.fanout_started",
   "fact.fanout_completed",
   "fact.subrun_completed",
+  "fact.message_appended",
 ]);
 
 /** True for events that flow through `FEED_EVENT_KINDS` (so the server

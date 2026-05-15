@@ -966,8 +966,8 @@ export interface IEventReader {
   activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[];
 
   /**
-   * Counts of immediate sub-runs grouped by status. Returns null when
-   * the run has no children. Drives `RunSummary.childStatusDigest` and
+   * Counts of descendant sub-runs grouped by status. Returns null when
+   * the run has no descendants. Drives `RunSummary.childStatusDigest` and
    * the parent's `RunDetail` header chips.
    */
   childStatusDigest(parentRunId: string): ChildStatusDigestRow | null;

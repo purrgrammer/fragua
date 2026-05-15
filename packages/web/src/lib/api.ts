@@ -86,13 +86,13 @@ export interface RunSummary {
   parentNodeId?: string;
   parallelIndex?: number;
   branchNodeId?: string;
-  /** Counts of immediate sub-runs grouped by status. Present only on
+  /** Counts of descendant sub-runs grouped by status. Present only on
    * parents with at least one child row. Drives the runs-list /
    * Inbox / detail-header digest chips. */
   childStatusDigest?: ChildStatusDigest;
 }
 
-/** Status counts of a parent's immediate sub-runs. Server-side
+/** Status counts of a parent's descendant sub-runs. Server-side
  * aggregate; renders as a compact chip ("▶3 ⏸1") in lists + detail. */
 export interface ChildStatusDigest {
   total: number;
@@ -190,7 +190,7 @@ export interface RunDetail {
    * runs with no children or no active descendants. The Graph view
    * unions this set with the run's own running nodes. */
   effectiveActiveNodes?: Array<{ runId: string; nodeId: string; branchNodeId?: string }>;
-  /** Counts of immediate sub-runs grouped by status. Mirrors the
+  /** Counts of descendant sub-runs grouped by status. Mirrors the
    * field on `RunSummary`; drives the run-detail header summary. */
   childStatusDigest?: ChildStatusDigest;
 }
@@ -723,15 +723,16 @@ export async function getRunSteps(id: string): Promise<StepSnapshot[]> {
  * (lossless JSON round-trip). `nodeId` is swarm's projection of which
  * graph node emitted the turn.
  *
- * `runId` is intentionally absent — the URL pins it. `originRunId` is
- * stamped only when the parent fetched with `?include=descendants`
- * and the row came from a sub-run; same-run rows omit it. */
+ * `runId` is intentionally absent — the URL pins it for single-run
+ * reads. `originRunId` is stamped when the parent fetched with
+ * `?include=descendants`, including same-run rows, so `(originRunId,
+ * ordinal)` is a stable identity. */
 export interface RunMessageRow {
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
-  /** Set only on rows that came from a sub-run when the parent's
-   * messages were fetched with `includeDescendants: true`. Lets
+  /** Set when the parent's messages were fetched with
+   * `includeDescendants: true`. Lets
    * RunConversation route each row into its branch's section
    * regardless of the row's nodeId. */
   originRunId?: string;

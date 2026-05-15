@@ -12,7 +12,7 @@
 // settled.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { cancelRun, resumeRun, type RunSummary } from "../lib/api.ts";
+import { cancelRun, type RunSummary, resumeRun } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { Button } from "./ui/button.tsx";
 
@@ -48,11 +48,7 @@ export function BranchActions({ runId, runStatus, parentRunId }: BranchActionsPr
   if (!isOperatorActionable(runStatus)) return null;
   const busy = resume.isPending || cancel.isPending;
   return (
-    <div
-      data-testid={`branch-actions-${runId}`}
-      data-run-status={runStatus}
-      className="inline-flex items-center gap-1"
-    >
+    <div data-testid={`branch-actions-${runId}`} data-run-status={runStatus} className="inline-flex items-center gap-1">
       <Button
         size="sm"
         variant="ghost"
