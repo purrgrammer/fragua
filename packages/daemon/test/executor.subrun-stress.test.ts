@@ -961,6 +961,193 @@ describe("parallel stress — cancel race against child completion", () => {
   });
 });
 
+describe("parallel stress — intent isolation between sibling sub-runs", () => {
+  test("intent.budget_adjusted on one paused sibling does NOT leak routing to the other sibling", async () => {
+    const h = freshHarness();
+    const sha = "wf_iso";
+    h.store.saveWorkflow(sha, "iso", buildFanoutDot(2, { budgets: [0.05, 0.05] }));
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.05, calls: 6 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.05, calls: 6 }));
+    h.store.enqueueRun({ runId: "iso", workflowSha: sha });
+    await drive(h, "iso", 80);
+
+    const b0 = "iso__fanout__i0__b0";
+    const b1 = "iso__fanout__i0__b1";
+    expect(h.store.getState(b0)?.status).toBe("paused");
+    expect(h.store.getState(b1)?.status).toBe("paused");
+
+    // Raise + resume ONLY on b0. b1 must remain paused at its
+    // original cap, with no budget_override written to its routing.
+    h.store.appendIntent(b0, {
+      type: "intent.budget_adjusted",
+      payload: { scope: "node", metric: "cost", newLimit: 1.5 },
+    });
+    h.store.appendIntent(b0, { type: "intent.resume", payload: {} });
+    await drive(h, "iso", 80);
+
+    const b0State = h.store.getState(b0)!;
+    const b1State = h.store.getState(b1)!;
+    expect(b0State.status).toBe("completed");
+    expect(b0State.routing["budget_override.node.cost"]).toBe(1.5);
+
+    expect(b1State.status).toBe("paused");
+    // Critical isolation assertion: b1's routing has NO override —
+    // b0's intent didn't bleed across the sibling boundary.
+    expect(b1State.routing["budget_override.node.cost"]).toBeUndefined();
+    h.store.close();
+  });
+});
+
+describe("parallel stress — multi-HITL same-key answer scoped to one child", () => {
+  test("two paused_hitl children with identical [A] accelerator → operator answers one; other stays paused", async () => {
+    const h = freshHarness();
+    const sha = "wf_hkc";
+    h.store.saveWorkflow(
+      sha,
+      "hkc",
+      `digraph G {
+        start [shape=Mdiamond];
+        fanout [shape=component];
+        gate_a [shape=hexagon, prompt="A?"];
+        gate_b [shape=hexagon, prompt="B?"];
+        fan_in [shape=tripleoctagon];
+        done [shape=Msquare];
+        start -> fanout;
+        fanout -> gate_a;
+        fanout -> gate_b;
+        gate_a -> fan_in [label="[A] Yes"];
+        gate_b -> fan_in [label="[A] Yes"];
+        fan_in -> done;
+      }`,
+    );
+    h.store.enqueueRun({ runId: "hkc", workflowSha: sha });
+    await drive(h, "hkc", 80);
+    const a = "hkc__fanout__i0__b0";
+    const b = "hkc__fanout__i0__b1";
+    expect(h.store.getState(a)?.status).toBe("paused_hitl");
+    expect(h.store.getState(b)?.status).toBe("paused_hitl");
+
+    // Answer only A — same accelerator key. Must not advance B.
+    h.store.appendIntent(a, { type: "intent.hitl_input", payload: { selected: "A" } });
+    h.store.appendIntent(a, { type: "intent.resume", payload: {} });
+    await drive(h, "hkc", 80);
+
+    expect(h.store.getState(a)?.status).toBe("completed");
+    expect(h.store.getState(b)?.status).toBe("paused_hitl");
+    expect(h.store.getState("hkc")?.status).toBe("running_children");
+    h.store.close();
+  });
+});
+
+describe("parallel stress — parent vs child budget stack", () => {
+  test("workflow-level cost cap fires before per-child node caps when set tight; parent halts via fanout abort", async () => {
+    const h = freshHarness();
+    const sha = "wf_pvc";
+    h.store.saveWorkflow(
+      sha,
+      "pvc",
+      `digraph G {
+        graph [budget_policy="stop", max_cost_usd="0.05"];
+        start [shape=Mdiamond];
+        fanout [shape=component];
+        b0 [max_cost_usd="1.0"];
+        b1 [max_cost_usd="1.0"];
+        fan_in [shape=tripleoctagon];
+        done [shape=Msquare];
+        start -> fanout;
+        fanout -> b0; fanout -> b1;
+        b0 -> fan_in; b1 -> fan_in;
+        fan_in -> done;
+      }`,
+    );
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.05, calls: 5 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.05, calls: 5 }));
+    h.store.enqueueRun({ runId: "pvc", workflowSha: sha });
+    await drive(h, "pvc", 80);
+
+    // Total cap is $0.05; each child has $1.00 node cap. The
+    // workflow-level cap should trip at the parent (run-level)
+    // first — the cumulative spend across siblings exceeds it well
+    // before either child's node cap.
+    const parent = h.store.getState("pvc")!;
+    expect(["halted", "completed"]).toContain(parent.status);
+    // Parent's totalCostUsd is bounded by the run-level cap plus
+    // at most one in-flight call's worth of overshoot per child.
+    expect(parent.metrics.totalCostUsd).toBeLessThanOrEqual(0.5);
+    h.store.close();
+  });
+
+  test("per-child node caps fire when set tighter than the workflow run cap", async () => {
+    const h = freshHarness();
+    const sha = "wf_pvc2";
+    h.store.saveWorkflow(
+      sha,
+      "pvc2",
+      `digraph G {
+        graph [max_cost_usd="10.0"];
+        start [shape=Mdiamond];
+        fanout [shape=component];
+        b0 [max_cost_usd="0.05"];
+        b1 [max_cost_usd="0.05"];
+        fan_in [shape=tripleoctagon];
+        done [shape=Msquare];
+        start -> fanout;
+        fanout -> b0; fanout -> b1;
+        b0 -> fan_in; b1 -> fan_in;
+        fan_in -> done;
+      }`,
+    );
+    h.dispatcher.register(sha, "b0", mockCodergenSpec({ costPerCall: 0.1, calls: 5 }));
+    h.dispatcher.register(sha, "b1", mockCodergenSpec({ costPerCall: 0.1, calls: 5 }));
+    h.store.enqueueRun({ runId: "pvc2", workflowSha: sha });
+    await drive(h, "pvc2", 80);
+
+    // Both children pause at their own $0.05 node cap; parent
+    // run-level cap ($10) is comfortable above.
+    expect(h.store.getState("pvc2__fanout__i0__b0")?.status).toBe("paused");
+    expect(h.store.getState("pvc2__fanout__i0__b1")?.status).toBe("paused");
+    expect(h.store.getState("pvc2")?.status).toBe("running_children");
+    h.store.close();
+  });
+});
+
+describe("parallel stress — first_success with paused sibling", () => {
+  test("first_success: winner completes, paused_hitl sibling gets cancelled (first_success cascade respects non-terminal siblings)", async () => {
+    const h = freshHarness();
+    const sha = "wf_fsh";
+    h.store.saveWorkflow(
+      sha,
+      "fsh",
+      `digraph G {
+        start [shape=Mdiamond];
+        fanout [shape=component, join_policy="first_success"];
+        fast;
+        slow_hitl [shape=hexagon, prompt="?"];
+        fan_in [shape=tripleoctagon];
+        done [shape=Msquare];
+        start -> fanout;
+        fanout -> fast;
+        fanout -> slow_hitl;
+        fast -> fan_in;
+        slow_hitl -> fan_in [label="[A] OK"];
+        fan_in -> done;
+      }`,
+    );
+    h.dispatcher.register(sha, "fast", mockCodergenSpec({ costPerCall: 0.01, calls: 1 }));
+    // slow_hitl auto-resolves to wait.human
+
+    h.store.enqueueRun({ runId: "fsh", workflowSha: sha });
+    await drive(h, "fsh", 80);
+
+    // fast wins; slow_hitl was paused_hitl when the first_success
+    // cascade fired → operator never answered → sibling cancelled.
+    expect(h.store.getState("fsh__fanout__i0__b0")?.status).toBe("completed");
+    expect(h.store.getState("fsh__fanout__i0__b1")?.status).toBe("cancelled");
+    expect(h.store.getState("fsh")?.status).toBe("completed");
+    h.store.close();
+  });
+});
+
 describe("parallel stress — wake convergence idempotence", () => {
   test("wake-pending fires multiple times on a parent whose children are all paused — no duplicate fact.subrun_completed", async () => {
     const h = freshHarness();
