@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { SqliteStore } from "@swarm/store";
 import {
+  buildModelEntry,
   buildProviderEntry,
   type CustomProviderAnswers,
   inferModelDefaults,
@@ -169,23 +170,13 @@ describe("mergeProviderEntry", () => {
   const existing: ProviderEntry = {
     baseUrl: "http://localhost:11434/v1",
     api: "openai_completions",
-    models: [
-      {
-        id: "llama3.1:8b",
-        name: "llama3.1:8b",
-        api: "openai_completions",
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-      },
-    ],
+    models: [buildModelEntry({ id: "llama3.1:8b", api: "openai_completions" })],
   };
 
   const newEntry: ProviderEntry = {
     baseUrl: "http://localhost:11434/v1",
     api: "openai_completions",
-    models: [
-      { id: "mistral:7b", name: "mistral:7b", api: "openai_completions", contextWindow: 32_768, maxTokens: 8_192 },
-    ],
+    models: [buildModelEntry({ id: "mistral:7b", api: "openai_completions" })],
   };
 
   test("overwrite=true replaces provider entirely", () => {
@@ -206,13 +197,13 @@ describe("mergeProviderEntry", () => {
     const updated: ProviderEntry = {
       ...newEntry,
       models: [
-        {
+        buildModelEntry({
           id: "llama3.1:8b",
-          name: "llama3.1 updated",
           api: "openai_completions",
+          name: "llama3.1 updated",
           contextWindow: 200_000,
           maxTokens: 16_384,
-        },
+        }),
       ],
     };
     const result = mergeProviderEntry(existing, updated, false);
@@ -225,6 +216,27 @@ describe("mergeProviderEntry", () => {
     const snapshot = JSON.stringify(existing);
     mergeProviderEntry(existing, newEntry, false);
     expect(JSON.stringify(existing)).toBe(snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildModelEntry (flag overrides)
+// ---------------------------------------------------------------------------
+describe("buildModelEntry (flag overrides)", () => {
+  test("flag-set fields override the inferModelDefaults heuristic", () => {
+    const m = buildModelEntry({ id: "llama3.1:8b", contextWindow: 50 });
+    // override wins over the llama3 heuristic (128_000)
+    expect(m.contextWindow).toBe(50);
+    // maxTokens un-overridden → inherits the heuristic (8_192)
+    expect(m.maxTokens).toBe(8_192);
+  });
+
+  test("field-zero defaults fill in when no overrides supplied", () => {
+    const m = buildModelEntry({ id: "some-model" });
+    expect(m.reasoning).toBe(false);
+    expect(m.input).toEqual(["text"]);
+    expect(m.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(m.name).toBe("some-model");
   });
 });
 

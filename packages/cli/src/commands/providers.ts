@@ -6,7 +6,13 @@
 // `provider_config` respectively. Each command opens the global store
 // briefly and closes it before returning.
 
-export { providersAddCustomCommand } from "./providers-custom.ts";
+export {
+  providersAddCustomCommand,
+  providersAddModelCommand,
+  providersEditModelCommand,
+  providersLsModelsCommand,
+  providersRmModelCommand,
+} from "./providers-custom.ts";
 
 import type { OAuthLoginCallbacks } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
@@ -31,6 +37,10 @@ export function providersHelpCommand(): number {
   console.log(`  ${chalk.cyan("test <provider> [model]")}  Stream a 1-token call to verify the setup`);
   console.log(`  ${chalk.cyan("login [provider]")}         Run the OAuth flow for a subscription-based provider`);
   console.log(`  ${chalk.cyan("logout <provider>")}        Clear stored OAuth tokens`);
+  console.log(`  ${chalk.cyan("ls-models <provider>")}     List the models declared under a custom provider`);
+  console.log(`  ${chalk.cyan("add-model <provider> <id>")} Append one model entry to a custom provider's models[]`);
+  console.log(`  ${chalk.cyan("rm-model <provider> <id>")}  Remove one model entry from a custom provider`);
+  console.log(`  ${chalk.cyan("edit-model <provider> <id>")} Update one or more fields on an existing model entry`);
   console.log();
   console.log(chalk.dim("Credentials live in ~/.swarm/swarm.db (provider_credentials table)."));
   console.log(chalk.dim("Custom providers + model overrides live in ~/.swarm/swarm.db (provider_config table)."));
