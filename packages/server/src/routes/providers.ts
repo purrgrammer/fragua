@@ -8,13 +8,14 @@
 //
 // The web UI uses these to render the Providers page and the per-
 // provider credential form. AuthStorage is the source of truth for
-// credentials; ModelRegistry is the source of truth for models.
+// credentials (backed by the global store's `provider_credentials`
+// table); ModelRegistry is the source of truth for models.
 //
-// Security rules (see SECURITY section below):
-//   - NEVER return the `key` field of an ApiKeyCredential.
-//   - Writes to `/credentials` with kind="literal" are refused when the
-//     Host header isn't localhost — forces remote clients onto env or
-//     shell forms, so the key doesn't travel over the wire.
+// Security rules:
+//   - NEVER return the stored `key` field of an ApiKeyCredential.
+//   - `key` is now stored verbatim in the global DB (no !cmd / env-var
+//     indirection). Transport-layer protection (TLS / loopback-only
+//     bind) is the deployment's responsibility on writes.
 
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@swarm/agent";
@@ -24,10 +25,6 @@ import { Hono } from "hono";
 export interface ProvidersRouteOptions {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
-  /** When false (default: infer from Host header per-request), writes
-   * with kind="literal" are refused. Tests pass `true` to skip the
-   * check; production wiring just lets the per-request check run. */
-  allowLiteralWrites?: boolean;
 }
 
 interface ProviderSummary {
@@ -35,11 +32,14 @@ interface ProviderSummary {
   model_count: number;
   credentialed: boolean;
   /** Describes *where* the credential came from — matches
-   * `AuthStorage.describeAuthSource`. Never includes the key itself. */
+   * `AuthStorage.describeAuthSource`. One of `"stored api_key"`,
+   * `"stored oauth"`, `"models.json custom provider"`, or `null`.
+   * Never includes the key itself. */
   auth_source: string | null;
-  /** `api_key` | `oauth` when stored in auth.json, else `null`. Env-sourced
-   * or fallback credentials report `null` here — they're "credentialed"
-   * from swarm's perspective but there's no entry to `rm`. */
+  /** `api_key` | `oauth` when stored in `provider_credentials`, else
+   * `null`. Fallback (custom-provider models.json) credentials report
+   * `null` here — they're "credentialed" from swarm's perspective but
+   * there's no row to `rm`. */
   auth_kind: "api_key" | "oauth" | null;
   /** Surface OAuth-login availability so the UI can show a "Sign in"
    * affordance only for providers that actually support it. */
@@ -60,14 +60,6 @@ function summarize(name: string, model_count: number, auth: AuthStorage, oauthId
     oauth_available: oauthIds.has(name),
     default_model: (defaultModelPerProvider as Record<string, string>)[name] ?? null,
   };
-}
-
-function hostIsLocal(hostHeader: string | undefined): boolean {
-  if (!hostHeader) return false;
-  // Host header can be "host" or "host:port". Strip the port.
-  const host = hostHeader.split(":")[0]?.toLowerCase();
-  if (!host) return false;
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
 export function providersRoutes(opts: ProvidersRouteOptions): Hono {
@@ -172,45 +164,13 @@ export function providersRoutes(opts: ProvidersRouteOptions): Hono {
 
   app.post("/providers/:name/credentials", async (c) => {
     const name = c.req.param("name");
-    const body = (await c.req.json().catch(() => null)) as { kind: "literal" | "env" | "shell"; value: string } | null;
-    if (!body || typeof body.value !== "string" || body.value.length === 0) {
-      return c.json({ error: "bad_request", detail: "body must be { kind, value }" }, 400);
+    const body = (await c.req.json().catch(() => null)) as { key?: unknown } | null;
+    if (!body || typeof body.key !== "string" || body.key.length === 0) {
+      return c.json({ error: "bad_request", detail: "body must be { key: string }" }, 400);
     }
-
-    // SECURITY: literal writes must come from localhost unless the
-    // caller explicitly opted in (tests). Prevents a shared-host
-    // deployment from accepting raw keys over the wire.
-    if (body.kind === "literal" && opts.allowLiteralWrites !== true) {
-      if (!hostIsLocal(c.req.header("host"))) {
-        return c.json(
-          {
-            error: "literal_over_network",
-            detail:
-              'kind="literal" stores the key verbatim and is refused over non-localhost connections. Use kind="env" (env var name) or kind="shell" (! command) instead.',
-          },
-          403,
-        );
-      }
-    }
-
-    // Normalize the stored `key` field so resolve-config-value picks the
-    // right strategy at read time:
-    //   literal → as-typed
-    //   env     → bare variable name (AuthStorage resolves it at read)
-    //   shell   → "!cmd" (auto-prefixed)
-    let key: string;
-    if (body.kind === "literal") {
-      key = body.value;
-    } else if (body.kind === "env") {
-      key = body.value;
-    } else if (body.kind === "shell") {
-      const trimmed = body.value.trim();
-      key = trimmed.startsWith("!") ? trimmed : `!${trimmed}`;
-    } else {
-      return c.json({ error: "bad_request", detail: `unknown kind: ${(body as { kind?: unknown }).kind}` }, 400);
-    }
-
-    authStorage.set(name, { type: "api_key", key });
+    // `key` is stored verbatim. No !cmd / env-var indirection — the
+    // credentials-in-the-store proposal cut both from the main path.
+    authStorage.set(name, { type: "api_key", key: body.key });
     return c.json({ ok: true });
   });
 

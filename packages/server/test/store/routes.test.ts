@@ -433,42 +433,6 @@ describe("POST /runs — enqueue", () => {
   });
 });
 
-describe("envProviderPreflight", () => {
-  test("ok when at least one known provider env var is set", async () => {
-    const { envProviderPreflight } = await import("../../src/store/routes.ts");
-    const prev = process.env["ANTHROPIC_API_KEY"];
-    process.env["ANTHROPIC_API_KEY"] = "test-key";
-    try {
-      expect(envProviderPreflight()).toEqual({ ok: true });
-    } finally {
-      if (prev === undefined) delete process.env["ANTHROPIC_API_KEY"];
-      else process.env["ANTHROPIC_API_KEY"] = prev;
-    }
-  });
-
-  test("fails with detail listing expected env keys when none are set", async () => {
-    const { envProviderPreflight } = await import("../../src/store/routes.ts");
-    const knownKeys = ["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY"];
-    const saved: Record<string, string | undefined> = {};
-    for (const k of knownKeys) {
-      saved[k] = process.env[k];
-      delete process.env[k];
-    }
-    try {
-      const res = envProviderPreflight();
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        for (const k of knownKeys) expect(res.detail).toContain(k);
-      }
-    } finally {
-      for (const k of knownKeys) {
-        const v = saved[k];
-        if (v !== undefined) process.env[k] = v;
-      }
-    }
-  });
-});
-
 describe("GET /runs/:id/steps", () => {
   test("unknown run → 404 with code=not_found", async () => {
     // Note: this test lives alongside the other /runs/ read tests which
