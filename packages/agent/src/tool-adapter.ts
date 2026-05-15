@@ -14,6 +14,9 @@
 //   - `content[]`: when a swarm tool returns rich blocks (image read),
 //     we forward them verbatim. Otherwise we wrap the truncated
 //     `text` in a single TextContent block, preserving prior behaviour.
+//   - `terminate`: a swarm tool can hint the agent loop to stop after
+//     the current batch (the `abort` tool sets it); forwarded onto
+//     pi-agent-core's `AgentToolResult.terminate`.
 
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
@@ -116,6 +119,7 @@ export function toAgentTool(swarmTool: Tool, env: ExecutionEnvironment, swarmCon
           original_length: built.originalLength,
           ...(data?.full_output_path ? { full_output_path: data.full_output_path } : {}),
         },
+        ...(result.terminate ? { terminate: true } : {}),
       };
     },
   };

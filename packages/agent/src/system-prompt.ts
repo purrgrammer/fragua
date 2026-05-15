@@ -153,27 +153,6 @@ export interface BuildSystemPromptInput {
   runEnv?: RunEnvironment | undefined;
 }
 
-/** The `<protocol>` block — the universal contract every codergen call
- * sees. Today it teaches a single emit marker, `<abort>reason</abort>`.
- * The text is a constant so it composes into the cache key without
- * variation per node, per run, or per provider. Workflow authors do not
- * restate this contract in node prompts. */
-const PROTOCOL_BLOCK = [
-  "<protocol>",
-  "If you cannot proceed (missing target, contradictory constraints, external blocker),",
-  "end your final message with `<abort>reason</abort>` as the entire last non-empty line —",
-  "no prose before `<abort>` on the line, nothing after `</abort>` on the message. The",
-  "reason is one short sentence; it is surfaced as the run's failure reason.",
-  "Otherwise just produce your output.",
-  "</protocol>",
-].join("\n");
-
-/** Returned for parity with `renderRunEnvironment` — pure string, no
- * dependencies, suitable for assertion in tests. */
-export function renderProtocol(): string {
-  return PROTOCOL_BLOCK;
-}
-
 /** Inputs for the framework-blocks-only assembly (everything except the
  *  persona). Shared between the full `buildSystemPrompt` and the
  *  sub-agent assembly in `materialiseForChild`. */
@@ -182,12 +161,6 @@ export interface BuildFrameworkBlocksInput {
   skillsCatalog?: string;
   agentsCatalog?: string;
   runEnv?: RunEnvironment | undefined;
-  /** Whether to include the `<protocol>` block. Defaults to true.
-   *  Sub-agents pass `false` — they're tool invocations, not workflow
-   *  nodes, so the abort emit contract is meaningless (a sub-agent
-   *  returning `<abort>…</abort>` just shows up as toolResult text on
-   *  the parent's stream — it doesn't halt anything). */
-  includeProtocol?: boolean;
 }
 
 /** Assemble everything that frames a persona — env / protocol / agents
@@ -201,22 +174,17 @@ export function buildFrameworkBlocks({
   skillsCatalog,
   agentsCatalog,
   runEnv,
-  includeProtocol = true,
 }: BuildFrameworkBlocksInput): string {
   const skillsBlock = skillsCatalog ?? "";
   const agentsBlock = agentsCatalog ?? "";
   // Prepend order (top → bottom of the assembled framework block):
   //   <environment>   — where the agent is running
-  //   <protocol>      — the abort emit contract; constant per call (nodes only)
   //   agents catalog  — named sub-agents the LLM can spawn (when `agent` tool present)
   //   skills catalog  — what tools / skills are available
   //   project conv.   — AGENTS.md and friends
   let out = contextBlock;
   out = mergeSystemPrompt(out, skillsBlock);
   out = mergeSystemPrompt(out, agentsBlock);
-  if (includeProtocol) {
-    out = mergeSystemPrompt(out, PROTOCOL_BLOCK);
-  }
   if (runEnv !== undefined) {
     out = mergeSystemPrompt(out, renderRunEnvironment(runEnv));
   }
@@ -324,11 +292,6 @@ export interface ParentFrameworkInput {
  *                      or inline `system_prompt` argument), LAST so it
  *                      reads as the immediate task framing for the LLM.
  *
- *  No `<protocol>` block — sub-agents are tool invocations, not workflow
- *  nodes, so the abort emit contract is meaningless (a sub-agent
- *  returning `<abort>…</abort>` just shows up as toolResult text on the
- *  parent's stream; it doesn't halt the parent's run).
- *
  *  No agents catalogue — sub-agents can't spawn grand-children (the
  *  `agent` tool is stripped from the child pool).
  *
@@ -362,7 +325,6 @@ export function materialiseForChild(
     contextBlock: parentFramework.contextBlock,
     skillsCatalog: childSkillsCatalog,
     agentsCatalog: "",
-    includeProtocol: false,
     ...(parentFramework.runEnv !== undefined ? { runEnv: parentFramework.runEnv } : {}),
   });
   // Persona last: framework blocks frame the task, the persona is the

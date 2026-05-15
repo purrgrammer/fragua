@@ -461,6 +461,7 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
   },
 };
 
+import { abortTool } from "./abort-tool.ts";
 import { skillTool } from "./skill-tool.ts";
 import { webFetchTool } from "./web-fetch.ts";
 
@@ -469,10 +470,10 @@ import { webFetchTool } from "./web-fetch.ts";
 // them explicitly. Workflows that want public-web reading or sub-agents
 // opt in per node; everything else stays unaffected.
 //
-// `skill` is built-in: included here so it lands in every node's tool
-// pool by default, AND force-included by the codergen backend even when
-// a node's `allowed_tools` / `denied_tools` would exclude it. The
-// proposal is explicit — "always available, zero .dot migration".
+// `skill` and `abort` are built-in: included here so they land in every
+// node's tool pool by default, AND force-included by the codergen
+// backend even when a node's `allowed_tools` / `denied_tools` would
+// exclude them — always available, zero .dot migration.
 export const CORE_TOOLS: AnyTool[] = [
   readFileTool,
   writeFileTool,
@@ -484,6 +485,7 @@ export const CORE_TOOLS: AnyTool[] = [
   webFetchTool,
   agentTool,
   skillTool,
+  abortTool,
 ];
 
 /** Structurally remove the `agent` tool from a pool. The `agent` tool

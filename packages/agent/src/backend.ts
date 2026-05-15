@@ -279,18 +279,20 @@ export class PiCodergenBackend implements CodergenBackend {
       );
     }
 
-    // Force-include the built-in `skill` tool. Even when the node pins
-    // `allowed_tools` (excluding skill) or lists it under `denied_tools`,
-    // skill loading must remain available — the proposal is explicit
-    // ("always available, zero .dot migration"). The catalog block in the
-    // system prompt already advertises `skill({ name, arguments })`; if
-    // the tool weren't actually wired the model would call it and get a
-    // hard-to-diagnose unknown-tool error. Skipped only when the registry
-    // doesn't carry it (tests with a hand-rolled registry that omits
-    // skill); workflow `allowed_tools` / `denied_tools` cannot exclude it.
+    // Force-include the built-in `skill` and `abort` tools. Even when the
+    // node pins `allowed_tools` (excluding them) or lists them under
+    // `denied_tools`, they must remain available — both are universal
+    // affordances ("always available, zero .dot migration"). The system
+    // prompt and tool descriptions advertise them; if they weren't
+    // actually wired the model would call them and get a hard-to-diagnose
+    // unknown-tool error. Skipped only when the registry doesn't carry
+    // them (tests with a hand-rolled registry); workflow `allowed_tools`
+    // / `denied_tools` cannot exclude them.
     const skillTool = this.registry.get("skill");
-    const finalTools =
-      skillTool && !selectedTools.some((t) => t.name === "skill") ? [...selectedTools, skillTool] : selectedTools;
+    const abortTool = this.registry.get("abort");
+    let finalTools = selectedTools;
+    if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
+    if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
 
     // Prefer per-call env (wired via HandlerContext → CodergenInput by
     // the executor when a WorktreeProvisioner is active). Falls back
@@ -765,20 +767,21 @@ export class PiCodergenBackend implements CodergenBackend {
     }
 
     // Self-abort: an agent may decide its task is unreachable (missing target,
-    // contradictory constraints, external blocker) and emit `<abort>reason</abort>`.
-    // Treating that as a `fail` outcome lets workflows wire an early-exit edge
-    // with `condition="outcome=fail"` instead of forwarding the whole run
-    // through a no-op plan → implement → verify chain. We also flag it
-    // `non_retryable` so the goal-gate retry machinery doesn't relaunch the
-    // run after an explicit stop.
+    // contradictory constraints, external blocker) and call the built-in
+    // `abort` tool. Treating that as a `fail` outcome lets workflows wire an
+    // early-exit edge with `condition="outcome=fail"` instead of forwarding
+    // the whole run through a no-op plan → implement → verify chain. We also
+    // flag it `non_retryable` so the goal-gate retry machinery doesn't
+    // relaunch the run after an explicit stop.
     //
-    // Parse the FULL assistant text, not the 4KB-clipped `notes`. Long agent
-    // replies (many tool calls, lots of reasoning) push the trailing
-    // `<abort>` marker off the end of the clipped window, which would mask
-    // the abort and mis-report the node as outcome=success.
-    const fullText = fullAssistantText(last);
-    const notes = fullText.slice(0, 4_000);
-    const aborted = parseAbortMarker(fullText);
+    // The `abort` tool sets `terminate: true`, so the loop stops after its
+    // batch and the genuinely-last message is the tool result — `notes` is
+    // taken from the last assistant message, and the abort scan walks the
+    // whole transcript so it still wins when emitted in a non-terminating
+    // batch alongside other tool calls.
+    const lastAssistant = lastAssistantMessage(agent.state.messages);
+    const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
+    const aborted = findAbortToolCall(agent.state.messages);
     if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
     return ok({ notes });
@@ -897,10 +900,7 @@ function summarizeMessage(message: { role: string; content?: unknown }): string 
 }
 
 /** Concatenate every text block in an assistant message. Caller clips for
- *  storage; callers that scan for trailing markers (`<abort>…</abort>`)
- *  must NOT clip first — the marker is anchored at the message's final
- *  non-whitespace position, and a clip from the head would still chop
- *  the tail in long replies. */
+ *  storage. */
 function fullAssistantText(message: { role: string; content?: unknown }): string {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
   const parts = message.content as Array<{ type: string; text?: string }>;
@@ -910,40 +910,53 @@ function fullAssistantText(message: { role: string; content?: unknown }): string
     .join("\n");
 }
 
+/** The last `assistant`-role message in the transcript, or `undefined`.
+ *  The agent loop can end on a `toolResult` message — the `abort` tool
+ *  sets `terminate: true`, so its result lands after the assistant turn
+ *  that called it — but `notes` must still come from assistant text. */
+function lastAssistantMessage(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+): { role: string; content?: unknown } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === "assistant") return m;
+  }
+  return undefined;
+}
+
 /**
- * Parse the final assistant text for a self-abort marker. The agent signals
- * "I cannot proceed" by emitting `<abort>reason</abort>` as the entire last
- * non-empty line of its final message — no prose before `<abort>` on that
- * line, nothing after `</abort>` on the message. Mid-text occurrences (e.g.
- * `<abort>` quoted as documentation inside a fenced code block) and
- * trailing prose epilogues both fail to match, which (a) prevents the
- * self-referential mode where an agent describing the contract halts
- * itself and (b) catches the failure mode where the agent emits a clean
- * marker but then keeps generating after it.
+ * Scan the transcript for a call to the built-in `abort` tool. The agent
+ * signals "I cannot proceed" by calling `abort({ reason })`; the tool sets
+ * `terminate: true` so the loop stops after its batch. The contract is
+ * taught by the tool's own description and documented in
+ * `docs/handler-contract.md` § "Codergen self-abort".
  *
- * The contract itself is taught in the system prompt's `<protocol>` block
- * (see `system-prompt.ts:renderProtocol`) and documented in
- * `docs/handler-contract.md` § "Codergen self-abort". Workflow node
- * prompts do not restate the syntax — they declare when to abort, the
- * system prompt covers how.
+ * Walks the whole message array — not just the last message — so the abort
+ * still wins when it was emitted alongside other tool calls in a
+ * non-terminating batch (the loop ran one more turn but the call is still
+ * in the transcript). First `abort` call wins.
  *
  * The reason is trimmed and clamped so it can be surfaced as a
  * `failure_reason` without dragging in kilobytes of reasoning. Returns
- * `null` when no own-line marker is present.
+ * `null` when no `abort` call is present.
  *
- * Exported so workflows (and tests) can rely on the exact contract
- * without reimplementing matching.
+ * Exported so tests can rely on the exact contract without reimplementing
+ * the scan.
  */
-export function parseAbortMarker(text: string): { reason: string } | null {
-  if (!text) return null;
-  const lines = text.split(/\r?\n/);
-  let lastIdx = lines.length - 1;
-  while (lastIdx >= 0 && lines[lastIdx]!.trim().length === 0) lastIdx--;
-  if (lastIdx < 0) return null;
-  const match = /^\s*<abort>(.*?)<\/abort>\s*$/i.exec(lines[lastIdx]!);
-  if (!match) return null;
-  const raw = match[1]!.replace(/\s+/g, " ").trim().slice(0, 400);
-  return { reason: raw.length > 0 ? raw : "agent aborted without a reason" };
+export function findAbortToolCall(
+  messages: ReadonlyArray<{ role: string; content?: unknown }>,
+): { reason: string } | null {
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const blocks = message.content as Array<{ type: string; name?: string; arguments?: Record<string, unknown> }>;
+    for (const block of blocks) {
+      if (block.type !== "toolCall" || block.name !== "abort") continue;
+      const rawReason = typeof block.arguments?.["reason"] === "string" ? block.arguments["reason"] : "";
+      const reason = rawReason.replace(/\s+/g, " ").trim().slice(0, 400);
+      return { reason: reason.length > 0 ? reason : "agent aborted without a reason" };
+    }
+  }
+  return null;
 }
 
 function sha256Hex(value: string): string {

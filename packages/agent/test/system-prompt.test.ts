@@ -8,7 +8,6 @@ import {
   loadContextFiles,
   materialiseForChild,
   mergeSystemPrompt,
-  renderProtocol,
   renderRunEnvironment,
 } from "../src/system-prompt.ts";
 
@@ -190,22 +189,8 @@ describe("renderRunEnvironment", () => {
   });
 });
 
-describe("renderProtocol", () => {
-  test("teaches the <abort> own-line contract", () => {
-    const block = renderProtocol();
-    expect(block).toContain("<protocol>");
-    expect(block).toContain("</protocol>");
-    expect(block).toContain("<abort>reason</abort>");
-    expect(block).toContain("entire last non-empty line");
-  });
-
-  test("is a constant — same bytes on every call (cache-key invariant)", () => {
-    expect(renderProtocol()).toBe(renderProtocol());
-  });
-});
-
 describe("buildSystemPrompt with runEnv", () => {
-  test("prepends <environment> then <protocol> before every other block", () => {
+  test("prepends <environment> before every other block", () => {
     const out = buildSystemPrompt({
       global: "you are the agent",
       perNode: undefined,
@@ -213,24 +198,20 @@ describe("buildSystemPrompt with runEnv", () => {
       runEnv: { worktreePath: "/wt/abc", runId: "abc" },
     });
     const envIdx = out.indexOf("<environment>");
-    const protocolIdx = out.indexOf("<protocol>");
     const conventionsIdx = out.indexOf("<project-conventions>");
     const baseIdx = out.indexOf("you are the agent");
     expect(envIdx).toBeGreaterThanOrEqual(0);
-    expect(protocolIdx).toBeGreaterThan(envIdx);
-    expect(protocolIdx).toBeLessThan(conventionsIdx);
+    expect(envIdx).toBeLessThan(conventionsIdx);
     expect(conventionsIdx).toBeLessThan(baseIdx);
   });
 
-  test("omits <environment> entirely when runEnv is undefined, but always includes <protocol>", () => {
+  test("omits <environment> entirely when runEnv is undefined", () => {
     const out = buildSystemPrompt({
       global: "base",
       perNode: undefined,
       contextBlock: "",
     });
     expect(out).not.toContain("<environment>");
-    expect(out).toContain("<protocol>");
-    expect(out).toContain("<abort>reason</abort>");
     expect(out.endsWith("base")).toBe(true);
   });
 });
@@ -244,7 +225,7 @@ describe("buildSystemPrompt — agents catalogue", () => {
     "- `reviewer` — Reviews diffs.",
   ].join("\n");
 
-  test("agentsCatalog is appended above skills and below protocol", () => {
+  test("agentsCatalog is appended above skills", () => {
     const skillsBlock = "<available_skills>...</available_skills>";
     const out = buildSystemPrompt({
       global: "you are the agent",
@@ -253,13 +234,10 @@ describe("buildSystemPrompt — agents catalogue", () => {
       skillsCatalog: skillsBlock,
       agentsCatalog,
     });
-    const protocolIdx = out.indexOf("<protocol>");
     const agentsIdx = out.indexOf("## Available sub-agents");
     const skillsIdx = out.indexOf("<available_skills>");
-    expect(protocolIdx).toBeGreaterThan(-1);
     expect(agentsIdx).toBeGreaterThan(-1);
     expect(skillsIdx).toBeGreaterThan(-1);
-    expect(protocolIdx).toBeLessThan(agentsIdx);
     expect(agentsIdx).toBeLessThan(skillsIdx);
   });
 
@@ -304,17 +282,6 @@ describe("materialiseForChild", () => {
     expect(out.systemPrompt).toContain("<environment>");
     expect(out.systemPrompt).toContain("project AGENTS.md");
     expect(out.effectiveSkills).toEqual([]);
-  });
-
-  test("sub-agents do NOT see the <protocol> block — they're tool calls, not nodes", () => {
-    // The protocol block teaches the abort emit contract, which is
-    // meaningless for a sub-agent (a sub-agent returning
-    // `<abort>…</abort>` just shows up as toolResult text on the
-    // parent's stream — it doesn't halt the parent's run).
-    const bare = materialiseForChild({}, parentFramework, parentSkills);
-    expect(bare.systemPrompt).not.toContain("<protocol>");
-    const withPersona = materialiseForChild({ system_prompt: "REVIEWER" }, parentFramework, parentSkills);
-    expect(withPersona.systemPrompt).not.toContain("<protocol>");
   });
 
   test("persona is appended LAST, after framework blocks", () => {

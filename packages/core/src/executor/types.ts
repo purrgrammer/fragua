@@ -61,8 +61,8 @@ export interface CodergenInput {
   budgetSnapshot?: BudgetSnapshotInput;
   /** When true, the backend uses `node.attrs.system_prompt` (or the
    * empty string when absent) as the COMPLETE system prompt — no
-   * framework `<protocol>`, no skills catalog, no context-files block,
-   * no run-env description. Used by the `agent` tool's spawn path so
+   * framework skills catalog, no context-files block, no run-env
+   * description. Used by the `agent` tool's spawn path so
    * the calling LLM has full control over the sub-agent's context
    * window: framework injection-by-default would change the shape of
    * the call the parent constructed without asking. */

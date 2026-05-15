@@ -211,7 +211,7 @@ No SQL equivalent — steps are a pure reducer over events. If the server is dow
 Reach for the transcript when:
 
 - A codergen node produced wrong output → read its `content[]` blocks.
-- A node aborted with `<abort>…</abort>` → reason in an assistant `TextContent` block.
+- A node aborted via the `abort` tool → find the `toolCall` block `name:"abort"` in an assistant row; the reason is in `arguments.reason`.
 - A prompt template failed to substitute (`${context.foo}` appeared literally) → visible on `role:"user"` rows.
 - Context management is suspect → read the `role:"system"` row for the assembled prompt.
 - Tool-call pairing — `assistant.content[i]` `toolCall { id, name, arguments }` pairs with the next `role:"toolResult"` row whose `toolCallId` matches.
@@ -232,7 +232,7 @@ Roles, in brief:
 
 - `system` — `SystemPromptMessage { role, content, timestamp }`. Per-call assembled system prompt; written by `PiCodergenBackend` to keep `llm.start` under the 4KB event cap. Filtered out before pi-ai (which carries the system prompt separately).
 - `user` — `UserMessage`. The substituted prompt the node's `prompt = "…"` compiled into. Verify `$ARGUMENTS`, `$<nodeId>.output`, `${context.*}` resolved.
-- `assistant` — `AssistantMessage`. `content` is `(TextContent | ThinkingContent | ToolCall)[]` in block order. `<abort>reason</abort>` lives in a `TextContent.text`.
+- `assistant` — `AssistantMessage`. `content` is `(TextContent | ThinkingContent | ToolCall)[]` in block order. A self-abort is a `ToolCall` block `name:"abort"` with `arguments.reason`.
 - `toolResult` — `ToolResultMessage`. Top-level `toolCallId` pairs back to `assistant.ToolCall.id`; `toolName` + `isError` are siblings.
 
 `thread_id` shares the transcript across nodes that declare the same id (e.g. `change.dot`'s `cluster_dev` puts `implement` + `review` on `thread_id="dev"` so the reviewer sees the implementer's session). Filter by `node_id` to narrow.
@@ -287,7 +287,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 
 | Terminal fact | `reason` / cause | What it means |
 |---|---|---|
-| `fact.run_halted` | `"aborted_exit"` | Codergen agent emitted `<abort>…</abort>`. Pull the assistant turn (§6). |
+| `fact.run_halted` | `"aborted_exit"` | Codergen agent called the `abort` tool. Pull the assistant turn (§6) — the reason is in the `toolCall` block's `arguments.reason`. |
 | `fact.run_halted` | `"max_retries_exceeded"` (Stage 3 — converted) | Backward conditional edge consumed the target's `max_retries`. **Now emits `fact.run_paused{reason:"max_retries"}`** instead of halting. Operator may grant more retries via `intent.max_retries_adjusted`. |
 | `fact.run_halted` | `"goal_gate_unsatisfied"` (Stage 3 — converted) | `goal_gate=true` node never settled in SUCCESS/PARTIAL_SUCCESS, retarget chain (SPEC §3.4) exhausted past `max_goal_gate_retries`. **Now emits `fact.run_paused{reason:"goal_gate"}`** instead of halting. |
 | `fact.run_halted` | `"abort_loop"` (Stage 3 — converted) | 5 consecutive aborts without progress (`ABORT_LOOP_CEILING`). **Now emits `fact.run_paused{reason:"abort_loop"}`** instead of halting. |

@@ -44,6 +44,7 @@ import { Message as AIMessage, MessageContent, MessageResponse } from "@/compone
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -1287,6 +1288,12 @@ function RichToolResult({
         isStreaming={!result}
       />
     );
+  }
+  // abort: built-in self-halt signal. The reason lands on params and is
+  // echoed on result.details.data — surface it as an error-tone card
+  // rather than a generic ToolOutput dump.
+  if (toolName === "abort") {
+    return <AbortToolResult params={params as { reason?: string } | undefined} result={result} />;
   }
   // Extension-paired *.web.tsx renderer takes precedence over the
   // hardcoded built-in branches below. The renderer's `content` slots

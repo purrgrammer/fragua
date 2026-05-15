@@ -1,21 +1,24 @@
-// abort-test.dot — single-node workflow for verifying the strict <abort> contract.
+// abort-test.dot — single-node workflow for verifying the `abort` tool contract.
 //
 // The prompt has one deterministic abort criterion: the literal token
 // `ABORT_NOW_PLEASE` in $ARGUMENTS. Run with that token and the LLM must
-// abort via the protocol it learned in the system prompt — node prompts
-// no longer restate the syntax.
+// abort by calling the built-in `abort` tool — node prompts declare *when*
+// to abort, the tool's own description covers *how*.
+//
+// The `check` node sets `allowed_tools = ""`, so this also proves the
+// `abort` tool is force-included on every codergen node regardless of the
+// node's tool pin.
 //
 //   bun run swarm run abort-test --input="ABORT_NOW_PLEASE"
 //
 // Expected terminal state:
 //   - status=halted, reason=aborted_exit
 //   - failure_reason mentions the trigger token
-//   - the agent's last assistant message ends with `<abort>…</abort>`
-//     as the entire last non-empty line
+//   - the agent's transcript contains an `abort` tool call
 
 digraph abort_test {
   graph [
-    goal             = "Verify the strict <abort> self-emit contract end-to-end."
+    goal             = "Verify the abort tool contract end-to-end."
     label            = "abort-test"
     default_fidelity = "compact"
     budget_usd       = 0.10

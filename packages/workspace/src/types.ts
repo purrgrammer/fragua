@@ -220,6 +220,11 @@ export interface ToolOutput<TResult = ContextValue> {
   data?: TResult;
   /** True when the tool failed (still returned to the LLM so it can retry). */
   is_error?: boolean;
+  /** Hint that the agent loop should stop after the current tool batch.
+   * Forwarded to pi-agent-core's `AgentToolResult.terminate`; the loop
+   * only terminates when every result in the batch sets it. Used by the
+   * built-in `abort` tool. */
+  terminate?: boolean;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: registry stores tools with diverse arg/result shapes.

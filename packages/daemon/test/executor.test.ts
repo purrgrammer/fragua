@@ -211,8 +211,8 @@ describe("executor — edge selection", () => {
   });
 
   test("aborted_exit halt detail carries the handler's failureReason verbatim", async () => {
-    // Regression for the dropped abort-reason: when an agent emits
-    // `<abort>reason</abort>`, parseAbortMarker → outcome.failure_reason →
+    // Regression for the dropped abort-reason: when an agent calls the
+    // `abort` tool, findAbortToolCall → outcome.failure_reason →
     // result.failureReason → fact.run_halted.detail. Used to die at the
     // last hop because the detail was hardcoded to "reached <node> via
     // outcome=fail".

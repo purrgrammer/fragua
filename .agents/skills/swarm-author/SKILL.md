@@ -1,6 +1,6 @@
 ---
 name: swarm-author
-description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, `<abort>`, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+description: Author or edit a swarm DOT workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a `.dot` file under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches the shape→handler vocabulary (start/exit/codergen/conditional/wait.human/tool/parallel/fan_in), attribute grammar, substitution tokens, condition expressions, idiomatic prompts (authoritative $ARGUMENTS, the `abort` tool, allowed_tools, thread_id), loop construction via backward conditional edges + max_retries, parallel + fan_in, validator diagnostics, and a smoke-test recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
 version: 0.2.1
 ---
 
@@ -146,7 +146,7 @@ path := "outcome" | "context.<key>" | "context.<key>.<sub>" | …
 val  := STRING | NUMBER | IDENT | true | false | null
 ```
 
-- `outcome=success | fail` — set by the handler. Codergen `outcome=fail` on `<abort>…</abort>`; tool outcome from exit code.
+- `outcome=success | fail` — set by the handler. Codergen `outcome=fail` when the agent calls the `abort` tool; tool outcome from exit code.
 - `context.foo=bar` — reads run context KV.
 - `&&` conjunction only; no `||`. Split into two edges if you need disjunction.
 
@@ -205,7 +205,7 @@ Idiomatic pattern (`change.dot`):
 graph [ retry_target = "implement", max_goal_gate_retries = 2 ]
 
 review [
-  prompt       = "Judge the diff. Reply APPROVE or <abort>REJECT: …</abort>."
+  prompt       = "Judge the diff. Reply APPROVE, or call the `abort` tool with reason `REJECT: …`."
   goal_gate    = true
   retry_target = "implement"
 ]
@@ -303,16 +303,16 @@ Make `$ARGUMENTS` the only source of truth; refuse when empty:
 ```
 Task (authoritative, do not substitute): $ARGUMENTS.
 If $ARGUMENTS is empty, names nothing specific, or the target is blocked,
-emit `<abort>missing or blocked target</abort>`. Do NOT retarget silently.
+call the `abort` tool with reason `missing or blocked target`. Do NOT retarget silently.
 ```
 
-### Abort sentinels
+### Abort tool
 
-A node that decides the run can't proceed emits `<abort>reason</abort>` in its final text. The runtime reads this, records `outcome=fail`, writes `fact.node_aborted { cause:"aborted_exit" }`, and the run halts with `reason:"aborted_exit"` unless a downstream edge routes on it.
+A node that decides the run can't proceed calls the built-in `abort` tool with a one-sentence `reason`. The runtime reads the call, records `outcome=fail`, writes `fact.node_aborted { cause:"aborted_exit" }`, and the run halts with `reason:"aborted_exit"` unless a downstream edge routes on it. `abort` is force-included on every codergen node — even under `allowed_tools=""` — so node prompts never need to whitelist it.
 
 ```
 If the task needs more than the workflow can handle (multi-package refactor, contract change),
-emit `<abort>task too large, split into <suggested>: <reason></abort>`.
+call `abort` with reason `task too large, split into <suggested>: <reason>`.
 ```
 
 ### Explicit tool whitelist
@@ -428,7 +428,7 @@ If you have the budget, run it twice — once cold, once with the prior run's ar
 - **Don't pack two jobs into one node.** A node has one prompt, one thread, one model, one set of tools. "Do A, then B, then C" — three nodes.
 - **Don't leave `model=` unset in a shipped workflow.** Daemon default is fine for drafts; explicit pins make cost + quality predictable across machines.
 - **Don't `context_files = "docs/SPEC.md, docs/ARCHITECTURE.md, README.md"`.** You'll blow the event payload cap and bury the real rules. One file with the hard constraints, usually `AGENTS.md`.
-- **Don't re-invent `<abort>`.** Downstream nodes already know how to read it. A custom sentinel requires a parser; the standard one just works.
+- **Don't re-invent the `abort` tool.** It's force-included on every codergen node and downstream edges already route on `outcome=fail`. A custom text sentinel requires a parser; the standard tool just works.
 - **Don't conditionally route on `outcome=error`.** The states are `success` and `fail`. `fact.run_halted { reason:"error" }` is a terminal event, not an edge-eligible outcome.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Your edit applies only to *future* runs.
 - **Don't put HITL inside a parallel branch.** Not supported; coerces to fail.
@@ -465,7 +465,7 @@ digraph NAME {
       thread_id     = "dev"
     ]
     review [
-      prompt       = "Judge the diff. APPROVE or <abort>REJECT: …</abort>."
+      prompt       = "Judge the diff. APPROVE, or call `abort` with reason `REJECT: …`."
       goal_gate    = true                 # workflow-level retry §8
       retry_target = "implement"
     ]

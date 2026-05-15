@@ -395,8 +395,8 @@ export function makeSpawnSubagent(
         workflow_sha: "",
         // The caller (the parent's LLM) constructed the tool call
         // expecting a specific context shape. Suppress framework
-        // injection (`<protocol>`, skills catalog, env-info, global
-        // persona) so the sub-agent's system prompt is exactly what
+        // injection (skills catalog, env-info, global persona) so the
+        // sub-agent's system prompt is exactly what
         // the caller passed via `spec.system_prompt` — or empty when
         // omitted. The skills filter still drives the sub-agent's
         // available skill files / tool surface; nothing auto-renders

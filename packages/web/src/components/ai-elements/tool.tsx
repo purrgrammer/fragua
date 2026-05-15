@@ -14,6 +14,7 @@ import {
   FolderIcon,
   GlobeIcon,
   type LucideIcon,
+  OctagonXIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -160,6 +161,7 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // spawn shows its caller-supplied label rather than a generic noun.
   agent: { icon: BotIcon, label: "Agent" },
   skill: { icon: BookOpenIcon, label: "Skill" },
+  abort: { icon: OctagonXIcon, label: "Abort" },
 };
 
 /** Resolve a tool name to its registry entry. Accepts either the bare

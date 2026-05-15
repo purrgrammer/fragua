@@ -127,7 +127,7 @@ Unchanged. `Promise.race` with hard timeout bounds damage; leaked handlers emit 
 Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2). Handlers with `side_effect: "none" | "idempotent"` can replay freely; `external` handlers rely on the provider key.
 
 ### 1.10 LLM provider transport error mid-stream
-**Attack.** The LLM provider returns 402 (insufficient balance), 429 (rate limit), 5xx, or the network drops mid-stream. pi-ai surfaces this as `AssistantMessageEvent { type: "error" }`; without intervention the codergen handler converts it into `outcome.status = "fail"`, indistinguishable from a deliberate `<abort>`. The run halts and all completed work in the transcript is abandoned even though it survives in the `messages` table.
+**Attack.** The LLM provider returns 402 (insufficient balance), 429 (rate limit), 5xx, or the network drops mid-stream. pi-ai surfaces this as `AssistantMessageEvent { type: "error" }`; without intervention the codergen handler converts it into `outcome.status = "fail"`, indistinguishable from a deliberate `abort` tool call. The run halts and all completed work in the transcript is abandoned even though it survives in the `messages` table.
 
 **Resolution.**
 1. **HTTP-status capture.** `PiCodergenBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
