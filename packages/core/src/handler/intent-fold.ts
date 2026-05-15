@@ -8,6 +8,16 @@
 // reported in the decision so the executor can emit `intent.dropped`
 // observability events for audit.
 //
+// **Purity contract (P0.1 of docs/proposals/parallel.md):** `foldIntents`
+// is total over `RunStatus`, deterministic (same inputs → byte-identical
+// output), and free of side effects (no I/O, no clocks, no mutation of
+// the input array, no reads of ambient state). The function exists as
+// the same reducer for top-level runs and (post P2) sub-runs; both call
+// it with `(getUnappliedIntents(runId), state.status)` and consume the
+// returned `IntentDecision` the same way. Property tests in
+// `intent-fold.test.ts` enforce the contract; the executor in
+// `daemon/src/executor.ts` is the only top-level caller today.
+//
 // Precedence summary:
 //
 //   R1  cancel beats everything → terminal cancel

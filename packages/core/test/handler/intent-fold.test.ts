@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { StoredEvent } from "@swarm/store";
+import type { RunStatus, StoredEvent } from "@swarm/store";
+import fc from "fast-check";
 import { foldIntents } from "../../src/handler/intent-fold.ts";
 
 function ev(seq: number, type: string, payload: unknown): StoredEvent {
@@ -236,6 +237,147 @@ describe("foldIntents", () => {
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.routingDelta["max_loops_override"]).toBe(2000);
+    }
+  });
+});
+
+// ─── Purity contract (P0.1 of docs/proposals/parallel.md) ────────────
+//
+// foldIntents is the same reducer for top-level runs and sub-runs (post
+// P2). Locking the purity contract here so the cutover can rely on it.
+
+describe("foldIntents — purity contract", () => {
+  const ALL_STATUSES: RunStatus[] = [
+    "queued",
+    "running",
+    "paused",
+    "paused_hitl",
+    "paused_auto",
+    "completed",
+    "halted",
+    "cancelled",
+    "quarantined",
+  ];
+
+  // Generators over the intent types the fold actually consumes. Keeps
+  // payloads in a sensible range; the fold doesn't validate beyond the
+  // shape checks it already runs.
+  const intentArb = fc.oneof(
+    fc.record({
+      type: fc.constant("intent.pause_requested" as const),
+      payload: fc.constant({}),
+    }),
+    fc.record({
+      type: fc.constant("intent.cancel_requested" as const),
+      payload: fc.record({ reason: fc.option(fc.string(), { nil: undefined }) }),
+    }),
+    fc.record({
+      type: fc.constant("intent.steering_requested" as const),
+      payload: fc.record({ text: fc.string() }),
+    }),
+    fc.record({
+      type: fc.constant("intent.hitl_input" as const),
+      payload: fc.record({
+        selected: fc.string({ minLength: 1, maxLength: 5 }),
+        note: fc.option(fc.string(), { nil: undefined }),
+      }),
+    }),
+    fc.record({
+      type: fc.constant("intent.priority_adjusted" as const),
+      payload: fc.record({ newPriority: fc.integer({ min: -100, max: 100 }) }),
+    }),
+    fc.record({
+      type: fc.constant("intent.budget_adjusted" as const),
+      payload: fc.record({
+        scope: fc.constantFrom("node" as const, "run" as const),
+        metric: fc.constantFrom("cost" as const, "tokens" as const),
+        newLimit: fc.double({ min: Math.fround(0.0001), max: 1000, noNaN: true, noDefaultInfinity: true }),
+      }),
+    }),
+    fc.record({
+      type: fc.constant("intent.max_retries_adjusted" as const),
+      payload: fc.record({
+        nodeId: fc.string({ minLength: 1, maxLength: 10 }),
+        newLimit: fc.integer({ min: 1, max: 100 }),
+      }),
+    }),
+    fc.record({
+      type: fc.constant("intent.goal_gate_adjusted" as const),
+      payload: fc.record({ newLimit: fc.integer({ min: 1, max: 100 }) }),
+    }),
+    fc.record({
+      type: fc.constant("intent.max_loops_adjusted" as const),
+      payload: fc.record({ newLimit: fc.integer({ min: 1, max: 10_000 }) }),
+    }),
+  );
+
+  function buildEvent(seq: number, sample: { type: string; payload: unknown }): StoredEvent {
+    return {
+      runId: "r",
+      seq,
+      type: sample.type as StoredEvent["type"],
+      writer: "web",
+      payload: sample.payload as StoredEvent["payload"],
+      ts: seq,
+    };
+  }
+
+  test("deterministic: same inputs → byte-identical output", () => {
+    fc.assert(
+      fc.property(
+        fc.array(intentArb, { minLength: 0, maxLength: 20 }),
+        fc.constantFrom(...ALL_STATUSES),
+        (samples, status) => {
+          const intents = samples.map((s, i) => buildEvent(i + 1, s));
+          const a = foldIntents(intents, status);
+          const b = foldIntents(intents, status);
+          expect(a).toEqual(b);
+        },
+      ),
+    );
+  });
+
+  test("total over RunStatus: never throws", () => {
+    fc.assert(
+      fc.property(
+        fc.array(intentArb, { minLength: 0, maxLength: 10 }),
+        fc.constantFrom(...ALL_STATUSES),
+        (samples, status) => {
+          const intents = samples.map((s, i) => buildEvent(i + 1, s));
+          expect(() => foldIntents(intents, status)).not.toThrow();
+        },
+      ),
+    );
+  });
+
+  test("does not mutate the input array (no in-place sort or push)", () => {
+    fc.assert(
+      fc.property(
+        fc.array(intentArb, { minLength: 0, maxLength: 10 }),
+        fc.constantFrom(...ALL_STATUSES),
+        (samples, status) => {
+          const intents = samples.map((s, i) => buildEvent(i + 1, s));
+          const snapshot = JSON.parse(JSON.stringify(intents));
+          foldIntents(intents, status);
+          expect(intents).toEqual(snapshot);
+        },
+      ),
+    );
+  });
+
+  test("empty input → proceed with no side-effect fields", () => {
+    for (const status of ALL_STATUSES) {
+      const out = foldIntents([], status);
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.shouldPause).toBe(false);
+        expect(out.shouldPauseAfterDispatch).toBe(false);
+        expect(out.appliedSeqs).toEqual([]);
+        expect(out.dropped).toEqual([]);
+        expect(out.routingDelta).toEqual({});
+        expect(out.steering).toBeUndefined();
+        expect(out.hitlInput).toBeUndefined();
+      }
     }
   });
 });
