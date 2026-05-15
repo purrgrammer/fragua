@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 11
+-- swarm event store schema — Revision 12
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -54,6 +54,14 @@
 -- OAuth tokens, replacing `~/.swarm/auth.json`. `kind` is
 -- denormalised from `payload.type` so swarm-debug can SELECT the
 -- shape without JSON-parsing. Pure additive; no row migrations.
+-- v11 → v12: custom-provider config in the store
+-- (docs/proposals/provider-config-storage.md). New `provider_config`
+-- table holds the per-provider definition blob (baseUrl, headers,
+-- compat, models, modelOverrides) that previously lived in
+-- `~/.swarm/models.json`. Per-row Ajv validation lives in the agent
+-- layer (`ModelRegistry.loadCustomModels`); one broken row no longer
+-- poisons the entire registry. No `apiKey` field — credentials always
+-- come from `provider_credentials`. Pure additive; no row migrations.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -302,6 +310,24 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
   provider   TEXT PRIMARY KEY,
   kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
   payload    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+-- Custom-provider definitions (docs/proposals/provider-config-storage.md).
+-- One row per provider id; `config` carries the per-provider definition
+-- blob (baseUrl, headers, compat, models, modelOverrides) — the
+-- `ProviderConfigSchema` body minus `apiKey`. Credentials always come
+-- from `provider_credentials`. Per-row Ajv validation lives in the
+-- agent layer (`ModelRegistry.loadCustomModels`) so one corrupt
+-- provider can be skipped without torching the rest of the registry.
+-- No indexes — PK on `provider` is the only access pattern (lookup by
+-- id, full table scan for `list`, both <20 rows in practice). No SQL
+-- CHECK on `api` / `provider` shape: pi-ai's `Api` and `Provider`
+-- types are extensible.
+CREATE TABLE IF NOT EXISTS provider_config (
+  provider   TEXT PRIMARY KEY,
+  config     TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 ) STRICT;

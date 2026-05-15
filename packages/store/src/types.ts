@@ -1159,6 +1159,42 @@ export interface IProviderCredentialStore {
 }
 
 /**
+ * Custom-provider config blobs (docs/proposals/provider-config-storage.md).
+ *
+ * One row per `provider` id; the JSON `config` body carries the
+ * per-provider definition (baseUrl, headers, compat, models,
+ * modelOverrides) — the `ProviderConfigSchema` shape from
+ * `@swarm/agent` minus the `apiKey` field. Credentials always come
+ * from `provider_credentials`. Per-row Ajv validation lives in
+ * `ModelRegistry.loadCustomModels` so one corrupt provider can be
+ * skipped without poisoning sibling rows.
+ */
+export interface ProviderConfigRow {
+  provider: string;
+  /** Parsed JSON. The agent layer owns the per-provider schema; the
+   *  store keeps `unknown` so it doesn't pull pi-ai types. */
+  config: unknown;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IProviderConfigStore {
+  /** Single row by provider id, or `null` if missing. `config` is
+   *  parsed JSON. */
+  getProviderConfig(provider: string): ProviderConfigRow | null;
+  /** All rows ordered by provider ASC. Cheap (full scan; <20 rows in
+   *  practice). */
+  listProviderConfigs(): ProviderConfigRow[];
+  /** Upsert. On conflict, `created_at` is preserved and `updated_at`
+   *  advances. `config` must already be a JSON-serialised string;
+   *  serialisation happens in the caller per invariant I1 (no
+   *  `JSON.stringify` inside the write txn). */
+  upsertProviderConfig(args: { provider: string; config: string }): void;
+  /** Hard delete. No-op when the row is absent. */
+  deleteProviderConfig(provider: string): void;
+}
+
+/**
  * Composite store contract — backward-compatible alias for the original
  * `IEventStore` shape. New code should depend on the narrowest sub-
  * interface that fits its needs (e.g. analytics routes only need
@@ -1168,4 +1204,5 @@ export type IEventStore = IEventWriter &
   IEventReader &
   IAnalyticsReader &
   IDaemonCoordinator &
-  IProviderCredentialStore;
+  IProviderCredentialStore &
+  IProviderConfigStore;

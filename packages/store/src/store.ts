@@ -78,6 +78,13 @@ import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import {
+  type ProviderConfigDbRow,
+  deleteProviderConfig as queryDeleteProviderConfig,
+  upsertProviderConfig as queryUpsertProviderConfig,
+  selectAllProviderConfigs,
+  selectProviderConfig,
+} from "./provider-config-queries.ts";
+import {
   type ProviderCredentialDbRow,
   deleteProviderCredential as queryDeleteProviderCredential,
   upsertProviderCredential as queryUpsertProviderCredential,
@@ -175,6 +182,7 @@ import {
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
+  type ProviderConfigRow,
   type ProviderCredentialRow,
   type RunMetrics,
   type RunState,
@@ -279,6 +287,15 @@ function rowToProviderCredential(row: ProviderCredentialDbRow): ProviderCredenti
     provider: row.provider,
     kind: row.kind,
     payload: JSON.parse(row.payload),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToProviderConfig(row: ProviderConfigDbRow): ProviderConfigRow {
+  return {
+    provider: row.provider,
+    config: JSON.parse(row.config),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1146,6 +1163,36 @@ export class SqliteStore implements IEventStore {
   deleteProviderCredential(provider: string): void {
     this.writeTxn(() => {
       queryDeleteProviderCredential(this.db, provider);
+    });
+  }
+
+  // ─────────────── Provider config ───────────────
+
+  getProviderConfig(provider: string): ProviderConfigRow | null {
+    const row = selectProviderConfig(this.db, provider);
+    return row == null ? null : rowToProviderConfig(row);
+  }
+
+  listProviderConfigs(): ProviderConfigRow[] {
+    return selectAllProviderConfigs(this.db).map(rowToProviderConfig);
+  }
+
+  upsertProviderConfig(args: { provider: string; config: string }): void {
+    // Caller passes pre-stringified `config` per invariant I1 —
+    // JSON.stringify must not run inside the write txn.
+    const now = this.now();
+    this.writeTxn(() => {
+      queryUpsertProviderConfig(this.db, {
+        provider: args.provider,
+        config: args.config,
+        now,
+      });
+    });
+  }
+
+  deleteProviderConfig(provider: string): void {
+    this.writeTxn(() => {
+      queryDeleteProviderConfig(this.db, provider);
     });
   }
 

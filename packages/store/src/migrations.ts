@@ -40,6 +40,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [9, MIGRATION_009_SUBRUN_COLUMNS()],
   [10, MIGRATION_010_RUNNING_CHILDREN_STATUS()],
   [11, MIGRATION_011_PROVIDER_CREDENTIALS()],
+  [12, MIGRATION_012_PROVIDER_CONFIG()],
 ]);
 
 /**
@@ -750,6 +751,32 @@ function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
       provider   TEXT PRIMARY KEY,
       kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
       payload    TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+  `;
+}
+
+/**
+ * v11 → v12: custom-provider config in the store (proposal:
+ * `docs/proposals/provider-config-storage.md`).
+ *
+ * Pure additive: `provider_config` is one row per provider, holds the
+ * per-provider definition blob (baseUrl, headers, compat, models,
+ * modelOverrides) that previously lived in `~/.swarm/models.json`.
+ * Per-row Ajv validation lives in `ModelRegistry.loadCustomModels`.
+ * No data migration — the legacy file is dropped outright per ground
+ * rule #11 (pre-release, no backwards-compat).
+ *
+ * `IF NOT EXISTS` is intentional, mirroring step 11: dev DBs that ran
+ * an earlier draft of this work bumped the table into existence
+ * directly; the post-migration `foreign_key_check` passes trivially.
+ */
+function MIGRATION_012_PROVIDER_CONFIG(): string {
+  return `
+    CREATE TABLE IF NOT EXISTS provider_config (
+      provider   TEXT PRIMARY KEY,
+      config     TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     ) STRICT;
