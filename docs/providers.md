@@ -34,13 +34,20 @@ the OAuth flow for subscription-based providers. The daemon refuses to
 run a node against a provider with no row in the table and points the
 operator at `swarm providers add <provider>`.
 
-Custom OpenAI-compatible endpoints still go through
-`swarm providers add --custom`, which appends to `~/.swarm/models.json`
-(the follow-up
-[provider-config-storage](./proposals/provider-config-storage.md)
-proposal will lift those into the store too). Until then,
-`models.json`'s custom-provider `apiKey` field is the only remaining
-corner where `!cmd` / env-var resolution still applies.
+Custom OpenAI-compatible endpoints (Ollama, vLLM, LM Studio, corporate
+proxies) go through `swarm providers add --custom`, which writes a row
+to the same global store — the `provider_config` table. The wizard
+prompts for the slug, base URL, API shape, and one or more model ids;
+it does NOT prompt for a key. Authenticated custom providers get a
+credential row via the normal `swarm providers add <name>` flow; the
+two writes are independent (a keyless Ollama is fine).
+
+`!cmd` / env-var resolution is gone repo-wide. Secrets that previously
+lived under `models.json`'s `apiKey: "!cmd …"` form belong in
+`provider_credentials` instead — either as a literal key or via
+OAuth. A custom provider that needs a non-`Authorization` header can
+set `authHeader: true` on its `provider_config` row so the stored key
+gets injected into `Authorization: Bearer …` at request time.
 
 See the [CLI README](../packages/cli/README.md) for the full operations
 reference.

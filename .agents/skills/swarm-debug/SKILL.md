@@ -284,6 +284,17 @@ sqlite3 -readonly ~/.swarm/swarm.db \
 
 `kind` is denormalised from `payload.type` so you can spot the shape (`api_key` vs `oauth`) without JSON-parsing. The `payload` blob carries the full credential; **never echo it to logs** — it contains live secrets. `updated_at` jumps on OAuth refresh (last-writer-wins across racers); a stale `updated_at` plus a `paused_auto{reason:"provider_retry"}` run usually means refresh failed.
 
+### Custom-provider definitions
+
+Custom providers (Ollama, vLLM, LM Studio, proxies) and built-in-provider overrides live in `provider_config` on the same store since the follow-up provider-config-storage proposal landed. Use it during post-mortems when a workflow targets a custom provider and the run halts with `model_unresolved` or the registry surfaces a `provider_config: …` warning:
+
+```sh
+sqlite3 -readonly ~/.swarm/swarm.db \
+  "SELECT provider, length(config), updated_at FROM provider_config ORDER BY provider;"
+```
+
+Per-row Ajv failures land on `ModelRegistry.getError()` (surfaced via the `/providers` route's `provider_config_error` field) and don't poison sibling providers — if one row is corrupt the rest still load. The `config` blob is the per-provider definition body (baseUrl, headers, compat, models, modelOverrides); credentials live in `provider_credentials`. There is no `apiKey` field on the blob — `!cmd` / env-var resolution is gone repo-wide.
+
 For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
 
 ```sh

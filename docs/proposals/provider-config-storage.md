@@ -1,10 +1,12 @@
 ---
 title: Custom-provider config in the store — follow-up to provider-credentials-storage
 summary: "Move ~/.swarm/models.json into a provider_config table (per-provider JSON blob, Ajv-validated on read). Deletes resolve-config-value.ts and the !cmd/env credential machinery in its last corner. Closes the transient inconsistency from the credentials PR."
-status: proposed
-maturity: sketch
+status: shipped
+maturity: designed
 last-reviewed: 2026-05-15
 ---
+
+> **Note (implementation).** Migration landed as step 12 (v11 → v12). `ProviderConfigSchema` is exported from `@swarm/agent` for CLI writers; `ModelRegistry.create(authStorage, store)` takes a required store. `AuthStorage.getApiKey` no longer accepts `includeFallback`; the `"models.json custom provider"` describeAuthSource label is gone. `resolve-config-value.ts` is deleted.
 
 # Custom-provider config in the store — follow-up to provider-credentials-storage
 
