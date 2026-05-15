@@ -1,25 +1,26 @@
-// Credential / model-config file paths.
+// Custom-provider model-config file paths.
 //
-// Swarm is globally-scoped for credentials: one user, one machine, one
-// set of keys and custom models, shared across every workspace. This
-// matches how aws/gcloud/ssh/gh treat auth.
+// Built-in provider credentials (api_key + OAuth) live in the global
+// store (`~/.swarm/swarm.db`, `provider_credentials` table) since the
+// credentials-in-the-store proposal landed. The remaining file path
+// here is for custom-provider *definitions* (Ollama, vLLM, LM Studio,
+// proxies) — `~/.swarm/models.json` — which the follow-up
+// provider-config-storage proposal will lift into the store.
 //
-//   ~/.swarm/auth.json     — AuthStorage (api_key + oauth credentials)
-//   ~/.swarm/models.json   — ModelRegistry (custom providers + overrides)
+// Swarm is globally-scoped for credentials and custom models: one user,
+// one machine, one set of keys and custom providers, shared across
+// every workspace. This matches how aws/gcloud/ssh/gh treat auth.
+//
+//   ~/.swarm/swarm.db    — provider_credentials + ModelRegistry config
+//                          (api_key + oauth credentials live in the DB)
+//   ~/.swarm/models.json — ModelRegistry (custom providers + overrides;
+//                          PR2 moves this into provider_config)
 //
 // `SWARM_HOME` overrides the base directory (tests, one-off installs).
-// `~/.pi/agent/{auth,models}.json` is a one-time bootstrap source: if
-// `~/.swarm/auth.json` doesn't exist yet but the pi file does, swarm
+// `~/.pi/agent/models.json` is a one-time bootstrap source: if
+// `~/.swarm/models.json` doesn't exist yet but the pi file does, swarm
 // COPIES the pi content over on first access. After that, swarm writes
-// go to `~/.swarm/*` only — the pi file is never modified. This was a
-// prior bug: treating pi as a live fallback meant `swarm providers add`
-// wrote into pi-coding-agent's state, violating single-source-of-truth
-// and surprising users who had stale keys in pi.
-//
-// The door is intentionally left open for per-workspace overlays: when
-// we add them they'll only override model *selection defaults*; the
-// credential layer stays global so a steered run on workspace A can't
-// exfiltrate keys configured for workspace B.
+// go to `~/.swarm/*` only.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -36,19 +37,9 @@ export function getSwarmHome(): string {
   return join(homedir(), ".swarm");
 }
 
-/** Absolute path to ~/.swarm/auth.json. File does not need to exist. */
-export function getAuthPath(): string {
-  return join(getSwarmHome(), "auth.json");
-}
-
 /** Absolute path to ~/.swarm/models.json. File does not need to exist. */
 export function getModelsPath(): string {
   return join(getSwarmHome(), "models.json");
-}
-
-/** pi-coding-agent auth.json — bootstrap source (see file header). */
-export function getPiFallbackAuthPath(): string {
-  return join(homedir(), ".pi", "agent", "auth.json");
 }
 
 /** pi-coding-agent models.json — bootstrap source. */
@@ -64,7 +55,7 @@ function bootstrapFromPi(src: string, dst: string, mode: number): boolean {
   if (existsSync(dst)) return false;
   if (!existsSync(src)) return false;
   try {
-    statSync(src); // readable check
+    statSync(src);
   } catch {
     return false;
   }
@@ -79,26 +70,19 @@ function bootstrapFromPi(src: string, dst: string, mode: number): boolean {
   return true;
 }
 
-/** Run both bootstraps. Call once at AuthStorage / ModelRegistry
- * construction time. Safe to call repeatedly. Returns a small record
- * describing what happened so the CLI can surface "imported from pi"
- * as a one-time notice. */
-export function bootstrapSwarmHomeFromPi(): { auth: boolean; models: boolean } {
-  const auth = bootstrapFromPi(getPiFallbackAuthPath(), getAuthPath(), 0o600);
+/** Run the models.json bootstrap. Call once at ModelRegistry
+ * construction time. Safe to call repeatedly. Returns whether a
+ * copy was performed (so the CLI can surface "imported from pi" as a
+ * one-time notice). The auth half is gone — credentials live in the
+ * store, not on disk. */
+export function bootstrapSwarmHomeFromPi(): { models: boolean } {
   const models = bootstrapFromPi(getPiFallbackModelsPath(), getModelsPath(), 0o644);
-  return { auth, models };
+  return { models };
 }
 
-/** Resolve the auth file path to use. Always returns the swarm path.
- * If the swarm file doesn't exist yet but the pi file does, the pi
- * content is copied over first (one-time bootstrap). Reads and writes
- * thereafter both go to the swarm path. */
-export function resolveAuthPath(): string {
-  bootstrapSwarmHomeFromPi();
-  return getAuthPath();
-}
-
-/** Same semantics as resolveAuthPath, for models.json. */
+/** Resolve the models.json file path to use. Always returns the swarm
+ * path. If the swarm file doesn't exist yet but the pi file does, the
+ * pi content is copied over first (one-time bootstrap). */
 export function resolveModelsPath(): string {
   bootstrapSwarmHomeFromPi();
   return getModelsPath();

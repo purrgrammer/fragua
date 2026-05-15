@@ -5,9 +5,10 @@ export * from "./auth-storage.ts";
 export * from "./model-registry.ts";
 export * from "./model-resolver.ts";
 export * from "./paths.ts";
+// resolve-config-value is kept while ModelRegistry consumes it for the
+// `models.json` custom-provider `apiKey` field; the follow-up
+// provider-config-storage proposal deletes the file entirely.
 export {
-  clearConfigValueCache,
-  invalidateCommandCache,
   resolveConfigValue,
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
