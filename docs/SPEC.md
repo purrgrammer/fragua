@@ -287,6 +287,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Interviewer interface** (attractor §6). Replaced by `wait.human` nodes plus the `intent.hitl_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context resets happen via per-edge `fidelity=truncate|compact|summary:*`; full restarts happen by enqueueing a new run. Validator: `W014`.
+- **`tripleoctagon.prompt` LLM-eval branch** (attractor §4.9). `parallel.fan_in` is structural-only — a deterministic heuristic ranker. LLM synthesis of branch outputs lives in a downstream codergen node referencing `$<branchId>.output` (see `~/.swarm/workflows/review.dot` for the canonical pattern), or in an upstream codergen using the `agent` tool for runtime-decided fan-out. Validator: `W015`.
 
 **Surfaced as warnings, not errors:**
 

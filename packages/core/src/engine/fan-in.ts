@@ -1,20 +1,19 @@
-// Fan-in reducer — attractor-spec §4.9, heuristic branch.
+// Fan-in reducer.
 //
 // Consolidates N parallel branch outcomes into a single winner. Pure: no
-// I/O, no mutation of inputs. The LLM-eval branch (`IF node.prompt is not
-// empty`) is deferred; this module implements the `ELSE` clause:
+// I/O, no mutation of inputs. fan_in is structural-only — it picks a
+// winner via a deterministic heuristic:
 //
 //   SORT candidates BY (outcome_rank, -score, branchId)
 //   outcome_rank = {success: 0, partial_success: 1, retry: 2, skipped: 3, fail: 4}
 //
-// `skipped` is a swarm-specific status (attractor has only the four); we
-// rank it between retry and fail because a node that skipped produced no
-// work but also didn't error, which is strictly worse than a retry-eligible
-// outcome and strictly better than a hard failure.
+// LLM synthesis of branch outputs is expressed as a downstream codergen
+// node referencing `$<branchId>.output`, not as a mode of this handler.
+// See `handlers/fan-in.ts` header for the rationale and patterns.
 //
-// Fan-in returns `allFailed` so the caller can map to Outcome.status: the
-// spec says fan-in only returns FAIL when every candidate failed; otherwise
-// the best non-fail candidate is the winner.
+// Fan-in returns `allFailed` so the caller can map to Outcome.status: it
+// only returns FAIL when every candidate failed; otherwise the best
+// non-fail candidate is the winner.
 //
 // ─── Replay determinism ────────────────────────────────────────────────
 //

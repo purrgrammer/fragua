@@ -87,7 +87,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
 ]);
 
 /** Attributes attractor defines but swarm's architecture makes meaningless.
- * Authors who set them get W014 with a pointer to SPEC.md §6.5 — better
+ * Authors who set them get W014 with a pointer to SPEC.md §5 — better
  * than the previous silent no-op. */
 const ATTRACTOR_ONLY_NODE_ATTRS: ReadonlyMap<string, string> = new Map([
   ["auto_status", "swarm handlers return typed HandlerResult directly — there is no missing-status path to synthesize"],
@@ -742,7 +742,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // W014: attractor attribute that swarm's architecture makes inert.
   // `auto_status` (node) and `loop_restart` (edge) are documented in
   // attractor but the swarm runtime has no path that consults them; see
-  // SPEC.md §6.5 for rationale. The whitelist (W013) accepts them so
+  // SPEC.md §5 for rationale. The whitelist (W013) accepts them so
   // they don't double-warn — this lint is their dedicated signal.
   for (const n of nodes) {
     for (const [key, why] of ATTRACTOR_ONLY_NODE_ATTRS) {
@@ -750,7 +750,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({
         severity: "warning",
         code: "W014",
-        message: `node "${n.id}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §6.5`,
+        message: `node "${n.id}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §5`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
@@ -762,11 +762,30 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({
         severity: "warning",
         code: "W014",
-        message: `edge "${e.from}" → "${e.to}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §6.5`,
+        message: `edge "${e.from}" → "${e.to}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §5`,
         edge: { from: e.from, to: e.to },
         ...(e.loc !== undefined ? { loc: e.loc } : {}),
       });
     }
+  }
+
+  // W015: tripleoctagon (parallel.fan_in) node has `prompt=` set. fan_in
+  // is structural-only — a deterministic heuristic ranker — so `prompt=`
+  // is parsed but never read by the handler. The fix is one of two
+  // patterns: (a) downstream codergen node referencing `$<branchId>.output`
+  // for cross-branch synthesis (see review.dot); (b) `agent` tool in an
+  // upstream codergen for runtime-decided fan-out (see orchestrate.dot).
+  for (const n of nodes) {
+    if (n.shape !== "tripleoctagon") continue;
+    const p = n.attrs.prompt;
+    if (typeof p !== "string" || p.trim() === "") continue;
+    diags.push({
+      severity: "warning",
+      code: "W015",
+      message: `tripleoctagon (parallel.fan_in) node "${n.id}" has prompt= set but fan_in runs a deterministic heuristic ranker — the prompt is never read. For LLM synthesis of branch outputs, add a downstream codergen referencing $<branchId>.output (see review.dot), or fan out via the agent tool inside an upstream codergen (see orchestrate.dot).`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
   }
 
   if (opts.strict) {

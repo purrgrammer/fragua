@@ -891,7 +891,7 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
     expect(w014).toBeDefined();
     expect(w014?.severity).toBe("warning");
     expect(w014?.nodeId).toBe("work");
-    expect(w014?.message).toMatch(/SPEC\.md §6\.5/);
+    expect(w014?.message).toMatch(/SPEC\.md §5/);
   });
 
   test("W014: loop_restart on an edge", () => {
@@ -927,6 +927,57 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
     // auto_status: one W014, zero W013.
     expect(diags.filter((d) => d.code === "W014").length).toBe(1);
     expect(diags.some((d) => d.code === "W013" && d.message.includes("auto_status"))).toBe(false);
+  });
+});
+
+describe("W015 — tripleoctagon prompt is inert", () => {
+  function fanInGraph(extraAttrs: string): string {
+    return `
+      digraph {
+        start [shape=Mdiamond]
+        fan   [shape=component]
+        a     [prompt="a"]
+        b     [prompt="b"]
+        join  [shape=tripleoctagon${extraAttrs}]
+        done  [shape=Msquare]
+        start -> fan -> a -> join -> done
+        fan -> b -> join
+      }
+    `;
+  }
+
+  test("W015 fires when tripleoctagon has prompt= set", () => {
+    const diags = validate(parseDotSource(fanInGraph(`, prompt="synthesize the branches"`)));
+    const w015 = diags.find((d) => d.code === "W015");
+    expect(w015).toBeDefined();
+    expect(w015?.severity).toBe("warning");
+    expect(w015?.nodeId).toBe("join");
+    expect(w015?.message).toMatch(/heuristic ranker/);
+    expect(w015?.message).toMatch(/\$<branchId>\.output/);
+  });
+
+  test("W015 does not fire on a bare tripleoctagon (no prompt)", () => {
+    const diags = validate(parseDotSource(fanInGraph("")));
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
+  });
+
+  test("W015 ignores prompt= on non-tripleoctagon shapes", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          start [shape=Mdiamond]
+          work  [prompt="real codergen prompt"]
+          done  [shape=Msquare]
+          start -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
+  });
+
+  test("W015 does not fire when prompt= is empty / whitespace", () => {
+    const diags = validate(parseDotSource(fanInGraph(`, prompt="   "`)));
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
 });
 

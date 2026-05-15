@@ -1,4 +1,4 @@
-// parallel.fan_in handler — attractor-spec §4.9 heuristic branch.
+// parallel.fan_in handler.
 //
 // Consumes `parallel.<parallelNodeId>.results` from routing (written by
 // the parallel handler in the preceding node), feeds the candidates to
@@ -6,10 +6,13 @@
 // routing under `fan_in.<nodeId>.winner` so downstream codergen/tool
 // nodes can reference it via `${context.fan_in.*}` substitution.
 //
-// The LLM-eval branch from attractor §4.9 (`IF node.prompt is not empty`)
-// is still deferred; this handler only runs the heuristic. When it
-// lands, the emit side belongs in a separate handler kind or a
-// `prompt`-branching switch inside this one.
+// fan_in is structural-only: it joins parallel branches and picks a
+// winner via a deterministic heuristic. LLM synthesis of branch outputs
+// lives in a downstream codergen node referencing `$<branchId>.output`
+// (see `~/.swarm/workflows/review.dot` for the canonical pattern), or
+// in an upstream codergen using the `agent` tool for runtime-decided
+// fan-out. `prompt=` on a tripleoctagon is therefore not honored and
+// the validator flags it (W015).
 
 import { FAN_IN_VERSION, type FanInCandidate, foldFanIn } from "../../engine/fan-in.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
