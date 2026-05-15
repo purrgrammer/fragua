@@ -50,6 +50,10 @@ Or run the interactive setup, which writes to `~/.swarm/`:
 ```sh
 bun run swarm providers add       # pick a provider, paste a key
 bun run swarm providers           # list configured providers + their default models
+bun run swarm providers ls-models <provider>            # list models declared under a custom provider
+bun run swarm providers add-model <provider> <id>       # append one model entry (flags: --context-window --max-tokens --reasoning --input --cost-input --cost-output --yes)
+bun run swarm providers rm-model <provider> <id>        # remove one model entry
+bun run swarm providers edit-model <provider> <id>      # update one or more fields on an existing entry (same flags as add-model)
 ```
 
 See [`docs/providers.md`](docs/providers.md) for the full list and

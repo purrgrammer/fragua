@@ -16,13 +16,18 @@ import { initCommand } from "../src/commands/init.ts";
 import {
   providersAddCommand,
   providersAddCustomCommand,
+  providersAddModelCommand,
+  providersEditModelCommand,
   providersHelpCommand,
   providersListCommand,
   providersLoginCommand,
   providersLogoutCommand,
+  providersLsModelsCommand,
   providersRmCommand,
+  providersRmModelCommand,
   providersTestCommand,
 } from "../src/commands/providers.ts";
+import type { ModelOpsFlags } from "../src/commands/providers-custom.ts";
 import { runCommand } from "../src/commands/run.ts";
 import {
   scheduleAddCommand,
@@ -36,6 +41,47 @@ import { serveCommand } from "../src/commands/serve.ts";
 import { validateCommand } from "../src/commands/validate.ts";
 
 const cli = cac("swarm");
+
+// Translate cac's option bag into the per-model-ops flag shape.
+// cac kebab-cases multi-word options: `--context-window` → `contextWindow`.
+function parseModelOpsFlags(options: Record<string, unknown>): ModelOpsFlags {
+  const pickStr = (key: string): string | undefined => {
+    const v = options[key];
+    return typeof v === "string" ? v : undefined;
+  };
+  const pickNum = (key: string): number | undefined => {
+    const v = options[key];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+  };
+  const out: ModelOpsFlags = {};
+  const name = pickStr("name");
+  if (name !== undefined) out.name = name;
+  const ctx = pickNum("contextWindow");
+  if (ctx !== undefined) out.contextWindow = ctx;
+  const max = pickNum("maxTokens");
+  if (max !== undefined) out.maxTokens = max;
+  if (options["reasoning"] === true) out.reasoning = true;
+  const input = pickStr("input");
+  if (input !== undefined) {
+    const parts = input
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    const valid = parts.every((p) => p === "text" || p === "image");
+    if (valid) out.input = parts as ("text" | "image")[];
+  }
+  const costIn = pickNum("costInput");
+  if (costIn !== undefined) out.costInput = costIn;
+  const costOut = pickNum("costOutput");
+  if (costOut !== undefined) out.costOutput = costOut;
+  if (options["yes"] === true) out.yes = true;
+  return out;
+}
 
 cli.command("validate <workflow>", "Parse + lint a workflow without executing").action(async (workflow: string) => {
   const code = await validateCommand(workflow);
@@ -62,6 +108,14 @@ cli
     "Manage LLM provider credentials + custom models (run without args for help)",
   )
   .option("--custom", "`add` only: add a custom (OpenAI-compatible) provider to the global store")
+  .option("--name <str>", "`add-model`/`edit-model` only: display name")
+  .option("--context-window <n>", "`add-model`/`edit-model` only: context window in tokens")
+  .option("--max-tokens <n>", "`add-model`/`edit-model` only: max output tokens")
+  .option("--reasoning", "`add-model`/`edit-model` only: model supports reasoning mode")
+  .option("--input <list>", "`add-model`/`edit-model` only: comma-sep modalities (text,image)")
+  .option("--cost-input <usd>", "`add-model`/`edit-model` only: per-million-token input cost")
+  .option("--cost-output <usd>", "`add-model`/`edit-model` only: per-million-token output cost")
+  .option("--yes, -y", "`add-model`/`rm-model`/`edit-model`: skip the confirmation prompt")
   .action(
     async (
       action: string | undefined,
@@ -95,6 +149,38 @@ cli
         case "logout":
           process.exit(await providersLogoutCommand(target));
           break;
+        case "ls-models":
+          if (target == null) {
+            console.error(chalk.red("providers ls-models: <provider> required"));
+            process.exit(1);
+          }
+          process.exit(await providersLsModelsCommand(target));
+          break;
+        case "add-model": {
+          if (target == null || extra == null) {
+            console.error(chalk.red("providers add-model: <provider> <id> required"));
+            process.exit(1);
+          }
+          process.exit(await providersAddModelCommand(target, extra, parseModelOpsFlags(options)));
+          break;
+        }
+        case "rm-model": {
+          if (target == null || extra == null) {
+            console.error(chalk.red("providers rm-model: <provider> <id> required"));
+            process.exit(1);
+          }
+          const yes = options["yes"] === true;
+          process.exit(await providersRmModelCommand(target, extra, yes ? { yes: true } : {}));
+          break;
+        }
+        case "edit-model": {
+          if (target == null || extra == null) {
+            console.error(chalk.red("providers edit-model: <provider> <id> required"));
+            process.exit(1);
+          }
+          process.exit(await providersEditModelCommand(target, extra, parseModelOpsFlags(options)));
+          break;
+        }
         default:
           console.error(chalk.red(`unknown providers action: ${action}`));
           providersHelpCommand();

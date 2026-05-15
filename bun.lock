@@ -41,6 +41,7 @@
         "@swarm/server": "workspace:*",
         "@swarm/store": "workspace:*",
         "@swarm/workspace": "workspace:*",
+        "ajv": "8.17.1",
         "cac": "6.7.14",
         "chalk": "5.6.2",
         "ink": "5.2.1",
@@ -66,10 +67,10 @@
       "version": "0.0.0",
       "dependencies": {
         "@sinclair/typebox": "0.34.41",
-        "@swarm/store": "workspace:*",
         "@swarm/types": "workspace:*",
       },
       "devDependencies": {
+        "@swarm/store": "workspace:*",
         "fast-check": "3.23.1",
         "typescript": "5.7.3",
       },

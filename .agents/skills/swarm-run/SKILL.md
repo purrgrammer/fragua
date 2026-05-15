@@ -59,7 +59,7 @@ Common failures:
 - **Heartbeat > 30s old** — daemon dead. Runs stay `queued` until a new one claims the lock. Restart the harness.
 - **`http_url` NULL** — the daemon is up but the harness hasn't published the HTTP URL. Either the harness is mid-startup, or the user is on the CI-primitive path (`swarm daemon` + `swarm serve` separately) — in that case, fall back to `<cwd>/.swarm/serve.json` for discovery.
 - **Provider not credentialed** — `POST /runs` 400s with `code="provider_unavailable"`. Fix: `swarm providers add <provider>` or `swarm providers login <provider>`.
-- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model (`swarm providers add --custom`, which writes to `~/.swarm/swarm.db`'s `provider_config` table) or switch the workflow's `model=` attr.
+- **Model not registered** — `POST /workflows` 400s with `code="model_unresolved"`. Either register the model or switch the workflow's `model=` attr. For a *new* provider use the full wizard (`swarm providers add --custom`); when the provider already exists and you just want one more model, skip the wizard with `swarm providers add-model <provider> <id> [--context-window N --max-tokens N --reasoning --input text,image --cost-input X --cost-output X --yes]`. Both write to `~/.swarm/swarm.db`'s `provider_config` table; the per-model verbs (`ls-models` / `add-model` / `rm-model` / `edit-model`) Ajv-validate on read and write so a typo refuses cleanly instead of poisoning the row.
 
 The user should run `swarm harness` themselves — don't start it on their behalf without asking; the harness attaches to the current shell.
 
