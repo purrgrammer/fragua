@@ -31,6 +31,9 @@ export interface WakePendingResult {
   resumed: string[];
   retryResumed: string[];
   unquarantined: string[];
+  /** Parent run ids transitioned out of `running_children` because every
+   *  sub-run reached terminal. P2.3 of `docs/proposals/parallel.md`. */
+  fanoutConverged: string[];
 }
 
 /**
@@ -44,7 +47,16 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
   const resumed = wakeResume(store);
   const retryResumed = wakeAutoResume(store, now);
   const unquarantined = wakeUnquarantine(store);
-  return { cancelled, hitlWoken, resumed, retryResumed, unquarantined };
+  // first_success cancellation runs BEFORE the fanout-convergence sweep so
+  // the cascading cancel intents have a chance to be observed by
+  // `wakeCancel`-style flows on the same tick (children that are
+  // paused/paused_hitl pick the cancel up immediately; running children
+  // pick it up via their own dispatchOne fold). The convergence sweep
+  // still only fires when every child is terminal — the cancel signals
+  // here just bring the laggards there faster.
+  wakeFirstSuccess(store);
+  const fanoutConverged = wakeRunningChildren(store);
+  return { cancelled, hitlWoken, resumed, retryResumed, unquarantined, fanoutConverged };
 }
 
 /**
@@ -244,4 +256,206 @@ function synthesisedDoneFacts(orphans: OrphanSideEffectRow[]): FactEvent[] {
       artifactKey: `__synth_treat_as_done__:${o.nodeId ?? ""}:${o.toolName ?? ""}`,
     },
   }));
+}
+
+/**
+ * Promote parent runs out of `running_children` once every sub-run has
+ * reached a terminal status. P2.3 of `docs/proposals/parallel.md`.
+ *
+ * For each parent in `running_children` with zero active children:
+ *   1. Resolve `(parentNodeId, fanInNode, subRunIds)` from routing.
+ *   2. Read each sub-run's projection — final status, cost rollup,
+ *      billed-tokens rollup.
+ *   3. Emit one `fact.subrun_completed` per sub-run (reducer folds cost
+ *      into the parent's projection, preserving D3's rollup invariant).
+ *   4. Emit one `fact.fanout_completed` carrying the inline outcomes
+ *      (reducer transitions parent to `queued`, sets `readyAt = now`).
+ *
+ * Both facts land in the same OCC commit so a half-converged state is
+ * unobservable. Late-arriving sub-runs (a paused sub-run that wakes and
+ * terminates AFTER this sweep already converged the parent) can never
+ * happen by construction: the sweep only fires when
+ * `activeChildRuns(parent) === []`, which already excludes paused
+ * statuses (they're non-terminal).
+ *
+ * Sub-runs whose final status is `paused`, `paused_hitl`, `paused_auto`,
+ * or `quarantined` are NOT terminal and the helper keeps waiting (the
+ * proposal's D8 / D9 — sub-run quarantine / pause blocks the parent
+ * without cascading).
+ */
+function wakeRunningChildren(store: IEventStore): string[] {
+  const out: string[] = [];
+  const candidates = store.getWakeCandidates({ statuses: ["running_children"] });
+  for (const row of candidates) {
+    const active = store.activeChildRuns(row.runId);
+    if (active.length > 0) continue;
+
+    const parentState = store.getState(row.runId);
+    if (parentState == null) continue;
+    const parentNodeId = parentState.currentNode;
+    if (parentNodeId == null) continue;
+
+    const subRunIdsRaw = parentState.routing[`parallel.${parentNodeId}.sub_run_ids`];
+    if (!Array.isArray(subRunIdsRaw)) continue;
+    const subRunIds: string[] = [];
+    for (const v of subRunIdsRaw) {
+      if (typeof v !== "string") continue;
+      subRunIds.push(v);
+    }
+    if (subRunIds.length === 0) continue;
+    const fanInNode = parentState.routing[`parallel.${parentNodeId}.fan_in_node`];
+    if (typeof fanInNode !== "string") continue;
+
+    const outcomes: Array<{
+      subRunId: string;
+      parallelIndex: number;
+      finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+      costUsd: number;
+      billedTokens: number;
+    }> = [];
+    const facts: FactEvent[] = [];
+    let allTerminal = true;
+    for (let i = 0; i < subRunIds.length; i++) {
+      const childId = subRunIds[i]!;
+      const child = store.getState(childId);
+      if (child == null) {
+        // Sub-run vanished. The sweep treats it as a halted slot so the
+        // parent doesn't wedge — fan_in surfaces the gap via routing.
+        outcomes.push({ subRunId: childId, parallelIndex: i, finalStatus: "halted", costUsd: 0, billedTokens: 0 });
+        facts.push({
+          type: "fact.subrun_completed",
+          payload: {
+            subRunId: childId,
+            parentNodeId,
+            parallelIndex: i,
+            finalStatus: "halted",
+            costUsd: 0,
+            billedTokens: 0,
+          },
+        });
+        continue;
+      }
+      const final = mapTerminalStatus(child.status);
+      if (final == null) {
+        // Child is still non-terminal (paused / paused_hitl /
+        // paused_auto). Don't converge yet.
+        allTerminal = false;
+        break;
+      }
+      const outcome = {
+        subRunId: childId,
+        parallelIndex: i,
+        finalStatus: final,
+        costUsd: child.metrics.totalCostUsd,
+        billedTokens: child.metrics.billedTokens,
+      };
+      outcomes.push(outcome);
+      facts.push({
+        type: "fact.subrun_completed",
+        payload: {
+          subRunId: childId,
+          parentNodeId,
+          parallelIndex: i,
+          finalStatus: final,
+          costUsd: child.metrics.totalCostUsd,
+          billedTokens: child.metrics.billedTokens,
+        },
+      });
+    }
+    if (!allTerminal) continue;
+
+    facts.push({
+      type: "fact.fanout_completed",
+      payload: {
+        parentNodeId,
+        fanInNode,
+        outcomes,
+      },
+    });
+
+    try {
+      store.appendFact(row.runId, facts, row.version);
+      out.push(row.runId);
+    } catch (err) {
+      if (!(err instanceof ConcurrencyError)) throw err;
+    }
+  }
+  return out;
+}
+
+/**
+ * `first_success` join-policy cancellation (P4 of
+ * `docs/proposals/parallel.md`). When a parent run is in
+ * `running_children` AND `join_policy === "first_success"` AND any
+ * sub-run has reached `status="completed"`, append
+ * `intent.cancel_requested { reason: "first_success_won" }` on every
+ * remaining active sub-run. Standard cancel semantics: children unwind
+ * (some emit `fact.run_cancelled` immediately; others abort their
+ * in-flight handler first), and the wake-pending convergence sweep
+ * promotes the parent once they're all terminal.
+ *
+ * Idempotent: re-appending a cancel intent on a sub-run that already
+ * carries one is harmless — `intent.cancel_requested` is consumed at
+ * most once by the fold (further appends are no-ops). Detection guards
+ * against re-issuing the cancel on the same tick by checking whether a
+ * pending cancel already exists on the sub-run's log.
+ */
+function wakeFirstSuccess(store: IEventStore): string[] {
+  const out: string[] = [];
+  const candidates = store.getWakeCandidates({ statuses: ["running_children"] });
+  for (const row of candidates) {
+    const state = store.getState(row.runId);
+    if (state == null) continue;
+    const parentNodeId = state.currentNode;
+    if (parentNodeId == null) continue;
+    const joinPolicy = state.routing[`parallel.${parentNodeId}.join_policy`];
+    if (joinPolicy !== "first_success") continue;
+    const childIds = state.routing[`parallel.${parentNodeId}.sub_run_ids`];
+    if (!Array.isArray(childIds)) continue;
+
+    // Find at least one child that completed (winner).
+    let anyWinner = false;
+    const childStates: { id: string; status: string }[] = [];
+    for (const idRaw of childIds) {
+      if (typeof idRaw !== "string") continue;
+      const child = store.getState(idRaw);
+      if (child == null) continue;
+      childStates.push({ id: idRaw, status: child.status });
+      if (child.status === "completed") anyWinner = true;
+    }
+    if (!anyWinner) continue;
+
+    // Cascade cancels onto every non-terminal sibling.
+    for (const c of childStates) {
+      const terminal =
+        c.status === "completed" || c.status === "cancelled" || c.status === "halted" || c.status === "quarantined";
+      if (terminal) continue;
+      // Skip if a cancel intent is already pending and unapplied — no
+      // need to flood the event log.
+      const childState = store.getState(c.id);
+      if (childState != null) {
+        const pending = store.getNextPendingIntent(c.id, "intent.cancel_requested", childState.lastAppliedSeq);
+        if (pending != null) continue;
+      }
+      try {
+        store.appendIntent(c.id, {
+          type: "intent.cancel_requested",
+          payload: { reason: "first_success_won" },
+        });
+      } catch {
+        // Best-effort — a child that vanished or whose store handle
+        // rejected is harmless: convergence will sweep it next tick.
+      }
+    }
+    out.push(row.runId);
+  }
+  return out;
+}
+
+function mapTerminalStatus(status: string): "completed" | "halted" | "cancelled" | "quarantined" | null {
+  if (status === "completed") return "completed";
+  if (status === "halted") return "halted";
+  if (status === "cancelled") return "cancelled";
+  if (status === "quarantined") return "quarantined";
+  return null;
 }

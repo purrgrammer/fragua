@@ -84,6 +84,7 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     externalCall: async (_, fn) => fn("stub-key"),
     args: overrides.args ?? {},
     nodeOutputs: overrides.nodeOutputs ?? new Map(),
+    subRunOutcomes: overrides.subRunOutcomes ?? new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
     withScope: () => {
       throw new Error("stubCtx: withScope not implemented for this test");

@@ -80,6 +80,7 @@ const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | und
   // halted/paused.
   queued: undefined,
   running: undefined,
+  running_children: undefined,
   completed: undefined,
   cancelled: undefined,
   halted: undefined,

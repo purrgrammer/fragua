@@ -189,6 +189,36 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       next.branch = fact.payload.branch;
       return next;
     }
+    case "fact.fanout_started": {
+      // Parent transitions from `running` → `running_children`. The
+      // dispatch interval closes (parent isn't actively executing
+      // handler code; sub-runs run in parallel under their own claims),
+      // but `currentNode` stays pinned to the component so the
+      // collect-phase re-dispatch lands on the same node.
+      closeDispatchInterval(next, now);
+      next.status = "running_children";
+      next.nodeStartedAt = null;
+      return next;
+    }
+    case "fact.fanout_completed": {
+      // Every sub-run has reached terminal-or-paused-class. Move the
+      // parent back into the queue so the next claim runs the collect
+      // phase on the component node. `readyAt = now` so the wake puts
+      // it at the front of the priority/ready_at sort.
+      next.status = "queued";
+      next.readyAt = now;
+      return next;
+    }
+    case "fact.subrun_completed": {
+      // Cost rollup: fold the sub-run's billed cost/tokens into the
+      // parent's metrics so budget gates see cumulative spend (parent +
+      // every completed sub-run) on the next gate check. In-flight
+      // sub-runs aggregate live via SQL at gate-check time (D3).
+      const p = fact.payload;
+      next.metrics.totalCostUsd += p.costUsd;
+      next.metrics.billedTokens += p.billedTokens;
+      return next;
+    }
     case "fact.run_requeued_after_crash": {
       // If sweep captured the dying daemon's last heartbeat, use it as a
       // tight upper bound on real active time (heartbeat updates ~every 5s,
@@ -220,6 +250,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     case "fact.provider_retry_attempted":
       return next;
   }
+  return next;
 }
 
 export function foldFacts(initial: RunState, facts: FactEvent[], now: number): RunState {

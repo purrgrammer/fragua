@@ -16,12 +16,19 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  * - `paused_auto` — daemon owes a clock tick; operator may short-circuit via `intent.resume`
  * - `paused_hitl` — workflow asked a question; answer via `intent.hitl_input`
  *
+ * Plus `running_children` — the run dispatched a fan-out and is waiting
+ * for its sub-runs to converge. Not a pause: the parent's worktree and
+ * provisioner state stay live, the wake-pending sweep advances the
+ * parent back to `queued` (collect phase) when every sub-run reaches a
+ * terminal-or-paused-class state. P1.2 of `docs/proposals/parallel.md`.
+ *
  * Mirrored by `run_state.status` (CHECK constraint in schema.sql) and
  * the daemon's intent fold. See {@link PauseReason} for the reason
  * partition; status follows reason 1:1. */
 export type RunStatus =
   | "queued"
   | "running"
+  | "running_children"
   | "paused"
   | "paused_hitl"
   | "paused_auto"
@@ -154,6 +161,22 @@ export type IntentEvent =
        * dispatch tick. */
       type: "intent.max_loops_adjusted";
       payload: { newLimit: number; note?: string };
+    }
+  | {
+      /** The parallel handler asks the executor to fan out into N
+       * sub-runs and transition the parent to `running_children`. The
+       * handler returns the requested fanout shape via
+       * `HandlerResult.fanout_pending`; the executor then enqueues
+       * sub-runs and emits `fact.fanout_started`. The intent is
+       * recorded for replay so the original branch composition (and the
+       * sub-run IDs the executor minted) lands in the event log. P1.3
+       * of `docs/proposals/parallel.md`. */
+      type: "intent.fanout_requested";
+      payload: {
+        parentNodeId: string;
+        fanInNode: string;
+        branchNodeIds: readonly string[];
+      };
     };
 
 export type IntentType = IntentEvent["type"];
@@ -550,6 +573,65 @@ export type FactEvent =
        * provisioner. Lands AFTER the terminal status fact. */
       type: "fact.run_branched";
       payload: { branch: string };
+    }
+  | {
+      /** Parent fanned out into N sub-runs. The sub-run ids are already
+       * enqueued by the parallel handler; this fact transitions the
+       * parent into `running_children` and records the convergence node
+       * the parent will re-enter on collect. P1.3 of
+       * `docs/proposals/parallel.md`. */
+      type: "fact.fanout_started";
+      payload: {
+        parentNodeId: string;
+        childRunIds: readonly string[];
+        fanInNode: string;
+      };
+    }
+  | {
+      /** Every sub-run from a prior `fact.fanout_started` has reached a
+       * terminal-or-paused-class state. Emitted by the wake-pending
+       * sweep on the parent's log; transitions the parent from
+       * `running_children` back to `queued` so the next executor turn
+       * runs the collect phase. The `outcomes` array carries the inline
+       * final outcome per sub-run so the parent never re-reads sub-run
+       * projections. P1.3 of `docs/proposals/parallel.md`. */
+      type: "fact.fanout_completed";
+      payload: {
+        parentNodeId: string;
+        fanInNode: string;
+        outcomes: readonly {
+          subRunId: string;
+          parallelIndex: number;
+          finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+          /** Aggregated final cost the sub-run reported through its own
+           * projection's `metrics.totalCostUsd`. */
+          costUsd: number;
+          /** Billed-tokens sum from sub-run metrics. */
+          billedTokens: number;
+        }[];
+      };
+    }
+  | {
+      /** A sub-run reached a terminal status; the parent's projection
+       * folds the inline outcome into its `total_subrun_cost_usd`
+       * accumulator (cost rollup, D3 in the proposal). Fires once per
+       * sub-run termination. P1.3 of `docs/proposals/parallel.md`. */
+      type: "fact.subrun_completed";
+      payload: {
+        subRunId: string;
+        parentNodeId: string;
+        parallelIndex: number;
+        finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+        costUsd: number;
+        billedTokens: number;
+        /** Optional reference to the sub-run's primary output artifact —
+         * the parent's `$<branchId>.output` substitution resolves
+         * through this on collect-phase re-dispatch. */
+        outputRef?: { nodeId: string; key: string };
+        /** Optional `routingDelta.score` the sub-run surfaced for
+         * fan_in ranking. */
+        fanInScore?: number;
+      };
     };
 
 // Note: there are no dedicated `fact.subagent.*` events. Sub-agents
@@ -750,6 +832,8 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
   "fact.run_branched",
+  "fact.fanout_started",
+  "fact.fanout_completed",
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",

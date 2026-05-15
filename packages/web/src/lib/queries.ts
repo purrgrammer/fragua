@@ -101,6 +101,14 @@ export const queries = {
         staleTime: 30_000,
         retry: noRetryOnGone,
       }),
+    /** Sub-runs of a parent (P5 of docs/proposals/parallel.md). Empty
+     *  array on top-level runs. */
+    children: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), id, "children"] as const,
+        queryFn: () => api.getRunChildren(id),
+        enabled: id.length > 0,
+      }),
   },
 
   skills: {

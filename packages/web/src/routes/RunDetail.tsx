@@ -41,6 +41,7 @@ import { RunConversation } from "../components/RunConversation.tsx";
 import { RunPausedNotice } from "../components/RunPausedNotice.tsx";
 import { RunStatusBadge } from "../components/RunStatusBadge.tsx";
 import SteerInput from "../components/SteerInput.tsx";
+import { SubRunList } from "../components/SubRunList.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { StatTile } from "../components/ui/stat-tile.tsx";
@@ -170,6 +171,11 @@ export function RunDetail(): JSX.Element {
       {detail?.runStatus === "paused_hitl" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
+
+      {/* P5 of docs/proposals/parallel.md: render the parent's
+          sub-runs (parallel branches) above the tabs. Self-renders
+          nothing when the run has no children. */}
+      {id != null && id.length > 0 && <SubRunList parentRunId={id} />}
 
       {isError && !detail ? (
         <EmptyState

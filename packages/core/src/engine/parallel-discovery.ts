@@ -98,3 +98,74 @@ export function findParallelParent(graph: Graph, fanInNodeId: string): string | 
   }
   return null;
 }
+
+/**
+ * Well-formedness of a multi-node branch subgraph (P3.1 / W017 of
+ * `docs/proposals/parallel.md`). For each branch:
+ *
+ *   - BFS forward from the branch root, stopping at the fan_in
+ *     convergence node.
+ *   - The collected node set is the branch's subgraph.
+ *   - Different branches' subgraphs MUST be disjoint (no cross-branch
+ *     edges): a node reachable from branch A and branch B is ambiguous
+ *     ownership and the executor's per-sub-run slice can't decide which
+ *     sub-run dispatches it.
+ *   - Cycles inside a branch subgraph are tolerated only via the same
+ *     retry-policy semantics top-level workflows use (max_retries on
+ *     backward edges); detection here just records the cycle.
+ */
+export type BranchSubgraphFinding =
+  | { kind: "ok" }
+  | { kind: "cross-branch"; nodeId: string; branchRoots: string[] }
+  | { kind: "cycle"; nodeId: string; branchRoot: string };
+
+export interface BranchSubgraphReport {
+  /** Per-branch-root → node ids reachable inside the branch's subgraph
+   *  (excluding the fan_in node itself). */
+  perBranch: Record<string, string[]>;
+  /** Empty array when well-formed. */
+  findings: BranchSubgraphFinding[];
+}
+
+export function validateBranchSubgraphs(
+  graph: Graph,
+  branches: readonly string[],
+  fanInNode: string,
+): BranchSubgraphReport {
+  const perBranch: Record<string, string[]> = {};
+  const findings: BranchSubgraphFinding[] = [];
+  const ownership = new Map<string, string[]>(); // nodeId -> branchRoot[]
+
+  for (const branchRoot of branches) {
+    const reachable = new Set<string>();
+    const stack: string[] = [branchRoot];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (id === fanInNode) continue; // fan_in is the convergence; not part of any branch.
+      if (reachable.has(id)) {
+        findings.push({ kind: "cycle", nodeId: id, branchRoot });
+        continue;
+      }
+      reachable.add(id);
+      for (const e of graph.edges) {
+        if (e.from !== id) continue;
+        if (e.to === fanInNode) continue;
+        if (!reachable.has(e.to)) stack.push(e.to);
+      }
+    }
+    perBranch[branchRoot] = [...reachable];
+    for (const id of reachable) {
+      const owners = ownership.get(id) ?? [];
+      if (!owners.includes(branchRoot)) owners.push(branchRoot);
+      ownership.set(id, owners);
+    }
+  }
+
+  for (const [nodeId, owners] of ownership) {
+    if (owners.length > 1) {
+      findings.push({ kind: "cross-branch", nodeId, branchRoots: owners });
+    }
+  }
+
+  return { perBranch, findings };
+}

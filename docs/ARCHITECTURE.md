@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 8`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade; v5 added a `kind` discriminator + parent-linkage columns on `run_state` to model conversation runs (since abandoned); v6 adds the `schedules` table and `run_state.schedule_id` for scheduled runs (proposal: `docs/proposals/scheduled-runs.md`); v7 drops the v5 conversation scaffolding (`kind`, `parent_run_id`, `parent_node_id`, `parent_iteration`) and restores `workflow_sha` to `NOT NULL` — sub-agents are an in-tool implementation, not runs (proposal: `docs/proposals/agent-tool.md`); v8 collapses `paused_provider_retry` and `paused_retry` into a single `paused_auto` status, retires `fact.run_paused_retry` (folded into `fact.run_paused{reason:"handler_retry"}`), and promotes provider auto-retry to its own reason `provider_retry` (was: `provider_error` + `policy:"auto-retry"`); legacy auto-wake runs in flight at migration time are deleted (proposal: `docs/proposals/recoverable-budget-pause.md`, Stage 2). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 10`. v2 collapses `paused_provider_error` into the unified `paused` status carrying a reason-discriminated `fact.run_paused`; v3 drops `run_state.project_id` and the `projects` table, adds `cwd` + workflow metadata + harness URL columns; v4 widens `workflow_scope` CHECK to include `'local'` for the global-then-local workflow resolution cascade; v5 added a `kind` discriminator + parent-linkage columns on `run_state` to model conversation runs (since abandoned); v6 adds the `schedules` table and `run_state.schedule_id` for scheduled runs (proposal: `docs/proposals/scheduled-runs.md`); v7 drops the v5 conversation scaffolding (`kind`, `parent_run_id`, `parent_node_id`, `parent_iteration`) and restores `workflow_sha` to `NOT NULL` — sub-agents are an in-tool implementation, not runs (proposal: `docs/proposals/agent-tool.md`); v8 collapses `paused_provider_retry` and `paused_retry` into a single `paused_auto` status, retires `fact.run_paused_retry` (folded into `fact.run_paused{reason:"handler_retry"}`), and promotes provider auto-retry to its own reason `provider_retry` (was: `provider_error` + `policy:"auto-retry"`); legacy auto-wake runs in flight at migration time are deleted (proposal: `docs/proposals/recoverable-budget-pause.md`, Stage 2); v9 re-introduces sub-run linkage columns (`parent_run_id`, `parent_node_id`, `parallel_index`, `subgraph_root_node_id`, `subgraph_terminal_node_id`) on `run_state` plus an `idx_run_state_parent` partial index — this time for parallel sub-runs (proposal: `docs/proposals/parallel.md`, P1.1); v10 adds `running_children` to `run_state.status` CHECK — parents that fanned out into sub-runs sit in this status until every sub-run reaches a terminal-or-paused-class state (proposal: `docs/proposals/parallel.md`, P1.2). See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -181,7 +181,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_hitl','paused_auto',
+    'queued','running','running_children','paused','paused_hitl','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -205,6 +205,13 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   base_git_sha TEXT,                              -- HEAD sha of worktree at provision time; NULL when no provisioner
   branch TEXT,                                    -- preserved on dispose when working-copy delta exists; NULL otherwise
   schedule_id TEXT,                               -- schedule that fired this run; informational, not a FK cascade target
+  -- Parallel sub-run linkage (P1.1 of docs/proposals/parallel.md).
+  -- NULL on top-level runs; set together on sub-run enqueue.
+  parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+  parent_node_id TEXT,                            -- component node on parent that fanned out
+  parallel_index INTEGER,                         -- sub-run's 0-based slot in the fan-out
+  subgraph_root_node_id TEXT,                     -- root of the parent-graph slice this sub-run dispatches through
+  subgraph_terminal_node_id TEXT,                 -- fan_in node where the sub-run converges (sub-run terminates before entering it)
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -222,6 +229,9 @@ CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
 CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
 CREATE INDEX idx_runs_by_schedule
   ON run_state(schedule_id) WHERE schedule_id IS NOT NULL;
+-- Sub-run lookups (cancel propagation, cost rollup, sweep).
+CREATE INDEX idx_run_state_parent
+  ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
 
 CREATE TABLE events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
@@ -364,6 +374,7 @@ CREATE INDEX idx_schedules_cwd ON schedules(cwd);
 | `intent.max_retries_adjusted` | `nodeId: string`, `newLimit: number` (>0), `note?: string` | Operator raises a node's `max_retries` cap on a `paused{reason:'max_retries'}` run; folded into `routing.max_retries_override.<nodeId>`. Stage 3 of recoverable-budget-pause.md |
 | `intent.goal_gate_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises `max_goal_gate_retries` on a `paused{reason:'goal_gate'}` run; folded into `routing.max_goal_gate_retries_override` |
 | `intent.max_loops_adjusted` | `newLimit: number` (>0), `note?: string` | Operator raises the per-run dispatch ceiling on a `paused{reason:'max_loops'}` run; folded into `routing.max_loops_override` |
+| `intent.fanout_requested` | `parentNodeId`, `fanInNode`, `branchNodeIds: string[]` | Parallel handler signals the executor to fan out into N sub-runs. The handler returns `HandlerResult.fanout_pending`; the executor enqueues the sub-runs and emits `fact.fanout_started`. Intent is replay-recoverable — the original branch composition lives in the event log. P1.3 of `docs/proposals/parallel.md` |
 
 ### Fact events (writer: `daemon`, OCC-checked)
 | Type | Payload fields | Semantics |
@@ -391,6 +402,9 @@ CREATE INDEX idx_schedules_cwd ON schedules(cwd);
 | `fact.handler_timeout_leaked` | `nodeId`, `leakedAt` | Accounting truth |
 | `fact.daemon_takeover` | `reclaimedFrom: pid`, `at: ts` | Lock reclaim |
 | `fact.run_branched` | `branch` | Post-terminal metadata: dispose() preserved a branch (working tree had a non-empty `git status --porcelain`). Lands AFTER the terminal status fact. Branch GC, paused-run drift handling, and per-branch isolation in parallel branches are tracked in [`docs/proposals/worktree-design.md`](./proposals/worktree-design.md). |
+| `fact.fanout_started` | `parentNodeId`, `childRunIds: string[]`, `fanInNode` | Parent fanned out into N sub-runs; transitions parent to `running_children`. The reducer closes the parent's dispatch interval (sub-runs run under their own claims) and leaves `currentNode` pinned to the component for the collect-phase re-dispatch. P1.3 of `docs/proposals/parallel.md` |
+| `fact.fanout_completed` | `parentNodeId`, `fanInNode`, `outcomes: [{ subRunId, parallelIndex, finalStatus, costUsd, billedTokens }]` | All sub-runs reached terminal-or-paused-class. Emitted by the wake-pending sweep on the parent's log; transitions the parent from `running_children` back to `queued` so the next executor turn runs the collect phase. Inline outcomes carry the cost/status rollup so the parent never re-reads sub-run projections — preserves replay determinism (D5). P1.3 of `docs/proposals/parallel.md` |
+| `fact.subrun_completed` | `subRunId`, `parentNodeId`, `parallelIndex`, `finalStatus: 'completed'\|'halted'\|'cancelled'\|'quarantined'`, `costUsd`, `billedTokens`, `outputRef?`, `fanInScore?` | Single sub-run reached terminal; parent's projection folds the inline cost into its rollup (cost rollup, D3). One per sub-run termination. P1.3 of `docs/proposals/parallel.md` |
 
 **Sub-agents have no dedicated facts and no `run_state` row.** A sub-agent (LLM-spawned via the `agent` tool) is a tool implementation that runs inline as a fresh codergen call against the parent's event stream. Three **observability** event types bracket the slice: `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`, `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`, and `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` (fires on respawn after a daemon crash; see [`docs/proposals/sub-agent-crash-resilience.md`](./proposals/sub-agent-crash-resilience.md)). `name` and `agent_def` are independent: `name` carries the free-form caller-supplied label from `agent({ name: <label>, … })`; `agent_def` carries the resolved profile name from `agent({ agent: <def-name>, … })` against a discovered definition (see [`docs/proposals/agent-definitions.md`](./proposals/agent-definitions.md)). Either, both, or neither can be present. UIs prefer `name` when present (the caller chose it for this spawn) and fall back to `agent_def`. Every event the sub-agent emits in between (`llm.start`, `llm.toolcall_*`, `cost.recorded`, `agent.turn_*`) carries `subagent_id` on its payload as a discriminator. The cost-rollup fields (`costUsd`, `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) sum every `cost.recorded` the sub-agent forwarded onto the parent's stream during its bracket — a per-spawn view UIs and analytics can render without scanning the slice. Required numbers, default 0 when no `cost.recorded` fired (e.g. spawn halted before any LLM call). Field shape mirrors `fact.node_aborted.partial*`. The fields are a per-spawn view of the same stream, not a duplicate accounting path: cost still rolls into the parent's `metrics` through the existing accumulation path — the reducer doesn't filter on `subagent_id`. The tool result (`{ subagent_id, status, total_tool_calls, halt_reason? }`) is the bidirectional handle the parent LLM gets back. Parallel `agent` toolcalls in one parent message run concurrently and demux by `subagent_id`. The `subagent_id` itself is **deterministic** — `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars — so a sub-agent respawned after a daemon crash hashes to the same id and rehydrates its prior transcript under the existing `__subagent:<id>` namespace in the messages table. The respawn path emits `subagent.resumed` (no fresh `subagent.start` — the original is still in the event log) and either skips the LLM call (when the persisted transcript ended in `stopReason:"stop"` with no pending toolCalls) or hands `priorMessages` to the backend so the child picks up where it left off. On a resumed bracket, `subagent.end.costUsd` and the token fields are **cumulative** across every spawn of the same `subagent_id` — the daemon seeds the per-spawn rollup from prior `subagent.end` events for that id (via `IEventReader.getEventsByType`). **Consumers summing cost across `subagent.end` rows MUST dedupe by `subagent_id` and take the terminal (non-cancelled) bracket; naive summation across every bracket over-counts.** The parent's `total_cost_usd` projection is unaffected — it folds each `fact.node_completed.costUsd` once. Typed payload schemas: `SubagentStartData` / `SubagentEndData` / `SubagentResumedData` in `packages/core/src/types/events.ts`.
 
@@ -483,6 +497,14 @@ export interface IEventWriter {
   // Workflow catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
 
+  // Metrics-only delta (no OCC, no event) — see docs/proposals/parallel.md §P0.3.
+  // Applies additive deltas to `run_state.metrics` in a single SQL UPDATE
+  // (json_set + json_extract + COALESCE), without bumping `version` and
+  // without appending an event. Targets cross-run accounting hops (parent
+  // absorbing completed sub-run cost) so the parent's OCC space doesn't
+  // churn for projection-layer accounting.
+  addMetricsDelta(runId: string, delta: MetricsDelta): void;
+
   // Maintenance
   vacuum(): void;
   gcBlobs(maxRows?: number): { deleted: number };
@@ -523,6 +545,17 @@ export interface IEventReader {
   // Per-run aggregates
   getStepAggregates(runId: string): StepAggregateRow[];
   getRunCostTotals(runId: string): RunCostTotalsRow;
+
+  // Parallel sub-runs — see docs/proposals/parallel.md §P1.4 / §P1.5.
+  // `getParentCostSnapshot` aggregates the parent's own cost (already
+  // includes terminal sub-run rollup folded by the reducer) with the
+  // live `total_cost_usd` of every non-terminal sub-run, so the budget
+  // gate evaluates `own + inFlight` against the cap mid-fanout without
+  // re-walking the events table. `activeChildRuns` returns the
+  // non-terminal sub-run id list for cancel propagation (D10) — the
+  // dispatch fold emits `intent.cancel_requested` on each.
+  getParentCostSnapshot(parentRunId: string): ParentCostSnapshot;
+  activeChildRuns(parentRunId: string): string[];
 
   // Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
@@ -941,6 +974,11 @@ app.get("/skills/:locId/tree",        (c) => skillTree(c));        // recursive 
 app.get("/skills/:locId/file",        (c) => skillFile(c));        // ?path=<rel>; sandboxed to skill_dir
 app.get("/agents",                    (c) => listAgents(c));
 app.get("/agents/:locId",             (c) => agentDetail(c));      // metadata + body (the prompt)
+
+// Sub-runs view (P5 of docs/proposals/parallel.md). Returns the
+// summary row for every run whose `parent_run_id = :id`, sorted by
+// `parallel_index`. Empty array on top-level runs.
+app.get("/runs/:id/children", (c) => c.json({ children: childSummaries(c.req.param("id")) }));
 
 // JSON-batch read of a run's events; pagination via ?since / ?limit.
 app.get("/runs/:id/events", (c) => {

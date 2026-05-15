@@ -41,6 +41,7 @@ import type {
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
+  ParentCostSnapshot,
   RunCostTotalsRow,
   StepAggregateRow,
   WakeCandidateRow,
@@ -90,6 +91,7 @@ export type {
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
+  ParentCostSnapshot,
   RunCostTotalsRow,
   StepAggregateRow,
   WakeCandidateRow,
@@ -173,6 +175,41 @@ export interface RunMetrics {
   activeMs: number;
 }
 
+/**
+ * Eligibility filter passed to {@link IEventWriter.claimNextRun}. The
+ * picker walks queued runs in priority order; rows that fail the filter
+ * are skipped (the picker keeps walking) rather than blocking. Top-level
+ * runs (no `parent_run_id`) always pass.
+ *
+ * See P0.4 of `docs/proposals/parallel.md`.
+ */
+export interface ClaimEligibility {
+  /** Sub-runs (rows with non-NULL `parent_run_id`) are eligible only
+   *  when the parent's status is in this list. If unset, sub-runs are
+   *  ignored — used by callers that only want top-level runs (e.g.,
+   *  pre-sub-run behaviour). */
+  parentStatusIn?: readonly RunStatus[];
+}
+
+/**
+ * Additive deltas applied via {@link IEventWriter.addMetricsDelta}. Each
+ * field is optional and treated as a delta to add to the current value
+ * (missing → 0). Used for cross-run cost rollup (parallel sub-runs).
+ */
+export interface MetricsDelta {
+  billedTokens?: number;
+  totalCostUsd?: number;
+  totalInputCostUsd?: number;
+  totalOutputCostUsd?: number;
+  totalCacheReadCostUsd?: number;
+  totalCacheWriteCostUsd?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
+  activeMs?: number;
+}
+
 export interface RunState {
   runId: string;
   version: number;
@@ -232,6 +269,23 @@ export interface RunState {
    * target, so a run keeps its lineage even after the schedule row is
    * gone. */
   scheduleId: string | null;
+  /** Parent run id when this row is a parallel sub-run; `null` on
+   * top-level runs. P1.1 of `docs/proposals/parallel.md`. ON DELETE
+   * SET NULL — parent GC leaves the sub-run as a free-standing row. */
+  parentRunId: string | null;
+  /** Component node id on the parent that fanned out into this sub-run.
+   * `null` on top-level runs. */
+  parentNodeId: string | null;
+  /** Sub-run's 0-based position in the parent's fan-out. `null` on
+   * top-level runs. */
+  parallelIndex: number | null;
+  /** Root of the parent-graph slice this sub-run dispatches through.
+   * `null` on top-level runs. */
+  subgraphRootNodeId: string | null;
+  /** Fan_in node where the sub-run converges. The sub-run terminates
+   * BEFORE entering this node; the parent's collect phase reads sub-run
+   * outcomes on the fan_in turn. `null` on top-level runs. */
+  subgraphTerminalNodeId: string | null;
 }
 
 /**
@@ -505,6 +559,16 @@ export interface EnqueueRunParams {
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
+  /** Parallel sub-run linkage. Set only by the parallel handler when
+   * fanning out into N sub-run rows; top-level enqueues leave these
+   * undefined. P1.1 of `docs/proposals/parallel.md`. All five fields
+   * are set or none — the executor / dispatcher refuses inconsistent
+   * partial linkage. */
+  parentRunId?: string;
+  parentNodeId?: string;
+  parallelIndex?: number;
+  subgraphRootNodeId?: string;
+  subgraphTerminalNodeId?: string;
 }
 
 export interface GetEventsOpts {
@@ -610,7 +674,18 @@ export interface IEventWriter {
 
   // ─── Run lifecycle (mutations)
   enqueueRun(params: EnqueueRunParams): void;
-  claimNextRun(maxInFlight: number): { runId: string } | null;
+  /**
+   * Atomically claim the next eligible queued run (highest priority, lowest
+   * ready_at), or `null` when the daemon is at capacity or no run is
+   * eligible. Defaults to the historical behaviour: any `queued` run.
+   *
+   * P0.4 of `docs/proposals/parallel.md`: `opts.eligibility` parameterises
+   * the picker by an eligibility filter so sub-run-aware claiming can
+   * gate on the parent's status. Top-level runs (no `parent_run_id`)
+   * always pass through; sub-runs are claimed only when their parent's
+   * status is in `eligibility.parentStatusIn`.
+   */
+  claimNextRun(maxInFlight: number, opts?: { eligibility?: ClaimEligibility }): { runId: string } | null;
   /**
    * Heal crash damage on daemon startup (requeue 'running' runs,
    * quarantine orphan side-effect intents). When the caller is the
@@ -656,6 +731,21 @@ export interface IEventWriter {
 
   // ─── Workflow catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
+
+  /**
+   * Apply additive deltas to `run_state.metrics` WITHOUT bumping `version`,
+   * WITHOUT appending an event, and WITHOUT folding through the reducer.
+   * For cross-run accounting hops (e.g., a parent absorbing completed
+   * sub-run cost) where the metric mutation is pure accounting and
+   * shouldn't churn the parent's OCC space — see P0.3 of
+   * `docs/proposals/parallel.md`.
+   *
+   * Map-shaped fields (`models`, `nodeCosts`, `loopCounts`) are NOT
+   * supported through this pathway; their merge semantics flow through
+   * the reducer via `fact.node_completed`. Concurrent calls serialise
+   * via the write-queue. No-op when `runId` is unknown.
+   */
+  addMetricsDelta(runId: string, delta: MetricsDelta): void;
 
   // ─── Maintenance
   vacuum(): void;
@@ -778,6 +868,27 @@ export interface IEventReader {
    * title generator) that don't have an `llm.start` to anchor to.
    */
   getRunCostTotals(runId: string): RunCostTotalsRow;
+
+  /**
+   * Aggregate cost snapshot for a parent run with active sub-runs.
+   * Returns `{ ownCostUsd, inFlightCostUsd, ownBilledTokens,
+   * inFlightBilledTokens }` so the budget gate can evaluate
+   * `own + inFlight` against the cap when a fan-out is mid-flight. The
+   * `own` half already includes terminal sub-runs (folded into the
+   * parent's metrics via `fact.subrun_completed`); `inFlight` covers
+   * live sub-runs whose final cost hasn't landed yet. See P1.4 / D3 of
+   * `docs/proposals/parallel.md`. Top-level runs return zero on the
+   * in-flight half (no sub-runs to aggregate).
+   */
+  getParentCostSnapshot(parentRunId: string): ParentCostSnapshot;
+
+  /**
+   * Run-id list of every sub-run linked to `parentRunId` whose status
+   * is non-terminal. Used by cancel propagation (P1.5 / D10):
+   * cancelling a parent appends `intent.cancel_requested` on each of
+   * these. Returns an empty array for top-level runs.
+   */
+  activeChildRuns(parentRunId: string): string[];
 
   // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;

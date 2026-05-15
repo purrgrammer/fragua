@@ -20,6 +20,7 @@ export function mapStatus(status: RunStatus): UiStatus {
     case "halted":
       return "fail";
     case "running":
+    case "running_children":
       return "running";
     case "queued":
       return "queued";
@@ -64,6 +65,10 @@ export function runStateToSummary(
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;
   if (state.cwd != null) summary.cwd = state.cwd;
+  // Parallel sub-run linkage (P5 of docs/proposals/parallel.md).
+  if (state.parentRunId != null) summary.parentRunId = state.parentRunId;
+  if (state.parentNodeId != null) summary.parentNodeId = state.parentNodeId;
+  if (state.parallelIndex != null) summary.parallelIndex = state.parallelIndex;
   return summary;
 }
 

@@ -9,6 +9,10 @@ export interface MetricsSnapshot {
   writes: number;
   intents: number;
   facts: number;
+  /** Metrics-only delta writes (P0.3 — cross-run cost rollup). Doesn't
+   *  bump `version` or emit an event; counted here so the snapshot
+   *  accounts for every store write. */
+  metricsDeltas: number;
   occConflicts: number;
   /** Last N write durations in ms, newest last. */
   writeDurationsMs: number[];
@@ -33,6 +37,7 @@ export class Metrics {
   private writes = 0;
   private intents = 0;
   private facts = 0;
+  private metricsDeltas = 0;
   private occConflicts = 0;
   private durations: number[] = [];
   private lockWaits: number[] = [];
@@ -40,10 +45,11 @@ export class Metrics {
   private totalLockWaitMs = 0;
   private readonly startedAt = Date.now();
 
-  recordWrite(durationMs: number, kind: "fact" | "intent"): void {
+  recordWrite(durationMs: number, kind: "fact" | "intent" | "metrics_delta"): void {
     this.writes++;
     if (kind === "fact") this.facts++;
-    else this.intents++;
+    else if (kind === "intent") this.intents++;
+    else this.metricsDeltas++;
     this.totalMs += durationMs;
     this.durations.push(durationMs);
     if (this.durations.length > RESERVOIR_CAP) this.durations.shift();
@@ -70,6 +76,7 @@ export class Metrics {
       writes: this.writes,
       intents: this.intents,
       facts: this.facts,
+      metricsDeltas: this.metricsDeltas,
       occConflicts: this.occConflicts,
       writeDurationsMs: [...this.durations],
       p50WriteMs: percentile(sortedW, 0.5),
@@ -87,6 +94,7 @@ export class Metrics {
     this.writes = 0;
     this.intents = 0;
     this.facts = 0;
+    this.metricsDeltas = 0;
     this.occConflicts = 0;
     this.durations = [];
     this.lockWaits = [];

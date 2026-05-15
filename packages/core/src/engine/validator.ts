@@ -4,7 +4,7 @@
 import { parseAcceleratorKey } from "../accelerator.ts";
 import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
-import { discoverFanInTarget } from "./parallel-discovery.ts";
+import { discoverFanInTarget, validateBranchSubgraphs } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
 
@@ -766,6 +766,41 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         edge: { from: e.from, to: e.to },
         ...(e.loc !== undefined ? { loc: e.loc } : {}),
       });
+    }
+  }
+
+  // W017: parallel branch subgraph well-formedness (P3.1 / P3.3 of
+  // docs/proposals/parallel.md). Each `component` node's branch
+  // subgraph — the slice from its outgoing edges to the converging
+  // tripleoctagon — must be a tree-of-DAGs: every node reachable from
+  // a branch root belongs to that branch alone (no cross-branch edges
+  // share ownership of an interior node). Cycles inside a branch are
+  // tolerated only via the same `max_retries`/`retry_target`
+  // mechanisms top-level workflows use; we still surface them so
+  // authors know the subgraph isn't a pure DAG.
+  for (const n of nodes) {
+    if (n.shape !== "component") continue;
+    const discovery = discoverFanInTarget(graph, n.id);
+    if (discovery.kind !== "ok") continue;
+    const report = validateBranchSubgraphs(graph, discovery.branches, discovery.fanInNode);
+    for (const finding of report.findings) {
+      if (finding.kind === "cross-branch") {
+        diags.push({
+          severity: "warning",
+          code: "W017",
+          message: `node "${finding.nodeId}" is reachable from multiple branches of parallel "${n.id}" (${finding.branchRoots.join(", ")}). The executor's per-sub-run subgraph slice can't decide which sub-run owns it — split the node or restructure so each branch's subgraph is disjoint.`,
+          nodeId: finding.nodeId,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      } else if (finding.kind === "cycle") {
+        diags.push({
+          severity: "info",
+          code: "W017",
+          message: `branch subgraph rooted at "${finding.branchRoot}" contains a cycle through "${finding.nodeId}". Allowed only if guarded by max_retries / retry_target on the backward edge — see SPEC §3.6.`,
+          nodeId: finding.nodeId,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
     }
   }
 

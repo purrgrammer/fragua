@@ -100,14 +100,16 @@ The `events` log is the source of truth for run state; the `run_state` row is th
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused, paused_hitl, paused_auto, halted, cancelled, quarantined}
+queued → running → {completed, paused, paused_hitl, paused_auto, running_children, halted, cancelled, quarantined}
           ▲            │
           └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
-                              or wake-pending timer for paused_auto)
+                              or wake-pending timer for paused_auto;
+                              running_children → queued on fact.fanout_completed once every sub-run terminal)
 ```
 
 - **`queued`** — enqueued; ready to be claimed.
 - **`running`** — a daemon has claimed it and is dispatching handlers.
+- **`running_children`** — the run dispatched a parallel fan-out and is waiting for its sub-runs to converge. Not a pause: the parent's worktree and provisioner state stay live, the claim loop must not re-pick it, and the wake-pending sweep transitions the parent back to `queued` (collect phase) on `fact.fanout_completed` once every sub-run reaches a terminal-or-paused-class state. Operator endpoints (`/cancel`, `/pause`) target the parent normally — `cancel` cascades to children via `intent.cancel_requested` on every active sub-run (D10), `pause` waits for the in-flight sub-runs to settle. See `docs/proposals/parallel.md` P1.2.
 - **`paused_hitl`** — a `wait.human` node yielded. `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`.
 - **`paused`** — operator-resumable pause. `fact.run_paused.payload.reason` discriminates the action shape. All wake on `intent.resume`; some pauses pair `intent.resume` with a cap-adjustment intent. The full reason set:
 

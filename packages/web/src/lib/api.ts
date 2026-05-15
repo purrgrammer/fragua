@@ -59,6 +59,7 @@ export interface RunSummary {
   runStatus?:
     | "queued"
     | "running"
+    | "running_children"
     | "paused"
     | "paused_hitl"
     | "paused_auto"
@@ -78,6 +79,11 @@ export interface RunSummary {
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
+  /** Parallel sub-run linkage — P5 of docs/proposals/parallel.md. Absent
+   * on top-level runs. */
+  parentRunId?: string;
+  parentNodeId?: string;
+  parallelIndex?: number;
 }
 
 export interface NodeState {
@@ -121,6 +127,7 @@ export interface RunDetail {
   runStatus?:
     | "queued"
     | "running"
+    | "running_children"
     | "paused"
     | "paused_hitl"
     | "paused_auto"
@@ -548,6 +555,19 @@ export async function getRunChanges(runId: string): Promise<RunChange[]> {
 
 export async function getRun(id: string): Promise<RunDetail> {
   return getJson(`/runs/${encodeURIComponent(id)}`, isRunDetail);
+}
+
+/** Sub-runs of a parent — P5 of docs/proposals/parallel.md. */
+export async function getRunChildren(id: string): Promise<RunSummary[]> {
+  const body = await getJson(
+    `/runs/${encodeURIComponent(id)}/children`,
+    (v): v is { children: RunSummary[] } =>
+      typeof v === "object" &&
+      v !== null &&
+      Array.isArray((v as { children?: unknown }).children) &&
+      (v as { children: unknown[] }).children.every(isRunSummary),
+  );
+  return body.children;
 }
 
 export async function listWorkflows(): Promise<WorkflowSummary[]> {

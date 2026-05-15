@@ -167,8 +167,11 @@ describe("migrate — v6 → v7 drops conversation-run scaffolding", () => {
 
     // The kind column is gone — querying it errors.
     expect(() => db.query("SELECT kind FROM run_state").all()).toThrow(/no such column/i);
-    // parent_* columns are gone too.
-    expect(() => db.query("SELECT parent_run_id FROM run_state").all()).toThrow(/no such column/i);
+    // The v5 conversation-specific `parent_iteration` is gone. v9 re-uses
+    // `parent_run_id` / `parent_node_id` for parallel sub-runs (different
+    // feature, same column names) so those come back, but `parent_iteration`
+    // does not — sub-runs use `parallel_index` instead.
+    expect(() => db.query("SELECT parent_iteration FROM run_state").all()).toThrow(/no such column/i);
 
     // workflow_sha is back to NOT NULL — verify by inserting NULL throws.
     expect(() =>

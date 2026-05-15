@@ -390,7 +390,7 @@ For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_
 
 `bun run swarm validate path/to/my-thing.dot` is the fast feedback loop. Fix every error; take warnings seriously.
 
-Error codes range from E001 (no start node) through E016 (`type=` names an unknown handler). Warning codes from W001 (orphan node) through W014 (attractor-only attribute swarm does not honor). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
+Error codes range from E001 (no start node) through E016 (`type=` names an unknown handler). Warning codes from W001 (orphan node) through W017 (parallel branch subgraph cross-branch ownership / cycle — sub-run model, see `docs/proposals/parallel.md`). For the full lookup table — every code, severity, and meaning — see `references/validator-codes.md`.
 
 The most common ones to know without looking up:
 

@@ -410,7 +410,31 @@ export function createRoutes(deps: ServerDeps): Hono {
     const body = (await readJson<{ reason?: string }>(c)) ?? {};
     const payload: { reason?: string } = {};
     if (typeof body.reason === "string") payload.reason = body.reason;
-    return appendIntentOr413(c, c.req.param("id"), {
+    const runId = c.req.param("id");
+    // Cancel propagation (P1.5 / D10 of docs/proposals/parallel.md):
+    // when the parent is mid-fanout, queue cancel intents on every
+    // active sub-run BEFORE the parent's cancel intent. Children
+    // unwind, emit `fact.run_cancelled`, the wake-pending sweep then
+    // sees all sub-runs terminal and emits `fact.fanout_completed`;
+    // the parent comes back to `queued` and dispatchOne folds the
+    // pending cancel intent on the next turn. Reading the children
+    // list before appending is best-effort — a sub-run that races
+    // terminal in between still ends up consistent because cancel on
+    // an already-terminal run is a no-op by the executor's status
+    // gate.
+    const children = deps.store.activeChildRuns(runId);
+    for (const childId of children) {
+      try {
+        deps.store.appendIntent(childId, {
+          type: "intent.cancel_requested",
+          payload: { reason: "parent_cancelled" },
+        });
+      } catch {
+        // Best-effort: a child that vanished (race with terminal +
+        // GC) shouldn't block the parent's own cancel.
+      }
+    }
+    return appendIntentOr413(c, runId, {
       type: "intent.cancel_requested",
       payload,
     });

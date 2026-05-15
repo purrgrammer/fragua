@@ -1,32 +1,17 @@
-// parallel handler — attractor-spec §4.8 concurrent sub-execution.
+// parallel handler — concurrent sub-execution via first-class sub-runs.
 //
-// Regime C (deliberation-only): each branch runs in-process with a
-// deep-cloned routing snapshot. Branches DO NOT mutate the worktree —
-// enforced by convention (workflows restrict branch `allowed_tools` to
-// read-only sets). The parent run's single worktree is preserved across
-// the fan-out / fan-in, so we avoid attractor's in-memory-only semantics
-// losing swarm's per-run filesystem isolation.
+// Each fan-out enqueues N child `run_state` rows (one per branch) and
+// transitions the parent to `running_children`. The wake-pending sweep
+// promotes the parent back to `queued` once every sub-run reaches a
+// terminal-or-paused-class state; the parent's next dispatch re-enters
+// this handler in **collect phase**, builds the `ParallelBranchResult[]`
+// from the parent's projection-folded sub-run outcomes, and hands off
+// to fan_in.
 //
-// Branch outcomes are collected into routing under the key
-//   `parallel.<parallelNodeId>.results = [{branchId, status, score?}, ...]`
-// — the downstream `parallel.fan_in` handler reads this and runs
-// `foldFanIn` to pick a winner.
-//
-// Limitations (v1):
-//   - A branch that returns `yield_hitl` is coerced to `fail` with a
-//     documented reason. Nested HITL in a parallel fan-out is not
-//     supported by the current turn-based executor.
-//   - External-call intent/done facts emitted from a branch attribute
-//     to the parent parallel node's nodeId (inherited externalCall).
-//     For MVP this is fine because branches are deliberation-only and
-//     rarely touch externalCall; can be refined when a concrete need
-//     surfaces.
-//   - `first_success` join policy cancels losing branches best-effort
-//     by triggering the shared AbortController. Branches that don't
-//     respect the signal keep running until completion.
+// See `docs/proposals/parallel.md` for the full design.
 
 import { FAN_IN_VERSION, type FanInCandidate } from "../../engine/fan-in.ts";
-import type { Handler, HandlerContext, HandlerResult, HandlerSpec } from "../types.ts";
+import type { Handler, HandlerResult, HandlerSpec, SubRunOutcome } from "../types.ts";
 
 export type JoinPolicy = "wait_all" | "first_success";
 
@@ -35,38 +20,75 @@ export interface ParallelConfig {
    * parallel (component) node in the DOT graph. */
   children: string[];
   /** Id of the fan_in node the parallel handler hands off to when all
-   * branches have resolved (or the winner arrives, under first_success). */
+   * branches have resolved. */
   fanInNode: string;
-  /** Per attractor §4.8. Defaults to `wait_all`. */
+  /** Default `wait_all`. `first_success` cancels losing siblings (P4 of
+   * the proposal — implemented as `intent.cancel_requested` on every
+   * non-winning sub-run; siblings unwind via the normal cancel path). */
   joinPolicy?: JoinPolicy;
-  /** Look up the HandlerSpec for a branch by its node id. Typically
-   * closes over the auto-dispatcher's specs map. Returning null halts
-   * the parallel node — a branch must resolve or the graph is wrong. */
-  resolveChild: (nodeId: string) => HandlerSpec | null;
-  /** Build the per-branch HandlerContext. The executor-facing factory
-   * typically deep-clones routing and overrides nodeId + iteration;
-   * this lets tests stub out context construction cheaply. */
-  buildChildContext: (nodeId: string, parentCtx: HandlerContext) => HandlerContext;
   /** Hard timeout for the whole fan-out. Optional: parallel is an
-   * orchestration layer, not a deadline in its own right — child
-   * handlers self-police via their own maxMs. Default: effectively
-   * unbounded (1 hour) so a child's own maxMs is the real fence.
-   * Set explicitly when a branch-wide wall-clock floor is required. */
+   * orchestration layer, not a deadline in its own right — sub-runs
+   * self-police via their own watchdog (P0.2 / D5). Default: effectively
+   * unbounded (1 hour). */
   maxMs?: number;
 }
 
 export interface ParallelBranchResult {
   branchId: string;
   status: FanInCandidate["status"];
-  /** Optional score surfaced by the branch in `routingDelta["score"]`. */
+  /** Optional score the branch surfaced via its outcome's `score`. */
   score?: number;
-  /** Non-empty when the branch failed / halted — surfaced in routing so
+  /** Non-empty when the branch failed / halted. Surfaced in routing so
    * fan_in can emit informative failure reasons. */
   failReason?: string;
 }
 
-// Effectively unbounded. Children's own maxMs is the real fence.
+// Effectively unbounded. Sub-runs' own maxMs is the real fence.
 const DEFAULT_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * Detect collect phase: the prior dispatch's `fact.fanout_started`
+ * stamped sub-run IDs into routing under `parallel.<nodeId>.sub_run_ids`;
+ * a second dispatch with the key present means the wake-pending sweep
+ * has converged. Pure read — no side effects.
+ */
+function readSubRunIds(routing: Readonly<Record<string, unknown>>, parentNodeId: string): string[] | null {
+  const key = `parallel.${parentNodeId}.sub_run_ids`;
+  const raw = routing[key];
+  if (!Array.isArray(raw)) return null;
+  const ids: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") return null;
+    ids.push(v);
+  }
+  return ids;
+}
+
+/**
+ * Map a single sub-run's inline outcome to the legacy
+ * `ParallelBranchResult` shape fan_in expects. `branchId` is the branch's
+ * **node** id (matched against `cfg.children[parallelIndex]`), NOT the
+ * sub-run id — preserves the convention where `$<branchId>.output`
+ * substitution resolves through the branch node id.
+ */
+function mapOutcome(branchNodeId: string, outcome: SubRunOutcome): ParallelBranchResult {
+  let status: FanInCandidate["status"];
+  switch (outcome.finalStatus) {
+    case "completed":
+      status = "success";
+      break;
+    case "halted":
+    case "quarantined":
+      status = "fail";
+      break;
+    case "cancelled":
+      status = "fail";
+      break;
+  }
+  const out: ParallelBranchResult = { branchId: branchNodeId, status };
+  if (outcome.fanInScore !== undefined) out.score = outcome.fanInScore;
+  return out;
+}
 
 export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
   const joinPolicy: JoinPolicy = cfg.joinPolicy ?? "wait_all";
@@ -80,116 +102,60 @@ export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    const branchAbort = new AbortController();
-    const branches: Promise<ParallelBranchResult>[] = cfg.children.map(
-      async (childId, parallelIndex): Promise<ParallelBranchResult> => {
-        const childSpec = cfg.resolveChild(childId);
-        if (childSpec == null) {
-          const branchResult: ParallelBranchResult = {
-            branchId: childId,
+    const subRunIds = readSubRunIds(parentCtx.routing, parentCtx.nodeId);
+
+    // Collect phase: prior dispatch committed `fact.fanout_started`, the
+    // wake-pending sweep converged sub-runs, and the executor re-entered
+    // this handler with sub-run outcomes already folded into
+    // `parentCtx.subRunOutcomes`. Synthesise the fan_in input shape and
+    // transition to the fan_in node.
+    if (subRunIds !== null && subRunIds.length === cfg.children.length) {
+      const results: ParallelBranchResult[] = subRunIds.map((subRunId, parallelIndex) => {
+        const outcome = parentCtx.subRunOutcomes.get(subRunId);
+        const branchNodeId = cfg.children[parallelIndex] ?? subRunId;
+        if (outcome === undefined) {
+          // Sweep promoted the parent but didn't write a
+          // `fact.subrun_completed` for this id. The convergence
+          // invariant (sweep emits one per sub-run before
+          // `fact.fanout_completed`) is broken — surface as a branch
+          // failure rather than silently dropping a slot. The fan_in
+          // handler downgrades to `outcome=fail` and routing carries
+          // the reason.
+          return {
+            branchId: branchNodeId,
             status: "fail",
-            failReason: `branch "${childId}" has no dispatchable HandlerSpec`,
+            failReason: `sub-run "${subRunId}" terminated without a fact.subrun_completed payload`,
           };
-          // Lifecycle fence: emit started/completed even for unresolvable
-          // branches so the per-branch projection stays consistent.
-          // iteration: 0 — branches inherit the parent's iteration but
-          // we have no childCtx here.
-          parentCtx.emit("fact.node_started", {
-            nodeId: childId,
-            iteration: 0,
-            parentNodeId: parentCtx.nodeId,
-            parallelIndex,
-          });
-          parentCtx.emit("fact.node_completed", {
-            nodeId: childId,
-            iteration: 0,
-            parentNodeId: parentCtx.nodeId,
-            parallelIndex,
-            tokens: 0,
-            costUsd: 0,
-            outcomeStatus: "fail",
-            nextNode: cfg.fanInNode,
-          });
-          return branchResult;
         }
-        const childCtx = cfg.buildChildContext(childId, parentCtx);
-        const childIteration = childCtx.iteration ?? 0;
-        parentCtx.emit("fact.node_started", {
-          nodeId: childId,
-          iteration: childIteration,
-          parentNodeId: parentCtx.nodeId,
-          parallelIndex,
-        });
-        let result: HandlerResult;
-        let branchResult: ParallelBranchResult;
-        try {
-          result = await childSpec.handler(childCtx);
-          branchResult = mapResult(childId, result);
-        } catch (err) {
-          branchResult = {
-            branchId: childId,
-            status: "fail",
-            failReason: err instanceof Error ? err.message : String(err),
-          };
-          parentCtx.emit("fact.node_completed", {
-            nodeId: childId,
-            iteration: childIteration,
-            parentNodeId: parentCtx.nodeId,
-            parallelIndex,
-            tokens: 0,
-            costUsd: 0,
-            outcomeStatus: "fail",
-            nextNode: cfg.fanInNode,
-          });
-          return branchResult;
-        }
+        return mapOutcome(branchNodeId, outcome);
+      });
 
-        const completedPayload: Record<string, unknown> = {
-          nodeId: childId,
-          iteration: childIteration,
-          parentNodeId: parentCtx.nodeId,
-          parallelIndex,
-          tokens: result.kind === "transition" ? result.tokens : 0,
-          costUsd: result.kind === "transition" ? result.costUsd : 0,
-          outcomeStatus: branchResult.status,
-          nextNode: cfg.fanInNode,
-        };
-        if (result.kind === "transition" && result.outputRef) {
-          // selectNodeOutputRefs SQL parses outputRef as "<refNodeId>:<key>".
-          // Use the branch's own id so $<branchId>.output resolves downstream.
-          completedPayload["outputRef"] = `${result.outputRef.nodeId}:${result.outputRef.key}`;
-        }
-        if (branchResult.score !== undefined) {
-          completedPayload["score"] = branchResult.score;
-        }
-        parentCtx.emit("fact.node_completed", completedPayload);
-        return branchResult;
-      },
-    );
+      return {
+        kind: "transition",
+        nextNode: cfg.fanInNode,
+        outcomeStatus: "success",
+        tokens: 0,
+        costUsd: 0,
+        routingDelta: {
+          [`parallel.${parentCtx.nodeId}.results`]: results,
+          // Pin the fan-in algorithm version at the moment the parallel
+          // node settles. The fan_in handler reads it back so a replay
+          // of this parallel after a future ranker bump still sees the
+          // ordering this run was designed under.
+          [`parallel.${parentCtx.nodeId}.fan_in_version`]: FAN_IN_VERSION,
+        },
+      } satisfies HandlerResult;
+    }
 
-    const results =
-      joinPolicy === "first_success" ? await raceForFirstSuccess(branches, branchAbort) : await Promise.all(branches);
-
-    parentCtx.emit("parallel.completed", {
-      parallelNodeId: parentCtx.nodeId,
-      joinPolicy,
-      branches: results.map((r) => ({ branchId: r.branchId, status: r.status })),
-    });
-
+    // Fan-out phase: ask the executor to enqueue N sub-runs and
+    // transition us to `running_children`. The executor mints sub-run
+    // ids, writes them onto routing, and emits `fact.fanout_started`
+    // in a single OCC commit (P2.2 of the proposal).
     return {
-      kind: "transition",
-      nextNode: cfg.fanInNode,
-      outcomeStatus: "success",
-      tokens: 0,
-      costUsd: 0,
-      routingDelta: {
-        [`parallel.${parentCtx.nodeId}.results`]: results,
-        // Pin the fan-in algorithm version at the moment the parallel
-        // node settles. The fan_in handler reads it back so a replay of
-        // this parallel after a future ranker bump still sees the
-        // ordering this run was designed under. See engine/fan-in.ts.
-        [`parallel.${parentCtx.nodeId}.fan_in_version`]: FAN_IN_VERSION,
-      },
+      kind: "fanout_pending",
+      branchNodeIds: cfg.children,
+      fanInNode: cfg.fanInNode,
+      joinPolicy,
     } satisfies HandlerResult;
   };
 
@@ -201,66 +167,16 @@ export function makeParallelHandler(cfg: ParallelConfig): HandlerSpec {
   };
 }
 
-function mapResult(branchId: string, result: HandlerResult): ParallelBranchResult {
-  if (result.kind === "transition") {
-    const status = result.outcomeStatus ?? "success";
-    const score =
-      typeof result.routingDelta?.["score"] === "number" ? (result.routingDelta["score"] as number) : undefined;
-    const out: ParallelBranchResult = { branchId, status };
-    if (score !== undefined) out.score = score;
-    return out;
-  }
-  if (result.kind === "halt") {
-    return {
-      branchId,
-      status: "fail",
-      failReason: result.detail ?? `branch halted: ${result.reason}`,
-    };
-  }
-  // yield_hitl — not supported inside a parallel branch under v1.
-  return {
-    branchId,
-    status: "fail",
-    failReason: "branch returned yield_hitl; HITL inside parallel not supported in v1",
-  };
+/** Unused under the sub-run model; kept exported for callers that
+ *  may still import it. Future cleanups will drop it once no consumer
+ *  references it. */
+export function legacyParallelResultMapper(): undefined {
+  return undefined;
 }
 
-/**
- * Resolve as soon as one branch returns `success`, aborting the rest.
- * If all branches resolve without success, return every result (same
- * shape as `wait_all`) so fan_in can still rank them.
- */
-async function raceForFirstSuccess(
-  branches: Promise<ParallelBranchResult>[],
-  abort: AbortController,
-): Promise<ParallelBranchResult[]> {
-  const pending = new Map<Promise<ParallelBranchResult>, number>();
-  branches.forEach((p, i) => {
-    pending.set(p, i);
-  });
-  const results: ParallelBranchResult[] = new Array(branches.length);
-
-  while (pending.size > 0) {
-    const racers = Array.from(pending.keys()).map((p) => p.then((r) => ({ p, r })));
-    const next = await Promise.race(racers);
-    results[pending.get(next.p)!] = next.r;
-    pending.delete(next.p);
-    if (next.r.status === "success") {
-      abort.abort();
-      // Drain remaining promises so downstream code never leaks rejections.
-      for (const [p, i] of pending) {
-        try {
-          results[i] = await p;
-        } catch (err) {
-          results[i] = {
-            branchId: `drained_${i}`,
-            status: "fail" as const,
-            failReason: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }
-      break;
-    }
-  }
-  return results;
+/** Compute the helper context that downstream code may want for a
+ *  branch during collect phase. Exposed for tests; not used inside the
+ *  handler itself. */
+export function buildBranchResultFromOutcome(branchNodeId: string, outcome: SubRunOutcome): ParallelBranchResult {
+  return mapOutcome(branchNodeId, outcome);
 }

@@ -29,6 +29,7 @@ const UiStatus = Type.Union([
 const RawRunStatus = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
+  Type.Literal("running_children"),
   Type.Literal("paused"),
   Type.Literal("paused_hitl"),
   Type.Literal("paused_auto"),
@@ -59,6 +60,13 @@ export const RunSummary = Type.Object({
    * the only project identifier in the harness-by-default model. Absent
    * for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
+  /** Sub-run linkage when this row is a parallel sub-run (P5 of
+   * `docs/proposals/parallel.md`). Absent on top-level runs. The web UI
+   * groups sub-runs under their parent's run-detail page and the cost
+   * panel renders each as its own line. */
+  parentRunId: Type.Optional(Type.String()),
+  parentNodeId: Type.Optional(Type.String()),
+  parallelIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 export type RunSummary = Static<typeof RunSummary>;
 

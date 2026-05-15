@@ -199,6 +199,15 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       return facts;
     }
+    case "fanout_pending": {
+      // Handled directly by the executor's dispatchOne — emits
+      // `fact.fanout_started` + enqueues sub-runs + transitions to
+      // `running_children` without going through resultToFacts. The
+      // result-mapper never sees this kind; we keep the case for
+      // exhaustiveness so adding a new HandlerResult kind in the future
+      // surfaces here too.
+      return facts;
+    }
   }
 }
 

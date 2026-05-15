@@ -82,6 +82,28 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     return c.json(runStateToDetail(state, events, name, source));
   });
 
+  // Sub-runs view for a parent — P5 of docs/proposals/parallel.md.
+  // Returns the summary row for every run whose `parent_run_id`
+  // matches `:id`, sorted by `parallel_index`. The UI renders this as
+  // a "child runs" section on the parent's run-detail page.
+  app.get("/runs/:id/children", (c) => {
+    const parentRunId = c.req.param("id");
+    // Discover child run-ids via the SQL helper. Each child's full
+    // summary is built from its own state + event tail.
+    const childRunIds = store.listRunIds({ parentRunId });
+    const children = childRunIds
+      .map((childId) => {
+        const childState = store.getState(childId);
+        if (childState == null) return null;
+        const childEvents = store.getEvents(childId);
+        const childWf = childState.workflowSha != null ? store.getWorkflow(childState.workflowSha) : null;
+        return runStateToSummary(childState, childEvents, childWf?.name);
+      })
+      .filter((s): s is NonNullable<typeof s> => s != null)
+      .sort((a, b) => (a.parallelIndex ?? 0) - (b.parallelIndex ?? 0));
+    return c.json({ children });
+  });
+
   // Full-fidelity event log. Returns raw store events as-is (fact.* and
   // intent.* payloads); the web adapter translates. Uncapped — this is
   // the canonical "give me everything that happened" endpoint, used for
@@ -171,6 +193,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
 const VALID_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "queued",
   "running",
+  "running_children",
   "paused",
   "paused_hitl",
   "paused_auto",

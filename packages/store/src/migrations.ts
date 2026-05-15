@@ -37,6 +37,8 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [6, MIGRATION_006_SCHEDULES()],
   [7, MIGRATION_007_DROP_CONVERSATION_KIND()],
   [8, MIGRATION_008_AUTO_WAKE_UNIFICATION()],
+  [9, MIGRATION_009_SUBRUN_COLUMNS()],
+  [10, MIGRATION_010_RUNNING_CHILDREN_STATUS()],
 ]);
 
 /**
@@ -694,6 +696,153 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  * `reason` alone). Provider auto-retry runs in flight are gone via
  * (2) above.
  */
+/**
+ * v8 → v9: parallel sub-runs (P1.1 of `docs/proposals/parallel.md`).
+ *
+ * Adds the additive sub-run linkage columns on `run_state`:
+ *
+ *   - `parent_run_id`             — FK to `run_state.run_id`, ON DELETE
+ *                                   SET NULL (matches earlier child-run
+ *                                   cascade pattern; parent GC leaves the
+ *                                   sub-run as a free-standing row whose
+ *                                   own GC is independent).
+ *   - `parent_node_id`            — component node id on the parent that
+ *                                   fanned out into this sub-run.
+ *   - `parallel_index`            — sub-run's slot in the fan-out (0..N-1).
+ *   - `subgraph_root_node_id`     — root of the parent-graph slice the
+ *                                   sub-run dispatches through.
+ *   - `subgraph_terminal_node_id` — fan_in node where the sub-run
+ *                                   converges. The sub-run terminates
+ *                                   before entering it; the parent's
+ *                                   collect phase reads sub-run outcomes
+ *                                   on the fan_in turn.
+ *
+ * Plus a partial index `idx_run_state_parent` covering
+ * `parent_run_id` lookups (sweep, cancel propagation, cost rollup).
+ *
+ * All columns are nullable; existing rows keep NULL across the board
+ * (they're top-level runs). The CHECK constraint on `status` is NOT
+ * touched here — P1.2 adds `running_children` via its own table rebuild.
+ *
+ * `migrate()` runs each step with `foreign_keys = OFF`, then
+ * `foreign_key_check` verifies consistency before commit. ADD COLUMN
+ * with REFERENCES is fine in this mode; new rows pass trivially
+ * because every existing `parent_run_id` is NULL.
+ */
+function MIGRATION_009_SUBRUN_COLUMNS(): string {
+  return `
+    ALTER TABLE run_state ADD COLUMN parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL;
+    ALTER TABLE run_state ADD COLUMN parent_node_id TEXT;
+    ALTER TABLE run_state ADD COLUMN parallel_index INTEGER;
+    ALTER TABLE run_state ADD COLUMN subgraph_root_node_id TEXT;
+    ALTER TABLE run_state ADD COLUMN subgraph_terminal_node_id TEXT;
+
+    CREATE INDEX idx_run_state_parent
+      ON run_state(parent_run_id) WHERE parent_run_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v9 → v10: parallel sub-runs (P1.2 of `docs/proposals/parallel.md`).
+ *
+ * Adds `running_children` to `run_state.status` CHECK. A parent run in
+ * this status has fanned out into N sub-runs and is waiting for them to
+ * converge — it is NOT paused (worktree + provisioner state stay live)
+ * and NOT queued (claim loop must not re-pick it). The wake-pending
+ * sweep transitions it back to `queued` (collect phase) when every
+ * sub-run reaches a terminal-or-paused-class state.
+ *
+ * SQLite has no `ALTER TABLE … ADD CHECK`, so the status CHECK update
+ * goes through a table rebuild. Indexes recreate identically. The v9
+ * sub-run linkage columns and `idx_run_state_parent` are preserved.
+ */
+function MIGRATION_010_RUNNING_CHILDREN_STATUS(): string {
+  return `
+    CREATE TABLE run_state_v10 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','running_children','paused','paused_hitl','paused_auto',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      schedule_id TEXT,
+      parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+      parent_node_id TEXT,
+      parallel_index INTEGER,
+      subgraph_root_node_id TEXT,
+      subgraph_terminal_node_id TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v10 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id,
+      parent_run_id, parent_node_id, parallel_index,
+      subgraph_root_node_id, subgraph_terminal_node_id
+    )
+    SELECT
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id,
+      parent_run_id, parent_node_id, parallel_index,
+      subgraph_root_node_id, subgraph_terminal_node_id
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+    DROP INDEX IF EXISTS idx_runs_by_schedule;
+    DROP INDEX IF EXISTS idx_run_state_parent;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v10 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+    CREATE INDEX idx_runs_by_schedule
+      ON run_state(schedule_id)
+      WHERE schedule_id IS NOT NULL;
+    CREATE INDEX idx_run_state_parent
+      ON run_state(parent_run_id)
+      WHERE parent_run_id IS NOT NULL;
+  `;
+}
+
 function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
   return `
     -- (2) drop in-flight legacy auto-wake runs and cascade their

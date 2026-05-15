@@ -122,6 +122,23 @@ export interface ExternalCallParams {
  */
 export type ExternalCall = <T>(params: ExternalCallParams, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
 
+/**
+ * Inline outcome the parent's projection records for a terminated
+ * sub-run. The parallel handler in collect phase reads these to
+ * synthesise the fan_in input shape. Mirrors the payload of
+ * `fact.subrun_completed`. See D5 of `docs/proposals/parallel.md`.
+ */
+export interface SubRunOutcome {
+  subRunId: string;
+  parentNodeId: string;
+  parallelIndex: number;
+  finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+  costUsd: number;
+  billedTokens: number;
+  outputRef?: { nodeId: string; key: string };
+  fanInScore?: number;
+}
+
 export interface HandlerContext {
   readonly runId: string;
   readonly nodeId: string;
@@ -158,6 +175,17 @@ export interface HandlerContext {
    * output wins.
    */
   readonly nodeOutputs: ReadonlyMap<string, NodeOutput>;
+  /**
+   * Inline outcomes for every sub-run that has terminated under this
+   * parent run, folded from `fact.subrun_completed` events on the
+   * parent's own log. Keyed by sub-run id; payloads carry final status,
+   * cost, billed tokens, optional `outputRef`, optional `fanInScore`.
+   * Empty on top-level runs and on parent runs that haven't fanned out
+   * yet. Used by the parallel handler's collect phase to synthesise
+   * fan_in input without re-reading sub-run projections. See P2.3 / D5
+   * of `docs/proposals/parallel.md`.
+   */
+  readonly subRunOutcomes: ReadonlyMap<string, SubRunOutcome>;
   /**
    * Emit an observability event (agent.*, llm.*, tool.*, cost.recorded,
    * summary.*). The executor persists these to the store under their
@@ -326,4 +354,28 @@ export type HandlerResult =
        * it exactly — no jitter, no exponential cap. Absent → daemon falls
        * back to its own full-jitter exponential schedule. */
       retryAfterMs?: number;
+    }
+  | {
+      /** Parallel handler requests a fan-out into N sub-runs. The
+       * executor mints sub-run IDs, enqueues each as a child `run_state`
+       * row, and transitions the parent to `running_children` via
+       * `fact.fanout_started`. The wake-pending sweep promotes the
+       * parent back to `queued` once every sub-run reaches a
+       * terminal-or-paused-class state; the next dispatch re-enters the
+       * parallel handler in collect phase (detected via the
+       * `parallel.<nodeId>.sub_run_ids` routing key). P2.2 of
+       * `docs/proposals/parallel.md`. */
+      kind: "fanout_pending";
+      /** Branch root node ids — direct downstream targets of the
+       * component node in the parent's DOT graph. Sub-runs dispatch
+       * through the subgraph slice anchored at each id. */
+      branchNodeIds: readonly string[];
+      /** Convergence node the parent re-enters on collect. Sub-runs
+       * terminate BEFORE entering it; their `subgraph_terminal_node_id`
+       * points here. */
+      fanInNode: string;
+      /** Join policy hint. Surfaced into the parent's routing so a
+       * `first_success` sweep can race-cancel siblings (P4). Defaults to
+       * `wait_all`. */
+      joinPolicy?: "wait_all" | "first_success";
     };

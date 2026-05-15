@@ -55,6 +55,18 @@ import type { Provisioner } from "./worktree-provisioner.ts";
 type HandlerResult = core.HandlerResult;
 type LlmCallFn = core.LlmCallFn;
 
+/**
+ * Outcome of a single dispatch turn. `dispatchOne` returns this so the
+ * outer loop can decide whether to continue iterating or exit (because
+ * the run reached a terminal / paused state, or another short-circuit).
+ *
+ * P0.2 of `docs/proposals/parallel.md`: extracted from the monolithic
+ * while loop so sub-runs (a child `run_state` row driven through the
+ * same `runExecutor` → `runOne` → `runOneInner` path) reuse the
+ * per-turn services unchanged.
+ */
+export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
+
 export interface ExecutorOpts {
   store: IEventStore;
   dispatcher: Dispatcher;
@@ -338,1192 +350,1291 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
   };
 
-  try {
-    while (!opts.shutdownSignal.aborted && turns < maxTurns) {
-      turns++;
-      const state = opts.store.getState(runId);
-      if (state == null) return;
-      const workflowSha = state.workflowSha;
+  const dispatchOne = async (): Promise<DispatchOutcome> => {
+    const state = opts.store.getState(runId);
+    if (state == null) return { kind: "terminal" };
+    const workflowSha = state.workflowSha;
 
-      if (
-        state.status === "completed" ||
-        state.status === "cancelled" ||
-        state.status === "halted" ||
-        state.status === "paused" ||
-        state.status === "paused_hitl" ||
-        state.status === "paused_auto" ||
-        state.status === "quarantined"
-      ) {
-        return;
-      }
+    if (
+      state.status === "completed" ||
+      state.status === "cancelled" ||
+      state.status === "halted" ||
+      state.status === "paused" ||
+      state.status === "paused_hitl" ||
+      state.status === "paused_auto" ||
+      state.status === "quarantined" ||
+      // Parent waiting on sub-runs: the wake-pending sweep will move it
+      // back to `queued` on `fact.fanout_completed`. Re-claiming here
+      // would race the sweep and trip the executor into running the
+      // component a second time.
+      state.status === "running_children"
+    ) {
+      return { kind: "terminal" };
+    }
 
-      // Schema drift refusal. Versions in the compatibility range
-      // [MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION] resume
-      // cleanly; only out-of-range pins (older than MIN, or newer than
-      // CURRENT — i.e. the daemon was downgraded) halt. See
-      // packages/store/src/pragmas.ts for the bumping policy.
-      if (state.schemaVersion < MIN_COMPATIBLE_SCHEMA_VERSION || state.schemaVersion > CURRENT_SCHEMA_VERSION) {
-        await tryAppendFact(opts.store, runId, state.version, [
-          {
-            type: "fact.run_halted",
-            payload: { reason: "schema_drift" },
-          },
-        ]);
-        return;
-      }
-
-      // Fold unapplied intents into a single decision.
-      const unapplied = opts.store.getUnappliedIntents(runId);
-      const decision = core.foldIntents(unapplied, state.status);
-
-      // Audit dropped intents before any state transition so SSE consumers
-      // see them in causal order with the eventual fact.
-      if (decision.dropped.length > 0) {
-        const obs = decision.dropped.map((d) => ({
-          type: "intent.dropped",
-          payload: { originalSeq: d.seq, originalType: d.type, reason: d.reason },
-        }));
-        opts.store.appendObservabilityEvents(runId, obs);
-      }
-
-      if (decision.kind === "cancel") {
-        await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
-        return;
-      }
-
-      if (decision.shouldPause) {
-        await tryAppendFact(
-          opts.store,
-          runId,
-          state.version,
-          [
-            {
-              type: "fact.run_paused",
-              payload: {
-                reason: "operator",
-                nodeId: state.currentNode ?? "",
-              },
-            },
-          ],
-          // Advance lastAppliedSeq so the pause intent (and any hitched-along
-          // intents that were folded into appliedSeqs) doesn't refire on
-          // the next dispatch after wakePending moves the run back to queued.
-          decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
-        );
-        return;
-      }
-
-      // Identify the node to run. `claimNextRun` flips status to 'running' but
-      // leaves current_node NULL — treat that as the "just-claimed" signal and
-      // emit run_started to pin the start node. The start node comes from
-      // routing.start_node, defaulting to "start".
-      const currentNode = state.currentNode;
-      const needsStart = state.currentNode == null && (state.status === "queued" || state.status === "running");
-
-      // Provision the run's worktree before the first fact.run_started
-      // commits. If init fails, the run is halted with a clear reason
-      // and the provisioner is responsible for any partial-state
-      // cleanup. After the first successful provision, runEnv is cached
-      // locally and reused on every subsequent turn — `ensure` is
-      // idempotent but we avoid the extra lookup.
-      if (opts.provisioner && runEnv === undefined) {
-        try {
-          runEnv = await opts.provisioner.ensure(runId, state.cwd != null ? { cwd: state.cwd } : {});
-          opts.store.appendDaemonEvent(
-            { type: "daemon.worktree_provisioned", payload: { runId, ok: true } },
-            { runId },
-          );
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : String(err);
-          opts.store.appendDaemonEvent(
-            { type: "daemon.worktree_provisioned", payload: { runId, ok: false, errorDetail: detail } },
-            { runId },
-          );
-          await tryAppendFact(opts.store, runId, state.version, [
-            {
-              type: "fact.run_halted",
-              payload: {
-                reason: "error",
-                detail: `worktree_provision_failed: ${detail}`,
-              },
-            },
-          ]);
-          return;
-        }
-      }
-
-      if (needsStart) {
-        const start = routingString(state.routing, "start_node") ?? "start";
-        const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
-        const startFacts: FactEvent[] = [
-          {
-            type: "fact.run_started",
-            payload: {
-              workflowSha: state.workflowSha,
-              schemaVersion: state.schemaVersion,
-              startNode: start,
-              ...(baseGitSha != null ? { baseGitSha } : {}),
-            },
-          },
-        ];
-        // Seed graph-level routing keys at run start so $goal substitution
-        // and `${context.graph.goal}` references resolve from turn 1
-        // onward (attractor §4.5 / §5.1). Closes the silent bug where
-        // the agent reads routing["graph.goal"] but nothing wrote it.
-        const startGraph = graphFor(state.workflowSha);
-        const startRoutingPatch: Record<string, unknown> = {};
-        if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
-          startRoutingPatch["graph.goal"] = startGraph.attrs.goal;
-        }
-        if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
-          startRoutingPatch["graph.label"] = startGraph.attrs.label;
-        }
-        const ok = await tryAppendFact(
-          opts.store,
-          runId,
-          state.version,
-          startFacts,
-          Object.keys(startRoutingPatch).length > 0 ? { routingPatch: startRoutingPatch } : undefined,
-        );
-        if (!ok) {
-          const { halted } = await onOccConflict("fact.run_started", start, 0, state.version);
-          if (halted) return;
-          continue;
-        }
-        onOccResolved(start, 0);
-        if (opts.autoTitler) {
-          const input = routingString(state.routing, "input") ?? "";
-          const goal = graphFor(workflowSha)?.attrs.goal;
-          const req: TitleRequest = {
-            runId,
-            workflowSha,
-            input,
-          };
-          if (goal !== undefined) req.goal = goal;
-          opts.autoTitler.titleRun(req);
-        }
-        continue; // Reload state next turn with the new run_started applied.
-      }
-
-      if (currentNode == null) return;
-
-      // Production ceiling on handler dispatches. A workflow that loops
-      // without ever aborting (so ABORT_LOOP_CEILING never fires) would
-      // otherwise run until budget or wall-clock killed it. This is the
-      // last-resort guard; workflow authors should bound loops via
-      // `max_retries` on backward edges.
-      //
-      // The override key is read on every iteration so a Raise & Resume
-      // adjustment takes effect on the next dispatch — `dispatches` is
-      // a JS-local counter that resets on every runOne entry, so the
-      // resume after a pause already starts at 0; the override raises
-      // the ceiling for *this* dispatch loop's pass.
-      const effectiveMaxLoops = readNumber(state.routing[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
-      if (dispatches >= effectiveMaxLoops) {
-        await tryAppendFact(opts.store, runId, state.version, [
-          {
-            type: "fact.run_paused",
-            payload: {
-              reason: "max_loops",
-              currentLimit: effectiveMaxLoops,
-              dispatches,
-            },
-          },
-        ]);
-        return;
-      }
-      dispatches++;
-
-      // Stamp dispatchStartedAt before handing control to the handler
-      // so activeMs accounting captures this dispatch interval.
-      // fact.run_started covers the very first dispatch (it stamps
-      // dispatchStartedAt directly via its own reducer case), so we
-      // only emit here when the projection's dispatchStartedAt was
-      // reset by a prior terminal/pause fact.
-      if (state.dispatchStartedAt == null) {
-        const dispatchIteration = nodeRetryCount(state.routing);
-        const ok = await tryAppendFact(opts.store, runId, state.version, [
-          {
-            type: "fact.dispatch_started",
-            payload: {
-              nodeId: currentNode,
-              iteration: dispatchIteration,
-              resumeOf: deriveResumeOf(opts.store, runId),
-            },
-          },
-        ]);
-        if (!ok) {
-          dispatches--;
-          const { halted } = await onOccConflict(
-            "fact.dispatch_started",
-            currentNode,
-            dispatchIteration,
-            state.version,
-          );
-          if (halted) return;
-          continue;
-        }
-        onOccResolved(currentNode, dispatchIteration);
-        continue;
-      }
-
-      // Dispatch.
-      const spec = opts.dispatcher.get(workflowSha, currentNode);
-      const steerCtrl = new AbortController();
-      const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
-      const signal = AbortSignal.any(signals);
-
-      const iteration = nodeRetryCount(state.routing);
-      // Pre-commit recorder: each recordIntent/recordDone/recordFailed
-      // commits its own short transaction so a hard crash mid-`fn` leaves
-      // the intent durable in the event log. ARCHITECTURE.md §1.1.
-      const recorder = new CommittingRecorder({
-        store: opts.store,
-        runId,
-        nodeId: currentNode,
-        iteration,
-        initialVersion: state.version,
-      });
-      const observability: { type: string; payload: Record<string, unknown> }[] = [];
-      // Mid-handler micro-batch timer. See OBSERVABILITY_FLUSH_*_MS notes.
-      // Owned by `emitObservability` (schedules) and `flushObservability`
-      // (clears). Always null-checked before clearTimeout / setTimeout so
-      // the leak-budget / abort / normal completion paths can call
-      // `flushObservability` unconditionally.
-      let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
-      const flushObservability = (): void => {
-        if (observabilityFlushTimer != null) {
-          clearTimeout(observabilityFlushTimer);
-          observabilityFlushTimer = null;
-        }
-        if (observability.length === 0) return;
-        // Drain into a fresh array before the (sync) write so the buffer
-        // is empty if the write throws — best-effort telemetry; we swallow
-        // and log on failure rather than retry.
-        const drained = observability.splice(0, observability.length);
-        try {
-          opts.store.appendObservabilityEvents(runId, drained);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn(`[executor] observability flush failed for run ${runId}:`, err);
-        }
-      };
-
-      let turnBilled = 0;
-      let totalCostUsd = 0;
-      let totalInputTokens = 0;
-      let totalOutputTokens = 0;
-      let totalCacheReadTokens = 0;
-      let totalCacheWriteTokens = 0;
-      let lastModel: string | undefined;
-      // Reactive budget halt: when a `cost.recorded` event mid-handler
-      // pushes cumulative spend over a `budget_policy="stop"` ceiling,
-      // we abort the in-flight handler and emit fact.run_halted{
-      // reason:"budget"} alongside fact.node_aborted (which captures
-      // partial spend). Without this bound, sub-agent fan-out spends
-      // freely between parent-turn boundaries — a single orchestrator
-      // turn can overshoot the cap by 5×+ before the post-handler
-      // boundary check runs.
-      let reactiveBudgetHaltDetail: string | undefined;
-      const accounting: core.LlmAccounting = {
-        addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
-          turnBilled += tokens;
-          totalCostUsd += costUsd;
-          totalInputTokens += inputTokens ?? 0;
-          totalOutputTokens += outputTokens ?? 0;
-          totalCacheReadTokens += cacheReadTokens ?? 0;
-          totalCacheWriteTokens += cacheWriteTokens ?? 0;
-          lastModel = model;
+    // Schema drift refusal. Versions in the compatibility range
+    // [MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION] resume
+    // cleanly; only out-of-range pins (older than MIN, or newer than
+    // CURRENT — i.e. the daemon was downgraded) halt. See
+    // packages/store/src/pragmas.ts for the bumping policy.
+    if (state.schemaVersion < MIN_COMPATIBLE_SCHEMA_VERSION || state.schemaVersion > CURRENT_SCHEMA_VERSION) {
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.run_halted",
+          payload: { reason: "schema_drift" },
         },
-      };
+      ]);
+      return { kind: "terminal" };
+    }
 
-      // Hard-filter ctx.tools by the node's allowed_tools / denied_tools.
-      // A handler that reaches for `ctx.tools.get("bash")` on a node that
-      // didn't allow "bash" gets `unknown tool: bash`, same as for an
-      // unregistered tool. The filter lives at HandlerContext construction
-      // so every handler kind (codergen, tool, parallel branches, custom)
-      // respects the same structural enforcement.
-      const graph = graphFor(state.workflowSha);
-      const nodeAttrs = graph?.nodes[currentNode]?.attrs;
-      const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
-        ? (nodeAttrs.allowed_tools as readonly string[])
-        : undefined;
-      const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
-        ? (nodeAttrs.denied_tools as readonly string[])
-        : undefined;
+    // Fold unapplied intents into a single decision.
+    const unapplied = opts.store.getUnappliedIntents(runId);
+    const decision = core.foldIntents(unapplied, state.status);
 
-      // Captured outputs of every prior node, keyed by nodeId. Re-folded on
-      // every dispatch from `fact.node_completed` events that carry an
-      // outputRef. Without this, downstream `$<nodeId>.output` substitution
-      // resolves to the empty string and aborts cascade through the graph.
-      const nodeOutputs = opts.store.getNodeOutputs(runId);
+    // Audit dropped intents before any state transition so SSE consumers
+    // see them in causal order with the eventual fact.
+    if (decision.dropped.length > 0) {
+      const obs = decision.dropped.map((d) => ({
+        type: "intent.dropped",
+        payload: { originalSeq: d.seq, originalType: d.type, reason: d.reason },
+      }));
+      opts.store.appendObservabilityEvents(runId, obs);
+    }
 
-      const ctxOpts: core.BuildContextOpts = {
+    if (decision.kind === "cancel") {
+      await tryAppendFact(opts.store, runId, state.version, cancelToFacts(decision.intentSeq));
+      return { kind: "terminal" };
+    }
+
+    if (decision.shouldPause) {
+      await tryAppendFact(
+        opts.store,
         runId,
-        nodeId: currentNode,
-        iteration,
-        signal,
-        routing: state.routing,
-        store: opts.store,
-        llm: core.makeLlmClient({
-          signal,
-          call: opts.llmCall,
-          accounting,
-        }),
-        http: core.makeHttpClient(
-          opts.defaultHttpTimeoutMs != null ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs } : { signal },
-        ),
-        tools: opts.tools,
-        recorder,
-        args: buildSubstitutionArgs(runId, state.routing),
-        nodeOutputs,
-        emitObservability: (type, payload) => {
-          // Stamp nodeId + iteration so the UI can scope without the
-          // handler having to thread it through every payload.
-          observability.push({
-            type,
-            payload: { nodeId: currentNode, iteration, ...payload },
-          });
-          // Mirror handler-emitted `cost.recorded` into the per-turn
-          // accumulator. Codergen bypasses ctx.llm.call() and reports
-          // usage through ctx.emit (handler-bridge.ts forwards every
-          // pi-agent-core message_end → cost.recorded). Without this
-          // mirror, the abort branch's `partial` payload reads zero on
-          // codergen handlers — fact.node_aborted would land with
-          // partialTokens=0/partialCostUsd=0 and run_state.metrics +
-          // budget_usd would silently undercount aborted spend. The
-          // completion path is unaffected: it only backfills result
-          // fields when the handler returned zeros (executor.ts §below),
-          // and codergen's HandlerResult already carries populated
-          // tokens/costUsd from its own accumulator (handler-bridge
-          // surfaces the same cost.recorded stream into the result).
-          // Per AGENTS.md ground rule #5: this accumulator is turn-local,
-          // not a reducer fold of cost.recorded.
-          if (type === "cost.recorded") {
-            const p = payload as Record<string, unknown>;
-            turnBilled += readNumber(p["total_tokens"]);
-            totalCostUsd += readNumber(p["cost_usd"]);
-            totalInputTokens += readNumber(p["input_tokens"]);
-            totalOutputTokens += readNumber(p["output_tokens"]);
-            totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
-            totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
-            const model = p["model"];
-            if (typeof model === "string") lastModel = model;
-
-            // Reactive budget gate. Bounds peak overshoot to one
-            // in-flight LLM message rather than the parent turn's full
-            // sub-agent fan-out. Only fires once per dispatch (the
-            // halt-pending flag short-circuits subsequent events).
-            // Pause-policy breaches still wait for the post-handler
-            // boundary so the operator-pause flow stays unchanged.
-            if (reactiveBudgetHaltDetail === undefined) {
-              const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
-              const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
-              const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
-              const overrides = readBudgetOverrides(state.routing);
-              const reactive = evaluateBudget({
-                graphAttrs: graph?.attrs ?? {},
-                ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
-                completedNodeId: currentNode,
-                cumulativeCostUsd: state.metrics.totalCostUsd + totalCostUsd,
-                cumulativeTokens: priorRunFresh + turnBilled,
-                nodeCumulativeCostUsd: priorNodeBucket.costUsd + totalCostUsd,
-                nodeCumulativeTokens: priorNodeBucket.tokens + turnBilled,
-                alreadyWarned: readBudgetWarned(state.routing),
-                ...(overrides !== undefined ? { overrides } : {}),
-              });
-              if (reactive.shouldHalt) {
-                reactiveBudgetHaltDetail = reactive.haltReason ?? "";
-                for (const ev of reactive.events) {
-                  observability.push({
-                    type: ev.type,
-                    payload: { nodeId: currentNode, iteration, ...ev.payload },
-                  });
-                }
-                steerCtrl.abort(new Error("budget"));
-              }
-            }
-          }
-          // Hard ceiling — bound peak memory and per-batch render cost
-          // when a provider streams a burst of deltas faster than the
-          // soft timer can drain.
-          if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
-            flushObservability();
-            return;
-          }
-          // Soft ceiling — coalesce small bursts so we don't hammer the
-          // writer lock with one txn per text delta.
-          if (observabilityFlushTimer == null) {
-            observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
-          }
-        },
-      };
-      if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
-      if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
-      if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
-      if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
-      if (runEnv !== undefined) ctxOpts.env = runEnv;
-      // Budget snapshot at dispatch time. The backend embeds this verbatim
-      // into `llm.start.budget` so the UI can render "X of Y used" without
-      // cross-referencing the graph attrs. Only populated when at least one
-      // ceiling (run-level or node-level cost) is configured.
-      const runMaxCostUsd = graph?.attrs.budget_usd;
-      const nodeMaxCostUsd = nodeAttrs?.max_cost_usd;
-      if (typeof runMaxCostUsd === "number" || typeof nodeMaxCostUsd === "number") {
-        const snap: core.BudgetSnapshotInput = {
-          cumulative_cost_usd: state.metrics.totalCostUsd,
-          cumulative_tokens: state.metrics.totalInputTokens + state.metrics.totalOutputTokens,
-        };
-        if (typeof runMaxCostUsd === "number") snap.run_max_cost_usd = runMaxCostUsd;
-        if (typeof nodeMaxCostUsd === "number") snap.max_cost_usd = nodeMaxCostUsd;
-        ctxOpts.budgetSnapshot = snap;
-      }
-      const ctx = core.buildHandlerContext(ctxOpts);
-
-      let result: HandlerResult;
-      let wasAborted = false;
-      let abortCause: "timeout" | "aborted" = "aborted";
-      let leakedTimeout = false;
-      // Register only here, not at steerCtrl creation: the build steps
-      // above (graph load, node-output fold, context build) can throw, and
-      // the `finally` below is the sole unregister — an earlier register
-      // leaks the entry on a build-path throw, and the next claim of this
-      // runId then trips `register`'s already-registered guard.
-      opts.registry.register(runId, steerCtrl);
-      try {
-        // Promise.race against a marker rather than a rejecting timer: a
-        // rejection from the timer would mask an ignored-AbortSignal as
-        // "handler error" in the catch block (the original code's
-        // `.then(_ => …)` callback never fired because `timeoutReject`
-        // never fulfilled). Resolving with a sentinel lets us detect the
-        // leak unambiguously.
-        const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
-          spec.handler(ctx),
-          new Promise<typeof TIMEOUT_SENTINEL>((res) =>
-            setTimeout(() => res(TIMEOUT_SENTINEL), spec.maxMs + leakGrace),
-          ),
-        ]);
-        if (raced === TIMEOUT_SENTINEL) {
-          leakedTimeout = true;
-          result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
-        } else {
-          result = raced;
-        }
-      } catch (err) {
-        wasAborted = isAbortError(err);
-        if (wasAborted) abortCause = classifyAbortCause(signal, err);
-        result = {
-          kind: "halt",
-          reason: "error",
-          detail: errorMessage(err),
-        };
-      } finally {
-        opts.registry.unregister(runId);
-      }
-
-      // Drain anything left in the soft-batch buffer before the terminal
-      // fact lands so consumers tailing /events still see the trail
-      // followed by node_completed in causal order — the timer-driven
-      // flush handles mid-handler streaming, this drain handles the tail.
-      if (leakedTimeout) {
-        flushObservability();
-        await tryAppendFact(opts.store, runId, recorder.version(), [
+        state.version,
+        [
           {
-            type: "fact.handler_timeout_leaked",
-            payload: { nodeId: currentNode, leakedAt: clock() },
-          },
-          {
-            type: "fact.run_halted",
-            payload: { reason: "error", detail: "handler_leaked" },
-          },
-        ]);
-        // Bound the blast radius of misbehaving handlers across the
-        // process lifetime. Per-process counter; once we cross the limit
-        // the daemon entrypoint trips its shutdown controller via the
-        // `onLeakLimitExceeded` callback, the singleton + sweep pick up
-        // the slack on restart.
-        leakBudget.recordLeak(runId, currentNode);
-        return;
-      }
-
-      if (wasAborted) {
-        flushObservability();
-        // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
-        // Side-effect facts are already durable via the pre-commit recorder.
-        const facts = abortResultToFacts(currentNode, iteration, abortCause, {
-          tokens: turnBilled,
-          costUsd: totalCostUsd,
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          cacheReadTokens: totalCacheReadTokens,
-          cacheWriteTokens: totalCacheWriteTokens,
-        });
-        // Reactive budget halt: when the cost.recorded mirror tripped a
-        // stop-policy breach mid-handler and triggered the abort, append
-        // fact.run_halted{reason:"budget"} alongside fact.node_aborted in
-        // the same atomic commit so the run terminates immediately.
-        // Otherwise the abort would just bump consecutiveAborts and the
-        // next dispatch would re-enter the same node — exactly the
-        // overshoot we're trying to avoid.
-        if (reactiveBudgetHaltDetail !== undefined) {
-          const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
-          if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
-          facts.push({ type: "fact.run_halted", payload: haltPayload });
-          await tryAppendFact(opts.store, runId, recorder.version(), facts);
-          return;
-        }
-        // Watchdog timeout: re-categorise the abort as a system-initiated
-        // pause-retry. The current dispatch's transcript stays on disk
-        // and the resume re-dispatches with it intact (handler-bridge
-        // restores priorMessages from the messages table on a paused_auto
-        // wake — the same mechanism HITL + provider-retry resumes use).
-        // Bounded by a per-nodeId counter at
-        // `routing.internal.timeout_retries.<nodeId>`; exhaustion halts
-        // with `timeout_exhausted`. fact.node_aborted still lands so
-        // partial-spend metrics accrue exactly as on the abort path.
-        // consecutiveAborts is intentionally NOT bumped — watchdog
-        // timeouts are system-initiated, not workflow-initiated, so the
-        // abort-loop ceiling shouldn't compound with them.
-        // See docs/proposals/watchdog-timeout-pause-retry.md.
-        if (abortCause === "timeout") {
-          const TIMEOUT_RETRY_COUNTER_KEY = `internal.timeout_retries.${currentNode}`;
-          const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
-          const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
-          const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
-          const priorAttempts = readNumber(state.routing[TIMEOUT_RETRY_COUNTER_KEY]);
-          const nextAttempt = priorAttempts + 1;
-          if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
-            const delayMs = Math.min(
-              TIMEOUT_RETRY_BACKOFF_MS_CEILING,
-              TIMEOUT_RETRY_BACKOFF_MS_BASE * 2 ** priorAttempts,
-            );
-            const resumeAt = clock() + delayMs;
-            facts.push({
-              type: "fact.run_paused",
-              payload: {
-                reason: "timeout_retry",
-                nodeId: currentNode,
-                attempt: nextAttempt,
-                delayMs,
-                resumeAt,
-                maxAttempts: TIMEOUT_RETRY_MAX_ATTEMPTS,
-                attemptedMs: spec.maxMs,
-              },
-            });
-            const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, {
-              routingPatch: {
-                [AUTO_RESUME_AT_KEY]: resumeAt,
-                [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
-              },
-            });
-            if (!ok) {
-              const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
-              if (halted) return;
-              continue;
-            }
-            return;
-          }
-          // Exhausted — terminal halt. fact.node_aborted lands first
-          // for metrics, then fact.run_halted with the operator-readable
-          // reason.
-          facts.push({
-            type: "fact.run_halted",
-            payload: {
-              reason: "timeout_exhausted",
-              detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
-            },
-          });
-          await tryAppendFact(opts.store, runId, recorder.version(), facts);
-          return;
-        }
-        await tryAppendFact(opts.store, runId, recorder.version(), facts);
-        consecutiveAborts++;
-        // One-shot warning the abort before the halt lands so a watcher
-        // sees the trend before the run dies. Observability (no version
-        // bump, no OCC) so it can ride alongside the just-committed
-        // fact.node_aborted in causal order.
-        if (consecutiveAborts === abortLoopCeiling - 1) {
-          opts.store.appendObservabilityEvents(runId, [
-            {
-              type: "abort_loop_warning",
-              payload: {
-                nodeId: currentNode,
-                consecutiveAborts,
-                ceiling: abortLoopCeiling,
-              },
-            },
-          ]);
-        }
-        if (consecutiveAborts >= abortLoopCeiling) {
-          await tryAppendFact(
-            opts.store,
-            runId,
-            // version may have shifted after the abort append; re-read.
-            opts.store.getState(runId)?.version ?? state.version,
-            [
-              {
-                type: "fact.run_paused",
-                payload: {
-                  reason: "abort_loop",
-                  nodeId: currentNode,
-                  consecutiveAborts,
-                },
-              },
-            ],
-          );
-          return;
-        }
-        continue;
-      } else {
-        consecutiveAborts = 0;
-      }
-
-      // Edge selection is recorded with `edge.selected` AFTER the
-      // goal-gate retarget check, not at selection time. Goal-gate
-      // retarget can override `result.nextNode` to a different target
-      // (the retry_target), in which case the originally-selected edge
-      // is never actually traversed and `edge.selected` would lie. We
-      // hold the selection here, then emit it only if no retarget fired.
-      let pendingEdgeSelection: EdgeSelection | undefined;
-
-      // Attach LLM accounting into the node_completed fact if the handler
-      // didn't set these explicitly.
-      if (result.kind === "transition") {
-        if (result.tokens === 0 && turnBilled > 0) result.tokens = turnBilled;
-        if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
-        // Split fields: only fill from executor accounting when the handler
-        // didn't already report any. Handlers that already know their own
-        // split (handler-bridge aggregating cost.recorded) win — the
-        // executor's LlmAccounting doesn't see codergen calls that go
-        // through the agent backend.
-        if ((result.inputTokens ?? 0) === 0 && totalInputTokens > 0) result.inputTokens = totalInputTokens;
-        if ((result.outputTokens ?? 0) === 0 && totalOutputTokens > 0) result.outputTokens = totalOutputTokens;
-        if ((result.cacheReadTokens ?? 0) === 0 && totalCacheReadTokens > 0) {
-          result.cacheReadTokens = totalCacheReadTokens;
-        }
-        if ((result.cacheWriteTokens ?? 0) === 0 && totalCacheWriteTokens > 0) {
-          result.cacheWriteTokens = totalCacheWriteTokens;
-        }
-        if (result.modelName == null && lastModel != null) result.modelName = lastModel;
-
-        // Edge selection: when the handler left `nextNode` unset, pick from
-        // the current node's outgoing edges via the 5-rule selector (SPEC
-        // §3.8). With it set, the handler is bypassing routing on purpose.
-        if (result.nextNode == null) {
-          const graph = graphFor(state.workflowSha);
-          const srcNode = graph?.nodes[currentNode];
-          if (graph != null && srcNode != null) {
-            const selection = selectEdge({
-              graph,
-              source: srcNode,
-              outcome: {
-                status: result.outcomeStatus ?? "success",
-                context_updates: {},
-                preferred_label: result.preferredLabel ?? "",
-                suggested_next_ids: result.suggestedNextIds ?? [],
-                notes: "",
-              },
-              context: state.routing,
-            });
-            if (selection != null) {
-              result.nextNode = selection.edge.to;
-              pendingEdgeSelection = selection;
-            } else if (result.outcomeStatus === "fail") {
-              // §3.7 step 2/3 — when no fail-edge claimed the failure,
-              // consult the source node's retry_target / fallback_retry_target
-              // before halting. Step 4 (pipeline termination) is the
-              // `__end__` fallback below when no retarget resolves.
-              const retarget = resolveFailRetarget(graph, currentNode);
-              if (retarget != null) {
-                result.nextNode = retarget;
-              } else {
-                // No fail-edge and no retarget — terminal halt path.
-                result.nextNode = "__end__";
-              }
-            } else {
-              // No outgoing edges or no viable selection — terminal.
-              result.nextNode = "__end__";
-            }
-          } else {
-            // Graph unavailable (already-running test fixtures without a
-            // parseable workflow) — terminal by default.
-            result.nextNode = "__end__";
-          }
-        }
-      }
-
-      // Budget enforcement at the post-handler boundary. The check sees
-      // cumulative spend INCLUDING this turn (state.metrics doesn't have
-      // the new fact applied yet, so we add result.{tokens,costUsd} in).
-      // On halt, defer the halt until after resultToFacts so
-      // fact.node_completed lands first — without that, the breaching
-      // turn's spend is visible to the gate but never folds into
-      // run_state.total_cost_usd or nodeCosts[currentNode]; the projection
-      // would lag the gate's `actual` by the breaching-turn cost.
-      // On warn-only, prepend the warn event(s) to observability and let
-      // the transition continue.
-      let budgetWarnedTags: readonly string[] = [];
-      let budgetPause: { scope: "node" | "run"; metric: "cost" | "tokens"; limit: number; actual: number } | undefined;
-      let budgetHaltDetail: string | undefined;
-      if (result.kind === "transition") {
-        const graph = graphFor(state.workflowSha);
-        const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
-        const turnFresh = (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
-        const turnCost = result.costUsd ?? 0;
-        const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
-        const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
-        const alreadyWarned = readBudgetWarned(state.routing);
-        const overrides = readBudgetOverrides(state.routing);
-        const decisionBudget = evaluateBudget({
-          graphAttrs: graph?.attrs ?? {},
-          ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
-          completedNodeId: currentNode,
-          cumulativeCostUsd: state.metrics.totalCostUsd + turnCost,
-          cumulativeTokens: priorRunFresh + turnFresh,
-          nodeCumulativeCostUsd: priorNodeBucket.costUsd + turnCost,
-          nodeCumulativeTokens: priorNodeBucket.tokens + turnFresh,
-          alreadyWarned,
-          ...(overrides !== undefined ? { overrides } : {}),
-        });
-        for (const ev of decisionBudget.events) {
-          observability.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
-        }
-        budgetWarnedTags = decisionBudget.newlyWarned;
-        if (decisionBudget.shouldHalt) {
-          budgetHaltDetail = decisionBudget.haltReason ?? "";
-        } else if (decisionBudget.pauseBreach !== undefined) {
-          budgetPause = decisionBudget.pauseBreach;
-        }
-      }
-
-      // Goal-gate enforcement (attractor §3.4). Two responsibilities:
-      //   1. Record this node's outcome under `goal_gates.<id>` whenever it
-      //      has goal_gate=true, so terminal-arrival can read the fold.
-      //   2. When the resolved transition leads to a terminal, check every
-      //      visited gate: if any unsatisfied, redirect to the §3.4 chain
-      //      (gate.retry_target → gate.fallback_retry_target → graph.retry_target
-      //      → graph.fallback_retry_target) bounded by max_goal_gate_retries.
-      //   3. Counter exhaust → halt with `goal_gate_unsatisfied`.
-      //
-      // The current-turn outcome is folded into a synthetic snapshot before
-      // checking gates, so a final-stage gate that just completed can be
-      // evaluated without waiting for the next turn's projection refresh.
-      let goalGateRetargetTarget: string | undefined;
-      let goalGateRetriesPatch: number | undefined;
-      if (result.kind === "transition") {
-        const graph = graphFor(state.workflowSha);
-        const completedNode = graph?.nodes[currentNode];
-        if (graph != null && completedNode != null) {
-          const isTerminalNext =
-            result.nextNode === "__end__" ||
-            result.nextNode === "end" ||
-            result.nextNode === "done" ||
-            (result.nextNode != null && graph.nodes[result.nextNode]?.shape === "Msquare");
-          // Synthetic outcome map: prior gates from routing + this turn's gate.
-          const priorOutcomes = readGateOutcomes(state.routing);
-          const synthOutcomes = new Map(priorOutcomes);
-          if (completedNode.attrs.goal_gate === true && result.outcomeStatus != null) {
-            synthOutcomes.set(currentNode, result.outcomeStatus);
-          }
-          if (isTerminalNext) {
-            const goalGateOverride = readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
-            const action = goalGateStep({
-              graph,
-              outcomes: synthOutcomes,
-              retries: readGoalGateRetries(state.routing),
-              ...(goalGateOverride > 0 ? { capOverride: goalGateOverride } : {}),
-            });
-            if (action.kind === "retarget") {
-              goalGateRetargetTarget = action.target;
-              goalGateRetriesPatch = action.nextRetries;
-              result.nextNode = action.target;
-              observability.push({
-                type: "goal_gate.retarget",
-                payload: { failedGate: action.gate, target: action.target, retries: action.nextRetries },
-              });
-            } else if (action.kind === "halt") {
-              observability.push({
-                type: "goal_gate.unsatisfied",
-                payload: { gate: action.gate },
-              });
-              const goalGateLimit =
-                readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
-                (typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3);
-              result = {
-                kind: "halt",
-                reason: "goal_gate_unsatisfied",
-                detail: action.gate,
-                pauseContext: { currentLimit: goalGateLimit },
-              };
-            }
-          }
-        }
-      }
-
-      // Goal-gate retarget (or unsatisfied-halt) overrides the selected
-      // edge — the originally-picked edge was never actually traversed,
-      // so suppress its `edge.selected`. Otherwise emit it now, before
-      // node_completed lands, preserving the conventional ordering.
-      if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
-        recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
-      }
-
-      // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
-      // returns outcomeStatus="retry", consult retryStep to decide:
-      //   - retry → emit fact.run_paused{reason:"handler_retry"}
-      //     (transitions to paused_auto, freeing the slot);
-      //     wake-pending re-queues the run after delayMs
-      //   - halt → run halts with `max_retries_exceeded`
-      //   - advance_partial → rewrite outcomeStatus to "partial_success"
-      //     and let edge selection advance (allow_partial branch, §3.5)
-      //
-      // For the retry path we DO emit fact.node_completed first (metrics
-      // are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
-      // — the run sleeps without a slot held, and resume re-dispatches the
-      // same node since state.currentNode points back at the retrying id.
-      let retryCounterPatch: Record<string, number> | undefined;
-      let retryPause:
-        | {
-            nodeId: string;
-            attempt: number;
-            delayMs: number;
-            resumeAt: number;
-            maxRetries: number;
-          }
-        | undefined;
-      if (result.kind === "transition" && result.outcomeStatus === "retry") {
-        const graph = graphFor(state.workflowSha);
-        const completedNode = graph?.nodes[currentNode];
-        if (graph != null && completedNode != null) {
-          const backoff = resolveBackoff(completedNode.attrs, graph.attrs);
-          // Operator override (intent.max_retries_adjusted) takes
-          // precedence over the static node/graph attrs. Stage 3
-          // pause-converted halt: a Raise & Resume after a max_retries
-          // pause should let the next dispatch see the higher cap.
-          const maxRetriesOverride = readNumber(state.routing[maxRetriesOverrideKey(currentNode)]);
-          const maxRetries =
-            maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
-          const allowPartial = completedNode.attrs.allow_partial === true;
-          const counterKey = retryCountKey(currentNode);
-          const priorRetries = readNumber(state.routing[counterKey]);
-          const action = retryStep({
-            state: { retries: priorRetries, maxRetries },
-            status: "retry",
-            backoff,
-            allowPartial,
-          });
-          if (action.kind === "retry") {
-            const now = clock();
-            const resumeAt = now + Math.max(0, Math.round(action.delayMs));
-            observability.push({
-              type: "node.retry_scheduled",
-              payload: {
-                nodeId: currentNode,
-                attempt: priorRetries + 1,
-                delayMs: action.delayMs,
-                maxRetries,
-                resumeAt,
-              },
-            });
-            // Set nextNode = currentNode so fact.node_completed records
-            // the loop intent (state.currentNode lands on the retrying
-            // node; resume re-dispatches it).
-            result.nextNode = currentNode;
-            retryCounterPatch = {
-              [counterKey]: priorRetries + 1,
-            };
-            retryPause = {
-              nodeId: currentNode,
-              attempt: priorRetries + 1,
-              delayMs: action.delayMs,
-              resumeAt,
-              maxRetries,
-            };
-          } else if (action.kind === "halt") {
-            observability.push({
-              type: "node.retry_exhausted",
-              payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
-            });
-            result = {
-              kind: "halt",
-              reason: "max_retries_exceeded",
-              detail: `node "${currentNode}" exhausted ${maxRetries} retries`,
-              pauseContext: { currentLimit: maxRetries, attempts: priorRetries + 1 },
-            };
-          } else if (action.kind === "advance_partial") {
-            observability.push({
-              type: "node.retry_partial_accept",
-              payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
-            });
-            result.outcomeStatus = "partial_success";
-          }
-        }
-      }
-
-      // Provider auto-retry: when a codergen turn returns pause_provider,
-      // consult the policy module to decide whether this is auto-retry
-      // (transient transport error, schedule a backoff), manual (operator
-      // must intervene — auth/billing/schema), or halt-exhausted (chain
-      // cap exceeded). The decision drives fact mutation + routing patches
-      // below; manual is the existing behaviour and needs no further work.
-      // The exhausted branch emits a `provider_exhausted` halt fact
-      // directly — that reason is executor-only (not in the handler-side
-      // HaltReason union) so we don't go through resultToFacts.
-      let providerRetryDecision: ProviderRetryDecision | undefined;
-      let providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined;
-      if (result.kind === "pause_provider") {
-        providerRetryDecision = decideProviderRetry({
-          httpStatus: result.httpStatus,
-          ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
-          priorAttempt: readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]),
-          now: clock(),
-          cumulativeDelayMs: 0,
-        });
-        if (providerRetryDecision.kind === "exhausted") {
-          providerExhausted = { attempt: providerRetryDecision.attempt, reason: providerRetryDecision.reason };
-          providerRetryDecision = undefined;
-        }
-      }
-
-      // Tail-drain: the handler may have streamed most of its deltas
-      // mid-flight via the timer, but `edge.selected` and any post-handler
-      // observability (e.g. budget warnings above) still need to flush
-      // before the terminal fact for causal ordering.
-      flushObservability();
-
-      // Side-effect facts are already durable via the pre-commit recorder;
-      // resultToFacts only emits the terminal node_* / run_* facts.
-      const factsCtx = {
-        state,
-        appliedIntentSeqs: decision.appliedSeqs,
-      };
-      let facts = resultToFacts(result, factsCtx);
-
-      // R3 — pause defers when paired with steer/hitl: keep the
-      // node_completed accounting, then pause instead of advancing to
-      // the next node. wakePending will rouse the run on the next
-      // intent.hitl_input. Terminal halts (run_halted) beat pause; we
-      // only swap the success continuations (node_started / run_completed).
-      // Mid-dispatch pause races (intent arrives AFTER the fold but
-      // BEFORE the handler returned) flow through the abort-throw path:
-      // the codergen agent rethrows on signal-tripped + aborted-stream
-      // so the executor's catch block writes fact.node_aborted, leaves
-      // the run running, and the next dispatch's fold consumes the
-      // pause intent normally.
-      if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
-        const swapTypes = new Set(["fact.node_started", "fact.run_completed"]);
-        const swapped = facts.some((f) => swapTypes.has(f.type));
-        if (swapped) {
-          facts = facts.filter((f) => !swapTypes.has(f.type));
-          facts.push({
             type: "fact.run_paused",
             payload: {
               reason: "operator",
               nodeId: state.currentNode ?? "",
             },
+          },
+        ],
+        // Advance lastAppliedSeq so the pause intent (and any hitched-along
+        // intents that were folded into appliedSeqs) doesn't refire on
+        // the next dispatch after wakePending moves the run back to queued.
+        decision.appliedSeqs.length > 0 ? { advanceAppliedTo: Math.max(...decision.appliedSeqs) } : undefined,
+      );
+      return { kind: "terminal" };
+    }
+
+    // Identify the node to run. `claimNextRun` flips status to 'running' but
+    // leaves current_node NULL — treat that as the "just-claimed" signal and
+    // emit run_started to pin the start node. The start node comes from
+    // routing.start_node, defaulting to "start".
+    const currentNode = state.currentNode;
+    const needsStart = state.currentNode == null && (state.status === "queued" || state.status === "running");
+
+    // Provision the run's worktree before the first fact.run_started
+    // commits. If init fails, the run is halted with a clear reason
+    // and the provisioner is responsible for any partial-state
+    // cleanup. After the first successful provision, runEnv is cached
+    // locally and reused on every subsequent turn — `ensure` is
+    // idempotent but we avoid the extra lookup.
+    if (opts.provisioner && runEnv === undefined) {
+      try {
+        runEnv = await opts.provisioner.ensure(runId, state.cwd != null ? { cwd: state.cwd } : {});
+        opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        opts.store.appendDaemonEvent(
+          { type: "daemon.worktree_provisioned", payload: { runId, ok: false, errorDetail: detail } },
+          { runId },
+        );
+        await tryAppendFact(opts.store, runId, state.version, [
+          {
+            type: "fact.run_halted",
+            payload: {
+              reason: "error",
+              detail: `worktree_provision_failed: ${detail}`,
+            },
+          },
+        ]);
+        return { kind: "terminal" };
+      }
+    }
+
+    if (needsStart) {
+      // Sub-runs (P1.1 / P2.1 of docs/proposals/parallel.md) start at
+      // the branch root they were enqueued against, not the workflow's
+      // `start` node. The subgraph slice fences edge selection at
+      // `subgraph_terminal_node_id` below — see the
+      // "subgraph_terminal_node_id" check after edge selection.
+      const start = state.subgraphRootNodeId ?? routingString(state.routing, "start_node") ?? "start";
+      const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
+      const startFacts: FactEvent[] = [
+        {
+          type: "fact.run_started",
+          payload: {
+            workflowSha: state.workflowSha,
+            schemaVersion: state.schemaVersion,
+            startNode: start,
+            ...(baseGitSha != null ? { baseGitSha } : {}),
+          },
+        },
+      ];
+      // Seed graph-level routing keys at run start so $goal substitution
+      // and `${context.graph.goal}` references resolve from turn 1
+      // onward (attractor §4.5 / §5.1). Closes the silent bug where
+      // the agent reads routing["graph.goal"] but nothing wrote it.
+      const startGraph = graphFor(state.workflowSha);
+      const startRoutingPatch: Record<string, unknown> = {};
+      if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
+        startRoutingPatch["graph.goal"] = startGraph.attrs.goal;
+      }
+      if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
+        startRoutingPatch["graph.label"] = startGraph.attrs.label;
+      }
+      const ok = await tryAppendFact(
+        opts.store,
+        runId,
+        state.version,
+        startFacts,
+        Object.keys(startRoutingPatch).length > 0 ? { routingPatch: startRoutingPatch } : undefined,
+      );
+      if (!ok) {
+        const { halted } = await onOccConflict("fact.run_started", start, 0, state.version);
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
+      onOccResolved(start, 0);
+      if (opts.autoTitler) {
+        const input = routingString(state.routing, "input") ?? "";
+        const goal = graphFor(workflowSha)?.attrs.goal;
+        const req: TitleRequest = {
+          runId,
+          workflowSha,
+          input,
+        };
+        if (goal !== undefined) req.goal = goal;
+        opts.autoTitler.titleRun(req);
+      }
+      return { kind: "continue" }; // Reload state next turn with the new run_started applied.
+    }
+
+    if (currentNode == null) return { kind: "terminal" };
+
+    // Production ceiling on handler dispatches. A workflow that loops
+    // without ever aborting (so ABORT_LOOP_CEILING never fires) would
+    // otherwise run until budget or wall-clock killed it. This is the
+    // last-resort guard; workflow authors should bound loops via
+    // `max_retries` on backward edges.
+    //
+    // The override key is read on every iteration so a Raise & Resume
+    // adjustment takes effect on the next dispatch — `dispatches` is
+    // a JS-local counter that resets on every runOne entry, so the
+    // resume after a pause already starts at 0; the override raises
+    // the ceiling for *this* dispatch loop's pass.
+    const effectiveMaxLoops = readNumber(state.routing[MAX_LOOPS_OVERRIDE_KEY]) || maxLoops;
+    if (dispatches >= effectiveMaxLoops) {
+      await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.run_paused",
+          payload: {
+            reason: "max_loops",
+            currentLimit: effectiveMaxLoops,
+            dispatches,
+          },
+        },
+      ]);
+      return { kind: "terminal" };
+    }
+    dispatches++;
+
+    // Stamp dispatchStartedAt before handing control to the handler
+    // so activeMs accounting captures this dispatch interval.
+    // fact.run_started covers the very first dispatch (it stamps
+    // dispatchStartedAt directly via its own reducer case), so we
+    // only emit here when the projection's dispatchStartedAt was
+    // reset by a prior terminal/pause fact.
+    if (state.dispatchStartedAt == null) {
+      const dispatchIteration = nodeRetryCount(state.routing);
+      const ok = await tryAppendFact(opts.store, runId, state.version, [
+        {
+          type: "fact.dispatch_started",
+          payload: {
+            nodeId: currentNode,
+            iteration: dispatchIteration,
+            resumeOf: deriveResumeOf(opts.store, runId),
+          },
+        },
+      ]);
+      if (!ok) {
+        dispatches--;
+        const { halted } = await onOccConflict("fact.dispatch_started", currentNode, dispatchIteration, state.version);
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
+      onOccResolved(currentNode, dispatchIteration);
+      return { kind: "continue" };
+    }
+
+    // Dispatch.
+    const spec = opts.dispatcher.get(workflowSha, currentNode);
+    const steerCtrl = new AbortController();
+    const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
+    const signal = AbortSignal.any(signals);
+
+    const iteration = nodeRetryCount(state.routing);
+    // Pre-commit recorder: each recordIntent/recordDone/recordFailed
+    // commits its own short transaction so a hard crash mid-`fn` leaves
+    // the intent durable in the event log. ARCHITECTURE.md §1.1.
+    const recorder = new CommittingRecorder({
+      store: opts.store,
+      runId,
+      nodeId: currentNode,
+      iteration,
+      initialVersion: state.version,
+    });
+    const observability: { type: string; payload: Record<string, unknown> }[] = [];
+    // Mid-handler micro-batch timer. See OBSERVABILITY_FLUSH_*_MS notes.
+    // Owned by `emitObservability` (schedules) and `flushObservability`
+    // (clears). Always null-checked before clearTimeout / setTimeout so
+    // the leak-budget / abort / normal completion paths can call
+    // `flushObservability` unconditionally.
+    let observabilityFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushObservability = (): void => {
+      if (observabilityFlushTimer != null) {
+        clearTimeout(observabilityFlushTimer);
+        observabilityFlushTimer = null;
+      }
+      if (observability.length === 0) return;
+      // Drain into a fresh array before the (sync) write so the buffer
+      // is empty if the write throws — best-effort telemetry; we swallow
+      // and log on failure rather than retry.
+      const drained = observability.splice(0, observability.length);
+      try {
+        opts.store.appendObservabilityEvents(runId, drained);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[executor] observability flush failed for run ${runId}:`, err);
+      }
+    };
+
+    let turnBilled = 0;
+    let totalCostUsd = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCacheWriteTokens = 0;
+    let lastModel: string | undefined;
+    // Reactive budget halt: when a `cost.recorded` event mid-handler
+    // pushes cumulative spend over a `budget_policy="stop"` ceiling,
+    // we abort the in-flight handler and emit fact.run_halted{
+    // reason:"budget"} alongside fact.node_aborted (which captures
+    // partial spend). Without this bound, sub-agent fan-out spends
+    // freely between parent-turn boundaries — a single orchestrator
+    // turn can overshoot the cap by 5×+ before the post-handler
+    // boundary check runs.
+    let reactiveBudgetHaltDetail: string | undefined;
+    const accounting: core.LlmAccounting = {
+      addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
+        turnBilled += tokens;
+        totalCostUsd += costUsd;
+        totalInputTokens += inputTokens ?? 0;
+        totalOutputTokens += outputTokens ?? 0;
+        totalCacheReadTokens += cacheReadTokens ?? 0;
+        totalCacheWriteTokens += cacheWriteTokens ?? 0;
+        lastModel = model;
+      },
+    };
+
+    // Hard-filter ctx.tools by the node's allowed_tools / denied_tools.
+    // A handler that reaches for `ctx.tools.get("bash")` on a node that
+    // didn't allow "bash" gets `unknown tool: bash`, same as for an
+    // unregistered tool. The filter lives at HandlerContext construction
+    // so every handler kind (codergen, tool, parallel branches, custom)
+    // respects the same structural enforcement.
+    const graph = graphFor(state.workflowSha);
+    const nodeAttrs = graph?.nodes[currentNode]?.attrs;
+    const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
+      ? (nodeAttrs.allowed_tools as readonly string[])
+      : undefined;
+    const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
+      ? (nodeAttrs.denied_tools as readonly string[])
+      : undefined;
+
+    // Captured outputs of every prior node, keyed by nodeId. Re-folded on
+    // every dispatch from `fact.node_completed` events that carry an
+    // outputRef. Without this, downstream `$<nodeId>.output` substitution
+    // resolves to the empty string and aborts cascade through the graph.
+    const nodeOutputs = opts.store.getNodeOutputs(runId);
+
+    // Inline sub-run outcomes from this parent run's own
+    // `fact.subrun_completed` events. The parallel handler's collect
+    // phase reads them to synthesise the fan_in input shape.
+    const subRunOutcomes = foldSubRunOutcomes(opts.store, runId);
+
+    const ctxOpts: core.BuildContextOpts = {
+      runId,
+      nodeId: currentNode,
+      iteration,
+      signal,
+      routing: state.routing,
+      store: opts.store,
+      llm: core.makeLlmClient({
+        signal,
+        call: opts.llmCall,
+        accounting,
+      }),
+      http: core.makeHttpClient(
+        opts.defaultHttpTimeoutMs != null ? { signal, defaultTimeoutMs: opts.defaultHttpTimeoutMs } : { signal },
+      ),
+      tools: opts.tools,
+      recorder,
+      args: buildSubstitutionArgs(runId, state.routing),
+      nodeOutputs,
+      subRunOutcomes,
+      emitObservability: (type, payload) => {
+        // Stamp nodeId + iteration so the UI can scope without the
+        // handler having to thread it through every payload.
+        observability.push({
+          type,
+          payload: { nodeId: currentNode, iteration, ...payload },
+        });
+        // Mirror handler-emitted `cost.recorded` into the per-turn
+        // accumulator. Codergen bypasses ctx.llm.call() and reports
+        // usage through ctx.emit (handler-bridge.ts forwards every
+        // pi-agent-core message_end → cost.recorded). Without this
+        // mirror, the abort branch's `partial` payload reads zero on
+        // codergen handlers — fact.node_aborted would land with
+        // partialTokens=0/partialCostUsd=0 and run_state.metrics +
+        // budget_usd would silently undercount aborted spend. The
+        // completion path is unaffected: it only backfills result
+        // fields when the handler returned zeros (executor.ts §below),
+        // and codergen's HandlerResult already carries populated
+        // tokens/costUsd from its own accumulator (handler-bridge
+        // surfaces the same cost.recorded stream into the result).
+        // Per AGENTS.md ground rule #5: this accumulator is turn-local,
+        // not a reducer fold of cost.recorded.
+        if (type === "cost.recorded") {
+          const p = payload as Record<string, unknown>;
+          turnBilled += readNumber(p["total_tokens"]);
+          totalCostUsd += readNumber(p["cost_usd"]);
+          totalInputTokens += readNumber(p["input_tokens"]);
+          totalOutputTokens += readNumber(p["output_tokens"]);
+          totalCacheReadTokens += readNumber(p["cache_read_tokens"]);
+          totalCacheWriteTokens += readNumber(p["cache_write_tokens"]);
+          const model = p["model"];
+          if (typeof model === "string") lastModel = model;
+
+          // Reactive budget gate. Bounds peak overshoot to one
+          // in-flight LLM message rather than the parent turn's full
+          // sub-agent fan-out. Only fires once per dispatch (the
+          // halt-pending flag short-circuits subsequent events).
+          // Pause-policy breaches still wait for the post-handler
+          // boundary so the operator-pause flow stays unchanged.
+          if (reactiveBudgetHaltDetail === undefined) {
+            const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
+            const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+            const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
+            const overrides = readBudgetOverrides(state.routing);
+            const reactive = evaluateBudget({
+              graphAttrs: graph?.attrs ?? {},
+              ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
+              completedNodeId: currentNode,
+              cumulativeCostUsd: state.metrics.totalCostUsd + totalCostUsd,
+              cumulativeTokens: priorRunFresh + turnBilled,
+              nodeCumulativeCostUsd: priorNodeBucket.costUsd + totalCostUsd,
+              nodeCumulativeTokens: priorNodeBucket.tokens + turnBilled,
+              alreadyWarned: readBudgetWarned(state.routing),
+              ...(overrides !== undefined ? { overrides } : {}),
+            });
+            if (reactive.shouldHalt) {
+              reactiveBudgetHaltDetail = reactive.haltReason ?? "";
+              for (const ev of reactive.events) {
+                observability.push({
+                  type: ev.type,
+                  payload: { nodeId: currentNode, iteration, ...ev.payload },
+                });
+              }
+              steerCtrl.abort(new Error("budget"));
+            }
+          }
+        }
+        // Hard ceiling — bound peak memory and per-batch render cost
+        // when a provider streams a burst of deltas faster than the
+        // soft timer can drain.
+        if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
+          flushObservability();
+          return { kind: "terminal" };
+        }
+        // Soft ceiling — coalesce small bursts so we don't hammer the
+        // writer lock with one txn per text delta.
+        if (observabilityFlushTimer == null) {
+          observabilityFlushTimer = setTimeout(flushObservability, OBSERVABILITY_FLUSH_INTERVAL_MS);
+        }
+      },
+    };
+    if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
+    if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
+    if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
+    if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
+    if (runEnv !== undefined) ctxOpts.env = runEnv;
+    // Budget snapshot at dispatch time. The backend embeds this verbatim
+    // into `llm.start.budget` so the UI can render "X of Y used" without
+    // cross-referencing the graph attrs. Only populated when at least one
+    // ceiling (run-level or node-level cost) is configured.
+    const runMaxCostUsd = graph?.attrs.budget_usd;
+    const nodeMaxCostUsd = nodeAttrs?.max_cost_usd;
+    if (typeof runMaxCostUsd === "number" || typeof nodeMaxCostUsd === "number") {
+      const snap: core.BudgetSnapshotInput = {
+        cumulative_cost_usd: state.metrics.totalCostUsd,
+        cumulative_tokens: state.metrics.totalInputTokens + state.metrics.totalOutputTokens,
+      };
+      if (typeof runMaxCostUsd === "number") snap.run_max_cost_usd = runMaxCostUsd;
+      if (typeof nodeMaxCostUsd === "number") snap.max_cost_usd = nodeMaxCostUsd;
+      ctxOpts.budgetSnapshot = snap;
+    }
+    const ctx = core.buildHandlerContext(ctxOpts);
+
+    let result: HandlerResult;
+    let wasAborted = false;
+    let abortCause: "timeout" | "aborted" = "aborted";
+    let leakedTimeout = false;
+    // Register only here, not at steerCtrl creation: the build steps
+    // above (graph load, node-output fold, context build) can throw, and
+    // the `finally` below is the sole unregister — an earlier register
+    // leaks the entry on a build-path throw, and the next claim of this
+    // runId then trips `register`'s already-registered guard.
+    opts.registry.register(runId, steerCtrl);
+    try {
+      // Promise.race against a marker rather than a rejecting timer: a
+      // rejection from the timer would mask an ignored-AbortSignal as
+      // "handler error" in the catch block (the original code's
+      // `.then(_ => …)` callback never fired because `timeoutReject`
+      // never fulfilled). Resolving with a sentinel lets us detect the
+      // leak unambiguously.
+      const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
+        spec.handler(ctx),
+        new Promise<typeof TIMEOUT_SENTINEL>((res) => setTimeout(() => res(TIMEOUT_SENTINEL), spec.maxMs + leakGrace)),
+      ]);
+      if (raced === TIMEOUT_SENTINEL) {
+        leakedTimeout = true;
+        result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
+      } else {
+        result = raced;
+      }
+    } catch (err) {
+      wasAborted = isAbortError(err);
+      if (wasAborted) abortCause = classifyAbortCause(signal, err);
+      result = {
+        kind: "halt",
+        reason: "error",
+        detail: errorMessage(err),
+      };
+    } finally {
+      opts.registry.unregister(runId);
+    }
+
+    // Drain anything left in the soft-batch buffer before the terminal
+    // fact lands so consumers tailing /events still see the trail
+    // followed by node_completed in causal order — the timer-driven
+    // flush handles mid-handler streaming, this drain handles the tail.
+    if (leakedTimeout) {
+      flushObservability();
+      await tryAppendFact(opts.store, runId, recorder.version(), [
+        {
+          type: "fact.handler_timeout_leaked",
+          payload: { nodeId: currentNode, leakedAt: clock() },
+        },
+        {
+          type: "fact.run_halted",
+          payload: { reason: "error", detail: "handler_leaked" },
+        },
+      ]);
+      // Bound the blast radius of misbehaving handlers across the
+      // process lifetime. Per-process counter; once we cross the limit
+      // the daemon entrypoint trips its shutdown controller via the
+      // `onLeakLimitExceeded` callback, the singleton + sweep pick up
+      // the slack on restart.
+      leakBudget.recordLeak(runId, currentNode);
+      return { kind: "terminal" };
+    }
+
+    if (wasAborted) {
+      flushObservability();
+      // Reapply partial usage to node_aborted; executor doesn't roll back blobs.
+      // Side-effect facts are already durable via the pre-commit recorder.
+      const facts = abortResultToFacts(currentNode, iteration, abortCause, {
+        tokens: turnBilled,
+        costUsd: totalCostUsd,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheWriteTokens: totalCacheWriteTokens,
+      });
+      // Reactive budget halt: when the cost.recorded mirror tripped a
+      // stop-policy breach mid-handler and triggered the abort, append
+      // fact.run_halted{reason:"budget"} alongside fact.node_aborted in
+      // the same atomic commit so the run terminates immediately.
+      // Otherwise the abort would just bump consecutiveAborts and the
+      // next dispatch would re-enter the same node — exactly the
+      // overshoot we're trying to avoid.
+      if (reactiveBudgetHaltDetail !== undefined) {
+        const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+        if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
+        facts.push({ type: "fact.run_halted", payload: haltPayload });
+        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        return { kind: "terminal" };
+      }
+      // Watchdog timeout: re-categorise the abort as a system-initiated
+      // pause-retry. The current dispatch's transcript stays on disk
+      // and the resume re-dispatches with it intact (handler-bridge
+      // restores priorMessages from the messages table on a paused_auto
+      // wake — the same mechanism HITL + provider-retry resumes use).
+      // Bounded by a per-nodeId counter at
+      // `routing.internal.timeout_retries.<nodeId>`; exhaustion halts
+      // with `timeout_exhausted`. fact.node_aborted still lands so
+      // partial-spend metrics accrue exactly as on the abort path.
+      // consecutiveAborts is intentionally NOT bumped — watchdog
+      // timeouts are system-initiated, not workflow-initiated, so the
+      // abort-loop ceiling shouldn't compound with them.
+      // See docs/proposals/watchdog-timeout-pause-retry.md.
+      if (abortCause === "timeout") {
+        const TIMEOUT_RETRY_COUNTER_KEY = `internal.timeout_retries.${currentNode}`;
+        const TIMEOUT_RETRY_BACKOFF_MS_BASE = 5_000;
+        const TIMEOUT_RETRY_BACKOFF_MS_CEILING = 60_000;
+        const TIMEOUT_RETRY_MAX_ATTEMPTS = 3;
+        const priorAttempts = readNumber(state.routing[TIMEOUT_RETRY_COUNTER_KEY]);
+        const nextAttempt = priorAttempts + 1;
+        if (nextAttempt < TIMEOUT_RETRY_MAX_ATTEMPTS) {
+          const delayMs = Math.min(
+            TIMEOUT_RETRY_BACKOFF_MS_CEILING,
+            TIMEOUT_RETRY_BACKOFF_MS_BASE * 2 ** priorAttempts,
+          );
+          const resumeAt = clock() + delayMs;
+          facts.push({
+            type: "fact.run_paused",
+            payload: {
+              reason: "timeout_retry",
+              nodeId: currentNode,
+              attempt: nextAttempt,
+              delayMs,
+              resumeAt,
+              maxAttempts: TIMEOUT_RETRY_MAX_ATTEMPTS,
+              attemptedMs: spec.maxMs,
+            },
           });
+          const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, {
+            routingPatch: {
+              [AUTO_RESUME_AT_KEY]: resumeAt,
+              [TIMEOUT_RETRY_COUNTER_KEY]: nextAttempt,
+            },
+          });
+          if (!ok) {
+            const { halted } = await onOccConflict("fact.run_paused", currentNode, iteration, recorder.version());
+            if (halted) return { kind: "terminal" };
+            return { kind: "continue" };
+          }
+          return { kind: "terminal" };
+        }
+        // Exhausted — terminal halt. fact.node_aborted lands first
+        // for metrics, then fact.run_halted with the operator-readable
+        // reason.
+        facts.push({
+          type: "fact.run_halted",
+          payload: {
+            reason: "timeout_exhausted",
+            detail: `${TIMEOUT_RETRY_MAX_ATTEMPTS} watchdog timeouts on node "${currentNode}"; thread continuity preserved but progress stalled`,
+          },
+        });
+        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        return { kind: "terminal" };
+      }
+      await tryAppendFact(opts.store, runId, recorder.version(), facts);
+      consecutiveAborts++;
+      // One-shot warning the abort before the halt lands so a watcher
+      // sees the trend before the run dies. Observability (no version
+      // bump, no OCC) so it can ride alongside the just-committed
+      // fact.node_aborted in causal order.
+      if (consecutiveAborts === abortLoopCeiling - 1) {
+        opts.store.appendObservabilityEvents(runId, [
+          {
+            type: "abort_loop_warning",
+            payload: {
+              nodeId: currentNode,
+              consecutiveAborts,
+              ceiling: abortLoopCeiling,
+            },
+          },
+        ]);
+      }
+      if (consecutiveAborts >= abortLoopCeiling) {
+        await tryAppendFact(
+          opts.store,
+          runId,
+          // version may have shifted after the abort append; re-read.
+          opts.store.getState(runId)?.version ?? state.version,
+          [
+            {
+              type: "fact.run_paused",
+              payload: {
+                reason: "abort_loop",
+                nodeId: currentNode,
+                consecutiveAborts,
+              },
+            },
+          ],
+        );
+        return { kind: "terminal" };
+      }
+      return { kind: "continue" };
+    } else {
+      consecutiveAborts = 0;
+    }
+
+    // Fanout: the parallel handler requested a sub-run fan-out. P2.2 of
+    // docs/proposals/parallel.md. The executor:
+    //   1. Mints sub-run IDs (deterministic from
+    //      `(parentRunId, parentNodeId, iteration, branchIndex)` so a
+    //      replay reproduces them).
+    //   2. Enqueues each sub-run with parent linkage + subgraph slice
+    //      pointers. Sub-runs share the parent's `workflow_sha` and
+    //      `cwd`; the slice is `(subgraph_root_node_id,
+    //      subgraph_terminal_node_id)`.
+    //   3. Appends `fact.fanout_started` on the parent's log inside
+    //      one OCC commit — the reducer transitions the parent to
+    //      `running_children` and stamps the sub-run id list into
+    //      routing so the collect-phase handler reads them on resume.
+    // The wake-pending sweep promotes the parent back to `queued` on
+    // `fact.fanout_completed` once every sub-run reaches a
+    // terminal-or-paused-class state. The parent's runOneInner
+    // terminates here (returns terminal) — the slot is released for
+    // sub-runs to claim.
+    if (result.kind === "fanout_pending") {
+      flushObservability();
+      const joinPolicy: "wait_all" | "first_success" =
+        result.joinPolicy === "first_success" ? "first_success" : "wait_all";
+      const childRunIds: string[] = result.branchNodeIds.map(
+        (_branchNode, branchIndex) => `${runId}__${currentNode}__i${iteration}__b${branchIndex}`,
+      );
+      for (let i = 0; i < result.branchNodeIds.length; i++) {
+        const branchNodeId = result.branchNodeIds[i]!;
+        const childRunId = childRunIds[i]!;
+        try {
+          opts.store.enqueueRun({
+            runId: childRunId,
+            workflowSha: state.workflowSha,
+            priority: state.priority,
+            parentRunId: runId,
+            parentNodeId: currentNode,
+            parallelIndex: i,
+            subgraphRootNodeId: branchNodeId,
+            subgraphTerminalNodeId: result.fanInNode,
+            ...(state.cwd !== null ? { cwd: state.cwd } : {}),
+          });
+        } catch (err) {
+          // A duplicate enqueue means an earlier crash-resume already
+          // wrote the sub-run row. Best-effort: keep going; OCC on the
+          // parent fanout_started commit will reconcile.
+          if (!(err instanceof Error) || !/already exists|UNIQUE/i.test(err.message)) {
+            throw err;
+          }
         }
       }
+      const fanoutFacts: FactEvent[] = [
+        {
+          type: "fact.fanout_started",
+          payload: {
+            parentNodeId: currentNode,
+            childRunIds,
+            fanInNode: result.fanInNode,
+          },
+        },
+      ];
+      const fanoutRouting: Record<string, unknown> = {
+        [`parallel.${currentNode}.sub_run_ids`]: childRunIds,
+        [`parallel.${currentNode}.fan_in_node`]: result.fanInNode,
+        [`parallel.${currentNode}.join_policy`]: joinPolicy,
+      };
+      const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+      const fanoutAppendOpts: { routingPatch: Record<string, unknown>; advanceAppliedTo?: number } = {
+        routingPatch: fanoutRouting,
+      };
+      if (advanceAppliedTo !== undefined) fanoutAppendOpts.advanceAppliedTo = advanceAppliedTo;
+      const fanoutOk = await tryAppendFact(opts.store, runId, recorder.version(), fanoutFacts, fanoutAppendOpts);
+      if (!fanoutOk) {
+        const { halted } = await onOccConflict("fact.fanout_started", currentNode, iteration, recorder.version());
+        if (halted) return { kind: "terminal" };
+        return { kind: "continue" };
+      }
+      onOccResolved(currentNode, iteration);
+      return { kind: "terminal" };
+    }
 
-      // Retry pause: swap fact.node_started for
-      // fact.run_paused{reason:"handler_retry"} so the run releases its
-      // concurrency slot during the backoff window. node_completed is
-      // preserved (metrics + the nextNode=currentNode routing fact).
-      // wake-pending re-queues the run once `resumeAt` has elapsed.
-      if (retryPause !== undefined) {
+    // Edge selection is recorded with `edge.selected` AFTER the
+    // goal-gate retarget check, not at selection time. Goal-gate
+    // retarget can override `result.nextNode` to a different target
+    // (the retry_target), in which case the originally-selected edge
+    // is never actually traversed and `edge.selected` would lie. We
+    // hold the selection here, then emit it only if no retarget fired.
+    let pendingEdgeSelection: EdgeSelection | undefined;
+
+    // Attach LLM accounting into the node_completed fact if the handler
+    // didn't set these explicitly.
+    if (result.kind === "transition") {
+      if (result.tokens === 0 && turnBilled > 0) result.tokens = turnBilled;
+      if (result.costUsd === 0 && totalCostUsd > 0) result.costUsd = totalCostUsd;
+      // Split fields: only fill from executor accounting when the handler
+      // didn't already report any. Handlers that already know their own
+      // split (handler-bridge aggregating cost.recorded) win — the
+      // executor's LlmAccounting doesn't see codergen calls that go
+      // through the agent backend.
+      if ((result.inputTokens ?? 0) === 0 && totalInputTokens > 0) result.inputTokens = totalInputTokens;
+      if ((result.outputTokens ?? 0) === 0 && totalOutputTokens > 0) result.outputTokens = totalOutputTokens;
+      if ((result.cacheReadTokens ?? 0) === 0 && totalCacheReadTokens > 0) {
+        result.cacheReadTokens = totalCacheReadTokens;
+      }
+      if ((result.cacheWriteTokens ?? 0) === 0 && totalCacheWriteTokens > 0) {
+        result.cacheWriteTokens = totalCacheWriteTokens;
+      }
+      if (result.modelName == null && lastModel != null) result.modelName = lastModel;
+
+      // Edge selection: when the handler left `nextNode` unset, pick from
+      // the current node's outgoing edges via the 5-rule selector (SPEC
+      // §3.8). With it set, the handler is bypassing routing on purpose.
+      if (result.nextNode == null) {
+        const graph = graphFor(state.workflowSha);
+        const srcNode = graph?.nodes[currentNode];
+        if (graph != null && srcNode != null) {
+          const selection = selectEdge({
+            graph,
+            source: srcNode,
+            outcome: {
+              status: result.outcomeStatus ?? "success",
+              context_updates: {},
+              preferred_label: result.preferredLabel ?? "",
+              suggested_next_ids: result.suggestedNextIds ?? [],
+              notes: "",
+            },
+            context: state.routing,
+          });
+          if (selection != null) {
+            result.nextNode = selection.edge.to;
+            pendingEdgeSelection = selection;
+          } else if (result.outcomeStatus === "fail") {
+            // §3.7 step 2/3 — when no fail-edge claimed the failure,
+            // consult the source node's retry_target / fallback_retry_target
+            // before halting. Step 4 (pipeline termination) is the
+            // `__end__` fallback below when no retarget resolves.
+            const retarget = resolveFailRetarget(graph, currentNode);
+            if (retarget != null) {
+              result.nextNode = retarget;
+            } else {
+              // No fail-edge and no retarget — terminal halt path.
+              result.nextNode = "__end__";
+            }
+          } else {
+            // No outgoing edges or no viable selection — terminal.
+            result.nextNode = "__end__";
+          }
+        } else {
+          // Graph unavailable (already-running test fixtures without a
+          // parseable workflow) — terminal by default.
+          result.nextNode = "__end__";
+        }
+      }
+      // Sub-run subgraph fence (P2.1 / P2.3 of docs/proposals/parallel.md):
+      // when the resolved transition would enter the fan_in convergence
+      // node, terminate the sub-run instead. The parent's wake-pending
+      // sweep reads each sub-run's terminal status to roll up outcomes
+      // and emit `fact.subrun_completed` + `fact.fanout_completed`.
+      if (state.subgraphTerminalNodeId != null && result.nextNode === state.subgraphTerminalNodeId) {
+        result.nextNode = "__end__";
+      }
+    }
+
+    // Budget enforcement at the post-handler boundary. The check sees
+    // cumulative spend INCLUDING this turn (state.metrics doesn't have
+    // the new fact applied yet, so we add result.{tokens,costUsd} in).
+    // On halt, defer the halt until after resultToFacts so
+    // fact.node_completed lands first — without that, the breaching
+    // turn's spend is visible to the gate but never folds into
+    // run_state.total_cost_usd or nodeCosts[currentNode]; the projection
+    // would lag the gate's `actual` by the breaching-turn cost.
+    // On warn-only, prepend the warn event(s) to observability and let
+    // the transition continue.
+    let budgetWarnedTags: readonly string[] = [];
+    let budgetPause: { scope: "node" | "run"; metric: "cost" | "tokens"; limit: number; actual: number } | undefined;
+    let budgetHaltDetail: string | undefined;
+    if (result.kind === "transition") {
+      const graph = graphFor(state.workflowSha);
+      const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
+      const turnFresh = (result.inputTokens ?? 0) + (result.outputTokens ?? 0);
+      const turnCost = result.costUsd ?? 0;
+      const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
+      const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
+      const alreadyWarned = readBudgetWarned(state.routing);
+      const overrides = readBudgetOverrides(state.routing);
+      const decisionBudget = evaluateBudget({
+        graphAttrs: graph?.attrs ?? {},
+        ...(completedNodeAttrs !== undefined ? { completedNodeAttrs } : {}),
+        completedNodeId: currentNode,
+        cumulativeCostUsd: state.metrics.totalCostUsd + turnCost,
+        cumulativeTokens: priorRunFresh + turnFresh,
+        nodeCumulativeCostUsd: priorNodeBucket.costUsd + turnCost,
+        nodeCumulativeTokens: priorNodeBucket.tokens + turnFresh,
+        alreadyWarned,
+        ...(overrides !== undefined ? { overrides } : {}),
+      });
+      for (const ev of decisionBudget.events) {
+        observability.push({ type: ev.type, payload: { nodeId: currentNode, iteration, ...ev.payload } });
+      }
+      budgetWarnedTags = decisionBudget.newlyWarned;
+      if (decisionBudget.shouldHalt) {
+        budgetHaltDetail = decisionBudget.haltReason ?? "";
+      } else if (decisionBudget.pauseBreach !== undefined) {
+        budgetPause = decisionBudget.pauseBreach;
+      }
+    }
+
+    // Goal-gate enforcement (attractor §3.4). Two responsibilities:
+    //   1. Record this node's outcome under `goal_gates.<id>` whenever it
+    //      has goal_gate=true, so terminal-arrival can read the fold.
+    //   2. When the resolved transition leads to a terminal, check every
+    //      visited gate: if any unsatisfied, redirect to the §3.4 chain
+    //      (gate.retry_target → gate.fallback_retry_target → graph.retry_target
+    //      → graph.fallback_retry_target) bounded by max_goal_gate_retries.
+    //   3. Counter exhaust → halt with `goal_gate_unsatisfied`.
+    //
+    // The current-turn outcome is folded into a synthetic snapshot before
+    // checking gates, so a final-stage gate that just completed can be
+    // evaluated without waiting for the next turn's projection refresh.
+    let goalGateRetargetTarget: string | undefined;
+    let goalGateRetriesPatch: number | undefined;
+    if (result.kind === "transition") {
+      const graph = graphFor(state.workflowSha);
+      const completedNode = graph?.nodes[currentNode];
+      if (graph != null && completedNode != null) {
+        const isTerminalNext =
+          result.nextNode === "__end__" ||
+          result.nextNode === "end" ||
+          result.nextNode === "done" ||
+          (result.nextNode != null && graph.nodes[result.nextNode]?.shape === "Msquare");
+        // Synthetic outcome map: prior gates from routing + this turn's gate.
+        const priorOutcomes = readGateOutcomes(state.routing);
+        const synthOutcomes = new Map(priorOutcomes);
+        if (completedNode.attrs.goal_gate === true && result.outcomeStatus != null) {
+          synthOutcomes.set(currentNode, result.outcomeStatus);
+        }
+        if (isTerminalNext) {
+          const goalGateOverride = readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]);
+          const action = goalGateStep({
+            graph,
+            outcomes: synthOutcomes,
+            retries: readGoalGateRetries(state.routing),
+            ...(goalGateOverride > 0 ? { capOverride: goalGateOverride } : {}),
+          });
+          if (action.kind === "retarget") {
+            goalGateRetargetTarget = action.target;
+            goalGateRetriesPatch = action.nextRetries;
+            result.nextNode = action.target;
+            observability.push({
+              type: "goal_gate.retarget",
+              payload: { failedGate: action.gate, target: action.target, retries: action.nextRetries },
+            });
+          } else if (action.kind === "halt") {
+            observability.push({
+              type: "goal_gate.unsatisfied",
+              payload: { gate: action.gate },
+            });
+            const goalGateLimit =
+              readNumber(state.routing[MAX_GOAL_GATE_RETRIES_OVERRIDE_KEY]) ||
+              (typeof graph.attrs.max_goal_gate_retries === "number" ? graph.attrs.max_goal_gate_retries : 3);
+            result = {
+              kind: "halt",
+              reason: "goal_gate_unsatisfied",
+              detail: action.gate,
+              pauseContext: { currentLimit: goalGateLimit },
+            };
+          }
+        }
+      }
+    }
+
+    // Goal-gate retarget (or unsatisfied-halt) overrides the selected
+    // edge — the originally-picked edge was never actually traversed,
+    // so suppress its `edge.selected`. Otherwise emit it now, before
+    // node_completed lands, preserving the conventional ordering.
+    if (pendingEdgeSelection !== undefined && goalGateRetargetTarget === undefined && result.kind === "transition") {
+      recordEdgeSelected(observability, currentNode, iteration, pendingEdgeSelection);
+    }
+
+    // Retry-policy enforcement (attractor §3.5 / §3.6). When the handler
+    // returns outcomeStatus="retry", consult retryStep to decide:
+    //   - retry → emit fact.run_paused{reason:"handler_retry"}
+    //     (transitions to paused_auto, freeing the slot);
+    //     wake-pending re-queues the run after delayMs
+    //   - halt → run halts with `max_retries_exceeded`
+    //   - advance_partial → rewrite outcomeStatus to "partial_success"
+    //     and let edge selection advance (allow_partial branch, §3.5)
+    //
+    // For the retry path we DO emit fact.node_completed first (metrics
+    // are real spend), THEN swap fact.node_started for fact.run_paused{reason:"handler_retry"}
+    // — the run sleeps without a slot held, and resume re-dispatches the
+    // same node since state.currentNode points back at the retrying id.
+    let retryCounterPatch: Record<string, number> | undefined;
+    let retryPause:
+      | {
+          nodeId: string;
+          attempt: number;
+          delayMs: number;
+          resumeAt: number;
+          maxRetries: number;
+        }
+      | undefined;
+    if (result.kind === "transition" && result.outcomeStatus === "retry") {
+      const graph = graphFor(state.workflowSha);
+      const completedNode = graph?.nodes[currentNode];
+      if (graph != null && completedNode != null) {
+        const backoff = resolveBackoff(completedNode.attrs, graph.attrs);
+        // Operator override (intent.max_retries_adjusted) takes
+        // precedence over the static node/graph attrs. Stage 3
+        // pause-converted halt: a Raise & Resume after a max_retries
+        // pause should let the next dispatch see the higher cap.
+        const maxRetriesOverride = readNumber(state.routing[maxRetriesOverrideKey(currentNode)]);
+        const maxRetries =
+          maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
+        const allowPartial = completedNode.attrs.allow_partial === true;
+        const counterKey = retryCountKey(currentNode);
+        const priorRetries = readNumber(state.routing[counterKey]);
+        const action = retryStep({
+          state: { retries: priorRetries, maxRetries },
+          status: "retry",
+          backoff,
+          allowPartial,
+        });
+        if (action.kind === "retry") {
+          const now = clock();
+          const resumeAt = now + Math.max(0, Math.round(action.delayMs));
+          observability.push({
+            type: "node.retry_scheduled",
+            payload: {
+              nodeId: currentNode,
+              attempt: priorRetries + 1,
+              delayMs: action.delayMs,
+              maxRetries,
+              resumeAt,
+            },
+          });
+          // Set nextNode = currentNode so fact.node_completed records
+          // the loop intent (state.currentNode lands on the retrying
+          // node; resume re-dispatches it).
+          result.nextNode = currentNode;
+          retryCounterPatch = {
+            [counterKey]: priorRetries + 1,
+          };
+          retryPause = {
+            nodeId: currentNode,
+            attempt: priorRetries + 1,
+            delayMs: action.delayMs,
+            resumeAt,
+            maxRetries,
+          };
+        } else if (action.kind === "halt") {
+          observability.push({
+            type: "node.retry_exhausted",
+            payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
+          });
+          result = {
+            kind: "halt",
+            reason: "max_retries_exceeded",
+            detail: `node "${currentNode}" exhausted ${maxRetries} retries`,
+            pauseContext: { currentLimit: maxRetries, attempts: priorRetries + 1 },
+          };
+        } else if (action.kind === "advance_partial") {
+          observability.push({
+            type: "node.retry_partial_accept",
+            payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
+          });
+          result.outcomeStatus = "partial_success";
+        }
+      }
+    }
+
+    // Provider auto-retry: when a codergen turn returns pause_provider,
+    // consult the policy module to decide whether this is auto-retry
+    // (transient transport error, schedule a backoff), manual (operator
+    // must intervene — auth/billing/schema), or halt-exhausted (chain
+    // cap exceeded). The decision drives fact mutation + routing patches
+    // below; manual is the existing behaviour and needs no further work.
+    // The exhausted branch emits a `provider_exhausted` halt fact
+    // directly — that reason is executor-only (not in the handler-side
+    // HaltReason union) so we don't go through resultToFacts.
+    let providerRetryDecision: ProviderRetryDecision | undefined;
+    let providerExhausted: { attempt: number; reason: "max_attempts" | "max_cumulative_ms" } | undefined;
+    if (result.kind === "pause_provider") {
+      providerRetryDecision = decideProviderRetry({
+        httpStatus: result.httpStatus,
+        ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
+        priorAttempt: readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]),
+        now: clock(),
+        cumulativeDelayMs: 0,
+      });
+      if (providerRetryDecision.kind === "exhausted") {
+        providerExhausted = { attempt: providerRetryDecision.attempt, reason: providerRetryDecision.reason };
+        providerRetryDecision = undefined;
+      }
+    }
+
+    // Tail-drain: the handler may have streamed most of its deltas
+    // mid-flight via the timer, but `edge.selected` and any post-handler
+    // observability (e.g. budget warnings above) still need to flush
+    // before the terminal fact for causal ordering.
+    flushObservability();
+
+    // Side-effect facts are already durable via the pre-commit recorder;
+    // resultToFacts only emits the terminal node_* / run_* facts.
+    const factsCtx = {
+      state,
+      appliedIntentSeqs: decision.appliedSeqs,
+    };
+    let facts = resultToFacts(result, factsCtx);
+
+    // R3 — pause defers when paired with steer/hitl: keep the
+    // node_completed accounting, then pause instead of advancing to
+    // the next node. wakePending will rouse the run on the next
+    // intent.hitl_input. Terminal halts (run_halted) beat pause; we
+    // only swap the success continuations (node_started / run_completed).
+    // Mid-dispatch pause races (intent arrives AFTER the fold but
+    // BEFORE the handler returned) flow through the abort-throw path:
+    // the codergen agent rethrows on signal-tripped + aborted-stream
+    // so the executor's catch block writes fact.node_aborted, leaves
+    // the run running, and the next dispatch's fold consumes the
+    // pause intent normally.
+    if (result.kind === "transition" && decision.shouldPauseAfterDispatch) {
+      const swapTypes = new Set(["fact.node_started", "fact.run_completed"]);
+      const swapped = facts.some((f) => swapTypes.has(f.type));
+      if (swapped) {
+        facts = facts.filter((f) => !swapTypes.has(f.type));
+        facts.push({
+          type: "fact.run_paused",
+          payload: {
+            reason: "operator",
+            nodeId: state.currentNode ?? "",
+          },
+        });
+      }
+    }
+
+    // Retry pause: swap fact.node_started for
+    // fact.run_paused{reason:"handler_retry"} so the run releases its
+    // concurrency slot during the backoff window. node_completed is
+    // preserved (metrics + the nextNode=currentNode routing fact).
+    // wake-pending re-queues the run once `resumeAt` has elapsed.
+    if (retryPause !== undefined) {
+      facts = facts.filter((f) => f.type !== "fact.node_started");
+      facts.push({
+        type: "fact.run_paused",
+        payload: {
+          reason: "handler_retry",
+          nodeId: retryPause.nodeId,
+          attempt: retryPause.attempt,
+          delayMs: retryPause.delayMs,
+          resumeAt: retryPause.resumeAt,
+          maxRetries: retryPause.maxRetries,
+        },
+      });
+    }
+
+    // Provider exhausted: rewrite the existing
+    // fact.run_paused{reason:"provider_error"} (from result-to-facts'
+    // pause_provider arm) to a recoverable
+    // fact.run_paused{reason:"provider_exhausted"} pause. Stage 3 of
+    // recoverable-budget-pause.md flipped this from terminal halt to
+    // paused — operators may know the underlying transport issue is
+    // fixed and want to retry the chain. cumulativeMs is best-effort
+    // 0 because the executor doesn't track elapsed time across the
+    // chain locally; the per-attempt facts in fact.provider_retry_attempted
+    // carry the timeline.
+    if (providerExhausted !== undefined) {
+      facts = facts.filter((f) => f.type !== "fact.run_paused");
+      facts.push({
+        type: "fact.run_paused",
+        payload: {
+          reason: "provider_exhausted",
+          nodeId: state.currentNode ?? "",
+          attempts: providerExhausted.attempt,
+          cumulativeMs: 0,
+        },
+      });
+    }
+
+    // Provider auto-retry: rewrite the fact.run_paused payload from
+    // reason="provider_error" to reason="provider_retry" with
+    // attempt + resumeAt so the reducer projects status to
+    // `paused_auto` and the wake-pending sweeper auto-resumes once
+    // `resumeAt` has elapsed. The chain is recorded separately via
+    // fact.provider_retry_attempted (one per attempt).
+    if (providerRetryDecision?.kind === "auto-retry") {
+      for (let i = 0; i < facts.length; i++) {
+        const f = facts[i]!;
+        if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
+          facts[i] = {
+            type: "fact.run_paused",
+            payload: {
+              reason: "provider_retry",
+              nodeId: f.payload.nodeId,
+              httpStatus: f.payload.httpStatus,
+              provider: f.payload.provider,
+              errorMessage: f.payload.errorMessage,
+              attempt: providerRetryDecision.attempt,
+              resumeAt: providerRetryDecision.resumeAt,
+            },
+          };
+          break;
+        }
+      }
+      facts.push({
+        type: "fact.provider_retry_attempted",
+        payload: {
+          nodeId: state.currentNode ?? "",
+          attempt: providerRetryDecision.attempt,
+          httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
+          delayMs: providerRetryDecision.delayMs,
+        },
+      });
+    }
+
+    // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"}
+    // so the run releases its slot and waits for `intent.budget_adjusted`
+    // + `intent.resume`. node_completed is preserved (metrics + the
+    // nextNode routing fact).
+    //
+    // EXCEPTION: when this turn's transition was terminal,
+    // result-to-facts has already emitted `fact.run_completed`
+    // (or `fact.run_halted` for fail outcomes). Adding
+    // `fact.run_paused` afterwards would clobber the terminal
+    // status in the reducer (paused wins because it's last) and
+    // leave `currentNode` pointed at a terminal sentinel — on
+    // resume, the dispatcher crashes trying to find a handler for
+    // `done` / `__end__`. Budget enforcement after a successful
+    // terminal transition is moot anyway: the run is finished.
+    if (budgetPause !== undefined) {
+      const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
+      if (!alreadyTerminal) {
         facts = facts.filter((f) => f.type !== "fact.node_started");
         facts.push({
           type: "fact.run_paused",
           payload: {
-            reason: "handler_retry",
-            nodeId: retryPause.nodeId,
-            attempt: retryPause.attempt,
-            delayMs: retryPause.delayMs,
-            resumeAt: retryPause.resumeAt,
-            maxRetries: retryPause.maxRetries,
-          },
-        });
-      }
-
-      // Provider exhausted: rewrite the existing
-      // fact.run_paused{reason:"provider_error"} (from result-to-facts'
-      // pause_provider arm) to a recoverable
-      // fact.run_paused{reason:"provider_exhausted"} pause. Stage 3 of
-      // recoverable-budget-pause.md flipped this from terminal halt to
-      // paused — operators may know the underlying transport issue is
-      // fixed and want to retry the chain. cumulativeMs is best-effort
-      // 0 because the executor doesn't track elapsed time across the
-      // chain locally; the per-attempt facts in fact.provider_retry_attempted
-      // carry the timeline.
-      if (providerExhausted !== undefined) {
-        facts = facts.filter((f) => f.type !== "fact.run_paused");
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "provider_exhausted",
+            reason: "budget",
             nodeId: state.currentNode ?? "",
-            attempts: providerExhausted.attempt,
-            cumulativeMs: 0,
+            scope: budgetPause.scope,
+            metric: budgetPause.metric,
+            limit: budgetPause.limit,
+            actual: budgetPause.actual,
           },
         });
       }
+    }
 
-      // Provider auto-retry: rewrite the fact.run_paused payload from
-      // reason="provider_error" to reason="provider_retry" with
-      // attempt + resumeAt so the reducer projects status to
-      // `paused_auto` and the wake-pending sweeper auto-resumes once
-      // `resumeAt` has elapsed. The chain is recorded separately via
-      // fact.provider_retry_attempted (one per attempt).
-      if (providerRetryDecision?.kind === "auto-retry") {
-        for (let i = 0; i < facts.length; i++) {
-          const f = facts[i]!;
-          if (f.type === "fact.run_paused" && f.payload.reason === "provider_error") {
-            facts[i] = {
-              type: "fact.run_paused",
-              payload: {
-                reason: "provider_retry",
-                nodeId: f.payload.nodeId,
-                httpStatus: f.payload.httpStatus,
-                provider: f.payload.provider,
-                errorMessage: f.payload.errorMessage,
-                attempt: providerRetryDecision.attempt,
-                resumeAt: providerRetryDecision.resumeAt,
-              },
-            };
-            break;
-          }
-        }
-        facts.push({
-          type: "fact.provider_retry_attempted",
-          payload: {
-            nodeId: state.currentNode ?? "",
-            attempt: providerRetryDecision.attempt,
-            httpStatus: result.kind === "pause_provider" ? result.httpStatus : null,
-            delayMs: providerRetryDecision.delayMs,
-          },
-        });
-      }
+    // Budget halt: preserve fact.node_completed (so projection +
+    // per-node cost rollup land), then replace whatever transition fact
+    // came (fact.run_completed for terminal-success, fact.run_halted{
+    // aborted_exit} for terminal-fail, fact.node_started for non-
+    // terminal) with fact.run_halted{reason:"budget"}. Mirrors the
+    // budgetPause shape immediately above — same fact-list mutation,
+    // halt instead of pause.
+    if (budgetHaltDetail !== undefined) {
+      facts = facts.filter(
+        (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
+      );
+      const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
+      if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
+      facts.push({ type: "fact.run_halted", payload: haltPayload });
+    }
 
-      // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"}
-      // so the run releases its slot and waits for `intent.budget_adjusted`
-      // + `intent.resume`. node_completed is preserved (metrics + the
-      // nextNode routing fact).
-      //
-      // EXCEPTION: when this turn's transition was terminal,
-      // result-to-facts has already emitted `fact.run_completed`
-      // (or `fact.run_halted` for fail outcomes). Adding
-      // `fact.run_paused` afterwards would clobber the terminal
-      // status in the reducer (paused wins because it's last) and
-      // leave `currentNode` pointed at a terminal sentinel — on
-      // resume, the dispatcher crashes trying to find a handler for
-      // `done` / `__end__`. Budget enforcement after a successful
-      // terminal transition is moot anyway: the run is finished.
-      if (budgetPause !== undefined) {
-        const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
-        if (!alreadyTerminal) {
-          facts = facts.filter((f) => f.type !== "fact.node_started");
-          facts.push({
-            type: "fact.run_paused",
-            payload: {
-              reason: "budget",
-              nodeId: state.currentNode ?? "",
-              scope: budgetPause.scope,
-              metric: budgetPause.metric,
-              limit: budgetPause.limit,
-              actual: budgetPause.actual,
-            },
-          });
-        }
-      }
-
-      // Budget halt: preserve fact.node_completed (so projection +
-      // per-node cost rollup land), then replace whatever transition fact
-      // came (fact.run_completed for terminal-success, fact.run_halted{
-      // aborted_exit} for terminal-fail, fact.node_started for non-
-      // terminal) with fact.run_halted{reason:"budget"}. Mirrors the
-      // budgetPause shape immediately above — same fact-list mutation,
-      // halt instead of pause.
-      if (budgetHaltDetail !== undefined) {
-        facts = facts.filter(
-          (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
-        );
-        const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
-        if (budgetHaltDetail.length > 0) haltPayload.detail = budgetHaltDetail;
-        facts.push({ type: "fact.run_halted", payload: haltPayload });
-      }
-
-      let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
-      if (budgetWarnedTags.length > 0) {
-        const prior = readBudgetWarned(state.routing);
-        const merged = new Set(prior);
-        for (const tag of budgetWarnedTags) merged.add(tag);
-        routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
-      }
-      // Per-node retry counter: bumped when retryStep returned `retry`
-      // above. Lives at `internal.retry_count.<nodeId>` (see
-      // packages/core/src/types/context.ts:retryCountKey).
-      if (retryCounterPatch !== undefined) {
-        routingPatch = { ...(routingPatch ?? {}), ...retryCounterPatch };
-      }
-      // Retry pause: stamp the wake-eligibility timestamp so wake-pending
-      // can re-queue this run when the backoff has elapsed.
-      if (retryPause !== undefined) {
-        routingPatch = { ...(routingPatch ?? {}), [AUTO_RESUME_AT_KEY]: retryPause.resumeAt };
-      }
-      // Provider auto-retry: same shape, plus persist the attempt counter
-      // so the next pause_provider in the chain reads it and the cap
-      // bounds the run even across manual `intent.resume` interruptions.
-      if (providerRetryDecision?.kind === "auto-retry") {
+    let routingPatch = mergeRoutingPatches(decision.routingDelta, result);
+    if (budgetWarnedTags.length > 0) {
+      const prior = readBudgetWarned(state.routing);
+      const merged = new Set(prior);
+      for (const tag of budgetWarnedTags) merged.add(tag);
+      routingPatch = { ...(routingPatch ?? {}), [BUDGET_WARNED_KEY]: [...merged].sort() };
+    }
+    // Per-node retry counter: bumped when retryStep returned `retry`
+    // above. Lives at `internal.retry_count.<nodeId>` (see
+    // packages/core/src/types/context.ts:retryCountKey).
+    if (retryCounterPatch !== undefined) {
+      routingPatch = { ...(routingPatch ?? {}), ...retryCounterPatch };
+    }
+    // Retry pause: stamp the wake-eligibility timestamp so wake-pending
+    // can re-queue this run when the backoff has elapsed.
+    if (retryPause !== undefined) {
+      routingPatch = { ...(routingPatch ?? {}), [AUTO_RESUME_AT_KEY]: retryPause.resumeAt };
+    }
+    // Provider auto-retry: same shape, plus persist the attempt counter
+    // so the next pause_provider in the chain reads it and the cap
+    // bounds the run even across manual `intent.resume` interruptions.
+    if (providerRetryDecision?.kind === "auto-retry") {
+      routingPatch = {
+        ...(routingPatch ?? {}),
+        [AUTO_RESUME_AT_KEY]: providerRetryDecision.resumeAt,
+        [PROVIDER_RETRY_ATTEMPT_KEY]: providerRetryDecision.attempt,
+      };
+    }
+    // Clear the provider-retry chain counter on any successful turn
+    // so future failures in this run start a fresh chain. Keep the
+    // counter on `transition` outcomes regardless of outcomeStatus —
+    // a `fail` outcome from the agent (not a transport error) means
+    // the call landed; the chain-counter doesn't apply.
+    if (result.kind === "transition" && readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]) > 0) {
+      routingPatch = { ...(routingPatch ?? {}), [PROVIDER_RETRY_ATTEMPT_KEY]: 0 };
+    }
+    // Goal-gate routing keys: record the completed gate's outcome and
+    // (when goalGateStep retargeted) the bumped retry counter. These keys
+    // power the §3.4 fold across turns — readGateOutcomes /
+    // readGoalGateRetries pick them up next turn.
+    if (result.kind === "transition") {
+      const graph = graphFor(state.workflowSha);
+      const completedNode = graph?.nodes[currentNode];
+      if (completedNode?.attrs.goal_gate === true && result.outcomeStatus != null) {
         routingPatch = {
           ...(routingPatch ?? {}),
-          [AUTO_RESUME_AT_KEY]: providerRetryDecision.resumeAt,
-          [PROVIDER_RETRY_ATTEMPT_KEY]: providerRetryDecision.attempt,
+          [goalGateOutcomeKey(currentNode)]: result.outcomeStatus,
         };
       }
-      // Clear the provider-retry chain counter on any successful turn
-      // so future failures in this run start a fresh chain. Keep the
-      // counter on `transition` outcomes regardless of outcomeStatus —
-      // a `fail` outcome from the agent (not a transport error) means
-      // the call landed; the chain-counter doesn't apply.
-      if (result.kind === "transition" && readNumber(state.routing[PROVIDER_RETRY_ATTEMPT_KEY]) > 0) {
-        routingPatch = { ...(routingPatch ?? {}), [PROVIDER_RETRY_ATTEMPT_KEY]: 0 };
+      if (goalGateRetargetTarget !== undefined && goalGateRetriesPatch !== undefined) {
+        routingPatch = {
+          ...(routingPatch ?? {}),
+          [GOAL_GATE_RETRIES_KEY]: goalGateRetriesPatch,
+        };
       }
-      // Goal-gate routing keys: record the completed gate's outcome and
-      // (when goalGateStep retargeted) the bumped retry counter. These keys
-      // power the §3.4 fold across turns — readGateOutcomes /
-      // readGoalGateRetries pick them up next turn.
-      if (result.kind === "transition") {
-        const graph = graphFor(state.workflowSha);
-        const completedNode = graph?.nodes[currentNode];
-        if (completedNode?.attrs.goal_gate === true && result.outcomeStatus != null) {
-          routingPatch = {
-            ...(routingPatch ?? {}),
-            [goalGateOutcomeKey(currentNode)]: result.outcomeStatus,
-          };
-        }
-        if (goalGateRetargetTarget !== undefined && goalGateRetriesPatch !== undefined) {
-          routingPatch = {
-            ...(routingPatch ?? {}),
-            [GOAL_GATE_RETRIES_KEY]: goalGateRetriesPatch,
-          };
-        }
-      }
-      const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
-      const appendOpts: {
-        routingPatch?: Record<string, unknown>;
-        advanceAppliedTo?: number;
-      } = {};
-      if (routingPatch !== undefined) appendOpts.routingPatch = routingPatch;
-      if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
-      const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, appendOpts);
-      if (!ok) {
-        const turnIteration = nodeRetryCount(state.routing);
-        const turnFactType = facts[0]?.type ?? "fact.unknown";
-        const { halted } = await onOccConflict(turnFactType, currentNode, turnIteration, recorder.version());
-        if (halted) return;
-        continue; // OCC retry — rebuild from fresh state
-      }
-      onOccResolved(currentNode, nodeRetryCount(state.routing));
+    }
+    const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+    const appendOpts: {
+      routingPatch?: Record<string, unknown>;
+      advanceAppliedTo?: number;
+    } = {};
+    if (routingPatch !== undefined) appendOpts.routingPatch = routingPatch;
+    if (advanceAppliedTo !== undefined) appendOpts.advanceAppliedTo = advanceAppliedTo;
+    const ok = await tryAppendFact(opts.store, runId, recorder.version(), facts, appendOpts);
+    if (!ok) {
+      const turnIteration = nodeRetryCount(state.routing);
+      const turnFactType = facts[0]?.type ?? "fact.unknown";
+      const { halted } = await onOccConflict(turnFactType, currentNode, turnIteration, recorder.version());
+      if (halted) return { kind: "terminal" };
+      return { kind: "continue" }; // OCC retry — rebuild from fresh state
+    }
+    onOccResolved(currentNode, nodeRetryCount(state.routing));
+    return { kind: "continue" };
+  };
+
+  try {
+    while (!opts.shutdownSignal.aborted && turns < maxTurns) {
+      turns++;
+      const outcome = await dispatchOne();
+      if (outcome.kind === "terminal") return;
     }
   } finally {
     // Dispose the worktree env when the run reaches a hard-terminal
@@ -1594,6 +1705,52 @@ async function tryAppendFact(
     if (err instanceof ConcurrencyError) return false;
     throw err;
   }
+}
+
+/**
+ * Fold every `fact.subrun_completed` event on this run's own log into a
+ * Map keyed by sub-run id. Late events overwrite earlier ones, which
+ * matches the semantics of a sub-run that legitimately re-emits (e.g.
+ * provider auto-retry chain on the wake-pending side that re-folds
+ * outcomes after a fresh terminal). Empty Map on runs that haven't
+ * fanned out (the cheap path — `getEventsByType` is a single indexed
+ * scan returning zero rows).
+ */
+function foldSubRunOutcomes(store: IEventStore, runId: string): Map<string, core.SubRunOutcome> {
+  const out = new Map<string, core.SubRunOutcome>();
+  const events = store.getEventsByType(runId, "fact.subrun_completed");
+  for (const ev of events) {
+    const p = ev.payload as {
+      subRunId?: string;
+      parentNodeId?: string;
+      parallelIndex?: number;
+      finalStatus?: "completed" | "halted" | "cancelled" | "quarantined";
+      costUsd?: number;
+      billedTokens?: number;
+      outputRef?: { nodeId: string; key: string };
+      fanInScore?: number;
+    };
+    if (
+      typeof p.subRunId !== "string" ||
+      typeof p.parentNodeId !== "string" ||
+      typeof p.parallelIndex !== "number" ||
+      p.finalStatus === undefined
+    ) {
+      continue;
+    }
+    const outcome: core.SubRunOutcome = {
+      subRunId: p.subRunId,
+      parentNodeId: p.parentNodeId,
+      parallelIndex: p.parallelIndex,
+      finalStatus: p.finalStatus,
+      costUsd: p.costUsd ?? 0,
+      billedTokens: p.billedTokens ?? 0,
+    };
+    if (p.outputRef !== undefined) outcome.outputRef = p.outputRef;
+    if (p.fanInScore !== undefined) outcome.fanInScore = p.fanInScore;
+    out.set(p.subRunId, outcome);
+  }
+  return out;
 }
 
 function mergeRoutingPatches(

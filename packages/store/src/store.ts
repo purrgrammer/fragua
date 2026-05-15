@@ -78,6 +78,7 @@ import { migrate } from "./migrations.ts";
 import { applyCreationPragmas, applyPragmas, CURRENT_SCHEMA_VERSION } from "./pragmas.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
+  applyMetricsDelta,
   bumpRunSeq,
   type CwdSummaryRow,
   claimQueuedRun,
@@ -87,15 +88,19 @@ import {
   type GlobalModelBreakdownRow,
   insertRunState,
   type ListRunIdsOpts,
+  type MetricsDeltaRow,
+  type ParentCostSnapshot,
   getRunCostTotals as queryRunCostTotals,
   getStepAggregates as queryStepAggregates,
   type RunCostTotalsRow,
   type RunStateRow,
   type StepAggregateRow,
+  selectActiveChildren,
   selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
   selectNextQueuedRun,
+  selectParentCostSnapshot,
   selectRunIds,
   selectRunStateRow,
   selectWakeCandidates,
@@ -125,6 +130,7 @@ import {
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
+  type ClaimEligibility,
   ConcurrencyError,
   type CreateScheduleParams,
   type DaemonEvent,
@@ -151,6 +157,7 @@ import {
   MAX_ROUTING_BYTES,
   type Message,
   MessageTooLargeError,
+  type MetricsDelta,
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
@@ -244,6 +251,11 @@ function rowToRunState(row: RunStateRow): RunState {
     workflowScope: row.workflow_scope,
     workflowPath: row.workflow_path,
     scheduleId: row.schedule_id,
+    parentRunId: row.parent_run_id,
+    parentNodeId: row.parent_node_id,
+    parallelIndex: row.parallel_index,
+    subgraphRootNodeId: row.subgraph_root_node_id,
+    subgraphTerminalNodeId: row.subgraph_terminal_node_id,
   };
 }
 
@@ -422,6 +434,28 @@ export class SqliteStore implements IEventStore {
     return { seqs };
   }
 
+  addMetricsDelta(runId: string, delta: MetricsDelta): void {
+    const row: MetricsDeltaRow = {
+      billedTokens: delta.billedTokens ?? 0,
+      totalCostUsd: delta.totalCostUsd ?? 0,
+      totalInputCostUsd: delta.totalInputCostUsd ?? 0,
+      totalOutputCostUsd: delta.totalOutputCostUsd ?? 0,
+      totalCacheReadCostUsd: delta.totalCacheReadCostUsd ?? 0,
+      totalCacheWriteCostUsd: delta.totalCacheWriteCostUsd ?? 0,
+      totalInputTokens: delta.totalInputTokens ?? 0,
+      totalOutputTokens: delta.totalOutputTokens ?? 0,
+      totalCacheReadTokens: delta.totalCacheReadTokens ?? 0,
+      totalCacheWriteTokens: delta.totalCacheWriteTokens ?? 0,
+      activeMs: delta.activeMs ?? 0,
+    };
+    const now = this.now();
+    const startAt = performance.now();
+    this.writeTxn(() => {
+      applyMetricsDelta(this.db, runId, row, now);
+    });
+    this.metrics.recordWrite(performance.now() - startAt, "metrics_delta");
+  }
+
   // ─────────────── Daemon events ───────────────
 
   appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number } {
@@ -481,6 +515,11 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
+        parentRunId: params.parentRunId ?? null,
+        parentNodeId: params.parentNodeId ?? null,
+        parallelIndex: params.parallelIndex ?? null,
+        subgraphRootNodeId: params.subgraphRootNodeId ?? null,
+        subgraphTerminalNodeId: params.subgraphTerminalNodeId ?? null,
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
@@ -501,9 +540,16 @@ export class SqliteStore implements IEventStore {
     return selectRunIds(this.db, opts);
   }
 
-  claimNextRun(maxInFlight: number): { runId: string } | null {
+  claimNextRun(maxInFlight: number, opts?: { eligibility?: ClaimEligibility }): { runId: string } | null {
     const now = this.now();
     let claimed: string | null = null;
+    // P0.4: `eligibility.parentStatusIn` will gate sub-runs on parent
+    // status once P1.1 adds the `parent_run_id` column. Until then, the
+    // schema has no sub-runs, so every queued row is a top-level run and
+    // the filter is structurally a no-op. The parameter is accepted for
+    // signature stability — caller code wired in P0 keeps working when
+    // the SQL gains the join in P1.1.
+    const _eligibility = opts?.eligibility;
 
     this.writeTxn(() => {
       if (countRunningRuns(this.db) >= maxInFlight) return;
@@ -682,6 +728,14 @@ export class SqliteStore implements IEventStore {
 
   getRunCostTotals(runId: string): RunCostTotalsRow {
     return queryRunCostTotals(this.db, runId);
+  }
+
+  getParentCostSnapshot(parentRunId: string): ParentCostSnapshot {
+    return selectParentCostSnapshot(this.db, parentRunId);
+  }
+
+  activeChildRuns(parentRunId: string): string[] {
+    return selectActiveChildren(this.db, parentRunId);
   }
 
   getKpiTotals(window: AnalyticsWindow): KpiTotalsRow {

@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 8
+-- swarm event store schema — Revision 10
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -35,6 +35,19 @@
 -- in-flight runs in the legacy auto-wake states (pre-release, no
 -- prior-state compat — AGENTS.md ground rule #11). See
 -- docs/proposals/recoverable-budget-pause.md Stage 2.
+-- v8 → v9: parallel sub-runs (P1.1 of docs/proposals/parallel.md).
+-- `run_state` gains the additive linkage columns `parent_run_id`,
+-- `parent_node_id`, `parallel_index`, `subgraph_root_node_id`,
+-- `subgraph_terminal_node_id`. All NULLable; top-level runs keep them
+-- NULL. `idx_run_state_parent` covers `parent_run_id` lookups (cancel
+-- propagation, cost rollup, sweep). `parent_run_id` is FK to
+-- `run_state(run_id)` with ON DELETE SET NULL so a parent GC leaves the
+-- sub-run as a free-standing row whose own GC is independent.
+-- v9 → v10: `running_children` status (P1.2 of docs/proposals/parallel.md).
+-- Adds `running_children` to `run_state.status` CHECK. Parent runs that
+-- fanned out into sub-runs sit in this status until every sub-run
+-- reaches a terminal-or-paused-class state; the wake-pending sweep
+-- transitions the parent back to `queued` (collect phase).
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -59,7 +72,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_hitl','paused_auto',
+    'queued','running','running_children','paused','paused_hitl','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -102,6 +115,17 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- NOT cascade here, so a run keeps its lineage even after the schedule
   -- is removed. No `REFERENCES schedules(id)` constraint by design.
   schedule_id TEXT,
+  -- Parallel sub-run linkage (P1.1 of docs/proposals/parallel.md). All
+  -- NULL on top-level runs. A sub-run row carries its parent's run id,
+  -- the component node that fanned out, its 0-based position in the
+  -- fan-out, and the subgraph slice it dispatches through (root
+  -- inclusive, terminal exclusive — the parent's collect phase reads
+  -- outcomes when the terminal would be entered).
+  parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
+  parent_node_id TEXT,
+  parallel_index INTEGER,
+  subgraph_root_node_id TEXT,
+  subgraph_terminal_node_id TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -119,6 +143,9 @@ CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
 CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_run_state_parent
+  ON run_state(parent_run_id)
+  WHERE parent_run_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,

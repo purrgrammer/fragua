@@ -148,19 +148,6 @@ function specsForGraph(
           children: discovery.branches,
           fanInNode: discovery.fanInNode,
           joinPolicy,
-          resolveChild: (childId) => specs.get(childId) ?? null,
-          buildChildContext: (childId, parentCtx) => {
-            // Single structural rescoping: rebuilds artifacts / messages /
-            // externalCall / emit / tools / env against the branch's own
-            // (nodeId, iteration=0) and per-branch tool narrowing. Run-level
-            // resources (store, llm, http, recorder, signal, routing) are
-            // reused unchanged.
-            const childAttrs = graph.nodes[childId]?.attrs;
-            const override: handler.ScopeOverrides = { nodeId: childId, iteration: 0 };
-            if (Array.isArray(childAttrs?.allowed_tools)) override.allowedTools = childAttrs.allowed_tools;
-            if (Array.isArray(childAttrs?.denied_tools)) override.deniedTools = childAttrs.denied_tools;
-            return parentCtx.withScope(override);
-          },
         }),
       );
     } else if (kind === "parallel.fan_in") {

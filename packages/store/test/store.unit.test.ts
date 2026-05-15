@@ -995,3 +995,189 @@ describe("SqliteStore — gcBlobs", () => {
     store.close();
   });
 });
+
+describe("SqliteStore — addMetricsDelta (P0.3)", () => {
+  test("adds to numeric fields without bumping version or appending events", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const before = store.getState(runId)!;
+    const eventsBefore = store.getEvents(runId).length;
+
+    store.addMetricsDelta(runId, {
+      totalCostUsd: 0.42,
+      totalInputTokens: 100,
+      totalOutputTokens: 200,
+      billedTokens: 300,
+      activeMs: 5_000,
+    });
+
+    const after = store.getState(runId)!;
+    expect(after.version).toBe(before.version);
+    expect(store.getEvents(runId)).toHaveLength(eventsBefore);
+    expect(after.metrics.totalCostUsd).toBeCloseTo(0.42);
+    expect(after.metrics.totalInputTokens).toBe(100);
+    expect(after.metrics.totalOutputTokens).toBe(200);
+    expect(after.metrics.billedTokens).toBe(300);
+    expect(after.metrics.activeMs).toBe(5_000);
+    store.close();
+  });
+
+  test("repeated calls accumulate additively", () => {
+    const store = freshStore();
+    seedRun(store).then((runId) => {
+      store.addMetricsDelta(runId, { totalCostUsd: 0.1 });
+      store.addMetricsDelta(runId, { totalCostUsd: 0.25 });
+      store.addMetricsDelta(runId, { totalCostUsd: 0.05 });
+      expect(store.getState(runId)!.metrics.totalCostUsd).toBeCloseTo(0.4);
+      store.close();
+    });
+  });
+
+  test("unknown runId is a no-op", () => {
+    const store = freshStore();
+    expect(() => store.addMetricsDelta("missing", { totalCostUsd: 1 })).not.toThrow();
+    store.close();
+  });
+
+  test("partial delta leaves other fields untouched", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.addMetricsDelta(runId, { totalCostUsd: 0.5 });
+    store.addMetricsDelta(runId, { totalInputTokens: 7 });
+    const m = store.getState(runId)!.metrics;
+    expect(m.totalCostUsd).toBeCloseTo(0.5);
+    expect(m.totalInputTokens).toBe(7);
+    expect(m.totalOutputTokens).toBe(0);
+    store.close();
+  });
+
+  test("generated total_cost_usd column reflects the delta", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.addMetricsDelta(runId, { totalCostUsd: 1.25 });
+    const row = (store as unknown as { db: Database }).db
+      .query<{ total_cost_usd: number }, [string]>("SELECT total_cost_usd FROM run_state WHERE run_id = ?")
+      .get(runId);
+    expect(row?.total_cost_usd).toBeCloseTo(1.25);
+    store.close();
+  });
+});
+
+describe("SqliteStore — parent / sub-run helpers (P1.4 / P1.5)", () => {
+  test("getParentCostSnapshot aggregates own + in-flight; excludes terminal sub-runs", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const parent = await seedRun(store, { workflowSha: sha });
+    // Two sub-runs: one running, one completed (terminal).
+    const live = nextId();
+    const done = nextId();
+    store.enqueueRun({
+      runId: live,
+      workflowSha: sha,
+      parentRunId: parent,
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_live",
+      subgraphTerminalNodeId: "fan_in",
+    });
+    store.enqueueRun({
+      runId: done,
+      workflowSha: sha,
+      parentRunId: parent,
+      parentNodeId: "fanout",
+      parallelIndex: 1,
+      subgraphRootNodeId: "branch_done",
+      subgraphTerminalNodeId: "fan_in",
+    });
+
+    store.addMetricsDelta(live, { totalCostUsd: 0.5, billedTokens: 100 });
+    store.addMetricsDelta(done, { totalCostUsd: 0.75, billedTokens: 200 });
+    store.addMetricsDelta(parent, { totalCostUsd: 1.0, billedTokens: 50 });
+
+    // Force the "done" sub-run into a terminal status directly so the
+    // helper sees the exclusion path.
+    (store as unknown as { db: Database }).db
+      .query("UPDATE run_state SET status = 'completed' WHERE run_id = ?")
+      .run(done);
+
+    const snap = store.getParentCostSnapshot(parent);
+    expect(snap.ownCostUsd).toBeCloseTo(1.0);
+    expect(snap.inFlightCostUsd).toBeCloseTo(0.5); // only `live`
+    expect(snap.inFlightBilledTokens).toBe(100);
+    store.close();
+  });
+
+  test("getParentCostSnapshot returns zeros for a parent with no sub-runs", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    const snap = store.getParentCostSnapshot(runId);
+    expect(snap.ownCostUsd).toBe(0);
+    expect(snap.inFlightCostUsd).toBe(0);
+    expect(snap.ownBilledTokens).toBe(0);
+    expect(snap.inFlightBilledTokens).toBe(0);
+    store.close();
+  });
+
+  test("activeChildRuns returns only non-terminal sub-runs", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const parent = await seedRun(store, { workflowSha: sha });
+    const a = nextId();
+    const b = nextId();
+    const c = nextId();
+    for (const [id, idx] of [
+      [a, 0],
+      [b, 1],
+      [c, 2],
+    ] as const) {
+      store.enqueueRun({
+        runId: id,
+        workflowSha: sha,
+        parentRunId: parent,
+        parentNodeId: "fanout",
+        parallelIndex: idx,
+        subgraphRootNodeId: `branch_${id}`,
+        subgraphTerminalNodeId: "fan_in",
+      });
+    }
+    (store as unknown as { db: Database }).db
+      .query("UPDATE run_state SET status = 'completed' WHERE run_id = ?")
+      .run(b);
+    (store as unknown as { db: Database }).db
+      .query("UPDATE run_state SET status = 'cancelled' WHERE run_id = ?")
+      .run(c);
+
+    expect(store.activeChildRuns(parent).sort()).toEqual([a].sort());
+    store.close();
+  });
+
+  test("activeChildRuns is empty for a top-level run", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    expect(store.activeChildRuns(runId)).toEqual([]);
+    store.close();
+  });
+
+  test("sub-run row carries the linkage columns end-to-end", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    const parent = await seedRun(store, { workflowSha: sha });
+    const child = nextId();
+    store.enqueueRun({
+      runId: child,
+      workflowSha: sha,
+      parentRunId: parent,
+      parentNodeId: "fanout",
+      parallelIndex: 3,
+      subgraphRootNodeId: "branch_a",
+      subgraphTerminalNodeId: "fan_in",
+    });
+    const state = store.getState(child)!;
+    expect(state.parentRunId).toBe(parent);
+    expect(state.parentNodeId).toBe("fanout");
+    expect(state.parallelIndex).toBe(3);
+    expect(state.subgraphRootNodeId).toBe("branch_a");
+    expect(state.subgraphTerminalNodeId).toBe("fan_in");
+    store.close();
+  });
+});
