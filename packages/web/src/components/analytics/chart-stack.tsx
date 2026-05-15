@@ -59,11 +59,7 @@ export function barOuterBounds<K extends string>(
   };
 }
 
-export function renderStackSegment<K extends string>(
-  barProps: unknown,
-  keys: readonly K[],
-  dataKey: K,
-): ReactElement {
+export function renderStackSegment<K extends string>(barProps: unknown, keys: readonly K[], dataKey: K): ReactElement {
   const p = barProps as {
     payload: Readonly<Record<K, number>>;
     x?: number;

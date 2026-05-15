@@ -77,9 +77,7 @@ describe("barOuterBounds", () => {
       c: { y: baseline - 8 - 16 - 20, h: 20 },
       d: { y: baseline - 8 - 16 - 20 - 12, h: 12 },
     };
-    const bounds = (KEYS as readonly Key[]).map((k) =>
-      barOuterBounds<Key>(row, KEYS, k, 5, segs[k].y, 20, segs[k].h),
-    );
+    const bounds = (KEYS as readonly Key[]).map((k) => barOuterBounds<Key>(row, KEYS, k, 5, segs[k].y, 20, segs[k].h));
     const expected = { x: 5, y: baseline - 56, width: 20, height: 56 };
     for (const b of bounds) expect(b).toEqual(expected);
   });
