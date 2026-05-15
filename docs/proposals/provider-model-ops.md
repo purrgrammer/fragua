@@ -1,10 +1,12 @@
 ---
 title: Per-model CLI ops for custom providers — add-model / rm-model / ls-models / edit-model
 summary: "swarm providers add-model / rm-model / ls-models / edit-model lets operators manage individual model entries inside a custom provider's provider_config row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable."
-status: proposed
-maturity: sketch
-last-reviewed: 2026-05-15
+status: shipped
+maturity: designed
+last-reviewed: 2026-05-22
 ---
+
+> **Note (implementation).** Four sub-verbs shipped on the existing `swarm providers …` cac command (`ls-models`, `add-model`, `rm-model`, `edit-model`). Flag set lands verbatim: `--name`, `--context-window`, `--max-tokens`, `--reasoning`, `--input`, `--cost-input`, `--cost-output`, `--yes`/`-y`. Client-side Ajv validation against `ProviderConfigSchema` runs on every read (`loadProviderEntry`) **and** every write — a structurally-broken row is refused before mutation, with the same `schema validation failed` message a bad write would produce. The wider `ModelEntry` shape now carries the full 8-field body required by pi-ai's `Model<Api>` (`reasoning`, `input`, `cost` are required), and `buildModelEntry` is the single pure builder shared by the wizard, `add-model`, and `edit-model`.
 
 # Per-model CLI ops for custom providers
 

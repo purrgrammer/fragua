@@ -88,5 +88,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Codergen maxMs is a runaway backstop, not a typical bound](./codergen-maxms-backstop.md)
 - [Provider credentials in the store](./provider-credentials-storage.md)
 - [Custom-provider config in the store](./provider-config-storage.md)
+- [Per-model CLI ops for custom providers](./provider-model-ops.md)
 
 </details>

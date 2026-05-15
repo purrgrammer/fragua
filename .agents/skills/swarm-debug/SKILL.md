@@ -295,6 +295,8 @@ sqlite3 -readonly ~/.swarm/swarm.db \
 
 Per-row Ajv failures land on `ModelRegistry.getError()` (surfaced via the `/providers` route's `provider_config_error` field) and don't poison sibling providers — if one row is corrupt the rest still load. The `config` blob is the per-provider definition body (baseUrl, headers, compat, models, modelOverrides); credentials live in `provider_credentials`. There is no `apiKey` field on the blob — `!cmd` / env-var resolution is gone repo-wide.
 
+When a provider row's `models[]` looks wrong, prefer the structured CLI over hand-crafted SQL: `swarm providers ls-models <provider>` prints every entry with `ctx / max / reasoning / cost(in,out)`; `swarm providers edit-model <provider> <id> --<flag> <value>` updates one or more fields while preserving everything else byte-identical; `swarm providers rm-model <provider> <id>` removes a single entry. Each verb Ajv-validates the blob both on read (refuses a structurally-broken row before mutation) and on write, so post-mortem repairs land cleanly without re-walking the whole `add --custom` wizard or hand-crafting `sqlite3 UPDATE provider_config SET config = json_set(...)`.
+
 For "what did the run actually change in the working tree?" use the worktree endpoints — they sit on top of the run's `.swarm/worktrees/<run_id>/` directory and the preserved `swarm/runs/<run_id>` branch:
 
 ```sh
