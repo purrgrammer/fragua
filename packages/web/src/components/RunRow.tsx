@@ -22,7 +22,6 @@
 import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { shortRunId } from "../lib/runId.ts";
-import { BranchDigestChip } from "./BranchDigestChip.tsx";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { WorkflowLink } from "./WorkflowLink.tsx";
@@ -60,10 +59,7 @@ function TableRow({ row }: { row: RunSummary }): JSX.Element {
       </td>
       <td className="py-2 pr-4 max-w-0">{wf ? <WorkflowLink name={wf} variant="badge" /> : null}</td>
       <td className="py-2 pr-4 text-right">
-        <div className="inline-flex items-center gap-1.5">
-          {row.childStatusDigest ? <BranchDigestChip digest={row.childStatusDigest} /> : null}
-          <RunStatusBadge status={row.status} runStatus={row.runStatus} />
-        </div>
+        <RunStatusBadge status={row.status} runStatus={row.runStatus} />
       </td>
     </tr>
   );
@@ -87,7 +83,6 @@ function CompactRow({ row }: { row: RunSummary }): JSX.Element {
           {wf}
         </Badge>
       ) : null}
-      {row.childStatusDigest ? <BranchDigestChip digest={row.childStatusDigest} /> : null}
       <RunStatusBadge status={row.status} runStatus={row.runStatus} />
     </Link>
   );

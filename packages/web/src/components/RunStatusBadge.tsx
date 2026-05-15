@@ -19,7 +19,7 @@
 // missing) fall through to the operator-attention default (`paused`)
 // since that's the most likely needs-attention state.
 
-import type { RunDetail, RunSummary } from "../lib/api.ts";
+import type { ChildStatusDigest, RunDetail, RunSummary } from "../lib/api.ts";
 import { statusLabel } from "../lib/format.ts";
 
 export interface RunStatusBadgeProps {
@@ -28,6 +28,11 @@ export interface RunStatusBadgeProps {
    * paused / paused_auto / paused_hitl; ignored for non-paused values.
    * Optional so existing call sites don't have to thread it through. */
   runStatus?: RunDetail["runStatus"];
+  /** Child status digest. When the parent has paused / paused_hitl /
+   *  quarantined children, the badge escalates to the paused-class
+   *  tint and label even if the parent's own status is
+   *  running_children — the operator's surface is "needs attention". */
+  childStatusDigest?: ChildStatusDigest;
   /** Optional override for the `data-testid` attribute.
    *  Defaults to `status-<status>` (e.g. `status-running`). */
   "data-testid"?: string;
@@ -49,33 +54,48 @@ function pausedTone(runStatus: RunDetail["runStatus"] | undefined): string {
 export function RunStatusBadge({
   status,
   runStatus,
+  childStatusDigest,
   "data-testid": testId,
   className,
 }: RunStatusBadgeProps): JSX.Element {
+  // Escalate to "needs attention" when a child branch is awaiting
+  // operator action. The parent is the operator-facing unit; if any
+  // branch is paused / HITL / quarantined, the badge reflects that
+  // even when the parent's own runStatus is running_children.
+  const childAttention =
+    (childStatusDigest?.pausedHitl ?? 0) > 0 ||
+    (childStatusDigest?.paused ?? 0) > 0 ||
+    (childStatusDigest?.quarantined ?? 0) > 0;
+  const effectiveRunStatus =
+    childAttention && (runStatus === "running_children" || runStatus === "running")
+      ? ((childStatusDigest?.pausedHitl ?? 0) > 0 ? "paused_hitl" : "paused")
+      : runStatus;
+  const effectiveStatus = childAttention && (status === "running" || status === "queued") ? "paused" : status;
   const tone =
-    status === "success"
+    effectiveStatus === "success"
       ? "bg-sw-accent-success/10 text-sw-accent-success border-sw-accent-success/30"
-      : status === "fail"
+      : effectiveStatus === "fail"
         ? "bg-sw-accent-error/10 text-sw-accent-error border-sw-accent-error/30"
-        : status === "running"
+        : effectiveStatus === "running"
           ? "bg-sw-accent-thinking/10 text-sw-accent-thinking border-sw-accent-thinking/30"
-          : status === "queued"
+          : effectiveStatus === "queued"
             ? "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30"
-            : status === "paused"
-              ? pausedTone(runStatus)
+            : effectiveStatus === "paused"
+              ? pausedTone(effectiveRunStatus)
               : "bg-sw-accent-idle/10 text-sw-accent-idle border-sw-accent-idle/30";
   // Running badges pulse to signal "alive" — same `.sw-pulse` treatment
   // the Shimmer component uses (opacity 1.0 → 0.55 → 1.0, with a
   // prefers-reduced-motion fallback in globals.css).
-  const pulse = status === "running" ? "sw-pulse" : "";
+  const pulse = effectiveStatus === "running" ? "sw-pulse" : "";
   return (
     <span
-      data-testid={testId ?? `status-${status}`}
-      data-status={status}
-      data-run-status={runStatus}
+      data-testid={testId ?? `status-${effectiveStatus}`}
+      data-status={effectiveStatus}
+      data-run-status={effectiveRunStatus}
+      data-child-attention={childAttention ? "true" : undefined}
       className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tone} ${pulse}${className ? ` ${className}` : ""}`.trim()}
     >
-      {statusLabel(status)}
+      {statusLabel(effectiveStatus)}
     </span>
   );
 }

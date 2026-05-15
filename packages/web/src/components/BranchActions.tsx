@@ -12,7 +12,6 @@
 // settled.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 import { cancelRun, resumeRun, type RunSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { Button } from "./ui/button.tsx";
@@ -74,11 +73,6 @@ export function BranchActions({ runId, runStatus, parentRunId }: BranchActionsPr
           Resume
         </Button>
       ) : null}
-      <Button asChild size="sm" variant="outline" disabled={busy}>
-        <Link to={`/runs/${runId}?orphan=true`} data-testid={`branch-manage-${runId}`}>
-          Manage →
-        </Link>
-      </Button>
     </div>
   );
 }

@@ -158,13 +158,41 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       bucket.push(event);
       eventsByRun.set(originRunId, bucket);
     }
+    // Sub-run branch metadata: each child run carries its branch root
+    // (parent_node_id) + ordinal (parallel_index) on run_state. Stamp
+    // them onto every step from a sub-run so CostInspector can nest
+    // sub-run rows under their parallel parent — without this, sub-run
+    // steps land at top-level with null parentNodeId. The parent run
+    // itself has no entry; its own steps already carry parentNodeId
+    // from inline branch events when applicable.
+    const subRunMeta = new Map<string, { parentNodeId: string; parallelIndex: number }>();
+    for (const originRunId of eventsByRun.keys()) {
+      if (originRunId === runId) continue;
+      const child = store.getState(originRunId);
+      if (child?.parentNodeId != null && child.parallelIndex != null) {
+        subRunMeta.set(originRunId, {
+          parentNodeId: child.parentNodeId,
+          parallelIndex: child.parallelIndex,
+        });
+      }
+    }
     const merged = Array.from(eventsByRun.entries())
-      .flatMap(([originRunId, originEvents]) =>
-        attachStepAggregates(
+      .flatMap(([originRunId, originEvents]) => {
+        const meta = subRunMeta.get(originRunId);
+        const steps = attachStepAggregates(
           eventsToSteps(originEvents.map((event) => ({ ...event, originRunId }))),
           store.getStepAggregates(originRunId),
-        ),
-      )
+        );
+        if (meta == null) return steps;
+        // Stamp sub-run's parallel parent on every step that doesn't
+        // already carry one (some sub-run steps may come from a
+        // nested toolCall — preserve those).
+        return steps.map((s) =>
+          s.parentNodeId == null
+            ? { ...s, parentNodeId: meta.parentNodeId, parallelIndex: meta.parallelIndex }
+            : s,
+        );
+      })
       .sort(
         (a, b) =>
           Date.parse(a.startedAt) - Date.parse(b.startedAt) ||

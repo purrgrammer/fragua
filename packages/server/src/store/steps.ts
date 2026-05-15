@@ -378,6 +378,19 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       continue;
     }
 
+    if (ev.type === "fact.fanout_started") {
+      // The node identified by `payload.parentNodeId` is a parallel.*
+      // component — it dispatches branches as sub-runs and never opens
+      // an LLM call of its own. Suppress the synthetic tool-step that
+      // would otherwise fire at fact.node_completed with a wall-clock
+      // duration covering the entire fan-out window; the operator's
+      // mental model is "spend lived in the branches", which the
+      // per-branch rows already show.
+      const fanParent = stringField(data, "parentNodeId");
+      if (fanParent) pendingToolNode.delete(fanParent);
+      continue;
+    }
+
     if (ev.type === "llm.start") {
       // This node opened an LLM call — it's a codergen, not a tool
       // node. Clear any pending tool-step entry so we don't emit a

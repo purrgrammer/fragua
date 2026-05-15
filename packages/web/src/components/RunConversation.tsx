@@ -25,7 +25,7 @@
 
 import { renderers as extensionRenderers } from "virtual:swarm-extensions";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
-import { type MouseEvent as ReactMouseEvent, type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -645,10 +645,12 @@ function BranchCard({
   parentRunId?: string;
   children: ReactNode;
 }): JSX.Element {
-  // Stop the trigger from toggling collapse when the operator clicks
-  // a button in the header — `event.stopPropagation()` keeps the
-  // expand/collapse only on the chrome.
-  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+  // BranchActions must live OUTSIDE CollapsibleTrigger — Radix's
+  // CollapsibleTrigger renders a real `<button>` element and a
+  // button-inside-button is invalid HTML (the inner `<a>` /
+  // `<button>` doesn't receive clicks reliably). Header is now a
+  // flex row whose first child is the trigger (clickable area) and
+  // whose tail is the actions strip (siblings, not nested).
   return (
     <Collapsible
       defaultOpen={defaultOpen}
@@ -657,31 +659,29 @@ function BranchCard({
       data-child-status={childRun?.runStatus}
       className="rounded-md border border-sw-border bg-sw-surface/50"
     >
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface">
-        <StatusDot status={state?.state ?? "pending"} isLive={isLive} isPaused={isPaused} />
-        <span className="font-mono text-[12px] font-medium text-sw-text">{branchId}</span>
-        {childRun ? (
-          <RunStatusBadge status={childRun.status} runStatus={childRun.runStatus} className="ml-1" />
-        ) : null}
-        {childRun != null && childRun.costUsd > 0 ? (
-          <span className="font-mono text-[10px] tabular-nums text-sw-muted">${childRun.costUsd.toFixed(2)}</span>
-        ) : null}
-        <span className="ml-auto flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+      <div className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sw-surface">
+        <CollapsibleTrigger className="flex flex-1 items-center gap-2 min-w-0 text-left">
+          <StatusDot status={state?.state ?? "pending"} isLive={isLive} isPaused={isPaused} />
+          <span className="font-mono text-[12px] font-medium text-sw-text">{branchId}</span>
           {childRun ? (
-            <span onClick={stop} className="normal-case">
-              <BranchActions
-                runId={childRun.runId}
-                runStatus={childRun.runStatus}
-                parentRunId={parentRunId}
-              />
-            </span>
+            <RunStatusBadge status={childRun.status} runStatus={childRun.runStatus} className="ml-1" />
           ) : null}
-          {messageCount > 0 ? <span className="tabular-nums">{messageCount} msg</span> : null}
-          <span aria-hidden className="transition-transform group-data-[state=open]:rotate-90">
-            ›
+          {childRun != null && childRun.costUsd > 0 ? (
+            <span className="font-mono text-[10px] tabular-nums text-sw-muted">${childRun.costUsd.toFixed(2)}</span>
+          ) : null}
+          <span className="ml-auto flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-sw-muted">
+            {messageCount > 0 ? <span className="tabular-nums">{messageCount} msg</span> : null}
+            <span aria-hidden className="transition-transform group-data-[state=open]:rotate-90">
+              ›
+            </span>
           </span>
-        </span>
-      </CollapsibleTrigger>
+        </CollapsibleTrigger>
+        {childRun ? (
+          <span className="ml-2 normal-case">
+            <BranchActions runId={childRun.runId} runStatus={childRun.runStatus} parentRunId={parentRunId} />
+          </span>
+        ) : null}
+      </div>
       <CollapsibleContent
         data-testid={`branch-card-content-${branchId}`}
         className="flex flex-col gap-3 border-t border-sw-border px-3 py-3"

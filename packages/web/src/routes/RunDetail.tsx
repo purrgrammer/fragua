@@ -31,6 +31,7 @@ import {
   CommitFiles,
 } from "../components/ai-elements/commit.tsx";
 import { FileTree } from "../components/ai-elements/file-tree.tsx";
+import { ChildHitlChoices } from "../components/ChildHitlChoices.tsx";
 import { CostInspector } from "../components/CostInspector.tsx";
 import { GraphView } from "../components/GraphView.tsx";
 import { HitlChoice } from "../components/HitlChoice.tsx";
@@ -216,6 +217,11 @@ export function RunDetail(): JSX.Element {
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
 
+      {/* Sub-run HITL gates surface here so the operator can answer
+          without navigating into the child run. One panel per
+          paused_hitl child; self-empty when no child is awaiting input. */}
+      <ChildHitlChoices children={subRuns} />
+
       {/* P5 of docs/proposals/parallel.md: render the parent's
           sub-runs (parallel branches) above the tabs. Self-renders
           nothing when the run has no children. */}
@@ -384,6 +390,7 @@ const DetailHeader = memo(function DetailHeader({
             <RunStatusBadge
               status={detail.status}
               runStatus={detail.runStatus}
+              {...(detail.childStatusDigest ? { childStatusDigest: detail.childStatusDigest } : {})}
               data-testid="detail-status"
               className="px-1.5 py-0.5 text-[0.65rem]"
             />

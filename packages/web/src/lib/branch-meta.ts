@@ -23,7 +23,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import type { NodeState, RunDetail } from "./api.ts";
+import type { NodeState, RunDetail, RunSummary } from "./api.ts";
 import { queries } from "./queries.ts";
 
 export interface FanInResult {
@@ -70,14 +70,53 @@ interface MinimalEvent {
   payload: unknown;
 }
 
-/** Pure derivation — exported so tests can exercise it without React. */
-export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonly NodeState[] | undefined): BranchMeta {
+/** Pure derivation — exported so tests can exercise it without React.
+ *  When `children` is supplied (sub-runs known via /runs/:id/children),
+ *  branches are seeded from there first — covers branches that paused
+ *  before emitting `fact.node_started` (e.g. wait.human gates yielding
+ *  paused_hitl on dispatch). Events still get walked to refine state
+ *  and pick up any inline branches not represented as sub-runs. */
+export function deriveBranchMeta(
+  events: readonly MinimalEvent[],
+  nodes: readonly NodeState[] | undefined,
+  children?: readonly RunSummary[],
+): BranchMeta {
   const parentToBranches = new Map<string, string[]>();
   const branchToParent = new Map<string, string>();
   const winnerBranchIds = new Set<string>();
   const fanInResultsByParent = new Map<string, FanInResult>();
   const seenBranches = new Set<string>();
   const branchStateByNode = new Map<string, NodeState["state"]>();
+
+  // Seed from /children when available — the authoritative source for
+  // sub-run branches. Each child's branchNodeId is the branch's root;
+  // parentNodeId is the parallel.* component that spawned it. Children
+  // sorted by parallelIndex for deterministic tab order. State derived
+  // from runStatus: paused_hitl / paused → "running" (the branch is
+  // alive, just blocked on operator); completed → "completed";
+  // halted/cancelled → "failed".
+  if (children) {
+    const ordered = [...children].sort((a, b) => (a.parallelIndex ?? 0) - (b.parallelIndex ?? 0));
+    for (const c of ordered) {
+      const branchId = c.branchNodeId ?? c.parentNodeId;
+      const parentId = c.parentNodeId;
+      if (!branchId || !parentId) continue;
+      if (!seenBranches.has(branchId)) {
+        seenBranches.add(branchId);
+        branchToParent.set(branchId, parentId);
+        const arr = parentToBranches.get(parentId) ?? [];
+        arr.push(branchId);
+        parentToBranches.set(parentId, arr);
+      }
+      const mapped: NodeState["state"] =
+        c.runStatus === "completed"
+          ? "completed"
+          : c.runStatus === "halted" || c.runStatus === "cancelled" || c.runStatus === "quarantined"
+            ? "failed"
+            : "running";
+      branchStateByNode.set(branchId, mapped);
+    }
+  }
 
   for (const ev of events) {
     if (ev.type !== "fact.node_started" && ev.type !== "fact.node_completed" && ev.type !== "fan_in.completed") {
@@ -138,8 +177,10 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
   return { parentToBranches, branchToParent, activeBranchesByParent, winnerBranchIds, fanInResultsByParent };
 }
 
-/** React hook: fetches the run's events, derives branch metadata.
- *  Re-keys on `totalEvents` so SSE-driven liveness flows through. */
+/** React hook: fetches the run's events + sub-runs, derives branch metadata.
+ *  Re-keys on `totalEvents` so SSE-driven liveness flows through. The
+ *  /children fetch seeds branches that paused before emitting any
+ *  node_started (the wait.human-on-dispatch case). */
 export function useBranchMeta(
   runId: string | null | undefined,
   detail: RunDetail | undefined,
@@ -151,8 +192,14 @@ export function useBranchMeta(
     enabled: !!runId,
     refetchInterval: detail?.status === "running" ? 1_000 : false,
   });
+  const childrenQuery = useQuery({
+    ...queries.runs.children(runId ?? ""),
+    enabled: !!runId,
+  });
   const events = eventsQuery.data?.events;
   const eventsLen = Array.isArray(events) ? events.length : 0;
+  const children = childrenQuery.data;
+  const childrenLen = Array.isArray(children) ? children.length : 0;
 
   const qc = useQueryClient();
   // Invalidate on SSE-driven `totalEvents` changes so the query refetches.
@@ -161,14 +208,18 @@ export function useBranchMeta(
     if (runId) void qc.invalidateQueries({ queryKey: eventsKey });
   }, [totalEvents, runId]);
 
-  // eslint-disable-next-line — eventsLen is the cheap identity-stable
-  // signal; the events array reference changes on every refetch even
-  // when the content is identical, so depending on it directly would
-  // re-derive the maps unnecessarily. eventsLen captures the only
-  // dimension we care about for invalidation.
+  // eslint-disable-next-line — eventsLen / childrenLen are the cheap
+  // identity-stable signals; the arrays themselves re-key on every
+  // refetch.
   // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above.
   return useMemo(() => {
-    if (!Array.isArray(events) || events.length === 0) return EMPTY_BRANCH_META;
-    return deriveBranchMeta(events as MinimalEvent[], detail?.nodes);
-  }, [eventsLen, detail?.nodes]);
+    const noEvents = !Array.isArray(events) || events.length === 0;
+    const noChildren = !Array.isArray(children) || children.length === 0;
+    if (noEvents && noChildren) return EMPTY_BRANCH_META;
+    return deriveBranchMeta(
+      noEvents ? [] : (events as MinimalEvent[]),
+      detail?.nodes,
+      noChildren ? undefined : children,
+    );
+  }, [eventsLen, childrenLen, detail?.nodes]);
 }
