@@ -333,6 +333,27 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
           steps.push(step);
           lastStepIdxForNode.set(nodeId, steps.length - 1);
           pendingToolNode.delete(nodeId);
+        } else if (stringField(data, "parentNodeId")) {
+          // Parallel codergen branch. The branch ran inside the parent's
+          // inline dispatch (`parallel.ts:childSpec.handler(childCtx)`)
+          // and `fillOrphanDurations`'s neighbour-boundary trick can't
+          // resolve a wall duration — sibling branches share a
+          // `startedAt` to the ms, and the parent's exit row anchors
+          // BEFORE the branches'. Result: a racey 0ms (when llm.start
+          // opened the step and llm.done collapsed onto it) or an
+          // undefined that the UI fallback later renders as the whole
+          // parent block's duration. Stamp the truthful wall figure
+          // directly from the lifecycle facts (daemon-written, sync) —
+          // same shape as the `subagent.end` block above.
+          const stepIdx = lastStepIdxForNode.get(nodeId);
+          const startedTs = lastNodeStartedTs.get(nodeId);
+          if (stepIdx !== undefined && startedTs !== undefined) {
+            const target = steps[stepIdx];
+            if (target !== undefined) {
+              const dur = ev.ts - startedTs;
+              if (Number.isFinite(dur) && dur >= 0) target.durationMs = dur;
+            }
+          }
         }
       }
       continue;

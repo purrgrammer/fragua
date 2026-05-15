@@ -197,6 +197,65 @@ describe("eventsToSteps", () => {
     expect(lensB.parallelIndex).toBe(1);
   });
 
+  test("parallel codergen branches: fact.node_completed stamps wall durationMs from lifecycle facts", () => {
+    // Parallel branches run inline under the parent component's dispatch,
+    // so their `llm.start`/`llm.done` timestamps are pi-agent-core-
+    // buffered and collapse to ~0. `fillOrphanDurations`'s neighbour
+    // trick can't resolve a wall figure either (sibling branches share
+    // a `startedAt` to the ms). The reducer must stamp the truthful
+    // wall duration directly from `fact.node_completed.ts − fact.node_started.ts`.
+    const events = [
+      ev("fact.node_started", 1000, { nodeId: "lensA", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
+      ev("fact.node_started", 1000, { nodeId: "lensB", iteration: 0, parentNodeId: "fork", parallelIndex: 1 }),
+      // llm.start arrives "later" but pi-agent-core's flush at end-of-call collapses
+      // both buffered timestamps onto each other — simulate by giving them ts close to
+      // the (later) llm.done. The exact value doesn't matter for the test; what matters
+      // is that the fact.node_completed handler stamps the wall figure regardless.
+      ev("llm.start", 5000, { nodeId: "lensA" }),
+      ev("llm.start", 5000, { nodeId: "lensB" }),
+      // Branches complete at different real wall times (the daemon-written
+      // fact.node_completed.ts is truthful and sync).
+      ev("fact.node_completed", 6500, { nodeId: "lensA", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
+      ev("fact.node_completed", 8000, { nodeId: "lensB", iteration: 0, parentNodeId: "fork", parallelIndex: 1 }),
+    ];
+    const steps = eventsToSteps(events);
+    const lensA = steps.find((s) => s.nodeId === "lensA")!;
+    const lensB = steps.find((s) => s.nodeId === "lensB")!;
+    // 6500 − 1000 = 5500
+    expect(lensA.durationMs).toBe(5500);
+    // 8000 − 1000 = 7000
+    expect(lensB.durationMs).toBe(7000);
+  });
+
+  test("parallel-branch durationMs stamp overrides a racey 0 from buffered llm.start/llm.done", () => {
+    // Reproduces the production symptom: llm.start opened the step, llm.done
+    // (also buffered) folded a near-zero durationMs onto it. The
+    // fact.node_completed handler must overwrite, not respect-if-set.
+    // We don't directly synthesise the racey 0 here (eventsToSteps doesn't
+    // currently set durationMs from llm.done — see file header), but the
+    // contract is symmetric either way: the lifecycle-facts wall figure wins.
+    const events = [
+      ev("fact.node_started", 100, { nodeId: "branch", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
+      ev("llm.start", 105, { nodeId: "branch" }),
+      ev("fact.node_completed", 3000, { nodeId: "branch", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
+    ];
+    const [step] = eventsToSteps(events);
+    expect(step?.durationMs).toBe(2900);
+  });
+
+  test("top-level (non-branch) fact.node_completed does NOT stamp durationMs (preserves the existing path)", () => {
+    // fillOrphanDurations handles top-level codergens via neighbour-step boundaries;
+    // the new stamp must scope itself to branches (parentNodeId present) so it
+    // doesn't double-write or compete with the existing path for sequential codergens.
+    const events = [
+      ev("fact.node_started", 100, { nodeId: "scope", iteration: 0 }),
+      ev("llm.start", 110, { nodeId: "scope" }),
+      ev("fact.node_completed", 2000, { nodeId: "scope", iteration: 0 }),
+    ];
+    const [step] = eventsToSteps(events);
+    expect(step?.durationMs).toBeUndefined();
+  });
+
   test("a top-level fact.node_started for a previously-branch nodeId clears stale branch metadata", () => {
     // Defensive: if a node id reappears as top-level (e.g. workflow
     // edited mid-replay), the next llm.start must NOT inherit the old
