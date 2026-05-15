@@ -597,6 +597,58 @@ describe("GET /runs/:id/steps", () => {
   });
 });
 
+describe("GET /runs/:id detail", () => {
+  test("parent detail includes descendant branch node state but keeps parent SSE cursor", async () => {
+    const { createServer } = await import("../../src/index.ts");
+    const app = createServer({ store });
+    store.enqueueRun({ runId: "detail-parent", workflowSha: "wf" });
+    store.enqueueRun({
+      runId: "detail-child",
+      workflowSha: "wf",
+      parentRunId: "detail-parent",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "lens",
+      subgraphTerminalNodeId: "fan_in",
+    });
+    const p0 = store.getState("detail-parent")!;
+    store.appendFact(
+      "detail-parent",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", schemaVersion: p0.schemaVersion, startNode: "fanout" },
+        },
+      ],
+      p0.version,
+    );
+    const parentLastSeq = store.getEvents("detail-parent").at(-1)!.seq;
+    const c0 = store.getState("detail-child")!;
+    store.appendFact(
+      "detail-child",
+      [
+        {
+          type: "fact.run_started",
+          payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "lens" },
+        },
+      ],
+      c0.version,
+    );
+    const c1 = store.getState("detail-child")!;
+    store.appendFact(
+      "detail-child",
+      [{ type: "fact.node_started", payload: { nodeId: "lens", iteration: 0 } }],
+      c1.version,
+    );
+
+    const res = await app.request("/runs/detail-parent");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { lastEventSeq: number; nodes: Array<{ nodeId: string; state: string }> };
+    expect(body.lastEventSeq).toBe(parentLastSeq);
+    expect(body.nodes.some((node) => node.nodeId === "lens" && node.state === "running")).toBe(true);
+  });
+});
+
 describe("GET /runs?status= filter", () => {
   test("accepts paused_auto — regression: VALID_STATUSES used to drop the literal", async () => {
     const { createServer } = await import("../../src/index.ts");

@@ -39,6 +39,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [8, MIGRATION_008_AUTO_WAKE_UNIFICATION()],
   [9, MIGRATION_009_SUBRUN_COLUMNS()],
   [10, MIGRATION_010_RUNNING_CHILDREN_STATUS()],
+  [11, MIGRATION_011_PROVIDER_CREDENTIALS()],
 ]);
 
 /**
@@ -729,6 +730,34 @@ function MIGRATION_007_DROP_CONVERSATION_KIND(): string {
  * with REFERENCES is fine in this mode; new rows pass trivially
  * because every existing `parent_run_id` is NULL.
  */
+/**
+ * v10 → v11: provider credentials table (proposal:
+ * `docs/proposals/provider-credentials-storage.md`).
+ *
+ * Creates an empty `provider_credentials` table keyed on
+ * `(provider TEXT PRIMARY KEY)` with `kind` ∈ {`api_key`, `oauth`} and
+ * a JSON `payload` blob. The proposal moves built-in provider creds
+ * out of `~/.swarm/auth.json` into the store; this migration lands the
+ * schema slot ahead of the consuming code so dev DBs that ran an
+ * earlier draft of the credential work (which bumped the table into
+ * existence) replay through `migrate()` cleanly. The store doesn't
+ * read or write the table yet — wiring lands when the credentials
+ * proposal does. `IF NOT EXISTS` is intentional: DBs that already
+ * have the table from the in-flight experiment are a no-op match,
+ * and the post-migration `foreign_key_check` passes trivially.
+ */
+function MIGRATION_011_PROVIDER_CREDENTIALS(): string {
+  return `
+    CREATE TABLE IF NOT EXISTS provider_credentials (
+      provider   TEXT PRIMARY KEY,
+      kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+      payload    TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+  `;
+}
+
 function MIGRATION_009_SUBRUN_COLUMNS(): string {
   return `
     ALTER TABLE run_state ADD COLUMN parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL;

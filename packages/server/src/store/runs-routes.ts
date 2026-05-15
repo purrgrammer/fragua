@@ -54,11 +54,14 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // from the event log; capping the input dropped later nodes on big
     // runs. The derivations themselves filter to a handful of event
     // types per walk, so total work stays bounded.
-    const events = store.getEvents(runId);
+    const parentEvents = store.getEvents(runId);
+    const events = store.getEventsFeedWithDescendants(runId);
     const wf = state.workflowSha != null ? store.getWorkflow(state.workflowSha) : null;
     const name = wf?.name;
     const source = wf?.dotSource;
-    return c.json(runStateToDetail(state, events, name, source));
+    const detail = runStateToDetail(state, events, name, source);
+    detail.lastEventSeq = parentEvents.at(-1)?.seq ?? 0;
+    return c.json(detail);
   });
 
   // Sub-runs view for a parent — P5 of docs/proposals/parallel.md.

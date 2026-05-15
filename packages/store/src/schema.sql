@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 10
+-- swarm event store schema — Revision 11
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -48,6 +48,11 @@
 -- fanned out into sub-runs sit in this status until every sub-run
 -- reaches a terminal status; the wake-pending sweep
 -- transitions the parent back to `queued` (collect phase).
+-- v10 → v11: `provider_credentials` table (proposal:
+-- docs/proposals/provider-credentials-storage.md). Schema slot landed
+-- ahead of the consuming code so dev DBs that ran an earlier draft of
+-- the credential work replay through `migrate()` cleanly. Empty by
+-- default; the store doesn't read or write this table yet.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -285,3 +290,15 @@ CREATE INDEX IF NOT EXISTS idx_schedules_due
   ON schedules(next_fire_at)
   WHERE paused_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_schedules_cwd ON schedules(cwd);
+
+-- Provider credentials (proposal: docs/proposals/provider-credentials-storage.md).
+-- Schema slot landed ahead of the consuming code. Empty by default; the
+-- store doesn't read or write this table yet. `payload` is a JSON blob
+-- whose shape depends on `kind` (api_key: `{key}`; oauth: full token set).
+CREATE TABLE IF NOT EXISTS provider_credentials (
+  provider   TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('api_key','oauth')),
+  payload    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;

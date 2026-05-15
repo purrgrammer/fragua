@@ -77,6 +77,7 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
   const winnerBranchIds = new Set<string>();
   const fanInResultsByParent = new Map<string, FanInResult>();
   const seenBranches = new Set<string>();
+  const branchStateByNode = new Map<string, NodeState["state"]>();
 
   for (const ev of events) {
     if (ev.type !== "fact.node_started" && ev.type !== "fact.node_completed" && ev.type !== "fan_in.completed") {
@@ -109,16 +110,24 @@ export function deriveBranchMeta(events: readonly MinimalEvent[], nodes: readonl
     const nodeId = typeof p["nodeId"] === "string" ? (p["nodeId"] as string) : "";
     const parentNodeId = typeof p["parentNodeId"] === "string" ? (p["parentNodeId"] as string) : "";
     if (!nodeId || !parentNodeId) continue;
-    if (seenBranches.has(nodeId)) continue;
-    seenBranches.add(nodeId);
-    branchToParent.set(nodeId, parentNodeId);
-    const arr = parentToBranches.get(parentNodeId) ?? [];
-    arr.push(nodeId);
-    parentToBranches.set(parentNodeId, arr);
+    if (ev.type === "fact.node_started") {
+      branchStateByNode.set(nodeId, "running");
+    } else {
+      const outcomeStatus = typeof p["outcomeStatus"] === "string" ? p["outcomeStatus"] : "";
+      branchStateByNode.set(nodeId, outcomeStatus === "fail" ? "failed" : "completed");
+    }
+    if (!seenBranches.has(nodeId)) {
+      seenBranches.add(nodeId);
+      branchToParent.set(nodeId, parentNodeId);
+      const arr = parentToBranches.get(parentNodeId) ?? [];
+      arr.push(nodeId);
+      parentToBranches.set(parentNodeId, arr);
+    }
   }
 
   const stateByNode = new Map<string, NodeState["state"]>();
   for (const n of nodes ?? []) stateByNode.set(n.nodeId, n.state);
+  for (const [nodeId, state] of branchStateByNode) stateByNode.set(nodeId, state);
 
   const activeBranchesByParent = new Map<string, string[]>();
   for (const [parent, branches] of parentToBranches) {
