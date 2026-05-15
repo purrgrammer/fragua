@@ -30,6 +30,12 @@ last-reviewed: 2026-05-15
   large duration string (`"999h"` is the going rate). The arbitrary ceiling is a smell — the value
   has no semantic meaning, just "large enough that I won't hit it." Real cost controls
   (`max_tokens`, `max_cost_usd`) are the actual ceiling and live on the node attrs.
+- **The bug it produces.** `parseDurationMs` accepts `ms/s/m/h` and validates against safe
+  integers, but Node's `setTimeout` silently clamps any delay above `2^31 - 1` (~596 hours, ~24.8
+  days) to 1 ms. A `"999h"` config slips through `parseDurationMs` cleanly, then the leak
+  watchdog at `executor.ts:864` fires immediately and the run halts with
+  `reason: "error", detail: "handler_leaked"`. Observed in practice on 2026-05-15. A safer
+  ceiling like `"240h"` (10 days) dodges the clamp — but the value remains a smell.
 - **Why other handler kinds are different.**
   - `tool` (shell subprocess): wall-clock IS the right bound. A hung `bun run ci` could spin
     forever. Default `5 * 60 * 1000` ms (`handlers/tool.ts:80`) stays sensible.

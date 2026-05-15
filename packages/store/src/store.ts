@@ -89,12 +89,14 @@ import {
   type GlobalModelBreakdownRow,
   insertRunState,
   type ListRunIdsOpts,
+  type ListRunSummaryRowsOpts,
   type MetricsDeltaRow,
   type ParentCostSnapshot,
   getRunCostTotals as queryRunCostTotals,
   getStepAggregates as queryStepAggregates,
   type RunCostTotalsRow,
   type RunStateRow,
+  type RunSummaryRow,
   type StepAggregateRow,
   selectActiveChildren,
   selectCwds,
@@ -104,6 +106,7 @@ import {
   selectParentCostSnapshot,
   selectRunIds,
   selectRunStateRow,
+  selectRunSummaryRows,
   selectWakeCandidates,
   updateRunStateTitle,
   type WakeCandidateRow,
@@ -542,6 +545,10 @@ export class SqliteStore implements IEventStore {
     return selectRunIds(this.db, opts);
   }
 
+  listRunSummaryRows(opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
+    return selectRunSummaryRows(this.db, opts);
+  }
+
   claimNextRun(maxInFlight: number, opts?: { eligibility?: ClaimEligibility }): { runId: string } | null {
     const now = this.now();
     let claimed: string | null = null;
@@ -611,7 +618,7 @@ export class SqliteStore implements IEventStore {
    * count (typically O(fanout-width)). Use for the run-detail page's
    * unified view; per-run drill-downs should keep using `getEvents`.
    */
-  getEventsWithDescendants(runId: string, opts: { sinceTs?: number; limit?: number } = {}): MergedStoredEvent[] {
+  getEventsFeedWithDescendants(runId: string, opts: { sinceTs?: number; limit?: number } = {}): MergedStoredEvent[] {
     const rows: DescendantEventRow[] = selectEventsWithDescendants(this.db, runId, opts);
     return rows.map((r) => {
       const base = rowToStoredEvent(r);

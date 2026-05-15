@@ -127,6 +127,37 @@ export interface ListRunIdsOpts {
   limit?: number;
 }
 
+export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
+  /** Exclude sub-runs. Used by top-level `GET /runs`; child lists pass
+   *  `parentRunId` instead. */
+  topLevelOnly?: boolean;
+}
+
+export interface RunSummaryRow {
+  runId: string;
+  workflowSha: string;
+  workflowName: string | null;
+  status: RunStatus;
+  routing: string;
+  title: string | null;
+  eventTitle: string | null;
+  parentTitle: string | null;
+  cwd: string | null;
+  parentRunId: string | null;
+  parentNodeId: string | null;
+  parallelIndex: number | null;
+  branchNodeId: string | null;
+  enqueuedAt: number;
+  firstEventTs: number | null;
+  lastEventTs: number | null;
+  eventCount: number;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+}
+
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
  *  Returns `[]` for `statuses: []` without hitting the DB. */
 export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] {
@@ -155,6 +186,95 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
     .query<{ run_id: string }, (RunStatus | string | number)[]>(sql)
     .all(...args)
     .map((r) => r.run_id);
+}
+
+/** SQL-backed projection for `GET /runs` / child-run summary rows.
+ *  Avoids hydrating full event logs just to derive count, duration, and
+ *  title fallback. */
+export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
+  const { statuses, cwd, parentRunId, order = "newest", limit, topLevelOnly } = opts;
+  if (statuses !== undefined && statuses.length === 0) return [];
+
+  const clauses: string[] = [];
+  const args: (RunStatus | string | number)[] = [];
+  if (statuses) {
+    clauses.push(`r.status IN (${statuses.map(() => "?").join(",")})`);
+    args.push(...statuses);
+  }
+  if (cwd !== undefined) {
+    clauses.push("r.cwd = ?");
+    args.push(cwd);
+  }
+  if (parentRunId !== undefined) {
+    clauses.push("r.parent_run_id = ?");
+    args.push(parentRunId);
+  } else if (topLevelOnly === true) {
+    clauses.push("r.parent_run_id IS NULL");
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const orderBy = order === "oldest" ? "r.enqueued_at ASC" : "r.updated_at DESC";
+  const limitClause = limit !== undefined ? "LIMIT ?" : "";
+  if (limit !== undefined) args.push(limit);
+
+  const sql = `
+    WITH selected AS (
+      SELECT r.run_id, r.workflow_sha, r.workflow_name, r.status, r.routing, r.metrics,
+             r.title, r.cwd, r.parent_run_id, r.parent_node_id, r.parallel_index,
+             r.subgraph_root_node_id, r.enqueued_at, r.updated_at
+        FROM run_state r
+        ${where}
+       ORDER BY ${orderBy}, r.run_id ASC
+       ${limitClause}
+    ),
+    event_bounds AS (
+      SELECT e.run_id,
+             COUNT(*) AS eventCount,
+             MIN(e.ts) AS firstEventTs,
+             MAX(e.ts) AS lastEventTs
+        FROM events e
+        JOIN selected s ON s.run_id = e.run_id
+       GROUP BY e.run_id
+    ),
+    latest_title_seq AS (
+      SELECT e.run_id, MAX(e.seq) AS seq
+        FROM events e
+        JOIN selected s ON s.run_id = e.run_id
+       WHERE e.type = 'run.title_generated'
+       GROUP BY e.run_id
+    )
+    SELECT s.run_id AS runId,
+           s.workflow_sha AS workflowSha,
+           COALESCE(s.workflow_name, w.name) AS workflowName,
+           s.status AS status,
+           s.routing AS routing,
+           s.title AS title,
+           json_extract(title_event.payload, '$.title') AS eventTitle,
+           parent.title AS parentTitle,
+           s.cwd AS cwd,
+           s.parent_run_id AS parentRunId,
+           s.parent_node_id AS parentNodeId,
+           s.parallel_index AS parallelIndex,
+           s.subgraph_root_node_id AS branchNodeId,
+           s.enqueued_at AS enqueuedAt,
+           eb.firstEventTs AS firstEventTs,
+           eb.lastEventTs AS lastEventTs,
+           COALESCE(eb.eventCount, 0) AS eventCount,
+           CAST(COALESCE(json_extract(s.metrics, '$.totalCostUsd'), 0) AS REAL) AS totalCostUsd,
+           CAST(COALESCE(json_extract(s.metrics, '$.totalInputTokens'), 0) AS INTEGER) AS totalInputTokens,
+           CAST(COALESCE(json_extract(s.metrics, '$.totalOutputTokens'), 0) AS INTEGER) AS totalOutputTokens,
+           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheReadTokens'), 0) AS INTEGER) AS totalCacheReadTokens,
+           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens
+      FROM selected s
+      LEFT JOIN workflows w ON w.sha = s.workflow_sha
+      LEFT JOIN run_state parent ON parent.run_id = s.parent_run_id
+      LEFT JOIN event_bounds eb ON eb.run_id = s.run_id
+      LEFT JOIN latest_title_seq lts ON lts.run_id = s.run_id
+      LEFT JOIN events title_event ON title_event.run_id = lts.run_id AND title_event.seq = lts.seq
+     ORDER BY ${order === "oldest" ? "s.enqueued_at ASC" : "s.updated_at DESC"}, s.run_id ASC
+  `;
+
+  return db.query<RunSummaryRow, (RunStatus | string | number)[]>(sql).all(...args);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -281,9 +401,34 @@ export function updateRunStateTitle(db: Database, runId: string, title: string, 
   db.query(UPDATE_RUN_STATE_TITLE_SQL).run(title, now, runId);
 }
 
+// Sub-run claim invariant (P1.1 of docs/proposals/parallel.md):
+//   a queued row is ONLY claimable when either
+//     - it's top-level (parent_run_id IS NULL), OR
+//     - its parent's status is 'running_children' (meaning the parent
+//       has committed fact.fanout_started and is awaiting its children).
+//
+// Without this filter, the executor would race: children are enqueued
+// in N separate transactions BEFORE the parent commits fact.fanout_started,
+// so a concurrent tick can claim a child while the parent is still
+// 'running' (no `parallel.<node>.sub_run_ids` on routing yet). The
+// child would then dispatch, complete, and try to wake the parent
+// out of a state it never entered.
+//
+// The EXISTS subquery hits the run_state(run_id) primary key — O(1)
+// per queued row; idx_run_state_parent makes the outer filter cheap.
+// Parent-status check uses `IN` so a future status (e.g. paused
+// running_children) only needs a literal added here.
 const SELECT_NEXT_QUEUED_RUN_SQL = `
   SELECT run_id, version FROM run_state
    WHERE status = 'queued'
+     AND (
+       parent_run_id IS NULL
+       OR EXISTS (
+         SELECT 1 FROM run_state p
+          WHERE p.run_id = run_state.parent_run_id
+            AND p.status = 'running_children'
+       )
+     )
    ORDER BY priority DESC, ready_at ASC, run_id ASC
    LIMIT 1
 `;

@@ -7,7 +7,7 @@
 import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@swarm/store";
 import { Hono } from "hono";
 import type { WorkflowReader } from "../ports.ts";
-import { listRuns, runStateToDetail, runStateToSummary } from "./runs-adapter.ts";
+import { runStateToDetail, runSummaryRowToSummary } from "./runs-adapter.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "./steps.ts";
 
 export interface RunsRoutesOpts {
@@ -20,18 +20,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   const app = new Hono();
   const { store } = opts;
 
-  async function workflowName(sha: string): Promise<string | undefined> {
-    const row = store.getWorkflow(sha);
-    if (row != null) return row.name;
-    if (opts.workflowReader != null) {
-      const list = await opts.workflowReader.list();
-      const match = list.find((w) => w.sha === sha.slice(0, 7) || w.sha === sha);
-      return match?.name;
-    }
-    return undefined;
-  }
-
-  app.get("/runs", async (c) => {
+  app.get("/runs", (c) => {
     // Query params (all optional, all enforced server-side):
     //   ?status=a,b,c — narrow to specific lifecycle statuses.
     //   ?cwd=<path>   — narrow to a single project root (exact match
@@ -48,27 +37,11 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     const cwdParam = c.req.query("cwd");
     const order: "newest" | "oldest" = c.req.query("order") === "oldest" ? "oldest" : "newest";
     const limit = parseLimit(c.req.query("limit"));
-    const opts: Parameters<typeof listRuns>[1] = { order };
-    if (statuses !== undefined) opts.statuses = statuses;
-    if (cwdParam !== undefined && cwdParam.length > 0) opts.cwd = cwdParam;
-    if (limit !== undefined) opts.limit = limit;
-    const ids = listRuns(store, opts);
-    const summaries = [];
-    for (const runId of ids) {
-      const state = store.getState(runId);
-      if (state == null) continue;
-      // Hide sub-runs from the top-level list (P5 of
-      // docs/proposals/parallel.md). Operators see fan-outs as one
-      // logical run; sub-runs surface as nested branches on the
-      // parent's detail page. Without this filter every sub-run
-      // shows up as a sibling row in the Running tab.
-      if (state.parentRunId != null) continue;
-      const events = store.getEvents(runId, { limit: 5000 });
-      // Conversation runs carry no workflow_sha; skip the lookup.
-      const name = state.workflowSha != null ? await workflowName(state.workflowSha) : undefined;
-      summaries.push(runStateToSummary(state, events, name));
-    }
-    return c.json(summaries);
+    const queryOpts: Parameters<typeof store.listRunSummaryRows>[0] = { order, topLevelOnly: true };
+    if (statuses !== undefined) queryOpts.statuses = statuses;
+    if (cwdParam !== undefined && cwdParam.length > 0) queryOpts.cwd = cwdParam;
+    if (limit !== undefined) queryOpts.limit = limit;
+    return c.json(store.listRunSummaryRows(queryOpts).map(runSummaryRowToSummary));
   });
 
   app.get("/runs/:id", async (c) => {
@@ -98,18 +71,9 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // summary is built from its own state + event tail. We also look
     // up the parent's title so sub-runs inherit it (P5 — operator
     // surface treats fan-outs as one logical run).
-    const parentState = store.getState(parentRunId);
-    const parentTitle = parentState?.title && parentState.title.length > 0 ? parentState.title : undefined;
-    const childRunIds = store.listRunIds({ parentRunId });
-    const children = childRunIds
-      .map((childId) => {
-        const childState = store.getState(childId);
-        if (childState == null) return null;
-        const childEvents = store.getEvents(childId);
-        const childWf = childState.workflowSha != null ? store.getWorkflow(childState.workflowSha) : null;
-        return runStateToSummary(childState, childEvents, childWf?.name, parentTitle);
-      })
-      .filter((s): s is NonNullable<typeof s> => s != null)
+    const children = store
+      .listRunSummaryRows({ parentRunId })
+      .map(runSummaryRowToSummary)
       .sort((a, b) => (a.parallelIndex ?? 0) - (b.parallelIndex ?? 0));
     return c.json({ children });
   });
@@ -133,7 +97,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     // when parallel sub-runs are involved. Default (no param) is the
     // simple per-run query for backward compat and lightweight tools.
     if (c.req.query("include") === "descendants") {
-      return c.json(store.getEventsWithDescendants(runId));
+      return c.json(store.getEventsFeedWithDescendants(runId));
     }
     return c.json(store.getEvents(runId));
   });

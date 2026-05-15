@@ -537,6 +537,64 @@ describe("parallel sub-runs — cross-run substitution (P5)", () => {
   });
 });
 
+describe("parallel sub-runs — claim race regression", () => {
+  test("queued sub-runs aren't claimable until parent is in running_children", async () => {
+    // Race the executor exposed: each child sub-run is enqueued in
+    // its OWN transaction before the parent commits fact.fanout_started.
+    // A concurrent claim during that window would dispatch a child
+    // while parent.routing.parallel.<id>.sub_run_ids is still unset,
+    // breaking the collect-phase contract.
+    //
+    // SQL fix: SELECT_NEXT_QUEUED_RUN_SQL filters out sub-runs whose
+    // parent isn't in running_children. We simulate the window by
+    // hand: insert a child row directly with parent still in
+    // 'running' status, then verify the picker skips it.
+    const h = freshHarness();
+    const sha = "wf_claim_race";
+    h.store.saveWorkflow(sha, "claim-race", "digraph G {}");
+
+    // Manually craft the race window. Parent's status is 'running'
+    // (not 'running_children' yet); child is queued under it.
+    h.store.enqueueRun({ runId: "p_race", workflowSha: sha });
+    // Flip parent to running by hand — bypasses needing to dispatch
+    // the parent first.
+    const db = (h.store as unknown as { db: { query: (sql: string) => { run: (...a: unknown[]) => void } } }).db;
+    db.query("UPDATE run_state SET status = 'running' WHERE run_id = ?").run("p_race");
+    // Enqueue a child with parent_run_id pointing at the still-running
+    // parent. Picker MUST refuse this until parent becomes running_children.
+    h.store.enqueueRun({
+      runId: "p_race__fanout__i0__b0",
+      workflowSha: sha,
+      parentRunId: "p_race",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_a",
+      subgraphTerminalNodeId: "fan_in",
+    });
+
+    // claimNextRun must return null — parent isn't ready and the
+    // child is gated behind it.
+    expect(h.store.claimNextRun(8)).toBeNull();
+
+    // Transition parent to running_children. Now the child is
+    // claimable.
+    db.query("UPDATE run_state SET status = 'running_children' WHERE run_id = ?").run("p_race");
+    const claimed = h.store.claimNextRun(8);
+    expect(claimed?.runId).toBe("p_race__fanout__i0__b0");
+    h.store.close();
+  });
+
+  test("top-level runs claim regardless (no parent_run_id)", async () => {
+    const h = freshHarness();
+    const sha = "wf_top_level";
+    h.store.saveWorkflow(sha, "top-level", "digraph G {}");
+    h.store.enqueueRun({ runId: "p_top", workflowSha: sha });
+    const claimed = h.store.claimNextRun(8);
+    expect(claimed?.runId).toBe("p_top");
+    h.store.close();
+  });
+});
+
 describe("parallel sub-runs — terminal vs subgraph fence pause", () => {
   test("subgraph fence terminal does pause on budget breach (sub-run path)", async () => {
     // The legacy "alreadyTerminal skip" silently let sub-runs complete

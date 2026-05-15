@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, StoredEvent } from "@swarm/store";
+import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@swarm/store";
 import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
@@ -86,6 +86,49 @@ export function runStateToSummary(
   if (state.parentNodeId != null) summary.parentNodeId = state.parentNodeId;
   if (state.parallelIndex != null) summary.parallelIndex = state.parallelIndex;
   if (state.subgraphRootNodeId != null) summary.branchNodeId = state.subgraphRootNodeId;
+  return summary;
+}
+
+/** Build a RunSummary from the SQL-backed list projection. This mirrors
+ * `runStateToSummary` without requiring the route to fetch and parse the
+ * full event log for every row. */
+export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
+  const startedAtMs = row.firstEventTs ?? row.enqueuedAt;
+  const durationMs =
+    row.firstEventTs != null && row.lastEventTs != null && row.lastEventTs >= row.firstEventTs
+      ? row.lastEventTs - row.firstEventTs
+      : undefined;
+  const routing = JSON.parse(row.routing) as Record<string, unknown>;
+  const summary: RunSummary = {
+    runId: row.runId,
+    startedAt: new Date(startedAtMs).toISOString(),
+    status: mapStatus(row.status),
+    runStatus: row.status,
+    eventCount: row.eventCount,
+    costUsd: row.totalCostUsd,
+    inputTokens: row.totalInputTokens,
+    outputTokens: row.totalOutputTokens,
+    cacheReadTokens: row.totalCacheReadTokens,
+    cacheWriteTokens: row.totalCacheWriteTokens,
+  };
+  if (row.workflowSha) summary.workflow = row.workflowSha;
+  if (row.workflowName != null) summary.workflowName = row.workflowName;
+  if (durationMs !== undefined) summary.durationMs = durationMs;
+
+  const ownTitle = row.title != null && row.title.length > 0 ? row.title : undefined;
+  const inheritedTitle =
+    row.parentRunId != null && row.parentTitle != null && row.parentTitle.length > 0 ? row.parentTitle : undefined;
+  const eventTitle = row.eventTitle != null && row.eventTitle.length > 0 ? row.eventTitle : undefined;
+  const title = ownTitle ?? inheritedTitle ?? eventTitle;
+  if (title !== undefined) summary.title = title;
+
+  const input = pickInput(routing);
+  if (input !== undefined) summary.input = input;
+  if (row.cwd != null) summary.cwd = row.cwd;
+  if (row.parentRunId != null) summary.parentRunId = row.parentRunId;
+  if (row.parentNodeId != null) summary.parentNodeId = row.parentNodeId;
+  if (row.parallelIndex != null) summary.parallelIndex = row.parallelIndex;
+  if (row.branchNodeId != null) summary.branchNodeId = row.branchNodeId;
   return summary;
 }
 

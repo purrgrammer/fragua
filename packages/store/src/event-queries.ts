@@ -178,7 +178,18 @@ const SELECT_EVENTS_WITH_DESCENDANTS_SQL = `
  *
  *  D2 of `docs/proposals/parallel.md` — the unified view a parent's
  *  detail page needs so RunConversation, branch-meta, GraphView, and
- *  CostInspector see sub-run activity as branches of the parent. */
+ *  CostInspector see sub-run activity as branches of the parent.
+ *
+ *  **UI feed, NOT causal replay.** Cross-run ordering is approximate:
+ *  `appendObservabilityEvents` writes a whole batch under one
+ *  timestamp, so events written together get one `ts` and tie-break
+ *  on `(run_id, seq)`. That's enough for an operator-facing scroll
+ *  view but doesn't recover the precise interleaving any agent
+ *  observed. Per-run replay must keep using `getEvents(runId)` where
+ *  the per-run `seq` is a strict total order; treating this merged
+ *  stream as authoritative causal history is wrong. If a future
+ *  consumer needs causal cross-run ordering, add a global monotonic
+ *  event id and key the order on that. */
 export function selectEventsWithDescendants(
   db: Database,
   parentRunId: string,

@@ -41,8 +41,10 @@ import type {
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
+  ListRunSummaryRowsOpts,
   ParentCostSnapshot,
   RunCostTotalsRow,
+  RunSummaryRow,
   StepAggregateRow,
   WakeCandidateRow,
 } from "./run-state-queries.ts";
@@ -91,8 +93,10 @@ export type {
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
+  ListRunSummaryRowsOpts,
   ParentCostSnapshot,
   RunCostTotalsRow,
+  RunSummaryRow,
   StepAggregateRow,
   WakeCandidateRow,
 } from "./run-state-queries.ts";
@@ -785,6 +789,10 @@ export interface IEventReader {
    * into SQL. Powers the web `/runs` list and the analytics drilldown
    * re-hydration loop. */
   listRunIds(opts?: ListRunIdsOpts): string[];
+  /** SQL-backed `RunSummary` projection rows. Used by list surfaces so
+   * they do not hydrate thousands of events per run just to derive
+   * count, duration, title, and metrics. */
+  listRunSummaryRows(opts?: ListRunSummaryRowsOpts): RunSummaryRow[];
   /** Counts used by the `/health` daemon enrichment. Cheap (indexed). */
   runStateCounts(): { running: number; queued: number };
 
@@ -800,16 +808,21 @@ export interface IEventReader {
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
-   * Merged event stream for a parent run AND every descendant sub-run,
-   * in `(ts, run_id, seq)` order. Each sub-run row carries the branch
+   * **UI feed** of parent + descendant sub-run events, in approximate
+   * `(ts, run_id, seq)` order. Each sub-run row carries the branch
    * linkage (`parentNodeIdForBranch`, `parallelIndexForBranch`,
    * `branchNodeId`) so a UI that previously read inline-branch
    * `fact.node_started`/`fact.node_completed` events from the parent's
    * log stays coherent when those events live on sub-run logs. D2 of
    * `docs/proposals/parallel.md`. Top-level runs without descendants
    * return their own events with `originRunId = runId`.
+   *
+   * NOT causal replay — cross-run timestamps share `ts` for events
+   * appended in one batch and tie-break on `(run_id, seq)`, so the
+   * merged order is approximate. Use `getEvents(runId)` for per-run
+   * replay (strict total order via per-run `seq`).
    */
-  getEventsWithDescendants(runId: string, opts?: { sinceTs?: number; limit?: number }): MergedStoredEvent[];
+  getEventsFeedWithDescendants(runId: string, opts?: { sinceTs?: number; limit?: number }): MergedStoredEvent[];
   /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`

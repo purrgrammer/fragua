@@ -195,6 +195,66 @@ describe("getStepAggregates", () => {
   });
 });
 
+describe("listRunSummaryRows", () => {
+  test("projects summary fields without hydrating event logs", async () => {
+    const store = freshStore();
+    const runId = await seedRun(store);
+    store.appendObservabilityEvents(runId, [{ type: "run.title_generated", payload: { title: "Generated title" } }]);
+
+    const [row] = store.listRunSummaryRows({ topLevelOnly: true });
+    expect(row!.runId).toBe(runId);
+    expect(row!.workflowName).toBe("test");
+    expect(row!.eventCount).toBe(2);
+    expect(row!.firstEventTs).toBeLessThan(row!.lastEventTs!);
+    expect(row!.eventTitle).toBe("Generated title");
+    expect(row!.totalCostUsd).toBe(0);
+    store.close();
+  });
+
+  test("top-level summaries exclude child runs before applying limit", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "parent", workflowSha: sha });
+    store.enqueueRun({
+      runId: "child",
+      workflowSha: sha,
+      parentRunId: "parent",
+      parentNodeId: "fanout",
+      parallelIndex: 0,
+      subgraphRootNodeId: "branch_a",
+      subgraphTerminalNodeId: "join",
+    });
+
+    expect(store.listRunSummaryRows({ topLevelOnly: true, limit: 10 }).map((r) => r.runId)).toEqual(["parent"]);
+    const [child] = store.listRunSummaryRows({ parentRunId: "parent" });
+    expect(child!.runId).toBe("child");
+    expect(child!.parentTitle).toBeNull();
+    expect(child!.branchNodeId).toBe("branch_a");
+    store.close();
+  });
+
+  test("child summaries include parent title fallback", async () => {
+    const store = freshStore();
+    const sha = await seedWorkflow(store);
+    store.enqueueRun({ runId: "parent", workflowSha: sha });
+    store.setRunTitle("parent", "Parent title");
+    store.enqueueRun({
+      runId: "child",
+      workflowSha: sha,
+      parentRunId: "parent",
+      parentNodeId: "fanout",
+      parallelIndex: 1,
+      subgraphRootNodeId: "branch_b",
+      subgraphTerminalNodeId: "join",
+    });
+
+    const [child] = store.listRunSummaryRows({ parentRunId: "parent" });
+    expect(child!.parentTitle).toBe("Parent title");
+    expect(child!.parallelIndex).toBe(1);
+    store.close();
+  });
+});
+
 describe("getGlobalEventsForward", () => {
   // Use FEED_EVENT_KINDS-shaped allow-list so the query engine sees the
   // realistic set. `intent.run_enqueued` is the most convenient seed —
