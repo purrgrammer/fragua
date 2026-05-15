@@ -353,6 +353,11 @@ export interface StepSnapshot {
     cache_write_tokens?: number;
     cost_usd: number;
   };
+  /** Set client-side by CostInspector.mergeStepsByNode when this row
+   * collapses multiple `llm.start` windows for the same node
+   * (multi-turn codergen, pause+resume cycles). Surfaces as a small
+   * "× N turns" badge so the operator knows the row is a sum. */
+  turns?: number;
 }
 
 /** Thrown for any non-2xx HTTP response. Callers can branch on `.status`

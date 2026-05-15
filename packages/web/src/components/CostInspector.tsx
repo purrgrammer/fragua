@@ -102,6 +102,23 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
     );
   }
 
+  // Merge multi-turn / pause+resume duplicates: each `llm.start`
+  // becomes its own StepSnapshot, so a codergen handler that takes
+  // multiple turns produces N rows for one nodeId; raise+resume
+  // produces another N. Collapse them into ONE row per
+  // (originRunId, nodeId, parentNodeId, parallelIndex, parentStartSeq,
+  // subagentId) — summed cost/tokens, earliest startedAt, latest
+  // durationMs end, with `turns` carrying the count. The underlying
+  // per-call detail is still available via /steps for any future
+  // drill-in surface.
+  //
+  // Sub-runs in particular skip `fact.node_started` on dispatch
+  // (the parent's fanout opens the branch's "node" implicitly), so
+  // the server-side pause/resume fold in eventsToSteps doesn't
+  // trigger. Doing the merge here makes the UI robust regardless of
+  // whether the server folds.
+  const mergedSteps = mergeStepsByNode(steps);
+
   // Partition into top-level vs branch rows. Branch rows are indented
   // under their parent and the parent renders as a non-leaf summary
   // (cost / tokens aggregated across itself + every child).
@@ -128,7 +145,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   const groupKey = (parentNodeId: string, parentStartSeq: number | undefined): string =>
     `${parentNodeId}|${parentStartSeq ?? PARENT_NODE_WILDCARD}`;
   const topLevelParentNodeIds = new Set<string>();
-  for (const s of steps) {
+  for (const s of mergedSteps) {
     const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
     if (!isBranch) topLevelParentNodeIds.add(s.nodeId);
   }
@@ -136,7 +153,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   const topLevel: StepSnapshot[] = [];
   const synthesisedParents = new Map<string, StepSnapshot>();
   let synthCount = 0;
-  for (const s of steps) {
+  for (const s of mergedSteps) {
     const isBranch = typeof s.parentNodeId === "string" && s.parentNodeId.length > 0;
     if (isBranch) {
       const parentNodeId = s.parentNodeId as string;
@@ -191,6 +208,92 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
       })}
     </div>
   );
+}
+
+/** Merge CONSECUTIVE steps that share the same logical "node window":
+ *  same originRunId, same nodeId, same parent linkage. Each `llm.start`
+ *  in the server's stream produces one StepSnapshot; codergen
+ *  multi-turn and pause-resume both yield several within the same
+ *  node window. Operators care about the node's TOTAL spend, not the
+ *  per-turn rows, so we sum here. `turns` carries the merge count for
+ *  the UI to surface as "lens · 7 turns".
+ *
+ *  Why consecutive-only: goal-gate retarget runs the SAME node a
+ *  second time after sub-agents fire (or other intervening steps
+ *  push between). Those legitimately distinct invocations are
+ *  non-consecutive in the timeline; merging them would collapse a
+ *  retry loop's spend into one misleading row and would break the
+ *  per-invocation sub-agent grouping the CostInspector relies on.
+ *  Pause/resume + multi-turn produce contiguous llm.starts in the
+ *  same node window, so the consecutive bound captures them while
+ *  keeping goal-gate retargets distinct. */
+export function mergeStepsByNode(steps: readonly StepSnapshot[]): StepSnapshot[] {
+  const groupKey = (s: StepSnapshot): string =>
+    [
+      s.originRunId ?? "",
+      s.nodeId,
+      s.parentNodeId ?? "",
+      s.parallelIndex ?? -1,
+      s.parentStartSeq ?? -1,
+      s.subagentId ?? "",
+    ].join("|");
+  const out: StepSnapshot[] = [];
+  let runStart = 0;
+  while (runStart < steps.length) {
+    const head = steps[runStart]!;
+    const headKey = groupKey(head);
+    let runEnd = runStart + 1;
+    while (runEnd < steps.length && groupKey(steps[runEnd]!) === headKey) runEnd += 1;
+    if (runEnd - runStart === 1) {
+      out.push(head);
+    } else {
+      out.push(collapseTurns(steps.slice(runStart, runEnd)));
+    }
+    runStart = runEnd;
+  }
+  return out;
+}
+
+function collapseTurns(rows: readonly StepSnapshot[]): StepSnapshot {
+  const first = rows[0]!;
+  // Pick the earliest startedAt + earliest startSeq as the row's
+  // identity; sum cost/tokens; use the latest available durationMs
+  // (some turns will have it set, the in-flight tail may not).
+  let costUsd = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let billedTokens = 0;
+  let latestEnd: number | undefined;
+  for (const r of rows) {
+    costUsd += r.cost?.cost_usd ?? 0;
+    inputTokens += r.cost?.input_tokens ?? 0;
+    outputTokens += r.cost?.output_tokens ?? 0;
+    cacheReadTokens += r.cost?.cache_read_tokens ?? 0;
+    cacheWriteTokens += r.cost?.cache_write_tokens ?? 0;
+    billedTokens += r.cost?.billed_tokens ?? 0;
+    if (r.durationMs != null) {
+      const startMs = Date.parse(r.startedAt);
+      const end = startMs + r.durationMs;
+      if (latestEnd == null || end > latestEnd) latestEnd = end;
+    }
+  }
+  const startMs = Date.parse(first.startedAt);
+  const merged: StepSnapshot = { ...first };
+  if (latestEnd != null && Number.isFinite(latestEnd) && latestEnd > startMs) {
+    merged.durationMs = latestEnd - startMs;
+  }
+  merged.cost = {
+    cost_usd: costUsd,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_write_tokens: cacheWriteTokens,
+    billed_tokens: billedTokens,
+  };
+  merged.turns = rows.length;
+  return merged;
 }
 
 function stepIdentityKey(step: StepSnapshot, fallbackRunId: string): string {
@@ -413,6 +516,11 @@ function StepCostRow({
         {step.iteration && (
           <span className={`font-mono ${metricChipClass}`}>
             iter {step.iteration.n}/{step.iteration.max}
+          </span>
+        )}
+        {step.turns != null && step.turns > 1 && (
+          <span className={`font-mono ${metricChipClass}`} title="LLM calls collapsed into this row (multi-turn or pause+resume)">
+            × {step.turns} turns
           </span>
         )}
       </span>
