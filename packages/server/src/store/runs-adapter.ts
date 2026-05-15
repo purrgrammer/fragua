@@ -33,11 +33,19 @@ export function mapStatus(status: RunStatus): UiStatus {
   }
 }
 
-/** Build a RunSummary from a run's projection + its event tail. */
+/** Build a RunSummary from a run's projection + its event tail.
+ *
+ * Sub-runs (state.parentRunId set) inherit the parent's title — the
+ * operator surface treats a fan-out as one logical run and renders sub-
+ * runs as nested branches. The auto-titler is skipped for sub-runs
+ * (executor.ts), so without this lookup their title would always be
+ * empty. `parentTitle` is the resolved string (caller looked up the
+ * parent's projection) or undefined when the parent isn't available. */
 export function runStateToSummary(
   state: RunState,
   events: StoredEvent[],
   workflowName: string | undefined,
+  parentTitle?: string,
 ): RunSummary {
   const first = events[0];
   const last = events[events.length - 1];
@@ -60,7 +68,16 @@ export function runStateToSummary(
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
-  const title = state.title && state.title.length > 0 ? state.title : pickTitle(events);
+  // Title resolution order: own title → parent's title (sub-runs inherit
+  // the operator-facing label) → event-derived title. Sub-runs skip
+  // the auto-titler so own title is always null; parentTitle backfills
+  // it when the caller looked up the parent. Top-level runs ignore
+  // parentTitle (parentRunId is null).
+  const ownTitle = state.title && state.title.length > 0 ? state.title : undefined;
+  const inheritedTitle = state.parentRunId != null && parentTitle != null && parentTitle.length > 0
+    ? parentTitle
+    : undefined;
+  const title = ownTitle ?? inheritedTitle ?? pickTitle(events);
   if (title !== undefined) summary.title = title;
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;
@@ -69,6 +86,7 @@ export function runStateToSummary(
   if (state.parentRunId != null) summary.parentRunId = state.parentRunId;
   if (state.parentNodeId != null) summary.parentNodeId = state.parentNodeId;
   if (state.parallelIndex != null) summary.parallelIndex = state.parallelIndex;
+  if (state.subgraphRootNodeId != null) summary.branchNodeId = state.subgraphRootNodeId;
   return summary;
 }
 

@@ -624,6 +624,14 @@ export type FactEvent =
         finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
         costUsd: number;
         billedTokens: number;
+        /** Per-bucket token split — same shape as `fact.node_completed`.
+         * Forwarded so the parent's metrics aggregate full input /
+         * output / cache splits across sub-runs, not just billed total.
+         * Optional for back-compat with pre-split sub-runs. */
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
         /** Optional reference to the sub-run's primary output artifact —
          * the parent's `$<branchId>.output` substitution resolves
          * through this on collect-phase re-dispatch. */

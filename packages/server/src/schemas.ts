@@ -63,10 +63,13 @@ export const RunSummary = Type.Object({
   /** Sub-run linkage when this row is a parallel sub-run (P5 of
    * `docs/proposals/parallel.md`). Absent on top-level runs. The web UI
    * groups sub-runs under their parent's run-detail page and the cost
-   * panel renders each as its own line. */
+   * panel renders each as its own line. `branchNodeId` is the branch's
+   * root node id (e.g. `lens_correctness`) — the operator-facing label
+   * for the branch, distinct from the synthetic sub-run id. */
   parentRunId: Type.Optional(Type.String()),
   parentNodeId: Type.Optional(Type.String()),
   parallelIndex: Type.Optional(Type.Integer({ minimum: 0 })),
+  branchNodeId: Type.Optional(Type.String()),
 });
 export type RunSummary = Static<typeof RunSummary>;
 

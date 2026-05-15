@@ -213,10 +213,17 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       // Cost rollup: fold the sub-run's billed cost/tokens into the
       // parent's metrics so budget gates see cumulative spend (parent +
       // every completed sub-run) on the next gate check. In-flight
-      // sub-runs aggregate live via SQL at gate-check time (D3).
+      // sub-runs aggregate live via SQL at gate-check time (D3). Token
+      // splits roll up too so the parent's UI shows correct
+      // input/output/cache totals (defaults to 0 for back-compat with
+      // pre-split sub-runs).
       const p = fact.payload;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.billedTokens += p.billedTokens;
+      next.metrics.totalInputTokens += p.inputTokens ?? 0;
+      next.metrics.totalOutputTokens += p.outputTokens ?? 0;
+      next.metrics.totalCacheReadTokens += p.cacheReadTokens ?? 0;
+      next.metrics.totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
       return next;
     }
     case "fact.run_requeued_after_crash": {

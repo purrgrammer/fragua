@@ -5,12 +5,13 @@
 // level runs of workflows without `parallel`).
 
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 import type { RunSummary } from "../lib/api.ts";
 import { queries } from "../lib/queries.ts";
 import { RunStatusBadge } from "./RunStatusBadge.tsx";
 
 interface SubRunListProps {
+  /** Parent run id. The current run-detail page's id; sub-runs are
+   *  fetched as `parent_run_id = parentRunId` children. */
   parentRunId: string;
 }
 
@@ -47,14 +48,18 @@ export function SubRunList({ parentRunId }: SubRunListProps): JSX.Element | null
               #{child.parallelIndex ?? "?"}
             </span>
             <RunStatusBadge status={mapStatus(child)} runStatus={child.runStatus} />
-            <Link
-              to={`/runs/${child.runId}`}
-              className="flex-1 truncate font-mono text-xs text-sw-text hover:underline"
-              data-testid="sub-run-link"
+            {/* Sub-runs are an executor implementation detail — operators
+                shouldn't navigate into them. Clicking a branch row stays on
+                the parent's detail page (no `to=`) and just renders the
+                branch identity. Future: scroll to / highlight the relevant
+                section in the parent's conversation when the descendants
+                merge lands. */}
+            <span
+              className="flex-1 truncate font-mono text-xs text-sw-muted"
+              data-testid="sub-run-branch-label"
             >
-              {child.parentNodeId ?? "branch"}
-              <span className="ml-2 text-sw-muted">{child.runId}</span>
-            </Link>
+              {child.branchNodeId ?? child.parentNodeId ?? "branch"}
+            </span>
             <span className="text-xs tabular-nums text-sw-muted shrink-0">{formatCost(child.costUsd)}</span>
           </li>
         ))}

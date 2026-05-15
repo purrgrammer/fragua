@@ -350,17 +350,34 @@ function wakeRunningChildren(store: IEventStore): string[] {
         billedTokens: child.metrics.billedTokens,
       };
       outcomes.push(outcome);
-      facts.push({
-        type: "fact.subrun_completed",
-        payload: {
-          subRunId: childId,
-          parentNodeId,
-          parallelIndex: i,
-          finalStatus: final,
-          costUsd: child.metrics.totalCostUsd,
-          billedTokens: child.metrics.billedTokens,
-        },
-      });
+      // Forward the child's full token split into the parent's
+      // metrics so the parent's UI shows correct input/output/cache
+      // totals after rollup. Omit zero fields to keep the 4 KB
+      // payload bound comfortable on wide fan-outs.
+      const payload: {
+        subRunId: string;
+        parentNodeId: string;
+        parallelIndex: number;
+        finalStatus: "completed" | "halted" | "cancelled" | "quarantined";
+        costUsd: number;
+        billedTokens: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+      } = {
+        subRunId: childId,
+        parentNodeId,
+        parallelIndex: i,
+        finalStatus: final,
+        costUsd: child.metrics.totalCostUsd,
+        billedTokens: child.metrics.billedTokens,
+      };
+      if (child.metrics.totalInputTokens > 0) payload.inputTokens = child.metrics.totalInputTokens;
+      if (child.metrics.totalOutputTokens > 0) payload.outputTokens = child.metrics.totalOutputTokens;
+      if (child.metrics.totalCacheReadTokens > 0) payload.cacheReadTokens = child.metrics.totalCacheReadTokens;
+      if (child.metrics.totalCacheWriteTokens > 0) payload.cacheWriteTokens = child.metrics.totalCacheWriteTokens;
+      facts.push({ type: "fact.subrun_completed", payload });
     }
     if (!allTerminal) continue;
 

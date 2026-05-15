@@ -77,8 +77,17 @@ export function startSupervisor(opts: SupervisorOpts): {
         const newest = unapplied[unapplied.length - 1]!.seq;
         if (newest <= prev) continue;
         const fresh = unapplied.filter((e) => e.seq > prev);
-        const hasNonSteer = fresh.some((e) => e.type !== "intent.steering_requested");
+        // `intent.run_enqueued` is the synthetic queue marker that
+        // caused the run to exist — never an operator action. Filter
+        // it out so the supervisor doesn't mistake it for a mid-flight
+        // cancel/pause/etc. when lastAppliedSeq hasn't advanced past
+        // it yet (e.g., sub-runs whose first dispatched node is a
+        // long-running codergen, no fast noop start node to advance
+        // applied seq before the 50ms tick).
+        const operatorIntents = fresh.filter((e) => e.type !== "intent.run_enqueued");
+        const hasNonSteer = operatorIntents.some((e) => e.type !== "intent.steering_requested");
         lastIntentSeq.set(runId, newest);
+        if (operatorIntents.length === 0) continue;
         if (hasNonSteer) {
           // Skip steer forwarding — the abort kills the in-flight call
           // before pi-agent-core could drain the queue, and the standard

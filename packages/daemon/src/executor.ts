@@ -443,7 +443,10 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // idempotent but we avoid the extra lookup.
     if (opts.provisioner && runEnv === undefined) {
       try {
-        runEnv = await opts.provisioner.ensure(runId, state.cwd != null ? { cwd: state.cwd } : {});
+        const provisionOpts: { cwd?: string; parentRunId?: string } = {};
+        if (state.cwd != null) provisionOpts.cwd = state.cwd;
+        if (state.parentRunId != null) provisionOpts.parentRunId = state.parentRunId;
+        runEnv = await opts.provisioner.ensure(runId, provisionOpts);
         opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
@@ -495,20 +498,37 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (typeof startGraph?.attrs.label === "string" && startGraph.attrs.label !== "") {
         startRoutingPatch["graph.label"] = startGraph.attrs.label;
       }
-      const ok = await tryAppendFact(
-        opts.store,
-        runId,
-        state.version,
-        startFacts,
-        Object.keys(startRoutingPatch).length > 0 ? { routingPatch: startRoutingPatch } : undefined,
-      );
+      // Advance lastAppliedSeq on run_started so the supervisor doesn't
+      // mistake the synthetic `intent.run_enqueued` (the queue marker
+      // that caused this run to exist) for a fresh operator intent
+      // mid-handler. Top-level runs survived this by accident — their
+      // `start` node is a fast noop whose fact.node_completed advances
+      // applied seq before supervisor's first 50ms tick. Sub-runs start
+      // directly at the heavy branch root (no noop buffer), so the
+      // supervisor's first tick lands mid-LLM-call and trips the
+      // controller (cause: "aborted", tokens=0), causing a spurious
+      // re-dispatch. Fold's `applied` already includes the
+      // run_enqueued seq; we just need to actually persist it.
+      const startAdvanceTo =
+        decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
+      const startAppendOpts: { routingPatch?: Record<string, unknown>; advanceAppliedTo?: number } = {};
+      if (Object.keys(startRoutingPatch).length > 0) startAppendOpts.routingPatch = startRoutingPatch;
+      if (startAdvanceTo !== undefined) startAppendOpts.advanceAppliedTo = startAdvanceTo;
+      const ok = await tryAppendFact(opts.store, runId, state.version, startFacts, startAppendOpts);
       if (!ok) {
         const { halted } = await onOccConflict("fact.run_started", start, 0, state.version);
         if (halted) return { kind: "terminal" };
         return { kind: "continue" };
       }
       onOccResolved(start, 0);
-      if (opts.autoTitler) {
+      // Skip the auto-titler for sub-runs: they share the parent's
+      // identity (branchNodeId is the operator-facing label, not a
+      // summarised prose title), the title call is a wasted LLM round
+      // (~$0.005 × N branches per fan-out), and on cold starts the
+      // titler's call can race the parent's executor — visible in
+      // production as a `daemon.worktree_provisioned` event firing
+      // twice for the parent.
+      if (opts.autoTitler && state.parentRunId == null) {
         const input = routingString(state.routing, "input") ?? "";
         const goal = graphFor(workflowSha)?.attrs.goal;
         const req: TitleRequest = {
@@ -637,6 +657,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // turn can overshoot the cap by 5×+ before the post-handler
     // boundary check runs.
     let reactiveBudgetHaltDetail: string | undefined;
+    // Symmetric to the halt path above, but for `budget_policy="pause"`
+    // (the default). Before this landed, pause-policy breaches waited
+    // for the post-handler boundary — which the codergen agent loop
+    // routinely overshot by 10×+ in one dispatch (73 LLM calls, $3.29
+    // on a $0.30 cap on the original review.dot lens regression). The
+    // reactive gate now aborts the handler mid-flight and the abort
+    // arm below emits `fact.run_paused{reason:"budget"}` so the
+    // operator can raise the cap and resume. Bounds peak overshoot to
+    // one in-flight LLM message.
+    let reactiveBudgetPauseBreach:
+      | { scope: "run" | "node"; metric: "cost" | "tokens"; limit: number; actual: number }
+      | undefined;
     const accounting: core.LlmAccounting = {
       addUsage: ({ tokens, costUsd, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }) => {
         turnBilled += tokens;
@@ -730,11 +762,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
 
           // Reactive budget gate. Bounds peak overshoot to one
           // in-flight LLM message rather than the parent turn's full
-          // sub-agent fan-out. Only fires once per dispatch (the
-          // halt-pending flag short-circuits subsequent events).
-          // Pause-policy breaches still wait for the post-handler
-          // boundary so the operator-pause flow stays unchanged.
-          if (reactiveBudgetHaltDetail === undefined) {
+          // sub-agent fan-out. Fires once per dispatch — the halt /
+          // pause flags short-circuit subsequent events. Both stop AND
+          // pause policies abort mid-handler (pause was previously
+          // post-handler only, which the codergen agent loop routinely
+          // overshot by 10×+; the post-handler arm still exists as a
+          // belt-and-suspenders catch for handlers that don't emit
+          // `cost.recorded`).
+          if (reactiveBudgetHaltDetail === undefined && reactiveBudgetPauseBreach === undefined) {
             const completedNodeAttrs = graph?.nodes[currentNode]?.attrs;
             const priorNodeBucket = state.metrics.nodeCosts[currentNode] ?? { tokens: 0, costUsd: 0 };
             const priorRunFresh = state.metrics.totalInputTokens + state.metrics.totalOutputTokens;
@@ -759,6 +794,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
                 });
               }
               steerCtrl.abort(new Error("budget"));
+            } else if (reactive.pauseBreach !== undefined) {
+              reactiveBudgetPauseBreach = reactive.pauseBreach;
+              for (const ev of reactive.events) {
+                observability.push({
+                  type: ev.type,
+                  payload: { nodeId: currentNode, iteration, ...ev.payload },
+                });
+              }
+              steerCtrl.abort(new Error("budget_pause"));
             }
           }
         }
@@ -767,7 +811,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // soft timer can drain.
         if (observability.length >= OBSERVABILITY_FLUSH_SIZE_THRESHOLD) {
           flushObservability();
-          return { kind: "terminal" };
+          return;
         }
         // Soft ceiling — coalesce small bursts so we don't hammer the
         // writer lock with one txn per text delta.
@@ -885,6 +929,29 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         const haltPayload: { reason: "budget"; detail?: string } = { reason: "budget" };
         if (reactiveBudgetHaltDetail.length > 0) haltPayload.detail = reactiveBudgetHaltDetail;
         facts.push({ type: "fact.run_halted", payload: haltPayload });
+        await tryAppendFact(opts.store, runId, recorder.version(), facts);
+        return { kind: "terminal" };
+      }
+      // Reactive budget pause: same shape as the halt arm above but
+      // for `budget_policy="pause"` (the default). Emits
+      // `fact.run_paused{reason:"budget", scope, metric, limit, actual}`
+      // alongside the node_aborted in one atomic commit so the run
+      // releases its concurrency slot. The operator raises the cap via
+      // `intent.budget_adjusted` and resumes via `intent.resume`.
+      // consecutiveAborts is NOT bumped — like the timeout-retry path,
+      // this is system-initiated.
+      if (reactiveBudgetPauseBreach !== undefined) {
+        facts.push({
+          type: "fact.run_paused",
+          payload: {
+            reason: "budget",
+            nodeId: currentNode,
+            scope: reactiveBudgetPauseBreach.scope,
+            metric: reactiveBudgetPauseBreach.metric,
+            limit: reactiveBudgetPauseBreach.limit,
+            actual: reactiveBudgetPauseBreach.actual,
+          },
+        });
         await tryAppendFact(opts.store, runId, recorder.version(), facts);
         return { kind: "terminal" };
       }
@@ -1080,6 +1147,15 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // is never actually traversed and `edge.selected` would lie. We
     // hold the selection here, then emit it only if no retarget fired.
     let pendingEdgeSelection: EdgeSelection | undefined;
+    // True iff the subgraph fence (sub-run hitting its
+    // subgraph_terminal_node_id) rewrote the transition to `__end__`.
+    // Distinct from a workflow-declared terminal (Msquare done) which
+    // a top-level run reaches cleanly. The budget-pause arm uses this
+    // to decide whether a terminal-on-breach should pause (sub-run:
+    // the cap was actually blown, the "terminal" is synthetic) or
+    // complete cleanly (top-level: budget gate is a fence, declared
+    // exit doesn't need pausing).
+    let subgraphFenceTriggered = false;
 
     // Attach LLM accounting into the node_completed fact if the handler
     // didn't set these explicitly.
@@ -1152,6 +1228,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // and emit `fact.subrun_completed` + `fact.fanout_completed`.
       if (state.subgraphTerminalNodeId != null && result.nextNode === state.subgraphTerminalNodeId) {
         result.nextNode = "__end__";
+        subgraphFenceTriggered = true;
       }
     }
 
@@ -1512,18 +1589,42 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // + `intent.resume`. node_completed is preserved (metrics + the
     // nextNode routing fact).
     //
-    // EXCEPTION: when this turn's transition was terminal,
-    // result-to-facts has already emitted `fact.run_completed`
-    // (or `fact.run_halted` for fail outcomes). Adding
-    // `fact.run_paused` afterwards would clobber the terminal
-    // status in the reducer (paused wins because it's last) and
-    // leave `currentNode` pointed at a terminal sentinel — on
-    // resume, the dispatcher crashes trying to find a handler for
-    // `done` / `__end__`. Budget enforcement after a successful
-    // terminal transition is moot anyway: the run is finished.
+    // Two terminal-interaction shapes:
+    //   1. Workflow-declared terminal (Msquare done; top-level clean
+    //      exit). result-to-facts already emitted `fact.run_completed`.
+    //      Adding `fact.run_paused` would clobber the terminal status
+    //      and leave `currentNode` pointed at a terminal sentinel — on
+    //      resume the dispatcher would crash trying to find a handler
+    //      for `done`. Budget enforcement after a clean terminal
+    //      transition is moot: the run is finished. Skip the pause.
+    //   2. Subgraph fence terminal (sub-run whose nextNode = fan_in
+    //      was rewritten to `__end__` by the fence above). The cap
+    //      WAS blown; the terminal is synthetic. Strip the terminal
+    //      facts and emit the pause so the operator can raise the cap
+    //      and resume. Mirrors the halt arm's strip pattern below.
     if (budgetPause !== undefined) {
-      const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
-      if (!alreadyTerminal) {
+      const alreadyTerminal = facts.some(
+        (f) => f.type === "fact.run_completed" || f.type === "fact.run_halted",
+      );
+      if (alreadyTerminal && subgraphFenceTriggered) {
+        // Sub-run subgraph-fence terminal: strip + replace.
+        facts = facts.filter(
+          (f) =>
+            f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
+        );
+        facts.push({
+          type: "fact.run_paused",
+          payload: {
+            reason: "budget",
+            nodeId: state.currentNode ?? "",
+            scope: budgetPause.scope,
+            metric: budgetPause.metric,
+            limit: budgetPause.limit,
+            actual: budgetPause.actual,
+          },
+        });
+      } else if (!alreadyTerminal) {
+        // Non-terminal turn: standard swap of node_started → run_paused.
         facts = facts.filter((f) => f.type !== "fact.node_started");
         facts.push({
           type: "fact.run_paused",
@@ -1537,6 +1638,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           },
         });
       }
+      // else: workflow-declared terminal + breach → preserved as
+      // completion (legacy semantics; budget gate is moot on a clean
+      // exit).
     }
 
     // Budget halt: preserve fact.node_completed (so projection +

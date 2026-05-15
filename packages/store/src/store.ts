@@ -865,38 +865,72 @@ export class SqliteStore implements IEventStore {
   }
 
   getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }> {
-    const refs: NodeOutputRefRow[] = selectNodeOutputRefs(this.db, runId);
     const out = new Map<string, { output: string; success: boolean; timestamp: number }>();
     const decoder = new TextDecoder();
-    // Refs come back ordered by seq ASC, so a later iteration of the same
-    // node naturally overwrites the earlier one. The artifact key on the
-    // event is the canonical "<nodeId>:<key>" string the daemon writes;
-    // the artifact itself was put under the node's own scope, so we
-    // recover (nodeId, iteration, key) from the payload directly.
-    for (const ref of refs) {
-      // outputRefKey shape: "<refNodeId>:<key>"; parallel branches surface
-      // their own branch id here so $<branchId>.output resolves downstream.
-      const colon = ref.outputRefKey.indexOf(":");
-      if (colon < 0) continue;
-      const refNodeId = ref.outputRefKey.slice(0, colon);
-      const key = ref.outputRefKey.slice(colon + 1);
-      let bytes: Uint8Array;
-      try {
-        bytes = this.getArtifact({ runId, nodeId: refNodeId, iteration: ref.iteration, key });
-      } catch {
-        // Artifact missing on disk (orphan after an out-of-band gc-blobs
-        // run, say). Skip rather than throw — the substituted prompt
-        // will treat the value as empty, same as a node that never
-        // produced output.
-        continue;
+    // Cross-run substitution (P5 of docs/proposals/parallel.md):
+    //
+    //   1. Walk the parent chain UP and prepend their outputs. A
+    //      sub-run prompt like "review using $scope.output" needs to
+    //      see the parent's scope output. Parent's outputs are frozen
+    //      at fanout time — they don't change after sub-runs dispatch.
+    //
+    //   2. Add this run's own outputs.
+    //
+    //   3. Walk the direct children DOWN, adding their outputs. A
+    //      parent's downstream node (e.g. `synthesize`) reads
+    //      `$lens_correctness.output` — the artifact lives under the
+    //      child sub-run's namespace, not the parent's. Without this
+    //      hop the substitution silently resolves to the empty string
+    //      and cascades down the graph as aborted_exit.
+    //
+    // Order: parent first → self → children. `Map.set` later-wins, so
+    // a child's overwrite of the parent's nodeId is intentional (the
+    // child's output is the more recent thing — though parallel
+    // branches by construction don't re-emit a parent's nodeId).
+    const accumulateRefs = (sourceRunId: string): void => {
+      const refs = selectNodeOutputRefs(this.db, sourceRunId);
+      for (const ref of refs) {
+        const colon = ref.outputRefKey.indexOf(":");
+        if (colon < 0) continue;
+        const refNodeId = ref.outputRefKey.slice(0, colon);
+        const key = ref.outputRefKey.slice(colon + 1);
+        let bytes: Uint8Array;
+        try {
+          bytes = this.getArtifact({ runId: sourceRunId, nodeId: refNodeId, iteration: ref.iteration, key });
+        } catch {
+          continue;
+        }
+        out.set(ref.nodeId, {
+          output: decoder.decode(bytes),
+          success: ref.outcomeStatus !== "fail",
+          timestamp: ref.seq,
+        });
       }
-      const text = decoder.decode(bytes);
-      out.set(ref.nodeId, {
-        output: text,
-        success: ref.outcomeStatus !== "fail",
-        timestamp: ref.seq,
-      });
+    };
+
+    // (1) Parent chain (up). Bound to defend against pathological
+    // cycles (impossible per schema FK but cheap belt-and-suspenders).
+    const ancestry: string[] = [];
+    let cursor: string | null = runId;
+    let depth = 0;
+    while (cursor != null && depth < 32) {
+      const row = selectRunStateRow(this.db, cursor);
+      if (row == null || row.parent_run_id == null) break;
+      ancestry.push(row.parent_run_id);
+      cursor = row.parent_run_id;
+      depth++;
     }
+    for (let i = ancestry.length - 1; i >= 0; i--) accumulateRefs(ancestry[i]!);
+
+    // (2) Self.
+    accumulateRefs(runId);
+
+    // (3) Direct children. The children query is a single indexed
+    // scan; we only walk one level deep to avoid an exponential blow
+    // on hypothetical nested fan-outs (not currently supported).
+    const childIds = selectRunIds(this.db, { parentRunId: runId });
+    for (const childId of childIds) accumulateRefs(childId);
+
     return out;
   }
 

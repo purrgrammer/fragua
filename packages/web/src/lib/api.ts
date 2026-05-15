@@ -80,10 +80,12 @@ export interface RunSummary {
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
   /** Parallel sub-run linkage — P5 of docs/proposals/parallel.md. Absent
-   * on top-level runs. */
+   * on top-level runs. `branchNodeId` is the branch's root node id
+   * (e.g. `lens_correctness`) — the human-readable branch label. */
   parentRunId?: string;
   parentNodeId?: string;
   parallelIndex?: number;
+  branchNodeId?: string;
 }
 
 export interface NodeState {

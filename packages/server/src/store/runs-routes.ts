@@ -57,6 +57,12 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     for (const runId of ids) {
       const state = store.getState(runId);
       if (state == null) continue;
+      // Hide sub-runs from the top-level list (P5 of
+      // docs/proposals/parallel.md). Operators see fan-outs as one
+      // logical run; sub-runs surface as nested branches on the
+      // parent's detail page. Without this filter every sub-run
+      // shows up as a sibling row in the Running tab.
+      if (state.parentRunId != null) continue;
       const events = store.getEvents(runId, { limit: 5000 });
       // Conversation runs carry no workflow_sha; skip the lookup.
       const name = state.workflowSha != null ? await workflowName(state.workflowSha) : undefined;
@@ -89,7 +95,12 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   app.get("/runs/:id/children", (c) => {
     const parentRunId = c.req.param("id");
     // Discover child run-ids via the SQL helper. Each child's full
-    // summary is built from its own state + event tail.
+    // summary is built from its own state + event tail. We also look
+    // up the parent's title so sub-runs inherit it (P5 — operator
+    // surface treats fan-outs as one logical run).
+    const parentState = store.getState(parentRunId);
+    const parentTitle =
+      parentState?.title && parentState.title.length > 0 ? parentState.title : undefined;
     const childRunIds = store.listRunIds({ parentRunId });
     const children = childRunIds
       .map((childId) => {
@@ -97,7 +108,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
         if (childState == null) return null;
         const childEvents = store.getEvents(childId);
         const childWf = childState.workflowSha != null ? store.getWorkflow(childState.workflowSha) : null;
-        return runStateToSummary(childState, childEvents, childWf?.name);
+        return runStateToSummary(childState, childEvents, childWf?.name, parentTitle);
       })
       .filter((s): s is NonNullable<typeof s> => s != null)
       .sort((a, b) => (a.parallelIndex ?? 0) - (b.parallelIndex ?? 0));
