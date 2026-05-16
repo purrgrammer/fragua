@@ -22,6 +22,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
+| [Codergen context + output tools](./codergen-context-output-tools.md) | designed | `context_set` + `emit_output` tool implementations, `output_schema` attribute + ajv validation, E017/W018 validator codes, operator intent endpoints (`intent.context_set` / `intent.output_set`) |
 
 ## Accepted (design done; awaiting scheduling)
 
@@ -45,6 +46,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Throughput baseline + benchmark suite](./throughput-baseline.md) | specified | close ARCH §13 risk #3; nominal capacity claims have no measurement behind them |
 | [Operator-surface contract tests](./operator-surface-tests.md) | specified | catch C6-class drift between skill-taught curl bodies and server validators; pairs with drift-lint |
 | [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) | sketch | extend `paused_hitl` so a codergen step can ask the operator a clarification question end-of-turn; answer flows back as a user message on resume. Reuses today's HITL plumbing; adds one parser branch + one resume convention |
+
 | [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
