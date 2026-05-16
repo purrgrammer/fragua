@@ -988,7 +988,7 @@ export interface IEventReader {
    * always writes text/plain; tool nodes write stdout) round-trip
    * losslessly through the decode.
    */
-  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }>;
+  getNodeOutputs(runId: string): Map<string, { output: string; stderr?: string; success: boolean; timestamp: number }>;
 
   // ─── Workflow catalog (read)
   getWorkflow(sha: string): WorkflowRow | null;

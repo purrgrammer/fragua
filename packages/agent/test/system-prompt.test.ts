@@ -148,6 +148,7 @@ describe("renderRunEnvironment", () => {
     });
     expect(block).toContain("<environment>");
     expect(block).toContain("cwd: /wt/abc");
+    expect(block).toContain("run_id: abc");
     expect(block).toContain("Bash starts in cwd");
     // ❌ antipattern interpolates the actual cwd — by reflecting the value
     // the model is tempted to echo, the example breaks the cargo-culted
@@ -167,17 +168,18 @@ describe("renderRunEnvironment", () => {
       runId: "x",
     });
     expect(block).toContain("cwd: /wt/x");
+    expect(block).toContain("run_id: x");
     expect(block).toContain("Bash starts in cwd");
     expect(block).not.toContain("ran here");
   });
 
-  test("does not surface run_id (unused by agent, costs tokens)", () => {
+  test("surfaces run_id alongside cwd", () => {
     const block = renderRunEnvironment({
       worktreePath: "/wt/x",
-      runId: "01jx-this-id-should-not-leak",
+      runId: "01jx-this-id-should-appear",
     });
-    expect(block).not.toContain("01jx-this-id-should-not-leak");
-    expect(block).not.toContain("run_id");
+    expect(block).toContain("01jx-this-id-should-appear");
+    expect(block).toContain("run_id: 01jx-this-id-should-appear");
   });
 
   test("no `worktree:` label — terminology stays env-agnostic", () => {

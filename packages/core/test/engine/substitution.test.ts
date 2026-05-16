@@ -79,6 +79,31 @@ describe("substitute", () => {
     });
     expect(out).toBe("goal=ship plan=v1 args=--fast");
   });
+
+  test("$nodeId.stderr substitutes the stderr channel", () => {
+    const outputs = new Map<string, NodeOutput>([
+      ["build", { success: true, output: "ok", stderr: "warn: deprecated", timestamp: 0 }],
+    ]);
+    expect(substitute("err=$build.stderr", { nodeOutputs: outputs })).toBe("err=warn: deprecated");
+  });
+
+  test("$nodeId.stderr absent — resolves to empty string", () => {
+    const outputs = new Map<string, NodeOutput>([["build", { success: true, output: "ok", timestamp: 0 }]]);
+    expect(substitute("[$build.stderr]", { nodeOutputs: outputs })).toBe("[]");
+  });
+
+  test("$nodeId.stderr for unknown node — resolves to empty string", () => {
+    expect(substitute("$unknown.stderr")).toBe("");
+  });
+
+  test("$id.output and $id.stderr coexist in one template", () => {
+    const outputs = new Map<string, NodeOutput>([
+      ["build", { success: true, output: "compiled", stderr: "1 warning", timestamp: 0 }],
+    ]);
+    expect(substitute("out=$build.output err=$build.stderr", { nodeOutputs: outputs })).toBe(
+      "out=compiled err=1 warning",
+    );
+  });
 });
 
 describe("collectReferences", () => {
@@ -89,6 +114,11 @@ describe("collectReferences", () => {
 
   test("finds node ids", () => {
     const refs = collectReferences("$plan.output $review.output.score");
+    expect(refs.nodeIds.sort()).toEqual(["plan", "review"]);
+  });
+
+  test("$id.stderr is captured under nodeIds", () => {
+    const refs = collectReferences("$plan.output $review.stderr");
     expect(refs.nodeIds.sort()).toEqual(["plan", "review"]);
   });
 

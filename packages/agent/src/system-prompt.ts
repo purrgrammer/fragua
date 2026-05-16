@@ -117,8 +117,8 @@ export interface RunEnvironment {
    * as `cwd:` (model-agnostic; works whether or not the path is a git
    * worktree). */
   worktreePath: string;
-  /** Opaque session id, stable across the whole run. Used for
-   * event-log correlation; not surfaced to the agent. */
+  /** Opaque session id, stable across the whole run. Surfaced to the
+   * agent as `run_id:` so artifacts can cite their producing run. */
   runId: string;
   /** The bootstrap command that ran (string form only). Omitted when the
    * project didn't configure one. Presence of this field signals "deps
@@ -226,6 +226,7 @@ export function renderRunEnvironment(env: RunEnvironment): string {
   const lines: string[] = [
     "<environment>",
     `cwd: ${cwd}`,
+    `run_id: ${env.runId}`,
     "- Bash starts in cwd; run commands directly.",
     "  ✅ pwd",
     `  ❌ cd ${cwd} && pwd`,

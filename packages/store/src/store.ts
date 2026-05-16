@@ -1028,8 +1028,21 @@ export class SqliteStore implements IEventStore {
         } catch {
           continue;
         }
+        let stderr: string | undefined;
+        try {
+          const stderrBytes = this.getArtifact({
+            runId: sourceRunId,
+            nodeId: refNodeId,
+            iteration: ref.iteration,
+            key: "stderr",
+          });
+          stderr = decoder.decode(stderrBytes);
+        } catch {
+          // stderr artifact is optional — absent for codergen nodes and silent tool runs
+        }
         out.set(ref.nodeId, {
           output: decoder.decode(bytes),
+          ...(stderr !== undefined ? { stderr } : {}),
           success: ref.outcomeStatus !== "fail",
           timestamp: ref.seq,
         });

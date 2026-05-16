@@ -4,6 +4,7 @@
 //   ${context.<key>}          — read context KV (dots in key preserved)
 //   $<nodeId>.output.<path>   — traverse structured node output (JSON path)
 //   $<nodeId>.output          — raw node stdout/response
+//   $<nodeId>.stderr          — node stderr channel (tool nodes only; empty otherwise)
 //   $ARGUMENTS                — the run's input string (CLI positional / API body)
 //   $goal                     — the graph's `goal` attribute (attractor §9.2)
 //
@@ -16,6 +17,8 @@ import type { ContextValue } from "../types/outcome.ts";
 export interface NodeOutput {
   success: boolean;
   output: string;
+  /** Optional stderr channel. Populated for tool nodes; undefined for codergen/other nodes. */
+  stderr?: string;
   data?: ContextValue;
   timestamp: number;
 }
@@ -33,7 +36,9 @@ export interface SubstitutionOptions {
 }
 
 const CONTEXT_RE = /\$\{context\.([^}]+)\}/g;
-const NODE_OUTPUT_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.([A-Za-z0-9_.[\]-]+))?/g;
+// Matches $<nodeId>.output[.path] and $<nodeId>.stderr — channel is capture group 2.
+// JSON-path traversal (group 3) is supported for .output only; .stderr is always a flat string.
+const NODE_CHANNEL_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.(output|stderr)(?:\.([A-Za-z0-9_.[\]-]+))?/g;
 const BUILTIN_VARS = ["$ARGUMENTS"] as const;
 
 export function substitute(template: string, opts: SubstitutionOptions = {}): string {
@@ -57,10 +62,12 @@ export function substitute(template: string, opts: SubstitutionOptions = {}): st
     return fmt(toStr(context[trimmed]));
   });
 
-  // $nodeId.output[.path]
-  out = out.replace(NODE_OUTPUT_RE, (_match, nodeId: string, path: string | undefined) => {
+  // $nodeId.output[.path] and $nodeId.stderr
+  out = out.replace(NODE_CHANNEL_RE, (_match, nodeId: string, channel: string, path: string | undefined) => {
     const no = nodeOutputs?.get(nodeId);
     if (!no) return fmt("");
+    if (channel === "stderr") return fmt(no.stderr ?? "");
+    // channel === "output"
     if (!path) return fmt(no.output);
     const value = traverse(no.data, path);
     return fmt(toStr(value as ContextValue | undefined));
@@ -96,7 +103,7 @@ export function collectReferences(template: string): {
     const key = m[1]?.trim();
     if (key && !contextKeys.includes(key)) contextKeys.push(key);
   }
-  for (const m of template.matchAll(NODE_OUTPUT_RE)) {
+  for (const m of template.matchAll(NODE_CHANNEL_RE)) {
     const id = m[1];
     if (id && !nodeIds.includes(id)) nodeIds.push(id);
   }
