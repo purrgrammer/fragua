@@ -85,7 +85,7 @@ export interface DaemonMainOpts {
 }
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
-const DEFAULT_CONCURRENCY = 8;
+const DEFAULT_CONCURRENCY = 16;
 // Matches @swarm/agent's codergen default — the supervisor must never
 // trip a legitimate long-running codergen node just because the spec
 // wasn't resolvable at the moment of the leak check. See

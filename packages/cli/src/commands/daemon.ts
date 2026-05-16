@@ -179,7 +179,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       llmSource = "env";
     }
   }
-  const concurrency = opts.concurrency ?? config.concurrency ?? 4;
+  const concurrency = opts.concurrency ?? config.concurrency ?? 16;
 
   const signalCtrl = new AbortController();
   const onSig = () => signalCtrl.abort();

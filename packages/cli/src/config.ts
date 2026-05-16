@@ -125,7 +125,7 @@ export const SwarmConfigSchema = Type.Object(
     // substrings against the shell command.
     blocklist: Type.Optional(Type.Array(Type.String())),
     // Max concurrent runs the daemon will claim from its queue. CLI
-    // `--concurrency` overrides this. Default 8 when unset.
+    // `--concurrency` overrides this. Default 16 when unset.
     concurrency: Type.Optional(Type.Integer({ minimum: 1 })),
     // Per-run ceiling on handler dispatches. A workflow that loops
     // indefinitely halts with `reason: "max_loops"`. Default 1000.

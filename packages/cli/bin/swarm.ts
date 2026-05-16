@@ -239,7 +239,7 @@ cli
 // are dispatched via a positional (same pattern as providers / db).
 cli
   .command("daemon [action]", "Run or stop the execution daemon (run without args for help)")
-  .option("--concurrency <n>", "`start` only: max concurrent runs (default 8)")
+  .option("--concurrency <n>", "`start` only: max concurrent runs (default 16)")
   .option("--cwd <path>", "Base directory (default process.cwd)")
   .option("--db <path>", "Store path (default <cwd>/.swarm/swarm.db)")
   .option("--llm-provider <name>", "`start` only: LLM provider override (default: auto-detected)")
