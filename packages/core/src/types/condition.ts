@@ -1,11 +1,19 @@
 // Condition AST: the tiny boolean language used on edges.
-// Grammar: expr := term ("&&" term)*
-//          term := ident ("=" | "!=") value
-//          ident := (IDENT ".")* IDENT
-//          value := STRING | NUMBER | IDENT | "true" | "false" | "null"
+// Grammar:
+//   expr    := or
+//   or      := and ("||" and)*
+//   and     := unary ("&&" unary)*
+//   unary   := "!" unary | primary
+//   primary := "(" expr ")" | term
+//   term    := path (op value | "contains" value | "matches" regex)?
+//   path    := IDENT ("." IDENT)*
+//   op      := "=" | "!=" | "<" | ">" | "<=" | ">="
+//   value   := STRING | NUMBER | IDENT | "true" | "false" | "null"
+//   regex   := "/" body "/" flags?
+//   flags   := [gimsuy]+
 // See docs/SPEC.md §3.8.
 
-export type ConditionAst = AndNode | ComparisonNode | TruthyNode;
+export type ConditionAst = AndNode | OrNode | NotNode | ComparisonNode | ContainsNode | MatchesNode | TruthyNode;
 
 export interface AndNode {
   kind: "and";
@@ -13,11 +21,35 @@ export interface AndNode {
   right: ConditionAst;
 }
 
+export interface OrNode {
+  kind: "or";
+  left: ConditionAst;
+  right: ConditionAst;
+}
+
+export interface NotNode {
+  kind: "not";
+  expr: ConditionAst;
+}
+
 export interface ComparisonNode {
   kind: "cmp";
   path: string[];
-  op: "=" | "!=";
+  op: "=" | "!=" | "<" | ">" | "<=" | ">=";
   value: ConditionValue;
+}
+
+export interface ContainsNode {
+  kind: "contains";
+  path: string[];
+  value: ConditionValue;
+}
+
+export interface MatchesNode {
+  kind: "matches";
+  path: string[];
+  pattern: string;
+  flags: string;
 }
 
 /** Bare-key truthiness clause (attractor §10.5 "Unqualified keys evaluate

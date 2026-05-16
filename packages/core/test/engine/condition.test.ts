@@ -212,3 +212,175 @@ describe("evaluateConditionSource", () => {
     expect(evaluateConditionSource("outcome=ok", { outcome: "ok", context: {} })).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Extended operator tests
+// ---------------------------------------------------------------------------
+
+describe("parseCondition — extended operators", () => {
+  test("disjunction parses as or node", () => {
+    const ast = parseCondition("a=1 || b=2");
+    expect(ast.kind).toBe("or");
+    if (ast.kind !== "or") throw new Error("expected or");
+    expect(ast.left.kind).toBe("cmp");
+    expect(ast.right.kind).toBe("cmp");
+  });
+
+  test("mixed && and || — && binds tighter (a=1 && b=2 || c=3) → (and) or c=3", () => {
+    const ast = parseCondition("a=1 && b=2 || c=3");
+    expect(ast.kind).toBe("or");
+    if (ast.kind !== "or") throw new Error("expected or");
+    expect(ast.left.kind).toBe("and");
+    expect(ast.right.kind).toBe("cmp");
+    if (ast.right.kind === "cmp") {
+      expect(ast.right.path).toEqual(["c"]);
+      expect(ast.right.value).toBe(3);
+    }
+    if (ast.left.kind === "and") {
+      expect(ast.left.left.kind).toBe("cmp");
+      expect(ast.left.right.kind).toBe("cmp");
+    }
+  });
+
+  test("negation parses as not node wrapping term", () => {
+    const ast = parseCondition("!context.locked");
+    expect(ast.kind).toBe("not");
+    if (ast.kind !== "not") throw new Error("expected not");
+    expect(ast.expr.kind).toBe("truthy");
+    if (ast.expr.kind === "truthy") {
+      expect(ast.expr.path).toEqual(["context", "locked"]);
+    }
+  });
+
+  test("negation binds tighter than &&", () => {
+    const ast = parseCondition("!a && b");
+    expect(ast.kind).toBe("and");
+    if (ast.kind !== "and") throw new Error("expected and");
+    expect(ast.left.kind).toBe("not");
+    expect(ast.right.kind).toBe("truthy");
+  });
+
+  test("numeric comparison operators <,>,<=,>=", () => {
+    const lt = parseCondition("context.score < 5");
+    const gt = parseCondition("context.score > 5");
+    const lte = parseCondition("context.score <= 5");
+    const gte = parseCondition("context.score >= 5");
+    expect(lt.kind).toBe("cmp");
+    expect(gt.kind).toBe("cmp");
+    expect(lte.kind).toBe("cmp");
+    expect(gte.kind).toBe("cmp");
+    if (lt.kind === "cmp") expect(lt.op).toBe("<");
+    if (gt.kind === "cmp") expect(gt.op).toBe(">");
+    if (lte.kind === "cmp") expect(lte.op).toBe("<=");
+    if (gte.kind === "cmp") expect(gte.op).toBe(">=");
+  });
+
+  test("contains operator parses", () => {
+    const ast = parseCondition(`context.path contains "src/"`);
+    expect(ast.kind).toBe("contains");
+    if (ast.kind !== "contains") throw new Error("expected contains");
+    expect(ast.path).toEqual(["context", "path"]);
+    expect(ast.value).toBe("src/");
+  });
+
+  test("matches operator parses regex literal", () => {
+    const ast = parseCondition("context.area matches /^auth/");
+    expect(ast.kind).toBe("matches");
+    if (ast.kind !== "matches") throw new Error("expected matches");
+    expect(ast.path).toEqual(["context", "area"]);
+    expect(ast.pattern).toBe("^auth");
+    expect(ast.flags).toBe("");
+  });
+
+  test("matches operator parses regex with flags", () => {
+    const ast = parseCondition("context.area matches /foo/i");
+    expect(ast.kind).toBe("matches");
+    if (ast.kind !== "matches") throw new Error("expected matches");
+    expect(ast.pattern).toBe("foo");
+    expect(ast.flags).toBe("i");
+  });
+
+  test("malformed regex (no closing slash) throws ConditionParseError", () => {
+    expect(() => parseCondition("context.area matches /^auth")).toThrow(ConditionParseError);
+  });
+
+  test("unbalanced parenthesis throws ConditionParseError", () => {
+    expect(() => parseCondition("(a=1 && b=2")).toThrow(ConditionParseError);
+  });
+
+  test("parenthesised grouping overrides precedence", () => {
+    // a=1 && (b=2 || c=3) — root is 'and', right child is 'or'
+    const ast = parseCondition("a=1 && (b=2 || c=3)");
+    expect(ast.kind).toBe("and");
+    if (ast.kind !== "and") throw new Error("expected and");
+    expect(ast.right.kind).toBe("or");
+  });
+});
+
+describe("evaluateCondition — extended operators", () => {
+  test("disjunction true when either side true", () => {
+    const env = { outcome: "ok", context: { a: 99, b: 2 } };
+    expect(evaluateCondition(parseCondition("a=1 || b=2"), env)).toBe(true);
+    expect(evaluateCondition(parseCondition("a=1 || b=99"), env)).toBe(false);
+  });
+
+  test("negation flips truthy clause", () => {
+    const envLocked = { outcome: "ok", context: { locked: true } };
+    const envUnlocked = { outcome: "ok", context: { locked: false } };
+    expect(evaluateCondition(parseCondition("!context.locked"), envLocked)).toBe(false);
+    expect(evaluateCondition(parseCondition("!context.locked"), envUnlocked)).toBe(true);
+  });
+
+  test("numeric > with number", () => {
+    const env = { outcome: "ok", context: { score: 10 } };
+    expect(evaluateCondition(parseCondition("context.score > 5"), env)).toBe(true);
+    const envLow = { outcome: "ok", context: { score: 3 } };
+    expect(evaluateCondition(parseCondition("context.score > 5"), envLow)).toBe(false);
+  });
+
+  test("numeric comparisons coerce string lhs to number", () => {
+    const env = { outcome: "ok", context: { score: "10" } };
+    expect(evaluateCondition(parseCondition("context.score > 5"), env)).toBe(true);
+    expect(evaluateCondition(parseCondition("context.score < 5"), env)).toBe(false);
+  });
+
+  test("comparison falls back to lexicographic for non-numeric strings", () => {
+    const env = { outcome: "ok", context: { name: "beta" } };
+    expect(evaluateCondition(parseCondition(`context.name > "alpha"`), env)).toBe(true);
+    expect(evaluateCondition(parseCondition(`context.name < "alpha"`), env)).toBe(false);
+  });
+
+  test("contains — substring on string lhs", () => {
+    const env = { outcome: "ok", context: { path: "packages/src/foo" } };
+    expect(evaluateCondition(parseCondition(`context.path contains "src/"`), env)).toBe(true);
+    expect(evaluateCondition(parseCondition(`context.path contains "dist/"`), env)).toBe(false);
+  });
+
+  test("contains — membership on array lhs", () => {
+    const env = { outcome: "ok", context: { tags: ["a", "b"] as unknown as string } };
+    expect(evaluateCondition(parseCondition(`context.tags contains "a"`), env)).toBe(true);
+    expect(evaluateCondition(parseCondition(`context.tags contains "c"`), env)).toBe(false);
+  });
+
+  test("matches — regex applied to string lhs", () => {
+    const env = { outcome: "ok", context: { area: "auth.login" } };
+    expect(evaluateCondition(parseCondition("context.area matches /^auth/"), env)).toBe(true);
+    const envBilling = { outcome: "ok", context: { area: "billing" } };
+    expect(evaluateCondition(parseCondition("context.area matches /^auth/"), envBilling)).toBe(false);
+  });
+
+  test("matches — flags honoured (case-insensitive)", () => {
+    const env = { outcome: "ok", context: { area: "auth.login" } };
+    expect(evaluateCondition(parseCondition("context.area matches /^AUTH/i"), env)).toBe(true);
+  });
+
+  test("matches — missing key (undefined) → false, not throw", () => {
+    const env = { outcome: "ok", context: {} };
+    expect(evaluateCondition(parseCondition("context.area matches /^auth/"), env)).toBe(false);
+  });
+
+  test("mixed precedence end-to-end: a=1 && b=2 || c=3 with only c=3 true → true", () => {
+    const env = { outcome: "ok", context: { a: 99, b: 99, c: 3 } };
+    expect(evaluateCondition(parseCondition("a=1 && b=2 || c=3"), env)).toBe(true);
+  });
+});

@@ -1,9 +1,16 @@
 // Condition expression parser + evaluator.
-// Grammar: expr := term ("&&" term)*
-//          term := path op value
-//          path := IDENT ("." IDENT)*   (also accepts "." inside key for context.x.y)
-//          op := "=" | "!="
-//          value := STRING | NUMBER | IDENT | "true" | "false" | "null"
+// Grammar:
+//   expr    := or
+//   or      := and ("||" and)*
+//   and     := unary ("&&" unary)*
+//   unary   := "!" unary | primary
+//   primary := "(" expr ")" | term
+//   term    := path (op value | "contains" value | "matches" regex)?
+//   path    := IDENT ("." IDENT)*   (also accepts "." inside key for context.x.y)
+//   op      := "=" | "!=" | "<" | ">" | "<=" | ">="
+//   value   := STRING | NUMBER | IDENT | "true" | "false" | "null"
+//   regex   := "/" body "/" flags?
+//   flags   := [gimsuy]+
 //
 // Evaluation environment:
 //   env.outcome : the current outcome status (e.g. "success")
@@ -14,6 +21,12 @@
 //   context.<key>    → env.context[key]   where <key> keeps dots (e.g. "graph.goal")
 //   <anything else>  → evaluates to undefined (and therefore fails `=` checks)
 //
+// Operator semantics:
+//   <, >, <=, >=  : numeric coercion both sides; lexicographic fallback for strings
+//   contains      : substring test (string LHS) or membership test (array LHS)
+//   matches       : regex test; RHS is /pattern/ or /pattern/flags
+//   !             : negation; binds tighter than && which binds tighter than ||
+//
 // See docs/SPEC.md §3.8.
 
 import {
@@ -22,6 +35,10 @@ import {
   type ConditionAst,
   ConditionParseError,
   type ConditionValue,
+  type ContainsNode,
+  type MatchesNode,
+  type NotNode,
+  type OrNode,
   type TruthyNode,
 } from "../types/condition.ts";
 import type { ContextValue } from "../types/outcome.ts";
@@ -70,6 +87,25 @@ function parseIdent(st: LexerState): string {
     throw new ConditionParseError("expected identifier", st.i, st.input);
   }
   return st.input.slice(start, st.i);
+}
+
+/** Non-destructive keyword probe: returns true and advances st.i past the
+ * keyword if the next non-space token is exactly `kw`. Restores st.i on miss. */
+function tryKeyword(st: LexerState, kw: string): boolean {
+  const saved = st.i;
+  skipSpace(st);
+  const start = st.i;
+  while (st.i < st.input.length) {
+    const c = st.input[st.i];
+    if (c === undefined) break;
+    const isAlpha = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+    if (isAlpha) st.i++;
+    else break;
+  }
+  const word = st.input.slice(start, st.i);
+  if (word === kw) return true;
+  st.i = saved;
+  return false;
 }
 
 function parsePath(st: LexerState): string[] {
@@ -140,39 +176,145 @@ function parseValue(st: LexerState): ConditionValue {
   return ident; // bareword compared as string
 }
 
-function parseTerm(st: LexerState): ComparisonNode | TruthyNode {
+/** Parse a /pattern/flags regex literal. Called after "matches" keyword consumed. */
+function parseRegex(st: LexerState): { pattern: string; flags: string } {
+  skipSpace(st);
+  const slashPos = st.i;
+  if (!consumeLiteral(st, "/")) {
+    throw new ConditionParseError("expected '/' to start regex literal", slashPos, st.input);
+  }
+  let pattern = "";
+  while (st.i < st.input.length) {
+    const c = st.input[st.i]!;
+    if (c === "/") break;
+    if (c === "\\" && st.i + 1 < st.input.length) {
+      const n = st.input[st.i + 1]!;
+      pattern += c + n;
+      st.i += 2;
+      continue;
+    }
+    pattern += c;
+    st.i++;
+  }
+  if (!consumeLiteral(st, "/")) {
+    throw new ConditionParseError("unterminated regex literal (missing closing '/')", st.i, st.input);
+  }
+  // Collect optional flags: letters only
+  let flags = "";
+  while (st.i < st.input.length) {
+    const c = st.input[st.i]!;
+    const isAlpha = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+    if (isAlpha) {
+      flags += c;
+      st.i++;
+    } else break;
+  }
+  // Validate the regex eagerly so parse errors surface at parse time.
+  try {
+    new RegExp(pattern, flags);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConditionParseError(`invalid regex: ${msg}`, slashPos, st.input);
+  }
+  return { pattern, flags };
+}
+
+function parseTerm(st: LexerState): ComparisonNode | ContainsNode | MatchesNode | TruthyNode {
   skipSpace(st);
   const path = parsePath(st);
   skipSpace(st);
+
+  // Two-character operators first (must precede single-char checks).
+  if (consumeLiteral(st, "<=")) {
+    skipSpace(st);
+    return { kind: "cmp", path, op: "<=", value: parseValue(st) };
+  }
+  if (consumeLiteral(st, ">=")) {
+    skipSpace(st);
+    return { kind: "cmp", path, op: ">=", value: parseValue(st) };
+  }
   if (consumeLiteral(st, "!=")) {
     skipSpace(st);
-    const value = parseValue(st);
-    return { kind: "cmp", path, op: "!=", value };
+    return { kind: "cmp", path, op: "!=", value: parseValue(st) };
   }
   if (consumeLiteral(st, "=")) {
     skipSpace(st);
-    const value = parseValue(st);
-    return { kind: "cmp", path, op: "=", value };
+    return { kind: "cmp", path, op: "=", value: parseValue(st) };
   }
+  if (consumeLiteral(st, "<")) {
+    skipSpace(st);
+    return { kind: "cmp", path, op: "<", value: parseValue(st) };
+  }
+  if (consumeLiteral(st, ">")) {
+    skipSpace(st);
+    return { kind: "cmp", path, op: ">", value: parseValue(st) };
+  }
+  if (tryKeyword(st, "contains")) {
+    skipSpace(st);
+    return { kind: "contains", path, value: parseValue(st) };
+  }
+  if (tryKeyword(st, "matches")) {
+    return { kind: "matches", path, ...parseRegex(st) };
+  }
+
   // Bare-key truthiness (attractor §10.5).
   return { kind: "truthy", path };
 }
 
-function parseExpr(st: LexerState): ConditionAst {
-  let left: ConditionAst = parseTerm(st);
+function parsePrimary(st: LexerState): ConditionAst {
+  skipSpace(st);
+  if (consumeLiteral(st, "(")) {
+    const inner = parseOr(st);
+    skipSpace(st);
+    if (!consumeLiteral(st, ")")) {
+      throw new ConditionParseError("expected ')'", st.i, st.input);
+    }
+    return inner;
+  }
+  return parseTerm(st);
+}
+
+function parseUnary(st: LexerState): ConditionAst {
+  skipSpace(st);
+  // Consume "!" only when not followed by "=" (which would be "!=", handled in parseTerm).
+  if (peek(st) === "!" && st.input[st.i + 1] !== "=") {
+    st.i++;
+    const expr = parseUnary(st);
+    return { kind: "not", expr } satisfies NotNode;
+  }
+  return parsePrimary(st);
+}
+
+function parseAnd(st: LexerState): ConditionAst {
+  let left: ConditionAst = parseUnary(st);
   while (true) {
     skipSpace(st);
     if (!consumeLiteral(st, "&&")) break;
-    const right = parseTerm(st);
+    const right = parseUnary(st);
     left = { kind: "and", left, right } satisfies AndNode;
   }
-  skipSpace(st);
   return left;
+}
+
+function parseOr(st: LexerState): ConditionAst {
+  let left: ConditionAst = parseAnd(st);
+  while (true) {
+    skipSpace(st);
+    if (!consumeLiteral(st, "||")) break;
+    const right = parseAnd(st);
+    left = { kind: "or", left, right } satisfies OrNode;
+  }
+  return left;
+}
+
+function parseExpr(st: LexerState): ConditionAst {
+  return parseOr(st);
 }
 
 export function parseCondition(source: string): ConditionAst {
   const st: LexerState = { i: 0, input: source };
   const ast = parseExpr(st);
+  skipSpace(st);
   if (st.i !== source.length) {
     throw new ConditionParseError(`unexpected trailing input "${source.slice(st.i)}"`, st.i, source);
   }
@@ -248,6 +390,31 @@ function equals(a: ContextValue | undefined, b: ConditionValue): boolean {
   return a === b;
 }
 
+/** Order comparison helper. Coerces both sides to numbers when possible;
+ * falls back to lexicographic string comparison. */
+function compareOrder(a: ContextValue | undefined, b: ConditionValue, op: "<" | ">" | "<=" | ">="): boolean {
+  if (a === undefined || a === null || b === null) return false;
+  if (typeof a === "boolean" || typeof b === "boolean") return false;
+
+  const na = typeof a === "number" ? a : Number(a);
+  const nb = typeof b === "number" ? b : Number(b);
+
+  if (Number.isFinite(na) && Number.isFinite(nb)) {
+    if (op === "<") return na < nb;
+    if (op === ">") return na > nb;
+    if (op === "<=") return na <= nb;
+    return na >= nb;
+  }
+
+  // Lexicographic fallback — coerce both to strings.
+  const sa = String(a);
+  const sb = String(b);
+  if (op === "<") return sa < sb;
+  if (op === ">") return sa > sb;
+  if (op === "<=") return sa <= sb;
+  return sa >= sb;
+}
+
 /** Truthiness check for bare-key clauses (attractor §10.5). */
 function isTruthy(v: ContextValue | undefined): boolean {
   if (v === undefined || v === null) return false;
@@ -258,16 +425,44 @@ function isTruthy(v: ContextValue | undefined): boolean {
   return Object.keys(v).length > 0;
 }
 
+/** Cache compiled regexes across evaluations of the same MatchesNode. */
+const regexCache = new WeakMap<object, RegExp>();
+
 export function evaluateCondition(ast: ConditionAst, env: ConditionEnv): boolean {
+  if (ast.kind === "or") {
+    return evaluateCondition(ast.left, env) || evaluateCondition(ast.right, env);
+  }
   if (ast.kind === "and") {
     return evaluateCondition(ast.left, env) && evaluateCondition(ast.right, env);
+  }
+  if (ast.kind === "not") {
+    return !evaluateCondition(ast.expr, env);
   }
   if (ast.kind === "truthy") {
     return isTruthy(resolvePath(ast.path, env));
   }
+  if (ast.kind === "contains") {
+    const lhs = resolvePath(ast.path, env);
+    if (lhs === undefined || lhs === null) return false;
+    if (typeof lhs === "string") return lhs.includes(String(ast.value));
+    if (Array.isArray(lhs)) return lhs.some((x) => x === ast.value);
+    return false;
+  }
+  if (ast.kind === "matches") {
+    const lhs = resolvePath(ast.path, env);
+    if (lhs === undefined || lhs === null) return false;
+    let re = regexCache.get(ast);
+    if (!re) {
+      re = new RegExp(ast.pattern, ast.flags);
+      regexCache.set(ast, re);
+    }
+    return re.test(String(lhs));
+  }
+  // ast.kind === "cmp"
   const lhs = resolvePath(ast.path, env);
-  const eq = equals(lhs, ast.value);
-  return ast.op === "=" ? eq : !eq;
+  if (ast.op === "=") return equals(lhs, ast.value);
+  if (ast.op === "!=") return !equals(lhs, ast.value);
+  return compareOrder(lhs, ast.value, ast.op);
 }
 
 /** True when a condition string is absent or whitespace-only. */
