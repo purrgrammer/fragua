@@ -519,7 +519,10 @@ function StepCostRow({
           </span>
         )}
         {step.turns != null && step.turns > 1 && (
-          <span className={`font-mono ${metricChipClass}`} title="LLM calls collapsed into this row (multi-turn or pause+resume)">
+          <span
+            className={`font-mono ${metricChipClass}`}
+            title="LLM calls collapsed into this row (multi-turn or pause+resume)"
+          >
             × {step.turns} turns
           </span>
         )}

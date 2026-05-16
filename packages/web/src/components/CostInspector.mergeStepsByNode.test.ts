@@ -70,7 +70,11 @@ describe("mergeStepsByNode", () => {
   test("durationMs spans from earliest start to latest end across merged turns", () => {
     const t0 = 1_700_000_000_000;
     const a: StepSnapshot = {
-      ...withCost(step({ startSeq: 1, nodeId: "n", originRunId: "r", startedAt: new Date(t0).toISOString() }), 0.01, 10),
+      ...withCost(
+        step({ startSeq: 1, nodeId: "n", originRunId: "r", startedAt: new Date(t0).toISOString() }),
+        0.01,
+        10,
+      ),
       durationMs: 100,
     };
     const b: StepSnapshot = {

@@ -96,11 +96,7 @@ describe("RunStatusBadge — running_children escalation", () => {
 
   test("terminal status (success) does NOT escalate even if a child is paused (parent took precedence)", () => {
     const { container } = render(
-      <RunStatusBadge
-        status="success"
-        runStatus="completed"
-        childStatusDigest={digest({ total: 1, paused: 1 })}
-      />,
+      <RunStatusBadge status="success" runStatus="completed" childStatusDigest={digest({ total: 1, paused: 1 })} />,
     );
     expect(container.querySelector('[data-status="success"]')).not.toBeNull();
   });
