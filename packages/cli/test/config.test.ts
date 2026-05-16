@@ -118,9 +118,9 @@ describe("loadConfig", () => {
     await writeGlobal(`{
       "defaults": {
         "llm_provider": "anthropic",
-        "llm_model": "claude-sonnet-4.7",
-        "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4.6" }
+        "llm_model": "claude-sonnet-4.7"
       },
+      "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4.6" },
       "autoTitle": true,
       "blocklist": ["sudo "]
     }`);
@@ -132,9 +132,21 @@ describe("loadConfig", () => {
     expect(cfg.bootstrap).toBe("bun install --frozen-lockfile");
     expect(cfg.defaults?.llm_provider).toBe("anthropic"); // from global
     expect(cfg.defaults?.llm_model).toBe("claude-opus-4.7"); // project override
-    expect(cfg.defaults?.summariser?.llm_model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
+    expect(cfg.summariser?.llm_model).toBe("claude-haiku-4.6"); // global wins (project didn't set)
     expect(cfg.autoTitle).toBe(true); // global only
     expect(cfg.blocklist).toEqual(["sudo "]); // global only
+  });
+
+  test("hoisted summariser key validates at the top level (not under defaults)", async () => {
+    await writeGlobal(`{ "summariser": { "llm_provider": "anthropic", "llm_model": "claude-haiku-4-5" } }`);
+    const cfg = await load();
+    expect(cfg.summariser?.llm_provider).toBe("anthropic");
+    expect(cfg.summariser?.llm_model).toBe("claude-haiku-4-5");
+  });
+
+  test("rejects legacy defaults.summariser nesting", async () => {
+    await writeGlobal(`{ "defaults": { "summariser": { "llm_provider": "anthropic" } } }`);
+    await expect(load()).rejects.toThrow(/validation failed/);
   });
 
   test("global only: project file absent, global config flows through", async () => {

@@ -450,8 +450,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   );
 
   // Auto-title summariser — cheap cross-run call that labels each run
-  // post-enqueue. Uses `defaults.summariser.{llm_provider,llm_model}`
-  // when set; otherwise defaults to the cheapest known model for the
+  // post-enqueue. Uses `summariser.{llm_provider,llm_model}` when set;
+  // otherwise defaults to the cheapest known model for the
   // primary provider. `autoTitle: false` disables even when a backend
   // is configured.
   const autoTitler = buildAutoTitler({
@@ -591,9 +591,9 @@ function buildSummariserBackend(args: {
   getApiKey: (provider: string) => Promise<string | undefined>;
 }): SummariserInfo {
   const { config, primaryProvider, modelRegistry, getApiKey } = args;
-  const sumProvider = config.defaults?.summariser?.llm_provider ?? primaryProvider;
+  const sumProvider = config.summariser?.llm_provider ?? primaryProvider;
   if (!sumProvider) return { backend: undefined, label: undefined };
-  const sumModel = config.defaults?.summariser?.llm_model ?? defaultSummariserModel(sumProvider);
+  const sumModel = config.summariser?.llm_model ?? defaultSummariserModel(sumProvider);
   if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   // Validate at boot — the summariser's resolveModel throws lazily on
   // first call, which surfaces deep inside whatever path triggered it

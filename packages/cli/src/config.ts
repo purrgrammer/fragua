@@ -7,9 +7,9 @@
 //                                       global; project keys win.
 //
 // Top-level keys merge shallowly between the two layers. Nested objects
-// (`defaults`, `blobGc`, `skills`, `timeouts`) merge one level deep so a
-// project config can override `defaults.llm_model` without losing the
-// global `defaults.summariser` block.
+// (`defaults`, `blobGc`, `skills`, `timeouts`, `summariser`) merge one level
+// deep so a project config can override `defaults.llm_model` without losing
+// the global `summariser` block.
 //
 // Missing files → `{}` (first-run UX). Malformed file or schema-invalid
 // content → throw with a caller-friendly message; silent fallback would
@@ -38,7 +38,6 @@ const Defaults = Type.Object(
     llm_provider: Type.Optional(Type.String()),
     llm_model: Type.Optional(Type.String()),
     permissions: Type.Optional(Type.String()),
-    summariser: Type.Optional(Summariser),
   },
   { additionalProperties: false },
 );
@@ -114,6 +113,10 @@ export const SwarmConfigSchema = Type.Object(
     // express "10 minutes" than "600000".
     bootstrapTimeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     defaults: Type.Optional(Defaults),
+    // Weak-model summariser. Powers async run-title generation (autoTitle)
+    // and fidelity=summary:medium|high transcript compression. Always
+    // cheaper than the primary coding model. Omit to disable both paths.
+    summariser: Type.Optional(Summariser),
     // Auto-generated run titles from $ARGUMENTS. true (default) kicks off
     // a fire-and-forget summariser call at run start. false disables.
     // CLI flag --no-auto-title wins over this.
