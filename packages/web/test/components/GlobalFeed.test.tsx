@@ -81,8 +81,18 @@ describe("metaForEvent", () => {
 });
 
 describe("isFeedRowHidden", () => {
-  test("hides fact.run_branched (mechanical worktree noise)", () => {
-    expect(isFeedRowHidden(evt("fact.run_branched", { branch: "swarm/runs/abc" }))).toBe(true);
+  test("hides fact.subrun_completed as defense in depth", () => {
+    expect(isFeedRowHidden(evt("fact.subrun_completed", { runId: "child-1" }))).toBe(true);
+  });
+
+  test("does not hide fact.message_appended (server no longer ships it)", () => {
+    expect(isFeedRowHidden(evt("fact.message_appended", { ordinal: 0, role: "assistant" }))).toBe(false);
+  });
+
+  test("does not hide fact.run_branched / fanout_started / fanout_completed (server no longer ships them)", () => {
+    expect(isFeedRowHidden(evt("fact.run_branched", { branch: "swarm/runs/abc" }))).toBe(false);
+    expect(isFeedRowHidden(evt("fact.fanout_started", { fanoutId: "f1", count: 2 }))).toBe(false);
+    expect(isFeedRowHidden(evt("fact.fanout_completed", { fanoutId: "f1" }))).toBe(false);
   });
 
   test("keeps user-facing run lifecycle facts visible", () => {

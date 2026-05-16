@@ -13,6 +13,7 @@
 // design language as Home's dashboard. The mix of stats is picked for
 // a run's essentials: status, duration, cost, tokens, current node.
 
+import type { FeedEvent } from "@swarm/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
@@ -79,8 +80,8 @@ const LIVE_STATUSES = new Set<string>(["queued", "running"]);
  * run view. */
 const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
 const TERMINAL_RUN_STATUSES = new Set<NonNullable<RunSummary["runStatus"]>>(["completed", "cancelled", "halted"]);
+// Child-message ticks deferred — see docs/proposals/descendant-event-stream.md.
 const DESCENDANT_REFRESH_TYPES = new Set<string>([
-  "fact.message_appended",
   "fact.run_started",
   "fact.run_completed",
   "fact.run_paused_hitl",
@@ -90,6 +91,20 @@ const DESCENDANT_REFRESH_TYPES = new Set<string>([
   "fact.run_halted",
   "fact.run_quarantined",
 ]);
+
+export function computeDescendantRefreshToken(
+  feedEvents: readonly FeedEvent[],
+  childRunIds: ReadonlySet<string>,
+): string {
+  if (childRunIds.size === 0) return "";
+  let token = "";
+  for (const event of feedEvents) {
+    if (!childRunIds.has(event.runId)) continue;
+    if (!DESCENDANT_REFRESH_TYPES.has(event.type)) continue;
+    token = `${event.runId}:${event.seq}`;
+  }
+  return token;
+}
 
 function aggregateActiveChildMetrics(children: readonly RunSummary[] | undefined): {
   costUsd: number;
@@ -163,16 +178,10 @@ export function RunDetail(): JSX.Element {
   });
   const childRunIds = useMemo(() => new Set((subRuns ?? []).map((r) => r.runId)), [subRuns]);
   const feedEvents = useAtomValue(feedAtom);
-  const descendantRefreshToken = useMemo(() => {
-    if (childRunIds.size === 0) return "";
-    let token = "";
-    for (const event of feedEvents) {
-      if (!childRunIds.has(event.runId)) continue;
-      if (!DESCENDANT_REFRESH_TYPES.has(event.type)) continue;
-      token = `${event.runId}:${event.seq}`;
-    }
-    return token;
-  }, [feedEvents, childRunIds]);
+  const descendantRefreshToken = useMemo(
+    () => computeDescendantRefreshToken(feedEvents, childRunIds),
+    [feedEvents, childRunIds],
+  );
 
   const {
     messages,

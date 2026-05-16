@@ -145,23 +145,12 @@ const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
 
 const FALLBACK_META: FeedKindMeta = { Icon: Inbox, verb: "" };
 
-/** Event types kept in the store + stream but suppressed from the
- *  Activity feed. `fact.run_branched` is mechanical worktree bookkeeping
- *  (the executor's terminal-cleanup path stamping `run_state.branch` for
- *  later `swarm gc --branches`) — operators don't act on it, so a row
- *  with no verb just adds noise. The fanout / subrun family is
- *  structural plumbing within a parallel run; the parent's lifecycle
- *  events already cover the operator-relevant story (parent started,
- *  parent completed, parent cancelled), and the per-sub-run rows
- *  would explode the feed on every fan-out (review.dot fires 4× per
- *  run, large fan-outs would dominate Home). */
-const HIDDEN_FEED_TYPES: ReadonlySet<string> = new Set([
-  "fact.run_branched",
-  "fact.fanout_started",
-  "fact.fanout_completed",
-  "fact.subrun_completed",
-  "fact.message_appended",
-]);
+/** Defense-in-depth client filter. `FEED_EVENT_KINDS` in `@swarm/types`
+ *  is the authoritative server-side allowlist; this set catches anything
+ *  that slips through. Currently `fact.subrun_completed` is the only
+ *  entry: it is not in `FEED_EVENT_KINDS` today, but the guard protects
+ *  against operator noise if it is ever re-added. */
+const HIDDEN_FEED_TYPES: ReadonlySet<string> = new Set(["fact.subrun_completed"]);
 
 /** True for events that flow through `FEED_EVENT_KINDS` (so the server
  *  ships them) but shouldn't render as a visible row. Exported for unit

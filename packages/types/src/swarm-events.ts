@@ -820,11 +820,11 @@ export interface RawEvent extends EventEnvelope {
  * is a request the daemon may still be working through. Showing the
  * intent rows in addition to the fact rows just duplicates signal.
  *
- * Excludes node-level facts, side-effect facts, and the entire
- * observability family (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`)
- * because at sustained run rates those would drown the feed.
- * `fact.message_appended` is streamed for hidden cross-run cache wakeups
- * (not rendered in Activity).
+ * Excludes node-level facts, side-effect facts, bookkeeping kinds
+ * (run_branched, fanout_started/completed, message_appended), and the
+ * entire observability family (`agent.*`, `llm.*`, `tool.*`,
+ * `cost.recorded`) because at sustained run rates those would drown
+ * the feed.
  *
  * Both `GET /events` (backfill) and `GET /events/stream` (live SSE)
  * filter through this list on the server side. Adding a new kind here
@@ -842,10 +842,6 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   "fact.run_halted",
   "fact.run_quarantined",
   "fact.run_requeued_after_crash",
-  "fact.run_branched",
-  "fact.fanout_started",
-  "fact.fanout_completed",
-  "fact.message_appended",
   // System health
   "fact.daemon_takeover",
   "fact.handler_timeout_leaked",

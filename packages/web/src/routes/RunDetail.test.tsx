@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { FeedEvent } from "@swarm/types";
 import { cleanup, render, within } from "@testing-library/react";
 import { useDom } from "../../test/setup.ts";
-import { StatsStrip } from "./RunDetail.tsx";
+import { computeDescendantRefreshToken, StatsStrip } from "./RunDetail.tsx";
 
 // Minimal RunDetail payload — only the fields StatsStrip reads.
 const baseDetail = {
@@ -51,5 +52,34 @@ describe("StatsStrip — Cache hit rate tile", () => {
     // Tile still renders with the skeleton placeholder — no value text, but testId present
     const tile = within(container).getByTestId("detail-cache-tile");
     expect(tile).toBeTruthy();
+  });
+});
+
+function feedEvt(type: string, runId: string, seq: number): FeedEvent {
+  return { type, runId, seq, ts: 0, writer: "daemon", payload: {} } as unknown as FeedEvent;
+}
+
+describe("computeDescendantRefreshToken", () => {
+  test("ignores fact.message_appended from a child run", () => {
+    const childRunIds = new Set(["child-1"]);
+    const feedEvents = [feedEvt("fact.message_appended", "child-1", 7)];
+    expect(computeDescendantRefreshToken(feedEvents, childRunIds)).toBe("");
+  });
+
+  test("bumps for fact.run_completed from a child run", () => {
+    const childRunIds = new Set(["child-1"]);
+    const feedEvents = [feedEvt("fact.run_completed", "child-1", 9)];
+    expect(computeDescendantRefreshToken(feedEvents, childRunIds)).toBe("child-1:9");
+  });
+
+  test("ignores events from runs outside childRunIds", () => {
+    const childRunIds = new Set(["child-1"]);
+    const feedEvents = [feedEvt("fact.run_completed", "unrelated", 5)];
+    expect(computeDescendantRefreshToken(feedEvents, childRunIds)).toBe("");
+  });
+
+  test("returns empty string when childRunIds is empty", () => {
+    const feedEvents = [feedEvt("fact.run_completed", "child-1", 3)];
+    expect(computeDescendantRefreshToken(feedEvents, new Set())).toBe("");
   });
 });

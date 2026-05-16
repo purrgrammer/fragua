@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SqliteStore, sha256Hex } from "@swarm/store";
+import { FEED_EVENT_KINDS } from "@swarm/types";
 import type { WorkflowDetail, WorkflowReader, WorkflowReadOptions, WorkflowSummary } from "../../src/ports.ts";
 import { createRoutes } from "../../src/store/routes.ts";
 
@@ -1368,6 +1369,70 @@ describe("global event feed (cross-run)", () => {
     // would have hit `done: true` before its 500ms deadline. The fact
     // that we reached the marker means the loop kept running past
     // terminal — exactly the contract we want.
+  });
+
+  test("GET /events strips bookkeeping kinds even when present in the store", async () => {
+    // Seed run "c" with a mix: one allowlisted anchor (run_started) and
+    // the four kinds that were removed from FEED_EVENT_KINDS.
+    store.enqueueRun({ runId: "c", workflowSha: "wf" });
+    const c0 = store.getState("c")!;
+    const c1 = store.appendFact(
+      "c",
+      [{ type: "fact.run_started", payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "n" } }],
+      c0.version,
+    );
+    // Append bookkeeping facts that must not reach the feed. The reducer
+    // is permissive about logical transitions, so we can chain them.
+    const c2 = store.appendFact(
+      "c",
+      [{ type: "fact.run_branched", payload: { branch: "swarm/runs/c" } }],
+      c1.newVersion,
+    );
+    const c3 = store.appendFact(
+      "c",
+      [{ type: "fact.fanout_started", payload: { parentNodeId: "n", childRunIds: ["sub-1"], fanInNode: "collect" } }],
+      c2.newVersion,
+    );
+    const c4 = store.appendFact(
+      "c",
+      [
+        {
+          type: "fact.fanout_completed",
+          payload: {
+            parentNodeId: "n",
+            fanInNode: "collect",
+            outcomes: [
+              { subRunId: "sub-1", parallelIndex: 0, finalStatus: "completed" as const, costUsd: 0, billedTokens: 0 },
+            ],
+          },
+        },
+      ],
+      c3.newVersion,
+    );
+    store.appendFact(
+      "c",
+      [{ type: "fact.message_appended", payload: { ordinal: 0, role: "assistant", nodeId: null, iteration: 1 } }],
+      c4.newVersion,
+    );
+
+    const routes = createRoutes({ store });
+    const res = await routes.fetch(new Request("http://test/events"));
+    expect(res.status).toBe(200);
+    const events = (await res.json()) as Array<{ type: string }>;
+    const types = events.map((e) => e.type);
+
+    // The anchor must be present (proves run "c" was seen).
+    expect(types).toContain("fact.run_started");
+    // The four removed kinds must not appear.
+    expect(types).not.toContain("fact.run_branched");
+    expect(types).not.toContain("fact.fanout_started");
+    expect(types).not.toContain("fact.fanout_completed");
+    expect(types).not.toContain("fact.message_appended");
+    // Every returned type must be in the trimmed FEED_EVENT_KINDS allowlist.
+    const allowed = new Set<string>(FEED_EVENT_KINDS);
+    for (const t of types) {
+      expect(allowed.has(t)).toBe(true);
+    }
   });
 });
 
