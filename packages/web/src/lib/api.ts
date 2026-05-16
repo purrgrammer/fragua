@@ -1091,6 +1091,7 @@ function isAnalyticsPayload(v: unknown): v is AnalyticsPayload {
   return (
     typeof o["window"] === "object" &&
     typeof o["totals"] === "object" &&
+    (o["firstRunAt"] === null || typeof o["firstRunAt"] === "number") &&
     Array.isArray(o["runsByBucket"]) &&
     Array.isArray(o["spendByBucket"]) &&
     Array.isArray(o["tokensByBucket"]) &&

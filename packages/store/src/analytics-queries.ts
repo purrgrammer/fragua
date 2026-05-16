@@ -161,6 +161,19 @@ export function getKpiTotals(db: Database, w: AnalyticsWindow): KpiTotalsRow {
   );
 }
 
+// ── Earliest run anchor ──────────────────────────────────────────────
+
+/** Minimum `enqueued_at` across runs matching the analytics window +
+ *  filters. Used by the client WindowSelector to decide which lastN
+ *  options are available for the visible dataset. Returns `null` when
+ *  no rows match (empty table or no runs inside the window). */
+export function getFirstRunAt(db: Database, w: AnalyticsWindow): number | null {
+  const pred = windowPredicate(w, "cwd");
+  const sql = `SELECT MIN(enqueued_at) AS firstRunAt FROM run_state WHERE ${pred.sql}`;
+  const row = db.query<{ firstRunAt: number | null }, (number | string)[]>(sql).get(...pred.params);
+  return row?.firstRunAt ?? null;
+}
+
 // ── Bucketed series ────────────────────────────────────────────────────
 
 export interface RunsByBucketRow {

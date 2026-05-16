@@ -89,7 +89,7 @@ export type {
   WorkflowDirectoryRow,
   WorkflowScopeFilter,
 } from "./analytics-queries.ts";
-export { decodeCursor, encodeCursor } from "./analytics-queries.ts";
+export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
   ActiveDescendantNodeRow,
@@ -1027,6 +1027,11 @@ export interface IAnalyticsReader {
   getModelDistribution(window: AnalyticsWindow): ModelDistributionRow[];
   /** Most-run workflows in the window joined to `workflows.name`. */
   getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[];
+  /** Minimum `enqueued_at` across runs matching the analytics window +
+   *  filters. `null` when no rows match. Drives WindowSelector option
+   *  filtering: lastN options are shown only when the data span is >= N
+   *  days. */
+  getFirstRunAt(window: AnalyticsWindow): number | null;
   /** Distinct `(scope, name[, cwd])` identities across `run_state` for
    *  the workflow selector on `/analytics`. Sha collapses (every edit
    *  of `research.dot` shares one row); `path` and `ephemeral` runs

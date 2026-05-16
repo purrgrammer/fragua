@@ -92,6 +92,10 @@ export interface TopWorkflowRow {
 export interface AnalyticsPayload {
   window: { fromMs: number; toMs: number; bucket: BucketKind; tzOffsetMinutes: number };
   compareWindow: { fromMs: number; toMs: number } | null;
+  /** Earliest run `enqueued_at` (unix ms) within the current analytics
+   *  window and active cwd/workflow filters. `null` when the window
+   *  contains no runs. Drives WindowSelector option filtering. */
+  firstRunAt: number | null;
   totals: {
     current: AnalyticsTotals;
     previous: AnalyticsTotals | null;

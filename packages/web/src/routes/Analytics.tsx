@@ -17,7 +17,7 @@
 // clicked slice. The drawer reuses RunRow.compact.
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CacheChart } from "../components/analytics/CacheChart.tsx";
 import { DrillDownDrawer } from "../components/analytics/DrillDownDrawer.tsx";
 // ProjectSelector intentionally absent: the project↔workflow filter
@@ -33,7 +33,7 @@ import { RunsChart } from "../components/analytics/RunsChart.tsx";
 import { SpendChart } from "../components/analytics/SpendChart.tsx";
 import { TokensChart } from "../components/analytics/TokensChart.tsx";
 // import { TopWorkflowsBar } from "../components/analytics/TopWorkflowsBar.tsx";
-import { WindowSelector } from "../components/analytics/WindowSelector.tsx";
+import { filterWindowOptions, WindowSelector } from "../components/analytics/WindowSelector.tsx";
 import { type WorkflowSelection, WorkflowSelector } from "../components/analytics/WorkflowSelector.tsx";
 import { resolveWindow, type WindowKey } from "../lib/analytics.ts";
 import type { AnalyticsRequest } from "../lib/api.ts";
@@ -72,6 +72,20 @@ export function Analytics(): JSX.Element {
     summaryReq.workflowName = workflow.name;
   }
   const { data, isPending } = useQuery(queries.analytics.summary(summaryReq));
+
+  // When the data span narrows (e.g. a workflow filter is applied that
+  // has fewer days of history), the current windowKey may no longer be
+  // available. Fall back to 'all' so the selector never shows a hidden
+  // option as the active value.
+  const availableKeys = useMemo(
+    () => new Set(filterWindowOptions(data?.firstRunAt ?? null, now).map((w) => w.key)),
+    [data?.firstRunAt, now],
+  );
+  useEffect(() => {
+    if (data !== undefined && !availableKeys.has(windowKey)) {
+      setWindowKey("all");
+    }
+  }, [availableKeys, windowKey, data]);
 
   const [slice, setSlice] = useState<DrillSlice | null>(null);
   const locale = useLocale();
@@ -118,7 +132,7 @@ export function Analytics(): JSX.Element {
     <div className="flex flex-col gap-4">
       <div className="flex justify-end gap-2">
         <WorkflowSelector value={workflow} onChange={setWorkflow} cwd={effectiveCwd} />
-        <WindowSelector value={windowKey} onChange={setWindowKey} />
+        <WindowSelector value={windowKey} onChange={setWindowKey} firstRunMs={data?.firstRunAt ?? null} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

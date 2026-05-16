@@ -59,6 +59,7 @@ export function analyticsRoutes(opts: AnalyticsRoutesOpts): Hono {
     return c.json({
       window: { fromMs: current.fromMs, toMs: current.toMs, bucket, tzOffsetMinutes },
       compareWindow: previous ? { fromMs: previous.fromMs, toMs: previous.toMs } : null,
+      firstRunAt: store.getFirstRunAt(current),
       totals,
       // No zero-fill — empty buckets are omitted entirely. The chart's
       // x-axis compresses to only the buckets SQL actually returned, so

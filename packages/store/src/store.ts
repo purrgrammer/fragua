@@ -13,6 +13,7 @@ import {
   type ModelDistributionRow,
   getCacheByBucket as queryCacheByBucket,
   getDrilldownPage as queryDrilldownPage,
+  getFirstRunAt as queryFirstRunAt,
   getHaltDistribution as queryHaltDistribution,
   getKpiTotals as queryKpiTotals,
   getModelDistribution as queryModelDistribution,
@@ -891,6 +892,10 @@ export class SqliteStore implements IEventStore {
 
   getTopWorkflows(window: AnalyticsWindow, limit: number): TopWorkflowRow[] {
     return queryTopWorkflows(this.db, window, limit);
+  }
+
+  getFirstRunAt(window: AnalyticsWindow): number | null {
+    return queryFirstRunAt(this.db, window);
   }
 
   getWorkflowDirectory(opts: { cwd?: string }): WorkflowDirectoryRow[] {
