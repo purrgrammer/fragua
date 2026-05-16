@@ -1416,6 +1416,18 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // — the run sleeps without a slot held, and resume re-dispatches the
     // same node since state.currentNode points back at the retrying id.
     let retryCounterPatch: Record<string, number> | undefined;
+    // Per attractor §3.5: reset the counter when this node succeeds so
+    // a re-entry via goal-gate retarget (§3.4) or a fail-edge loop
+    // starts at zero instead of inheriting the prior pass's count.
+    if (
+      result.kind === "transition" &&
+      (result.outcomeStatus === "success" || result.outcomeStatus === "partial_success")
+    ) {
+      const counterKey = retryCountKey(currentNode);
+      if (readNumber(state.routing[counterKey]) > 0) {
+        retryCounterPatch = { [counterKey]: 0 };
+      }
+    }
     let retryPause:
       | {
           nodeId: string;
