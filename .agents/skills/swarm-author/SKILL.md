@@ -381,6 +381,7 @@ graph [
 - `goal` — keep it short. Summarisers read this when deciding what matters in the run.
 - Defaults (`default_*`) cascade into nodes unless overridden.
 - `budget_*` — wired. `budget-policy.ts` evaluates `cumulative >= ceiling` at every turn boundary. `budget_policy="stop"` halts with `fact.run_halted { reason: "budget" }`; `budget_policy="warn"` emits `budget.warn` / `budget.stop` events without halting. Same semantics for node-level `max_cost_usd` / `max_tokens`.
+- `max_ms` / `timeout` — per-node wall-clock ceiling. Set `max_ms=0` (or `timeout="0"` / `"0s"`) on a codergen node to disable the wall-clock watchdog entirely; the auto-dispatcher resolves the zero sentinel to `HandlerSpec.maxMs: undefined`, the executor skips `AbortSignal.timeout`, and the supervisor stops checking for leaks on that node. Cost/token bounds (`max_cost_usd`, `max_tokens`) are the real ceiling for codergen — wall-clock is a runaway backstop, not a typical bound. Steer / cancel / shutdown aborts still propagate. See `docs/proposals/codergen-unbounded-time.md`.
 
 For `retry_policy` presets, `model_stylesheet` selectors, and `subgraph cluster_<name>` semantics, see `references/advanced-attrs.md`.
 

@@ -69,7 +69,7 @@ ctx.artifacts.getFrom({ nodeId, iteration, key })               // explicit cros
 - **Daemon supervisor fiber** ticks every 50ms, inside one short transaction:
   - `heartbeat()` — UPDATE `daemon_lock.heartbeat_at`
   - `detectNewIntents()` — for every registered abort controller, check if there are unapplied intents; trip abort if yes
-  - `detectStuckNodes()` — watchdog for handlers that exceeded `maxMs + LEAK_GRACE_MS`
+  - `detectStuckNodes()` — watchdog for handlers that exceeded `maxMs + LEAK_GRACE_MS`. Skipped for nodes whose `HandlerSpec.maxMs` is `undefined` (codergen opt-out via `max_ms=0`).
 - **Web SSE streams** poll `events WHERE seq > ?` every 100ms per subscribed run. At 10 concurrent subscribers, ≈100 qps of indexed reads; <1ms each.
 - **No `.sock` file.** Nothing to clean up on crash. Nothing to reconcile on restart.
 
@@ -466,7 +466,7 @@ Process-lifecycle and infrastructure events. Persisted in the dedicated `daemon_
 | `daemon.reaper_took_over` | `priorPid`, `priorHostname`, `priorHeartbeatAt`, `staleForMs` | Lock TTL exceeded; this daemon force-acquired |
 | `daemon.sweep_completed` | `requeued: number`, `quarantined: number`, `durationMs` | Startup sweep finished |
 | `daemon.blob_gc_completed` | `deleted: number`, `durationMs` | Orphan-blob GC sweep finished |
-| `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced |
+| `daemon.leak_detected` | `runId`, `nodeId`, `count`, `ceiling` | A handler leaked past `maxMs + leakGrace`; per-process counter advanced. Only fires for nodes with a numeric `HandlerSpec.maxMs` — unbounded codergen (`max_ms=0`) skips the watchdog. |
 | `daemon.worktree_provisioned` | `runId`, `ok: boolean`, `errorDetail?` | Provisioner result; `ok: false` records why a run halted at provision time |
 | `intent.schedule_create` | `scheduleId`, `workflowRef`, `cwd`, `intervalMs`, `intervalText`, `input?`, `overlapPolicy`, `fireOnCreate` | Operator created a schedule (writer: web/CLI). Audit only — the row in `schedules` is the canonical state |
 | `intent.schedule_pause` | `scheduleId` | Operator paused a schedule |
@@ -748,7 +748,7 @@ export type SideEffect = "none" | "idempotent" | "external";
 export type HandlerSpec = {
   kind: string;
   sideEffect: SideEffect;
-  maxMs: number;
+  maxMs?: number;       // optional; codergen may opt out via DOT max_ms=0 / timeout="0"
   handler: Handler;
 };
 
@@ -861,7 +861,7 @@ Handlers never compute `argsHash` themselves. The framework owns canonicalisatio
 ### Enforced at review
 - `no-restricted-imports`: `fetch`, `undici`, `fs`, `child_process` banned inside `handlers/`.
 - AST rule: no `await`/`JSON.stringify` inside `.transaction(() => ...)` bodies.
-- Handler PRs must: declare `sideEffect`, set `maxMs`, include replay property test for external tools.
+- Handler PRs must: declare `sideEffect`, set `maxMs` (or document why omission is correct for codergen-style handlers that self-bound via cost/tokens), include replay property test for external tools.
 
 ---
 
@@ -927,21 +927,25 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
     }
 
     const steerAbort = new AbortController();
-    const nodeSignal = AbortSignal.any([
-      steerAbort.signal,
-      AbortSignal.timeout(handlerSpec(state.current_node).maxMs),
-      shutdownSignal,
-    ]);
+    const spec = handlerSpec(state.current_node);
+    const sigs: AbortSignal[] = [steerAbort.signal, shutdownSignal];
+    if (spec.maxMs !== undefined) sigs.push(AbortSignal.timeout(spec.maxMs));
+    const nodeSignal = AbortSignal.any(sigs);
     registerAbort(runId, steerAbort);
 
     const ctx = buildHandlerContext(runId, state, nodeSignal, decision.routingDelta, decision.steering, decision.hitlInput);
 
     let result: HandlerResult;
     try {
-      result = await Promise.race([
-        dispatch(state.current_node, ctx),
-        timeoutRejects(handlerSpec(state.current_node).maxMs + LEAK_GRACE_MS),
-      ]);
+      if (spec.maxMs !== undefined) {
+        result = await Promise.race([
+          dispatch(state.current_node, ctx),
+          timeoutRejects(spec.maxMs + LEAK_GRACE_MS),
+        ]);
+      } else {
+        // Unbounded codergen — cost/token bounds and operator intents govern.
+        result = await dispatch(state.current_node, ctx);
+      }
     } catch (err) {
       result = mapErrorToResult(err, nodeSignal);
     } finally {

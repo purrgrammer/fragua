@@ -1,9 +1,9 @@
 ---
 title: Codergen nodes — unbounded wall-clock time
-summary: "Make HandlerSpec.maxMs optional for codergen-kind handlers. Per-codergen runs are bounded by tokens and USD spend, not wall-clock. Today HandlerSpec.maxMs: number is required, so the only way to express \"no timeout\" is a giant ceiling like timeouts.codergen: \"999h\" — design noise that obscures the real cost controls."
-status: proposed
+summary: "Codergen nodes can opt out of wall-clock bounding via DOT `max_ms=0` (or the duration-string equivalent `timeout=0s`); the auto-dispatcher resolves zero to `HandlerSpec.maxMs: undefined`, the executor skips `AbortSignal.timeout` and the leak watchdog, the supervisor skips the stuck-node trip. Cost / tokens / operator intents remain the operative ceiling. Default `DEFAULT_MAX_MS` stays at 4 h when nothing is set — unbounded is opt-in per node."
+status: shipped
 maturity: sketch
-last-reviewed: 2026-05-15
+last-reviewed: 2026-05-16
 ---
 
 # Codergen nodes — unbounded wall-clock time

@@ -556,6 +556,8 @@ Per-model rollups are available at `GET /metrics/global.breakdownByModel`.
 
 `maxMs` on the spec is a hard deadline. The executor composes `AbortSignal.timeout(maxMs)` into `ctx.signal`. If the handler ignores `signal` and runs past `maxMs + LEAK_GRACE_MS` (10s), the executor emits `fact.handler_timeout_leaked` and halts the run. Don't ignore `signal`.
 
+`HandlerSpec.maxMs` is typed `number | undefined`. Codergen-kind handlers may omit it (or set it to `undefined`) to disable wall-clock bounding entirely — cost/token attrs (`max_cost_usd`, `max_tokens`) remain the operative ceiling for the model loop. Authors opt in per-node from DOT via `max_ms=0` (or `timeout="0"`); the auto-dispatcher resolves either to `HandlerSpec.maxMs: undefined`. When `maxMs` is undefined the executor skips `AbortSignal.timeout` AND the leak watchdog, but steer / cancel / shutdown aborts still propagate through `ctx.signal`. See `docs/proposals/codergen-unbounded-time.md`.
+
 ---
 
 ## Example: minimal LLM handler
@@ -603,7 +605,7 @@ For a fully-featured LLM backend with skills, context files, and tool-calling, u
 Before merging a new handler:
 
 - [ ] `sideEffect` declared correctly (none / idempotent / external)
-- [ ] `maxMs` set — no defaults on purpose
+- [ ] `maxMs` set, or intentionally omitted for codergen-style handlers that self-bound via cost/tokens
 - [ ] Uses `ctx.signal` anywhere it blocks on I/O
 - [ ] No `node:fs` / `node:child_process` / bare `fetch` imports
 - [ ] External tool calls route through `ctx.externalCall`

@@ -48,7 +48,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Drift-lint extensions](./drift-lint-extensions.md) | specified | extend `bun run lint:docs` with three audits — HandlerContext block (ARCH §5 vs `handler/types.ts`), proposal-status-vs-code (catch shipped-but-still-`proposed`), JSDoc retry-status (`PauseReason` JSDoc vs `provider-retry-policy.ts`). Drift classes the existing gate doesn't catch; surfaced by the 2026-05-04 introspect run |
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
-| [Codergen nodes — unbounded wall-clock time](./codergen-unbounded-time.md) | sketch | make `HandlerSpec.maxMs` optional for codergen handlers; per-codergen runs are bounded by tokens and USD spend, not wall-clock; cuts the "999h" ceiling pattern from configs |
 | [Multi-account support per provider](./multi-account.md) | sketch | first-class `(provider, account)` credentials with reserved `"default"` account; selection via run intent / schedule / project config / global config; workflows stay account-agnostic. Drivers: billing/org separation, per-run credentials. Composes with deferred [`credentials.md`](./credentials.md) — lower-cost ordering is multi-account first against `auth.json`, credentials-in-DB second with the two-level shape baked in |
 | [Per-model CLI ops for custom providers](./provider-model-ops.md) | sketch | `swarm providers add-model / rm-model / ls-models / edit-model` lets operators manage individual model entries inside a custom provider's `provider_config` row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable |
 
@@ -87,6 +86,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Agent base prompt — sub-agents inherit the parent's framing](./agent-base-prompt.md)
 - [Sub-agent crash resilience — resume up to last completed turn](./sub-agent-crash-resilience.md)
 - [Codergen maxMs is a runaway backstop, not a typical bound](./codergen-maxms-backstop.md)
+- [Codergen nodes — unbounded wall-clock time](./codergen-unbounded-time.md)
 - [Provider credentials in the store](./provider-credentials-storage.md)
 - [Custom-provider config in the store](./provider-config-storage.md)
 - [Per-model CLI ops for custom providers](./provider-model-ops.md)
