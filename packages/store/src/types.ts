@@ -647,6 +647,36 @@ export interface GetGlobalEventsLatestOpts {
   limit: number;
 }
 
+export interface GetEventsForRunWithDescendantsForwardOpts {
+  /** Parent run id. Events from this run and every descendant sub-run
+   * (recursive via `run_state.parent_run_id`) are in scope. */
+  parentRunId: string;
+  /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
+   * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
+   * returned. */
+  floorTs: number;
+  /** Lex-max `run_id` already emitted at `floorTs`. On first connect
+   * (no emission yet at this ts), pass the sentinel `""`. */
+  lastRunId: string;
+  /** Lex-max `seq` already emitted at `floorTs` for `lastRunId`. On
+   * first connect, pass `-1`. */
+  lastSeq: number;
+  limit: number;
+}
+
+export interface GetEventsForRunWithDescendantsAtFloorOpts {
+  /** Parent run id; same scoping as the forward variant. */
+  parentRunId: string;
+  /** Boundary `ts` to scan; only events at exactly this `ts` qualify. */
+  floorTs: number;
+  /** Pagination cursor — only events with `(run_id, seq) >
+   * (afterRunId, afterSeq)` qualify. Pass `""` / `-1` on the first
+   * call. */
+  afterRunId: string;
+  afterSeq: number;
+  limit: number;
+}
+
 export interface GetMessagesOpts {
   sinceOrdinal?: number;
   limit?: number;
@@ -848,6 +878,22 @@ export interface IEventReader {
    * oldest-first. Powers the backfill route (`GET /events`).
    */
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
+  /**
+   * Forward direction of the per-parent descendant SSE feed: events
+   * from `parentRunId` and every sub-run in its tree (recursive via
+   * `run_state.parent_run_id`), strictly after `(floorTs, lastRunId,
+   * lastSeq)`, in `(ts, run_id, seq)` ASC order. Unfiltered by design
+   * — the descendant stream consumes the full firehose scoped to the
+   * parent's tree. See `docs/proposals/descendant-event-stream.md`.
+   */
+  getEventsForRunWithDescendantsForward(opts: GetEventsForRunWithDescendantsForwardOpts): StoredEvent[];
+  /**
+   * Boundary rescan companion for the per-parent descendant SSE feed:
+   * events at exactly `floorTs` with `(run_id, seq) > (afterRunId,
+   * afterSeq)`. Paginated ASC from `("", -1)` by the loop; the loop
+   * filters duplicates via a per-`floorTs` Set.
+   */
+  getEventsForRunWithDescendantsAtFloor(opts: GetEventsForRunWithDescendantsAtFloorOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
   /**
    * Run rows in the requested statuses, optionally narrowed to those

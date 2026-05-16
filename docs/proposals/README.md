@@ -50,7 +50,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Multi-account support per provider](./multi-account.md) | sketch | first-class `(provider, account)` credentials with reserved `"default"` account; selection via run intent / schedule / project config / global config; workflows stay account-agnostic. Drivers: billing/org separation, per-run credentials. Composes with deferred [`credentials.md`](./credentials.md) — lower-cost ordering is multi-account first against `auth.json`, credentials-in-DB second with the two-level shape baked in |
 | [Per-model CLI ops for custom providers](./provider-model-ops.md) | sketch | `swarm providers add-model / rm-model / ls-models / edit-model` lets operators manage individual model entries inside a custom provider's `provider_config` row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable |
-| [Descendant event stream](./descendant-event-stream.md) | sketch | dedicated `GET /runs/:id/descendants/stream` SSE endpoint scoped to child-run lifecycle + message events; replaces the global feed piggyback that broke when `fact.message_appended` was removed from `FEED_EVENT_KINDS` |
 
 ## Deferred
 
@@ -68,6 +67,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 <details>
 <summary>Design records for delivered capability — capability claims live in the root README. Click to expand.</summary>
 
+- [Descendant event stream](./descendant-event-stream.md)
 - [Project config file](./project-config.md)
 - [Doc-vs-code drift CI lint](./drift-lint.md)
 - [Bound the OCC retry loop](./occ-retry-ceiling.md)

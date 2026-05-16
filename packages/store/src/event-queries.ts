@@ -202,6 +202,76 @@ export function selectEventsWithDescendants(
     .all(parentRunId, sinceTs, limit);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Per-parent descendant feed reads (parent run + every sub-run)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Two-query design mirroring the global feed (see further down) but
+// scoped to a parent run's tree via the same recursive CTE used by
+// `SELECT_EVENTS_WITH_DESCENDANTS_SQL`. The descendant SSE stream is
+// unfiltered by design — no `type IN (…)` predicate — so RunDetail
+// can see the full firehose for its own tree without forcing the
+// noisy kinds onto the global allow-list.
+//
+//   - FORWARD: strict-tuple `(e.ts, e.run_id, e.seq) > (?floorTs,
+//     ?lastRunId, ?lastSeq)`. Advances on every emission so a
+//     same-ts batch larger than `LIMIT N` paginates across
+//     iterations.
+//
+//   - BOUNDARY RESCAN: events at exactly `e.ts == floorTs` with
+//     `(run_id, seq) > (afterRunId, afterSeq)`. The runGlobalFeedLoop
+//     boundary pass walks ASC from `("", -1)` and filters via a
+//     per-`floorTs` Set of emitted `(runId, seq)` keys.
+
+const SELECT_EVENTS_FOR_RUN_WITH_DESCENDANTS_FORWARD_SQL = `
+  WITH RECURSIVE descendants AS (
+    SELECT run_id FROM run_state WHERE run_id = ?1
+    UNION ALL
+    SELECT child.run_id FROM run_state child
+      JOIN descendants d ON child.parent_run_id = d.run_id
+  )
+  SELECT e.run_id, e.seq, e.type, e.writer, e.payload, e.ts
+    FROM events e
+    JOIN descendants d ON d.run_id = e.run_id
+   WHERE (e.ts, e.run_id, e.seq) > (?2, ?3, ?4)
+   ORDER BY e.ts ASC, e.run_id ASC, e.seq ASC
+   LIMIT ?5
+`;
+
+const SELECT_EVENTS_FOR_RUN_WITH_DESCENDANTS_AT_FLOOR_SQL = `
+  WITH RECURSIVE descendants AS (
+    SELECT run_id FROM run_state WHERE run_id = ?1
+    UNION ALL
+    SELECT child.run_id FROM run_state child
+      JOIN descendants d ON child.parent_run_id = d.run_id
+  )
+  SELECT e.run_id, e.seq, e.type, e.writer, e.payload, e.ts
+    FROM events e
+    JOIN descendants d ON d.run_id = e.run_id
+   WHERE e.ts = ?2
+     AND (e.run_id, e.seq) > (?3, ?4)
+   ORDER BY e.run_id ASC, e.seq ASC
+   LIMIT ?5
+`;
+
+export function selectEventsForRunWithDescendantsForward(
+  db: Database,
+  opts: { parentRunId: string; floorTs: number; lastRunId: string; lastSeq: number; limit: number },
+): EventRow[] {
+  return db
+    .query<EventRow, [string, number, string, number, number]>(SELECT_EVENTS_FOR_RUN_WITH_DESCENDANTS_FORWARD_SQL)
+    .all(opts.parentRunId, opts.floorTs, opts.lastRunId, opts.lastSeq, opts.limit);
+}
+
+export function selectEventsForRunWithDescendantsAtFloor(
+  db: Database,
+  opts: { parentRunId: string; floorTs: number; afterRunId: string; afterSeq: number; limit: number },
+): EventRow[] {
+  return db
+    .query<EventRow, [string, number, string, number, number]>(SELECT_EVENTS_FOR_RUN_WITH_DESCENDANTS_AT_FLOOR_SQL)
+    .all(opts.parentRunId, opts.floorTs, opts.afterRunId, opts.afterSeq, opts.limit);
+}
+
 const SELECT_EVENTS_UNAPPLIED_INTENTS_SQL = `
   SELECT run_id, seq, type, writer, payload, ts
     FROM events

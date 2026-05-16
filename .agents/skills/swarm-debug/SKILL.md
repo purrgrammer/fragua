@@ -135,6 +135,14 @@ If the ending is ambiguous (`fact.run_halted { reason: "error" }` with no detail
 # HTTP
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[] | {seq, type, payload, at: .ts}'
 
+# Parent + every descendant sub-run, merged in (ts, runId, seq) order.
+# Use this when the question is "why isn't the descendant view
+# updating?" — the live tail of this stream is what RunDetail
+# subscribes to via the per-parent SSE
+# (`/runs/:id/events/stream?include=descendants`, unfiltered firehose
+# scoped to one parent's tree). docs/proposals/descendant-event-stream.md.
+curl -fsS "$URL/runs/$RUN/events.json?include=descendants" | jq '.[] | {originRunId, seq, type, ts}'
+
 # SQL — chunks; events run into thousands on long runs.
 sqlite3 -readonly "$DB" <<SQL
 .mode json

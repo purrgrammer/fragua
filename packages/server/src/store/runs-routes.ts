@@ -6,19 +6,31 @@
 
 import { type IEventStore, isTerminal as isTerminalStatus, type RunStatus } from "@swarm/store";
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import type { WorkflowReader } from "../ports.ts";
 import { runStateToDetail, runSummaryRowToSummary } from "./runs-adapter.ts";
+import { parseGlobalCursorFromHeader, runGlobalFeedLoop } from "./sse.ts";
 import { attachStepAggregates, eventsToSteps, fillOrphanDurations } from "./steps.ts";
 
 export interface RunsRoutesOpts {
   store: IEventStore;
   /** Optional workflow reader for resolving workflow display names. */
   workflowReader?: WorkflowReader;
+  /** Poll interval for the per-parent descendant SSE feed. Mirrors
+   * the knob on the other SSE-mounting route factory. */
+  ssePollMs?: number;
+  /** SQL batch size for the descendant SSE forward / boundary fetch. */
+  sseBatchSize?: number;
 }
+
+const DEFAULT_SSE_POLL_MS = 100;
+const DEFAULT_SSE_BATCH_SIZE = 500;
 
 export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   const app = new Hono();
   const { store } = opts;
+  const ssePollMs = opts.ssePollMs ?? DEFAULT_SSE_POLL_MS;
+  const sseBatchSize = opts.sseBatchSize ?? DEFAULT_SSE_BATCH_SIZE;
 
   app.get("/runs", (c) => {
     // Query params (all optional, all enforced server-side):
@@ -131,6 +143,65 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
       return c.json(store.getEventsFeedWithDescendants(runId));
     }
     return c.json(store.getEvents(runId));
+  });
+
+  // SSE sibling of the JSON `?include=descendants` endpoint above.
+  // Per-parent descendant feed: events from this run AND every
+  // sub-run in its tree (recursive via run_state.parent_run_id),
+  // unfiltered — the descendant stream is the full firehose scoped
+  // to one parent's tree. RunDetail consumes this to keep its
+  // descendant transcript live without forcing the noisy kinds
+  // (`fact.message_appended`, etc.) onto the global `/events` feed.
+  //
+  // docs/proposals/descendant-event-stream.md.
+  app.get("/runs/:id/events/stream", (c) => {
+    const runId = c.req.param("id");
+    if (c.req.query("include") !== "descendants") {
+      return c.json({ error: "missing ?include=descendants", code: "bad_request" }, 400);
+    }
+    if (store.getState(runId) == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    return streamSSE(c, async (stream) => {
+      const initialCursor = parseGlobalCursorFromHeader({
+        fromTs: c.req.query("fromTs"),
+        lastEventId: c.req.header("Last-Event-ID"),
+      });
+      try {
+        await runGlobalFeedLoop(stream, initialCursor, {
+          // The descendant SQL is unfiltered; the `kindIn` opt on
+          // GetGlobalEventsForwardOpts is unused by our adapter
+          // callbacks below. We satisfy the loop's config shape with
+          // an empty array.
+          fetchForward: ({ floorTs, lastRunId, lastSeq, limit }) =>
+            store.getEventsForRunWithDescendantsForward({
+              parentRunId: runId,
+              floorTs,
+              lastRunId,
+              lastSeq,
+              limit,
+            }),
+          fetchAtFloor: ({ floorTs, afterRunId, afterSeq, limit }) =>
+            store.getEventsForRunWithDescendantsAtFloor({
+              parentRunId: runId,
+              floorTs,
+              afterRunId,
+              afterSeq,
+              limit,
+            }),
+          kindIn: [],
+          batchSize: sseBatchSize,
+          pollMs: ssePollMs,
+        });
+      } catch (err) {
+        // Mid-iteration teardown (test cleanup, daemon restart) can
+        // close the DB out from under the loop. Treat as an implicit
+        // stream abort instead of letting it bubble out of the
+        // streamSSE async generator.
+        if (err instanceof Error && /closed database/i.test(err.message)) return;
+        throw err;
+      }
+    });
   });
 
   app.get("/runs/:id/steps", (c) => {

@@ -57,6 +57,8 @@ import {
   type PendingIntentRow,
   selectEvents,
   selectEventsByType,
+  selectEventsForRunWithDescendantsAtFloor,
+  selectEventsForRunWithDescendantsForward,
   selectEventsWithDescendants,
   selectFactSideEffectDone,
   selectFactSideEffectIntent,
@@ -170,6 +172,8 @@ import {
   type FactAppendResult,
   type FactEvent,
   type GetDaemonEventsOpts,
+  type GetEventsForRunWithDescendantsAtFloorOpts,
+  type GetEventsForRunWithDescendantsForwardOpts,
   type GetEventsOpts,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
@@ -708,6 +712,14 @@ export class SqliteStore implements IEventStore {
 
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[] {
     return selectGlobalEventsLatest(this.db, opts).map(rowToStoredEvent);
+  }
+
+  getEventsForRunWithDescendantsForward(opts: GetEventsForRunWithDescendantsForwardOpts): StoredEvent[] {
+    return selectEventsForRunWithDescendantsForward(this.db, opts).map(rowToStoredEvent);
+  }
+
+  getEventsForRunWithDescendantsAtFloor(opts: GetEventsForRunWithDescendantsAtFloorOpts): StoredEvent[] {
+    return selectEventsForRunWithDescendantsAtFloor(this.db, opts).map(rowToStoredEvent);
   }
 
   getUnappliedIntents(runId: string): StoredEvent[] {

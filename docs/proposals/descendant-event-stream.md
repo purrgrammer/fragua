@@ -1,8 +1,8 @@
 ---
 title: Per-parent descendant event stream — split the operator feed from descendant tracking
 summary: "The operator Activity feed and RunDetail's descendant-tracking signal share one allowlist on /events. RunDetail's need for fact.message_appended floods the feed and forces a client-side HIDDEN_FEED_TYPES patch. Replace the entanglement with a scoped SSE: /runs/:id/events/stream?include=descendants serves a parent's run tree; /events keeps lifecycle + system-health only."
-status: proposed
-maturity: sketch
+status: shipped
+maturity: shipped
 last-reviewed: 2026-05-16
 rationale: Commit 2d0ddaf (P11 of parallel-ui, 2026-05-15) added `fact.message_appended` to `FEED_EVENT_KINDS` so RunDetail could observe sub-run progress through `feedAtom`. The commit message frames it as deferred work: "Parent's run-detail page updates in real time **without a parent-level SSE descendant multiplex (deferred — server-side recursive cursor work is the next pass)**." That next pass is this proposal. Observable cost today: a single live run can emit dozens of `fact.message_appended` per minute, the 30-event /events backfill fills with them, the GlobalFeed hides them all, and the operator sees one Activity row.
 ---
@@ -205,7 +205,22 @@ Per `AGENTS.md` §Ground rules:
 
 ## Status
 
-> Proposed, 2026-05-16. Depends on step 1 (trim `FEED_EVENT_KINDS`)
-> landing first; the regression window between step 1 and step 2 is the
-> "minor descendant-message ticker stops" UX cost. Land step 2 within
-> the same week to keep the window short.
+> Shipped, 2026-05-16. The four-site change landed verbatim:
+>
+> - `@swarm/store`: `getEventsForRunWithDescendantsForward` /
+>   `getEventsForRunWithDescendantsAtFloor` on `IEventReader` /
+>   `SqliteStore`, backed by a recursive-CTE-scoped strict-tuple cursor
+>   in `packages/store/src/event-queries.ts`.
+> - `@swarm/server`: new SSE route
+>   `GET /runs/:id/events/stream?include=descendants` mounted by
+>   `storeRunsRoutes`, reusing `runGlobalFeedLoop` with an empty
+>   `kindIn` (the descendant SQL is unfiltered).
+> - `@swarm/web`: `useRunDescendantStream(runId, { terminal })` hook
+>   returning `{ descendantToken }`; RunDetail replaces its
+>   `feedAtom`-scan-for-childRunIds block with the hook and threads
+>   the token into `useRunLive.descendantRefreshToken`. The previous
+>   `computeDescendantRefreshToken` export is gone.
+>
+> Same-PR doc updates: `docs/ARCHITECTURE.md` §4 (IEventReader) +
+> §7 (web-server routes); `.agents/skills/swarm-debug/SKILL.md`
+> §4 (walking the descendant timeline).

@@ -574,6 +574,10 @@ export interface IEventReader {
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[];
   getGlobalEventsAtFloor(opts: GetGlobalEventsAtFloorOpts): StoredEvent[];
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
+  // Per-parent descendant SSE feed: parent + every sub-run, scoped via
+  // recursive CTE on run_state.parent_run_id. Unfiltered by design.
+  getEventsForRunWithDescendantsForward(opts: GetEventsForRunWithDescendantsForwardOpts): StoredEvent[];
+  getEventsForRunWithDescendantsAtFloor(opts: GetEventsForRunWithDescendantsAtFloorOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
   getWakeCandidates(opts: { statuses: readonly RunStatus[]; autoResumeBefore?: number }): WakeCandidateRow[];
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
@@ -1137,6 +1141,26 @@ app.get("/runs/:id/stream", (c) => streamSSE(c, async (stream) => {
     }
     if (events.length === 0) await sleep(100);
   }
+}));
+
+// Per-parent descendant SSE — docs/proposals/descendant-event-stream.md.
+// Parent + every sub-run in its tree (recursive via
+// run_state.parent_run_id), unfiltered by design (full firehose scoped
+// to one parent's tree). Splits descendant tracking off the global
+// `/events` feed so the operator Activity allow-list can stay narrow.
+// Reuses runGlobalFeedLoop with the recursive-CTE-scoped store
+// helpers; resumable via Last-Event-ID (`<ts>.<runId>.<seq>` triple)
+// or ?fromTs.
+app.get("/runs/:id/events/stream", (c) => streamSSE(c, async (stream) => {
+  if (c.req.query("include") !== "descendants") return c.json({ error: "missing ?include=descendants" }, 400);
+  const runId = c.req.param("id");
+  const cursor = parseGlobalCursorFromHeader({ fromTs: c.req.query("fromTs"), lastEventId: c.req.header("Last-Event-ID") });
+  await runGlobalFeedLoop(stream, cursor, {
+    fetchForward: (opts) => store.getEventsForRunWithDescendantsForward({ parentRunId: runId, ...opts }),
+    fetchAtFloor: (opts) => store.getEventsForRunWithDescendantsAtFloor({ parentRunId: runId, ...opts }),
+    kindIn: [], // unused — descendant SQL has no type filter
+    batchSize: 500, pollMs: 100,
+  });
 }));
 ```
 
