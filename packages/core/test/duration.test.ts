@@ -44,13 +44,27 @@ describe("parseDurationMs — examples", () => {
   });
 });
 
+describe("parseDurationMs — zero is accepted (unbounded sentinel)", () => {
+  test("number 0 returns 0", () => {
+    expect(parseDurationMs(0)).toBe(0);
+  });
+
+  test('string "0" returns 0', () => {
+    expect(parseDurationMs("0")).toBe(0);
+  });
+
+  test('"0ms" / "0s" / "0m" / "0h" all return 0', () => {
+    expect(parseDurationMs("0ms")).toBe(0);
+    expect(parseDurationMs("0s")).toBe(0);
+    expect(parseDurationMs("0m")).toBe(0);
+    expect(parseDurationMs("0h")).toBe(0);
+  });
+});
+
 describe("parseDurationMs — rejects", () => {
   test.each([
     ["", "empty"],
     ["   ", "whitespace"],
-    ["0", "zero"],
-    ["0ms", "zero ms"],
-    ["0s", "zero s"],
     ["-5s", "negative"],
     ["5x", "unknown unit"],
     ["5 s", "internal space"],
@@ -68,7 +82,6 @@ describe("parseDurationMs — rejects", () => {
   });
 
   test.each([
-    [0, "zero int"],
     [-1, "negative int"],
     [0.5, "fractional"],
     [Number.NaN, "NaN"],
@@ -132,7 +145,7 @@ describe("parseDurationMs — properties", () => {
     );
   });
 
-  test("result is always a positive safe integer (success path)", () => {
+  test("result is always a non-negative safe integer (success path)", () => {
     const validInput = fc.oneof(
       fc.integer({ min: 1, max: 1_000_000 }),
       fc
@@ -143,17 +156,18 @@ describe("parseDurationMs — properties", () => {
       fc.property(validInput, (input) => {
         const out = parseDurationMs(input);
         expect(Number.isSafeInteger(out)).toBe(true);
-        expect(out).toBeGreaterThan(0);
+        expect(out).toBeGreaterThanOrEqual(0);
       }),
     );
   });
 
   test("bad input throws rather than returning garbage", () => {
     // Any string that doesn't match the grammar must throw. We seed with
-    // a mix of arbitrary strings and constructed near-misses.
+    // a mix of arbitrary strings and constructed near-misses. "0" /
+    // "0s" are NOT near-misses post-unbounded-sentinel — they parse to 0.
     const nearMiss = fc.oneof(
       fc.string({ maxLength: 10 }).filter((s) => !/^\s*\d+(ms|s|m|h)?\s*$/.test(s) && s.length > 0),
-      fc.constantFrom("5x", "5ms5", "ms5", "  ", "", "0", "0s", "-1", "1.5s", "1e3"),
+      fc.constantFrom("5x", "5ms5", "ms5", "  ", "", "-1", "1.5s", "1e3"),
     );
     fc.assert(
       fc.property(nearMiss, (input) => {
