@@ -73,7 +73,11 @@ export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): 
     const ms = parseDurationMs(attrs.timeout);
     return ms === 0 ? undefined : ms;
   }
-  return fallbackMs;
+  // Same 0→undefined collapse on the fallback path: config-level
+  // `timeouts.codergen: 0` is the unbounded sentinel just like the
+  // node-attr form. Without this, a `timeouts.codergen: 0` in
+  // `.swarm/config.jsonc` resolves to a 0-ms abort timer.
+  return fallbackMs === 0 ? undefined : fallbackMs;
 }
 
 function explicitlyUnbounded(attrs: NodeAttrs): boolean {

@@ -339,6 +339,14 @@ describe("resolveMaxMs — zero sentinel", () => {
   test("max_ms=5000 returns 5000", () => {
     expect(resolveMaxMs({ max_ms: 5_000 }, 60_000)).toBe(5_000);
   });
+
+  test("fallback=0 returns undefined (config-level unbounded sentinel)", () => {
+    // `~/.swarm/config.jsonc { timeouts: { codergen: 0 } }` resolves to a
+    // 0 fallback at the daemon — the resolver must collapse it to undefined
+    // the same way the explicit-attr path does, otherwise the executor
+    // wires `AbortSignal.timeout(0)` and the node aborts immediately.
+    expect(resolveMaxMs({}, 0)).toBeUndefined();
+  });
 });
 
 describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
