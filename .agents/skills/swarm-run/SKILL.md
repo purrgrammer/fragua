@@ -118,17 +118,24 @@ curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 | `GET /runs/:id/stream` (SSE) | Live progress. Terminates on disconnect. |
 | `GET /runs/:id/events.json` | Point-in-time snapshot; scripting; diffing. |
 | `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost; rows for parallel branches carry `parentNodeId` + `parallelIndex`). |
-| `GET /runs/:id` | Projection summary (status, current node, totals). Cheap status poll. |
+| `GET /runs/:id` | Projection summary (runStatus, status, current node, totals). Cheap status poll. |
+
+**Two status fields, don't conflate them.** `GET /runs/:id` returns BOTH `runStatus` (lifecycle: `queued | running | completed | halted | cancelled | paused | paused_hitl | paused_auto | quarantined`) AND `status` (the run's final *outcome*: `success | fail`, or `null` while not yet terminal). For "is the run still going?" checks use `runStatus`; for "did it succeed?" once terminal use `status`. The cheat sheet and the lifecycle table below use `runStatus` consistently.
 
 ```sh
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd, totalTokens: (.inputTokens + .outputTokens)}'
+curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd, totalTokens: ((.inputTokens // 0) + (.outputTokens // 0))}'
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})'
 curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
+
+# Polling pattern — watch runStatus, not status.
+until curl -fsS "$URL/runs/$RUN" | jq -e '.runStatus | IN("completed","halted","cancelled","paused_hitl","paused","quarantined")' >/dev/null; do
+  sleep 30
+done
 ```
 
 For running-but-silent runs: if the last event is `fact.node_started` with no follow-up after the node's `maxMs`, the supervisor watchdog should have fired — if it hasn't, the daemon is wedged. Jump to swarm-debug.
 
-**Lifecycle states beyond `running` / `completed`:**
+**`runStatus` lifecycle states beyond `running` / `completed`:**
 
 - `queued` — waiting for a daemon dispatch slot.
 - `paused_hitl` — `wait.human` gate yielded. Resume with `POST /runs/:id/hitl`.
@@ -148,7 +155,7 @@ All endpoints return `{ seq }` — quote it in any follow-up so the user can fin
 | POST | Body | Written intent | Post-condition |
 |---|---|---|---|
 | `/runs/:id/steer` | `{text}` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the steering text in the thread. |
-| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); status → `paused` (`reason:"operator"`). |
+| `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); `runStatus` → `paused` (`reason:"operator"`). |
 | `/runs/:id/cancel` | `{reason?}` | `intent.cancel_requested` | Handler aborts (`cause:"cancel"`); terminal `fact.run_cancelled`. |
 | `/runs/:id/hitl` | `{selected, note?}` | `intent.hitl_input` | For `wait.human`: routes to the outgoing edge whose `[K] Label` accelerator matches `selected`. 400 if missing/empty. |
 | `/runs/:id/resume` | `{note?}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued`. |
@@ -287,8 +294,8 @@ SHA=$(curl -fsS -X POST "$URL/workflows" -H 'content-type: application/json' \
 RUN=$(curl -fsS -X POST "$URL/runs" -H 'content-type: application/json' \
    -d "$(jq -n --arg sha "$SHA" --arg in "…" --arg cwd "$PWD" '{workflowSha:$sha, input:$in, cwd:$cwd}')" | jq -r .runId)
 
-# Status
-curl -fsS "$URL/runs/$RUN" | jq '{status, currentNode, costUsd}'
+# Status — runStatus is lifecycle (queued|running|completed|halted|…), status is outcome (success|fail|null).
+curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd}'
 
 # Intents (each returns {seq})
 curl -fsS -X POST "$URL/runs/$RUN/steer"        -d '{"text":"…"}'                                  -H 'content-type: application/json'
