@@ -13,9 +13,7 @@
 // design language as Home's dashboard. The mix of stats is picked for
 // a run's essentials: status, duration, cost, tokens, current node.
 
-import type { FeedEvent } from "@swarm/types";
 import { useQuery } from "@tanstack/react-query";
-import { useAtomValue } from "jotai";
 import { Coins, Database, DollarSign, Timer } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -56,7 +54,6 @@ import { useBranchMeta } from "../lib/branch-meta.ts";
 import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
-import { feedAtom } from "../lib/globalFeed.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
@@ -64,6 +61,7 @@ import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
 import { mergeDetail } from "../lib/useDetailOverlay.ts";
 import type { CostAggregate } from "../lib/useLiveCostAggregate.ts";
 import { useNow } from "../lib/useNow.ts";
+import { useRunDescendantStream } from "../lib/useRunDescendantStream.ts";
 import { useRunLive } from "../lib/useRunLive.ts";
 
 const VIEWS = ["conversation", "graph", "cost", "files"] as const;
@@ -80,31 +78,6 @@ const LIVE_STATUSES = new Set<string>(["queued", "running"]);
  * run view. */
 const TERMINAL_STATUSES = new Set<string>(["success", "fail", "canceled"]);
 const TERMINAL_RUN_STATUSES = new Set<NonNullable<RunSummary["runStatus"]>>(["completed", "cancelled", "halted"]);
-// Child-message ticks deferred — see docs/proposals/descendant-event-stream.md.
-const DESCENDANT_REFRESH_TYPES = new Set<string>([
-  "fact.run_started",
-  "fact.run_completed",
-  "fact.run_paused_hitl",
-  "fact.run_paused",
-  "fact.run_resumed",
-  "fact.run_cancelled",
-  "fact.run_halted",
-  "fact.run_quarantined",
-]);
-
-export function computeDescendantRefreshToken(
-  feedEvents: readonly FeedEvent[],
-  childRunIds: ReadonlySet<string>,
-): string {
-  if (childRunIds.size === 0) return "";
-  let token = "";
-  for (const event of feedEvents) {
-    if (!childRunIds.has(event.runId)) continue;
-    if (!DESCENDANT_REFRESH_TYPES.has(event.type)) continue;
-    token = `${event.runId}:${event.seq}`;
-  }
-  return token;
-}
 
 function aggregateActiveChildMetrics(children: readonly RunSummary[] | undefined): {
   costUsd: number;
@@ -176,12 +149,13 @@ export function RunDetail(): JSX.Element {
     enabled: !!id,
     refetchInterval: snapshot?.runStatus === "running_children" ? 1_000 : false,
   });
-  const childRunIds = useMemo(() => new Set((subRuns ?? []).map((r) => r.runId)), [subRuns]);
-  const feedEvents = useAtomValue(feedAtom);
-  const descendantRefreshToken = useMemo(
-    () => computeDescendantRefreshToken(feedEvents, childRunIds),
-    [feedEvents, childRunIds],
-  );
+  // Per-parent descendant SSE: emits a monotonic token on every event
+  // from this run or any sub-run in its tree, which `useRunLive`
+  // consumes as `descendantRefreshToken` to re-fetch the merged
+  // messages view. Replaces the prior feedAtom scan that forced noisy
+  // child-event kinds onto the operator Activity allow-list. See
+  // docs/proposals/descendant-event-stream.md.
+  const { descendantToken } = useRunDescendantStream(id || null, { terminal: isTerminal });
 
   const {
     messages,
@@ -195,7 +169,7 @@ export function RunDetail(): JSX.Element {
   } = useRunLive(id || null, {
     sinceSeq: snapshot?.lastEventSeq,
     terminal: isTerminal,
-    descendantRefreshToken,
+    descendantRefreshToken: descendantToken,
   });
   const isLoading = liveStatus === "loading";
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);

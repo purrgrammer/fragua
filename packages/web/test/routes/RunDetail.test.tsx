@@ -688,4 +688,174 @@ describe("RunDetail", () => {
       }
     });
   });
+
+  // ─── Descendant SSE (docs/proposals/descendant-event-stream.md) ─
+  //
+  // Pin the new transport: a child fact.message_appended landing on
+  // the per-parent descendant stream forces useRunLive's descendant
+  // re-fetch, replacing the prior `feedAtom`-scan approach that forced
+  // noisy kinds onto the global Activity allow-list. Nested inside the
+  // outer RunDetail describe so it shares the `useDom()` lifecycle
+  // (happy-dom's register/unregister/re-register cycle leaves
+  // `document` undefined between sibling describes).
+
+  describe("descendant event stream", () => {
+    it("opens /runs/:id/events/stream?include=descendants for a parallel parent", async () => {
+      const detail: RunDetailT = {
+        runId: "parent-1",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      const { client, mock } = prepare("parent-1", detail);
+      const fakeEs = installTrackingFakeEventSource();
+      try {
+        mount(client, "/runs/parent-1");
+        await waitFor(() => {
+          // useRunLive opens /runs/parent-1/stream
+          // useRunDescendantStream opens /runs/parent-1/events/stream?include=descendants
+          expect(
+            TrackingFakeEventSource.instances.some((es) =>
+              es.url.includes("/runs/parent-1/events/stream?include=descendants"),
+            ),
+          ).toBe(true);
+        });
+      } finally {
+        mock.restore();
+        fakeEs.restore();
+      }
+    });
+
+    it("child fact.message_appended on the descendant stream re-fetches merged messages (no feedAtom dep)", async () => {
+      // Mount on a running parent. The descendant SSE opens; dispatching
+      // a fact.message_appended frame from a child run on that stream
+      // bumps the `descendantToken`, which useRunLive consumes as
+      // `descendantRefreshToken` to refetch /messages?includeDescendants.
+      const detail: RunDetailT = {
+        runId: "parent-2",
+        startedAt: "2024-01-01T00:00:00Z",
+        status: "running",
+        lastEventSeq: 1,
+        nodes: [],
+        selectedEdges: [],
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+
+      // Custom fetch mock: count calls to messages?include=descendants
+      // so we can assert that the descendant token bump triggers a
+      // refetch. The exact-URL `installFetchMock` route map can't pattern-
+      // match query strings, so we route via the fallback and inspect the
+      // request URL ourselves.
+      const client = createTestQueryClient();
+      client.setQueryData(queries.runs.detail("parent-2").queryKey, detail);
+      let descendantMessagesCalls = 0;
+      const mock = installFetchMock({}, (req) => {
+        const u = req.url;
+        if (u.includes("/runs/parent-2/messages") && u.includes("include=descendants")) {
+          descendantMessagesCalls += 1;
+          return json([]);
+        }
+        if (u.includes("/runs/parent-2/messages")) return json([]);
+        if (u.includes("/runs/parent-2/events.json")) return json([]);
+        if (u.includes("/runs/parent-2/steps")) return json([]);
+        if (u.endsWith("/runs/parent-2") || u.includes("/runs/parent-2?")) return json(detail);
+        return json([]);
+      });
+      const fakeEs = installTrackingFakeEventSource();
+      try {
+        mount(client, "/runs/parent-2");
+
+        // Wait for the descendant EventSource to be created.
+        await waitFor(() => {
+          expect(
+            TrackingFakeEventSource.instances.some((es) =>
+              es.url.includes("/runs/parent-2/events/stream?include=descendants"),
+            ),
+          ).toBe(true);
+        });
+        // Initial bootstrap fetch lands at least once.
+        await waitFor(() => {
+          expect(descendantMessagesCalls).toBeGreaterThanOrEqual(1);
+        });
+        const baseline = descendantMessagesCalls;
+
+        const descendantEs = TrackingFakeEventSource.instances.find((es) =>
+          es.url.includes("/runs/parent-2/events/stream?include=descendants"),
+        )!;
+
+        // Dispatch a child fact.message_appended on the descendant stream.
+        // The hook bumps `descendantToken`; useRunLive's effect at line ~171
+        // refetches /messages?includeDescendants=true.
+        await act(async () => {
+          descendantEs.dispatch(
+            "fact.message_appended",
+            { ordinal: 1, role: "assistant", nodeId: "n", iteration: 0 },
+            "5000.child-1.7",
+          );
+        });
+
+        await waitFor(() => {
+          expect(descendantMessagesCalls).toBeGreaterThan(baseline);
+        });
+      } finally {
+        mock.restore();
+        fakeEs.restore();
+      }
+    });
+  });
 });
+
+class TrackingFakeEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+  static instances: TrackingFakeEventSource[] = [];
+  readyState = 1;
+  closed = false;
+  private listeners = new Map<string, Array<(ev: MessageEvent) => void>>();
+
+  constructor(public readonly url: string) {
+    TrackingFakeEventSource.instances.push(this);
+  }
+  addEventListener(type: string, l: (ev: MessageEvent) => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type)!.push(l);
+  }
+  removeEventListener(type: string, l: (ev: MessageEvent) => void): void {
+    const arr = this.listeners.get(type);
+    if (!arr) return;
+    const i = arr.indexOf(l);
+    if (i !== -1) arr.splice(i, 1);
+  }
+  close(): void {
+    this.closed = true;
+    this.readyState = 2;
+  }
+  dispatch(eventType: string, payload: unknown, id?: string): void {
+    const data = JSON.stringify({ type: eventType, payload });
+    const ev = new MessageEvent(eventType, { data, lastEventId: id ?? "" });
+    const typed = this.listeners.get(eventType) ?? [];
+    if (typed.length > 0) for (const l of typed) l(ev);
+    else for (const l of this.listeners.get("message") ?? []) l(ev);
+  }
+}
+
+function installTrackingFakeEventSource(): { restore: () => void } {
+  const g = globalThis as { [k: string]: unknown };
+  const original = g["EventSource"];
+  g["EventSource"] = TrackingFakeEventSource;
+  TrackingFakeEventSource.instances = [];
+  return {
+    restore() {
+      g["EventSource"] = original;
+      TrackingFakeEventSource.instances = [];
+    },
+  };
+}

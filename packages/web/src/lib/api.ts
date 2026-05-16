@@ -484,6 +484,15 @@ export function getRunEventsUrl(id: string, sinceSeq?: number): string {
   return url(typeof sinceSeq === "number" && sinceSeq > 0 ? `${base}?sinceSeq=${sinceSeq}` : base);
 }
 
+/** SSE URL for the per-parent descendant event feed: parent + every
+ * sub-run in its tree (recursive via `run_state.parent_run_id`). The
+ * server route is unfiltered — RunDetail consumes the full firehose
+ * for its own tree as a token-bump signal. See
+ * `docs/proposals/descendant-event-stream.md`. */
+export function getRunDescendantEventsUrl(id: string): string {
+  return url(`/runs/${encodeURIComponent(id)}/events/stream?include=descendants`);
+}
+
 // ── Endpoints ───────────────────────────────────────────────────────
 
 export async function health(): Promise<HealthResponse> {
