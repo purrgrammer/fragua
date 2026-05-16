@@ -616,7 +616,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Dispatch.
     const spec = opts.dispatcher.get(workflowSha, currentNode);
     const steerCtrl = new AbortController();
-    const signals: AbortSignal[] = [steerCtrl.signal, AbortSignal.timeout(spec.maxMs), opts.shutdownSignal];
+    const signals: AbortSignal[] = [steerCtrl.signal, opts.shutdownSignal];
+    if (spec.maxMs !== undefined) signals.push(AbortSignal.timeout(spec.maxMs));
     const signal = AbortSignal.any(signals);
 
     const iteration = nodeRetryCount(state.routing);
@@ -876,15 +877,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // `.then(_ => …)` callback never fired because `timeoutReject`
       // never fulfilled). Resolving with a sentinel lets us detect the
       // leak unambiguously.
-      const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
-        spec.handler(ctx),
-        new Promise<typeof TIMEOUT_SENTINEL>((res) => setTimeout(() => res(TIMEOUT_SENTINEL), spec.maxMs + leakGrace)),
-      ]);
-      if (raced === TIMEOUT_SENTINEL) {
-        leakedTimeout = true;
-        result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
+      if (spec.maxMs !== undefined) {
+        const watchdogMs = spec.maxMs + leakGrace;
+        const raced = await Promise.race<HandlerResult | typeof TIMEOUT_SENTINEL>([
+          spec.handler(ctx),
+          new Promise<typeof TIMEOUT_SENTINEL>((res) => setTimeout(() => res(TIMEOUT_SENTINEL), watchdogMs)),
+        ]);
+        if (raced === TIMEOUT_SENTINEL) {
+          leakedTimeout = true;
+          result = { kind: "halt", reason: "error", detail: "timeout_leaked" };
+        } else {
+          result = raced;
+        }
       } else {
-        result = raced;
+        // Unbounded codergen (DOT `max_ms=0`): no AbortSignal.timeout in the
+        // merged signal, so no leak watchdog either — cost/token bounds and
+        // operator intents are the operative ceiling. Steer + shutdown still
+        // abort cleanly via `ctx.signal`.
+        result = await spec.handler(ctx);
       }
     } catch (err) {
       wasAborted = isAbortError(err);
@@ -1021,7 +1031,11 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
               delayMs,
               resumeAt,
               maxAttempts: TIMEOUT_RETRY_MAX_ATTEMPTS,
-              attemptedMs: spec.maxMs,
+              // spec.maxMs is necessarily defined here — abortCause === "timeout"
+              // only fires when AbortSignal.timeout(spec.maxMs) was wired into the
+              // merged signal, which the dispatch block skips when spec.maxMs is
+              // undefined. The ?? 0 is purely a typecheck narrowing.
+              attemptedMs: spec.maxMs ?? 0,
             },
           });
           // Merge timeout-retry routing keys with the fold's delta so

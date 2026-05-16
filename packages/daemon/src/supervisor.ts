@@ -23,8 +23,11 @@ export interface SupervisorOpts {
   heartbeatIntervalMs?: number;
   /** Max time a node may run past its maxMs before supervisor trips it. */
   nodeLeakGraceMs?: number;
-  /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold. */
-  handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number;
+  /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold.
+   * Returns `undefined` for nodes that opted out of wall-clock bounding
+   * (codergen `max_ms=0`); the supervisor skips the leak-trip for those
+   * nodes — see docs/proposals/codergen-unbounded-time.md. */
+  handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number | undefined;
   /** Forward steer text into the codergen backend's queue. pi-agent-core's
    * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
    * turn; tripping the abort controller would force the in-flight LLM
@@ -117,6 +120,7 @@ export function startSupervisor(opts: SupervisorOpts): {
           if (state.status !== "running") continue;
           if (state.currentNode == null) continue;
           const maxMs = opts.handlerMaxMsFor(state.workflowSha, state.currentNode);
+          if (maxMs === undefined) continue;
           if (elapsed > maxMs + leakGrace) {
             opts.registry.trip(runId, new HandlerLeakedError(runId, state.currentNode));
           }

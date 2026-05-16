@@ -261,9 +261,12 @@ describe("resolveTimeouts", () => {
   });
 
   test("property — any invalid value surfaces a config-prefixed error", () => {
+    // "0" / "0s" / integer 0 are no longer invalid — parseDurationMs accepts
+    // them as the unbounded sentinel (docs/proposals/codergen-unbounded-time.md).
+    // Negative numbers and malformed strings still throw.
     const badValue = fc.oneof(
-      fc.constantFrom("garbage", "", "   ", "0s", "-1", "5x", "1.5m"),
-      fc.integer({ min: -1_000, max: 0 }),
+      fc.constantFrom("garbage", "", "   ", "-1", "5x", "1.5m"),
+      fc.integer({ min: -1_000, max: -1 }),
     );
     fc.assert(
       fc.property(badValue, (v) => {

@@ -309,7 +309,7 @@ describe("resolveMaxMs — properties", () => {
 
   test("invalid timeout strings throw InvalidDurationError", () => {
     const bad = fc.oneof(
-      fc.constantFrom("garbage", "", "   ", "0s", "-1", "5x", "1.5m", "5 m"),
+      fc.constantFrom("garbage", "", "   ", "-1", "5x", "1.5m", "5 m"),
       fc.string({ maxLength: 5 }).filter((s) => !/^\s*\d+(ms|s|m|h)?\s*$/.test(s)),
     );
     fc.assert(
@@ -317,5 +317,92 @@ describe("resolveMaxMs — properties", () => {
         expect(() => resolveMaxMs({ timeout }, undefined)).toThrow();
       }),
     );
+  });
+});
+
+describe("resolveMaxMs — zero sentinel", () => {
+  test("max_ms=0 returns undefined", () => {
+    expect(resolveMaxMs({ max_ms: 0 }, 1_000)).toBeUndefined();
+  });
+
+  test('timeout="0" returns undefined', () => {
+    expect(resolveMaxMs({ timeout: "0" }, 1_000)).toBeUndefined();
+    expect(resolveMaxMs({ timeout: "0s" }, 1_000)).toBeUndefined();
+    expect(resolveMaxMs({ timeout: "0ms" }, 1_000)).toBeUndefined();
+  });
+
+  test("unset max_ms / timeout returns the per-kind fallback", () => {
+    expect(resolveMaxMs({}, 60_000)).toBe(60_000);
+    expect(resolveMaxMs({}, undefined)).toBeUndefined();
+  });
+
+  test("max_ms=5000 returns 5000", () => {
+    expect(resolveMaxMs({ max_ms: 5_000 }, 60_000)).toBe(5_000);
+  });
+});
+
+describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
+  function captureMaxMsForNode(
+    dot: string,
+    nodeId: string,
+  ): { recordedMaxMs: number | "unbounded" | undefined; specMaxMs: number | undefined } {
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", dot);
+    let recorded: number | "unbounded" | undefined;
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(
+      autoDispatcherResolver({
+        store,
+        codergenFactory: (node, _next, maxMs) => {
+          if (node.id === nodeId) recorded = maxMs;
+          // Mirror the bridge's translation rule so we can assert
+          // HandlerSpec.maxMs end-to-end as well.
+          const spec: import("@swarm/core/handler").HandlerSpec = {
+            kind: "codergen",
+            sideEffect: "external",
+            handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
+          };
+          if (maxMs === "unbounded") {
+            // omit maxMs — unbounded
+          } else if (typeof maxMs === "number") {
+            spec.maxMs = maxMs;
+          } else {
+            spec.maxMs = 4 * 60 * 60 * 1000;
+          }
+          return spec;
+        },
+      }),
+    );
+    const spec = dispatcher.get("sha", nodeId);
+    const out = { recordedMaxMs: recorded, specMaxMs: spec.maxMs };
+    store.close();
+    return out;
+  }
+
+  test('DOT max_ms=0 passes "unbounded" to the codergen factory', () => {
+    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, max_ms=0]; done [shape=Msquare]; start -> impl -> done; }`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+    expect(recordedMaxMs).toBe("unbounded");
+    expect(specMaxMs).toBeUndefined();
+  });
+
+  test('DOT timeout="0s" passes "unbounded" to the codergen factory', () => {
+    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, timeout="0s"]; done [shape=Msquare]; start -> impl -> done; }`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+    expect(recordedMaxMs).toBe("unbounded");
+    expect(specMaxMs).toBeUndefined();
+  });
+
+  test("DOT with no max_ms passes undefined to the codergen factory", () => {
+    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box]; done [shape=Msquare]; start -> impl -> done; }`;
+    const { recordedMaxMs } = captureMaxMsForNode(dot, "impl");
+    expect(recordedMaxMs).toBeUndefined();
+  });
+
+  test("DOT max_ms=5000 passes the number 5000 to the codergen factory", () => {
+    const dot = `digraph { start [shape=Mdiamond]; impl [shape=box, max_ms=5000]; done [shape=Msquare]; start -> impl -> done; }`;
+    const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(dot, "impl");
+    expect(recordedMaxMs).toBe(5_000);
+    expect(specMaxMs).toBe(5_000);
   });
 });

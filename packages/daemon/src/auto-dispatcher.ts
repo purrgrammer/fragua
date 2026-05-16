@@ -36,7 +36,7 @@ export interface AutoDispatcherOpts {
    * the node's `timeout=`/`max_ms=` attrs (see `resolveMaxMs` below);
    * factories forward it into the HandlerSpec.
    */
-  codergenFactory?: (node: Node, nextNode: string, maxMs: number | undefined) => HandlerSpec;
+  codergenFactory?: (node: Node, nextNode: string, maxMs: number | "unbounded" | undefined) => HandlerSpec;
   /** Per-kind fallback `maxMs` when the DOT node declares neither
    * `timeout` nor `max_ms`. Keyed by handler kind (`codergen`, `tool`).
    * Absent kind → handler's own built-in default applies. */
@@ -51,6 +51,13 @@ export interface AutoDispatcherOpts {
  *   2. `attrs.timeout` — duration string ("30s", "5m", "2h", etc.)
  *   3. caller-supplied fallback (undefined → handler default applies)
  *
+ * Returns `undefined` (a) when neither attr is set and `fallbackMs` is
+ * undefined, OR (b) when an explicit `max_ms=0` / `timeout="0"` is set
+ * (the unbounded sentinel for codergen — see
+ * docs/proposals/codergen-unbounded-time.md). The two cases collapse here;
+ * `specsForGraph` re-inspects the raw attrs to distinguish them for the
+ * codergen factory.
+ *
  * Malformed values reach this function only when the DOT was parsed
  * without enqueue-time validation (tests, direct-store inserts). We
  * surface the parse error as a thrown `InvalidDurationError` — callers
@@ -58,9 +65,21 @@ export interface AutoDispatcherOpts {
  * the dispatcher.
  */
 export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): number | undefined {
-  if (typeof attrs.max_ms === "number") return parseDurationMs(attrs.max_ms);
-  if (typeof attrs.timeout === "string") return parseDurationMs(attrs.timeout);
+  if (typeof attrs.max_ms === "number") {
+    const ms = parseDurationMs(attrs.max_ms);
+    return ms === 0 ? undefined : ms;
+  }
+  if (typeof attrs.timeout === "string") {
+    const ms = parseDurationMs(attrs.timeout);
+    return ms === 0 ? undefined : ms;
+  }
   return fallbackMs;
+}
+
+function explicitlyUnbounded(attrs: NodeAttrs): boolean {
+  if (typeof attrs.max_ms === "number" && parseDurationMs(attrs.max_ms) === 0) return true;
+  if (typeof attrs.timeout === "string" && parseDurationMs(attrs.timeout) === 0) return true;
+  return false;
 }
 
 /**
@@ -121,10 +140,14 @@ function specsForGraph(
       throw err;
     }
     const useFactory = kind === "codergen" && codergenFactory != null;
-    specs.set(
-      node.id,
-      useFactory ? codergenFactory(node, first, resolvedMaxMs) : specForNode(node.id, edges, node.attrs, resolvedMaxMs),
-    );
+    if (useFactory) {
+      const codergenMaxMs: number | "unbounded" | undefined = explicitlyUnbounded(node.attrs)
+        ? "unbounded"
+        : resolvedMaxMs;
+      specs.set(node.id, codergenFactory(node, first, codergenMaxMs));
+    } else {
+      specs.set(node.id, specForNode(node.id, edges, node.attrs, resolvedMaxMs));
+    }
   }
 
   // Pass 2: parallel + fan_in, which need cross-node references. Per

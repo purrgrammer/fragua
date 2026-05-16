@@ -36,9 +36,16 @@ export interface MakeCodergenHandlerOpts {
   backend?: CodergenBackend;
   /** Builder used when `backend` is omitted. */
   backendOpts?: PiCodergenBackendOptions;
-  /** Hard per-call timeout; forwarded into HandlerSpec.maxMs. Default 30 min
-   * (see DEFAULT_MAX_MS below for rationale). */
-  maxMs?: number;
+  /** Hard per-call timeout; forwarded into HandlerSpec.maxMs.
+   *
+   *   - `number` — explicit ms ceiling; HandlerSpec.maxMs is set verbatim.
+   *   - `"unbounded"` — per-node opt-out (sourced from DOT `max_ms=0` /
+   *     `timeout="0"` via the auto-dispatcher); HandlerSpec.maxMs is left
+   *     absent so the executor skips AbortSignal.timeout and the leak
+   *     watchdog. See docs/proposals/codergen-unbounded-time.md.
+   *   - `undefined` — author didn't specify; HandlerSpec.maxMs gets the
+   *     4h DEFAULT_MAX_MS runaway backstop. */
+  maxMs?: number | "unbounded";
   /** Default ContextMap passed as CodergenInput.context. Merged with
    * ctx.routing at call time. */
   defaultContext?: ContextMap;
@@ -260,12 +267,19 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     return result;
   };
 
-  return {
+  const spec: HandlerSpec = {
     kind: "codergen",
     sideEffect: "external",
-    maxMs: opts.maxMs ?? DEFAULT_MAX_MS,
     handler: run,
   };
+  if (opts.maxMs === "unbounded") {
+    // Explicit opt-out via DOT max_ms=0 — leave HandlerSpec.maxMs absent.
+  } else if (typeof opts.maxMs === "number") {
+    spec.maxMs = opts.maxMs;
+  } else {
+    spec.maxMs = DEFAULT_MAX_MS;
+  }
+  return spec;
 }
 
 function mergeContext(defaults: ContextMap | undefined, routing: Readonly<Record<string, unknown>>): ContextMap {

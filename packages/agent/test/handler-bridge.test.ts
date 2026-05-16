@@ -696,3 +696,21 @@ describe("makeCodergenHandler — provider error → pause_provider", () => {
     store.close();
   });
 });
+
+describe("makeCodergenHandler — unbounded maxMs sentinel", () => {
+  test('maxMs: "unbounded" produces HandlerSpec with maxMs absent', () => {
+    const spec = makeCodergenHandler({ node: node(), backend: stubBackend(), maxMs: "unbounded" });
+    expect(spec.maxMs).toBeUndefined();
+    expect("maxMs" in spec).toBe(false);
+  });
+
+  test("maxMs: undefined applies DEFAULT_MAX_MS (4h, regression)", () => {
+    const spec = makeCodergenHandler({ node: node(), backend: stubBackend() });
+    expect(spec.maxMs).toBe(4 * 60 * 60 * 1000);
+  });
+
+  test("maxMs: 60_000 propagates verbatim", () => {
+    const spec = makeCodergenHandler({ node: node(), backend: stubBackend(), maxMs: 60_000 });
+    expect(spec.maxMs).toBe(60_000);
+  });
+});

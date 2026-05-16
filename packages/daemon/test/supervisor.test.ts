@@ -105,6 +105,38 @@ describe("supervisor — pause-aware leak detection", () => {
     registry.register("r", new AbortController());
     expect(registry.elapsedMs("r")).toBe(0);
   });
+
+  test("does not trip a controller for a node whose handlerMaxMsFor returns undefined", async () => {
+    // Unbounded codergen (DOT max_ms=0) — the supervisor must skip the
+    // leak-trip entirely, even after arbitrarily long elapsed time. See
+    // docs/proposals/codergen-unbounded-time.md.
+    const clk = fakeClock(1_000_000_000_000);
+    const registry = new AbortRegistry(clk.now);
+    const store = makeRunningStore("unbounded-1", "sha");
+    const ctrl = new AbortController();
+    registry.register("unbounded-1", ctrl);
+    clk.advance(10_000_000);
+
+    const shutdown = new AbortController();
+    const sup = startSupervisor({
+      store,
+      registry,
+      pid: process.pid,
+      shutdownSignal: shutdown.signal,
+      tickMs: 1,
+      heartbeatIntervalMs: 1_000_000,
+      nodeLeakGraceMs: 500,
+      handlerMaxMsFor: () => undefined,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    try {
+      expect(ctrl.signal.aborted).toBe(false);
+    } finally {
+      shutdown.abort();
+      await sup.promise;
+    }
+  });
 });
 
 describe("supervisor — intent-aware abort policy", () => {

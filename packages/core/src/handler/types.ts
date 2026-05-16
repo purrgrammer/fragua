@@ -14,8 +14,12 @@ export type SideEffect = "none" | "idempotent" | "external";
 export interface HandlerSpec {
   kind: string;
   sideEffect: SideEffect;
-  /** Hard per-call timeout. Applied via AbortSignal.timeout inside the executor. */
-  maxMs: number;
+  /** Hard per-call timeout. Applied via AbortSignal.timeout inside the
+   * executor. Optional — codergen-kind handlers may omit it to disable
+   * wall-clock bounding (per-node opt-in via DOT `max_ms=0` /
+   * `timeout="0"`); cost/token attrs remain the operative ceiling. See
+   * docs/proposals/codergen-unbounded-time.md. */
+  maxMs?: number;
   handler: Handler;
 }
 

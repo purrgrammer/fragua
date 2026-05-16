@@ -111,7 +111,12 @@ function findInvalidTimeoutAttr(
         };
       }
     } else if (max_ms != null) {
-      return { nodeId: node.id, attr: "max_ms", value: max_ms, detail: "max_ms must be a positive integer (ms)" };
+      return {
+        nodeId: node.id,
+        attr: "max_ms",
+        value: max_ms,
+        detail: "max_ms must be a non-negative integer (ms); 0 disables the wall-clock watchdog",
+      };
     }
     if (typeof timeout === "string") {
       try {

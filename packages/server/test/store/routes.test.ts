@@ -112,14 +112,32 @@ describe("POST /workflows — upload", () => {
     expect(body.error).toMatch(/garbage/);
   });
 
-  test("rejects zero / negative max_ms", async () => {
+  test("accepts max_ms=0 as the unbounded sentinel for codergen", async () => {
+    const res = await req("POST", "/workflows", {
+      name: "ok",
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=0]; done [shape=Msquare]; start -> a -> done; }`,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("rejects negative max_ms", async () => {
     const res = await req("POST", "/workflows", {
       name: "bad",
-      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=0]; done [shape=Msquare]; start -> a -> done; }`,
+      dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, max_ms=-1]; done [shape=Msquare]; start -> a -> done; }`,
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { code: string };
     expect(body.code).toBe("invalid_timeout_attr");
+  });
+
+  test('accepts timeout="0" / "0s" as the unbounded sentinel for codergen', async () => {
+    for (const t of ["0", "0s", "0ms"]) {
+      const res = await req("POST", "/workflows", {
+        name: "ok",
+        dotSource: `digraph { start [shape=Mdiamond]; a [shape=box, timeout="${t}"]; done [shape=Msquare]; start -> a -> done; }`,
+      });
+      expect(res.status).toBe(200);
+    }
   });
 
   test("accepts valid timeout strings", async () => {
