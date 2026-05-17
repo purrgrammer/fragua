@@ -223,40 +223,11 @@ describe("makeFanInHandler LLM path", () => {
     }
   });
 
-  test("delegate contextWrites are merged into routingDelta", async () => {
-    const { delegate } = makeDelegate(() => ({
-      winner: "branch_a",
-      contextWrites: [
-        { key: "shared_finding", value: "critical" },
-        { key: "confidence", value: 0.9 },
-      ],
-      tokens: 10,
-      costUsd: 0.002,
-    }));
-    const spec = makeFanInHandler({
-      parallelNodeId: "fanout",
-      evaluator: {
-        kind: "llm",
-        prompt: "analyze",
-        delegate,
-        nodeAttrs: {},
-      },
-    });
-    const ctx = stubCtx({ nodeId: "join", routing: baseRouting, nodeOutputs: baseNodeOutputs });
-    const result = await spec.handler(ctx);
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.routingDelta?.["shared_finding"]).toBe("critical");
-      expect(result.routingDelta?.["confidence"]).toBe(0.9);
-      expect(result.contextWriteLog).toHaveLength(2);
-    }
-  });
-
   test("delegate returning a failure halts with the failure reason in detail", async () => {
     const { delegate } = makeDelegate(() => ({
       failure: {
         reason: "fan_in_llm_emit_missing" as const,
-        detail: "LLM did not call emit_output",
+        detail: "no WINNER: <branchId> line found in the LLM reply",
       },
     }));
     const spec = makeFanInHandler({

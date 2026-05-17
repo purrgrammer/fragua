@@ -16,10 +16,10 @@
 //   LLM (prompt= set):
 //     A delegate function (supplied by the daemon layer via
 //     `FanInHandlerConfig.evaluator`) synthesises the branch outputs
-//     into a prompt and calls an LLM. The LLM must call `emit_output`
+//     into a prompt and calls an LLM. The LLM must end its reply with
 //     with `{winner: <branchId>}`. The delegate also has access to
-//     `context_set` so it can publish cross-cutting findings the
-//     downstream codergen consumes via `${context.<key>}`.
+//     a single `WINNER: <branchId>` line. The evaluator parses it out
+//     of the final assistant text.
 
 import { FAN_IN_VERSION, type FanInCandidate, foldFanIn } from "../../engine/fan-in.ts";
 import { substitute } from "../../engine/substitution.ts";
@@ -45,11 +45,6 @@ export interface LlmFanInInput {
 
 export interface LlmFanInSuccess {
   winner: string;
-  contextWrites?: Array<{
-    key: string;
-    value: string | number | boolean | null;
-    prevValue?: string | number | boolean | null;
-  }>;
   tokens?: number;
   costUsd?: number;
   modelName?: string;
@@ -164,7 +159,7 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
         } satisfies HandlerResult;
       }
 
-      const { winner: chosenId, contextWrites, tokens = 0, costUsd = 0, modelName } = delegateResult;
+      const { winner: chosenId, tokens = 0, costUsd = 0, modelName } = delegateResult;
 
       // Validate winner is in candidate set.
       const candidateIds = candidates.map((c) => c.branchId);
@@ -202,20 +197,12 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
         [allFailedKey]: allFailed,
       };
 
-      // Fold context_set writes into routingDelta.
-      if (contextWrites != null) {
-        for (const entry of contextWrites) {
-          routingDelta[entry.key] = entry.value;
-        }
-      }
-
       const result: HandlerResult = {
         kind: "transition",
         outcomeStatus,
         tokens,
         costUsd,
         routingDelta,
-        ...(contextWrites != null && contextWrites.length > 0 ? { contextWriteLog: contextWrites } : {}),
         ...(modelName !== undefined ? { modelName } : {}),
       };
       if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;

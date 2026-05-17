@@ -116,7 +116,7 @@ describe("makeFanInLlmDelegate", () => {
     const { backend, calls } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
     const delegate = makeFanInLlmDelegate({ backend });
     await delegate({ nodeId: "join", candidates, branchOutputs, prompt: "choose", nodeAttrs: {}, signal });
-    expect(calls[0]!.node.attrs.output_schema).toBeUndefined();
+    expect(calls[0]!.node.attrs["output_schema"]).toBeUndefined();
   });
 
   test("propagates llm_model and llm_provider from nodeAttrs to synthesised node", async () => {
