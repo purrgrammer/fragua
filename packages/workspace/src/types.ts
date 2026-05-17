@@ -46,6 +46,31 @@ export interface SwarmToolContext {
    *  argument against this set. Absent in tests / extension hosts
    *  that don't drive sub-agents. */
   readonly agentCatalog?: readonly AgentDefinition[];
+  /** Parsed `node.attrs.output_schema` (post `JSON.parse`). When set,
+   *  the codergen `emit_output` tool validates its `data` argument
+   *  against this via `Value.Check` from `@sinclair/typebox/value`
+   *  before writing to `pendingOutput`. The codergen backend reads
+   *  the raw string, parses once per call, and attaches the result
+   *  here. See docs/proposals/codergen-context-output-tools.md §3. */
+  readonly outputSchema?: unknown;
+  /** Per-turn accumulator the codergen `context_set` tool writes to.
+   *  Last-write-wins per key (the tool overwrites prior values on the
+   *  same key, capturing the displaced value as `prevValue`). The
+   *  codergen backend builds an empty Map per `backend.run()` and
+   *  drains it into `Outcome.contextWrites` after `agent.waitForIdle()`,
+   *  so multiple tool calls in one turn collapse into one routingDelta
+   *  + one ordered `fact.context_written` log. See
+   *  docs/proposals/codergen-context-output-tools.md §2.1. */
+  readonly contextWrites?: Map<string, { value: string | number | boolean | null; prevValue?: string | number | boolean | null }>;
+  /** Per-turn holder the codergen `emit_output` tool writes to. The
+   *  backend initialises with `{ value: undefined }`; the tool replaces
+   *  `.value` with `{ data }` on each successful call (last write
+   *  wins). After `agent.waitForIdle()` the backend reads
+   *  `pendingOutput.value` — defined means "agent called emit_output";
+   *  undefined means "prose fallback / schema-violation fail". The
+   *  holder pattern keeps `SwarmToolContext` itself frozen (readonly)
+   *  while letting the tool mutate the slot's interior. */
+  readonly pendingOutput?: { value: { data: unknown } | undefined };
 }
 
 /** Inputs the `agent` tool hands to `spawnSubagent`. Mirrors the

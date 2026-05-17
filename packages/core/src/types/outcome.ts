@@ -50,6 +50,41 @@ export const OutcomeSchema = Type.Object(
         retryAfterMs: Type.Optional(Type.Number()),
       }),
     ),
+    /**
+     * Ordered log of `context_set` tool calls the agent made this turn,
+     * captured by the agent backend off `swarmContext.contextWrites`.
+     * Each entry mirrors a single `routingDelta` write; handler-bridge
+     * merges them into the result's `routingDelta` and forwards the log
+     * as `HandlerResult.transition.contextWriteLog` so result-to-facts
+     * can emit one `fact.context_written` per write. Last-write-wins
+     * per key (the backend already collapses duplicates), so this list
+     * is at most one entry per unique key per turn. See
+     * docs/proposals/codergen-context-output-tools.md §2.1.
+     */
+    contextWrites: Type.Optional(
+      Type.Array(
+        Type.Object({
+          key: Type.String(),
+          value: Type.Unsafe<string | number | boolean | null>(Type.Any()),
+          prevValue: Type.Optional(Type.Unsafe<string | number | boolean | null>(Type.Any())),
+        }),
+      ),
+    ),
+    /**
+     * Last `emit_output` tool call's payload, captured by the agent
+     * backend off `swarmContext.pendingOutput`. When set, handler-bridge
+     * writes `JSON.stringify(data)` as the node's `output` artifact
+     * (overriding the prose-fallback path) and flags
+     * `HandlerResult.transition.outputEmitted` so result-to-facts can
+     * emit `fact.output_emitted`. When unset AND the node declared
+     * `output_schema`, the bridge downgrades the outcome to `fail`. See
+     * docs/proposals/codergen-context-output-tools.md §2.2 / §3.
+     */
+    pendingOutput: Type.Optional(
+      Type.Object({
+        data: Type.Unknown(),
+      }),
+    ),
   },
   { $id: "Outcome" },
 );

@@ -1,6 +1,7 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
+import { Value } from "@sinclair/typebox/value";
 import { parseAcceleratorKey } from "../accelerator.ts";
 import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
@@ -54,6 +55,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "max_tokens",
   "skills",
   "skills_disabled",
+  "output_schema",
   "model",
   "provider",
 ]);
@@ -804,23 +806,62 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W015: tripleoctagon (parallel.fan_in) node has `prompt=` set. fan_in
-  // is structural-only — a deterministic heuristic ranker — so `prompt=`
-  // is parsed but never read by the handler. The fix is one of two
-  // patterns: (a) downstream codergen node referencing `$<branchId>.output`
-  // for cross-branch synthesis (see review.dot); (b) `agent` tool in an
-  // upstream codergen for runtime-decided fan-out (see orchestrate.dot).
+  // E017: `output_schema=` on a node must be valid JSON that looks like a
+  // JSON Schema object. Codergen's `emit_output` tool validates data
+  // against this at runtime via `Value.Check`; a malformed schema means
+  // every emit_output call would fail at runtime. Surface at upload
+  // instead. The smoke test is `Value.Check(schema, {})` — forgiving by
+  // design, just catches throw-on-invalid-shape cases; most schema bugs
+  // surface at first `emit_output` call. See
+  // docs/proposals/codergen-context-output-tools.md §3.
   for (const n of nodes) {
-    if (n.shape !== "tripleoctagon") continue;
-    const p = n.attrs.prompt;
-    if (typeof p !== "string" || p.trim() === "") continue;
-    diags.push({
-      severity: "warning",
-      code: "W015",
-      message: `tripleoctagon (parallel.fan_in) node "${n.id}" has prompt= set but fan_in runs a deterministic heuristic ranker — the prompt is never read. For LLM synthesis of branch outputs, add a downstream codergen referencing $<branchId>.output (see review.dot), or fan out via the agent tool inside an upstream codergen (see orchestrate.dot).`,
-      nodeId: n.id,
-      ...(n.loc !== undefined ? { loc: n.loc } : {}),
-    });
+    const raw = n.attrs.output_schema;
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      diags.push({
+        severity: "error",
+        code: "E017",
+        message: `node "${n.id}" output_schema is not valid JSON: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      diags.push({
+        severity: "error",
+        code: "E017",
+        message: `node "${n.id}" output_schema must be a JSON object (Typebox-shaped JSON Schema), got ${
+          parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed
+        }`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+      continue;
+    }
+    try {
+      // Smoke test: invoke Value.Check with the parsed schema. We don't
+      // care about the result — only that it doesn't throw on a
+      // structurally broken schema. Most malformed schemas pass this
+      // and surface at first `emit_output` call instead.
+      // biome-ignore lint/suspicious/noExplicitAny: schema is opaque at validation time.
+      Value.Check(parsed as any, {});
+    } catch (err) {
+      diags.push({
+        severity: "error",
+        code: "E017",
+        message: `node "${n.id}" output_schema is not a valid JSON Schema: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
   }
 
   if (opts.strict) {

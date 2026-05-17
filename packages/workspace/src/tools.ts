@@ -462,6 +462,8 @@ export const bashTool: Tool<{ command: string; timeout?: number }, BashResultDat
 };
 
 import { abortTool } from "./abort-tool.ts";
+import { contextSetTool } from "./context-set-tool.ts";
+import { emitOutputTool } from "./emit-output-tool.ts";
 import { skillTool } from "./skill-tool.ts";
 import { webFetchTool } from "./web-fetch.ts";
 
@@ -486,6 +488,8 @@ export const CORE_TOOLS: AnyTool[] = [
   agentTool,
   skillTool,
   abortTool,
+  contextSetTool,
+  emitOutputTool,
 ];
 
 /** Structurally remove the `agent` tool from a pool. The `agent` tool

@@ -83,6 +83,32 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       facts.push({ type: "fact.node_completed", payload });
 
+      // Expand the codergen agent's `context_set` / `emit_output` log
+      // into per-write fact rows so the audit trail records every
+      // routing-context mutation and structured-output emission with
+      // `source: "agent"`. Operator-side duals (`source: "operator"`)
+      // are emitted from the executor's post-fold pass, not here. See
+      // docs/proposals/codergen-context-output-tools.md §2.1 / §2.2.
+      const completedNodeId = ctx.state.currentNode ?? "";
+      if (result.contextWriteLog !== undefined) {
+        for (const entry of result.contextWriteLog) {
+          const cwPayload: Extract<FactEvent, { type: "fact.context_written" }>["payload"] = {
+            source: "agent",
+            nodeId: completedNodeId,
+            key: entry.key,
+            value: entry.value,
+          };
+          if (entry.prevValue !== undefined) cwPayload.prevValue = entry.prevValue;
+          facts.push({ type: "fact.context_written", payload: cwPayload });
+        }
+      }
+      if (result.outputEmitted === true) {
+        facts.push({
+          type: "fact.output_emitted",
+          payload: { source: "agent", nodeId: completedNodeId },
+        });
+      }
+
       if (isTerminalNode(nextNode)) {
         // A terminal reached via an explicit fail outcome (either the
         // handler returned outcomeStatus="fail" or the edge selector

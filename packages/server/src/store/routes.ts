@@ -4,6 +4,7 @@
 // written here. Reads hit the store projection directly and work even when
 // the daemon is offline.
 
+import { Value } from "@sinclair/typebox/value";
 import { InvalidDurationError, parseDotSource, parseDurationMs } from "@swarm/core";
 import {
   FEED_EVENT_KINDS,
@@ -559,6 +560,128 @@ export function createRoutes(deps: ServerDeps): Hono {
     if (typeof body.note === "string") payload.note = body.note;
     return appendIntentOr413(c, c.req.param("id"), {
       type: "intent.max_loops_adjusted",
+      payload,
+    });
+  });
+
+  // Operator-side dual of the codergen `context_set` tool. Writes
+  // `routing[key] = value` so downstream nodes and edge conditions read
+  // it via `context.<key>`. The fold projects routing on the next turn;
+  // the executor emits `fact.context_written { source: "operator", … }`
+  // for the audit log. See
+  // docs/proposals/codergen-context-output-tools.md §4.1.
+  app.post("/runs/:id/context", async (c) => {
+    const body = await readJson<{ key?: unknown; value?: unknown; note?: unknown }>(c);
+    if (!body) {
+      return c.json({ error: "request body required" }, 400);
+    }
+    if (typeof body.key !== "string" || body.key.length === 0) {
+      return c.json({ error: "key must be a non-empty string" }, 400);
+    }
+    if (body.key.includes(".")) {
+      return c.json({ error: "key must not contain a dot (use a single identifier)" }, 400);
+    }
+    const v = body.value;
+    if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
+      return c.json({ error: "value must be a string, number, boolean, or null" }, 400);
+    }
+    const payload: { key: string; value: string | number | boolean | null; note?: string } = {
+      key: body.key,
+      value: v as string | number | boolean | null,
+    };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, c.req.param("id"), {
+      type: "intent.context_set",
+      payload,
+    });
+  });
+
+  // Operator-side dual of the codergen `emit_output` tool. Writes
+  // `data` as the named node's `output` artifact. When the target node
+  // declares `output_schema`, we synchronously validate against it and
+  // reject with 422 + Value.Errors so the operator sees the same
+  // structured error the LLM does. The artifact write itself is
+  // deferred to the daemon's post-fold pass (see
+  // packages/daemon/src/executor.ts). See
+  // docs/proposals/codergen-context-output-tools.md §4.2.
+  app.post("/runs/:id/output", async (c) => {
+    const runId = c.req.param("id");
+    const nodeId = c.req.query("node");
+    if (typeof nodeId !== "string" || nodeId.length === 0) {
+      return c.json({ error: "?node=<nodeId> required" }, 400);
+    }
+    const body = await readJson<{ data?: unknown; note?: unknown }>(c);
+    if (!body) {
+      return c.json({ error: "request body required" }, 400);
+    }
+    if (body.data === undefined) {
+      return c.json({ error: "data required" }, 400);
+    }
+    // Schema validation: resolve the run's workflow source, parse it,
+    // find the target node, and if it carries `output_schema=` run
+    // Value.Check. Same validator used at registration time + at the
+    // LLM `emit_output` call site — single source of truth for the
+    // shape contract.
+    const state = deps.store.getState(runId);
+    if (state == null) {
+      return c.json({ error: "run not found", code: "not_found", details: { runId } }, 404);
+    }
+    const wf = state.workflowSha != null ? deps.store.getWorkflow(state.workflowSha) : null;
+    if (wf?.dotSource != null && wf.dotSource.length > 0) {
+      try {
+        const graph = parseDotSource(wf.dotSource);
+        const targetNode = graph.nodes[nodeId];
+        if (targetNode == null) {
+          return c.json(
+            { error: `node "${nodeId}" not found in workflow`, code: "unknown_node" },
+            400,
+          );
+        }
+        const rawSchema = targetNode.attrs.output_schema;
+        if (typeof rawSchema === "string" && rawSchema.trim().length > 0) {
+          let parsedSchema: unknown;
+          try {
+            parsedSchema = JSON.parse(rawSchema);
+          } catch {
+            // E017 should have blocked upload; if we hit it here, fall
+            // through without validation rather than reject the operator.
+            parsedSchema = undefined;
+          }
+          if (parsedSchema !== undefined && parsedSchema !== null) {
+            // biome-ignore lint/suspicious/noExplicitAny: schema is an opaque user-supplied JSON Schema.
+            const ok = Value.Check(parsedSchema as any, body.data);
+            if (!ok) {
+              // biome-ignore lint/suspicious/noExplicitAny: same as above.
+              const errors = [...Value.Errors(parsedSchema as any, body.data)].map((e) => ({
+                path: e.path,
+                message: e.message,
+              }));
+              return c.json(
+                {
+                  error: `data failed output_schema validation (${errors.length} error${
+                    errors.length === 1 ? "" : "s"
+                  })`,
+                  code: "schema_validation_failed",
+                  errors,
+                },
+                422,
+              );
+            }
+          }
+        }
+      } catch {
+        // Workflow source unparseable here means the run was enqueued
+        // against an invalid sha (shouldn't happen post-validate); skip
+        // validation rather than 500 — the daemon will halt on its own.
+      }
+    }
+    const payload: { nodeId: string; data: unknown; note?: string } = {
+      nodeId,
+      data: body.data,
+    };
+    if (typeof body.note === "string") payload.note = body.note;
+    return appendIntentOr413(c, runId, {
+      type: "intent.output_set",
       payload,
     });
   });

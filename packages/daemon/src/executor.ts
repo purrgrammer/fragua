@@ -1778,6 +1778,61 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         };
       }
     }
+    // Operator-side `intent.context_set` writes. The fold already merged
+    // them into `routingDelta` (and therefore into `routingPatch` via
+    // `mergeRoutingPatches`), so the routing projection is already in
+    // motion. Emit one `fact.context_written { source: "operator", … }`
+    // per entry so the audit log records every operator-side write
+    // symmetrically with the agent-side ones. See
+    // docs/proposals/codergen-context-output-tools.md §4.1.
+    if (decision.operatorContextWrites !== undefined) {
+      const nodeIdForFact = state.currentNode ?? "";
+      for (const entry of decision.operatorContextWrites) {
+        const cwPayload: Extract<FactEvent, { type: "fact.context_written" }>["payload"] = {
+          source: "operator",
+          nodeId: nodeIdForFact,
+          key: entry.key,
+          value: entry.value,
+        };
+        if (entry.prevValue !== undefined) cwPayload.prevValue = entry.prevValue;
+        facts.push({ type: "fact.context_written", payload: cwPayload });
+      }
+    }
+
+    // Operator-side `intent.output_set` writes. Persist `data` as the
+    // named node's `output` artifact (replace: true, same path the
+    // codergen `emit_output` tool uses) and emit
+    // `fact.output_emitted { source: "operator", … }`. Schema validation
+    // already happened server-side before the intent landed; the daemon
+    // trusts the payload shape. Iteration is pinned to 0 — the
+    // operator-output slot is the "first dispatch" slot so
+    // `$<nodeId>.output` substitution resolves correctly when the
+    // target node hasn't run yet (or has run with a different
+    // iteration). See docs/proposals/codergen-context-output-tools.md
+    // §4.2.
+    if (decision.operatorOutputs !== undefined) {
+      for (const out of decision.operatorOutputs) {
+        try {
+          const bytes = new TextEncoder().encode(JSON.stringify(out.data));
+          opts.store.putArtifact(
+            { runId, nodeId: out.nodeId, iteration: 0, key: "output" },
+            bytes,
+            "application/json",
+            { replace: true },
+          );
+          facts.push({
+            type: "fact.output_emitted",
+            payload: { source: "operator", nodeId: out.nodeId },
+          });
+        } catch {
+          // Artifact write failure (size cap, scope error) is
+          // best-effort — swallow rather than halt the whole turn,
+          // matching the agent-side `emit_output` behaviour where a
+          // failed put just skips the fact emission.
+        }
+      }
+    }
+
     const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
     const appendOpts: {
       routingPatch?: Record<string, unknown>;
