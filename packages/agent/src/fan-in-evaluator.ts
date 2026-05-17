@@ -2,17 +2,16 @@
 // candidates when a tripleoctagon node carries prompt=.
 //
 // The delegate synthesises a prompt that concatenates each candidate's
-// $<branchId>.output text, then calls the backend with an output_schema
-// that forces the LLM to call emit_output({winner: "<branchId>"}). The
-// resolved branchId is returned to the fan-in handler, which writes it
-// into routing under fan_in.<nodeId>.winner.
+// $<branchId>.output text, then calls the backend with no tools (only
+// the built-in `abort` is force-included by the codergen backend). The
+// LLM is instructed to end its reply with a single line:
 //
-// context_set calls made by the LLM are forwarded back as contextWrites
-// so the handler can fold them into routingDelta and emit
-// fact.context_written events for downstream ${context.<key>} resolution.
+//   WINNER: <branchId>
+//
+// The evaluator parses that line out of `outcome.notes` (the final
+// assistant text the backend exposes) and validates the chosen
+// branchId against the candidate set. No tool dependency.
 
-import { Type } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
 import type { CodergenBackend, CodergenInput, Node } from "@swarm/core";
 import type { LlmFanInDelegate, LlmFanInInput, LlmFanInResult } from "@swarm/core/handler";
 import type { PiCodergenBackendOptions } from "./backend.ts";
@@ -26,17 +25,31 @@ export interface MakeFanInLlmDelegateOpts {
   backend?: CodergenBackend;
 }
 
+/** Regex that matches the WINNER: <branchId> line. Anchored to a line
+ *  (multi-line flag) so the LLM can put it anywhere in the reply, but
+ *  by convention it's the final line. We take the LAST match to handle
+ *  prompts that quote the format earlier in the reply. */
+const WINNER_LINE = /^[ \t]*WINNER:[ \t]*([^\s].*?)[ \t]*$/gm;
+
+function parseWinner(text: string): string | undefined {
+  const matches = [...text.matchAll(WINNER_LINE)];
+  if (matches.length === 0) return undefined;
+  const last = matches[matches.length - 1];
+  return last?.[1]?.trim();
+}
+
 /**
  * Build a `LlmFanInDelegate` backed by `PiCodergenBackend`.
  *
  * The returned closure is called by the fan-in handler each time a
  * tripleoctagon with `prompt=` is dispatched. It:
- *   1. Synthesises a prompt from the user's text + branch outputs.
- *   2. Sets `output_schema` on the synthesised node so the backend's
- *      `emit_output` enforcement requires `{winner: <branchId>}`.
- *   3. Calls `backend.run(...)` with `allowed_tools = ["context_set",
- *      "emit_output"]` — the LLM's only affordances for this call.
- *   4. Maps the `Outcome` back to `LlmFanInResult`.
+ *   1. Synthesises a prompt from the user's text + branch outputs +
+ *      a WINNER:<branchId> trailer instruction.
+ *   2. Calls `backend.run(...)` with `allowed_tools = ""` — no tools
+ *      beyond the codergen backend's force-included `abort`.
+ *   3. Parses the final assistant text (Outcome.notes) for the WINNER
+ *      line and validates against the candidate set.
+ *   4. Maps the result back to `LlmFanInResult`.
  */
 export function makeFanInLlmDelegate(opts: MakeFanInLlmDelegateOpts): LlmFanInDelegate {
   if (!opts.backend && !opts.backendOpts) {
@@ -47,7 +60,9 @@ export function makeFanInLlmDelegate(opts: MakeFanInLlmDelegateOpts): LlmFanInDe
   return async (input: LlmFanInInput): Promise<LlmFanInResult> => {
     const { candidates, branchOutputs, prompt, nodeAttrs, signal } = input;
 
-    // Synthesise the full prompt: user directive + branch summaries.
+    // Synthesise the full prompt: user directive + branch summaries +
+    // explicit WINNER trailer instruction with the legal set.
+    const candidateIds = candidates.map((c: { branchId: string }) => c.branchId);
     const branchBlocks = candidates
       .map((c: { branchId: string; status: string; score?: number }) => {
         const header = `=== branch:${c.branchId} (status=${c.status}${c.score != null ? `, score=${c.score}` : ""}) ===`;
@@ -56,34 +71,21 @@ export function makeFanInLlmDelegate(opts: MakeFanInLlmDelegateOpts): LlmFanInDe
       })
       .join("\n\n");
 
-    const fullPrompt = `${prompt}\n\n${branchBlocks}`;
+    const trailer = `End your reply with EXACTLY one line in the format:\n  WINNER: <branchId>\nwhere <branchId> is one of: ${candidateIds.join(", ")}.\nDo not output any text after that line.`;
 
-    // Output schema: winner must be one of the known branch ids.
-    // The backend's emit_output tool will enforce this via Value.Check.
-    const candidateIds = candidates.map((c: { branchId: string }) => c.branchId);
-    const outputSchema = JSON.stringify({
-      type: "object",
-      required: ["winner"],
-      additionalProperties: false,
-      properties: {
-        winner: {
-          type: "string",
-          enum: candidateIds,
-        },
-      },
-    });
+    const fullPrompt = `${prompt}\n\n${branchBlocks}\n\n${trailer}`;
 
     // Synthesise a Node whose attrs carry the tripleoctagon's llm_model /
     // llm_provider (already resolved by prepareGraph + stylesheet at
-    // auto-dispatch time), plus the output_schema and a narrow tool list.
+    // auto-dispatch time), plus an empty tool list. The codergen backend
+    // force-includes `abort`, which is the only affordance we want.
     const syntheticNode: Node = {
       id: input.nodeId,
       shape: "tripleoctagon",
       classes: [],
       attrs: {
         ...nodeAttrs,
-        output_schema: outputSchema,
-        allowed_tools: ["context_set", "emit_output"],
+        allowed_tools: [],
       },
     };
 
@@ -128,42 +130,36 @@ export function makeFanInLlmDelegate(opts: MakeFanInLlmDelegateOpts): LlmFanInDe
       };
     }
 
-    if (outcome.pendingOutput?.data === undefined) {
+    // outcome.notes carries the final assistant text (the backend slices
+    // it to ~4KB). Parse the WINNER line out of it.
+    const text = outcome.notes ?? "";
+    const winner = parseWinner(text);
+    if (winner === undefined) {
       return {
         failure: {
           reason: "fan_in_llm_emit_missing",
-          detail: "LLM did not call emit_output with {winner: <branchId>}",
+          detail: "no `WINNER: <branchId>` line found in the LLM reply",
         },
       };
     }
 
-    // Validate the payload with Typebox Value.Check.
-    const WinnerSchema = Type.Object(
-      { winner: Type.Union(candidateIds.map((id: string) => Type.Literal(id))) },
-      { additionalProperties: false },
-    );
-
-    const data = outcome.pendingOutput.data;
-    if (!Value.Check(WinnerSchema, data)) {
+    if (!candidateIds.includes(winner)) {
       return {
         failure: {
           reason: "fan_in_llm_picked_unknown_branch",
-          detail: `not a valid {winner: one-of-candidates} payload: ${JSON.stringify(data)}`,
+          detail: `LLM picked "${winner}", not in candidate set: ${candidateIds.join(", ")}`,
         },
       };
     }
 
-    const winner = (data as { winner: string }).winner;
-
-    // Collect contextWrites from the Outcome.
-    const contextWrites = outcome.contextWrites ?? [];
-
     return {
       winner,
-      ...(contextWrites.length > 0 ? { contextWrites } : {}),
       tokens,
       costUsd,
       ...(modelName !== undefined ? { modelName } : {}),
     };
   };
 }
+
+// Exported for unit testing.
+export const __test = { parseWinner };

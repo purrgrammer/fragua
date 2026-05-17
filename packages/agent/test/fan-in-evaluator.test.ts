@@ -1,15 +1,14 @@
 // Tests for makeFanInLlmDelegate.
 //
 // All tests inject a stub CodergenBackend so no real LLM calls fire.
-// The stubs record every CodergenInput.prompt + node.attrs.output_schema
-// so we can verify prompt synthesis and schema construction.
+// The stubs record every CodergenInput so we can verify prompt
+// synthesis and node-attr propagation. Winner is parsed from
+// `outcome.notes` (final assistant text) — no tool dependency.
 
 import { describe, expect, test } from "bun:test";
-import { Type } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
 import type { CodergenBackend, CodergenInput, FanInCandidate, Node, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
-import { makeFanInLlmDelegate } from "../src/fan-in-evaluator.ts";
+import { __test, makeFanInLlmDelegate } from "../src/fan-in-evaluator.ts";
 
 function makeOutcome(overrides: Partial<Outcome>): Outcome {
   return {
@@ -52,13 +51,31 @@ const branchOutputs = new Map([
 
 const signal = new AbortController().signal;
 
+describe("parseWinner (regex)", () => {
+  test("matches a clean trailing WINNER line", () => {
+    expect(__test.parseWinner("some prose\nWINNER: branch_b")).toBe("branch_b");
+  });
+  test("matches WINNER line with leading/trailing whitespace tolerantly", () => {
+    expect(__test.parseWinner("...\n  WINNER:   branch_a  ")).toBe("branch_a");
+  });
+  test("takes the last WINNER when multiple appear (model quoted the format earlier)", () => {
+    expect(__test.parseWinner("Format reminder: WINNER: <branchId>\n\nAnalysis...\nWINNER: branch_b")).toBe("branch_b");
+  });
+  test("returns undefined when no WINNER line present", () => {
+    expect(__test.parseWinner("just prose, no decision")).toBeUndefined();
+  });
+  test("returns undefined when WINNER value is empty", () => {
+    expect(__test.parseWinner("WINNER: ")).toBeUndefined();
+  });
+});
+
 describe("makeFanInLlmDelegate", () => {
   test("throws when neither backendOpts nor backend is provided", () => {
     expect(() => makeFanInLlmDelegate({})).toThrow("provide `backend` or `backendOpts`");
   });
 
-  test("synthesises prompt with branch outputs and passes it to the backend", async () => {
-    const { backend, calls } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_a" } } }));
+  test("synthesises prompt with branch outputs and the WINNER trailer", async () => {
+    const { backend, calls } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
     const delegate = makeFanInLlmDelegate({ backend });
     await delegate({
       nodeId: "join",
@@ -81,39 +98,29 @@ describe("makeFanInLlmDelegate", () => {
     // Status and score appear in the header.
     expect(prompt).toContain("status=success");
     expect(prompt).toContain("score=0.9");
+    // The WINNER trailer instruction is appended with the legal candidate list.
+    expect(prompt).toContain("WINNER: <branchId>");
+    expect(prompt).toContain("branch_a, branch_b");
   });
 
-  test("sets output_schema on the synthesised node with candidate ids as enum", async () => {
-    const { backend, calls } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_b" } } }));
-    const delegate = makeFanInLlmDelegate({ backend });
-    await delegate({ nodeId: "join", candidates, branchOutputs, prompt: "choose", nodeAttrs: {}, signal });
-
-    const schema = JSON.parse(calls[0]!.node.attrs.output_schema as string);
-    expect(schema.required).toEqual(["winner"]);
-    expect(schema.properties.winner.enum).toEqual(["branch_a", "branch_b"]);
-    // Verify Value.Check accepts a valid payload and rejects invalid ones.
-    const WinnerSchema = Type.Object(
-      { winner: Type.Union([Type.Literal("branch_a"), Type.Literal("branch_b")]) },
-      { additionalProperties: false },
-    );
-    expect(Value.Check(WinnerSchema, { winner: "branch_a" })).toBe(true);
-    expect(Value.Check(WinnerSchema, { winner: 42 })).toBe(false);
-    expect(Value.Check(WinnerSchema, {})).toBe(false);
-  });
-
-  test("only context_set and emit_output appear in allowed_tools on the synthesised node", async () => {
-    const { backend, calls } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_a" } } }));
+  test("synthesised node has empty allowed_tools (no context_set/emit_output)", async () => {
+    const { backend, calls } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
     const delegate = makeFanInLlmDelegate({ backend });
     await delegate({ nodeId: "join", candidates, branchOutputs, prompt: "choose", nodeAttrs: {}, signal });
     const allowedTools = calls[0]!.node.attrs.allowed_tools;
     expect(Array.isArray(allowedTools)).toBe(true);
-    expect(allowedTools).toContain("context_set");
-    expect(allowedTools).toContain("emit_output");
-    expect(allowedTools).toHaveLength(2);
+    expect(allowedTools).toEqual([]);
+  });
+
+  test("synthesised node carries no output_schema attr", async () => {
+    const { backend, calls } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
+    const delegate = makeFanInLlmDelegate({ backend });
+    await delegate({ nodeId: "join", candidates, branchOutputs, prompt: "choose", nodeAttrs: {}, signal });
+    expect(calls[0]!.node.attrs.output_schema).toBeUndefined();
   });
 
   test("propagates llm_model and llm_provider from nodeAttrs to synthesised node", async () => {
-    const { backend, calls } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_a" } } }));
+    const { backend, calls } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
     const delegate = makeFanInLlmDelegate({ backend });
     await delegate({
       nodeId: "join",
@@ -128,8 +135,10 @@ describe("makeFanInLlmDelegate", () => {
     expect(node.attrs.llm_provider).toBe("anthropic");
   });
 
-  test("returns winner from pendingOutput.data.winner", async () => {
-    const { backend } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_b" } } }));
+  test("returns winner parsed from outcome.notes WINNER line", async () => {
+    const { backend } = makeStubBackend(() =>
+      makeOutcome({ notes: "Branch B is clearly more severe.\n\nWINNER: branch_b" }),
+    );
     const delegate = makeFanInLlmDelegate({ backend });
     const result = await delegate({
       nodeId: "join",
@@ -145,12 +154,8 @@ describe("makeFanInLlmDelegate", () => {
     }
   });
 
-  test("missing emit_output downgrades to fan_in_llm_emit_missing failure", async () => {
-    const { backend } = makeStubBackend(() => {
-      // Omit pendingOutput entirely (exactOptionalPropertyTypes: pendingOutput cannot be `undefined`).
-      const { pendingOutput: _omitted, ...rest } = makeOutcome({ status: "success" });
-      return rest as Outcome;
-    });
+  test("missing WINNER line returns fan_in_llm_emit_missing failure", async () => {
+    const { backend } = makeStubBackend(() => makeOutcome({ notes: "I cannot decide." }));
     const delegate = makeFanInLlmDelegate({ backend });
     const result = await delegate({
       nodeId: "join",
@@ -163,12 +168,12 @@ describe("makeFanInLlmDelegate", () => {
     expect("failure" in result).toBe(true);
     if ("failure" in result) {
       expect(result.failure.reason).toBe("fan_in_llm_emit_missing");
-      expect(result.failure.detail).toMatch(/emit_output/);
+      expect(result.failure.detail).toMatch(/WINNER/);
     }
   });
 
-  test("emit_output payload not in candidate ids produces fan_in_llm_picked_unknown_branch failure", async () => {
-    const { backend } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "ghost_branch" } } }));
+  test("WINNER pointing to an unknown branch produces fan_in_llm_picked_unknown_branch failure", async () => {
+    const { backend } = makeStubBackend(() => makeOutcome({ notes: "WINNER: ghost_branch" }));
     const delegate = makeFanInLlmDelegate({ backend });
     const result = await delegate({
       nodeId: "join",
@@ -213,7 +218,7 @@ describe("makeFanInLlmDelegate", () => {
 
   test("cost is collected from cost.recorded events emitted by the backend", async () => {
     // The stub backend above emits cost.recorded with total_tokens=20, cost_usd=0.002.
-    const { backend } = makeStubBackend(() => makeOutcome({ pendingOutput: { data: { winner: "branch_a" } } }));
+    const { backend } = makeStubBackend(() => makeOutcome({ notes: "WINNER: branch_a" }));
     const delegate = makeFanInLlmDelegate({ backend });
     const result = await delegate({
       nodeId: "join",
@@ -227,30 +232,6 @@ describe("makeFanInLlmDelegate", () => {
       expect(result.tokens).toBe(20);
       expect(result.costUsd).toBeCloseTo(0.002);
       expect(result.modelName).toBe("test-model");
-    }
-  });
-
-  test("contextWrites from Outcome are forwarded in the result", async () => {
-    const { backend } = makeStubBackend(() =>
-      makeOutcome({
-        pendingOutput: { data: { winner: "branch_a" } },
-        contextWrites: [{ key: "severity", value: "high" }],
-      }),
-    );
-    const delegate = makeFanInLlmDelegate({ backend });
-    const result = await delegate({
-      nodeId: "join",
-      candidates,
-      branchOutputs,
-      prompt: "choose",
-      nodeAttrs: {},
-      signal,
-    });
-    if (!("failure" in result)) {
-      expect(result.contextWrites).toBeDefined();
-      expect(result.contextWrites).toHaveLength(1);
-      expect(result.contextWrites![0]!.key).toBe("severity");
-      expect(result.contextWrites![0]!.value).toBe("high");
     }
   });
 });
