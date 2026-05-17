@@ -83,14 +83,7 @@ Workflows are uploaded via `POST /workflows { name, dotSource }` which returns a
 
 A handler is a pure async function `(ctx: HandlerContext) => Promise<HandlerResult>`. Its I/O routes through `ctx`: `ctx.llm`, `ctx.http`, `ctx.tools`, `ctx.messages`, `ctx.artifacts`, `ctx.externalCall`. Handlers may not import `node:fs`, `node:child_process`, or call bare `fetch` — enforced by lint.
 
-The codergen handler force-includes **four built-in tools** on every call (in addition to whatever the registry + `allowed_tools` resolve to):
-
-- **`skill`** — load a skill from the catalogue rendered into the system prompt.
-- **`abort`** — unrecoverable stop. Agents that cannot proceed call `abort({ reason })`; the handler translates the call to `outcome.status="fail"` with `non_retryable=true`, so workflows route via `condition="outcome=fail"` edges and the boundary skips retries on intentional failures.
-- **`context_set`** — write a routing-context key (`context_set({ key, value })`) so downstream nodes and edge conditions read it via `context.<key>`. Additive within a turn; last-write-wins. Keys must be a single identifier (no dots); values are scalars or null. Each call lands as `fact.context_written { source: "agent", … }`. See [`codergen-context-output-tools.md`](./proposals/codergen-context-output-tools.md) §2.1.
-- **`emit_output`** — emit the node's structured output (`emit_output({ data })`) so downstream nodes can reference `$<this-node>.output[.path]`. Persisted as the node's `output` artifact (JSON). When the node declares `output_schema=` (a JSON Schema string), the tool validates `data` via `Value.Check` from `@sinclair/typebox/value` before persistence; not calling `emit_output` on a node that declares `output_schema=` downgrades the outcome to `fail`. Each call lands as `fact.output_emitted { source: "agent", … }`. See [`codergen-context-output-tools.md`](./proposals/codergen-context-output-tools.md) §2.2 / §3.
-
-All four are force-included by the codergen backend regardless of the node's `allowed_tools` / `denied_tools` — they are structural properties of the step execution contract, not user-selectable capabilities.
+The codergen handler force-includes an **`abort` tool** on every call. Agents that cannot proceed call `abort({ reason })`; the handler translates the call to `outcome.status="fail"` with `non_retryable=true`, so workflows route via `condition="outcome=fail"` edges and the boundary skips retries on intentional failures.
 
 See [`handler-contract.md`](./handler-contract.md) for the full API.
 
@@ -165,8 +158,6 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/max_retries` | `{ nodeId: string, newLimit: number, note?: string }` | Raises `max_retries` on a `paused{reason:"max_retries"}` run. |
 | `POST /runs/:id/goal_gate` | `{ newLimit: number, note?: string }` | Raises `max_goal_gate_retries` on a `paused{reason:"goal_gate"}` run. |
 | `POST /runs/:id/max_loops` | `{ newLimit: number, note?: string }` | Raises the per-run dispatch ceiling on a `paused{reason:"max_loops"}` run. |
-| `POST /runs/:id/context` | `{ key: string, value: string \| number \| boolean \| null, note?: string }` | Operator dual of the codergen `context_set` tool. Folds into `routing[key]` and emits `fact.context_written { source: "operator", … }`. Key must be a single identifier (no dots). |
-| `POST /runs/:id/output?node=<nodeId>` | `{ data: string \| object \| array, note?: string }` | Operator dual of the codergen `emit_output` tool. Writes `data` as the named node's `output` artifact and emits `fact.output_emitted { source: "operator", … }`. If the target node declares `output_schema=`, the route validates synchronously and returns **422** with `Value.Errors` on failure. |
 
 The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_loops`) raise per-run ceilings but do not themselves resume — the operator pairs each with `intent.resume` (the web UI bundles both clicks into a single "Raise & Resume" action).
 
