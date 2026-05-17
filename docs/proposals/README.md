@@ -23,7 +23,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
 | [Codergen context + output tools](./codergen-context-output-tools.md) | designed | `context_set` + `emit_output` tool implementations, `output_schema` attribute + ajv validation, E017/W018 validator codes, operator intent endpoints (`intent.context_set` / `intent.output_set`) |
-| [`paused{reason:"max_retries"}` — Stage 3 / max_retries slice](./paused-max-retries.md) | designed | executor halt-site at `daemon/src/executor.ts:1488–1498` → `fact.run_paused{reason:"max_retries"}` (types, fold, route, UI renderer already in tree); ARCH §3 / SPEC §3.4 / STATUS.md sweep  |
 
 ## Accepted (design done; awaiting scheduling)
 
@@ -94,5 +93,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Provider credentials in the store](./provider-credentials-storage.md)
 - [Custom-provider config in the store](./provider-config-storage.md)
 - [Per-model CLI ops for custom providers](./provider-model-ops.md)
+- [`paused{reason:"max_retries"}` — Stage 3 / max_retries slice](./paused-max-retries.md)
 
 </details>

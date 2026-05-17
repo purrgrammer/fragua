@@ -367,10 +367,16 @@ export type HandlerResult =
       // `"goal_gate_unsatisfied"`, `"max_loops"`) are accepted on the
       // handler-side type but get translated by result-to-facts into
       // `fact.run_paused` with reason `"max_retries"` / `"goal_gate"`
-      // / `"max_loops"` (Stage 3 of recoverable-budget-pause.md). The
-      // sibling-halt converted reasons `"abort_loop"` and
-      // `"provider_exhausted"` are emitted by the executor directly
-      // as `fact.run_paused`, never as halts.
+      // / `"max_loops"` (Stage 3 of recoverable-budget-pause.md).
+      // Post-paused-max-retries.md §3.1: the executor itself no longer
+      // constructs `reason: "max_retries_exceeded"` — retry exhaustion
+      // is now handled via the `retriesExhaustedPause` sentinel that
+      // emits `fact.run_paused` directly. The literal stays in the
+      // union for handler-contract stability and to keep the
+      // result-to-facts safety-net translation typed. The sibling-halt
+      // converted reasons `"abort_loop"` and `"provider_exhausted"`
+      // are emitted by the executor directly as `fact.run_paused`,
+      // never as halts.
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
       /** Optional context for halts that result-to-facts converts into

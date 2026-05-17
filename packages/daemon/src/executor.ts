@@ -1437,6 +1437,13 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           maxRetries: number;
         }
       | undefined;
+    // Stage 3 (docs/proposals/paused-max-retries.md): retry-counter
+    // exhaustion becomes an operator-resumable pause instead of a
+    // terminal halt. Sentinel mirrors `budgetPause` / `retryPause` —
+    // populated in the action.kind === "halt" branch below, consumed
+    // in the post-resultToFacts pass that swaps fact.node_started for
+    // fact.run_paused{reason:"max_retries"}.
+    let retriesExhaustedPause: { nodeId: string; currentLimit: number; attempts: number } | undefined;
     if (result.kind === "transition" && result.outcomeStatus === "retry") {
       const graph = graphFor(state.workflowSha);
       const completedNode = graph?.nodes[currentNode];
@@ -1446,7 +1453,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         // precedence over the static node/graph attrs. Stage 3
         // pause-converted halt: a Raise & Resume after a max_retries
         // pause should let the next dispatch see the higher cap.
-        const maxRetriesOverride = readNumber(state.routing[maxRetriesOverrideKey(currentNode)]);
+        // Read from `effectiveRouting` (state.routing merged with the
+        // current dispatch's fold delta) so an override consumed in
+        // the same turn as the resume is honoured immediately —
+        // mirrors the budget-override reader at executor.ts:794, and
+        // matches the comment on `effectiveRouting` at executor.ts:421.
+        const maxRetriesOverride = readNumber(effectiveRouting[maxRetriesOverrideKey(currentNode)]);
         const maxRetries =
           maxRetriesOverride > 0 ? maxRetriesOverride : resolveMaxRetries(completedNode.attrs, graph.attrs);
         const allowPartial = completedNode.attrs.allow_partial === true;
@@ -1490,12 +1502,24 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type: "node.retry_exhausted",
             payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
           });
-          result = {
-            kind: "halt",
-            reason: "max_retries_exceeded",
-            detail: `node "${currentNode}" exhausted ${maxRetries} retries`,
-            pauseContext: { currentLimit: maxRetries, attempts: priorRetries + 1 },
+          // Stage 3 (docs/proposals/paused-max-retries.md §3.1): emit a
+          // pause instead of a halt. Leave `result` as the transition
+          // shape with `outcomeStatus: "retry"` and `nextNode = currentNode`
+          // so resultToFacts emits fact.node_completed (preserving real
+          // spend) + fact.node_started; the post-resultToFacts pass
+          // strips fact.node_started and emits fact.run_paused. Counter
+          // semantics per §4: the per-node retry counter is NOT reset
+          // here — naked intent.resume re-dispatches with priorRetries
+          // unchanged and immediately re-exhausts; a Raise & Resume
+          // (intent.max_retries_adjusted writing routing.
+          // max_retries_override.<nodeId> + intent.resume) grants
+          // (newLimit − priorRetries) more attempts.
+          retriesExhaustedPause = {
+            nodeId: currentNode,
+            currentLimit: maxRetries,
+            attempts: priorRetries + 1,
           };
+          result.nextNode = currentNode;
         } else if (action.kind === "advance_partial") {
           observability.push({
             type: "node.retry_partial_accept",
@@ -1587,6 +1611,28 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           delayMs: retryPause.delayMs,
           resumeAt: retryPause.resumeAt,
           maxRetries: retryPause.maxRetries,
+        },
+      });
+    }
+
+    // Stage 3 (docs/proposals/paused-max-retries.md §3.1): retry
+    // exhaustion swap. Strip fact.node_started (the run pauses instead
+    // of advancing) and emit fact.run_paused{reason:"max_retries"}.
+    // fact.node_completed is preserved so the metrics + the
+    // nextNode=currentNode routing fact are recorded; an operator who
+    // clicks Resume re-dispatches the same (nodeId, iteration) with
+    // the retry counter intact (§4). The reason is not in
+    // AUTO_WAKE_PAUSE_REASONS so the reducer projects status="paused"
+    // (operator must act).
+    if (retriesExhaustedPause !== undefined) {
+      facts = facts.filter((f) => f.type !== "fact.node_started");
+      facts.push({
+        type: "fact.run_paused",
+        payload: {
+          reason: "max_retries",
+          nodeId: retriesExhaustedPause.nodeId,
+          currentLimit: retriesExhaustedPause.currentLimit,
+          attempts: retriesExhaustedPause.attempts,
         },
       });
     }

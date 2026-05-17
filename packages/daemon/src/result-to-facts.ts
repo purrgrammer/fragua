@@ -155,12 +155,16 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
     case "halt": {
       // Stage 3 of docs/proposals/recoverable-budget-pause.md converts
-      // three reasons to operator-resumable pauses. The executor still
-      // sets `result = { kind: "halt", reason: <X> }` at each site for
-      // legibility (the rest of the post-handler flow shares one shape
-      // for "this turn doesn't advance the run") — the conversion lives
-      // here so adding a sibling-halt conversion stays a one-file
-      // change. Other halts pass through to fact.run_halted unchanged.
+      // three reasons to operator-resumable pauses. `goal_gate_unsatisfied`
+      // and `max_loops` still flow through here (the executor sets
+      // `result = { kind: "halt", reason: <X> }` at those sites for
+      // legibility). `max_retries_exceeded` has migrated to the
+      // `retriesExhaustedPause` sentinel in executor.ts (per
+      // docs/proposals/paused-max-retries.md §3.1) and no longer
+      // reaches this branch from the executor; the translation below
+      // is retained as a safety net for any future caller that still
+      // constructs the handler-contract halt shape. Other halts pass
+      // through to fact.run_halted unchanged.
       const reason = result.reason;
       const nodeId = ctx.state.currentNode ?? "";
       const ctxCurrentLimit = result.pauseContext?.currentLimit ?? 0;

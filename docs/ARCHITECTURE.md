@@ -835,13 +835,17 @@ export type HandlerResult =
       kind: "halt";
       reason: "budget" | "max_loops" | "error" | "goal_gate_unsatisfied" | "max_retries_exceeded";
       detail?: string;
-      // Stage 3 of recoverable-budget-pause.md converts three reasons
-      // in this union to operator-resumable pauses at result-to-facts
-      // time: `max_retries_exceeded` → `fact.run_paused{reason:"max_retries"}`,
-      // `goal_gate_unsatisfied` → `fact.run_paused{reason:"goal_gate"}`,
-      // `max_loops` → `fact.run_paused{reason:"max_loops"}`. `pauseContext`
-      // (optional, omitted in this excerpt) carries `currentLimit` +
-      // `attempts` so the resulting pause payload reads "exhausted N of M".
+      // Stage 3 of recoverable-budget-pause.md converts the
+      // operator-recoverable halts in this union to pauses. As of
+      // docs/proposals/paused-max-retries.md the executor emits
+      // `fact.run_paused{reason:"max_retries"}` directly via the
+      // `retriesExhaustedPause` sentinel (no longer constructs
+      // `kind:"halt", reason:"max_retries_exceeded"` from the retry
+      // arm). `goal_gate_unsatisfied` → `fact.run_paused{reason:"goal_gate"}`
+      // and `max_loops` → `fact.run_paused{reason:"max_loops"}` still
+      // translate at result-to-facts time. `pauseContext` (optional,
+      // omitted in this excerpt) carries `currentLimit` + `attempts`
+      // so the resulting pause payload reads "exhausted N of M".
       // Genuinely-terminal HaltReasons (`schema_drift`, `aborted_exit`,
       // `occ_exhausted`, `timeout_exhausted`) are emitted by the executor
       // directly; `abort_loop` and `provider_exhausted` are also

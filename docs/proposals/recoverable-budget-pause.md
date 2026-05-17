@@ -328,7 +328,7 @@ states at any given moment).
 
 | Before | After | Cap-adjustment intent | Action shape |
 |---|---|---|---|
-| `fact.run_halted{reason:"max_retries_exceeded"}` | `paused{reason:"max_retries"}` | `intent.max_retries_adjusted { nodeId, newLimit }` | Raise & Resume / Resume / Cancel |
+| `fact.run_halted{reason:"max_retries_exceeded"}` | `paused{reason:"max_retries"}` — ✓ implemented via `docs/proposals/paused-max-retries.md` | `intent.max_retries_adjusted { nodeId, newLimit }` | Raise & Resume / Resume / Cancel |
 | `fact.run_halted{reason:"goal_gate_unsatisfied"}` | `paused{reason:"goal_gate"}` | `intent.goal_gate_adjusted { newLimit }` | Raise & Resume / Resume / Cancel |
 | `fact.run_halted{reason:"max_loops"}` | `paused{reason:"max_loops"}` | `intent.max_loops_adjusted { newLimit }` | Raise & Resume / Resume / Cancel |
 | `fact.run_halted{reason:"abort_loop"}` | `paused{reason:"abort_loop"}` | — (ceiling is config, not per-run) | Resume / Cancel |

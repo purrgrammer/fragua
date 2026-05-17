@@ -1,8 +1,9 @@
 ---
 title: "paused{reason:\"max_retries\"} — Stage 3 / max_retries slice"
-status: in-progress
-maturity: design
-last-reviewed: 2026-05-17
+summary: five reasons that previously halted the run terminally now project to `paused`
+status: shipped
+maturity: specified
+last-reviewed: 2026-05-21
 ---
 
 # `paused{reason:"max_retries"}` — Stage 3 / max_retries slice
