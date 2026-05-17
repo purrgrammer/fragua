@@ -1,13 +1,37 @@
 ---
 title: Codergen context + output tools
-status: in-progress
+status: scrapped
 maturity: design
 last-reviewed: 2026-05-17
 ---
 
 # Codergen context + output tools
 
-> Status: in-progress · Maturity: design
+> **Status: scrapped 2026-05-17.** The first cut shipped, but the design
+> didn't survive contact with the codebase: every consuming workflow
+> (`analyze.dot`, `structural-drift.dot`) ended up embedding large
+> escaped JSON Schema strings in DOT, and the dual operator intents
+> hadn't been re-thought against the eventual JSON IR + typed
+> context/inputs/outputs direction. The implementation and consuming
+> workflow edits were reverted (commits 7e3bd38, 908cc49, 7924923,
+> f1f2471, ab86819, 5ac20ee, f68f527). The G3 fan-in LLM evaluator was
+> detached from these tools and now text-parses a `WINNER:` line out of
+> the final assistant message — same capability, no tool dependency.
+>
+> What's worth carrying forward into the next attempt: (a) the
+> codergen → routing-context write path is real and useful; (b) Typebox
+> `Value.Check` is the right validator; (c) the operator-side intent
+> dual is the right substrate for fork/time-travel. What needs more
+> thought: the *invocation shape* (single tool vs. mega-tool, schema as
+> a string in DOT vs. nested object in JSON IR, how typed
+> inputs/outputs/context interplay with this surface).
+>
+> Re-design lands as a new proposal after JSON IR canonical ships and
+> the typed-context direction has a concrete shape.
+>
+> ---
+>
+> ## Original proposal (preserved for the redesign discussion)
 >
 > Three force-included built-in tools (`context_set`, `emit_output`, `abort`)
 > that make routing-context writes and structured outputs first-class for LLM

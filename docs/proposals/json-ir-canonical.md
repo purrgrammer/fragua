@@ -311,17 +311,22 @@ payload meaningfully on long-prompted workflows. Listed task #16
 
 ### B. JSON IR allows nested objects for fields DOT escapes as strings
 
-The G1 work introduced `output_schema=` as a node attribute carrying a
-JSON Schema string. In DOT the string must be JSON-escaped inline
-(`output_schema = "{\"type\":\"object\",...}"`); in JSON IR the same
-field can be a nested object. This is **within 1:1 parity** — DOT
-authors keep their string-escape syntax — but it removes a
-double-escaping wart in the JSON form that would otherwise persist if
-the IR matched DOT character-for-character.
+> **Note (post-2026-05-17):** the original live example for this rule
+> was the `output_schema=` attribute introduced by
+> `codergen-context-output-tools.md`. That proposal has been scrapped;
+> the principle still applies for any future attribute whose authored
+> value is JSON-shaped (e.g. the typed inputs/outputs/context surface
+> when it lands).
+
+In DOT, any JSON-shaped attribute value must be inline-escaped
+(`some_attr = "{\"type\":\"object\",...}"`); in JSON IR the same field
+can be a nested object. This is **within 1:1 parity** — DOT authors
+keep their string-escape syntax — but it removes a double-escaping
+wart in the JSON form that would otherwise persist if the IR matched
+DOT character-for-character.
 
 Implementation guidance: any node attribute whose authored value is a
-JSON-shaped string (today: only `output_schema=`, but the precedent
-generalises) should be stored as a parsed object in the IR. The
+JSON-shaped string should be stored as a parsed object in the IR. The
 DOT-to-IR lowering does the parse; the DOT emitter re-stringifies on
 the way out. Round-trip stable.
 

@@ -309,18 +309,17 @@ prompt is:
 ...
 ```
 
-The LLM **must** call `emit_output({"winner": "<branchId>"})`. The
-`output_schema` is enforced via `Value.Check` so any payload that doesn't
-match `{winner: <one-of-candidateIds>}` halts the run with
-`fan_in_llm_picked_unknown_branch`. The LLM also has access to
-`context_set`, so it can write cross-cutting findings that downstream
-nodes read via `${context.<key>}` substitution.
+The LLM **must** end its reply with a single line in the form
+`WINNER: <branchId>`. The evaluator parses the LAST such line out of the
+final assistant text (`Outcome.notes`) and validates `<branchId>` against
+the candidate set. The codergen tool pool is empty for this call (the
+backend's force-included `abort` remains available).
 
 Failure modes:
 
-- `fan_in_llm_emit_missing` — LLM never called `emit_output`.
-- `fan_in_llm_picked_unknown_branch` — `emit_output` was called but
-  `winner` is not in the candidate set.
+- `fan_in_llm_emit_missing` — no `WINNER:` line found in the reply.
+- `fan_in_llm_picked_unknown_branch` — `WINNER:` value is not in the
+  candidate set.
 - `fan_in_llm_provider_error` — provider transport error (same pause
   semantics as a regular codergen node).
 

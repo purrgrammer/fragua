@@ -22,7 +22,6 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
 | E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | conditional | wait.human | parallel | parallel.fan_in | tool`). Typo or invented type — there is no extension surface. |
-| E017 | `output_schema=` on a node is not valid JSON or is not a JSON object. Codergen's `emit_output` tool validates data against this schema at runtime; a malformed schema means every `emit_output` call would fail. Surface at upload instead. See `docs/proposals/codergen-context-output-tools.md` §3. |
 | E018 | A node inside a parallel branch subgraph is reachable from multiple branch roots — each branch must own its interior nodes exclusively. The executor's per-sub-run subgraph slice cannot decide which sub-run dispatches the shared node. Split the node or restructure so each branch's subgraph is disjoint. Proposal: `docs/proposals/parallel.md` §P3.3. |
 
 ## Warnings

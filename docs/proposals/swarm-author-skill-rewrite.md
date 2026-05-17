@@ -27,7 +27,7 @@ parallel design tracks now in motion change the model the skill should teach:
    DOT becomes authoring sugar; the canonical form is JSON IR. The skill needs
    to (a) explicitly position DOT as the *authoring layer*, (b) reference the
    published Typebox schema in `@swarm/types`, (c) handle the round-trip
-   asymmetry on string-attrs-that-are-actually-JSON (e.g. `output_schema`).
+   asymmetry on any future string-attrs-that-are-actually-JSON.
 2. **`@swarm/sdk` programmatic builder** (brainstorm: `/tmp/swarm-orchestration/sdk-brainstorm.md`,
    not yet a proposal) — TS-first authoring with typed context flow,
    importable subworkflows. The skill becomes one of *two* authoring stories;
@@ -49,8 +49,6 @@ Anchored to the current skill at `.agents/skills/swarm-author/SKILL.md`
 
 ### §2 Node attributes — missing surface
 
-- **`output_schema`** (G1 / `codergen-context-output-tools.md`, shipped) —
-  not mentioned. Authors have no way to know it exists or how to declare it.
 - **Edge-level `thread_id` / `fidelity` overrides** (verified during the
   attractor parity audit; wired at `packages/core/src/engine/fidelity.ts:17,28`).
   Skill teaches node-level only; edge attrs go unmentioned.
@@ -108,13 +106,14 @@ Anchored to the current skill at `.agents/skills/swarm-author/SKILL.md`
 - **HITL inside a parallel branch IS supported** (P3 multi-node sub-runs
   shipped). Skill currently says "not supported in v1; coerces to fail."
   Refuted by `parallel-hitl-smoke.dot` running green.
-- **Fan-in `prompt=`** (G3 — in flight as of this proposal) becomes
-  first-class LLM evaluation, drops W015. Skill currently says it's
-  "rejected (W015)." Will need to be flipped to "supported; reducer LLM
-  picks the winner."
+- **Fan-in `prompt=`** (G3, shipped) is now first-class LLM evaluation
+  (W015 dropped). The LLM ends its reply with a single `WINNER: <branchId>`
+  line; the evaluator text-parses it out of the final assistant message.
+  Skill currently says `prompt=` on tripleoctagon is rejected — flip to
+  "supported; teach the WINNER trailer convention."
 - **Voting pattern** — running N identical-prompt branches and aggregating
   by downstream codergen reading every `$<branchId>.output` — entirely
-  absent from the skill. Worth a §9.x subsection once G3 lands.
+  absent from the skill. Worth a §9.x subsection.
 
 ### §10 Models, providers, validation — minor
 
@@ -127,31 +126,27 @@ Anchored to the current skill at `.agents/skills/swarm-author/SKILL.md`
   the env block exists. Authors who want to know whether their `cwd:` is
   visible to the LLM (for path resolution prompts) have no reference.
 
-### §12 Prompts that behave — context_set + emit_output
+### §12 Prompts that behave — abort only (post-scrap)
 
-- **G1's three tools** (`abort`, `context_set`, `emit_output`) are
-  force-included on every codergen call. Skill currently teaches `abort`
-  only. The §12 "Authoritative task" / "Abort tool" / "Explicit tool
-  whitelist" frame is the right place to fold in:
-  - `context_set` — "share findings with downstream nodes via
-    `${context.<key>}` substitution or `condition=`"
-  - `emit_output` — "lock in your structured output; pairs with
-    `output_schema=`"
-  - The denied-tools W-code clarifying that force-included tools are part
-    of the codergen contract.
+- The `context_set` / `emit_output` / `output_schema` surface was tried
+  and scrapped (see `codergen-context-output-tools.md`, status: scrapped).
+  Skill stays with `abort` as the sole force-included tool for now.
+- A redesign is expected once typed inputs/outputs/context lands; the
+  skill update for that surface waits on the redesign proposal.
 
 ### §13 Wait.human — correct, minor
 
 - Worth cross-referencing G1's `context_set` for the "open-ended free-text
   gates" footnote — a HITL freeform answer can be parsed by the downstream
-  codergen and published via `context_set` rather than a codergen-as-parser
-  hop.
+  codergen and surfaced via the node's natural output for the next codergen
+  in line.
 
 ### §15 Validation — code table
 
 - W015 dropped (post-G3).
-- New E-code from G5 (in flight) for parallel branch cross-branch ownership.
-- W017 adjusted semantics.
+- New E-code from G5 (shipped, E018) for parallel branch cross-branch
+  ownership.
+- W017 adjusted semantics (cycle-only-under-guard).
 - The reference table at `references/validator-codes.md` is the
   authoritative list; the §15 prose should point to it rather than
   re-listing codes.
@@ -190,8 +185,6 @@ Status: proposed, maturity: designed. When this ships:
   — explicit invariant.
 - The published Typebox schema in `@swarm/types/graph-schema.ts` becomes
   the contract authors reference (vs. today's `packages/core/src/types/graph.ts`).
-- The `output_schema=` string-vs-nested-object asymmetry (Addendum B)
-  needs explanation.
 
 **Open question:** does the skill teach DOT first and JSON IR as
 "reference shape," or vice versa? Strawman: DOT first (it's still the
@@ -283,8 +276,8 @@ deferred to SDK-only, (4) pattern-first, (5) split into SKILL + recipes.
 1. **§1 Pick the pattern first** — rosetta of Anthropic patterns →
    swarm shapes, ~1 page.
 2. **§2 The shape vocabulary** — current §1, lightly revised.
-3. **§3 Node attributes** — current §2 + `output_schema`, env block,
-   edge-level overrides moved to §6.
+3. **§3 Node attributes** — current §2 + env block, edge-level
+   overrides moved to §6.
 4. **§4 Tool nodes** — current §3, unchanged.
 5. **§5 Substitution tokens** — current §4 + `$<id>.stderr`, drop the
    not-implemented table.
@@ -301,14 +294,15 @@ deferred to SDK-only, (4) pattern-first, (5) split into SKILL + recipes.
     cheat.
 12. **§12 Fidelity, context_files, environment block** — current §11
     + env block teach.
-13. **§13 Prompts that behave** — current §12 + `context_set` and
-    `emit_output` alongside `abort`.
+13. **§13 Prompts that behave** — current §12, unchanged (force-included
+    tool set stays at `abort` only post the codergen-context-output-tools
+    scrap).
 14. **§14 Wait.human** — current §13, minor.
 15. **§15 Graph-level attrs** — current §14, unchanged.
 16. **§16 Validation** — current §15, point at references/validator-codes.md.
 17. **§17 Smoke-test recipe** — current §16, unchanged.
 18. **§18 Anti-patterns** — current §17 + 4 new article-level entries.
-19. **§19 Cheat sheet** — current §-bottom, updated for new tools and operators.
+19. **§19 Cheat sheet** — current §-bottom, updated for new operators.
 
 Plus a new `references/recipes.md` with worked examples for each
 Anthropic pattern (chain, route, section, vote, orchestrator-workers,
