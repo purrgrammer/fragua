@@ -1,6 +1,7 @@
 // Graph linter. Catches structural and semantic issues before execution.
 // See docs/SPEC.md §4.1 (validation phase).
 
+import { Value } from "@sinclair/typebox/value";
 import { parseAcceleratorKey } from "../accelerator.ts";
 import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
@@ -872,17 +873,24 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       });
       continue;
     }
-    // Note: a deeper `Value.Check(schema, {})` smoke test was considered
-    // here, but Typebox's `Value.Check` rejects plain JSON Schema objects
-    // (e.g. `{"type":"object"}`) with "Unknown type" because Typebox
-    // expects its own symbol-keyed `kind` field. Authors typing JSON
-    // Schema by hand would get false-positive E017 on perfectly valid
-    // schemas. The proposal anticipates this: "Value.Check is forgiving
-    // by design; the registration-time check is a smoke test, not
-    // exhaustive — most malformed schemas surface at first emit_output
-    // call instead." So registration only checks that the string is
-    // valid JSON shaped as an object; runtime `Value.Check` at
-    // emit_output time enforces the rest.
+    try {
+      // Smoke test: invoke Value.Check with the parsed schema. We don't
+      // care about the result — only that it doesn't throw on a
+      // structurally broken schema. Most malformed schemas pass this
+      // and surface at first `emit_output` call instead.
+      // biome-ignore lint/suspicious/noExplicitAny: schema is opaque at validation time.
+      Value.Check(parsed as any, {});
+    } catch (err) {
+      diags.push({
+        severity: "error",
+        code: "E017",
+        message: `node "${n.id}" output_schema is not a valid JSON Schema: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        nodeId: n.id,
+        ...(n.loc !== undefined ? { loc: n.loc } : {}),
+      });
+    }
   }
 
   if (opts.strict) {

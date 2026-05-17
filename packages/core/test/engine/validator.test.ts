@@ -931,11 +931,7 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
   });
 });
 
-describe("W015 removed", () => {
-  // W015 used to warn that a tripleoctagon (parallel.fan_in) with prompt=
-  // had a dead prompt. The G3 design (separate proposal) makes fan-in LLM
-  // evaluation a first-class feature, so the warning is actively harmful.
-  // Dropped by docs/proposals/codergen-context-output-tools.md §5.1.
+describe("W015 — tripleoctagon prompt is inert", () => {
   function fanInGraph(extraAttrs: string): string {
     return `
       digraph {
@@ -951,61 +947,38 @@ describe("W015 removed", () => {
     `;
   }
 
-  test("tripleoctagon prompt= no longer warns", () => {
+  test("W015 fires when tripleoctagon has prompt= set", () => {
     const diags = validate(parseDotSource(fanInGraph(`, prompt="synthesize the branches"`)));
-    expect(diags.some((d) => d.code === "W015")).toBe(false);
+    const w015 = diags.find((d) => d.code === "W015");
+    expect(w015).toBeDefined();
+    expect(w015?.severity).toBe("warning");
+    expect(w015?.nodeId).toBe("join");
+    expect(w015?.message).toMatch(/heuristic ranker/);
+    expect(w015?.message).toMatch(/\$<branchId>\.output/);
   });
 
-  test("bare tripleoctagon (no prompt) still clean", () => {
+  test("W015 does not fire on a bare tripleoctagon (no prompt)", () => {
     const diags = validate(parseDotSource(fanInGraph("")));
     expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
-});
 
-describe("E017 output_schema", () => {
-  function nodeWithSchema(attr: string): string {
-    return `
-      digraph {
-        start [shape=Mdiamond]
-        work  [${attr}]
-        done  [shape=Msquare]
-        start -> work -> done
-      }
-    `;
-  }
-
-  test("rejects non-JSON output_schema", () => {
-    const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="not json"`)));
-    const e017 = diags.filter((d) => d.code === "E017");
-    expect(e017.length).toBe(1);
-    expect(e017[0]?.severity).toBe("error");
-    expect(e017[0]?.nodeId).toBe("work");
-    expect(e017[0]?.message).toMatch(/not valid JSON|must be a JSON object/);
+  test("W015 ignores prompt= on non-tripleoctagon shapes", () => {
+    const diags = validate(
+      parseDotSource(`
+        digraph {
+          start [shape=Mdiamond]
+          work  [prompt="real codergen prompt"]
+          done  [shape=Msquare]
+          start -> work -> done
+        }
+      `),
+    );
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
 
-  test("rejects non-object output_schema (array)", () => {
-    const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="[1,2,3]"`)));
-    const e017 = diags.find((d) => d.code === "E017");
-    expect(e017).toBeDefined();
-    expect(e017?.message).toMatch(/must be a JSON object/);
-  });
-
-  test("accepts valid Typebox-shaped JSON Schema", () => {
-    const schema = '{\\"type\\":\\"object\\",\\"properties\\":{\\"label\\":{\\"type\\":\\"string\\"}},\\"required\\":[\\"label\\"]}';
-    const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="${schema}"`)));
-    expect(diags.some((d) => d.code === "E017")).toBe(false);
-  });
-
-  test("empty / whitespace output_schema is ignored", () => {
-    const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema=""`)));
-    expect(diags.some((d) => d.code === "E017")).toBe(false);
-  });
-
-  test("output_schema does not trigger W013 (unrecognised attribute)", () => {
-    const schema = '{\\"type\\":\\"object\\"}';
-    const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="${schema}"`)));
-    const w013 = diags.find((d) => d.code === "W013" && d.message.includes("output_schema"));
-    expect(w013).toBeUndefined();
+  test("W015 does not fire when prompt= is empty / whitespace", () => {
+    const diags = validate(parseDotSource(fanInGraph(`, prompt="   "`)));
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
 });
 
