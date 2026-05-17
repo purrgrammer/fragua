@@ -28,11 +28,9 @@ function ctxWith(
 describe("context_set tool", () => {
   test("writes scalar values into swarmContext.contextWrites", async () => {
     const writes = new Map();
-    const out = await contextSetTool.execute(
-      { key: "foo", value: "bar" },
-      emptyEnv(),
-      { swarmContext: ctxWith(writes) },
-    );
+    const out = await contextSetTool.execute({ key: "foo", value: "bar" }, emptyEnv(), {
+      swarmContext: ctxWith(writes),
+    });
     expect(out.is_error).toBeUndefined();
     expect(writes.get("foo")).toEqual({ value: "bar" });
     expect(out.data?.ok).toBe(true);
@@ -51,11 +49,7 @@ describe("context_set tool", () => {
 
   test("rejects key with dot", async () => {
     const writes = new Map();
-    const out = await contextSetTool.execute(
-      { key: "a.b", value: "x" },
-      emptyEnv(),
-      { swarmContext: ctxWith(writes) },
-    );
+    const out = await contextSetTool.execute({ key: "a.b", value: "x" }, emptyEnv(), { swarmContext: ctxWith(writes) });
     expect(out.is_error).toBe(true);
     expect(out.text).toMatch(/no dots|contains a dot/);
     expect(writes.size).toBe(0);
@@ -63,22 +57,14 @@ describe("context_set tool", () => {
 
   test("rejects empty key", async () => {
     const writes = new Map();
-    const out = await contextSetTool.execute(
-      { key: "", value: "x" },
-      emptyEnv(),
-      { swarmContext: ctxWith(writes) },
-    );
+    const out = await contextSetTool.execute({ key: "", value: "x" }, emptyEnv(), { swarmContext: ctxWith(writes) });
     expect(out.is_error).toBe(true);
     expect(writes.size).toBe(0);
   });
 
   test("accepts null value", async () => {
     const writes = new Map();
-    const out = await contextSetTool.execute(
-      { key: "k", value: null },
-      emptyEnv(),
-      { swarmContext: ctxWith(writes) },
-    );
+    const out = await contextSetTool.execute({ key: "k", value: null }, emptyEnv(), { swarmContext: ctxWith(writes) });
     expect(out.is_error).toBeUndefined();
     expect(writes.get("k")?.value).toBeNull();
   });
@@ -91,11 +77,9 @@ describe("context_set tool", () => {
     // fallback guard).
     const full = ctxWith(new Map());
     const { contextWrites: _drop, ...rest } = full;
-    const out = await contextSetTool.execute(
-      { key: "k", value: "v" },
-      emptyEnv(),
-      { swarmContext: rest as SwarmToolContext },
-    );
+    const out = await contextSetTool.execute({ key: "k", value: "v" }, emptyEnv(), {
+      swarmContext: rest as SwarmToolContext,
+    });
     expect(out.is_error).toBe(true);
     expect(out.text).toMatch(/backend not wired/);
   });

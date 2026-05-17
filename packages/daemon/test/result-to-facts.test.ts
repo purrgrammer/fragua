@@ -19,8 +19,9 @@ function stateFor(nodeId: string): RunState {
   } as unknown as RunState;
 }
 
-function baseTransition(extras: Partial<Extract<handler.HandlerResult, { kind: "transition" }>> = {}):
-  | Extract<handler.HandlerResult, { kind: "transition" }> {
+function baseTransition(
+  extras: Partial<Extract<handler.HandlerResult, { kind: "transition" }>> = {},
+): Extract<handler.HandlerResult, { kind: "transition" }> {
   return {
     kind: "transition",
     nextNode: "next",

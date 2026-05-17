@@ -823,9 +823,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({
         severity: "error",
         code: "E017",
-        message: `node "${n.id}" output_schema is not valid JSON: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        message: `node "${n.id}" output_schema is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
@@ -841,7 +839,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
-      continue;
     }
     // Note: a deeper `Value.Check(schema, {})` smoke test was considered
     // here, but Typebox's `Value.Check` rejects plain JSON Schema objects

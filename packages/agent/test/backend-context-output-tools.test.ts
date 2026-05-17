@@ -31,7 +31,10 @@ async function runOnce(opts: {
   toolName: "context_set" | "emit_output";
   toolArgs: Record<string, unknown>;
   attrs: NodeAttrs;
-}): Promise<{ events: CapturedEvent[]; outcome: { status: string; contextWrites?: unknown; pendingOutput?: unknown } }> {
+}): Promise<{
+  events: CapturedEvent[];
+  outcome: { status: string; contextWrites?: unknown; pendingOutput?: unknown };
+}> {
   const faux = registerFauxProvider();
   try {
     const model = faux.getModel();
