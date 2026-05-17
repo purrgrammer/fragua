@@ -5,9 +5,6 @@
 // evidence-backed hypotheses. Does NOT apply changes — that lives in a
 // separate optimize workflow with an eval gate.
 //
-// Shape: collect → scope → explore (parallel branches, one per workflow)
-//        → collect_findings (LLM fan-in) → critique (goal-gate) → cross_observe → done
-//
 //   bun run swarm run analyze                                     # last 30 across all workflows
 //   bun run swarm run analyze --input="--limit 50"
 //   bun run swarm run analyze --input="--workflow change --limit 50"
@@ -15,13 +12,11 @@
 
 digraph analyze {
   graph [
-    goal                  = "Mine recent swarm runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements."
-    label                 = "analyze"
-    default_fidelity      = "compact"
-    budget_usd            = 3.00
-    retry_target          = "explore"
-    max_goal_gate_retries = 2
-    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+    goal             = "Mine recent swarm runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements."
+    label            = "analyze"
+    default_fidelity = "compact"
+    budget_usd       = 1.50
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
   ]
 
   start [shape=Mdiamond]
@@ -31,152 +26,17 @@ digraph analyze {
     tool_command = "bun .swarm/scripts/analyze/collect.ts $ARGUMENTS"
   ]
 
-  // scope: cheap planning node — reads the collect JSON, picks up to 8
-  // workflows with n_runs >= 3 ranked by signal density (confusion +
-  // cost-variance), and emits the selection as structured output that
-  // the branch prompts read via $scope.output.workflows_to_analyze.
-  scope [
-    prompt           = "You are a triage analyst. `$collect.output` is a JSON report produced by a deterministic script.\n\nTop-level fields: `totals`, `by_workflow[]` (each has `workflow`, `n_runs`, `node_profiles[]`, aggregates), `runs[]`, `collected_at`.\n\nTask:\n1. Select every workflow from `by_workflow` where `n_runs >= 3`.\n2. Rank those by signal density = (n_confusion_signals + n_retargets + cost_variance_pct) descending, where those sub-fields may be 0 if absent.\n3. Cap the list at 8 entries. If fewer than 8 qualify, include all that pass the threshold.\n4. Write a one-paragraph `scope_paragraph` summarising: total runs across all workflows, how many distinct workflows appear in the data, the time window from `collected_at`, total cost, and how many workflows were selected for deep analysis.\n5. Call `emit_output` with exactly:\n   { \"workflows_to_analyze\": [\"<name1>\", ...], \"scope_paragraph\": \"...\", \"collected_at\": \"<value from JSON>\" }\n\nIf `$collect.output` is empty or unparseable, call the `abort` tool with reason `collect output missing or unparseable`."
+  analyze [
+    prompt = "Audit recent swarm runs and emit ranked, evidence-backed improvement hypotheses. `$collect.output` (previous message) is a JSON report from a deterministic script — `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap.\n\nEmit a markdown report as your FINAL message verbatim — no file writes, no preamble, no postscript. Headings, exactly:\n\n# Swarm Analysis — <ISO date from collected_at>\n\n## Scope\nOne paragraph: total runs, distinct workflows, time window, sum cost. Note workflows with <3 runs are listed but not analysed.\n\n## Per-workflow findings\nPer workflow with n_runs >= 3, a `### <workflow>` subsection:\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact * confidence. Each a numbered item with labelled lines — **Claim:** the pattern in one sentence. **Evidence:** specific run_ids and >=2 numbers from the JSON. **Proposed change:** one concrete edit (prompt reword, max_retries, model swap, context_files, node split, tool removal), naming the .dot file and node. **Confidence:** low|medium|high + one sentence why. **Estimated impact:** cost delta $/%, or token delta, or reliability with a number.\nZero confusion signals (no aborts/steers/retargets/halts) + tight cost variance → 'no actionable hypotheses; workflow appears healthy'. Don't manufacture findings.\n\n## Workflows below sample threshold\n<workflow> (n=N): not analysed. One line each.\n\n## Cross-workflow observations\nOnly if something holds across workflows; else omit.\n\nRules: cite numbers not vibes; one run = low confidence, probably skip; a wanted-but-absent signal goes under a final '## Signals not collected'."
     allowed_tools    = "read"
-    llm_model        = "claude-haiku-4-5"
-    reasoning_effort = "low"
-    max_cost_usd     = 0.15
-    output_schema    = "{\"type\":\"object\",\"required\":[\"workflows_to_analyze\",\"scope_paragraph\",\"collected_at\"],\"properties\":{\"workflows_to_analyze\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":8},\"scope_paragraph\":{\"type\":\"string\"},\"collected_at\":{\"type\":\"string\"}}}"
-  ]
-
-  // explore: static fan-out hub. Each edge targets one branch codergen
-  // node. Branches that discover their workflow is not in
-  // $scope.output.workflows_to_analyze call abort and become fail
-  // candidates — harmless under wait_all because the fan-in LLM
-  // ignores them when it picks a winner.
-  explore [shape=component, join_policy="wait_all"]
-
-  analyze_workflow_change [
-    prompt        = "You are analysing ONE workflow in isolation: `change`.\n\nCheck whether `change` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `change`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### change\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_analyze [
-    prompt        = "You are analysing ONE workflow in isolation: `analyze`.\n\nCheck whether `analyze` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `analyze`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### analyze\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_ci_gate [
-    prompt        = "You are analysing ONE workflow in isolation: `ci-gate`.\n\nCheck whether `ci-gate` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `ci-gate`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### ci-gate\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_feature [
-    prompt        = "You are analysing ONE workflow in isolation: `feature`.\n\nCheck whether `feature` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `feature`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### feature\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_health [
-    prompt        = "You are analysing ONE workflow in isolation: `health`.\n\nCheck whether `health` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `health`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### health\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_research [
-    prompt        = "You are analysing ONE workflow in isolation: `research`.\n\nCheck whether `research` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `research`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### research\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_showcase [
-    prompt        = "You are analysing ONE workflow in isolation: `showcase`.\n\nCheck whether `showcase` appears in the scoped list: `$scope.output.workflows_to_analyze`.\nIf it does NOT appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, read the relevant slice of `$collect.output` — the `by_workflow` entry whose `workflow` field equals `showcase`, plus its associated `runs[]` entries. Trust all numbers exactly as given; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with exactly two sections:\n\n### showcase\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  analyze_workflow_other [
-    prompt        = "You are analysing workflows NOT individually covered by other branches (i.e., any workflow in `$collect.output.by_workflow[]` that is NOT one of: change, analyze, ci-gate, feature, health, research, showcase).\n\nFirst, intersect that remaining set with `$scope.output.workflows_to_analyze`. If no such workflows appear there, call the `abort` tool with reason `out of scope`.\n\nOtherwise, for each qualifying workflow, read its `by_workflow` entry and associated `runs[]`. Treat all numbers as exact; never invent fields.\n\nField caveats: `partial`/`partial_in_runs` are lower bounds. `dispatch_seconds` = wall − llm − tool. `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected.\n\nEmit a markdown block (no file writes, no preamble) with one `### <workflow>` subsection per qualifying workflow, each containing:\n**Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.\n**Hypotheses.** Up to 5, ranked by impact × confidence. Each item:\n- **Claim:** pattern in one sentence.\n- **Evidence:** ≥2 numbers from the JSON + ≥1 run_id.\n- **Proposed change:** one concrete edit naming the .dot file and node.\n- **Confidence:** low|medium|high + one sentence why.\n- **Estimated impact:** cost Δ$/%, token Δ, or reliability Δ with a number.\n\nIf zero confusion signals and tight cost variance for a workflow, write: 'no actionable hypotheses; workflow appears healthy'."
-    allowed_tools = "read"
-    max_cost_usd  = 0.35
-    fidelity      = "compact"
-  ]
-
-  // collect_findings: LLM-evaluated fan-in. The LLM must:
-  //   1. Call emit_output with {"winner": "<branchId>"} picking the branch
-  //      with the single strongest finding (required by the fan-in engine).
-  //   2. Write context_set with key "findings_json" containing the
-  //      full ranked+deduplicated cross-workflow findings as a JSON string,
-  //      "workflows_analyzed" (comma-separated names), and
-  //      "total_findings" (integer count).
-  // Downstream nodes read ${context.findings_json} for the aggregate.
-  collect_findings [
-    shape        = tripleoctagon
-    prompt       = "You have received findings from parallel workflow-analysis branches. Each branch analysed one workflow in isolation.\n\nAvailable branch outputs (non-empty ones contain a markdown Health + Hypotheses block per workflow):\n- change: $analyze_workflow_change.output\n- analyze: $analyze_workflow_analyze.output\n- ci-gate: $analyze_workflow_ci_gate.output\n- feature: $analyze_workflow_feature.output\n- health: $analyze_workflow_health.output\n- research: $analyze_workflow_research.output\n- showcase: $analyze_workflow_showcase.output\n- other workflows: $analyze_workflow_other.output\n\nTask:\n1. Ignore branches that are empty or contain only an abort notice.\n2. Across all non-empty branches, collect every Hypothesis item. Deduplicate hypotheses that make the same claim about the same node (keep the one with stronger evidence). Rank the deduplicated list by impact × confidence descending.\n3. Identify which branch has the single strongest top-ranked finding — that branch id is the `winner`.\n4. Build a JSON array of the top findings (max 20), each object: {\"workflow\": str, \"claim\": str, \"evidence\": str, \"proposed_change\": str, \"confidence\": str, \"estimated_impact\": str}.\n5. Write the following context keys via `context_set`:\n   - `findings_json`: the JSON array serialised as a string\n   - `workflows_analyzed`: comma-separated list of workflow names you processed\n   - `total_findings`: integer count of deduplicated findings\n6. Call `emit_output` with exactly: {\"winner\": \"<branchId>\"} where branchId is one of the node ids listed above (e.g. `analyze_workflow_change`).\n\nDo not emit any other text."
-    output_schema = "{\"type\":\"object\",\"required\":[\"winner\"],\"properties\":{\"winner\":{\"type\":\"string\"}}}"
-    max_cost_usd  = 0.50
-  ]
-
-  // critique: goal-gate evaluator. Reviews the synthesised findings for
-  // evidence quality. APPROVE advances; REJECT (abort) retargets to
-  // explore via the §3.4 chain (graph.retry_target="explore") capped at
-  // max_goal_gate_retries=2.
-  critique [
-    prompt        = "You are an evidence auditor. Your job is to verify that every hypothesis in the findings meets the evidence bar before the final report is written.\n\nThe synthesised findings (JSON array string): ${context.findings_json}\nThe raw collect data for cross-reference: $collect.output\n\nFor each finding in the array, check:\n- Does `evidence` cite ≥2 distinct numbers (costs, durations, token counts, percentages, counts)?\n- Does `evidence` cite ≥1 run_id from the raw collect data?\n\nIf every finding passes both checks, your final message should be exactly: APPROVE\n\nIf any finding fails, call the `abort` tool with reason: `REJECT: <comma-separated list of workflow+claim pairs that failed the evidence bar>`\n\nDo not rewrite findings. Do not add findings. Audit only."
-    allowed_tools = "read"
-    goal_gate     = true
-    retry_target  = "explore"
-    max_cost_usd  = 0.30
-  ]
-
-  // cross_observe: writes the final markdown report.
-  // Reads the critiqued findings from context and the scope/collect
-  // outputs to produce the full five-section report the old monolithic
-  // analyze node emitted.
-  cross_observe [
-    prompt        = "You are writing the final analysis report. Emit it as your FINAL message verbatim — no file writes, no preamble, no postscript.\n\nInputs:\n- Scope summary: $scope.output.scope_paragraph\n- Analysed workflows: ${context.workflows_analyzed}\n- Critiqued findings (JSON array string): ${context.findings_json}\n- Raw collect data (for workflows-below-threshold list): $collect.output\n\nReport structure — headings exactly:\n\n# Swarm Analysis — <ISO date from $scope.output.collected_at>\n\n## Scope\nPaste `$scope.output.scope_paragraph` verbatim here.\n\n## Per-workflow findings\nFor each workflow in ${context.workflows_analyzed}, render a `### <workflow>` subsection.\nUnder each subsection, render the findings from ${context.findings_json} that belong to that workflow, in ranked order, using the Claim / Evidence / Proposed change / Confidence / Estimated impact format.\nIf a workflow has no findings after deduplication, write: 'no actionable hypotheses; workflow appears healthy'.\n\n## Workflows below sample threshold\nFrom $collect.output, list every workflow in `by_workflow` with `n_runs < 3` as: `<workflow> (n=N): not analysed.` One line each. If none, omit the section.\n\n## Cross-workflow observations\nBased on ${context.findings_json}, write 3–6 observations that hold across multiple workflows (shared root causes, cost patterns, model choices, structural anti-patterns). Cite workflow names and at least one number per observation. If no genuine cross-workflow patterns exist, omit this section.\n\nRules: cite numbers not vibes; one run = low confidence; omit invented signals."
-    allowed_tools = "read"
-    max_cost_usd  = 0.40
+    reasoning_effort = "high"
+    max_cost_usd     = 1.20
   ]
 
   done [shape=Msquare]
 
-  // ── edges ───────────────────────────────────────────────────────────
-
   start   -> collect
-  collect -> done  [condition="outcome=fail"]
-  collect -> scope
-
-  scope -> done    [condition="outcome=fail"]
-  scope -> explore
-
-  explore -> analyze_workflow_change
-  explore -> analyze_workflow_analyze
-  explore -> analyze_workflow_ci_gate
-  explore -> analyze_workflow_feature
-  explore -> analyze_workflow_health
-  explore -> analyze_workflow_research
-  explore -> analyze_workflow_showcase
-  explore -> analyze_workflow_other
-
-  analyze_workflow_change   -> collect_findings
-  analyze_workflow_analyze  -> collect_findings
-  analyze_workflow_ci_gate  -> collect_findings
-  analyze_workflow_feature  -> collect_findings
-  analyze_workflow_health   -> collect_findings
-  analyze_workflow_research -> collect_findings
-  analyze_workflow_showcase -> collect_findings
-  analyze_workflow_other    -> collect_findings
-
-  collect_findings -> critique
-
-  critique -> done          [condition="outcome=fail"]
-  critique -> cross_observe
-
-  cross_observe -> done
+  collect -> done    [condition="outcome=fail"]
+  collect -> analyze
+  analyze -> done
 }
