@@ -61,10 +61,7 @@ export interface SwarmToolContext {
    *  so multiple tool calls in one turn collapse into one routingDelta
    *  + one ordered `fact.context_written` log. See
    *  docs/proposals/codergen-context-output-tools.md §2.1. */
-  readonly contextWrites?: Map<
-    string,
-    { value: string | number | boolean | null; prevValue?: string | number | boolean | null }
-  >;
+  readonly contextWrites?: Map<string, { value: string | number | boolean | null; prevValue?: string | number | boolean | null }>;
   /** Per-turn holder the codergen `emit_output` tool writes to. The
    *  backend initialises with `{ value: undefined }`; the tool replaces
    *  `.value` with `{ data }` on each successful call (last write

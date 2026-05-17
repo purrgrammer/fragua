@@ -991,8 +991,7 @@ describe("E017 output_schema", () => {
   });
 
   test("accepts valid Typebox-shaped JSON Schema", () => {
-    const schema =
-      '{\\"type\\":\\"object\\",\\"properties\\":{\\"label\\":{\\"type\\":\\"string\\"}},\\"required\\":[\\"label\\"]}';
+    const schema = '{\\"type\\":\\"object\\",\\"properties\\":{\\"label\\":{\\"type\\":\\"string\\"}},\\"required\\":[\\"label\\"]}';
     const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="${schema}"`)));
     expect(diags.some((d) => d.code === "E017")).toBe(false);
   });

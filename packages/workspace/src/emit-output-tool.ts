@@ -41,9 +41,14 @@ export const emitOutputTool: Tool<EmitOutputToolArgs, EmitOutputToolData> = {
     "Emit this node's structured output. Downstream nodes reference it via $<this-node>.output \u2014 and, if data is an object or array, can traverse specific fields via JSON path (e.g. $classify.output.label).\n\nCall this tool exactly once. If you call it multiple times, the last call wins. If this node declares output_schema and you do not call emit_output, the node is treated as failed.\n\nWhen no output_schema is declared, not calling this tool is fine \u2014 the node's output falls back to your final assistant text. Prefer emit_output whenever you are producing structured data.\n\ndata may be a string, a JSON object, or a JSON array.",
   parameters: Type.Object(
     {
-      data: Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown()), Type.Array(Type.Unknown())], {
-        description: "The structured output to emit. String, JSON object, or JSON array.",
-      }),
+      data: Type.Union(
+        [
+          Type.String(),
+          Type.Record(Type.String(), Type.Unknown()),
+          Type.Array(Type.Unknown()),
+        ],
+        { description: "The structured output to emit. String, JSON object, or JSON array." },
+      ),
     },
     { additionalProperties: false },
   ),

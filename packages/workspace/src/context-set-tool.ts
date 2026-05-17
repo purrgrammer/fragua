@@ -33,15 +33,16 @@ export interface ContextSetToolData {
 export const contextSetTool: Tool<ContextSetToolArgs, ContextSetToolData> = {
   name: "context_set",
   description:
-    'Set a routing-context key so downstream nodes and edge conditions can read it via context.<key>. Use this when you have classified the input, chosen a branch, scored an outcome, or computed any value the rest of the workflow needs.\n\nYou may call this tool multiple times in a single turn to set multiple keys. Each call is additive; the last write to a given key wins.\n\nRules:\n- key must be a single identifier \u2014 no dots (e.g. "severity", not "issue.severity").\n- value must be a string, number, boolean, or null. Objects and arrays are not supported yet.\n\nExample: context_set({ key: "category", value: "billing" })',
+    "Set a routing-context key so downstream nodes and edge conditions can read it via context.<key>. Use this when you have classified the input, chosen a branch, scored an outcome, or computed any value the rest of the workflow needs.\n\nYou may call this tool multiple times in a single turn to set multiple keys. Each call is additive; the last write to a given key wins.\n\nRules:\n- key must be a single identifier \u2014 no dots (e.g. \"severity\", not \"issue.severity\").\n- value must be a string, number, boolean, or null. Objects and arrays are not supported yet.\n\nExample: context_set({ key: \"category\", value: \"billing\" })",
   parameters: Type.Object(
     {
       key: Type.String({
         description: "Routing-context key. Single identifier; must not contain a dot.",
       }),
-      value: Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()], {
-        description: "Scalar value. Objects and arrays are not supported in v1.",
-      }),
+      value: Type.Union(
+        [Type.String(), Type.Number(), Type.Boolean(), Type.Null()],
+        { description: "Scalar value. Objects and arrays are not supported in v1." },
+      ),
     },
     { additionalProperties: false },
   ),

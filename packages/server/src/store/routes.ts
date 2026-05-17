@@ -632,7 +632,10 @@ export function createRoutes(deps: ServerDeps): Hono {
         const graph = parseDotSource(wf.dotSource);
         const targetNode = graph.nodes[nodeId];
         if (targetNode == null) {
-          return c.json({ error: `node "${nodeId}" not found in workflow`, code: "unknown_node" }, 400);
+          return c.json(
+            { error: `node "${nodeId}" not found in workflow`, code: "unknown_node" },
+            400,
+          );
         }
         const rawSchema = targetNode.attrs.output_schema;
         if (typeof rawSchema === "string" && rawSchema.trim().length > 0) {
