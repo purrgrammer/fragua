@@ -18,6 +18,7 @@ import {
   parseDurationMs,
   prepareGraph,
 } from "@swarm/core";
+import type { LlmFanInDelegate } from "@swarm/core/handler";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -41,6 +42,13 @@ export interface AutoDispatcherOpts {
    * `timeout` nor `max_ms`. Keyed by handler kind (`codergen`, `tool`).
    * Absent kind → handler's own built-in default applies. */
   defaultMaxMs?: { codergen?: number; tool?: number };
+  /**
+   * Optional delegate that drives an LLM evaluation when a
+   * `tripleoctagon` node carries a non-empty `prompt=` attribute.
+   * When absent, tripleoctagons with `prompt=` produce a halt spec
+   * at construction time (attractor §4.9 LLM-eval path).
+   */
+  fanInLlmDelegate?: LlmFanInDelegate;
 }
 
 /**
@@ -98,7 +106,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs, opts.fanInLlmDelegate);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -109,6 +117,7 @@ function specsForGraph(
   dotSource: string,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
+  fanInLlmDelegate?: LlmFanInDelegate,
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   // Apply transforms (stylesheet, …) so node.attrs reflect the resolved
@@ -183,7 +192,33 @@ function specsForGraph(
         specs.set(node.id, malformedFanInSpec(node.id));
         continue;
       }
-      specs.set(node.id, handler.makeFanInHandler({ parallelNodeId }));
+      const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt.trim() : "";
+      if (rawPrompt.length > 0) {
+        if (fanInLlmDelegate == null) {
+          specs.set(
+            node.id,
+            malformedFanInSpec(
+              node.id,
+              "prompt= set but no LLM delegate configured — start the daemon with --llm-provider/--llm-model",
+            ),
+          );
+          continue;
+        }
+        specs.set(
+          node.id,
+          handler.makeFanInHandler({
+            parallelNodeId,
+            evaluator: {
+              kind: "llm",
+              prompt: node.attrs.prompt as string,
+              delegate: fanInLlmDelegate,
+              nodeAttrs: node.attrs,
+            },
+          }),
+        );
+      } else {
+        specs.set(node.id, handler.makeFanInHandler({ parallelNodeId }));
+      }
     }
   }
 
@@ -237,7 +272,8 @@ function malformedWaitHumanSpec(nodeId: string, message: string): HandlerSpec {
   };
 }
 
-function malformedFanInSpec(nodeId: string): HandlerSpec {
+function malformedFanInSpec(nodeId: string, reason?: string): HandlerSpec {
+  const detail = reason ?? `fan_in node "${nodeId}" is not referenced by any component (parallel) node`;
   return {
     kind: "parallel.fan_in",
     sideEffect: "none",
@@ -245,7 +281,7 @@ function malformedFanInSpec(nodeId: string): HandlerSpec {
     handler: async () => ({
       kind: "halt",
       reason: "error",
-      detail: `fan_in node "${nodeId}" is not referenced by any component (parallel) node`,
+      detail: `fan_in "${nodeId}": ${detail}`,
     }),
   };
 }

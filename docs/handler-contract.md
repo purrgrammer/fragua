@@ -315,6 +315,41 @@ Branch outcomes land in routing under
 and the fan_in winner lands under `fan_in.<nodeId>.winner`. Downstream
 nodes read these through normal `${context.*}` substitution.
 
+#### LLM-evaluated fan-in (attractor §4.9)
+
+When a `tripleoctagon` carries a non-empty `prompt=`, the fan-in node
+dispatches an LLM call instead of running the heuristic. The synthesised
+prompt is:
+
+```
+<user prompt>
+
+=== branch:<branchId> (status=<status>[, score=<score>]) ===
+<$<branchId>.output text>
+
+=== branch:... ===
+...
+```
+
+The LLM **must** call `emit_output({"winner": "<branchId>"})`. The
+`output_schema` is enforced via `Value.Check` so any payload that doesn't
+match `{winner: <one-of-candidateIds>}` halts the run with
+`fan_in_llm_picked_unknown_branch`. The LLM also has access to
+`context_set`, so it can write cross-cutting findings that downstream
+nodes read via `${context.<key>}` substitution.
+
+Failure modes:
+
+- `fan_in_llm_emit_missing` — LLM never called `emit_output`.
+- `fan_in_llm_picked_unknown_branch` — `emit_output` was called but
+  `winner` is not in the candidate set.
+- `fan_in_llm_provider_error` — provider transport error (same pause
+  semantics as a regular codergen node).
+
+Model + provider selection for the evaluation call follows the same
+`llm_model` / `llm_provider` attributes on the tripleoctagon as for
+any codergen node; a graph-level `model_stylesheet` applies.
+
 Limits (v1): a branch that returns `yield_hitl` is coerced to `fail`
 with a documented reason; nested HITL in a parallel fan-out is not
 supported. A branch's `externalCall` intent/done facts attribute to

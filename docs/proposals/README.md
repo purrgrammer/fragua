@@ -23,6 +23,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
 | [Codergen context + output tools](./codergen-context-output-tools.md) | designed | `context_set` + `emit_output` tool implementations, `output_schema` attribute + ajv validation, E017/W018 validator codes, operator intent endpoints (`intent.context_set` / `intent.output_set`) |
+| [swarm-author SKILL.md final sweep](./swarm-author-skill-rewrite.md) | design | deferred until JSON IR canonical, `@swarm/sdk`, and typed inputs/outputs tracks settle; proposal lists outdated surface and open questions |
 
 ## Accepted (design done; awaiting scheduling)
 
