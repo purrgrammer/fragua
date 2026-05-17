@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ValidationError, validate, validateOrThrow } from "../../src/engine/validator.ts";
 import { parseDotSource } from "../../src/parser/parser.ts";
+import type { GraphAttrs, NodeAttrs } from "../../src/types/graph.ts";
 
 function codes(dots: string): string[] {
   return validate(parseDotSource(dots)).map((d) => d.code);
@@ -1006,6 +1007,159 @@ describe("E017 output_schema", () => {
     const diags = validate(parseDotSource(nodeWithSchema(`prompt="x", output_schema="${schema}"`)));
     const w013 = diags.find((d) => d.code === "W013" && d.message.includes("output_schema"));
     expect(w013).toBeUndefined();
+  });
+});
+
+describe("E018 cross-branch ownership", () => {
+  // Build a graph by hand so we can precisely control node ownership.
+  // Layout: spawn (component) -> branchA -> shared -> fanIn (tripleoctagon)
+  //                           -> branchB -> shared (cross-ownership!)
+  function crossBranchGraph() {
+    return {
+      id: "G",
+      directed: true as const,
+      attrs: {},
+      nodes: {
+        start: { id: "start", shape: "Mdiamond" as const, attrs: {}, classes: [] },
+        spawn: { id: "spawn", shape: "component" as const, attrs: { join_policy: "wait_all" as const }, classes: [] },
+        branchA: { id: "branchA", shape: "box" as const, attrs: {}, classes: [] },
+        branchB: { id: "branchB", shape: "box" as const, attrs: {}, classes: [] },
+        shared: { id: "shared", shape: "box" as const, attrs: {}, classes: [] },
+        fanIn: { id: "fanIn", shape: "tripleoctagon" as const, attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare" as const, attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "start", to: "spawn", attrs: {} },
+        { from: "spawn", to: "branchA", attrs: {} },
+        { from: "spawn", to: "branchB", attrs: {} },
+        { from: "branchA", to: "shared", attrs: {} },
+        { from: "branchB", to: "shared", attrs: {} }, // cross-branch!
+        { from: "shared", to: "fanIn", attrs: {} },
+        { from: "fanIn", to: "done", attrs: {} },
+      ],
+      subgraphs: [],
+    };
+  }
+
+  function disjointGraph() {
+    return {
+      id: "G",
+      directed: true as const,
+      attrs: {},
+      nodes: {
+        start: { id: "start", shape: "Mdiamond" as const, attrs: {}, classes: [] },
+        spawn: { id: "spawn", shape: "component" as const, attrs: { join_policy: "wait_all" as const }, classes: [] },
+        branchA: { id: "branchA", shape: "box" as const, attrs: {}, classes: [] },
+        nodeA2: { id: "nodeA2", shape: "box" as const, attrs: {}, classes: [] },
+        branchB: { id: "branchB", shape: "box" as const, attrs: {}, classes: [] },
+        branchC: { id: "branchC", shape: "box" as const, attrs: {}, classes: [] },
+        fanIn: { id: "fanIn", shape: "tripleoctagon" as const, attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare" as const, attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "start", to: "spawn", attrs: {} },
+        { from: "spawn", to: "branchA", attrs: {} },
+        { from: "spawn", to: "branchB", attrs: {} },
+        { from: "spawn", to: "branchC", attrs: {} },
+        { from: "branchA", to: "nodeA2", attrs: {} }, // multi-node branch
+        { from: "nodeA2", to: "fanIn", attrs: {} },
+        { from: "branchB", to: "fanIn", attrs: {} },
+        { from: "branchC", to: "fanIn", attrs: {} },
+        { from: "fanIn", to: "done", attrs: {} },
+      ],
+      subgraphs: [],
+    };
+  }
+
+  test("E018 cross-branch ownership in parallel subgraphs", () => {
+    const diags = validate(crossBranchGraph());
+    const e018 = diags.filter((d) => d.code === "E018");
+    expect(e018.length).toBeGreaterThan(0);
+    expect(e018[0]?.severity).toBe("error");
+    expect(e018[0]?.nodeId).toBe("shared");
+  });
+
+  test("E018 not emitted for disjoint branch subgraphs", () => {
+    const diags = validate(disjointGraph());
+    expect(diags.some((d) => d.code === "E018")).toBe(false);
+    expect(diags.some((d) => d.code === "W017")).toBe(false);
+  });
+});
+
+describe("W017 intra-branch cycle", () => {
+  // Layout that reliably triggers validateBranchSubgraphs' cycle detection:
+  // branch A has two paths to `merge`:  A → merge  and  A → sidecar → merge.
+  // Both paths push `merge` onto the DFS stack before it's visited, so when
+  // the second pop occurs `merge` is already in `reachable` — cycle fires.
+  // nodeAttrs and graphAttrs let individual tests inject retry guards.
+  function cycleGraph(nodeAttrs: Partial<NodeAttrs> = {}, graphAttrs: Partial<GraphAttrs> = {}) {
+    return {
+      id: "G",
+      directed: true as const,
+      attrs: { ...graphAttrs } as GraphAttrs,
+      nodes: {
+        start: { id: "start", shape: "Mdiamond" as const, attrs: {}, classes: [] },
+        spawn: { id: "spawn", shape: "component" as const, attrs: { join_policy: "wait_all" as const }, classes: [] },
+        branchA: { id: "branchA", shape: "box" as const, attrs: {}, classes: [] },
+        sidecar: { id: "sidecar", shape: "box" as const, attrs: {}, classes: [] },
+        merge: { id: "merge", shape: "box" as const, attrs: { ...nodeAttrs } as NodeAttrs, classes: [] },
+        branchB: { id: "branchB", shape: "box" as const, attrs: {}, classes: [] },
+        fanIn: { id: "fanIn", shape: "tripleoctagon" as const, attrs: {}, classes: [] },
+        done: { id: "done", shape: "Msquare" as const, attrs: {}, classes: [] },
+      },
+      edges: [
+        { from: "start", to: "spawn", attrs: {} },
+        { from: "spawn", to: "branchA", attrs: {} },
+        { from: "spawn", to: "branchB", attrs: {} },
+        // Branch A has two paths to `merge` — DFS will push merge twice.
+        { from: "branchA", to: "merge", attrs: {} },
+        { from: "branchA", to: "sidecar", attrs: {} },
+        { from: "sidecar", to: "merge", attrs: {} },
+        { from: "merge", to: "fanIn", attrs: {} },
+        { from: "branchB", to: "fanIn", attrs: {} },
+        { from: "fanIn", to: "done", attrs: {} },
+      ],
+      subgraphs: [],
+    };
+  }
+
+  test("W017 info on unguarded intra-branch cycle", () => {
+    const diags = validate(cycleGraph());
+    const w017 = diags.filter((d) => d.code === "W017");
+    expect(w017.length).toBeGreaterThan(0);
+    expect(w017[0]?.severity).toBe("info");
+    expect(w017[0]?.nodeId).toBe("merge");
+  });
+
+  test("W017 suppressed when cycle node is retry-guarded via max_retries", () => {
+    const diags = validate(cycleGraph({ max_retries: 3 }));
+    expect(diags.some((d) => d.code === "W017")).toBe(false);
+  });
+
+  test("W017 suppressed when cycle node is retry-guarded via retry_target", () => {
+    const diags = validate(cycleGraph({ retry_target: "merge" }));
+    expect(diags.some((d) => d.code === "W017")).toBe(false);
+  });
+
+  test("W017 suppressed when graph-level default_max_retries guards the cycle", () => {
+    const diags = validate(cycleGraph({}, { default_max_retries: 2 }));
+    expect(diags.some((d) => d.code === "W017")).toBe(false);
+  });
+
+  test("W017 suppressed when graph-level default_retry_policy guards the cycle", () => {
+    const diags = validate(cycleGraph({}, { default_retry_policy: "standard" }));
+    expect(diags.some((d) => d.code === "W017")).toBe(false);
+  });
+});
+
+describe("parallel-hitl-smoke.dot", () => {
+  test("parallel-hitl-smoke.dot validates clean under stricter E018 rule", async () => {
+    const path = new URL("../../../../.swarm/workflows/parallel-hitl-smoke.dot", import.meta.url).pathname;
+    const src = await Bun.file(path).text();
+    const diags = validate(parseDotSource(src));
+    expect(diags.filter((d) => d.code === "E018")).toHaveLength(0);
+    // Also confirm no spurious W017 on the well-formed multi-node branch
+    expect(diags.filter((d) => d.code === "W017")).toHaveLength(0);
   });
 });
 

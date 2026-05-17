@@ -137,6 +137,32 @@ export class ValidationError extends Error {
   }
 }
 
+/** Returns true when a cycle-revisited node is protected by a retry guard
+ * at node level or graph level, per SPEC §3.6. When guarded, W017 is
+ * suppressed entirely — the author has already acknowledged the backward
+ * edge by setting up retry semantics. */
+function isCycleRetryGuarded(graph: Graph, nodeId: string): boolean {
+  const node = graph.nodes[nodeId];
+  if (!node) return false;
+  const a = node.attrs;
+  const ga = graph.attrs;
+  const mr = Number(a.max_retries);
+  if (Number.isFinite(mr) && mr > 0) return true;
+  if (typeof a.retry_target === "string" && a.retry_target.trim() !== "") return true;
+  if (typeof a.fallback_retry_target === "string" && a.fallback_retry_target.trim() !== "") return true;
+  if (typeof a.retry_policy === "string" && a.retry_policy !== "" && a.retry_policy !== "none") return true;
+  const legacyAlias = (ga as Record<string, unknown>)["default_max_retry"];
+  const gmr = ga.default_max_retries ?? (typeof legacyAlias === "number" ? legacyAlias : Number(legacyAlias));
+  if (typeof gmr === "number" && Number.isFinite(gmr) && gmr > 0) return true;
+  if (
+    typeof ga.default_retry_policy === "string" &&
+    ga.default_retry_policy !== "" &&
+    ga.default_retry_policy !== "none"
+  )
+    return true;
+  return false;
+}
+
 export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[] {
   const diags: Diagnostic[] = [];
 
@@ -770,15 +796,17 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W017: parallel branch subgraph well-formedness (P3.1 / P3.3 of
-  // docs/proposals/parallel.md). Each `component` node's branch
-  // subgraph — the slice from its outgoing edges to the converging
-  // tripleoctagon — must be a tree-of-DAGs: every node reachable from
-  // a branch root belongs to that branch alone (no cross-branch edges
-  // share ownership of an interior node). Cycles inside a branch are
-  // tolerated only via the same `max_retries`/`retry_target`
-  // mechanisms top-level workflows use; we still surface them so
-  // authors know the subgraph isn't a pure DAG.
+  // E018: cross-branch node ownership in a parallel subgraph (P3.3 of
+  // docs/proposals/parallel.md). A node reachable from two branch roots
+  // is an unambiguous structural error — the executor's per-sub-run
+  // subgraph slice cannot decide which sub-run owns it.
+  //
+  // W017 (info): intra-branch cycle. Cycles inside a branch are tolerated
+  // only via the same `max_retries`/`retry_target` mechanisms top-level
+  // workflows use (SPEC §3.6). When any retry guard is present on the
+  // cycle node (or at graph level), the diagnostic is suppressed entirely;
+  // otherwise it surfaces as info so authors know the subgraph isn't a
+  // pure DAG.
   for (const n of nodes) {
     if (n.shape !== "component") continue;
     const discovery = discoverFanInTarget(graph, n.id);
@@ -787,13 +815,14 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     for (const finding of report.findings) {
       if (finding.kind === "cross-branch") {
         diags.push({
-          severity: "warning",
-          code: "W017",
-          message: `node "${finding.nodeId}" is reachable from multiple branches of parallel "${n.id}" (${finding.branchRoots.join(", ")}). The executor's per-sub-run subgraph slice can't decide which sub-run owns it — split the node or restructure so each branch's subgraph is disjoint.`,
+          severity: "error",
+          code: "E018",
+          message: `node "${finding.nodeId}" is reachable from multiple branches of parallel "${n.id}" (${finding.branchRoots.join(", ")}). Each branch subgraph must own its interior nodes exclusively — split the node or restructure so each branch's subgraph is disjoint.`,
           nodeId: finding.nodeId,
           ...(n.loc !== undefined ? { loc: n.loc } : {}),
         });
       } else if (finding.kind === "cycle") {
+        if (isCycleRetryGuarded(graph, finding.nodeId)) continue;
         diags.push({
           severity: "info",
           code: "W017",

@@ -22,6 +22,8 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
 | E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | conditional | wait.human | parallel | parallel.fan_in | tool`). Typo or invented type — there is no extension surface. |
+| E017 | `output_schema=` on a node is not valid JSON or is not a JSON object. Codergen's `emit_output` tool validates data against this schema at runtime; a malformed schema means every `emit_output` call would fail. Surface at upload instead. See `docs/proposals/codergen-context-output-tools.md` §3. |
+| E018 | A node inside a parallel branch subgraph is reachable from multiple branch roots — each branch must own its interior nodes exclusively. The executor's per-sub-run subgraph slice cannot decide which sub-run dispatches the shared node. Split the node or restructure so each branch's subgraph is disjoint. Proposal: `docs/proposals/parallel.md` §P3.3. |
 
 ## Warnings
 
@@ -42,6 +44,6 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | W013 | Unrecognised attribute name on a node, edge, or graph. The parser passes unknown attributes through silently (`NodeAttrs[extra: string]`); this lint catches typos like `goalgate=true` or `max_ms=…` (the runtime expects `maxMs`). Canonical list: `packages/core/src/types/graph.ts` (`NodeAttrs` / `EdgeAttrs` / `GraphAttrs`). |
 | W014 | Attractor-only attribute that swarm intentionally does not honor (currently `auto_status` on nodes, `loop_restart` on edges). See SPEC.md §5 for rationale. Drop the attribute or accept the no-op. |
 | W015 | `tripleoctagon` (`parallel.fan_in`) node has `prompt=` set. fan_in is structural-only — the prompt is parsed but never read. For LLM synthesis, add a downstream codergen referencing `$<branchId>.output` (see `review.dot`), or fan out via the `agent` tool inside an upstream codergen (see `orchestrate.dot`). |
-| W017 | Parallel branch subgraph is not well-formed. Either a node is reachable from multiple branches (cross-branch ownership — the executor's per-sub-run slice can't pick which sub-run dispatches it), or a branch subgraph contains a cycle (allowed only when guarded by `max_retries` / `retry_target` on the backward edge — see SPEC §3.6). Fires per offending node under each `component` node's branch slice. Proposal: `docs/proposals/parallel.md` §P3.1 / §P3.3. |
+| W017 | Cycle inside a parallel branch subgraph (same node reachable via two intra-branch paths, `info` severity). Allowed only when guarded by `max_retries` / `retry_target` (per-node) or `default_max_retries` / `default_retry_policy` (graph-level) on the backward edge — see SPEC §3.6. Suppressed entirely when any retry guard is present; surfaces as `info` when unguarded so authors know the subgraph isn't a pure DAG. Cross-branch ownership (a node reachable from two branch roots) is the separate blocking **E018**. Proposal: `docs/proposals/parallel.md` §P3.3. |
 
 `--strict` makes warnings fail the command. The CLI doesn't expose it yet; the API (`validate(graph, {strict:true})`) does.
