@@ -115,13 +115,6 @@ export interface NodeAttrs {
   skills?: string[];
   /** Hard opt-out — no skills catalog in the system prompt for this node. */
   skills_disabled?: boolean;
-  /** Opaque JSON Schema string the codergen `emit_output` tool validates
-   *  emitted data against via `Value.Check` from `@sinclair/typebox/value`.
-   *  When set, the node MUST call `emit_output` with conforming data
-   *  or the outcome is downgraded to `fail`. Parsed at workflow
-   *  registration; malformed JSON / non-schema-shaped values surface
-   *  as E017. See docs/proposals/codergen-context-output-tools.md §3. */
-  output_schema?: string;
   [extra: string]: AttrScalar | undefined;
 }
 

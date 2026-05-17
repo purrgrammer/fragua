@@ -165,26 +165,6 @@ export type IntentEvent =
       payload: { newLimit: number; note?: string };
     }
   | {
-      /** Operator-side dual of the codergen `context_set` tool. Writes
-       * `routing[key] = value` so downstream nodes and edge conditions
-       * read it via `context.<key>`. Emits `fact.context_written
-       * { source: "operator", … }` for symmetry with the agent path.
-       * See docs/proposals/codergen-context-output-tools.md §4.1. */
-      type: "intent.context_set";
-      payload: { key: string; value: string | number | boolean | null; note?: string };
-    }
-  | {
-      /** Operator-side dual of the codergen `emit_output` tool. Writes
-       * `data` as the named node's output artifact (same `outputRef`
-       * path the agent emit uses) and fires `fact.output_emitted
-       * { source: "operator", … }`. Server validates against
-       * `output_schema` before enqueueing (422 with Value.Errors on
-       * failure). See docs/proposals/codergen-context-output-tools.md
-       * §4.2. */
-      type: "intent.output_set";
-      payload: { nodeId: string; data: unknown; note?: string };
-    }
-  | {
       /** The parallel handler asks the executor to fan out into N
        * sub-runs and transition the parent to `running_children`. The
        * handler returns the requested fanout shape via
@@ -595,37 +575,6 @@ export type FactEvent =
        * provisioner. Lands AFTER the terminal status fact. */
       type: "fact.run_branched";
       payload: { branch: string };
-    }
-  | {
-      /** A routing-context key was written, by the codergen `context_set`
-       * tool (`source: "agent"`) or by the operator `intent.context_set`
-       * dual (`source: "operator"`). One fact per write — the LLM may
-       * call `context_set` multiple times per turn, and each landing
-       * gets its own event so the audit log is exhaustive. `prevValue`
-       * is omitted when the key was unset before the write. See
-       * docs/proposals/codergen-context-output-tools.md §2.1 / §4.1. */
-      type: "fact.context_written";
-      payload: {
-        source: "agent" | "operator";
-        nodeId: string;
-        key: string;
-        value: string | number | boolean | null;
-        prevValue?: string | number | boolean | null;
-      };
-    }
-  | {
-      /** A node's structured output was emitted, by the codergen
-       * `emit_output` tool (`source: "agent"`) or the operator
-       * `intent.output_set` dual (`source: "operator"`). The payload
-       * carries no data — the artifact itself lives under the run's
-       * artifact scope and is read via `$<nodeId>.output[.path]`
-       * substitution. See docs/proposals/codergen-context-output-tools.md
-       * §2.2 / §4.2. */
-      type: "fact.output_emitted";
-      payload: {
-        source: "agent" | "operator";
-        nodeId: string;
-      };
     }
   | {
       /** Parent fanned out into N sub-runs. The sub-run ids are already

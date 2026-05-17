@@ -1,7 +1,5 @@
 export * from "./abort-tool.ts";
 export * from "./agent.ts";
-export * from "./context-set-tool.ts";
-export * from "./emit-output-tool.ts";
 export * from "./agents/index.ts";
 export * from "./blocklist.ts";
 export * from "./edit-diff.ts";

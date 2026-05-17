@@ -279,13 +279,10 @@ export class PiCodergenBackend implements CodergenBackend {
       );
     }
 
-    // Force-include the built-in `skill`, `abort`, `context_set`, and
-    // `emit_output` tools. Even when the node pins `allowed_tools`
-    // (excluding them) or lists them under `denied_tools`, they must
-    // remain available — all four are universal affordances ("always
-    // available, zero .dot migration"). `context_set` + `emit_output`
-    // are structural properties of the codergen step contract per
-    // docs/proposals/codergen-context-output-tools.md §2.4. The system
+    // Force-include the built-in `skill` and `abort` tools. Even when the
+    // node pins `allowed_tools` (excluding them) or lists them under
+    // `denied_tools`, they must remain available — both are universal
+    // affordances ("always available, zero .dot migration"). The system
     // prompt and tool descriptions advertise them; if they weren't
     // actually wired the model would call them and get a hard-to-diagnose
     // unknown-tool error. Skipped only when the registry doesn't carry
@@ -293,15 +290,9 @@ export class PiCodergenBackend implements CodergenBackend {
     // / `denied_tools` cannot exclude them.
     const skillTool = this.registry.get("skill");
     const abortTool = this.registry.get("abort");
-    const contextSetTool = this.registry.get("context_set");
-    const emitOutputTool = this.registry.get("emit_output");
     let finalTools = selectedTools;
     if (skillTool && !finalTools.some((t) => t.name === "skill")) finalTools = [...finalTools, skillTool];
     if (abortTool && !finalTools.some((t) => t.name === "abort")) finalTools = [...finalTools, abortTool];
-    if (contextSetTool && !finalTools.some((t) => t.name === "context_set"))
-      finalTools = [...finalTools, contextSetTool];
-    if (emitOutputTool && !finalTools.some((t) => t.name === "emit_output"))
-      finalTools = [...finalTools, emitOutputTool];
 
     // Prefer per-call env (wired via HandlerContext → CodergenInput by
     // the executor when a WorktreeProvisioner is active). Falls back
@@ -356,36 +347,6 @@ export class PiCodergenBackend implements CodergenBackend {
     // resources are ready. Tools captured by `toAgentTool` close over
     // the SAME object reference, so the patches are visible to every
     // tool call without re-mapping.
-    // Parse `output_schema` once per call. Registration-time E017
-    // already proved the string is valid JSON + JSON-Schema-shaped, so a
-    // bare JSON.parse is enough. When unset, omit the field so the
-    // emit_output tool's "no schema, no validation" branch fires.
-    let parsedOutputSchema: unknown;
-    const rawOutputSchema = input.node.attrs.output_schema;
-    if (typeof rawOutputSchema === "string" && rawOutputSchema.trim().length > 0) {
-      try {
-        parsedOutputSchema = JSON.parse(rawOutputSchema);
-      } catch {
-        // Validator E017 already gates upload; a parse failure here
-        // means an unvalidated workflow snuck through. Drop the schema
-        // rather than crash — the emit_output tool then behaves as if
-        // no schema were declared. The missing-emit_output downgrade
-        // below still fires off `rawOutputSchema` so the operator-facing
-        // contract is preserved.
-        parsedOutputSchema = undefined;
-      }
-    }
-
-    // Per-turn accumulators populated by the force-included tools.
-    // `contextWrites` collects `context_set` calls; `pendingOutput`
-    // holds the last `emit_output` payload. Both are read after
-    // `agent.waitForIdle()` below and folded into the Outcome.
-    const contextWritesMap = new Map<
-      string,
-      { value: string | number | boolean | null; prevValue?: string | number | boolean | null }
-    >();
-    const pendingOutputSlot: { value: { data: unknown } | undefined } = { value: undefined };
-
     const swarmContext: SwarmToolContext & {
       spawnSubagent?: SwarmToolContext["spawnSubagent"];
       skillCatalog?: readonly Skill[];
@@ -400,9 +361,6 @@ export class PiCodergenBackend implements CodergenBackend {
             void swarmEmit(type as EventType, payload);
           }
         : () => {},
-      contextWrites: contextWritesMap,
-      pendingOutput: pendingOutputSlot,
-      ...(parsedOutputSchema !== undefined ? { outputSchema: parsedOutputSchema } : {}),
       ...(summariser ? { summarise: (i) => summariser.summarise(i) } : {}),
     };
     const tools = finalTools.map((t) => toAgentTool(t, effectiveEnv, swarmContext));
@@ -824,38 +782,9 @@ export class PiCodergenBackend implements CodergenBackend {
     const lastAssistant = lastAssistantMessage(agent.state.messages);
     const notes = lastAssistant ? fullAssistantText(lastAssistant).slice(0, 4_000) : "";
     const aborted = findAbortToolCall(agent.state.messages);
+    if (aborted) return fail(aborted.reason, { notes, non_retryable: true });
 
-    // Drain the codergen tool accumulators populated during the agent
-    // loop. `context_set` calls land in `contextWritesMap` (last write
-    // wins per key); `emit_output` lands in `pendingOutputSlot.value`.
-    // Both are surfaced on the Outcome so handler-bridge can fold
-    // contextWrites into routingDelta + a per-write fact log, and
-    // write the structured output as the node's `output` artifact.
-    const contextWritesLog: Array<{
-      key: string;
-      value: string | number | boolean | null;
-      prevValue?: string | number | boolean | null;
-    }> = [];
-    for (const [key, entry] of contextWritesMap) {
-      contextWritesLog.push({
-        key,
-        value: entry.value,
-        ...(entry.prevValue !== undefined ? { prevValue: entry.prevValue } : {}),
-      });
-    }
-    const pendingOutput = pendingOutputSlot.value;
-
-    if (aborted) {
-      const failOpts: Partial<import("@swarm/core").Outcome> = { notes, non_retryable: true };
-      if (contextWritesLog.length > 0) failOpts.contextWrites = contextWritesLog;
-      if (pendingOutput !== undefined) failOpts.pendingOutput = pendingOutput;
-      return fail(aborted.reason, failOpts);
-    }
-
-    const okOpts: Partial<import("@swarm/core").Outcome> = { notes };
-    if (contextWritesLog.length > 0) okOpts.contextWrites = contextWritesLog;
-    if (pendingOutput !== undefined) okOpts.pendingOutput = pendingOutput;
-    return ok(okOpts);
+    return ok({ notes });
   }
 
   /** Inject a user message into the currently active agent for `runId`,

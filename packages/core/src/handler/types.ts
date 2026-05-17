@@ -297,30 +297,6 @@ export type HandlerResult =
       suggestedNextIds?: string[];
       outputRef?: ArtifactRef;
       routingDelta?: Record<string, unknown>;
-      /**
-       * Ordered log of `context_set` writes the agent made this turn.
-       * Populated by the agent handler-bridge from `Outcome.contextWrites`.
-       * `result-to-facts.ts` expands each entry into a
-       * `fact.context_written { source: "agent", … }` event after
-       * `fact.node_completed`. The values are mirrored into
-       * `routingDelta` on the same result, so the `run_state.routing`
-       * projection picks them up in the same fact-batch transaction.
-       * See docs/proposals/codergen-context-output-tools.md §2.1.
-       */
-      contextWriteLog?: Array<{
-        key: string;
-        value: string | number | boolean | null;
-        prevValue?: string | number | boolean | null;
-      }>;
-      /**
-       * True when the codergen agent called `emit_output` this turn.
-       * `result-to-facts.ts` appends `fact.output_emitted { source:
-       * "agent", … }` after `fact.node_completed`. The artifact write
-       * itself happens inside the handler via `ctx.artifacts.put("output",
-       * …)` before this flag is set, so by the time the fact lands the
-       * `outputRef` already resolves.
-       */
-      outputEmitted?: boolean;
       /** Single-line reason emitted by the handler when `outcomeStatus="fail"`.
        * Surfaces verbatim as `fact.run_halted.detail` when the fail outcome
        * routes to a terminal node (executor's `aborted_exit` path). Optional

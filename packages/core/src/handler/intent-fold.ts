@@ -78,21 +78,6 @@ export type IntentDecision =
        * and they don't refire next turn. */
       appliedSeqs: number[];
       dropped: DroppedIntent[];
-      /** Operator `intent.context_set` writes, surfaced so the executor's
-       *  post-fold pass can emit one `fact.context_written { source:
-       *  "operator" }` per entry alongside the routingDelta projection.
-       *  Absent when no operator-context intents were folded. */
-      operatorContextWrites?: Array<{
-        key: string;
-        value: string | number | boolean | null;
-        prevValue?: string | number | boolean | null;
-      }>;
-      /** Operator `intent.output_set` writes, surfaced so the executor's
-       *  post-fold pass can write the named node's `output` artifact and
-       *  emit `fact.output_emitted { source: "operator" }`. Schema
-       *  validation already happened server-side. Absent when no
-       *  operator-output intents were folded. */
-      operatorOutputs?: Array<{ nodeId: string; data: unknown }>;
     };
 
 export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): IntentDecision {
@@ -132,12 +117,6 @@ export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): I
   const pauseSeqs: number[] = [];
   const dropped: DroppedIntent[] = [];
   const applied: number[] = [];
-  const operatorContextWrites: Array<{
-    key: string;
-    value: string | number | boolean | null;
-    prevValue?: string | number | boolean | null;
-  }> = [];
-  const operatorOutputs: Array<{ nodeId: string; data: unknown }> = [];
 
   // The fold only runs while the executor is dispatching, which means
   // the run is `queued` (just-claimed, about to transition to running)
@@ -243,52 +222,6 @@ export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): I
         }
         break;
       }
-      case "intent.context_set": {
-        // Operator-side dual of the codergen `context_set` tool. Writes
-        // routing[key] = value so downstream nodes and edge conditions
-        // see it via `context.<key>`. The fold validates key/value shape
-        // (no dots, scalar/null); a `fact.context_written { source:
-        // "operator", … }` is emitted by the executor's post-fold pass
-        // (see operatorContextWrites below). See
-        // docs/proposals/codergen-context-output-tools.md §4.1.
-        const p = ev.payload as { key: string; value: unknown };
-        const validKey = typeof p.key === "string" && p.key.length > 0 && !p.key.includes(".");
-        const validValue =
-          p.value === null ||
-          typeof p.value === "string" ||
-          typeof p.value === "number" ||
-          typeof p.value === "boolean";
-        if (validKey && validValue) {
-          const prev = routingDelta[p.key];
-          routingDelta[p.key] = p.value;
-          operatorContextWrites.push({
-            key: p.key,
-            value: p.value as string | number | boolean | null,
-            ...(isScalarOrNull(prev) ? { prevValue: prev } : {}),
-          });
-        } else {
-          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
-        }
-        break;
-      }
-      case "intent.output_set": {
-        // Operator-side dual of the codergen `emit_output` tool. The fold
-        // forwards the (nodeId, data) tuple verbatim; the executor's
-        // post-fold pass writes the artifact via `ctx.artifacts.put` and
-        // emits `fact.output_emitted { source: "operator", … }`.
-        // Schema validation against `output_schema` is enforced by the
-        // server route before the intent is appended (422 with
-        // Value.Errors), so by the time the fold sees it the shape is
-        // already valid. See
-        // docs/proposals/codergen-context-output-tools.md §4.2.
-        const p = ev.payload as { nodeId: string; data: unknown };
-        if (typeof p.nodeId === "string" && p.nodeId.length > 0) {
-          operatorOutputs.push({ nodeId: p.nodeId, data: p.data });
-        } else {
-          dropped.push({ seq: ev.seq, type: ev.type, reason: "wrong_state" });
-        }
-        break;
-      }
       case "intent.run_enqueued":
       case "intent.resume":
       case "intent.unquarantine":
@@ -355,11 +288,5 @@ export function foldIntents(intents: IntentFoldEvent[], runStatus: RunStatus): I
   };
   if (steering !== undefined) decision.steering = steering;
   if (hitlInput !== undefined) decision.hitlInput = hitlInput;
-  if (operatorContextWrites.length > 0) decision.operatorContextWrites = operatorContextWrites;
-  if (operatorOutputs.length > 0) decision.operatorOutputs = operatorOutputs;
   return decision;
-}
-
-function isScalarOrNull(v: unknown): v is string | number | boolean | null {
-  return v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }

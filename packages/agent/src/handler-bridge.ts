@@ -216,50 +216,10 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // — same observable end state as before, just authored through the
     // workflow graph instead of short-circuited here.
     const routingDelta = contextUpdatesToRouting(outcome.context_updates);
-    // Codergen `context_set` tool writes land here. Merge into the
-    // routingDelta so the same fact-batch transaction projects both
-    // sources into `run_state.routing`; the log itself is threaded
-    // through to `result-to-facts` via `contextWriteLog` so each write
-    // emits its own `fact.context_written { source: "agent", … }`. See
-    // docs/proposals/codergen-context-output-tools.md §2.1.
-    const contextWriteLog = outcome.contextWrites ?? [];
-    for (const entry of contextWriteLog) routingDelta[entry.key] = entry.value;
-
-    // emit_output → outputRef. The codergen agent's `emit_output` tool
-    // writes the structured payload to `outcome.pendingOutput`; we
-    // persist it as the node's `output` artifact (JSON, replace: true
-    // so a self-correcting LLM's second call wins). When unset and the
-    // node declared `output_schema`, the bridge downgrades the outcome
-    // to fail — the LLM agreed to produce schema-conforming data and
-    // did not. See docs/proposals/codergen-context-output-tools.md §2.2.
-    let pendingOutputRef: import("@swarm/store").ArtifactRef | undefined;
-    let emittedOutput = false;
-    if (outcome.pendingOutput !== undefined) {
-      try {
-        const serialised = JSON.stringify(outcome.pendingOutput.data);
-        pendingOutputRef = ctx.artifacts.put("output", serialised, "application/json", { replace: true });
-        emittedOutput = true;
-      } catch {
-        // Artifact write failure (e.g. payload size cap) is best-effort;
-        // the LLM's last assistant text is still captured by the
-        // existing prose-fallback path below. The fact.output_emitted
-        // skip is intentional — nothing was actually emitted.
-      }
-    }
-    const hasOutputSchema =
-      typeof opts.node.attrs.output_schema === "string" && opts.node.attrs.output_schema.trim().length > 0;
-    let effectiveStatus = outcome.status;
-    let effectiveFailureReason: string | undefined;
-    if (hasOutputSchema && !emittedOutput && outcome.status === "success") {
-      effectiveStatus = "fail";
-      effectiveFailureReason =
-        "node declares output_schema but emit_output was never called; produce a schema-conforming value";
-    }
     const failureReason =
-      effectiveFailureReason ??
-      (effectiveStatus === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0
+      outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0
         ? outcome.failure_reason
-        : undefined);
+        : undefined;
     // Only set `nextNode` for explicit overrides — otherwise the executor's
     // edge selector picks based on the outcome fields below. `opts.nextNode`
     // stays as a legacy-compat fallback for auto-dispatcher code paths that
@@ -271,10 +231,8 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // resolve through the executor's nodeOutputs fold, which dereferences
     // this artifact. Skipped when the run produced no assistant text (rare
     // edge: handler aborted before the first assistant turn streamed).
-    // When `emit_output` was called this turn, its artifact (written
-    // above) wins — explicit structured emit beats prose fallback.
-    let outputRef: import("@swarm/store").ArtifactRef | undefined = pendingOutputRef;
-    if (outputRef === undefined && finalAssistantText.length > 0) {
+    let outputRef: import("@swarm/store").ArtifactRef | undefined;
+    if (finalAssistantText.length > 0) {
       try {
         outputRef = ctx.artifacts.put("output", finalAssistantText, "text/plain", { replace: true });
       } catch {
@@ -287,7 +245,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
 
     const result: HandlerResult = {
       kind: "transition",
-      outcomeStatus: effectiveStatus,
+      outcomeStatus: outcome.status,
       ...(outcome.preferred_label.length > 0 ? { preferredLabel: outcome.preferred_label } : {}),
       ...(outcome.suggested_next_ids.length > 0 ? { suggestedNextIds: outcome.suggested_next_ids } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
@@ -305,8 +263,6 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(Object.keys(routingDelta).length > 0 ? { routingDelta } : {}),
       ...(modelName !== undefined ? { modelName } : {}),
       ...(outputRef !== undefined ? { outputRef } : {}),
-      ...(contextWriteLog.length > 0 ? { contextWriteLog } : {}),
-      ...(emittedOutput ? { outputEmitted: true } : {}),
     };
     return result;
   };
