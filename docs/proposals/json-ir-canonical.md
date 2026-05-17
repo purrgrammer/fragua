@@ -2,7 +2,7 @@
 title: JSON IR as the canonical workflow form
 status: proposed
 maturity: designed
-last-reviewed: 2026-05-04
+last-reviewed: 2026-05-17
 ---
 
 # JSON IR as the canonical workflow form
@@ -278,3 +278,95 @@ Per AGENTS.md ground rule #1:
 - **`README.md`** — if the quick-tour invocation references DOT
   specifically (`swarm run foo.dot`), update to mention `.json` is
   also accepted
+
+---
+
+## Addendum — 2026-05-17 review
+
+Four points landed during the codergen-context-output-tools / G1 work
+and the orchestration of that work, none of which change the core
+design but each of which needs to be reflected in the implementation
+PR.
+
+### A. `/runs/:id` projection: drop the embedded `workflowSource`
+
+The current `GET /runs/:id` response embeds `workflowSource: <raw DOT
+text>` inline. This surface was caught during the G1 orchestration
+because the raw DOT contains unescaped newlines/tabs, breaking strict
+JSON consumers (jq fails with `Invalid string: control characters from
+U+0000 through U+001F must be escaped`). The flip naturally fixes
+this because the wire is JSON IR. Two ways to land it:
+
+1. Replace with `workflowIr` (structured, well-escaped by
+   construction).
+2. **Drop the embed entirely.** The run already carries
+   `workflow_sha`; clients dereference via the workflow endpoint when
+   they need the source. Net win: cheaper hot-path projection
+   response, no duplicate source bytes per run.
+
+Recommend option 2. The projection is read on every status poll; the
+workflow source is read at most once per UI session. Cuts hot-path
+payload meaningfully on long-prompted workflows. Listed task #16
+(server escape control chars) becomes moot under either option.
+
+### B. JSON IR allows nested objects for fields DOT escapes as strings
+
+The G1 work introduced `output_schema=` as a node attribute carrying a
+JSON Schema string. In DOT the string must be JSON-escaped inline
+(`output_schema = "{\"type\":\"object\",...}"`); in JSON IR the same
+field can be a nested object. This is **within 1:1 parity** — DOT
+authors keep their string-escape syntax — but it removes a
+double-escaping wart in the JSON form that would otherwise persist if
+the IR matched DOT character-for-character.
+
+Implementation guidance: any node attribute whose authored value is a
+JSON-shaped string (today: only `output_schema=`, but the precedent
+generalises) should be stored as a parsed object in the IR. The
+DOT-to-IR lowering does the parse; the DOT emitter re-stringifies on
+the way out. Round-trip stable.
+
+This makes the JSON form strictly more ergonomic for the cases where
+DOT's string-only fields are already carrying structured data, and
+sets up a clean home for future typed-attr work (see Addendum E).
+
+### C. Pinned invariant: sha is sensitive to `schemaVersion`
+
+Already implied by "canonical JSON includes the version field"
+(decision 3) but worth explicit: two IRs identical in content but
+differing in `schemaVersion` produce **unrelated shas**. A future
+migration that bumps the version on every row therefore re-keys every
+workflow. Document so a maintainer doesn't "optimise" by hashing only
+the content field.
+
+Add to §Pinned invariants:
+
+> 5. **schemaVersion is sha-load-bearing.** The version field is part
+>    of canonical JSON. Differing versions ⇒ different shas, even if
+>    the rest of the IR is byte-identical. A migration that re-keys
+>    workflows must do so in the same transaction as the version
+>    bump (or accept replay drift for in-flight runs).
+
+### D. Web bundle savings
+
+`packages/web/src/lib/parse-workflow.ts` calls `parseDotSource`
+client-side to render the graph. After the flip, the UI fetches JSON
+IR directly — the 482 LOC parser stops shipping to the browser. Net
+positive on initial-render time + bundle size. Worth listing under
+§Why as an additional motivator, not a primary one.
+
+### E. Cross-reference: `@swarm/sdk` programmatic-build brainstorm
+
+A sibling brainstorm is in flight (2026-05-17) on a `@swarm/sdk`
+TypeScript namespace that builds JSON IR via code — typed
+context/inputs/outputs, importable subworkflows, Typebox schemas on
+nodes for compile-time wiring checks. That work assumes this proposal
+ships first (the published Typebox schema in `@swarm/types` is the
+SDK's target). When the brainstorm settles, it lands as its own
+proposal (`docs/proposals/swarm-sdk.md` or similar) and the §Out of
+scope "TS workflow-builder library" bullet here gets retired.
+
+The SDK direction is *strictly additive* to this proposal — it
+consumes the JSON IR schema, doesn't change it. But it's the
+motivating reason to push hard on the Typebox-first decision (§2)
+since the SDK's value proposition is type inference across the graph,
+which requires the schema to be the source of truth.
