@@ -30,7 +30,6 @@ digraph feature {
   plan [
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. If no proposal file is referenced, abort with reason `feature workflow requires a docs/proposals/*.md anchor; for ad-hoc work use change.dot`.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - no proposal anchor (per pre-flight above)\n\nMulti-package work and shared-contract changes (store schema, event envelope, handler contracts) ARE in scope here — that's why this workflow exists. Don't refuse them.\n\nRead the full proposal + the docs/proposals files it cross-references + the AGENTS.md doc-obligation table to identify same-PR doc updates. Survey the existing code at every package the proposal touches.\n\nOutput a numbered plan:\n  1. Files to create/modify (full paths). Group by package. Include same-PR doc updates from AGENTS.md §1.\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence. One per logical unit minimum.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers.\n  5. Cross-package dependencies: which packages must land/typecheck before which others, in what order."
     allowed_tools = "read, grep, find, ls"
-    context_files = "AGENTS.md"
   ]
 
   subgraph cluster_dev {
@@ -67,7 +66,6 @@ digraph feature {
     class         = "commit"
     prompt        = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.\n\nIf `git status --short` is empty, emit `COMMITTED: no changes`.\n\nOtherwise: `git add` explicit paths (group related files; multi-package features may warrant multiple commits, one per logical chunk), commit each with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha list>`. Don't push."
     allowed_tools = "read, write, edit, bash"
-    context_files = "AGENTS.md"
   ]
 
   done [shape=Msquare]
