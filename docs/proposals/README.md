@@ -22,7 +22,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
-| [Codergen context + output tools](./codergen-context-output-tools.md) | **scrapped 2026-05-17** | first cut shipped then reverted; needs more careful design alongside typed inputs/outputs/context. Implementation and consuming workflow edits reverted; G3 fan-in LLM evaluator detached and now text-parses `WINNER:` line |
 | [swarm-author SKILL.md final sweep](./swarm-author-skill-rewrite.md) | design | deferred until JSON IR canonical, `@swarm/sdk`, and typed inputs/outputs tracks settle; proposal lists outdated surface and open questions |
 
 ## Accepted (design done; awaiting scheduling)
@@ -53,6 +52,12 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Multi-account support per provider](./multi-account.md) | sketch | first-class `(provider, account)` credentials with reserved `"default"` account; selection via run intent / schedule / project config / global config; workflows stay account-agnostic. Drivers: billing/org separation, per-run credentials. Composes with deferred [`credentials.md`](./credentials.md) — lower-cost ordering is multi-account first against `auth.json`, credentials-in-DB second with the two-level shape baked in |
 | [Per-model CLI ops for custom providers](./provider-model-ops.md) | sketch | `swarm providers add-model / rm-model / ls-models / edit-model` lets operators manage individual model entries inside a custom provider's `provider_config` row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable |
+
+## Discarded
+
+| Proposal | Discarded | Why |
+|---|---|---|
+| [Codergen context + output tools](./codergen-context-output-tools.md) | 2026-05-17 | first cut shipped then reverted; the *invocation shape* (`context_set` / `emit_output` tools + `output_schema` attr) didn't survive contact with the consuming workflows. Redesign expected after JSON IR canonical + typed inputs/outputs/context land; see the scrap banner in the proposal for what to carry forward |
 
 ## Deferred
 

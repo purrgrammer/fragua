@@ -1,6 +1,6 @@
 ---
 title: Codergen context + output tools
-status: scrapped
+status: discarded
 maturity: design
 last-reviewed: 2026-05-17
 ---
