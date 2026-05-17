@@ -1053,6 +1053,8 @@ app.post("/runs/:id/budget",       async (c) => writeIntent(c, "intent.budget_ad
 app.post("/runs/:id/max_retries",  async (c) => writeIntent(c, "intent.max_retries_adjusted"));  // {nodeId, newLimit>0, note?}
 app.post("/runs/:id/goal_gate",    async (c) => writeIntent(c, "intent.goal_gate_adjusted"));    // {newLimit>0, note?}
 app.post("/runs/:id/max_loops",    async (c) => writeIntent(c, "intent.max_loops_adjusted"));    // {newLimit>0, note?}
+app.post("/runs/:id/context",     async (c) => writeIntent(c, "intent.context_set"));   // {key: string (no dots), value: string|number|boolean|null, note?}
+app.post("/runs/:id/output",      async (c) => writeIntent(c, "intent.output_set"));    // ?node=<nodeId>; {data: string|object|array, note?}; 422 on output_schema violation
 
 // Schedules surface (proposal: docs/proposals/scheduled-runs.md).
 // CRUD over the `schedules` table plus pause/resume verbs. Each
