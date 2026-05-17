@@ -10,9 +10,9 @@
 //   - override specific built-in models (fix stale cost, pin routing)
 //   - add custom models under a built-in provider
 //
-// Per-row Ajv validation lives in `loadCustomModels`: one corrupt row
-// is skipped (surfaced via `getError()`) without poisoning the rest
-// of the registry.
+// Per-row schema validation (Typebox `Value.Check`) lives in
+// `loadCustomModels`: one corrupt row is skipped (surfaced via
+// `getError()`) without poisoning the rest of the registry.
 //
 // Adapted from pi-coding-agent (https://github.com/badlogic/pi-mono,
 // packages/coding-agent/src/core/model-registry.ts) — MIT. Upstream in
@@ -47,16 +47,12 @@ import {
 } from "@mariozechner/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { type Static, Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type { IProviderConfigStore } from "@swarm/store";
-import AjvModule from "ajv";
 import type { AuthStorage } from "./auth-storage.ts";
 
-// biome-ignore lint/suspicious/noExplicitAny: Ajv's default export is runtime-dependent.
-const Ajv = (AjvModule as any).default || AjvModule;
-const ajv = new Ajv();
-
 // ---------------------------------------------------------------------------
-// Schemas (TypeBox → Ajv)
+// Schemas (TypeBox)
 // ---------------------------------------------------------------------------
 
 const PercentileCutoffsSchema = Type.Object({
@@ -195,7 +191,6 @@ const ModelsConfigSchema = Type.Object({
   providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 
-ajv.addSchema(ModelsConfigSchema, "ModelsConfig");
 // Per-row validation surface for `provider_config` writers (CLI). The
 // schema mirrors the per-provider body — minus `apiKey`, which lives
 // in `provider_credentials`.
@@ -416,7 +411,6 @@ export class ModelRegistry {
     const modelOverrides = new Map<string, Map<string, ModelOverride>>();
     const acceptedProviders: Record<string, Static<typeof ProviderConfigSchema>> = {};
     const errors: string[] = [];
-    const validate = ajv.getSchema("ModelsConfig")!;
 
     let rows: Array<{ provider: string; config: unknown }>;
     try {
@@ -428,15 +422,15 @@ export class ModelRegistry {
     }
 
     for (const row of rows) {
-      // Per-row Ajv validation. Wrap the row in the whole-file shape so
-      // the existing compiled schema applies; a corrupt row is logged
-      // and skipped, sibling rows still load.
+      // Per-row schema validation. Wrap the row in the whole-file shape
+      // so the schema applies; a corrupt row is logged and skipped,
+      // sibling rows still load.
       const wrapped = { providers: { [row.provider]: row.config } };
-      if (!validate(wrapped)) {
+      if (!Value.Check(ModelsConfigSchema, wrapped)) {
         const details =
-          // biome-ignore lint/suspicious/noExplicitAny: Ajv error shape is loose.
-          validate.errors?.map((e: any) => `  - ${e.instancePath || "root"}: ${e.message}`).join("\n") ||
-          "Unknown schema error";
+          [...Value.Errors(ModelsConfigSchema, wrapped)]
+            .map((e) => `  - ${e.path || "root"}: ${e.message}`)
+            .join("\n") || "Unknown schema error";
         errors.push(`provider_config[${row.provider}]: invalid schema\n${details}`);
         continue;
       }

@@ -17,12 +17,11 @@
 //
 // Per-model ops (docs/proposals/provider-model-ops.md) target a row
 // that already exists. Each verb loads the parsed `ProviderEntry`,
-// mutates `models[]`, Ajv-validates the whole blob, and upserts.
+// mutates `models[]`, validates the whole blob, and upserts.
 
+import { Value } from "@sinclair/typebox/value";
 import { ProviderConfigSchema } from "@swarm/agent";
 import type { IProviderConfigStore } from "@swarm/store";
-import type { ValidateFunction } from "ajv";
-import AjvModule from "ajv";
 import chalk from "chalk";
 import prompts from "prompts";
 import { openGlobalStore } from "./open-global-store.ts";
@@ -206,30 +205,18 @@ export function mergeProviderEntry(existing: ProviderEntry, next: ProviderEntry,
 }
 
 // ---------------------------------------------------------------------------
-// Ajv validation (defence in depth on writes)
+// Schema validation (defence in depth on writes)
 // ---------------------------------------------------------------------------
 
-// biome-ignore lint/suspicious/noExplicitAny: Ajv's default export is runtime-dependent.
-const Ajv = (AjvModule as any).default || AjvModule;
-let cachedValidator: ValidateFunction | null = null;
-
-function getValidator(): ValidateFunction {
-  if (cachedValidator !== null) return cachedValidator;
-  const ajv = new Ajv();
-  cachedValidator = ajv.compile(ProviderConfigSchema) as ValidateFunction;
-  return cachedValidator;
-}
-
-/** Ajv-validate a `ProviderEntry` against the agent layer's
+/** Validate a `ProviderEntry` against the agent layer's
  * `ProviderConfigSchema`. Defence in depth: `ModelRegistry.loadCustomModels`
  * also validates on read, but catching typos before write produces a
  * better error message at the spot the operator caused them. */
 export function validateProviderEntryWrite(entry: ProviderEntry): { ok: true } | { ok: false; errors: string } {
-  const validate = getValidator();
-  const ok = validate(entry);
-  if (ok) return { ok: true };
-  const ajv = new Ajv();
-  const errors = ajv.errorsText(validate.errors ?? []);
+  if (Value.Check(ProviderConfigSchema, entry)) return { ok: true };
+  const errors =
+    [...Value.Errors(ProviderConfigSchema, entry)].map((e) => `${e.path || "root"} ${e.message}`).join(", ") ||
+    "unknown schema error";
   return { ok: false, errors };
 }
 
@@ -239,10 +226,9 @@ export function validateProviderEntryWrite(entry: ProviderEntry): { ok: true } |
 
 /** Look up a parsed `ProviderEntry` by provider id. Prints the
  *  canonical "not found" message + returns `null` on miss so callers
- *  can short-circuit to exit code 1. Also runs Ajv against the
- *  loaded blob — a structurally-broken row is refused before any
- *  mutation, with the same `schema validation failed` message a
- *  bad write would produce. */
+ *  can short-circuit to exit code 1. Also validates the loaded blob —
+ *  a structurally-broken row is refused before any mutation, with the
+ *  same `schema validation failed` message a bad write would produce. */
 export function loadProviderEntry(store: IProviderConfigStore, provider: string): ProviderEntry | null {
   const row = store.getProviderConfig(provider);
   if (row == null) {

@@ -23,7 +23,6 @@
     "@swarm/server": "workspace:*",
     "@swarm/store": "workspace:*",
     "@swarm/workspace": "workspace:*",
-    "ajv": "8.17.1",
     "cac": "6.7.14",
     "chalk": "5.6.2",
     "ink": "5.2.1",

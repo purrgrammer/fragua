@@ -19,8 +19,7 @@
     "@swarm/core": "workspace:*",
     "@swarm/store": "workspace:*",
     "@swarm/types": "workspace:*",
-    "@swarm/workspace": "workspace:*",
-    "ajv": "8.17.1"
+    "@swarm/workspace": "workspace:*"
   },
   "devDependencies": {
     "fast-check": "3.23.1",
