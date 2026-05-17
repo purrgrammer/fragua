@@ -12,7 +12,7 @@ last-reviewed: 2026-05-17
 > Three force-included built-in tools (`context_set`, `emit_output`, `abort`)
 > that make routing-context writes and structured outputs first-class for LLM
 > steps, without interposing extra graph nodes. Pairs with an optional
-> `output_schema` node attribute (ajv-validated) and operator-side intent duals
+> `output_schema` node attribute (Typebox `Value.Check`-validated, no new dep) and operator-side intent duals
 > for every LLM-emitting call.
 
 ---
@@ -148,8 +148,8 @@ is _not_ called:
 executor's `nodeOutputs` fold already dereferences this artifact when resolving
 `$<nodeId>.output` — no executor change needed.
 
-**Validation.** When `output_schema` is set, the tool handler runs ajv
-synchronous validation against `data` before writing the artifact. On failure
+**Validation.** When `output_schema` is set, the tool handler runs Typebox
+`Value.Check` validation against `data` before writing the artifact. On failure
 the tool returns:
 
 ```json
@@ -232,36 +232,46 @@ ships.
 **Registration-time.** The DOT parser passes `output_schema` through
 `NodeAttrs` as an opaque string (it is already in `KNOWN_NODE_ATTRS` after
 this feature lands). At workflow registration (`packages/core/src/engine/validator.ts`)
-the validator calls `ajv.compile(JSON.parse(value))` inside a try/catch:
+the validator parses + sanity-checks the schema:
 
-- JSON parse failure → **E017** ("output_schema is not valid JSON").
-- ajv compile failure → **E017** ("output_schema is not a valid JSON Schema:
-  `<ajv message>`").
+- `JSON.parse(value)` failure → **E017** ("output_schema is not valid JSON").
+- `Value.Check(schema, {})` throwing or rejecting the empty object with a
+  structural error unrelated to required fields → **E017** ("output_schema is
+  not a valid JSON Schema: `<message>`"). (`Value.Check` is forgiving by design;
+  the registration-time check is a smoke test, not exhaustive — most malformed
+  schemas surface at first `emit_output` call instead.)
 
-This catches typos at upload time, not first-run time.
+This catches the most obvious typos at upload time.
 
 **Runtime.** The codergen backend reads `output_schema` from the node
 definition. When present:
 
-1. ajv is instantiated once per handler invocation with the parsed schema.
-2. Each `emit_output` call synchronously validates `data` against the schema.
+1. The schema is parsed once per handler invocation (`JSON.parse`).
+2. Each `emit_output` call synchronously validates `data` via
+   `Value.Check(schema, data)` from `@sinclair/typebox/value` (already a
+   project dep — precedent at `packages/cli/src/config.ts:22`). On failure
+   call `Value.Errors(schema, data)` to enumerate path + message pairs.
 3. On failure the tool returns the structured error (§2.2) without writing the
    artifact — the LLM retries within the turn.
 4. On success the artifact is written and the run proceeds normally.
 5. If `emit_output` was never called at turn-end and `output_schema` is set, the
    bridge sets `outcomeStatus: "fail"` with a descriptive `failureReason`.
 
-**Why ajv / why JSON Schema.**
-pi-ai uses TypeBox throughout; TypeBox's output IS JSON Schema Draft 7. Pinning
-ajv means: (a) the same schema string a TypeBox author would write compiles
-directly, (b) when v2 lands (§7) and the schema flows to the provider's
-`response_format`, swarm passes the identical string unchanged — no conversion
-layer. The `emit_output` validator becomes belt-and-suspenders over the
-provider's own enforcement.
+**Why Typebox.Value.Check / why JSON Schema.**
+pi-ai uses Typebox throughout; Typebox IS JSON Schema Draft 7 (a Typebox
+schema *is* a JSON Schema object). `@sinclair/typebox/value`'s
+`Value.Check` accepts any Typebox-shaped (JSON-Schema-shaped) object, so the
+same schema string a Typebox author would write validates directly — no
+conversion layer, no compile step. When v2 lands (§7) and the schema flows
+to the provider's `response_format`, swarm passes the identical string
+unchanged; Value.Check stays as belt-and-suspenders over the provider's own
+enforcement.
 
-**Dependency pin:** `ajv@^8` — JSON Schema Draft 7/2019-09/2020-12 validator;
-aligns with the JSON Schema Draft 7 superset that TypeBox emits, and the version
-providers (Anthropic, OpenAI) reference in their structured-output docs.
+**No new dependency.** `@sinclair/typebox/value` ships inside the existing
+`@sinclair/typebox` package (already pinned per the project stack in
+AGENTS.md). Do not add `ajv`, `@cfworker/json-schema`, or any other validator
+— if a published Typebox release lacks a feature we need, raise it as an
+upstream issue rather than parallel-stacking a second validator.
 
 ---
 
@@ -307,7 +317,7 @@ path — no substitution engine change required.
 
 **Schema validation.** If the node has `output_schema` set, the server validates
 the operator's `data` against it before enqueueing the intent. A 422 Unprocessable
-Entity with the ajv errors is returned on failure — operators get the same
+Entity with the Value.Errors output is returned on failure — operators get the same
 structured error the LLM sees, for the same in-flight correction loop.
 
 **Response:** 202 Accepted.
@@ -321,7 +331,7 @@ Codes are assigned at implementation time after confirming the current watermark
 
 | Code | Severity | Trigger | Gate |
 |------|----------|---------|------|
-| E017 | error | `output_schema=` is not valid JSON, or does not ajv-compile as JSON Schema | registration (`validator.ts`) |
+| E017 | error | `output_schema=` is not valid JSON, or does not parse as a Typebox-shaped schema (`Value.Check` smoke test) | registration (`validator.ts`) |
 | W018 | warning | A downstream `$<id>.output.<path>` reference names a path that the upstream node's `output_schema` does not permit (static dead-reference detection) | reference-resolution pass; **can defer to follow-up** |
 
 **Same-PR obligation when codes land.** Adding E017 / W018 requires updating
@@ -387,7 +397,7 @@ In that world:
   Alternatively `emit_output` is silently called by the backend when the
   provider returns a `stop_reason: "tool_use"` + JSON response, with no
   visible LLM call.
-- Runtime ajv validation in swarm becomes belt-and-suspenders: still runs,
+- Runtime Value.Check validation in swarm becomes belt-and-suspenders: still runs,
   still rejects, but should never fire in normal operation.
 - The `output_schema` DOT attribute and all author-facing tooling are unchanged.
   The only implementation delta is in `packages/agent/src/backend.ts` where the
