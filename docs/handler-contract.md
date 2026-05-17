@@ -111,8 +111,10 @@ return {
   outcomeStatus?: "success",            // matched against edge `condition="outcome=<s>"` clauses; defaults to "success"
   preferredLabel?: "go-on",             // matched against unconditional edges' `label` attr
   suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
-  outputRef?: ArtifactRef,              // optional; executor records it
-  routingDelta?: { key: value },        // merged into run_state.routing
+  outputRef?: ArtifactRef,              // optional; executor records it. For codergen, populated either from emit_output's JSON artifact (priority) or from the final assistant text (prose fallback) — see "`emit_output` and the `output` artifact" below.
+  routingDelta?: { key: value },        // merged into run_state.routing. For codergen, this includes (a) the handler's own entries and (b) every key the agent wrote via `context_set` this turn — the agent path mirrors the handler path so consumers don't have to care which source produced a write.
+  contextWriteLog?: Array<{ key, value, prevValue? }>, // codergen-only: ordered log of `context_set` tool calls. The executor expands this into per-write `fact.context_written { source: "agent", … }` events alongside `fact.node_completed`. See "`context_set` and routingDelta" below.
+  outputEmitted?: boolean,              // codergen-only: true when the `emit_output` tool fired this turn. The executor emits `fact.output_emitted { source: "agent", … }` next to `fact.node_completed`.
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
@@ -136,6 +138,26 @@ Three fields in the shape above — `parentNodeId`, `parallelIndex`, and `score`
 - **`score`** is the optional ranking value a branch surfaces by including `score` in its `routingDelta` (e.g. `routingDelta: { score: 0.87 }`). The executor copies it from `run_state.routing` onto `fact.node_completed.score`. The `fan_in` node reads it for `(status, -score, id)` winner ordering; the event log preserves it so post-mortems can reproduce the ranking without re-running. Authoritative payload shapes: `packages/types/src/swarm-events.ts` (`fact.node_started` payload lines ~155–167; `fact.node_completed` payload lines ~170–219), mirrored in `docs/ARCHITECTURE.md` §3.
 
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
+
+#### `context_set` and routingDelta
+
+For codergen nodes, `routingDelta` carries entries from **two sources** with identical projection semantics:
+
+1. Handler's own `routingDelta` field (the legacy path — set by `tool` / `parallel` / `wait.human` handlers, or by codergen handlers that want to write context outside the LLM's reach).
+2. Every key the LLM agent wrote via the force-included `context_set` tool this turn. The agent backend collects each `context_set({ key, value })` call in a per-turn map (last-write-wins per key), and handler-bridge folds the drained map into `routingDelta` before returning. The same map is also surfaced as `contextWriteLog: Array<{ key, value, prevValue? }>` so the executor can emit one `fact.context_written { source: "agent", … }` per write — the audit trail preserves the order and the displaced value (if any).
+
+The two sources merge into one `Record<string, unknown>` for the routing projection; consumers reading `run_state.routing` cannot tell them apart, and they shouldn't have to. The fact stream is where provenance lives: `fact.context_written { source: "agent" | "operator" }` distinguishes agent-side writes from operator-side ones (`intent.context_set` lands as `source: "operator"`). See [`docs/proposals/codergen-context-output-tools.md`](./proposals/codergen-context-output-tools.md) §2.1 / §4.1.
+
+#### `emit_output` and the `output` artifact
+
+For codergen nodes, `outputRef` follows a two-tier resolution:
+
+1. If the LLM agent called the force-included `emit_output({ data })` tool this turn, handler-bridge writes `JSON.stringify(data)` as the `output` artifact (mime `application/json`, `replace: true`) and sets `outputEmitted: true` on the transition. Downstream `$<thisNode>.output[.path]` substitution resolves through this artifact via the executor's `nodeOutputs` fold — object/array fields traverse as JSON paths.
+2. If `emit_output` was not called, handler-bridge writes the final assistant text as the `output` artifact (mime `text/plain`). This is the prose fallback that preserves backward compatibility with workflows that never call `emit_output`.
+
+When the node declares `output_schema=` (a JSON Schema string), the `emit_output` tool validates `data` via `Value.Check` from `@sinclair/typebox/value` before persisting. A `data` value that doesn't conform surfaces a structured `is_error: true` tool result with `errors: [{ path, message }]` so the LLM can retry within the same turn; repeated failures inside one turn do not halt the node. The contract bite is at turn end: a node that declares `output_schema=` but never landed a successful `emit_output` call has its outcome downgraded to `"fail"` with `failureReason` naming the missing call. Authors who want an explicit recovery path declare `condition="outcome=fail"` on an outgoing edge; without one the executor halts.
+
+The operator dual `POST /runs/:id/output?node=<nodeId>` follows the same artifact path. The server validates the operator's `data` against the target node's `output_schema` (if declared) and returns 422 + `Value.Errors` on failure before any intent is appended. See [`docs/proposals/codergen-context-output-tools.md`](./proposals/codergen-context-output-tools.md) §2.2 / §3 / §4.2.
 
 ### `yield_hitl`
 Handler needs a human to choose one of a structured set of options. Run transitions to `paused_hitl`, the executor frees the process. The `fact.run_paused_hitl` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
