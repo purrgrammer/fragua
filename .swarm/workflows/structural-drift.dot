@@ -22,25 +22,19 @@
 // daily catches drift before it accumulates. No HITL gate — the cadence
 // runs unattended.
 //
-// Models: .lens class gets opus + reasoning_effort:high (genuine cross-ref
-// reasoning, one check per lens); consolidate tripleoctagon + consolidate_table
-// ride sonnet (aggregation, not derivation). `collect` is a deterministic tool
-// node — no LLM cost.
-//
-// Architecture: collect → spawn (component, wait_all) → 6 lens codergens
-//   → consolidate (tripleoctagon, G3 LLM-eval, picks worst-offending lens)
-//   → consolidate_table (merges all six findings into one severity-grouped table)
-//   → review (goal-gate) → done
+// Models: opus + reasoning_effort:high for `drift` (the genuine cross-ref
+// reasoning); sonnet for review (mid-tier judgement). `collect` is a
+// deterministic tool node — no LLM cost.
 
 digraph structural_drift {
   graph [
     goal                  = "Cross-reference contract code surfaces against the docs that describe them; emit a severity-grouped findings table for the rollup to consume."
     label                 = "structural-drift"
     default_fidelity      = "compact"
-    budget_usd            = 12.00
+    budget_usd            = 5.00
     budget_policy         = "warn"
     max_goal_gate_retries = 2
-    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .lens { llm_model: claude-opus-4-7; reasoning_effort: high; } .consolidator { llm_model: claude-sonnet-4-6; }"
+    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
   ]
 
   start [shape=Mdiamond]
@@ -50,126 +44,28 @@ digraph structural_drift {
     tool_command = "bun .swarm/scripts/structural-drift/collect.ts $ARGUMENTS"
   ]
 
-  spawn [shape=component, join_policy="wait_all"]
-
-  // ── Lens 1: Schema ────────────────────────────────────────────────────────
-  lens_schema [
-    class         = "lens"
-    shape         = box
+  drift [
+    class         = "heavy"
     allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Schema drift check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `schema_sql` field (verbatim schema.sql contents) and the `contract_files` array. Trust those values; re-read source files only when you need surrounding context.\n\nCheck: every table / column / generated column / index / CHECK constraint / STRICT pragma in `schema_sql` against ARCHITECTURE.md §2. Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) a code_surface at file:line, AND (b) a doc_location at file:line (or explicit absence — 'NOT FOUND in ARCH §2 table'). A finding without both citations is invalid — re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── Lens 2: Event taxonomy ────────────────────────────────────────────────
-  lens_taxonomy [
-    class         = "lens"
-    shape         = box
-    allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Event taxonomy drift check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `taxonomy` field: run_statuses, pause_reasons, halt_reasons, quarantine_reasons, intent_types, fact_types, daemon_event_types — verbatim union literals extracted from swarm-events.ts. Trust those values; re-read source files only when you need surrounding context.\n\nCheck: every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and SPEC §3.4 status table where applicable. Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) a code_surface at file:line, AND (b) a doc_location at file:line (or explicit absence — 'NOT FOUND in ARCH §3 intent table'). A finding without both citations is invalid — re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── Lens 3: Handler contract ───────────────────────────────────────────────
-  lens_handler [
-    class         = "lens"
-    shape         = box
-    allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Handler contract drift check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `contract_files` array to locate packages/core/src/handler/types.ts and docs/handler-contract.md. Trust the snapshot; re-read source files only when you need surrounding context.\n\nCheck: return-kind enum / halt reasons handlers can return / HandlerContext fields / messages API shapes / artifacts API shapes in handler/types.ts against handler-contract.md. Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) a code_surface at file:line, AND (b) a doc_location at file:line (or explicit absence — 'NOT FOUND in handler-contract.md'). A finding without both citations is invalid — re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── Lens 4: Intent fold ───────────────────────────────────────────────────
-  lens_intent_fold [
-    class         = "lens"
-    shape         = box
-    allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Intent fold drift check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `contract_files` array to locate packages/core/src/handler/intent-fold.ts and docs/intent-fold.md. Trust the snapshot; re-read source files only when you need surrounding context.\n\nCheck: precedence rules R1–R7, per-intent table including the required-state column in intent-fold.ts against docs/intent-fold.md. Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) a code_surface at file:line, AND (b) a doc_location at file:line (or explicit absence — 'NOT FOUND in intent-fold.md'). A finding without both citations is invalid — re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── Lens 5: Doc code examples ─────────────────────────────────────────────
-  lens_doc_examples [
-    class         = "lens"
-    shape         = box
-    allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Doc code examples drift check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `doc_code_blocks` field: an array of {file, line_start, language, content} for typescript and dot fenced blocks in the structural docs. Trust those values; re-read source files only when you need surrounding context.\n\nCheck: every block in `doc_code_blocks` must call APIs that exist in current code. Flag examples using removed or renamed signatures (e.g. a method call whose name or parameter shape no longer matches the actual implementation). Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nFor each suspect block: grep the codebase for the called symbol to confirm presence or absence before flagging. Each finding MUST cite (a) a code_surface at file:line (the actual implementation, or its absence), AND (b) a doc_location at file:line_start (the doc block). A finding without both citations is invalid — re-verify or drop it.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── Lens 6: Recent commits hygiene ───────────────────────────────────────
-  lens_commits [
-    class         = "lens"
-    shape         = box
-    allowed_tools = "read, grep, find, bash"
-    max_cost_usd  = 0.80
-    output_schema = "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"findings\"]}"
-    prompt        = "Recent commits hygiene check. Read-only; do not modify any file.\n\n`$collect.output` is a JSON snapshot. Use the `contract_file_history` field: a map from contract file path to an array of recent commits (sha, message, date) that touched it. Also use `recent_commits` for the overall repo log. Trust those values; use bash (git log -- <path>) only when you need surrounding context not in the snapshot.\n\nCheck: for each contract file in `contract_file_history`, walk the listed commits and verify whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. The table maps contract files to expected companion docs (e.g. schema.sql → ARCHITECTURE.md §2; swarm-events.ts → ARCHITECTURE.md §3 + SPEC §3.4; handler/types.ts → handler-contract.md; intent-fold.ts → intent-fold.md). Flag any landed commit that touched a contract file but did NOT also touch its companion doc in the same commit (use git show <sha> --name-only to verify). Flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) the code_surface as the commit sha + contract file, AND (b) the doc_location as the companion doc that was absent from that commit. A finding without both citations is invalid — re-verify or drop it.\n\nEmit findings via `emit_output({findings:[...]})`. If you find none for this slice, emit `{findings:[]}` — do not skip the call."
-  ]
-
-  // ── consolidate (G3 LLM-eval tripleoctagon) ───────────────────────────────
-  // G3 contract: LLM must call emit_output({"winner":"<branchId>"}) — the
-  // runtime enforces this schema. context_set is the only side-channel for
-  // cross-cutting findings (scalar values only). worst_severity lands in
-  // routing so consolidate_table and review can route on it via condition=.
-  consolidate [
-    class         = "consolidator"
-    shape         = tripleoctagon
-    allowed_tools = "read"
-    max_cost_usd  = 0.40
-    prompt        = "Six lenses ran in parallel. Each branch emitted a JSON object {findings:[...]} as its output. Read the branch outputs, then:\n\n1. Call `context_set` with key=\"worst_severity\" and value one of \"CRITICAL\", \"HIGH\", \"MEDIUM\", \"LOW\", or \"NONE\" — set it to the worst severity across ALL branches (CRITICAL > HIGH > MEDIUM > LOW; NONE only when every branch has an empty findings array).\n\n2. Pick the branch with the single worst-severity finding as winner (most severe first; ties broken by total finding count; if all empty, pick any). Call `emit_output({\"winner\":\"<branchId>\"})` where branchId is one of: lens_schema, lens_taxonomy, lens_handler, lens_intent_fold, lens_doc_examples, lens_commits."
-  ]
-
-  // ── consolidate_table (post-fan-in merger) ────────────────────────────────
-  // Reads all six lens outputs (not just the winner) and emits a single
-  // severity-grouped findings array for review to judge. The G3 tripleoctagon
-  // cannot produce a free-form table (its schema is fixed to {winner:string}),
-  // so this node handles the consolidation work the task description assigns
-  // to "consolidate". If every lens returned empty findings, abort — no drift
-  // to report and no review needed.
-  consolidate_table [
-    shape         = box
-    allowed_tools = "read"
-    max_cost_usd  = 0.30
-    output_schema = "{\"type\":\"object\",\"properties\":{\"worst_severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\",\"NONE\"]},\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"severity\":{\"type\":\"string\",\"enum\":[\"CRITICAL\",\"HIGH\",\"MEDIUM\",\"LOW\"]},\"lens\":{\"type\":\"string\"},\"code_surface\":{\"type\":\"string\"},\"doc_location\":{\"type\":\"string\"},\"drift\":{\"type\":\"string\"}},\"required\":[\"severity\",\"lens\",\"code_surface\",\"doc_location\",\"drift\"]}}},\"required\":[\"worst_severity\",\"findings\"]}"
-    prompt        = "Merge the six lens outputs into one severity-grouped findings table.\n\nLens outputs (each is a JSON object with a `findings` array):\n- $lens_schema.output\n- $lens_taxonomy.output\n- $lens_handler.output\n- $lens_intent_fold.output\n- $lens_doc_examples.output\n- $lens_commits.output\n\nInstructions:\n1. Parse each lens output. Tag every finding with its `lens` id (lens_schema, lens_taxonomy, lens_handler, lens_intent_fold, lens_doc_examples, lens_commits).\n2. Flatten all findings into a single array, sorted by severity (CRITICAL first, then HIGH, MEDIUM, LOW).\n3. Determine worst_severity: the highest severity present across all findings, or \"NONE\" if every findings array is empty.\n4. If worst_severity is \"NONE\" (all lenses found nothing): call `abort` with reason `no_drift_found: all six lenses returned empty findings` — no review needed.\n5. Otherwise: call `emit_output({worst_severity: \"...\", findings: [...]})` with the merged, tagged, sorted array."
+    max_cost_usd  = 4.00
+    prompt        = "Cross-reference code↔docs using $collect.output. Read-only; you may re-read files for confirmation but do not modify.\n\n`$collect.output` is a JSON snapshot with: `contract_files[]` (path/lines/sha256_12), `taxonomy` (run_statuses, pause_reasons, halt_reasons, quarantine_reasons, intent_types, fact_types, daemon_event_types — verbatim union literals), `schema_sql` (full schema.sql), `doc_code_blocks[]` (file/line_start/language/content for typescript / dot blocks in the structural docs), `recent_commits[]`, `contract_file_history[path][]`. Trust those values verbatim; re-read source files only when you need surrounding context.\n\nWalk every check and flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) the code surface file:line, AND (b) the doc file:line where the surface is documented (or the explicit absence — 'NOT FOUND in ARCH §3 intent table'). A finding without both citations is invalid; re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nChecks:\n  1. Schema — every column / index / table / generated column / CHECK constraint in `schema_sql` against ARCHITECTURE.md §2.\n  2. Event taxonomy — every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and the SPEC §3.4 status table where applicable.\n  3. Handler contract — return-kind enum / halt reasons handlers can return / HandlerContext fields / messages / artifacts API shapes (handler/types.ts) against handler-contract.md.\n  4. Intent fold — precedence rules R1–R7, per-intent table including the required-state column (intent-fold.ts vs docs/intent-fold.md).\n  5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures (e.g. `messages.append(role, content)` when code is `messages.append(message)`).\n  6. Recent commits hygiene — for each contract file in `contract_file_history`, walk the listed commits and check whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. Flag any landed commit that did not.\n\nOutput a findings table grouped by severity, with file:line refs and the exact discrepancy. No prose preamble."
   ]
 
   review [
     allowed_tools = "read"
     goal_gate     = true
-    retry_target  = "consolidate_table"
+    retry_target  = "drift"
     max_cost_usd  = 0.80
-    prompt        = "Judge the findings table at $consolidate_table.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`. The run will retarget to `consolidate_table` and rebuild the report (capped by max_goal_gate_retries=2)."
+    prompt        = "Judge the findings table at $drift.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`. The run will retarget to `drift` and rebuild the report (capped by max_goal_gate_retries=2)."
   ]
 
   done [shape=Msquare]
 
-  start   -> collect
-  collect -> done  [condition="outcome=fail"]
-  collect -> spawn
+  start    -> collect
+  collect  -> done [condition="outcome=fail"]
+  collect  -> drift
 
-  spawn -> lens_schema
-  spawn -> lens_taxonomy
-  spawn -> lens_handler
-  spawn -> lens_intent_fold
-  spawn -> lens_doc_examples
-  spawn -> lens_commits
+  drift    -> review
 
-  lens_schema       -> consolidate
-  lens_taxonomy     -> consolidate
-  lens_handler      -> consolidate
-  lens_intent_fold  -> consolidate
-  lens_doc_examples -> consolidate
-  lens_commits      -> consolidate
-
-  consolidate       -> consolidate_table
-  consolidate_table -> done    [condition="outcome=fail"]
-  consolidate_table -> review
-  review            -> done
+  review   -> done
 }
