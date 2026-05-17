@@ -714,3 +714,90 @@ describe("makeCodergenHandler — unbounded maxMs sentinel", () => {
     expect(spec.maxMs).toBe(60_000);
   });
 });
+
+describe("makeCodergenHandler — context_set wiring", () => {
+  test("contextWriteLog surfaces on transition result", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-ctx", store, "n1");
+    const backend: CodergenBackend = {
+      async run() {
+        return {
+          status: "success",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+          contextWrites: [
+            { key: "foo", value: "bar" },
+            { key: "sev", value: "high", prevValue: "low" },
+          ],
+        };
+      },
+    };
+    const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "__end__", backend });
+    const result = await spec.handler(ctx);
+    if (result.kind !== "transition") throw new Error(`unexpected kind ${result.kind}`);
+    expect(result.contextWriteLog).toEqual([
+      { key: "foo", value: "bar" },
+      { key: "sev", value: "high", prevValue: "low" },
+    ]);
+    expect(result.routingDelta).toMatchObject({ foo: "bar", sev: "high" });
+  });
+});
+
+describe("makeCodergenHandler — emit_output wiring", () => {
+  test("outputEmitted=true and outputRef points at JSON artifact", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-out", store, "n1");
+    const backend: CodergenBackend = {
+      async run() {
+        return {
+          status: "success",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+          pendingOutput: { data: { label: "billing", confidence: 0.93 } },
+        };
+      },
+    };
+    const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "__end__", backend });
+    const result = await spec.handler(ctx);
+    if (result.kind !== "transition") throw new Error(`unexpected kind ${result.kind}`);
+    expect(result.outputEmitted).toBe(true);
+    expect(result.outputRef).toBeDefined();
+    expect(result.outputRef?.key).toBe("output");
+    expect(result.outputRef?.mime).toBe("application/json");
+    // Round-trip the artifact bytes — should be JSON-stringified data.
+    const bytes = ctx.artifacts.get("output");
+    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual({ label: "billing", confidence: 0.93 });
+  });
+
+  test("output_schema set but emit_output never called downgrades to fail", async () => {
+    const store = new SqliteStore({ path: ":memory:" });
+    const ctx = await ctxFor("r-fail", store, "n1");
+    const backend: CodergenBackend = {
+      async run() {
+        return {
+          status: "success",
+          context_updates: {},
+          preferred_label: "",
+          suggested_next_ids: [],
+          notes: "",
+        };
+      },
+    };
+    const spec = makeCodergenHandler({
+      node: node({
+        id: "n1",
+        attrs: { shape: "box", prompt: "x", output_schema: '{"type":"object"}' },
+      }),
+      nextNode: "__end__",
+      backend,
+    });
+    const result = await spec.handler(ctx);
+    if (result.kind !== "transition") throw new Error(`unexpected kind ${result.kind}`);
+    expect(result.outcomeStatus).toBe("fail");
+    expect(result.failureReason).toMatch(/emit_output was never called/);
+  });
+});

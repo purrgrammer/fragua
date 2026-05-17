@@ -236,6 +236,59 @@ describe("foldIntents", () => {
       expect(out.routingDelta["max_loops_override"]).toBe(2000);
     }
   });
+
+  describe("intent.context_set", () => {
+    test("writes key/value into routingDelta and operatorContextWrites", () => {
+      const out = foldIntents([ev(1, "intent.context_set", { key: "foo", value: "bar" })], "running");
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.routingDelta["foo"]).toBe("bar");
+        expect(out.operatorContextWrites).toEqual([{ key: "foo", value: "bar" }]);
+        expect(out.dropped).toEqual([]);
+      }
+    });
+
+    test("rejects keys with dots", () => {
+      const out = foldIntents([ev(1, "intent.context_set", { key: "a.b", value: "x" })], "running");
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.dropped[0]?.reason).toBe("wrong_state");
+        expect(out.routingDelta["a.b"]).toBeUndefined();
+        expect(out.operatorContextWrites).toBeUndefined();
+      }
+    });
+
+    test("accepts null values", () => {
+      const out = foldIntents([ev(1, "intent.context_set", { key: "k", value: null })], "running");
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.routingDelta["k"]).toBeNull();
+      }
+    });
+  });
+
+  describe("intent.output_set", () => {
+    test("surfaces (nodeId, data) on operatorOutputs", () => {
+      const out = foldIntents(
+        [ev(1, "intent.output_set", { nodeId: "classify", data: { label: "billing" } })],
+        "running",
+      );
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.operatorOutputs).toEqual([{ nodeId: "classify", data: { label: "billing" } }]);
+        expect(out.dropped).toEqual([]);
+      }
+    });
+
+    test("rejects empty nodeId", () => {
+      const out = foldIntents([ev(1, "intent.output_set", { nodeId: "", data: {} })], "running");
+      expect(out.kind).toBe("proceed");
+      if (out.kind === "proceed") {
+        expect(out.dropped[0]?.reason).toBe("wrong_state");
+        expect(out.operatorOutputs).toBeUndefined();
+      }
+    });
+  });
 });
 
 // ─── Purity contract (P0.1 of docs/proposals/parallel.md) ────────────
