@@ -48,25 +48,29 @@ digraph review {
   lens_correctness [class="lens",
     prompt = "CORRECTNESS lens on $scope.output.\n\nLook for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Read PATHS directly. Cross-check call sites where it matters. Skip cosmetic (architecture's lane).\n\nOutput up to 5 findings, one per line, no preamble, no Why/Fix verbosity:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. Synthesise picks fixes — keep yourself terse. If none, output exactly: `OK: no correctness issues`."
     allowed_tools = "read, grep, bash"
-    max_cost_usd  = 1.50
+    max_cost_usd  = 2.00
+    max_ms        = 600000
   ]
 
   lens_security [class="lens",
     prompt = "SECURITY lens on $scope.output.\n\nLook for: injection (SQL, shell, XSS, proto, path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF, open redirect, missing rate-limit on sensitive ops, data exposure, obvious CVE deps. Anchor in OWASP where it fits. Don't flag without checking surrounding sanitisation.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no security issues`."
     allowed_tools = "read, grep, bash"
-    max_cost_usd  = 1.50
+    max_cost_usd  = 2.00
+    max_ms        = 600000
   ]
 
   lens_performance [class="lens",
     prompt = "PERFORMANCE lens on $scope.output.\n\nLook for: complexity surprises (O(n²) on a hot path), N+1, unbounded loops/recursion, redundant work, large allocations/leaks, blocking I/O on hot paths, unnecessary serialisation/cloning, missing obvious indexes, oversized payloads, sync work that should batch/stream. Measure-before-optimise: flag with confidence proportional to evidence. Constant-factor nit on a cold path is not a finding.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no performance issues`."
     allowed_tools = "read, grep, bash"
-    max_cost_usd  = 1.50
+    max_cost_usd  = 2.00
+    max_ms        = 600000
   ]
 
   lens_architecture [class="lens",
     prompt = "ARCHITECTURE / MAINTAINABILITY lens on $scope.output.\n\nLook for: coupling crossing sensible boundaries, leaky abstractions, SRP violations, repeated logic that invites drift (not 3-line dupes), missing/wrong abstraction, misleading naming, public surface exposing internals, inconsistent error handling, half-finished implementations, scope creep. Project conventions are already in your system prompt — don't re-read.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no architecture issues`."
     allowed_tools = "read, grep, bash"
-    max_cost_usd  = 1.50
+    max_cost_usd  = 2.00
+    max_ms        = 600000
   ]
 
   explore [shape=component, join_policy="wait_all"]
