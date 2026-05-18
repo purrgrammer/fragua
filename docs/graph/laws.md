@@ -20,9 +20,11 @@ Stating them explicitly serves three purposes:
 
 4. **Reachability.** Every node reachable from `start`; every node reaches an `exit`. Dead code rejected.
 
-5. **Predicate completeness (decidable subset only).** For each node, the union of outgoing forward edges' `when` predicates either covers all of `O` *or* an explicit `else` edge exists. Statically decidable only when every predicate in the set is in the **decidable subset**: `eq` / `ne` / `in` / `exists` over enum-typed fields with finite literal-value sets. Outside the subset (regex, inequality on continuous types, BuiltinRef predicates), completeness is undecidable; the validator emits a warning and requires the author to declare an explicit else edge.
+5. **Predicate completeness — opt-in static check, not a runtime invariant.** When a node's outgoing forward edges all use predicates from the **decidable subset** (`eq` / `ne` / `in` / `exists` over enum-typed fields), the validator can prove the union covers all of `O` or that an explicit else edge exists. **The validator's check is best-effort authoring guidance, not a runtime invariant.** Workflows that route on LLM outputs, regex matches, BuiltinRefs, or continuous-type comparisons are inherently outside the decidable subset — and that's fine. The runtime routes correctly via source-order edge selection regardless of whether the validator could verify the graph. Authors who want explicit fall-through coverage write an explicit else edge; the validator emits a warning ("predicate completeness not decidable") on non-decidable graphs to remind, but doesn't block.
 
-6. **Predicate disjointness (decidable subset only).** At most one forward edge from a given node fires per outcome (retarget edges excluded). Same decidable-subset caveat as completeness. When predicates lie outside the subset, source-order resolves ties; the validator warns.
+6. **Predicate disjointness — opt-in static check, not a runtime invariant.** Same framing as completeness. The runtime always picks the first matching forward edge in source order; disjointness is a code-smell warning ("two edges could match the same outcome"), not a correctness requirement.
+
+The "law" framing earlier conflated these with type-system enforced properties like schema compatibility. They're best-effort lints; the runtime works regardless. Keeping them in the law list as #5 / #6 was misleading; reframing makes them honest about what the validator can and can't prove.
 
 7. **DAG property.** Forward edges form a DAG; only retarget edges close cycles; every retarget edge has `retryBudget`.
 

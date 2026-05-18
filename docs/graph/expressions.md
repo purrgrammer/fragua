@@ -74,10 +74,32 @@ transform ::= path                                # bare path: pull a value
             | "take(" path "," integer ")"        # first N elements
             | "drop(" path "," integer ")"        # skip first N
             | "json(" path ")"                    # serialize value to JSON string
+            # array operations (operate on array-typed paths)
+            | "length(" path ")"                  # array → integer
+            | "count(" path "," predicate ")"     # array → integer (matching elements)
+            | "filter(" path "," predicate ")"    # array → filtered array
+            | "flatten(" path ")"                 # nested array → flat array (one level)
 value     ::= literal | path-ref
 literal   ::= STRING | NUMBER | BOOL | NULL
 path-ref  ::= "{" "ref" ":" path "}"              # value pulled from a path
 ```
+
+### Array operations
+
+The most common "I want to filter / count / check existence" cases get first-class DSL forms instead of pushing to a Task. The element under predicate is rooted at `element.<path>`:
+
+```ts
+// "Filter findings to high+critical"
+filter(value.findings, in(element.severity, ['high', 'critical']))
+
+// "Count critical findings"
+count(value.findings, eq(element.severity, 'critical'))
+
+// "Length of files array"
+length(value.files)
+```
+
+For per-element shape transforms (project each finding to a different shape), use a `Map` node — that's a real sub-Run, the right place for arbitrary per-element compute. The DSL stays compositional at the record level.
 
 ### `set` and `construct` for computed fields
 
@@ -116,7 +138,25 @@ expr  ::= "and(" expr "," expr ")"
         | "in(" path "," "[" value ("," value)* "]" ")"
         | "exists(" path ")"
         | "matches(" path "," regex ")"
-path  ::= "outcome.tag" | "value." rest | "error." rest
+        # array operations
+        | "any(" path "," expr ")"                # array → bool: some element matches
+        | "all(" path "," expr ")"                # array → bool: every element matches
+        # numeric over array via length() in TransformExpr:
+        # eq(length(value.findings), lit(0))      # array empty
+path  ::= "outcome.tag" | "value." rest | "error." rest | "element." rest
+```
+
+The `any` / `all` predicates take a sub-predicate over each array element; within the sub-predicate, `element.<path>` refers to the element being tested:
+
+```ts
+// "Any finding is high or critical"
+any(value.findings, in(element.severity, ['high', 'critical']))
+
+// "All commits have a non-empty message"
+all(value.commits, exists(element.message))
+
+// "Findings array is empty" — combine length() (TransformExpr) with eq() (PredicateExpr)
+eq(length(value.findings), lit(0))
 ```
 
 Paths into `Outcome<O>`:

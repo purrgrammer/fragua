@@ -154,10 +154,55 @@ Common patterns expressed as one-liners. See [patterns.md](patterns.md) for the 
 import {
   mockEnvironment,                       // Environment with injectable clock/rng + stub registries
   runGraphInMemory,                      // in-process run for unit tests
+  evalExpr,                              // evaluate an Expression AST against a sample input
 } from '@swarm/sdk';
 ```
 
 Mock the Environment, drive `Run.send`, assert on `Run.events`. Pure-function nodes mock to themselves; LLM calls return replayable canned responses.
+
+### Expression REPL — `swarm expr eval`
+
+Because the edge DSLs (TransformExpr, PredicateExpr) don't run as JS, `console.log` and a JS debugger can't tell you why an edge dropped a vital field. The CLI ships a REPL for evaluating expression ASTs against sample inputs:
+
+```sh
+# Evaluate the predicate on edge review→commit against a sample Outcome
+swarm expr eval ./change.ts --edge review:commit --kind when \
+  --input '{"tag":"ok","value":{"verdict":"approve"}}'
+# → true
+
+# Evaluate the transform on edge implement→review against a sample Outcome
+swarm expr eval ./change.ts --edge implement:review --kind select \
+  --input '{"tag":"ok","value":{"files":[...],"tests":[...]}}'
+# → {"files":[...],"tests":[...]}
+
+# Show the canonical IR for a single edge expression
+swarm expr show ./change.ts --edge review:commit --kind when
+# → {"op":"eq","path":"value.verdict","value":{"lit":"approve"}}
+```
+
+The programmatic form (`evalExpr` from the SDK) is identical:
+
+```ts
+import { evalExpr } from '@swarm/sdk';
+
+const compiled = change.compile();
+const edge     = compiled.graph.edges.find(e => e.from === 'review' && e.to === 'commit')!;
+const result   = evalExpr(edge.when, { tag: 'ok', value: { verdict: 'approve' } });
+// result === true
+```
+
+This closes the "I can't debug what the DSL is doing" gap that follows from making the IR pure data. Authors writing complex predicates / transforms can verify them against sample shapes interactively, the same way they'd `console.log` a JS expression.
+
+### Pretty-printing
+
+Canonical IR JSON for transforms can be deeply nested and verbose. The CLI's `swarm expr show --pretty` (and SDK's `prettyExpr(expr)`) render an expression AST back to a JS-arrow-like form for human reading:
+
+```sh
+swarm expr show ./change.ts --edge review:commit --kind when --pretty
+# → (o) => o.value.verdict === 'approve'
+```
+
+Round-trip lossy in places (DSL has constructs the arrow grammar doesn't, like explicit BuiltinRef calls), but useful for the common cases.
 
 ### Browser-safe sub-entry
 

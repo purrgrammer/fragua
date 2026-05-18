@@ -267,6 +267,40 @@ SSE subscribers can request descendant streams via a `descendants=true` query pa
 
 Cost / token rollups are computed by walking the run tree; the parent's `metrics.totalCostUsd` includes descendants. Replay walks the tree the same way, deterministically.
 
+## Large-value handling: transparent blob spill
+
+The typed model passes data via edge transforms — `Outcome.value` flows from node to node. For workflows that produce large outputs (a Task fetching a 10MB doc, an LLM generating a 100KB report), naïvely storing `Outcome.value` inline in the event log would blow past the 4 KB payload cap that the store enforces today.
+
+The runtime handles this **transparently**: any field in an `Outcome.value` over a threshold (default 32 KB) is spilled to the blob store; the event log carries a `Blob` ref keyed by sha256 of the content. Reads inline the content from the blob store when a consumer node accesses it. Authors don't see blobs in the IR; schema validation, edge transforms, debugging tools all operate on the conceptual inlined value.
+
+```
+Task fetches 10MB doc                  → runtime: stores in blobs/{sha}, Outcome.value carries { content: <Blob ref> }
+Edge: pick(value.title, value.content) → both fields propagate (one inline, one as ref)
+LLM consumer: reads value.content      → runtime resolves the ref, inlines for prompt
+```
+
+The blob store reuses today's `blobs/` directory and `blobs` table. Replay reads the same refs; deterministic given the same blob store contents.
+
+Authors who need explicit "this field is huge, store as blob" hints can use the `external(path)` TransformExpr form (forces spill regardless of size); `inline(blob_ref)` forces resolution into the materialized value (rare; the runtime resolves automatically when downstream nodes access the field).
+
+Schema validation operates on the **conceptual value**, not the on-disk form. A field typed `Type.String()` validates a blob ref's inlined content as a string. Authors don't write schemas with blob types.
+
+## Workflow_sha pinning: runs are immutable
+
+A `Run` is bound to its `workflow_sha` at enqueue time. The `workflows` table is content-addressed (`docs/proposals/json-ir-canonical.md` Decision 5); sha is sha256 of canonical JSON IR. Workflow edits create new shas. Old runs continue to reference their original sha.
+
+Implications for **long-running waits** (a HITL Wait that sits paused for two weeks while the workflow's edited):
+
+- The paused run's `workflow_sha` doesn't change.
+- The Wait's `resumeSchema` is whatever it was at enqueue.
+- The operator's resume payload is validated against that original schema.
+- New runs (post-edit) use the new sha and the new schema; old paused runs don't see the new shape.
+- The alias table (`workflow_aliases`) tracks "the latest version of `(scope, name)`"; CLI dispatches new runs against the latest, but the run table holds shas.
+
+There is no "in-flight schema migration" to design. The model is pin-and-replay; runs are immutable references to immutable IR. If an operator wants a paused run to use a *new* schema, they cancel the old run and start a new one — no upgrade-in-place protocol.
+
+This is the same property today's swarm has for `dot_source` — formalized and made explicit in the canonical-IR model.
+
 ## Properties to preserve through the migration
 
 - **Replayability.** `replay(graph, env_det, eventLog) ≡ state`. Pure function.
