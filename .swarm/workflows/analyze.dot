@@ -5,10 +5,15 @@
 // evidence-backed hypotheses. Does NOT apply changes — that lives in a
 // separate optimize workflow with an eval gate.
 //
-//   bun run swarm run analyze                                     # last 30 across all workflows
-//   bun run swarm run analyze --input="--limit 50"
-//   bun run swarm run analyze --input="--workflow change --limit 50"
-//   bun run swarm run analyze --input="--since-days 7"
+// Defaults: --since-days 7 --limit 200. Picks up low-traffic drift
+// workflows that run 1–2×/week; capped so cost stays bounded on
+// high-traffic projects. Override via $ARGUMENTS as needed.
+//
+//   bun run swarm run analyze                                     # last 7 days, ≤200 runs
+//   bun run swarm run analyze --input="--workflow change"         # filter to one workflow
+//   bun run swarm run analyze --input="--since-days 30"           # widen the window
+//   bun run swarm run analyze --input="--limit 50"                # tighten the cap
+//   bun run swarm run analyze --input="--no-since --limit 30"     # old behaviour (latest 30, no window)
 
 digraph analyze {
   graph [

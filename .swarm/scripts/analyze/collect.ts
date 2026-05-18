@@ -37,9 +37,15 @@ function projectStoreHasRuns(path: string): boolean {
 
 function parseArgs(argv: string[]): Args {
   let storePath: string | null = null;
-  let limit = 30;
+  // Defaults tuned for "what's been going on this week":
+  //   --since-days 7  — picks up low-traffic drift workflows that run 1–2×/week.
+  //                     (Previously null; combined with limit=30 this dropped
+  //                     them below the 3-run analysis threshold.)
+  //   --limit 200     — hard cap on rows so cost stays bounded for high-traffic
+  //                     projects. Override either via $ARGUMENTS.
+  let limit = 200;
   let workflow: string | null = null;
-  let sinceMs: number | null = null;
+  let sinceMs: number | null = Date.now() - 7 * 86400_000;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = argv[i + 1];
@@ -49,6 +55,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--since-days" && next) {
       sinceMs = Date.now() - Number(next) * 86400_000; i++;
     }
+    else if (a === "--no-since") { sinceMs = null; }
   }
   return { storePath: resolve(storePath ?? defaultStorePath()), limit, workflow, sinceMs };
 }
