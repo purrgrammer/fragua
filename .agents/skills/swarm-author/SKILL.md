@@ -328,9 +328,14 @@ lens_security    -> collect
 
 Same shape, branches identical, reducer aggregates. Useful when you want variance and majority-rules confidence. (No example currently in the catalog; same primitives.)
 
-### Fan-in synthesis — currently heuristic only
+### Fan-in reducer kinds
 
-`tripleoctagon` runs a deterministic heuristic concatenator regardless of `prompt=`. For LLM synthesis of branch outputs **today**, add a downstream codergen referencing `$<branchId>.output`. The fan-in's `prompt` attr is on the roadmap to drive LLM synthesis directly (W015 currently warns when set). See `review.dot`'s `collect` for the canonical fan-in-with-synthesis pattern as it stands now.
+`tripleoctagon` runs one of two reducers, picked by `prompt=` presence:
+
+- **Heuristic (no `prompt=`)** — deterministic ranker over branch outcomes. Writes the winner's branchId to `fan_in.<id>.winner` in routing. Zero cost, replay-stable. Best for parallel voting / "pick the best outcome" patterns.
+- **LLM synthesis (`prompt=` set)** — feeds every branch's `$<branchId>.output` text to the LLM and returns its reply verbatim as the fan-in node's `output` artifact. Downstream nodes read it as `$<fanInId>.output`. Best for "integrate four lenses into one review" patterns. Requires the daemon to have an LLM provider/model configured (the harness wires this automatically; the CI primitive needs `--llm-provider`/`--llm-model`).
+
+See `review.dot`'s `collect` for the canonical LLM-synthesis fan-in. The synthesised document is sliced to ~4 KB by the codergen backend's `Outcome.notes` cap.
 
 E007 catches structural fan-in problems. HITL inside a parallel branch is not supported in v1 — put HITL outside the fan-out.
 
@@ -485,7 +490,6 @@ Common codes:
 - **W007** — `goal_gate=true` with no retarget chain.
 - **W011** — bare `model=` / `provider=` (use `llm_model=` / `llm_provider=`).
 - **W013** — unrecognised attribute name (typo source).
-- **W015** — `tripleoctagon` `prompt=` set but ignored (fan-in heuristic only). For LLM synthesis, add a downstream codergen referencing `$<branchId>.output`.
 
 Full table: `references/validator-codes.md`.
 

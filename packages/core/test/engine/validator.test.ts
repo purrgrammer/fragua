@@ -931,7 +931,7 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
   });
 });
 
-describe("W015 — tripleoctagon prompt is inert", () => {
+describe("W015 retirement — tripleoctagon prompt drives LLM synthesis at runtime", () => {
   function fanInGraph(extraAttrs: string): string {
     return `
       digraph {
@@ -947,37 +947,13 @@ describe("W015 — tripleoctagon prompt is inert", () => {
     `;
   }
 
-  test("W015 fires when tripleoctagon has prompt= set", () => {
+  test("tripleoctagon with prompt= does not emit W015", () => {
     const diags = validate(parseDotSource(fanInGraph(`, prompt="synthesize the branches"`)));
-    const w015 = diags.find((d) => d.code === "W015");
-    expect(w015).toBeDefined();
-    expect(w015?.severity).toBe("warning");
-    expect(w015?.nodeId).toBe("join");
-    expect(w015?.message).toMatch(/heuristic ranker/);
-    expect(w015?.message).toMatch(/\$<branchId>\.output/);
+    expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
 
-  test("W015 does not fire on a bare tripleoctagon (no prompt)", () => {
+  test("bare tripleoctagon (no prompt) does not emit W015", () => {
     const diags = validate(parseDotSource(fanInGraph("")));
-    expect(diags.some((d) => d.code === "W015")).toBe(false);
-  });
-
-  test("W015 ignores prompt= on non-tripleoctagon shapes", () => {
-    const diags = validate(
-      parseDotSource(`
-        digraph {
-          start [shape=Mdiamond]
-          work  [prompt="real codergen prompt"]
-          done  [shape=Msquare]
-          start -> work -> done
-        }
-      `),
-    );
-    expect(diags.some((d) => d.code === "W015")).toBe(false);
-  });
-
-  test("W015 does not fire when prompt= is empty / whitespace", () => {
-    const diags = validate(parseDotSource(fanInGraph(`, prompt="   "`)));
     expect(diags.some((d) => d.code === "W015")).toBe(false);
   });
 });

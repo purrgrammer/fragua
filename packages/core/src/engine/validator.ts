@@ -833,24 +833,13 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W015: tripleoctagon (parallel.fan_in) node has `prompt=` set. fan_in
-  // is structural-only — a deterministic heuristic ranker — so `prompt=`
-  // is parsed but never read by the handler. The fix is one of two
-  // patterns: (a) downstream codergen node referencing `$<branchId>.output`
-  // for cross-branch synthesis (see review.dot); (b) `agent` tool in an
-  // upstream codergen for runtime-decided fan-out (see orchestrate.dot).
-  for (const n of nodes) {
-    if (n.shape !== "tripleoctagon") continue;
-    const p = n.attrs.prompt;
-    if (typeof p !== "string" || p.trim() === "") continue;
-    diags.push({
-      severity: "warning",
-      code: "W015",
-      message: `tripleoctagon (parallel.fan_in) node "${n.id}" has prompt= set but fan_in runs a deterministic heuristic ranker — the prompt is never read. For LLM synthesis of branch outputs, add a downstream codergen referencing $<branchId>.output (see review.dot), or fan out via the agent tool inside an upstream codergen (see orchestrate.dot).`,
-      nodeId: n.id,
-      ...(n.loc !== undefined ? { loc: n.loc } : {}),
-    });
-  }
+  // W015 retired: tripleoctagon with `prompt=` now drives LLM synthesis
+  // of branch outputs at runtime (see
+  // `packages/core/src/handler/handlers/fan-in.ts` LLM path + the
+  // `fanInLlmDelegate` in the daemon auto-dispatcher). The synthesised
+  // document is captured as the fan-in node's `output` artifact and is
+  // reachable downstream via `$<fanInId>.output` substitution. The
+  // earlier warning that the prompt was ignored no longer applies.
 
   if (opts.strict) {
     return diags.map((d) => (d.severity === "warning" ? { ...d, severity: "error" as const } : d));
