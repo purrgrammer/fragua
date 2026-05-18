@@ -28,9 +28,30 @@ A `Graph<I, O, E>` with input `I` and output `O` **also implements `Node<I, O>`*
 
 `inputSchema` and `outputSchema` are Typebox-derived JSON Schemas embedded *verbatim* in the IR. The SDK re-exports `Type` from `@sinclair/typebox`; authors write `Type.Object({...})` and the resulting JSON Schema serializes as a plain JSON sub-tree inside the IR. Hashable (it's already JSON), runtime-validatable via `Typebox.Value.Check`, browser-safe. Standard Schema interop is a binding-layer concern at SDK use sites, not in the IR. Schemas are verbose; IRs aren't supposed to be tiny.
 
-### Sub-graph node ID scoping
+### Sub-graph IR shape and node ID scoping
 
-When a sub-graph appears as a node, its internal `nodes` map is scoped to that sub-graph — internal IDs don't collide with parent IDs. Cross-sub-graph node references aren't expressible in the IR (sub-graphs are black boxes from outside); if a cross-reference is needed, hoist the dependent node to the parent. Event-log path prefixing (see [runtime.md](runtime.md)) keeps observability legible across nested runs.
+A sub-graph appears in the parent IR as a Node with `kind: 'subgraph'` and an inlined `graph` field carrying the full child Graph object (see [kinds.md § Subgraph](kinds.md#subgraph)). The parent's `workflow_sha` hashes the whole tree.
+
+Internal `nodes` are scoped per sub-graph — child IDs don't collide with parent IDs. Cross-sub-graph node references aren't expressible in the IR (sub-graphs are black boxes from outside); if a cross-reference is needed, hoist the dependent node to the parent. Event-log path prefixing (see [runtime.md](runtime.md)) keeps observability legible across nested runs.
+
+### Bounds policy
+
+Graph-level (and Node-level) `bounds` carries the budget-overflow policy as well as the numeric caps:
+
+```ts
+type Bounds = {
+  maxCostUsd?: number;
+  maxTokens?:  number;
+  maxMs?:      number;
+  policy?:     'stop' | 'warn' | 'pause';      // default: 'stop'
+};
+```
+
+- **`stop`** — exceed → `fact.run_halted { reason: 'budget' }`. Terminal.
+- **`warn`** — exceed → emit budget event, keep going. Non-blocking observability.
+- **`pause`** — exceed → `fact.run_paused { reason: 'budget' }`. Operator raises the ceiling via `intent.budget_adjusted`, then `intent.resume` re-dispatches the same `(nodeId, iteration)` against the new ceiling.
+
+Policy is graph-level today; node-level bounds always halt (no per-node policy variation). Sub-graph bounds inherit policy from the parent unless explicitly overridden.
 
 ## Node
 

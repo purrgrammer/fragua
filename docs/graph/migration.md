@@ -113,6 +113,17 @@ The three channels stay; the mechanism of (1) and (2) becomes cleaner.
 
 The runtime semantics carry forward; the authoring surface and the data-flow contract gain types.
 
+## What retires from DOT
+
+A handful of DOT facilities that exist today don't translate one-to-one — and don't need to. SDK-level replacements cover the same intent more legibly:
+
+- **`cluster_<name>` subgraphs as class-derivation.** Today's `subgraph cluster_review { ... }` is *not* a sub-graph in the typed sense — it's a flat sibling namespace that derives a class for `model_stylesheet` rules. Retires alongside `class=` and `model_stylesheet=`. The typed equivalent for "these three nodes share a model" is the SDK helper `.withModelGroup(['plan', 'review'], 'claude-opus-4-7')` — explicit, no class system. *Real* sub-graphs (composable units with their own inputs/outputs) use the `subgraph(...)` builder per [sdk.md § Sub-graph composition](sdk.md#sub-graph-composition).
+- **`model_stylesheet`** and **node `class=`**. Bulk styling moves to SDK helpers; per-node `llm_model` / `llm_provider` stays.
+- **`fidelity=`**. Shared-thread continuity is implicitly full; the typed model carries data via edge transforms, not via "include N prior messages."
+- **`max_goal_gate_retries`** as a graph-level chained-retarget cap. Replaced by explicit per-retarget-edge `retryBudget`. Each gate's retarget edge is its own decision; no graph-level fallback chain.
+- **`default_retry_policy`**. No node-level retry policy in the typed model; retries are graph topology.
+- **`${context.<key>}`** substitution. Run-state KV as a side-channel retires; typed edges carry data instead.
+
 ## Order of operations
 
 The migration lands in layers, each independently useful:

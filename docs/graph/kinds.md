@@ -1,6 +1,6 @@
 # Node kinds
 
-Five kinds. Each is a discriminated case of `NodeKind`. Authoring picks the kind explicitly; the runtime dispatches on it.
+Six IR `kind` discriminator values: five **compute** kinds (`llm`, `task`, `wait`, `map`, `reduce`) and one **structural** kind (`subgraph`) that wraps a child `Graph<I, O>` so it composes as a node. Authoring picks the compute kind explicitly; sub-graphs are produced by composing graphs via the SDK (`.node('id', subgraph(childGraph))` or by passing a compiled `Graph<I, O>` directly to `.node()`).
 
 There is no `Conditional`/`Router` kind — routing is an edge property (`when` predicate), not a node kind. Diamonds disappear from the model.
 
@@ -95,6 +95,19 @@ The author asserts idempotency by setting the key. The runtime trusts it — a n
 
 For non-idempotent ad-hoc shell calls, prefer the `bash` tool inside an `LLM` node rather than a Task — that's what it's for.
 
+### Task stderr access
+
+On exit-zero success, stderr is captured in the streaming-partials event log (observable via `IO<E>`) but **not** surfaced on the Node's typed `O`. On non-zero exit, the failure body becomes:
+
+```ts
+Outcome.err = {
+  tag: 'err',
+  error: { stdout?: string; stderr: string; exitCode: number },
+};
+```
+
+Downstream edges can route on `o.error.exitCode` (e.g., to distinguish `EX_TEMPFAIL=75` from other failures) and read the stderr text via `o.error.stderr`. The legacy `$<id>.stderr` substitution from today's DOT retires with substitution generally — typed edges carry the error body directly.
+
 ## Wait
 
 ```ts
@@ -172,11 +185,37 @@ Fan-in: take an array, produce an aggregate. Two flavors:
 
 Today's `tripleoctagon` is conceptually a Reduce, currently restricted to the heuristic-concatenator builtin regardless of whether `prompt=` is set (see [../proposals/fan-in-to-reduce.md](../proposals/fan-in-to-reduce.md)). The typed `Reduce` makes the LLM-vs-builtin choice explicit instead of inferring from prompt presence.
 
+## Subgraph
+
+```ts
+type SubgraphAttrs<I, O, E> = {
+  graph: Graph<I, O, E>;                  // inlined in the parent's IR
+};
+```
+
+A `Node<I, O>` whose body is a child `Graph<I, O>`. The IR inlines the child graph verbatim at the parent's site — parent's `workflow_sha` hashes the whole tree. Storage-level dedup of shared sub-graphs (a `subgraphRefs?: { sha; nodeId }[]` index) is deferred as an optimization; v1 inlines for simplicity.
+
+**Single-exit sub-graphs** (the common case) have `O = ExitOutput` directly — the child's output schema flows up unchanged.
+
+**Multi-exit sub-graphs** (a child Graph with multiple `exits`) emit a **tagged-union output**:
+
+```ts
+O = { exit: 'publish'; value: PublishOutput }
+  | { exit: 'draft';   value: DraftOutput };
+```
+
+The SDK derives the output schema from the child's exits. Downstream edges route on `o.value.exit === 'publish'` via the predicate DSL.
+
+Sub-graphs run as **sub-Runs**: a child `run_state` row with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). This is the same sub-Run mechanism Map elements use — one path, two entry points. Sub-runs inherit the parent's budget pool by default (overridable per [runtime.md § Budget inheritance](runtime.md#budget-inheritance)), and their events propagate to the parent stream with `nodeIdPath` prefix (per [runtime.md § Sub-graph and Map event surface](runtime.md#sub-graph-and-map-event-surface)).
+
+Validation (reachability, predicate completeness, DAG property) applies **per sub-graph recursively**, not transitively. Each sub-graph is its own DAG; the parent's edges connecting sub-graph-nodes form a DAG at the parent level.
+
 ## Cross-kind invariants
 
 - **`Task`** bodies are externally observable (process-spawned); the IR carries only `command` + idempotency metadata. The author asserts idempotency by setting `idempotencyKey`; the runtime trusts that and caches by key for replay.
 - **`LLM`** is the only kind whose output isn't fully deterministic. The event log captures every turn; replay uses the logged result, not a fresh call.
 - **`Map`** and **`Reduce`** with builtin function reducers are fully replayable (logged element outcomes feed the reducer; builtin code is stable across runs).
 - **`Wait`** suspends and resumes via the event log; the resume event is the output.
+- **`Subgraph`** is pure structural composition; the replay property of the parent is the conjunction of the replay properties of the child sub-graphs.
 
-The replay property holds across all five kinds when the Environment is deterministic (injected `clock`, `rng`) and Task bodies honor their declared `idempotencyKey`.
+The replay property holds across all six kinds when the Environment is deterministic (injected `clock`, `rng`) and Task bodies honor their declared `idempotencyKey`.

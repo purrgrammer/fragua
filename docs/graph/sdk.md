@@ -9,7 +9,8 @@ Single TypeScript package authors consume. Subsumes today's `@swarm/extension` (
 ```ts
 import {
   defineGraph,
-  llm, task, wait, map, reduce,         // node-kind builders
+  llm, task, wait, map, reduce,         // compute-kind builders
+  subgraph,                              // structural-kind builder (wrap a Graph as a Node)
   edge, retarget,                        // edge builders
 } from '@swarm/sdk';
 
@@ -20,6 +21,56 @@ import type {
 ```
 
 Authors build a typed graph; `.compile()` returns `{ graph, ir, sha }`. The IR is the wire contract; the graph is the typed handle.
+
+### Sub-graph composition
+
+A compiled `Graph<I, O>` can be used as a Node in another graph — same shape, recursive. Two equivalent forms:
+
+```ts
+// Define a re-usable sub-graph
+const review = defineGraph<DiffInput, Verdict>('review', '1.0.0')
+  .input(DiffInputSchema)
+  .output(VerdictSchema)
+  .node('correctness', llm({ /* ... */ }))
+  .node('security',    llm({ /* ... */ }))
+  // ...
+  .compile();
+
+// Use it in a parent — explicit form
+const parent = defineGraph(...)
+  .node('review-step', subgraph(review.graph))
+  .edge('plan', 'review-step')
+  // ...
+
+// Use it in a parent — implicit coercion (SDK accepts Graph<I,O> where Node<I,O> is expected)
+const parent2 = defineGraph(...)
+  .node('review-step', review.graph)
+  .edge('plan', 'review-step')
+```
+
+Both forms canonicalize to the same IR shape — a Node with `kind: 'subgraph'` and the child Graph inlined. The IR carries the whole tree; parent's `workflow_sha` hashes the inlined sub-graph content.
+
+Same applies to `Map.body`:
+
+```ts
+.node('per-item', map({
+  extract:     (i) => i.items,
+  body:        review.graph,            // sub-graph per element
+  concurrency: 4,
+  policy:      'wait_all',
+}))
+```
+
+Each element runs the sub-graph as a sub-Run (see [runtime.md § Sub-Runs](runtime.md#sub-runs-one-mechanism-two-entry-points)) with the parent's budget pool. HITL inside a Map.body sub-graph is supported because sub-runs are full first-class runs.
+
+Multi-exit sub-graphs (a child with multiple `exits`) emit a tagged-union output that downstream edges route on:
+
+```ts
+.edge('review-step', 'publish', { when: (o) => o.value.exit === 'approve' })
+.edge('review-step', 'redraft', { when: (o) => o.value.exit === 'reject' })
+```
+
+Single-exit sub-graphs collapse to the child's `O` directly — no tagged-union ceremony.
 
 ### Schema helpers
 

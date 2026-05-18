@@ -157,11 +157,19 @@ A node never sees the full `Environment`. The capability boundary is structural 
 
 `emit` is the streaming surface — what today produces `llm.text_delta` / `cost.update` events. It writes through to the event log via the same envelope; clients see the partials over `IO<E>`.
 
+## Sub-Runs: one mechanism, two entry points
+
+Both `Map` elements and direct `Subgraph`-kind nodes run as **sub-Runs**: child `run_state` rows with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). One mechanism, two entry points into it. The runtime doesn't distinguish "sub-graph because Map.body" from "sub-graph because direct Subgraph node" — both produce sub-Run rows that inherit the parent's per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection).
+
+Net effect: HITL inside a parallel branch, multi-node branch sub-graphs, retargets inside sub-graphs — all work as first-class features because every sub-graph is just another Run.
+
 ## Budget inheritance
 
 By default, sub-graphs and Map elements **share the parent run's budget pool**. The graph-level `bounds.maxCostUsd` is the ceiling for the whole tree; sub-graph nodes don't get their own budget unless explicitly asked.
 
 An optional `bounds` override on a sub-graph node (or `Map.body` node) creates a sub-budget. The runtime enforces `min(parent_remaining, sub_budget)` at every turn boundary; whichever cap binds first fires the budget policy. Authors who need per-element bounds set them on the Map's `body` node.
+
+Policy (`stop` / `warn` / `pause`) lives on graph-level bounds (see [types.md § Bounds policy](types.md#bounds-policy)). Sub-graphs inherit policy from the parent unless explicitly overridden.
 
 ```ts
 // Whole-graph budget; sub-runs share it.
