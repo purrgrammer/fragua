@@ -1,0 +1,52 @@
+// parallel-hitl-smoke.dot — parallel fan-out with a human-in-the-loop branch.
+//
+// Demonstrates: parallel (component), parallel.fan_in (tripleoctagon),
+// wait.human (hexagon), and conditional (diamond) handler shapes.
+//
+// Layout:
+//   start → route (conditional) → spawn (parallel)
+//     branch A: read_only (codergen) → combine
+//     branch B: analyze (codergen) → confirm (wait.human)
+//                 → [A] apply (tool) → combine
+//                 → [S] combine
+//     branch C: baseline (codergen) → combine
+//   combine (parallel.fan_in) → done
+//
+//   bun run swarm run parallel-hitl-smoke
+
+digraph parallel_hitl_smoke {
+  graph [
+    goal  = "Fan out analysis, await human review on the middle branch, synthesize."
+    label = "parallel-hitl-smoke"
+  ]
+
+  start    [shape=Mdiamond]
+  route    [shape=diamond, prompt="Check whether inputs are present. Emit outcome=success when ready, outcome=fail otherwise."]
+  done     [shape=Msquare]
+
+  spawn    [shape=component, join_policy="wait_all"]
+  combine  [shape=tripleoctagon]
+
+  read_only [prompt="Summarise the read-only view of the target."]
+  analyze   [prompt="Produce a change plan."]
+  confirm   [shape=hexagon, prompt="Apply the plan?"]
+  apply     [shape=parallelogram, tool_command="echo APPLIED"]
+  baseline  [prompt="Record the current baseline metrics."]
+
+  start    -> route
+  route    -> spawn    [condition="outcome=success"]
+  route    -> done     [condition="outcome=fail"]
+
+  spawn    -> read_only
+  spawn    -> analyze
+  spawn    -> baseline
+
+  read_only -> combine
+  analyze   -> confirm
+  confirm   -> apply   [label="[A] Apply"]
+  confirm   -> combine [label="[S] Skip"]
+  apply     -> combine
+  baseline  -> combine
+
+  combine  -> done
+}
