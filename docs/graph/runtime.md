@@ -249,29 +249,61 @@ map({
 })
 ```
 
-## Sub-Run event model
+## Sub-Run event model and replay
 
-Each Run — top-level or nested — has its own slice of the event log, keyed by `run_id`. Sub-Run events do **not** duplicate into the parent's stream; instead, descendant views are constructed by querying for `parent_run_id` linkage. This aligns with the [parallel.md](../proposals/parallel.md) proposal and avoids:
+Each Run — top-level or nested — has its own slice of the event log, keyed by `run_id`. Sub-Run events do **not** duplicate into the parent's stream.
+
+When a sub-Run completes (terminates with `ok`, `err`, or `aborted`), its parent emits **one** fact: `fact.subrun_completed`, carrying the child's `run_id`, terminal `Outcome` summary, and roll-up cost/tokens. The parent's event log contains this single summary fact per sub-Run, not the child's full event stream. This aligns with [`../proposals/parallel.md`](../proposals/parallel.md).
+
+### Replay scope
+
+A parent run replays by walking **its own** event log only — it reads `fact.subrun_completed` records to learn what each child produced; it does **not** recurse into child event logs during replay. Child runs replay independently from their own event logs when an operator requests a child-specific replay.
+
+This avoids:
 
 - **Write amplification** — events would otherwise be written twice (child log + parent envelope).
-- **Replay ambiguity** — which event log is canonical for the child?
-- **Cost rollup confusion** — costs are now summed by traversing the run tree, not by counting parent-stream entries.
+- **Replay ambiguity** — the child's event log is canonical for the child; the parent's `fact.subrun_completed` is canonical for "what the parent saw."
+- **Coupling cost** — parent replay is O(parent events), not O(tree size).
 
-Operator views:
+### Operator views
 
-- **`/runs/:id/events`** — events for run `id` only. Default, cheapest.
-- **`/runs/:id/events?descendants=true`** — union of events from `id` and all transitive sub-Runs. Constructed by recursive SQL on `parent_run_id`. UI default for parent-of-Maps to keep the trace readable.
-- **`/runs/:id/tree`** — the run tree (parent + descendants) with status, cost, and event counts per node. Compact summary surface.
+- **`/runs/:id/events`** — events for run `id` only. Default; cheapest; the canonical event log for that run.
+- **`/runs/:id/events?descendants=true`** — union view of the run and all transitive sub-Runs, constructed by recursive SQL on `parent_run_id`. Operator-side lazy tree walk; not used by replay.
+- **`/runs/:id/tree`** — the run tree (parent + descendants) with status, terminal Outcome summary, cost rollup. Compact summary surface for dashboards.
 
-SSE subscribers can request descendant streams via a `descendants=true` query param; the server merges live; the client doesn't need to manage multiple SSE connections.
+### Cost rollup
 
-Cost / token rollups are computed by walking the run tree; the parent's `metrics.totalCostUsd` includes descendants. Replay walks the tree the same way, deterministically.
+The parent's `fact.subrun_completed` carries the child's *own-spend* (the child's own LLM calls, Task durations, etc.). The parent's `metrics.totalCostUsd` is **own-spend only** — what the parent itself accrued. The "with-descendants" view sums lazily via tree walk for operator displays.
+
+This split distinguishes **bounded parent budget** (the parent's own runaway prevention) from **observable total spend** (the tree-walk view). Today's swarm conflates them; the typed model separates.
+
+## Wait control plane
+
+Wait nodes change the operator control plane, not just the node kind. Today's `POST /runs/:id/hitl { selected, note? }` flat-payload endpoint generalizes:
+
+```
+POST /runs/:id/resume
+{
+  nodeId:   <wait_node_id>,
+  payload:  <validated against Wait.resumeSchema>
+}
+```
+
+Server validates `payload` against the Wait's `resumeSchema` at the runtime boundary (Tier 3). Validation failure → 400 with the structured error; no run state change. Success → the payload is the Wait node's `Outcome.value`; the run resumes against it.
+
+Endpoint variants:
+
+- **HITL (`source: 'human'`)** — operator POSTs the payload directly. UI affordances (radio buttons, free-text) are derived from the `resumeSchema` shape (rendered via the SDK's web entry).
+- **HTTP-Wait (`source: 'http'`)** — *parked for v1*. Auth, replay, idempotency, endpoint identity all unresolved. HITL-only ships first.
+- **Timer-Wait (`source: 'timer'`)** — auto-fires via the existing `wake-pending` mechanism. The run pauses with `RunStatus.paused_auto`; the wake-pending sweeper fires `POST /runs/:id/resume` internally with the configured `onFire` payload at the resume time. Indistinguishable from operator-driven resume from the run's perspective.
+
+`intent.hitl_input` (today's intent type) remains as the wire representation of the resume intent; the server adapter converts the new `/resume` endpoint into the typed intent.
 
 ## Large-value handling: transparent blob spill
 
 The typed model passes data via edge transforms — `Outcome.value` flows from node to node. For workflows that produce large outputs (a Task fetching a 10MB doc, an LLM generating a 100KB report), naïvely storing `Outcome.value` inline in the event log would blow past the 4 KB payload cap that the store enforces today.
 
-The runtime handles this **transparently**: any field in an `Outcome.value` over a threshold (default 32 KB) is spilled to the blob store; the event log carries a `Blob` ref keyed by sha256 of the content. Reads inline the content from the blob store when a consumer node accesses it. Authors don't see blobs in the IR; schema validation, edge transforms, debugging tools all operate on the conceptual inlined value.
+The runtime handles this **transparently**: any field over a threshold (default 32 KB) in any `Outcome` payload — `Outcome.value`, `Outcome.err.error`, `Outcome.aborted.reason`, intermediate fact payloads, validation error bodies — is spilled to the blob store; the event log carries a `Blob` ref keyed by sha256 of the content. Reads inline the content from the blob store when a consumer node accesses it. Authors don't see blobs in the IR; schema validation, edge transforms, debugging tools all operate on the conceptual inlined value.
 
 ```
 Task fetches 10MB doc                  → runtime: stores in blobs/{sha}, Outcome.value carries { content: <Blob ref> }
@@ -284,6 +316,22 @@ The blob store reuses today's `blobs/` directory and `blobs` table. Replay reads
 Authors who need explicit "this field is huge, store as blob" hints can use the `external(path)` TransformExpr form (forces spill regardless of size); `inline(blob_ref)` forces resolution into the materialized value (rare; the runtime resolves automatically when downstream nodes access the field).
 
 Schema validation operates on the **conceptual value**, not the on-disk form. A field typed `Type.String()` validates a blob ref's inlined content as a string. Authors don't write schemas with blob types.
+
+## Thread context policy
+
+A `thread?: ThreadId` on an LLM node tells the runtime to include prior thread messages in this call's context. The runtime applies a **tail-with-budget** policy by default:
+
+- Include the most recent N turns from the shared thread.
+- N is adaptive: shrink to fit within the LLM's remaining context window (after `bounds.maxTokens`), preferring more recent turns.
+- Older turns are dropped, not summarized. (Summarization is a future runtime optimization; v1 truncates from the head.)
+
+Authors who need explicit control add `threadContextPolicy?: 'tail' | 'full' | 'first-of'` and `threadContextSize?: number` to LLMAttrs:
+
+- **`tail`** (default) — last N turns, where N defaults to "fit budget"; explicit `threadContextSize` caps.
+- **`full`** — all prior turns. Authors using this take responsibility for token explosion; the runtime warns at bind time on threads it can statically prove will exceed `bounds.maxTokens`.
+- **`first-of`** — only the most recent N turns from the *most recent run* in the thread; useful when threads span retargeted re-runs and you don't want the older retargeted iteration's context.
+
+The migration claim "shared thread = full prior context" was naive — that explodes tokens. The runtime applies a sensible truncation policy by default; authors override only when needed.
 
 ## Workflow_sha pinning: runs are immutable
 

@@ -155,6 +155,13 @@ Forward-compatible field plan:
   `Function` kind — user JS reaches runs through `@swarm/sdk`
   extensions (`defineTool` / `defineHook`), not through a graph
   node body.
+- **No `contractVersion` field on the IR.** Earlier drafts carried
+  an author-supplied semver tag in the IR for human-facing
+  versioning; the reviewer correctly flagged that an "informational"
+  field that's in the canonical JSON contradicts itself by changing
+  the sha. Version visibility is a property of *aliases* — the
+  `workflow_aliases` table tracks every sha each `(scope, name)`
+  has pointed at; UI version-listing reads that history.
 - `predicate?: PredicateExpr`, `transform?: TransformExpr` on
   `Edge` — see [`docs/graph/expressions.md`](../graph/expressions.md)
   for the AST grammar. SDK desugars single-expression arrows to AST

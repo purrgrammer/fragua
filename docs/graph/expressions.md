@@ -74,10 +74,11 @@ transform ::= path                                # bare path: pull a value
             | "take(" path "," integer ")"        # first N elements
             | "drop(" path "," integer ")"        # skip first N
             | "json(" path ")"                    # serialize value to JSON string
-            # array operations (operate on array-typed paths)
+            # array operations (operate on array-typed paths; element root for inner expressions)
             | "length(" path ")"                  # array → integer
             | "count(" path "," predicate ")"     # array → integer (matching elements)
             | "filter(" path "," predicate ")"    # array → filtered array
+            | "map(" path "," transform ")"       # array → projected array (per-element shape change)
             | "flatten(" path ")"                 # nested array → flat array (one level)
 value     ::= literal | path-ref
 literal   ::= STRING | NUMBER | BOOL | NULL
@@ -99,7 +100,17 @@ count(value.findings, eq(element.severity, 'critical'))
 length(value.files)
 ```
 
-For per-element shape transforms (project each finding to a different shape), use a `Map` node — that's a real sub-Run, the right place for arbitrary per-element compute. The DSL stays compositional at the record level.
+For per-element shape transforms, the DSL's `map(path, transform)` covers the common cases. `element.<path>` roots inner expressions to the element under projection:
+
+```ts
+// "Project findings to {file, severity} for the reviewer"
+map(value.findings, construct({
+  file:     element.location,
+  severity: element.severity,
+}))
+```
+
+`Map` (the node kind) remains the right answer when each element needs an LLM call, a Task, or a sub-graph — anything beyond pure shape projection. The DSL's `map` is for the cheap per-element record projections that don't justify a sub-Run per element.
 
 ### `set` and `construct` for computed fields
 
@@ -254,6 +265,6 @@ Error messages point at the alternatives: split edges, pre-compute via a Task, u
 - **Hash stability** — `workflow_sha` doesn't depend on whitespace, formatting, or TS version.
 - **Replay determinism** — expressions are pure functions of their input; no side effects, no clocks, no IO.
 - **Cross-language emit** — a Python or Go client could emit the same IR if/when needed.
-- **Static analysis** — predicate completeness, disjointness, and schema compatibility all decidable on the AST.
+- **Static analysis on a decidable subset** — predicate completeness/disjointness are checkable over the small subset (`eq` / `ne` / `in` / `exists` over enum-typed fields with finite literal sets). Outside the subset (regex, inequality, BuiltinRef, array predicates) the checks are undecidable and the validator emits best-effort warnings — *not* errors. The runtime routes correctly via source-order tie-break regardless. See [`laws.md`](laws.md) and [`types.md`](types.md#tier-2--ir-validator-decidable-cases-only-pre-run) for the precise scope.
 
-What it costs: rich pre-prompt logic (conditional sections, loops, async fetches) can't live in the LLM node's `prompt`. Authors move that work to upstream `Task` nodes. The constraint forces cleaner, more linear workflows.
+What it costs: rich pre-prompt logic (conditional sections, async fetches) can't live in the LLM node's `prompt`. Authors move that work to upstream `Task` nodes. Simple object/array shape projections stay in-edge via `construct` and `map` / `filter` / `count`. The constraint forces cleaner, more linear workflows.

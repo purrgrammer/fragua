@@ -7,7 +7,6 @@ The core algebra of the typed Graph model. Every type here is Typebox-derived so
 ```ts
 type Graph<I, O, E = DefaultGraphEvent> = {
   id:               string;
-  contractVersion:  string;                       // author-supplied semver, e.g. "1.2.0"; informational
   schemaVersion:    number;                       // IR schema version; load-bearing for migration
   inputSchema:      StandardSchemaV1<I>;
   outputSchema:     StandardSchemaV1<O>;
@@ -19,16 +18,19 @@ type Graph<I, O, E = DefaultGraphEvent> = {
 };
 ```
 
-### Two version fields
+### Single version field
 
-- **`contractVersion: string`** — author-supplied semver tag, e.g. `"1.2.0"`. Informational; surfaced in UIs for version-listing per `(scope, name)`. Affects sha only because it's in the IR; doesn't drive any runtime logic.
-- **`schemaVersion: number`** — IR schema version. Load-bearing for schema-migration paths. v1 at first ship. Matches the `schema_version` column in the `workflows` SQL table.
+`schemaVersion: number` — the IR schema version. Load-bearing for schema-migration paths. v1 at first ship. Matches the `schema_version` column in the `workflows` SQL table.
+
+There is **no `contractVersion`**. Author-supplied version tags would either be in the IR (and affect `workflow_sha`, contradicting "informational") or not be in the IR (where alias-table history per `(scope, name)` already provides version visibility via `last_seen_at` and the sha chain). Going with the latter: versioning is a property of *aliases*, not of content. The `workflow_aliases` table tracks every sha each `(scope, name)` has pointed at; UI version-listing reads that.
 
 ### No `events` field
 
 The runtime emits facts determined by the *kinds* present (LLM emits `llm.text_delta`, Task emits `task.stdout_line`, etc.). Authors don't declare `E`; the SDK infers it from the graph's kinds for typed-IO consumers. Custom events from extension tools (via `ctx.emit`) join `E` via the extension's declared events schema — not via the graph IR. Earlier drafts carried `events: { in; out }` on Graph; dropped to reduce author confusion ("what do I put here?") and IR size.
 
-A `Graph<I, O, E>` with input `I` and output `O` **also implements `Node<I, O>`**. Sub-graphs compose as nodes; the category is closed under composition. The IR has one shape, recursive.
+A `Graph` is **structurally distinct from a Node** — `Graph` has `nodes`, `edges`, `start`, `exits`; `Node` has `id`, `kind`, schemas. They are not in a subtype relation. When a Graph is used as a node in another graph, it's **wrapped** in a `subgraph`-kind Node whose attrs carry the inlined child Graph (see [kinds.md § Subgraph](kinds.md#subgraph)). The IR has one recursive shape *through* that wrapper, not via type-level subtype tricks.
+
+Earlier drafts said "Graph implements Node." That was misleading — elegant phrasing for a relation the types don't actually express. The wrapper model is the operational reality.
 
 ### Schema embedding
 
@@ -185,19 +187,56 @@ No `retriable` field on err — retry is a property of the graph topology (retar
 
 `RunStatus` is the orthogonal axis: `running` | `paused` (with sub-reasons: `paused_hitl`, `paused_budget`, etc.) | `completed` | `halted`. Runtime concern; doesn't appear on node Outcome.
 
-## Where each property is enforced
+## Guarantee tiers
 
-### Type-system enforced (compile-time)
+Properties of the IR are enforced at different tiers with different scope. Honest naming of what each tier proves:
 
-- **Schema compatibility at edges.** For every edge `(a → b)`: `Output(a) ⊆ select(Input(b))`. Compile error if violated.
-- **Outcome totality.** Every node returns exactly one `Outcome<O>` case. Discriminated union; exhaustiveness checked on consumers.
-- **Sub-graph closure.** `Graph<I, O>` implements `Node<I, O>`. The category is closed.
+### Tier 1 — SDK-time (TS structural typing, builder-local only)
 
-### Statically checkable on the IR (lint, pre-run)
+The TS-builder's static types catch the structural subset of edge mismatches at `tsc` time. **`Output(a) ⊆ select(Input(b))` is not provable in TS in general** — the full relation depends on JSON Schema features that TypeScript can't express (`oneOf` / `anyOf`, optional with defaults, `additionalProperties`, pattern strings, transform-derived schemas).
 
-- **Reachability.** Every node reachable from `start`; every node reaches an `exit`. Dead code rejected.
-- **Predicate completeness.** Outgoing forward edges' `when` predicates cover all of `O`, or an explicit `else` edge exists.
-- **Predicate disjointness.** At most one forward edge from a given node fires per outcome.
-- **DAG property.** Forward edges form a DAG; cycles only via retarget edges; every retarget edge has `retryBudget`.
+What TS *does* prove:
+
+- **Static<>-derivable type compatibility.** When both nodes' schemas reduce to plain TS types via Typebox's `Static<>`, the builder checks that `select`'s static return type extends the target's static input type. Catches typos, renames, refactor-broken edges — the easy 60%.
+- **Outcome totality.** `Outcome<O>` is a discriminated union over `ok | err | aborted`; exhaustiveness on consumers.
+- **NodeId format.** String-literal-type check against the format regex.
+
+What TS *doesn't* prove: full schema subsumption (Tier 3), predicate completeness or disjointness (Tier 2 best-effort only), runtime-derived schema validity.
+
+### Tier 2 — IR-validator (decidable cases only, pre-run)
+
+A validator pass over the canonical JSON IR. Decidable checks:
+
+- **Reachability.** Every node reachable from `start`; every node reaches an `exit`. Decidable.
+- **DAG property.** Forward edges form a DAG; cycles only via retarget edges; every retarget edge has `retryBudget`. Decidable.
+- **NodeId format.** Regex check. Decidable.
+- **Schema syntactic validity.** Each `inputSchema` / `outputSchema` is a valid Typebox JSON Schema object. Decidable.
+
+Best-effort warnings (not errors, not load-bearing for the runtime):
+
+- **Predicate completeness over the decidable subset.** When outgoing forward edges all use predicates from `eq` / `ne` / `in` / `exists` over enum-typed fields with finite literal value sets, the validator can prove the union covers all outcomes or warn on missing coverage. Outside this subset (regex, inequality on continuous types, BuiltinRef, `any`/`all` over arrays), completeness is undecidable — the validator emits a warning recommending an explicit else edge.
+- **Predicate disjointness over the decidable subset.** Same scope.
+- **Schema subsumption.** Best-effort `Typebox.Value.Check` between edges. Catches common cases; doesn't prove the general relation.
+
+**The runtime never depends on Tier 2 checks.** Edge selection via source-order tie-break works whether or not predicates are statically disjoint.
+
+### Tier 3 — Runtime validation (canonical, untrusted IR)
+
+The IR may arrive from non-SDK sources (DOT lowering, JSON upload, cross-language emitter). Runtime validates at:
+
+- **Bind time.** All refs resolve (tools, providers, models, builtins, sub-graphs). `Typebox.Value.Check` between edges where Tier 1 didn't reach.
+- **Edge dispatch.** Every transformed value validated against the target node's `inputSchema` before the node runs. Validation failure → `Outcome.err` with the structured error.
+- **Node output.** Validated against `outputSchema` after the node completes (or via the structured-output tool's schema check during LLM dispatch).
+
+### Tier 4 — Best-effort lint
+
+Soft warnings the IR-validator emits but doesn't block on:
+
+- Predicate completeness/disjointness outside the decidable subset (above).
+- Shell-form Task commands that interpolate path-refs without explicit quoting filters.
+- Tasks without explicit `bounds.maxMs` on potentially-runaway commands.
+- Etc.
+
+These are author-time hints; the runtime works regardless.
 
 The full law list (including runtime invariants and property-test templates) lives in [laws.md](laws.md).

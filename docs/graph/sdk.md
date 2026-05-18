@@ -266,7 +266,7 @@ Template strings carry placeholders that the SDK parses at compile time and vali
 
 ```ts
 prompt: {
-  system: 'You are a code reviewer for the ${graph.contractVersion} codebase.',
+  system: 'You are a code reviewer. Focus on correctness and security.',
   user:   'Review ${input.diff | truncate(2000)} against the plan:\n${input.plan}',
 }
 ```

@@ -144,7 +144,7 @@ Comprehensive list. Every DOT facility that the typed model deliberately doesn't
 | `$<id>.output` substitution | Edge transforms |
 | `$<id>.output.<path>` | Edge transforms with PathExpr |
 | `$<id>.stderr` | `Outcome.err.error.stderr` |
-| `$goal` | TemplateExpr context var `${graph.contractVersion}` and similar |
+| `$goal` | Graph metadata accessible from the SDK builder; not surfaced as a TemplateExpr root |
 | `${context.<key>}` substitution | Typed edges (no side-channel KV) |
 | `condition="outcome=..."` | Predicate DSL `o.tag === 'ok'` |
 | `condition="context.<key>=..."` | Predicate DSL over `o.value.<path>` |
@@ -167,7 +167,7 @@ Comprehensive list. Every DOT facility that the typed model deliberately doesn't
 | `allowed_tools=` CSV string | `tools: ToolRef[]` typed array |
 | `llm_model=`, `llm_provider=` | Typed fields |
 | `tool_command=` | `Task.command` |
-| `fidelity=` on codergen | Shared thread = full prior context (no truncation tier) |
+| `fidelity=` on codergen | LLM `threadContextPolicy` (default `'tail'` with adaptive budget-based size; `'full'` available for authors who explicitly accept the token cost) — runtime applies sensible truncation by default, not "include everything" |
 | LLM `parseOutput.fromAssistantText` fallback parser | Drop; downstream Task parses if needed |
 | `budget_policy=` keyword | `bounds.policy: 'stop' \| 'warn' \| 'pause'` |
 | `Outcome.paused` | `RunStatus.paused` (orthogonal axis) |
@@ -233,7 +233,7 @@ The migration lands in layers, each independently useful:
 2. **Typed schemas on nodes.** Each node carries `inputSchema` and `outputSchema`. Optional fields on the IR; default to `unknown` (back-compat with non-typed nodes).
 3. **TS builder.** `@swarm/sdk` (or similar) emits the typed IR from TS code. Authoring becomes IDE-native; the IR stays the wire contract.
 4. **Edge DSL.** Predicate + transform DSL with named-function escape hatch. Replaces today's stringly-typed `condition=`.
-5. **Five-kind model.** `Task`, `Map`, `Reduce` join `LLM` and `Wait`. `Conditional` / diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
+5. **Seven-kind model.** Compute: `LLM`, `Task`. Suspend: `Wait`. Composition: `Map`, `Reduce`, `Race`, `Subgraph`. `Conditional` / diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
 6. **Run / Environment split.** `bind(graph, env)` → `BoundGraph`. `Run.fresh / replay / resume` peer constructors. `IO<E>` first-class.
 
 DOT keeps working throughout. Workflows authored in DOT today survive the migration as-is; new features are TS-only.

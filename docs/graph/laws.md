@@ -42,19 +42,30 @@ The "law" framing earlier conflated these with type-system enforced properties l
 
 ## Runtime invariants
 
-13. **Replay determinism.** `replay(graph, env_det, log) ≡ state`. Pure function over the event log when Environment dependencies (`clock`, `rng`, providers) are deterministic.
+Each runtime invariant comes with **stated assumptions**. The invariant holds only when its preconditions hold; an honest spec names them.
+
+13. **Replay determinism.** `replay(graph, env_det, log) ≡ state`. Pure function over the event log.
+    **Assumes:** Environment `clock` and `rng` are injected deterministically; providers return the logged response on replay (no fresh calls); Task bodies' logged outputs are used (no re-execution); no host-environment variables leak into Tasks; blob store is intact at the same content shas.
 
 14. **Fact monotonicity.** Fact stream is append-only: `facts(t₁) ⊆ facts(t₂)` for `t₁ < t₂`.
+    **Assumes:** no operator-initiated deletion of events from the store; no schema-migration that drops facts.
 
 15. **Resume idempotence.** `resume(R) ≡ resume(resume(R))` when no intervening events.
+    **Assumes:** no provider-side mutation between calls; the resume API is idempotent at the wire layer (server dedups same-payload resumes by `(nodeId, content-hash)`).
 
 16. **Budget monotonicity.** Cumulative cost is non-decreasing in run time.
+    **Assumes:** providers report costs honestly (no negative deltas); the event log's cost-update events are not retroactively edited; sub-Run rollups are summed but never subtracted.
 
 17. **Budget bound.** `final_cost ≤ budget + max_turn_cost` (atomic at turn boundary; a budget policy fires when crossing the threshold, but the in-flight turn completes).
+    **Assumes:** the runtime checks the budget at every turn boundary (between LLM calls, between Task subprocess invocations); no crash between cost-incurred and cost-logged.
 
 18. **Retry budget exhaustion.** A retarget edge with `retryBudget = N` fires at most `N` times per run.
+    **Assumes:** counter persistence via `fact.retarget_fired` is correctly applied during replay; no replay-time mutation of counters.
 
-19. **Termination.** Every run reaches an `exit` or a halt fact in bounded steps. Consequence of: forward edges DAG + bounded retry budgets + bounded `Wait` timeouts.
+19. **Termination.** Every run reaches an `exit` or a halt fact in bounded steps.
+    **Assumes:** forward edges form a DAG (Tier 2 checked); all retarget edges have bounded `retryBudget` (Tier 2 checked); all `Wait` nodes have a bounded resolution path (timer with `durationMs`, or an external resume); no Task body that spins forever (caught by `bounds.maxMs`).
+
+The assumptions name what would need to break for the invariant to fail. Each is a single load-bearing claim about the runtime, the store, or the Environment — surfacing them lets implementers know what to test.
 
 ## Generator constraint: stay inside the decidable subset
 

@@ -47,9 +47,57 @@ There is no fallback text parser. Authors who can't use either output mode restr
 
 Tools are referenced by name; `Environment.tools` resolves at bind. Bare-string refs fail with "ambiguous tool name" if multiple extensions register the same name; the explicit `{ extension, name }` form disambiguates. Tool versioning is an extension-management concern (the extension's own version pin in project config), not a workflow concern.
 
-### Output failure handling
+### LLM terminal protocol
 
-The model may decline to call the output tool, or call it with arguments that fail the output schema. Default behavior: feed the validation error back as a user message ("Your previous output didn't match the schema: <error>. Please call `emit_output` again with valid arguments."), retry once. On the second failure, emit `Outcome.err` with the validation error in the body; downstream edges route on it. `outputRetries?: number` overrides the cap (default 1).
+A precise spec for how an LLM call ends. The provider call loops until a terminal condition; the result determines the Node's `Outcome`.
+
+**Mode: `parseOutput: 'tool-call'`**
+
+The runtime advertises three implicit tools to the provider in addition to the node's `tools`:
+
+- `emit_output` — args validated against `outputSchema`. Calling it signals "this is my final answer."
+- `abort` — args = `{ reason: string }`. Calling it signals "halt this run; my caller can route on `Outcome.aborted`."
+- `pause_provider` — internal; the runtime injects on transient HTTP errors.
+
+The dispatch loop:
+
+```
+loop:
+  response = provider.call(messages, tools)
+  parse response.toolCalls:
+    if abort in toolCalls:
+      → Outcome.aborted { reason: abort.reason }
+      // Other tools in the same assistant message are ignored.
+    if emit_output in toolCalls:
+      validate emit_output.args against outputSchema:
+        if valid → Outcome.ok { value: emit_output.args }
+        if invalid:
+          if outputRetries remaining:
+            append validation error as user message
+            decrement outputRetries; continue loop
+          else:
+            → Outcome.err { error: { kind: 'output_validation_failed', detail } }
+      // Other tools in the same assistant message execute in parallel;
+      // their results are logged but don't affect Outcome (run is terminating).
+    if neither emit_output nor abort, but other tools called:
+      execute tools, append results to messages, continue loop
+    if no tool calls (only assistant text):
+      if outputRetries remaining:
+        append "Please call emit_output to terminate" as user message
+        decrement outputRetries; continue loop
+      else:
+        → Outcome.err { error: { kind: 'no_terminal_call', text } }
+```
+
+Precedence: **abort wins** over emit_output in the same message. Authors who want abort-OR-emit_output semantics can author it either way; abort takes precedence in case both fire.
+
+**Mode: `parseOutput: 'structured-response'`**
+
+Provider returns one JSON object directly (Anthropic JSON-mode, OpenAI `response_format`). No tools are advertised; the configured `tools` field is rejected at bind time when paired with this mode. The response is validated against `outputSchema`; success → `Outcome.ok`, failure → `Outcome.err { error: { kind: 'structured_response_invalid' } }`. No retry loop in this mode (provider-native structured output enforces shape natively).
+
+**outputRetries**
+
+Caps validation-failure retries in `tool-call` mode. Default 1. Set to 0 to disable retries; failure becomes immediate `Outcome.err`.
 
 ### Prompt expressivity ceiling
 
@@ -111,9 +159,11 @@ The validator flags shell-form commands that contain path-ref placeholders witho
 
 ### Security model
 
-- **`env`**: explicitly declared in the IR. Tasks never inherit the host environment. Authors who need `$PATH` etc. declare them in `env: { PATH: '...' }`.
+- **`env`**: the IR's `env` is the *extension* over a runtime-provided safe baseline. The runtime always provides `PATH`, `HOME`, `LANG`, `TERM`, `LC_ALL`, `TMPDIR` with deterministic-by-environment values (worktree-derived `HOME`, configured `PATH` that resolves `bun`, `git`, `python`, etc.). Author's `env` extends or overrides those. **No host-env variables leak**: vars not in the baseline or the author's declaration are not inherited.
+  - To force strict isolation (no baseline at all): `env: { __inheritDefaults: false, ... }`. Rare; authors who do this take responsibility for resolving binaries.
 - **`cwd`**: defaults to the run's worktree root; relative paths resolve there. Absolute paths outside the worktree are rejected by the validator unless the workflow author explicitly opts in via `allowAbsoluteCwd: true` (rare).
 - **Output caps**: `maxStdoutBytes` / `maxStderrBytes` cap streaming output to prevent runaway producers. Default: 10 MiB stdout, 1 MiB stderr. Exceeding caps truncates output, marks the Outcome with a `truncated: true` flag, and emits a warning fact.
+- **Outcome.err size**: subject to [runtime blob spill](runtime.md#large-value-handling-transparent-blob-spill) on any field over the spill threshold (default 32 KB) — `error.stdout`, `error.stderr`, and structured error bodies all spill transparently. Authors don't manage blobs.
 - **No filesystem isolation by default** — Tasks run in the worktree. Authors who need stronger isolation use a containerized command (`docker run ...`).
 
 The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors write a script (`./scripts/extract-areas`) and pipe typed I/O through it.
@@ -307,7 +357,7 @@ O = { exit: 'publish'; value: PublishOutput }
 
 The SDK derives the output schema from the child's exits. Downstream edges route on `o.value.exit === 'publish'` via the predicate DSL.
 
-Sub-graphs run as **sub-Runs**: a child `run_state` row with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). This is the same sub-Run mechanism Map elements use — one path, two entry points. Sub-runs inherit the parent's budget pool by default (overridable per [runtime.md § Budget inheritance](runtime.md#budget-inheritance)), and their events propagate to the parent stream with `nodeIdPath` prefix (per [runtime.md § Sub-graph and Map event surface](runtime.md#sub-graph-and-map-event-surface)).
+Sub-graphs run as **sub-Runs**: a child `run_state` row with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). This is the same sub-Run mechanism Map elements use. Sub-runs inherit the parent's budget pool by default (overridable per [runtime.md § Budget inheritance](runtime.md#budget-inheritance)); their events live in the child run's own event log (no duplication to parent), and the parent emits one `fact.subrun_completed` summary fact per child (see [runtime.md § Sub-Run event model and replay](runtime.md#sub-run-event-model-and-replay)).
 
 Validation (reachability, predicate completeness, DAG property) applies **per sub-graph recursively**, not transitively. Each sub-graph is its own DAG; the parent's edges connecting sub-graph-nodes form a DAG at the parent level.
 
@@ -319,7 +369,7 @@ Validation (reachability, predicate completeness, DAG property) applies **per su
 - **`Wait`** suspends and resumes via the event log; the resume event is the output. Suspension is a `RunStatus` (`paused`), not an Outcome variant.
 - **`Subgraph`** is pure structural composition; the replay property of the parent is the conjunction of the replay properties of the child sub-graphs.
 
-The replay property holds across all six kinds when the Environment is deterministic (injected `clock`, `rng`) — Task outputs are read from the event log on replay, so determinism doesn't depend on author-asserted properties of the Task body.
+The replay property holds across all seven kinds when the Environment is deterministic (injected `clock`, `rng`) — Task outputs are read from the event log on replay, so determinism doesn't depend on author-asserted properties of the Task body.
 
 ### No function-typed attrs in the IR
 
