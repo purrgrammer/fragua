@@ -61,6 +61,7 @@ export function SkillsList({ projectCwd, projectOnly, testIdPrefix = "skills-lis
     );
   }
 
+  const showScopeCol = !projectOnly;
   const showProjectCol = projectCwd === undefined;
 
   return (
@@ -70,7 +71,7 @@ export function SkillsList({ projectCwd, projectOnly, testIdPrefix = "skills-lis
           <TableRow>
             <TableHead className="w-48">Name</TableHead>
             <TableHead>Description</TableHead>
-            <TableHead className="w-24">Scope</TableHead>
+            {showScopeCol && <TableHead className="w-24">Scope</TableHead>}
             {showProjectCol && <TableHead className="w-40">Project</TableHead>}
           </TableRow>
         </TableHeader>
@@ -94,9 +95,11 @@ export function SkillsList({ projectCwd, projectOnly, testIdPrefix = "skills-lis
               <TableCell className="max-w-0 truncate text-sw-muted" title={s.description}>
                 {s.description}
               </TableCell>
-              <TableCell>
-                <code className="font-mono text-xs text-sw-muted">{s.scope}</code>
-              </TableCell>
+              {showScopeCol && (
+                <TableCell>
+                  <code className="font-mono text-xs text-sw-muted">{s.scope}</code>
+                </TableCell>
+              )}
               {showProjectCol && (
                 <TableCell className="max-w-0 truncate" title={s.project_cwd ?? "—"}>
                   <code className="font-mono text-xs text-sw-muted">

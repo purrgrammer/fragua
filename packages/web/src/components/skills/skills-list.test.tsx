@@ -77,6 +77,16 @@ describe("SkillsList", () => {
     expect(headers).toContain("Scope");
   });
 
+  test("Scope column is dropped when projectOnly is set", async () => {
+    captureFetch();
+    const { container } = renderWithProviders(<SkillsList projectCwd="/projects/a" projectOnly />);
+    const table = await waitFor(() => within(container).getByTestId("skills-list-table"));
+    const headers = Array.from(table.querySelectorAll("thead th")).map((h) => h.textContent?.trim());
+    expect(headers).not.toContain("Scope");
+    expect(headers).toContain("Name");
+    expect(headers).toContain("Description");
+  });
+
   test("Project column is shown in the global view (no projectCwd prop)", async () => {
     captureFetch();
     const { container } = renderWithProviders(<SkillsList />);

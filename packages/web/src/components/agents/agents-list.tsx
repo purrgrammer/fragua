@@ -62,6 +62,7 @@ export function AgentsList({
     );
   }
 
+  const showScopeCol = !projectOnly;
   const showModelCol = !compact;
   const showProjectCol = !compact && projectCwd === undefined;
 
@@ -72,7 +73,7 @@ export function AgentsList({
           <TableRow>
             <TableHead className="w-48">Name</TableHead>
             <TableHead>Description</TableHead>
-            <TableHead className="w-24">Scope</TableHead>
+            {showScopeCol && <TableHead className="w-24">Scope</TableHead>}
             {showModelCol && <TableHead className="w-32">Model</TableHead>}
             {showProjectCol && <TableHead className="w-32">Project</TableHead>}
           </TableRow>
@@ -97,9 +98,11 @@ export function AgentsList({
               <TableCell className="max-w-0 truncate text-sw-muted" title={a.description}>
                 {a.description}
               </TableCell>
-              <TableCell>
-                <code className="font-mono text-xs text-sw-muted">{a.scope}</code>
-              </TableCell>
+              {showScopeCol && (
+                <TableCell>
+                  <code className="font-mono text-xs text-sw-muted">{a.scope}</code>
+                </TableCell>
+              )}
               {showModelCol && (
                 <TableCell className="max-w-0 truncate" title={a.model ?? "(inherit)"}>
                   <code className="font-mono text-xs text-sw-muted">{a.model ?? "—"}</code>
