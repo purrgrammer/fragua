@@ -72,7 +72,6 @@ describe("wait.human handler", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.suggestedNextIds).toEqual(["after"]);
-      expect(result.routingDelta?.["human.gate.selected"]).toBe("A");
     }
   });
 
@@ -120,35 +119,20 @@ describe("wait.human handler", () => {
     expect(lower.kind).toBe("transition");
     if (lower.kind === "transition") {
       expect(lower.suggestedNextIds).toEqual(["after"]);
-      // Routing delta carries the canonical (uppercase) key from the option.
-      expect(lower.routingDelta?.["human.gate.selected"]).toBe("A");
     }
   });
 
-  test("note is NOT mirrored into routing — attractor §4.6 keys are selected + label only", async () => {
-    // Per attractor §4.6 the wait.human handler writes only
-    // `human.gate.selected` and `human.gate.label`. Free-text notes on
-    // intent.hitl_input land in the event log for audit but never
-    // reach downstream prompts via routing. Operators who need free
-    // text on a running thread use intent.steer (swarm extension).
+  test("transition emits no routing writes — choice and note live in the resume event for audit", async () => {
+    // The handler routes via suggestedNextIds + preferredLabel only.
+    // The operator's selected key and optional note are preserved
+    // verbatim in the intent.hitl_input event payload — not mirrored
+    // into run_state.routing. Operators who need free text on a
+    // running thread use intent.steer (swarm extension).
     const spec = makeWaitHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "looks good" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.routingDelta).not.toHaveProperty("human.gate.note");
-      expect(result.routingDelta?.["human.gate.label"]).toBe("[A] Approve");
-      expect(result.routingDelta?.["human.gate.selected"]).toBe("A");
-    }
-  });
-
-  test("inputKey override mirrors the selected key into a custom routing slot", async () => {
-    const spec = makeWaitHumanHandler({ ...cfg, inputKey: "review.decision" });
-    const result = await spec.handler(stubCtx({ hitlInput: { selected: "R" } }));
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.routingDelta?.["review.decision"]).toBe("R");
-      // Canonical keys are still written.
-      expect(result.routingDelta?.["human.gate.selected"]).toBe("R");
+      expect(result.routingDelta).toBeUndefined();
     }
   });
 

@@ -1,10 +1,11 @@
 // HitlChoice — structured operator input for a paused wait.human node.
 //
 // Renders the question label, one button per choice, and an optional
-// freeform notes textarea that the next agent node can read from
-// context.human.gate.note. Accelerator keys (e.g. "[A]" in "[A] Approve")
-// are stripped from the visible label — they're TUI/CLI metadata, not
-// useful on a button-based UI.
+// freeform notes textarea. Notes are recorded in the intent.hitl_input
+// event payload for audit; they don't flow to downstream nodes via
+// routing. Accelerator keys (e.g. "[A]" in "[A] Approve") are stripped
+// from the visible label — they're TUI/CLI metadata, not useful on a
+// button-based UI.
 
 import { stripAcceleratorPrefix } from "@swarm/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -64,7 +65,7 @@ export function HitlChoice({ runId, label, options }: HitlChoiceProps): JSX.Elem
 
       <textarea
         className="min-h-[64px] w-full resize-y rounded border border-sw-border bg-sw-bg px-3 py-2 text-sw-sm text-sw-text placeholder:text-sw-muted focus:border-sw-accent-idle focus:outline-none disabled:opacity-50"
-        placeholder="Notes for the agent (optional) — stored as context.human.gate.note"
+        placeholder="Notes (optional) — recorded with the resume event for audit"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         disabled={mutation.isPending}

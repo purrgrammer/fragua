@@ -142,12 +142,7 @@ Handler needs a human to choose one of a structured set of options. Run transiti
 
 When an operator writes `intent.hitl_input { selected, note? }`, `wakePendingHitl` moves the run back to `queued`; the handler re-enters with `ctx.hitlInput` set to `{ selected: string; note?: string }`.
 
-On resume the handler writes:
-- `human.gate.selected` — accelerator key of the chosen option
-- `human.gate.label` — display label
-- `human.gate.note` — operator annotation (if provided)
-
-and returns `suggestedNextIds: [chosen.to]` so edge selection routes to the matching target without conditions.
+On resume the handler emits **no routing writes** — the operator's selected key and optional `note` from `intent.hitl_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [chosen.to]` plus `preferredLabel: chosen.label`; edge selection routes via Step-2 label match (disambiguates parallel edges to the same target) falling through to Step-3 `suggestedNextIds`. No conditions involved.
 
 ```typescript
 return {

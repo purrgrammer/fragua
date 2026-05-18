@@ -7,8 +7,13 @@
 // Second call (after intent.hitl_input arrives): ctx.hitlInput is populated
 // by the executor from the fold. The handler resolves the chosen option
 // (case-insensitive key match) and returns a transition with
-// suggestedNextIds=[chosen.to] plus context updates under `human.gate.*`.
-// Edge selection routes without conditions.
+// suggestedNextIds=[chosen.to] + preferredLabel; edge selection routes
+// via Step-2 label match (disambiguates parallel edges to the same
+// target) falling through to Step-3 suggestedNextIds. No conditions
+// involved. No routing writes — the operator's selected key and
+// optional note are preserved verbatim in the intent.hitl_input event
+// payload for audit, and operators who need free-text input on a
+// running thread use intent.steer (docs/SPEC.md §6.4).
 
 import { parseAcceleratorKey, stripAcceleratorPrefix } from "../../accelerator.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
@@ -29,17 +34,12 @@ export interface HitlInput {
 export interface WaitHumanConfig {
   label?: string;
   options: HitlOption[];
-  /** Optional routing key where the operator-supplied selected key is
-   * mirrored on resume. When unset, only the canonical
-   * `human.gate.selected` / `human.gate.label` pair is written. */
-  inputKey?: string;
 }
 
 export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
   validateOptions(cfg.options);
   const label = cfg.label ?? "Select an option:";
   const options = cfg.options;
-  const inputKey = cfg.inputKey;
 
   const handler: Handler = async (ctx) => {
     if (ctx.hitlInput === undefined) {
@@ -57,18 +57,6 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    // Per attractor §4.6 the wait.human handler writes only
-    // `human.gate.selected` and `human.gate.label`. The optional `note`
-    // field on intent.hitl_input is recorded in the event payload for
-    // audit but is no longer mirrored into routing — operators who need
-    // free-text input on a running thread should use intent.steer
-    // (a swarm extension that fills that gap; see docs/SPEC.md §6.4).
-    const routingDelta: Record<string, unknown> = {
-      "human.gate.selected": chosen.key,
-      "human.gate.label": chosen.label,
-    };
-    if (inputKey !== undefined) routingDelta[inputKey] = chosen.key;
-
     return {
       kind: "transition",
       // `preferredLabel` lets the engine's Step-2 selector pick the
@@ -80,7 +68,6 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
       // operator's choice in `selectedEdges` / UI highlighting.
       preferredLabel: chosen.label,
       suggestedNextIds: [chosen.to],
-      routingDelta,
       tokens: 0,
       costUsd: 0,
     } satisfies HandlerResult;

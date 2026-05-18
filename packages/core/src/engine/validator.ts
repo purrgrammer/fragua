@@ -445,11 +445,11 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // W004: hexagon outgoing edge carries a legacy `context.hitl.*`
   // condition. The pre-structured-HITL handler wrote operator input to
   // `routing["hitl.<nodeId>"]` so workflows could branch on it via
-  // edge conditions. The structured handler writes
-  // `human.gate.{selected,label,note}` and routes via `suggestedNextIds`;
-  // the legacy condition will never match and the edge is dead code.
-  // Authors should drop the condition and rely on the `[K] Label`
-  // accelerator on the edge to drive routing.
+  // edge conditions. The structured handler emits no routing writes
+  // and routes via `suggestedNextIds` + `preferredLabel`; the legacy
+  // condition will never match and the edge is dead code. Authors
+  // should drop the condition and rely on the `[K] Label` accelerator
+  // on the edge to drive routing.
   for (const n of nodes) {
     if (n.shape !== "hexagon") continue;
     for (const e of graph.edges) {
