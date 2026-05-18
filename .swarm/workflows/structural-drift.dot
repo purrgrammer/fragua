@@ -9,9 +9,11 @@
 // auto-applied doc fixes, use doc-sync.dot — it's the apply-tail variant
 // scoped to a single doc.
 //
-// `drift` and `review` share `thread_id="drift"` — the review node reads
-// the findings table from the shared conversation, not from substituted
-// output.
+// The collector is its own dedicated codergen node (shape: box, allowed_tools
+// = bash) so a goal-gate retry on `review` does NOT re-run the collect script.
+// `collect`, `drift`, and `review` share `thread_id="drift"` — the bash tool
+// result from `collect` lives in the thread, and the heavy reasoning node
+// reads the snapshot directly without re-paying its cost on each retry.
 //
 //   bun run swarm run structural-drift
 //   bun run swarm run structural-drift --input="focus on event taxonomy"
@@ -21,7 +23,7 @@
 // runs unattended.
 //
 // Models: opus + reasoning_effort:high for `drift` (the genuine cross-ref
-// reasoning); sonnet for review (mid-tier judgement).
+// reasoning); sonnet for collect / review (mid-tier judgement).
 
 digraph structural_drift {
   graph [
@@ -31,17 +33,24 @@ digraph structural_drift {
     budget_usd            = 5.00
     budget_policy         = "warn"
     max_goal_gate_retries = 2
-    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; }"
+    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; } .heavy { llm_model: claude-opus-4-7; reasoning_effort: high; } #collect { llm_model: claude-haiku-4-5; }"
   ]
 
   start [shape=Mdiamond]
 
+  collect [
+    thread_id     = "drift"
+    allowed_tools = "bash"
+    max_cost_usd  = 0.10
+    prompt        = "Run `bun .swarm/scripts/structural-drift/collect.ts $ARGUMENTS` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.\n\nIf the script exits non-zero or returns malformed JSON, call the `abort` tool with reason `collector failed: <exit code or parse error>`.\n\nOtherwise reply with EXACTLY: `collected`."
+  ]
+
   drift [
     class         = "heavy"
     thread_id     = "drift"
-    allowed_tools = "bash, read, grep, find"
+    allowed_tools = "read, grep, find"
     max_cost_usd  = 4.00
-    prompt        = "Cross-reference code↔docs. Read-only; you may re-read files for confirmation but do not modify.\n\nFirst: run `bun .swarm/scripts/structural-drift/collect.ts $ARGUMENTS` via the bash tool. The script returns a JSON snapshot with: `contract_files[]` (path/lines/sha256_12), `taxonomy` (run_statuses, pause_reasons, halt_reasons, quarantine_reasons, intent_types, fact_types, daemon_event_types — verbatim union literals), `schema_sql` (full schema.sql), `doc_code_blocks[]` (file/line_start/language/content for typescript / dot blocks in the structural docs), `recent_commits[]`, `contract_file_history[path][]`. Trust those values verbatim; re-read source files only when you need surrounding context.\n\nWalk every check and flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) the code surface file:line, AND (b) the doc file:line where the surface is documented (or the explicit absence — 'NOT FOUND in ARCH §3 intent table'). A finding without both citations is invalid; re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nChecks:\n  1. Schema — every column / index / table / generated column / CHECK constraint in `schema_sql` against ARCHITECTURE.md §2.\n  2. Event taxonomy — every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and the SPEC §3.4 status table where applicable.\n  3. Handler contract — return-kind enum / halt reasons handlers can return / HandlerContext fields / messages / artifacts API shapes (handler/types.ts) against handler-contract.md.\n  4. Intent fold — precedence rules R1–R7, per-intent table including the required-state column (intent-fold.ts vs docs/intent-fold.md).\n  5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures (e.g. `messages.append(role, content)` when code is `messages.append(message)`).\n  6. Recent commits hygiene — for each contract file in `contract_file_history`, walk the listed commits and check whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. Flag any landed commit that did not.\n\nOutput a findings table grouped by severity, with file:line refs and the exact discrepancy. No prose preamble — the review node reads this from your final assistant message."
+    prompt        = "Cross-reference code↔docs. Read-only; you may re-read files for confirmation but do not modify.\n\nThe collector snapshot contains: `contract_files[]` (path/lines/sha256_12), `taxonomy` (run_statuses, pause_reasons, halt_reasons, quarantine_reasons, intent_types, fact_types, daemon_event_types — verbatim union literals), `schema_sql` (full schema.sql), `doc_code_blocks[]` (file/line_start/language/content for typescript / dot blocks in the structural docs), `recent_commits[]`, `contract_file_history[path][]`. Trust those values verbatim; re-read source files only when you need surrounding context.\n\nWalk every check and flag every discrepancy by severity. Legend: CRITICAL = wrong info that misleads readers; HIGH = missing entirely; MEDIUM = inconsistency; LOW = polish.\n\nEach finding MUST cite (a) the code surface file:line, AND (b) the doc file:line where the surface is documented (or the explicit absence — 'NOT FOUND in ARCH §3 intent table'). A finding without both citations is invalid; re-verify or drop it. To claim a doc 'misses' a value, grep the doc first and quote the surrounding context to prove the absence.\n\nChecks:\n  1. Schema — every column / index / table / generated column / CHECK constraint in `schema_sql` against ARCHITECTURE.md §2.\n  2. Event taxonomy — every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and the SPEC §3.4 status table where applicable.\n  3. Handler contract — return-kind enum / halt reasons handlers can return / HandlerContext fields / messages / artifacts API shapes (handler/types.ts) against handler-contract.md.\n  4. Intent fold — precedence rules R1–R7, per-intent table including the required-state column (intent-fold.ts vs docs/intent-fold.md).\n  5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures (e.g. `messages.append(role, content)` when code is `messages.append(message)`).\n  6. Recent commits hygiene — for each contract file in `contract_file_history`, walk the listed commits and check whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. Flag any landed commit that did not.\n\nOutput a findings table grouped by severity, with file:line refs and the exact discrepancy. No prose preamble."
   ]
 
   review [
@@ -50,13 +59,16 @@ digraph structural_drift {
     goal_gate     = true
     retry_target  = "drift"
     max_cost_usd  = 0.80
-    prompt        = "Judge the drift findings table from the prior turn for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`. The run will retarget to `drift` and rebuild the report (capped by max_goal_gate_retries=2)."
+    prompt        = "Judge the drift findings table for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a code surface file:line AND a doc file:line (or explicit absence).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the citations.\n  3. Coverage looks reasonable — each of the six checks (schema, event taxonomy, handler contract, intent fold, doc code examples, commit hygiene) has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent checks are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`."
     allowed_tools = "read"
   ]
 
   done [shape=Msquare]
 
-  start  -> drift
+  start   -> collect
+  collect -> done [condition="outcome=fail"]
+  collect -> drift
+
   drift  -> done [condition="outcome=fail"]
   drift  -> review
 

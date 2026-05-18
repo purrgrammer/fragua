@@ -113,7 +113,16 @@ The downstream node controls how much of that conversation it sees via `fidelity
 Idiomatic uses:
 
 - `implement` + `review` share `dev` — the reviewer judges from the conversation, with `fidelity=full` so it sees every diff turn. The implementer's `PLAN_REALISED` block sits in the thread as the last assistant message.
-- `audit` + `diff` + `review` + `propose_patch` share `audit` — each turn reads the prior structured output from the conversation; no substitution needed.
+- `collect` + `audit` + `review` share `audit` — the collector dumps a deterministic JSON snapshot via `bash`; the analyser reads it from the thread; a goal-gate review retargets back to the analyser without re-running the script.
+
+**Split heavy collectors into their own node.** When the first step runs a data-gathering script whose output is large (a `bun .swarm/scripts/foo/collect.ts` dumping JSON), make `collect` a dedicated codergen node with `allowed_tools = "bash"` and the same `thread_id` as the analyser. Two payoffs:
+
+- **Retries don't repay the collector.** When a downstream goal-gate retargets back to the analyser, only the analyser re-runs — `collect` stays put. Without the split, the collector runs every retry and re-dumps the same JSON into the thread, multiplying tokens.
+- **The thread carries the JSON.** The bash tool result lives in the shared thread; the analyser sees it under `fidelity=compact` (tool-result content is preserved) without any substitution. Reference the snapshot by name in the analyser prompt ("the collector snapshot contains …"), not by where it lives ("the prior turn", "$collect.output").
+
+Keep the collect node's prompt minimal — run the script, `abort` on non-zero exit, otherwise reply `collected`. It does almost nothing; pin it to your cheapest tier via an id-selector in the stylesheet (`#collect { llm_model: …; }`). Don't ask it to summarise: the analyser reasons over the JSON itself.
+
+Reference: `narrative-drift.dot`, `structural-drift.dot`.
 
 ### Environment re-derivation
 
@@ -464,6 +473,7 @@ Run twice if you have the budget — once cold, once with prior artifacts cleare
 - **Don't use legacy `context.hitl.<id>=…` on hexagon edges.** W004. Use `[K] Label`.
 - **Don't pair `goal_gate=true` with no retarget.** W007.
 - **Don't use a tool node to gather data for a downstream codergen.** Tool nodes are side-effect-only. If you need to run a deterministic script and reason about its output, call the script from inside a codergen's `bash` tool — the codergen reads stdout in its own context. The `collect → analyze` (tool → codergen) chain is the anti-pattern that motivated retiring `$<node>.output` substitution.
+- **Don't run a heavy collector inside the same node that's a goal-gate retarget target.** Each retarget re-runs the collector and re-dumps its (often large) JSON into the thread, multiplying tokens for no information gain. Split `collect` into its own codergen node sharing `thread_id` with the analyser — the bash tool result stays in the thread across retries while only the analyser re-runs. Reference: `narrative-drift.dot`, `structural-drift.dot`.
 - **Don't leak runtime plumbing into prompts.** No "the previous turn in this shared `dev` thread …" — the LLM doesn't need to model threads. Describe the task; reference the artifact ("the PLAN_REALISED block from the prior turn", "the drift table from the prior turn").
 
 ---

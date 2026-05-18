@@ -1,15 +1,19 @@
 #!/usr/bin/env bun
 // narrative-drift/collect.ts — deterministic inventory for narrative-drift.dot's
-// `audit`, `diff`, and `review` nodes. Covers the surfaces where drift is
+// `collect`, `audit`, and `review` nodes. Covers the surfaces where drift is
 // reasoning-heavy rather than literal: project status claims, proposal hygiene,
-// and per-skill rot. Output is a single JSON document on stdout, consumed
-// downstream via `$collect.output`.
+// and per-skill rot. Output is a single JSON document on stdout; the `collect`
+// codergen runs this script via its bash tool and the resulting tool-result
+// message becomes the snapshot that downstream nodes read off the shared
+// `audit` thread.
 //
 // Sections:
 //   1. status              — verbatim 'delivers today' / 'does not deliver' sections from STATUS.md and README.md (whichever has them)
 //   2. proposals           — front-matter (title/status/maturity/last_reviewed) per proposal
 //   3. proposals_index     — verbatim docs/proposals/README.md (the index doc)
-//   4. skills              — per skill: path, name, frontmatter description, lines + sha256_12, target_hint
+//   4. skills              — per `swarm-*` skill: path, name, frontmatter description, lines + sha256_12, target_hint.
+//                            The other skills (frontend / design / backend) are repo-specific to swarm itself —
+//                            their drift is not in scope for this audit.
 //
 // Structural surfaces (schema, event taxonomy, handler contract, intent fold,
 // doc code blocks, recent commits) live in structural-drift/collect.ts.
@@ -30,12 +34,6 @@ const SKILL_TARGET_HINTS: Record<string, string> = {
     "Operator HTTP routes (POST /runs/:id/{steer,pause,cancel,hitl,resume,unquarantine,priority,budget}) — cross-reference packages/server/src/store/routes.ts and runs-routes.ts; flag examples whose body shape would 4xx.",
   "swarm-debug":
     "Event taxonomy / halt reasons / quarantine reasons / payload field names — cross-reference packages/types/src/swarm-events.ts. Verify §4.1 fact-type table, §8 halt + paused statuses, §8.1 schedule daemon-events, §8.2 subagent observability events match current literals.",
-  frontend:
-    "React patterns under packages/web/src — components/ai-elements/, components/ui/, hooks, query-factories, useMutation cache invalidation. Verify guidance still matches actual code shape.",
-  design:
-    "Tailwind v4 token tables in packages/web/src/globals.css (@theme inline block) — verify token names (bg-sw-*, text-sw-*, rounded-sw-*) match what the SKILL.md claims; flag any token referenced in the skill that no longer exists in CSS.",
-  backend:
-    "Server-side patterns under packages/{server,store,core,agent} — queries.ts SQL discipline, IEventStore boundaries, reducer purity, route handler shape, payload caps. Verify guidance still matches actual code.",
 };
 
 interface FileSnapshot {
@@ -144,6 +142,10 @@ function collectSkills(): Skill[] {
     }
     entries.sort();
     for (const name of entries) {
+      // Repo-specific skills (frontend / design / backend) live alongside the
+      // generic swarm-* skills but their drift is bound to swarm's own code
+      // surface, not to the universal swarm narrative. Audit only swarm-*.
+      if (!name.startsWith("swarm-")) continue;
       const skillDir = resolve(dir, name);
       let isDir = false;
       try {

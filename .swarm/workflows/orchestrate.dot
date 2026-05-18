@@ -30,7 +30,7 @@ digraph orchestrate {
   ]
 
   synthesize [
-    prompt        = "Synthesize a final answer from the sub-agent results in your context (delivered as tool-result messages from prior `agent` calls). Read them, reconcile conflicts, write ONE final answer that addresses $ARGUMENTS. Don't list reports — produce a unified result."
+    prompt        = "Synthesize a final answer from the sub-agent results. Reconcile conflicts; write ONE unified answer that addresses $ARGUMENTS. Don't list reports — produce a unified result."
     allowed_tools = ""
     thread_id     = "orchestrate"
     fidelity      = "full"
