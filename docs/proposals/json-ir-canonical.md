@@ -8,9 +8,12 @@ last-reviewed: 2026-05-18
 # JSON IR as the canonical workflow form
 
 > **Status: proposed.** Pre-release; no backwards-compat constraints.
-> Brainstormed 2026-05-04; this doc records the four decisions that came
-> out of that session plus the counterarguments that need to land in
-> code or in `docs/SPEC.md` before the flip ships.
+> Brainstormed 2026-05-04, refined 2026-05-18. Records five decisions
+> plus the counterarguments that need to land in code or in
+> `docs/SPEC.md` before the flip ships. See `docs/graph/` for the
+> typed Graph<I, O, E> model this proposal is the first concrete step
+> toward, and `./fan-in-to-reduce.md` for the parallel `Reduce` kind
+> that lands as part of the typed extensions.
 
 ## Why
 
@@ -19,24 +22,33 @@ The engine already consumes a fully-typed in-memory IR
 nodes, edges, subgraphs }`). DOT is just the parser's input format;
 nothing downstream of `parseDotSource` cares whether the source was
 written by hand or generated. But the IR is invisible to anything
-outside the engine:
+outside the engine, and the storage shape conflates identity with
+content:
 
 - **No documented contract.** The shape lives only as TS interfaces in
-  `core`. UIs, transformers, programmatic clients, and a future TS
-  builder library have nothing concrete to target.
+  `core`. UIs, transformers, programmatic clients, and the typed
+  `@swarm/sdk` builder (Addendum E) have nothing concrete to target.
 - **Storage is DOT-text-keyed.** `workflows(sha, name, dot_source,
   created_at)` stores the DOT source and re-parses it on every run
   start (`daemon/src/executor.ts:322`,
   `daemon/src/auto-dispatcher.ts:78`). Parser changes silently affect
   replay of old runs.
+- **Identity is conflated with content.** Today's `workflows` row
+  carries both the immutable sha-keyed IR *and* the human-facing
+  `name`; renames or re-uploads either thrash the row or strand it.
+  There's no first-class concept of "version history of `change` in
+  this project" — old shas survive only as referenced-by-runs;
+  there's no alias-level audit.
 - **Prompts are inline-only.** Every prompt body lives as a `"""…"""`
   literal in the `.dot` file. No way to share fragments across
   workflows, version prompts independently, or compose them
   programmatically.
 
 The IR is already the right artifact — it just needs a published
-schema, a storage flip, and a clear authoring story (DOT stays as
-sugar; JSON becomes first-class).
+schema, a storage flip, an explicit `(scope, name)` alias layer over
+the content-addressed sha key, and a clear authoring story (DOT stays
+as sugar; JSON becomes first-class; the typed builder consumes the
+same IR).
 
 ## Decisions
 
@@ -121,24 +133,149 @@ two IRs with different `schemaVersion` but otherwise-similar content
 would have unrelated shas, but the version field gives the executor a
 fast pre-flight check before validation.
 
-### 4. 1:1 DOT/JSON parity for now
+### 4. DOT-expressible IR now; forward-compatible by additive fields
 
-DOT is a typed subset eventually (JSON picks up `$ref`/`@include`,
-richer condition types, programmatic-only fields), but in this pass
-JSON is purely a serialisation of the same DOT-expressible IR. Every
-attribute today round-trips both ways. No new features.
+In this pass, JSON IR is a serialisation of the same shape DOT can
+author — every current attribute round-trips both ways, no new
+features land at the storage flip. But the IR schema is designed so
+that the typed extensions described in `docs/graph/` arrive as
+**additive optional fields**, not schema-version bumps.
 
-This means:
+Forward-compatible field plan:
 
-- DOT → JSON via the existing parser (deterministic edge emission)
+- `inputSchema?: Schema`, `outputSchema?: Schema` on `Node` —
+  Typebox-derived schemas for typed I/O. Absent → today's
+  stringly-typed behaviour (input from `$ARGUMENTS` / substitution,
+  output from last assistant message).
+- `kind?: NodeKind` on `Node` — the typed discriminator
+  (`LLM | Function | Task | Wait | Map | Reduce`). Absent → derive
+  from shape (today's behavior).
+- `predicate?: PredicateExpr`, `transform?: TransformExpr` on `Edge`
+  — typed predicate/transform DSL. Absent → today's stringly-typed
+  `condition` is the only routing input.
+- `parseOutput?: 'tool-call' | 'structured-response' | …` on
+  LLM-shaped nodes — opt-in to typed output via terminal output tool
+  or provider-native structured response. Absent → today's last-
+  assistant-text behaviour.
+- `reduceKind?: 'function' | 'llm'` on `tripleoctagon` — explicit
+  reducer kind for the fan-in (`./fan-in-to-reduce.md`). Absent →
+  infer from `prompt=` presence.
+
+Forward-compat rules:
+
+- New fields are optional. Old IRs validate against the new schema.
+- When both a legacy stringly-typed field and a typed alternative
+  are present, the typed one wins; the IR validator warns on the
+  duplication (catches half-migrated workflows).
+- A non-additive break (rename, delete, type change) bumps
+  `schemaVersion` and triggers a migration pass; until then it
+  stays at `1`.
+
+This decoupling lets the canonical-form flip ship now (DOT parity,
+no behavioral change) and the typed extensions layer on without
+further schema-version bumps when they arrive.
+
+Mechanical workflow today:
+
+- DOT → JSON via the existing parser (deterministic edge emission).
 - JSON → DOT via a new emitter (`packages/core/src/parser/emit.ts`
-  or similar) — needed for the UI re-emit endpoint and for the
-  `swarm db` introspection commands
-- A round-trip test: `parse(emit(parse(dot))) === parse(dot)` for
-  every fixture in `packages/core/test/parser/fixtures/`
+  or similar) — needed for the UI re-emit endpoint and `swarm db`
+  introspection. Typed-only fields without a DOT analogue (e.g.
+  Typebox schemas) emit as a `// typed:` comment block that the
+  parser preserves on re-parse for round-trip stability *until* the
+  typed extensions can no longer round-trip cleanly, at which point
+  DOT becomes read-only for those workflows.
+- Round-trip test: `parse(emit(parse(dot))) === parse(dot)` for
+  every fixture in `packages/core/test/parser/fixtures/`.
 
-Subset extensions (`$ref`, programmatic fan-out generators, richer
-condition AST) are explicit follow-ups, not part of this pass.
+Out-of-scope DOT-superset features that arrive later as additive
+fields: `$ref` / `@include` for prompt files, richer condition AST
+(see typed predicates above), programmatic fan-out generators.
+
+### 5. `(scope, name)` user-facing identity; sha-referenced underneath
+
+The user resolves workflows by name and scope: `swarm run change`
+picks the `change` workflow from the current scope (project cwd or
+user-global). Today's `workflows` table conflates identity (the
+human alias) and content (the IR sha): every upload creates a new
+row with a new sha; the human-facing name is stamped onto each row
+and overwritten on re-upload. No first-class alias history, no
+way to see "every version of `change` in this project."
+
+Split:
+
+```sql
+CREATE TABLE workflows (
+  sha            TEXT PRIMARY KEY,             -- sha256(canonicalJson(ir))
+  ir             TEXT NOT NULL CHECK (json_valid(ir)),
+  schema_version INTEGER NOT NULL,
+  created_at     INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE workflow_aliases (
+  scope          TEXT NOT NULL,                -- 'user' | <project cwd>
+  name           TEXT NOT NULL,                -- e.g. 'change'
+  sha            TEXT NOT NULL REFERENCES workflows(sha),
+  first_seen_at  INTEGER NOT NULL,
+  last_seen_at   INTEGER NOT NULL,
+  PRIMARY KEY (scope, name, sha)
+) STRICT;
+
+CREATE INDEX workflow_aliases_latest
+  ON workflow_aliases(scope, name, last_seen_at DESC);
+```
+
+Three properties:
+
+1. **Content-addressed dedup.** Same IR → same sha → one `workflows`
+   row. A workflow uploaded from two projects shares the row; storage
+   collapses identical content.
+2. **Multiple historical aliases per `(scope, name)`.** Each edit
+   creates a new sha; the alias table records every `(scope, name,
+   sha)` it's ever pointed at. `last_seen_at` orders them; the UI
+   can show full version history per `(scope, name)`.
+3. **Replay survives renames and deletes.** Old runs reference the
+   immutable `workflow_sha`. The `workflows` row is keyed by sha,
+   not by `(scope, name)`; renames or deletes of aliases don't
+   break replay. The alias table only affects resolution of `swarm
+   run <name>` going forward.
+
+Naming `scope`:
+
+- `"user"` is the reserved literal for `~/.swarm/workflows/`.
+- Project scopes use the absolute cwd path as the scope literal —
+  simple, stable, no extra config; the `cwd` field on `run_state`
+  already serves the same identity purpose for project
+  disambiguation. A future "project identity" notion (git remote
+  URL, project-config UUID) could replace the cwd literal without
+  schema change since the column is opaque text.
+
+Resolution:
+
+- `swarm run <name>` from cwd `/foo`: pick `sha` from
+  `workflow_aliases WHERE scope='/foo' AND name=?` ordered by
+  `last_seen_at DESC LIMIT 1`; fall back to `scope='user'`.
+- UI: list `(scope, name)` pairs as workflows; the workflow detail
+  page shows version history — every sha ever aliased to this name,
+  with first/last-seen timestamps and per-sha run count.
+
+Upload:
+
+```sql
+-- Content-addressed; identical IRs collapse to one row.
+INSERT OR IGNORE INTO workflows(sha, ir, schema_version, created_at)
+  VALUES (?, ?, ?, ?);
+
+-- Alias record; bumped on every upload of this (scope, name, sha).
+INSERT INTO workflow_aliases(scope, name, sha, first_seen_at, last_seen_at)
+  VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (scope, name, sha) DO UPDATE SET last_seen_at = excluded.last_seen_at;
+```
+
+Scope passed by the CLI at upload time — the CLI resolved the
+workflow file from a known directory and forwards the path (or
+`"user"`) on `POST /workflows`. The server validates the scope is
+either `"user"` or an absolute path.
 
 ## Pinned invariants
 
@@ -162,38 +299,63 @@ changes don't break sha stability or replay:
    stored IR; the parser only runs at upload. This is a quiet
    correctness win over the status quo — worth one paragraph in
    `docs/SPEC.md` §3.
+5. **`schemaVersion` is sha-load-bearing** (originally Addendum C).
+   The version field is part of canonical JSON. Differing versions
+   ⇒ different shas, even if the rest of the IR is byte-identical.
+   A migration that re-keys workflows must do so in the same
+   transaction as the version bump (or accept replay drift for
+   in-flight runs).
+6. **Alias is many-to-many; sha is the immutable identity.** Renaming
+   or deleting a workflow alias doesn't affect the `workflows` row
+   keyed by sha. Old runs replay against their pinned sha regardless
+   of alias state. The alias table only affects resolution of
+   `swarm run <name>` going forward. Tested by: delete every alias
+   for a `(scope, name)`, confirm runs that referenced its prior
+   shas still replay; recreate the alias with a new sha, confirm
+   resolution returns the new one without affecting historical
+   replays.
 
 ## Touch list
 
 Files that change in the implementation pass:
 
 - **`packages/types/src/`** — new `graph-schema.ts` (Typebox), new
-  `graph.ts` re-exporting `Static<…>` types, `index.ts` updated
+  `graph.ts` re-exporting `Static<…>` types, `index.ts` updated.
+  All optional typed-extension fields land here as `Type.Optional(…)`.
 - **`packages/core/src/types/graph.ts`** — collapses to re-exports
-  from `@swarm/types`
-- **`packages/core/src/parser/`** — new `emit.ts` (JSON IR → DOT)
-- **`packages/store/src/schema.sql`** — `workflows` row shape, schema
-  bump v4 → v5
-- **`packages/store/src/migrations.ts`** — try-migrate per row (see
-  migration plan below)
+  from `@swarm/types`.
+- **`packages/core/src/parser/`** — new `emit.ts` (JSON IR → DOT).
+- **`packages/store/src/schema.sql`** — `workflows` row shape (drop
+  `dot_source`, add `ir` + `schema_version`); new `workflow_aliases`
+  table for `(scope, name) → sha` history; schema bump v4 → v5.
+- **`packages/store/src/migrations.ts`** — try-migrate per row + seed
+  the alias table from existing `run_state.cwd` correlations (see
+  migration plan below).
 - **`packages/store/src/workflow-queries.ts`** — `dot_source` → `ir`
-  in queries
+  in queries; new alias resolution + history query family.
 - **`packages/store/src/types.ts`** — `WorkflowRow.dotSource` →
-  `WorkflowRow.ir`
-- **`packages/store/src/store.ts`** — `saveWorkflow(sha, name, ir)`
+  `WorkflowRow.ir`; new `WorkflowAliasRow`.
+- **`packages/store/src/store.ts`** — `saveWorkflow(scope, name, sha, ir)`
+  (writes `workflows` + upserts `workflow_aliases`);
+  `resolveAlias(scope, name)`; `listAliasHistory(scope, name)`.
 - **`packages/server/src/store/routes.ts`** — upload endpoint accepts
-  JSON IR directly OR DOT (lower → validate → store)
+  JSON IR directly OR DOT (lower → validate → store); takes scope as
+  required parameter (`"user"` or absolute cwd path).
 - **`packages/server/src/routes/workflows.ts`** — returns JSON IR;
-  optional `?format=dot` query for re-emit (UI display path)
+  optional `?format=dot` query for re-emit (UI display path); new
+  `/workflows?scope=…` and `/workflows/:scope/:name/history`.
+- **`packages/server/src/store/runs-routes.ts`** — `GET /runs/:id`
+  projection drops embedded `workflowSource` (Addendum A + G).
 - **`packages/daemon/src/executor.ts:322`** — drop `parseDotSource`,
-  validate IR against schema, use directly
-- **`packages/daemon/src/auto-dispatcher.ts:78,86`** — same
+  validate IR against schema, use directly.
+- **`packages/daemon/src/auto-dispatcher.ts:78,86`** — same.
 - **`packages/agent/src/workflow-model-validator.ts:46`** — accept
-  Graph IR not DOT text
+  Graph IR not DOT text.
 - **`packages/cli/src/commands/run.ts`** — read `.dot` or `.json`;
-  lower DOT → JSON client-side before upload
+  lower DOT → JSON client-side before upload; pass scope (resolved
+  workflow directory) on `POST /workflows`.
 - **`packages/cli/src/commands/validate.ts`** — accept both
-  extensions
+  extensions.
 - **`packages/server/src/adapters/fs-workflow-reader.ts:110`** —
   replace `extractLabel` regex over DOT with `parseDotSource` +
   `attrs.label`. Side cleanup; the regex was always a smell.
@@ -213,37 +375,71 @@ After the flip:
 
 ## Migration plan
 
-Schema v4 → v5. Sha space changes (sha256(dot_source) → sha256(canonicalJson(ir))),
-so `run_state.workflow_sha` references need rewriting in the same
-transaction.
+Schema v4 → v5. Sha space changes (`sha256(dot_source) →
+sha256(canonicalJson(ir))`), so `run_state.workflow_sha` references
+need rewriting in the same transaction. Alias table seeded from the
+existing `(workflows.name, run_state.cwd)` correlation.
 
 Per-row migration:
 
 ```ts
+// Step 1: build the new workflows table (sha-keyed, content-only).
 for each row in workflows {
   try {
     graph = parseDotSource(row.dot_source);
     ir = canonicalize(graph);
     newSha = sha256Hex(ir);
-    INSERT INTO workflows_new(sha, name, ir, schema_version, created_at) VALUES (newSha, name, ir, 1, created_at);
+    INSERT OR IGNORE INTO workflows_new(sha, ir, schema_version, created_at)
+      VALUES (newSha, ir, 1, row.created_at);
     UPDATE run_state SET workflow_sha = newSha WHERE workflow_sha = row.sha;
+    // Remember the rewrite for alias seeding below.
+    shaRewrites[row.sha] = { newSha, name: row.name, createdAt: row.created_at };
   } catch (parseError) {
     log.warn("workflow row %s no longer parses (%s) — runs referencing it will not replay", row.sha, parseError.message);
-    // Row is skipped. run_state rows pointing at it become orphans;
+    // Row skipped. run_state rows pointing at it become orphans;
     // their replay path will fail explicitly with "workflow not found".
   }
 }
+
+// Step 2: seed workflow_aliases from the run_state.cwd correlation.
+// For each successfully-migrated workflow_sha, derive scope from the
+// cwd of every run that referenced it; record one alias row per
+// (scope, name, newSha).
+for each (oldSha, rewrite) in shaRewrites {
+  cwds = SELECT DISTINCT cwd FROM run_state WHERE workflow_sha = rewrite.newSha;
+  if cwds.length === 0 {
+    // No runs ever; treat as user-scope by convention.
+    cwds = ["user"];
+  }
+  for each cwd in cwds {
+    scope = isUserGlobalPath(cwd) ? "user" : cwd;
+    minRunCreatedAt = SELECT MIN(created_at) FROM run_state WHERE workflow_sha = rewrite.newSha AND cwd = cwd;
+    maxRunCreatedAt = SELECT MAX(created_at) FROM run_state WHERE workflow_sha = rewrite.newSha AND cwd = cwd;
+    INSERT INTO workflow_aliases(scope, name, sha, first_seen_at, last_seen_at)
+      VALUES (scope, rewrite.name, rewrite.newSha,
+              minRunCreatedAt ?? rewrite.createdAt,
+              maxRunCreatedAt ?? rewrite.createdAt);
+  }
+}
+
 DROP TABLE workflows;
 ALTER TABLE workflows_new RENAME TO workflows;
 ```
 
-**Why try-migrate, not nuke-and-replace:** decision 1's stated value
+**Why try-migrate, not nuke-and-replace.** Decision 1's stated value
 was "see prev versions of a workflow even if they are not in git as
 long as they've ran." Nuking destroys that on first deploy. The
 try-migrate path costs ~20 LOC and degrades gracefully on parser
 drift since insert.
 
-**Failure mode:** a `dot_source` that no longer parses orphans its
+**Why correlate scopes from run_state.cwd.** Today's workflows table
+doesn't record scope; it's a CLI-time concept. The closest authoritative
+record is which cwds have run each workflow, which lets us seed the
+alias table with real scope/name pairings instead of dumping everything
+into `"user"`. The seeding is best-effort — a workflow uploaded but
+never run lands under `"user"` as a fallback.
+
+**Failure mode.** A `dot_source` that no longer parses orphans its
 runs. They keep their `run_state` rows but can't replay. Logged,
 not fatal. Users in this state can re-upload the working DOT to get
 a fresh sha; old runs stay as historical events.
@@ -254,13 +450,15 @@ a fresh sha; old runs stay as historical events.
   time, inlined into the stored IR for replay determinism.
   Separate proposal once the canonical-form flip lands; the
   brainstorm session settled the principle but not the syntax.
-- **DOT-superset features.** Programmatic fan-out generators,
-  richer condition AST, conditional sub-schemas in JSON. These all
-  presuppose the JSON IR is first-class — wait for that.
-- **TS workflow-builder library.** A typed builder targeting the
-  JSON IR. Strictly a DX layer; not worth scoping until the schema
-  is published and we have at least one external consumer asking
-  for it.
+- **Typed extensions (`docs/graph/`).** Optional fields are
+  reserved in the schema (Decision 4); their *use* — typed I/O at
+  edges, structured LLM output via terminal output tool, Map /
+  Reduce kinds, retarget edges as data, the typed-builder
+  authoring surface — lands as a follow-up layer that doesn't
+  bump `schemaVersion`. Tracked by `docs/graph/` and Addendum F.
+- **Reducer-kind handler fix.** Today's `tripleoctagon` silently
+  ignores `prompt=`. Tracked by `./fan-in-to-reduce.md`; lands
+  with the typed extensions, not at the storage flip.
 - **UI workflow editor.** Building/editing workflows directly as
   IR in the dashboard. Requires the schema to be public first.
 
@@ -269,15 +467,23 @@ a fresh sha; old runs stay as historical events.
 Per AGENTS.md ground rule #1:
 
 - **`docs/SPEC.md` §3** — graph model gains a stored-form section;
-  invariant about edge-order determinism and parser-change isolation
+  invariant about edge-order determinism and parser-change isolation;
+  `(scope, name)` identity layer and alias-table semantics.
 - **`docs/ARCHITECTURE.md` §2** — `workflows` row shape change;
-  schema v4 → v5 entry in the migration history
+  new `workflow_aliases` table shape and indexes; schema v4 → v5
+  entry in the migration history.
+- **`docs/ARCHITECTURE.md` §7** — new alias-resolution + history
+  endpoints; updated `GET /runs/:id` projection (drops embedded
+  `workflowSource`).
 - **`.agents/skills/swarm-author/SKILL.md`** — note that DOT is
   authoring sugar; the canonical form is JSON IR; comments don't
-  round-trip; reference the published schema
+  round-trip; reference the published schema. `(scope, name)`
+  resolution covered briefly in §2 "Workflow location".
 - **`README.md`** — if the quick-tour invocation references DOT
   specifically (`swarm run foo.dot`), update to mention `.json` is
-  also accepted
+  also accepted.
+- **`docs/graph/migration.md`** — update if any workflow's
+  translation changes during the implementation pass.
 
 ---
 
@@ -371,6 +577,24 @@ consumes the JSON IR schema, doesn't change it. But it's the
 motivating reason to push hard on the Typebox-first decision (§2)
 since the SDK's value proposition is type inference across the graph,
 which requires the schema to be the source of truth.
+
+### G. `/runs/:id` projection: `workflowSource` retires (resolves task #16)
+
+Task #16 ("server: escape control chars in `/runs/:id workflowSource`")
+is closed as superseded by this proposal. With JSON IR as the wire
+format and the projection change (Addendum A's option 2):
+
+- The projection embeds typed JSON, not raw DOT text. JSON encoding
+  handles control chars natively; the escape-control bug cannot
+  occur in the new wire shape.
+- Following Addendum A's recommendation, the projection drops the
+  embedded source entirely. Clients dereference via the workflow
+  endpoint when they need source. Hot-path projection payload
+  shrinks; long-prompted workflows no longer carry their text on
+  every status poll.
+
+No separate work item — lands as part of this proposal's server
+touch list.
 
 ### F. Cross-reference: `docs/graph/` typed Graph model
 
