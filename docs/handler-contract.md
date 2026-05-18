@@ -284,15 +284,27 @@ their `allowed_tools` to read-only sets and have the follow-up node
 ```
 
 Branch outcomes land in routing under
-`parallel.<parallelNodeId>.results = [{branchId, status, score?}, …]`,
-and the fan_in winner lands under `fan_in.<nodeId>.winner`. Downstream
-nodes read these through normal `${context.*}` substitution.
+`parallel.<parallelNodeId>.results = [{branchId, status, score?}, …]`.
 
-#### LLM-evaluated fan-in (attractor §4.9)
+#### Reducer kinds
 
-When a `tripleoctagon` carries a non-empty `prompt=`, the fan-in node
-dispatches an LLM call instead of running the heuristic. The synthesised
-prompt is:
+`tripleoctagon` runs one of two reducers, picked by `prompt=` presence:
+
+**Heuristic reducer (default; `prompt=` absent or empty).** A
+deterministic ranker over branch outcomes — picks the top by
+`(status, -score, branchId)`. Writes the winner's branchId to routing
+under `fan_in.<nodeId>.winner`; downstream nodes read it via
+`${context.fan_in.<nodeId>.winner}` substitution. Zero cost,
+replay-stable. Best for parallel voting and "pick the best outcome"
+patterns.
+
+**LLM reducer (`prompt=` non-empty; attractor §4.9).** Feeds every
+branch's `$<branchId>.output` text to an LLM and returns its reply
+verbatim as the fan-in node's `output` artifact. Downstream nodes read
+it as `$<fanInNodeId>.output` (the same substitution surface every other
+codergen-style node uses). No winner is picked — the LLM's text IS the
+fan-in's output. Best for "integrate four lenses into one document"
+patterns. The framed prompt is:
 
 ```
 <user prompt>
@@ -304,23 +316,19 @@ prompt is:
 ...
 ```
 
-The LLM **must** end its reply with a single line in the form
-`WINNER: <branchId>`. The evaluator parses the LAST such line out of the
-final assistant text (`Outcome.notes`) and validates `<branchId>` against
-the candidate set. The codergen tool pool is empty for this call (the
-backend's force-included `abort` remains available).
+The codergen tool pool is empty for this call (the backend's
+force-included `abort` remains available). Model + provider selection
+follows the same `llm_model` / `llm_provider` attributes on the
+tripleoctagon as for any codergen node; a graph-level `model_stylesheet`
+applies. The synthesised document is sliced to ~4 KB by the codergen
+backend's `Outcome.notes` cap — long outputs truncate.
 
-Failure modes:
+Failure mode: `fan_in_llm_provider_error` — provider transport error,
+same pause semantics as a regular codergen node.
 
-- `fan_in_llm_emit_missing` — no `WINNER:` line found in the reply.
-- `fan_in_llm_picked_unknown_branch` — `WINNER:` value is not in the
-  candidate set.
-- `fan_in_llm_provider_error` — provider transport error (same pause
-  semantics as a regular codergen node).
-
-Model + provider selection for the evaluation call follows the same
-`llm_model` / `llm_provider` attributes on the tripleoctagon as for
-any codergen node; a graph-level `model_stylesheet` applies.
+Replay: the heuristic reducer is fully deterministic; the LLM reducer
+is non-deterministic at first execution but replayable because the
+delegate's logged output is the source of truth on re-execution.
 
 Limits (v1): a branch that returns `yield_hitl` is coerced to `fail`
 with a documented reason; nested HITL in a parallel fan-out is not
