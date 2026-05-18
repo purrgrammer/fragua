@@ -32,7 +32,7 @@ Stating them explicitly serves three purposes:
 
 9. **Identity.** `id<I> : Node<I, I>` exists with `id ∘ f ≡ f ∘ id ≡ f`.
 
-10. **Map fusion** (deterministic `Task` bodies only — NOT `LLM`, and only when both Tasks declare `idempotencyKey`): `Map(f) ∘ Map(g) ≡ Map(f ∘ g)`. Holds semantically; whether the runtime exploits it as an optimization is separate.
+10. **Map fusion** (deterministic `Task` bodies only — NOT `LLM`; `Task.idempotencyKey` is required, so this premise is structural): `Map(f) ∘ Map(g) ≡ Map(f ∘ g)`. Holds semantically; whether the runtime exploits it as an optimization is separate.
 
 11. **Reduce associativity** (builtin function reducers whose `⊕` is associative — `concat`, `json_merge` are; `majority_vote` is not): order of reduction is irrelevant.
 

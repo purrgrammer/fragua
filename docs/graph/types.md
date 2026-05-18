@@ -24,6 +24,14 @@ type Graph<I, O, E = DefaultGraphEvent> = {
 
 A `Graph<I, O, E>` with input `I` and output `O` **also implements `Node<I, O>`**. Sub-graphs compose as nodes; the category is closed under composition. The IR has one shape, recursive.
 
+### Schema embedding
+
+`inputSchema` and `outputSchema` are Typebox-derived JSON Schemas embedded *verbatim* in the IR. The SDK re-exports `Type` from `@sinclair/typebox`; authors write `Type.Object({...})` and the resulting JSON Schema serializes as a plain JSON sub-tree inside the IR. Hashable (it's already JSON), runtime-validatable via `Typebox.Value.Check`, browser-safe. Standard Schema interop is a binding-layer concern at SDK use sites, not in the IR. Schemas are verbose; IRs aren't supposed to be tiny.
+
+### Sub-graph node ID scoping
+
+When a sub-graph appears as a node, its internal `nodes` map is scoped to that sub-graph — internal IDs don't collide with parent IDs. Cross-sub-graph node references aren't expressible in the IR (sub-graphs are black boxes from outside); if a cross-reference is needed, hoist the dependent node to the parent. Event-log path prefixing (see [runtime.md](runtime.md)) keeps observability legible across nested runs.
+
 ## Node
 
 ```ts
@@ -32,7 +40,6 @@ interface Node<I, O> {
   readonly inputSchema:  StandardSchemaV1<I>;
   readonly outputSchema: StandardSchemaV1<O>;
   readonly kind:         NodeKind;                // see kinds.md
-  readonly retry?:       RetryPolicy;
   readonly thread?:      ThreadId;                // continuity hint, not data flow
   readonly bounds?: {
     maxCostUsd?: number;
@@ -43,6 +50,8 @@ interface Node<I, O> {
 ```
 
 A node's input comes from its incoming edge's `select` transform (or identity). A node's output is consumed by its outgoing edges' transforms. `thread` is a *continuity* hint — it tells the runtime to include prior thread messages in this node's call context — and is orthogonal to data flow.
+
+There is **no node-level `retry` policy**. The runtime handles provider-level transient retries (HTTP 429, network resets) below the surface via the `pause_provider` mechanism. Author-controlled retry is expressed in the graph topology — see [retarget edges](#edge) with `retryBudget`. One retry knob, one model: the graph encodes the retry policy.
 
 ## Edge
 
@@ -130,12 +139,14 @@ This is the same indirection used by `Reduce { kind: 'function' }` — the regis
 ```ts
 type Outcome<O, Err = NodeError> =
   | { tag: 'ok';      value: O }
-  | { tag: 'err';     error: Err; retriable: boolean }
+  | { tag: 'err';     error: Err }
   | { tag: 'paused';  reason: PauseReason; resumeSchema: StandardSchemaV1<unknown> }
   | { tag: 'aborted'; reason: string };
 ```
 
 Four cases, total. Type system enforces exhaustiveness on consumers. `paused` carries the resume schema so the runtime can validate operator input at the IO boundary — today's HITL accepts arbitrary payloads; the typed model rejects mismatches structurally.
+
+There is no `retriable` field. Retry is a property of the graph topology (retarget edges with `retryBudget`), not of an outcome — an err just routes to wherever its edge predicates say. The transient-provider-retry case (HTTP 429, network reset) lives below the handler surface as today's `pause_provider` mechanism, not on `Outcome`.
 
 ## Where each property is enforced
 

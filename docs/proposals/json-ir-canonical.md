@@ -144,25 +144,47 @@ that the typed extensions described in `docs/graph/` arrive as
 Forward-compatible field plan:
 
 - `inputSchema?: Schema`, `outputSchema?: Schema` on `Node` —
-  Typebox-derived schemas for typed I/O. Absent → today's
+  Typebox JSON Schemas embedded verbatim. Absent → today's
   stringly-typed behaviour (input from `$ARGUMENTS` / substitution,
   output from last assistant message).
 - `kind?: NodeKind` on `Node` — the typed discriminator
   (`LLM | Task | Wait | Map | Reduce`). Absent → derive from shape
   (today's behavior). There is no `Function` kind — see
   `docs/graph/kinds.md`: user-authored compute lives in `Task`
-  (scripts/commands); user JS reaches runs through extensions, not
-  through a graph node body.
+  (scripts/commands); user JS reaches runs through `@swarm/sdk`
+  extensions (`defineTool` / `defineHook`), not through a graph
+  node body.
 - `predicate?: PredicateExpr`, `transform?: TransformExpr` on `Edge`
   — typed predicate/transform DSL. Absent → today's stringly-typed
-  `condition` is the only routing input.
+  `condition` is the only routing input. SDK desugars arrow forms
+  to AST at `.compile()` time (single-expression arrows only;
+  multi-statement arrows rejected).
 - `parseOutput?: 'tool-call' | 'structured-response' | …` on
   LLM-shaped nodes — opt-in to typed output via terminal output tool
   or provider-native structured response. Absent → today's last-
   assistant-text behaviour.
+- `outputRetries?: number` on LLM-shaped nodes — cap on
+  output-schema-validation retries when the model fails to call the
+  terminal output tool with valid arguments. Default 1.
+- `idempotencyKey: (input) => string` on `Task`-shaped nodes —
+  **required** when the node opts into typed I/O (`outputSchema` or
+  `inputSchema` set). SDK provides `inputHashKey` and
+  `alwaysFreshKey` helpers; no implicit default to avoid the
+  "canonicalized input hash" footgun for moving-target side effects
+  (CI, fetches, etc.).
+- `source: 'human' | 'http' | 'timer'` discriminator on `Wait`-shaped
+  nodes (single-source per node, no tagged union). Multi-source
+  composition is expressed via `Map(policy: 'first_success')`.
 - `reduceKind?: 'function' | 'llm'` on `tripleoctagon` — explicit
   reducer kind for the fan-in (`./fan-in-to-reduce.md`). Absent →
   infer from `prompt=` presence.
+
+The typed Node `retry` field and Outcome `retriable` field that
+appeared in earlier drafts are **gone**. Author-facing retry is
+graph topology only — retarget edges with `retryBudget`. The
+runtime's provider-level transient-retry path (`pause_provider`)
+stays below the surface as today; that's runtime infrastructure,
+not author API.
 
 Forward-compat rules:
 
@@ -609,6 +631,8 @@ covers:
   predicate / transform DSL
 - **kinds.md** — five node kinds (`LLM`, `Task`, `Wait`, `Map`,
   `Reduce`); user-authored JS lives in extensions, not graph bodies
+- **sdk.md** — `@swarm/sdk` userland surface: graph definition,
+  tool / hook definition, pattern library, testing utilities
 - **runtime.md** — `Environment`, `BoundGraph`, `Run<I, O, E>`,
   `IO<E>`
 - **laws.md** — algebraic + operational invariants, property-test

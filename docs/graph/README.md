@@ -17,6 +17,7 @@ The typed Graph model addresses both. The runtime semantics — event-sourced re
 4. **[laws.md](laws.md)** — algebraic and operational invariants + property-based testing strategy.
 5. **[patterns.md](patterns.md)** — the eight Anthropic patterns (chain / route / sectioning / voting / orchestrator-workers / evaluator-optimizer / autonomous / augmented) expressed in the typed model.
 6. **[migration.md](migration.md)** — every current workflow translated to the new model: what gets better, what stays the same.
+7. **[sdk.md](sdk.md)** — `@swarm/sdk` userland surface: graph definition, tool definition, hook definition, pattern library, testing utilities, browser-safe sub-entry. Replaces today's `@swarm/extension` and adds the typed authoring layer.
 
 ## What ships when
 

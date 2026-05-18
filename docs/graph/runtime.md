@@ -39,7 +39,7 @@ type Environment = {
 
 User-authored code reaches the runtime through two surfaces:
 
-- **`tools`** — extensions (`@swarm/extension`) register tools and hooks at boot; `LLM` nodes invoke them by name. The "user JS lives here" answer.
+- **`tools`** — extensions defined via `@swarm/sdk`'s `defineTool` / `defineExtension` register tools and hooks at boot; `LLM` nodes invoke them by name. The "user JS lives here" answer. See [sdk.md](sdk.md).
 - **`Task` bodies** — process-spawned scripts referenced by `command`. The runtime never resolves user JS itself; the process boundary is the sandbox.
 
 There is no `FunctionRegistry` for arbitrary user JS bodies. The graph's IR never carries user JS source or compiled artifacts; it carries names that resolve to either extension tools (via `tools`) or runtime-provided builtins (via `builtins`).
@@ -156,6 +156,31 @@ type NodeContext<I, O, E> = {
 A node never sees the full `Environment`. The capability boundary is structural — handler bodies can only touch what's on `ctx`. Replay determinism falls out: a body that doesn't reach outside `ctx` is, by construction, deterministic given `ctx`.
 
 `emit` is the streaming surface — what today produces `llm.text_delta` / `cost.update` events. It writes through to the event log via the same envelope; clients see the partials over `IO<E>`.
+
+## Budget inheritance
+
+By default, sub-graphs and Map elements **share the parent run's budget pool**. The graph-level `bounds.maxCostUsd` is the ceiling for the whole tree; sub-graph nodes don't get their own budget unless explicitly asked.
+
+An optional `bounds` override on a sub-graph node (or `Map.body` node) creates a sub-budget. The runtime enforces `min(parent_remaining, sub_budget)` at every turn boundary; whichever cap binds first fires the budget policy. Authors who need per-element bounds set them on the Map's `body` node.
+
+```ts
+// Whole-graph budget; sub-runs share it.
+defineGraph(...).bounds({ maxCostUsd: 5.00 })
+
+// Map element body capped at $0.30 each, drawing from the shared $5 pool.
+map({
+  extract: (i) => i.subtasks,
+  body: workerNode.bounds({ maxCostUsd: 0.30 }),
+  concurrency: 4,
+  policy: 'wait_all',
+})
+```
+
+## Sub-graph and Map event surface
+
+Sub-graph events (and Map element events) emit on the parent run's stream wrapped in a `fact.subgraph_event` envelope with a `nodeIdPath` prefix. Subscribers to the parent's `IO<E>` see the nested fact; subscribers to the sub-graph's own `IO<E>` (returned from `runGraph` for an explicit sub-Run) see the raw inner fact.
+
+This means dashboards can subscribe to the parent once and render nested by path; the SDK's typed `IO<E>` on a child `Run` filters to its own slice. Same event log, two views.
 
 ## Properties to preserve through the migration
 
