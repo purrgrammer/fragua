@@ -1,6 +1,6 @@
 // Doc-vs-code drift lint — see docs/proposals/drift-lint.md.
 //
-// Reads contract source files (schema.sql, swarm-events.ts, handler/types.ts)
+// Reads contract source files (schema.sql, events.ts, handler/types.ts)
 // and asserts every structural token (table, column, enum literal,
 // HandlerResult kind / halt reason) appears verbatim in the corresponding
 // doc section. A line carrying `// drift-lint: ignore` (or `-- drift-lint:
@@ -21,7 +21,7 @@ const REPO_ROOT = join(__dirname, "..", "..", "..");
 const SCHEMA_SQL = join(REPO_ROOT, "packages", "store", "src", "schema.sql");
 const STORE_TYPES_TS = join(REPO_ROOT, "packages", "store", "src", "types.ts");
 const PRAGMAS_TS = join(REPO_ROOT, "packages", "store", "src", "pragmas.ts");
-const SWARM_EVENTS_TS = join(REPO_ROOT, "packages", "types", "src", "swarm-events.ts");
+const EVENTS_TS = join(REPO_ROOT, "packages", "types", "src", "events.ts");
 const HANDLER_TYPES_TS = join(REPO_ROOT, "packages", "core", "src", "handler", "types.ts");
 const ARCH_MD = join(REPO_ROOT, "docs", "ARCHITECTURE.md");
 const HANDLER_CONTRACT_MD = join(REPO_ROOT, "docs", "handler-contract.md");
@@ -275,12 +275,12 @@ function sliceTypeDecl(src: string, name: string): string | null {
 }
 
 interface EventTaxonomyOpts {
-  swarmEventsPath: string;
+  eventsPath: string;
   archPath: string;
 }
 
 export function auditEventTaxonomy(opts: EventTaxonomyOpts): Finding[] {
-  const ts = readFileSync(opts.swarmEventsPath, "utf8");
+  const ts = readFileSync(opts.eventsPath, "utf8");
   const md = readFileSync(opts.archPath, "utf8");
   const section3 = sliceSection(md, /^## 3\. /, 2);
   if (!section3) {
@@ -301,7 +301,7 @@ export function auditEventTaxonomy(opts: EventTaxonomyOpts): Finding[] {
     if (decl == null) {
       findings.push({
         token: name,
-        doc: opts.swarmEventsPath,
+        doc: opts.eventsPath,
         section: "(declaration not found)",
         source: `extractor: ${name}`,
       });
@@ -330,7 +330,7 @@ export function auditEventTaxonomy(opts: EventTaxonomyOpts): Finding[] {
     if (decl == null) {
       findings.push({
         token: unionName,
-        doc: opts.swarmEventsPath,
+        doc: opts.eventsPath,
         section: "(declaration not found)",
         source: `extractor: ${unionName}`,
       });
@@ -377,7 +377,7 @@ export function auditEventTaxonomy(opts: EventTaxonomyOpts): Finding[] {
   if (daemonDecl == null) {
     findings.push({
       token: "DaemonEvent",
-      doc: opts.swarmEventsPath,
+      doc: opts.eventsPath,
       section: "(declaration not found)",
       source: "extractor: DaemonEvent",
     });
@@ -963,20 +963,20 @@ export function auditArchSchemaVersionClaim(opts: { archPath: string; pragmasPat
  * Every literal in `HaltReason` must appear either in the
  * `kind: "halt"` reason union of `HandlerResult`, OR in the
  * trailing executor-only comment immediately after that arm.
- * Catches a new halt reason landing in `swarm-events.ts` without
+ * Catches a new halt reason landing in `events.ts` without
  * a corresponding handler/types.ts update — silent drift in a
  * contract surface readers grep for coverage.
  */
-export function auditHaltReasonCoverage(opts: { swarmEventsPath: string; handlerTypesPath: string }): Finding[] {
+export function auditHaltReasonCoverage(opts: { eventsPath: string; handlerTypesPath: string }): Finding[] {
   const findings: Finding[] = [];
-  const eventsTs = readFileSync(opts.swarmEventsPath, "utf8");
+  const eventsTs = readFileSync(opts.eventsPath, "utf8");
   const handlerTs = readFileSync(opts.handlerTypesPath, "utf8");
 
   const haltDecl = sliceTypeDecl(eventsTs, "HaltReason");
   if (haltDecl == null) {
     findings.push({
       token: "HaltReason",
-      doc: opts.swarmEventsPath,
+      doc: opts.eventsPath,
       section: "(declaration not found)",
       source: "auditHaltReasonCoverage",
     });
@@ -1031,7 +1031,7 @@ describe("drift-lint — live repo", () => {
     // Restricted to the non-DaemonEvent subset so the §3-wide check stays
     // crisp; DaemonEvent is checked separately against its subsection.
     const findings = auditEventTaxonomy({
-      swarmEventsPath: SWARM_EVENTS_TS,
+      eventsPath: EVENTS_TS,
       archPath: ARCH_MD,
     }).filter((f) => f.source !== "DaemonEvent discriminator");
     if (findings.length > 0) {
@@ -1042,7 +1042,7 @@ describe("drift-lint — live repo", () => {
 
   test("DaemonEvent types appear in ARCHITECTURE.md §3 'Daemon events' subsection", () => {
     const findings = auditEventTaxonomy({
-      swarmEventsPath: SWARM_EVENTS_TS,
+      eventsPath: EVENTS_TS,
       archPath: ARCH_MD,
     }).filter((f) => f.source === "DaemonEvent discriminator");
     if (findings.length > 0) {
@@ -1132,7 +1132,7 @@ describe("drift-lint — live repo", () => {
 
   test("every HaltReason literal is covered in handler/types.ts (union or executor-only comment)", () => {
     const findings = auditHaltReasonCoverage({
-      swarmEventsPath: SWARM_EVENTS_TS,
+      eventsPath: EVENTS_TS,
       handlerTypesPath: HANDLER_TYPES_TS,
     });
     if (findings.length > 0) {
@@ -1475,7 +1475,7 @@ describe("drift-lint — interface and route extractors", () => {
     );
     try {
       const findings = auditHaltReasonCoverage({
-        swarmEventsPath: tmpEvents,
+        eventsPath: tmpEvents,
         handlerTypesPath: tmpHandler,
       });
       expect(findings.length).toBe(1);
