@@ -11,8 +11,8 @@ The eight patterns from Anthropic's "Building Effective Agents," expressed in th
 ```ts
 const summarise = llm<DocInput, Summary>({
   model:       'claude-sonnet-4-6',
-  tools:       [readTool, grepTool],
-  buildPrompt: (i) => ({ user: `Summarise: ${i.path}` }),
+  tools:       ['read', 'grep'],
+  prompt:      { user: 'Summarise: ${input.path}' },
   parseOutput: 'tool-call',
 });
 ```
@@ -163,9 +163,9 @@ The retarget surface is graph topology, not a node attribute. Renderers, validat
 ```ts
 const merge = llm<BranchName, MergeResult>({
   model:       'claude-opus-4-7',
-  tools:       [readTool, writeTool, editTool, bashTool],
+  tools:       ['read', 'write', 'edit', 'bash'],
   bounds:      { maxCostUsd: 0.50, maxTokens: 1_200_000 },
-  buildPrompt: (b) => ({ user: `Rebase ${b} onto main and CAS-fast-forward.` }),
+  prompt:      { user: 'Rebase ${input.branch} onto main and CAS-fast-forward.' },
   parseOutput: 'tool-call',
 });
 ```

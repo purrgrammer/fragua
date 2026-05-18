@@ -39,10 +39,18 @@ type Environment = {
 
 User-authored code reaches the runtime through two surfaces:
 
-- **`tools`** — extensions defined via `@swarm/sdk`'s `defineTool` / `defineExtension` register tools and hooks at boot; `LLM` nodes invoke them by name. The "user JS lives here" answer. See [sdk.md](sdk.md).
+- **`tools`** — extensions defined via `@swarm/sdk`'s `defineTool` / `defineExtension` register tools at boot; `LLM` nodes invoke them by name. The "user JS lives here" answer. See [sdk.md](sdk.md).
 - **`Task` bodies** — process-spawned scripts referenced by `command`. The runtime never resolves user JS itself; the process boundary is the sandbox.
 
 There is no `FunctionRegistry` for arbitrary user JS bodies. The graph's IR never carries user JS source or compiled artifacts; it carries names that resolve to either extension tools (via `tools`) or runtime-provided builtins (via `builtins`).
+
+### `skills` and `agents` catalogs
+
+`SkillCatalog` and `AgentCatalog` are **read-only metadata** consumed by the LLM-node system-prompt builder. When an LLM node is dispatched, the runtime renders an `## Available skills` and `## Available sub-agents` block into the system prompt so the model knows what's invocable via the `skill` and `agent` tools.
+
+The `skill` and `agent` tools themselves are normal entries in the tool registry. The catalogs are *discovery surfaces* for the system prompt — not auto-include behaviors. There is no "trigger-based skill injection" magic; the LLM explicitly calls `skill({ name: 'design' })` if it wants design context, with the catalog telling it `design` is available.
+
+Catalog contents (name, description, parameters where applicable) are part of the system prompt; the rendered block is part of the LLM's input messages. Replay captures the rendered system prompt in the event log; catalog edits don't affect already-logged runs.
 
 Two properties to maintain:
 
@@ -112,18 +120,19 @@ Today swarm has resume but no first-class replay; making them peer constructors 
 
 ```ts
 interface IO<E> {
-  send:       (intent: IntentOf<E>) => Promise<Receipt>;
-  events:     AsyncIterable<FactOf<E>>;
-  subscribe:  (fn: (e: FactOf<E>) => void) => Unsubscribe;
+  send:   (intent: IntentOf<E>) => Promise<Receipt>;
+  events: AsyncIterable<FactOf<E>>;
 }
 
 type IntentOf<E> = E extends { dir: 'in';  shape: infer S } ? S : never;
 type FactOf<E>   = E extends { dir: 'out'; shape: infer S } ? S : never;
 ```
 
-Bidirectional event channel. Intents flow in (operator pause / resume / cancel / steer / feedback); facts flow out (lifecycle, cost, errors). Same envelope, two directions, both typed.
+Bidirectional event channel. Intents flow in (operator pause / resume / cancel / steer); facts flow out (lifecycle, cost, errors). Same envelope, two directions, both typed.
 
-Today's `intent.*` and `fact.*` events become `IntentOf<E>` and `FactOf<E>`. The taxonomy is preserved; the type just makes direction first-class so a UI binding to `IO<E>` knows what it can `send` vs only `subscribe` to.
+Today's `intent.*` and `fact.*` events become `IntentOf<E>` and `FactOf<E>`. The taxonomy is preserved; the type just makes direction first-class so a UI binding to `IO<E>` knows what it can `send` vs only iterate.
+
+`events` is `AsyncIterable` — the standard JS surface; consumers who want callbacks wrap it (`for await (const e of io.events) fn(e)`). Earlier drafts had both an iterable AND a callback `subscribe`; redundant, dropped.
 
 The same `IO<E>` surface serves:
 
@@ -156,6 +165,17 @@ type NodeContext<I, O, E> = {
 A node never sees the full `Environment`. The capability boundary is structural — handler bodies can only touch what's on `ctx`. Replay determinism falls out: a body that doesn't reach outside `ctx` is, by construction, deterministic given `ctx`.
 
 `emit` is the streaming surface — what today produces `llm.text_delta` / `cost.update` events. It writes through to the event log via the same envelope; clients see the partials over `IO<E>`.
+
+### AbortSignal triggers
+
+`ctx.signal` fires (aborts in-flight work) on:
+
+- **`intent.cancel`** — operator cancellation. Cleanest stop; in-flight LLM streams close; subprocesses get SIGTERM (then SIGKILL after `cancelGraceMs`, default 5s).
+- **`bounds` exceeded** with `policy: 'stop'` — runtime aborts whatever's mid-execution.
+- **`maxMs` per-node timeout** — fires on the offending node only.
+- **Parent run cancellation** — propagates recursively to sub-Runs.
+
+When a Wait suspends, `ctx.signal` does NOT fire — the run pauses, the signal stays clean, the Wait resumes by appending an event. Cancel while paused: the signal fires, the Wait transitions to `Outcome.aborted`.
 
 ## Sub-Runs: one mechanism, two entry points
 

@@ -11,13 +11,14 @@ The typed Graph model addresses both. The runtime semantics — event-sourced re
 
 ## Reading order
 
-1. **[types.md](types.md)** — `Graph<I, O, E>`, `Node<I, O>`, `Edge<O, I'>`, `Outcome<O>`, edge predicate/transform DSL. The core algebra.
-2. **[kinds.md](kinds.md)** — six IR `kind` values: five **compute** kinds (`llm`, `task`, `wait`, `map`, `reduce`) plus one **structural** kind (`subgraph`) for composition. User-authored compute lives in `Task` (scripts/commands); user JS reaches runs through extensions, not through a graph node body. No `Function` kind.
-3. **[runtime.md](runtime.md)** — `Environment`, `BoundGraph`, `Run<I, O, E>`, `IO<E>`. How a graph executes.
-4. **[laws.md](laws.md)** — algebraic and operational invariants + property-based testing strategy.
-5. **[patterns.md](patterns.md)** — the eight Anthropic patterns (chain / route / sectioning / voting / orchestrator-workers / evaluator-optimizer / autonomous / augmented) expressed in the typed model.
-6. **[migration.md](migration.md)** — every current workflow translated to the new model: what gets better, what stays the same.
-7. **[sdk.md](sdk.md)** — `@swarm/sdk` userland surface: graph definition, tool definition, hook definition, pattern library, testing utilities, browser-safe sub-entry. Replaces today's `@swarm/extension` and adds the typed authoring layer.
+1. **[types.md](types.md)** — `Graph<I, O, E>`, `Node<I, O>`, `Edge<O, I'>`, `Outcome<O>`, `Bounds`. The core algebra.
+2. **[expressions.md](expressions.md)** — `TemplateExpr` / `PathExpr` / `TransformExpr` / `PredicateExpr` / `BuiltinRef`. The expression-language IR that replaces TS functions in node attrs.
+3. **[kinds.md](kinds.md)** — six IR `kind` values: five **compute** kinds (`llm`, `task`, `wait`, `map`, `reduce`) plus one **structural** kind (`subgraph`) for composition. User-authored compute lives in `Task` (scripts/commands); user JS reaches runs through extensions, not through a graph node body. No `Function` kind.
+4. **[runtime.md](runtime.md)** — `Environment`, `BoundGraph`, `Run<I, O, E>`, `IO<E>`. How a graph executes.
+5. **[laws.md](laws.md)** — algebraic and operational invariants + property-based testing strategy.
+6. **[patterns.md](patterns.md)** — the eight Anthropic patterns (chain / route / sectioning / voting / orchestrator-workers / evaluator-optimizer / autonomous / augmented) expressed in the typed model.
+7. **[migration.md](migration.md)** — every current workflow translated to the new model: what gets better, what stays the same; comprehensive DOT-retires list.
+8. **[sdk.md](sdk.md)** — `@swarm/sdk` userland surface: graph definition, tool definition, hook definition, pattern library, testing utilities, browser-safe sub-entry. Replaces today's `@swarm/extension` and adds the typed authoring layer.
 
 ## What ships when
 

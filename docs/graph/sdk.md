@@ -101,7 +101,7 @@ import {
   evaluatorOptimizer,                    // (gen, eval, retries) → SubGraph
   vote,                                  // (body, n, aggregate) → Node
   withRetry,                             // (body, retryBudget) → SubGraph (retarget self-edge)
-  inputHashKey, alwaysFreshKey,          // Task idempotency helpers
+  haltOnError, retargetOnError,          // edge-boilerplate ergonomic helpers
 } from '@swarm/sdk';
 ```
 
@@ -162,11 +162,34 @@ const change = defineGraph('change', '1.0.0')
 
 Authors don't think about compilation unless they're writing test harnesses.
 
-## Predicate desugaring
+## Desugaring at `.compile()` time
 
-Arrow-form predicates and transforms (`when: (o) => o.value.choice === 'approve'`) desugar to DSL AST at `.compile()` time. The SDK ships a runtime TypeScript AST parser; no build-step requirement.
+The SDK accepts author-friendly forms and emits the [expression-language IR](expressions.md) at compile. Five desugarings:
 
-Single-expression arrows: supported.
+| Author writes | Emits |
+|---|---|
+| `prompt: { user: 'Task: ${input.task}' }` | TemplateExpr |
+| `when: (o) => o.value.verdict === 'approve'` | PredicateExpr |
+| `select: (o) => o.value` | PathExpr |
+| `select: (o) => ({ ...o.value, decision: o.value.choice })` | TransformExpr |
+| Imported builtin (e.g. `majority_vote` as a reducer) | BuiltinRef |
+
+### Template strings
+
+Template strings carry placeholders that the SDK parses at compile time and validates against the typed input schema:
+
+```ts
+prompt: {
+  system: 'You are a code reviewer for the ${graph.contractVersion} codebase.',
+  user:   'Review ${input.diff | truncate(2000)} against the plan:\n${input.plan}',
+}
+```
+
+`${path}` references typed input fields; `| filter` applies a builtin transform. Multiline strings are fine. Type errors on paths fail `.compile()`.
+
+### Arrow predicates
+
+Single-expression arrows only. Supported:
 
 ```ts
 when: (o) => o.value.verdict === 'approve'
@@ -174,21 +197,45 @@ when: (o) => o.value.severity >= 3 && o.value.cited
 when: (o) => o.value.errors.length === 0
 ```
 
-Multi-statement arrows: rejected at compile-time with a clear error pointing at the lint rule:
+Rejected at `.compile()`:
 
 ```ts
-// FAILS:
+// Multi-statement arrow:
 when: (o) => {
   const x = computeSomething(o);
   return x > 5;
 }
-// Error: predicates must be single expressions. Rewrite as a pre-computed Task,
-// or use a builtin ref. See: <docs link>
+
+// Closure over external variable:
+const threshold = 5;
+when: (o) => o.value.severity >= threshold
+
+// Method call outside the filter registry:
+when: (o) => o.value.text.includes('TODO')
+
+// Async / non-deterministic:
+when: (o) => Date.now() > o.value.deadline
 ```
 
-Closures over external variables: rejected for the same reason — the captured value isn't in the IR, so it can't be replayed or hashed deterministically.
+Error messages point at alternatives: split into multiple edges, pre-compute via a Task, use a builtin ref.
 
-Edges that need richer logic either split into multiple edges, pre-compute via a `Task` node, or reference a runtime builtin (`{ kind: 'ref', ref: 'severityAtLeastHigh' }`). User-authored JS for routing never lives in the IR.
+### Ergonomic helpers for boilerplate
+
+The typed-model retarget pattern is explicit by design but verbose for common cases. SDK helpers collapse the boilerplate:
+
+```ts
+// Equivalent to: .edge('plan', 'done', { when: (o) => o.tag === 'err' })
+//                .edge('implement', 'done', { when: (o) => o.tag === 'err' })
+//                .edge('review', 'done', { when: (o) => o.tag === 'err' })
+//                .edge('fix', 'done', { when: (o) => o.tag === 'err' })
+.haltOnError('plan', 'implement', 'review', 'fix')
+
+// Equivalent to: .edge('review', 'implement', retarget({ when: o => o.tag === 'err', retryBudget: 2 }))
+//                .edge('review', 'done', { when: o => o.tag === 'err' })
+.retargetOnError('review', { to: 'implement', retryBudget: 2, fallback: 'done' })
+```
+
+Helpers expand to the same edges; the IR is unchanged. Pure ergonomics.
 
 ## Type inference across the graph
 

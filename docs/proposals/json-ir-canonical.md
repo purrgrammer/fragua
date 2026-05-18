@@ -152,41 +152,48 @@ Forward-compatible field plan:
   compute kinds + one structural kind (`subgraph`) that inlines a
   child `Graph<I, O>` for composition. Absent → derive from shape
   (today's behavior, compute kinds only). There is no `Function`
-  kind — see `docs/graph/kinds.md`: user-authored compute lives in
-  `Task` (scripts/commands); user JS reaches runs through
-  `@swarm/sdk` extensions (`defineTool` / `defineHook`), not through
-  a graph node body.
-- `predicate?: PredicateExpr`, `transform?: TransformExpr` on `Edge`
-  — typed predicate/transform DSL. Absent → today's stringly-typed
-  `condition` is the only routing input. SDK desugars arrow forms
-  to AST at `.compile()` time (single-expression arrows only;
-  multi-statement arrows rejected).
-- `parseOutput?: 'tool-call' | 'structured-response' | …` on
-  LLM-shaped nodes — opt-in to typed output via terminal output tool
-  or provider-native structured response. Absent → today's last-
-  assistant-text behaviour.
+  kind — user JS reaches runs through `@swarm/sdk` extensions
+  (`defineTool` / `defineHook`), not through a graph node body.
+- `predicate?: PredicateExpr`, `transform?: TransformExpr` on
+  `Edge` — see [`docs/graph/expressions.md`](../graph/expressions.md)
+  for the AST grammar. SDK desugars single-expression arrows to AST
+  at `.compile()` time; multi-statement arrows rejected.
+- **All function-typed node attrs become declarative expressions**.
+  No TS functions in the IR. The five expression types from
+  `docs/graph/expressions.md` cover every previously-function
+  field:
+  - `LLM.prompt: { system?: TemplateExpr; user: TemplateExpr }` —
+    replaces `buildPrompt`.
+  - `Task.command: TemplateExpr` — placeholder substitution.
+  - `Wait.human.prompt: { question, description? }` of TemplateExpr.
+  - `Map.extract: TransformExpr` — must yield an array; bind-time
+    type check.
+- `parseOutput?: 'tool-call' | 'structured-response'` on
+  LLM-shaped nodes — two options only. The earlier
+  `fromAssistantText` fallback parser is dropped; restructure with
+  a downstream Task that parses prose.
 - `outputRetries?: number` on LLM-shaped nodes — cap on
-  output-schema-validation retries when the model fails to call the
-  terminal output tool with valid arguments. Default 1.
-- `idempotencyKey: (input) => string` on `Task`-shaped nodes —
-  **required** when the node opts into typed I/O (`outputSchema` or
-  `inputSchema` set). SDK provides `inputHashKey` and
-  `alwaysFreshKey` helpers; no implicit default to avoid the
-  "canonicalized input hash" footgun for moving-target side effects
-  (CI, fetches, etc.).
+  output-schema-validation retries. Default 1.
 - `source: 'human' | 'http' | 'timer'` discriminator on `Wait`-shaped
   nodes (single-source per node, no tagged union). Multi-source
   composition is expressed via `Map(policy: 'first_success')`.
 - `reduceKind?: 'function' | 'llm'` on `tripleoctagon` — explicit
-  reducer kind for the fan-in (`./fan-in-to-reduce.md`). Absent →
-  infer from `prompt=` presence.
+  reducer kind for the fan-in (`./fan-in-to-reduce.md`).
+- `bounds.policy?: 'stop' | 'warn' | 'pause'` on graph-level
+  `bounds`. Maps today's `budget_policy=` knob. Per-kind bounds
+  always halt the offending node; policy lives at graph level.
 
-The typed Node `retry` field and Outcome `retriable` field that
-appeared in earlier drafts are **gone**. Author-facing retry is
-graph topology only — retarget edges with `retryBudget`. The
-runtime's provider-level transient-retry path (`pause_provider`)
-stays below the surface as today; that's runtime infrastructure,
-not author API.
+Several Outcome / Node fields that appeared in earlier drafts are
+**gone**:
+
+- `retry` on Node and `retriable` on Outcome.err: dropped. Retry is
+  graph topology — retarget edges with `retryBudget`.
+- `Outcome.paused`: dropped. Paused is a `RunStatus`, not an
+  Outcome variant; edges only fire on terminated nodes.
+- `Node.thread?` and `Node.bounds?` on the Node interface: moved
+  off — `thread` is LLM-only, `bounds` shape is per-kind.
+- `Graph.events: { in; out }`: dropped from IR. Runtime infers `E`
+  from kinds present; SDK infers for typed-IO consumers.
 
 Forward-compat rules:
 
@@ -629,8 +636,9 @@ A `docs/graph/` directory landed 2026-05-18 describing the typed
 `Graph<I, O, E>` model the JSON IR is the canonical form for. It
 covers:
 
-- **types.md** — `Graph`, `Node`, `Edge`, `Outcome`, edge
-  predicate / transform DSL
+- **types.md** — `Graph`, `Node`, `Edge`, `Outcome`, `Bounds`
+- **expressions.md** — `TemplateExpr` / `PathExpr` / `TransformExpr`
+  / `PredicateExpr` / `BuiltinRef` DSL grammars
 - **kinds.md** — five node kinds (`LLM`, `Task`, `Wait`, `Map`,
   `Reduce`); user-authored JS lives in extensions, not graph bodies
 - **sdk.md** — `@swarm/sdk` userland surface: graph definition,

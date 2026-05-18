@@ -6,21 +6,27 @@ The core algebra of the typed Graph model. Every type here is Typebox-derived so
 
 ```ts
 type Graph<I, O, E = DefaultGraphEvent> = {
-  id:            string;
-  version:       string;                          // semver of the graph contract
-  schemaVersion: number;                          // IR schema version
-  inputSchema:   StandardSchemaV1<I>;
-  outputSchema:  StandardSchemaV1<O>;
-  nodes:         ReadonlyMap<NodeId, AnyNode>;
-  edges:         readonly AnyEdge[];
-  start:         NodeId;
-  exits:         readonly NodeId[];
-  events: {
-    in:  StandardSchemaV1<IntentOf<E>>;          // intents the graph accepts
-    out: StandardSchemaV1<FactOf<E>>;            // facts the graph emits
-  };
+  id:               string;
+  contractVersion:  string;                       // author-supplied semver, e.g. "1.2.0"; informational
+  irVersion:        number;                       // IR schema version; load-bearing for migration
+  inputSchema:      StandardSchemaV1<I>;
+  outputSchema:     StandardSchemaV1<O>;
+  nodes:            ReadonlyMap<NodeId, AnyNode>;
+  edges:            readonly AnyEdge[];
+  start:            NodeId;
+  exits:            readonly NodeId[];
+  bounds?:          Bounds;                       // graph-level budget; sub-graphs share by default
 };
 ```
+
+### Two version fields
+
+- **`contractVersion: string`** — author-supplied semver tag, e.g. `"1.2.0"`. Informational; surfaced in UIs for version-listing per `(scope, name)`. Affects sha only because it's in the IR; doesn't drive any runtime logic.
+- **`irVersion: number`** — IR schema version. Load-bearing for schema-migration paths. v1 at first ship.
+
+### No `events` field
+
+The runtime emits facts determined by the *kinds* present (LLM emits `llm.text_delta`, Task emits `task.stdout_line`, etc.). Authors don't declare `E`; the SDK infers it from the graph's kinds for typed-IO consumers. Custom events from extension tools (via `ctx.emit`) join `E` via the extension's declared events schema — not via the graph IR. Earlier drafts carried `events: { in; out }` on Graph; dropped to reduce author confusion ("what do I put here?") and IR size.
 
 A `Graph<I, O, E>` with input `I` and output `O` **also implements `Node<I, O>`**. Sub-graphs compose as nodes; the category is closed under composition. The IR has one shape, recursive.
 
@@ -34,9 +40,7 @@ A sub-graph appears in the parent IR as a Node with `kind: 'subgraph'` and an in
 
 Internal `nodes` are scoped per sub-graph — child IDs don't collide with parent IDs. Cross-sub-graph node references aren't expressible in the IR (sub-graphs are black boxes from outside); if a cross-reference is needed, hoist the dependent node to the parent. Event-log path prefixing (see [runtime.md](runtime.md)) keeps observability legible across nested runs.
 
-### Bounds policy
-
-Graph-level (and Node-level) `bounds` carries the budget-overflow policy as well as the numeric caps:
+### Bounds and bounds policy
 
 ```ts
 type Bounds = {
@@ -51,7 +55,9 @@ type Bounds = {
 - **`warn`** — exceed → emit budget event, keep going. Non-blocking observability.
 - **`pause`** — exceed → `fact.run_paused { reason: 'budget' }`. Operator raises the ceiling via `intent.budget_adjusted`, then `intent.resume` re-dispatches the same `(nodeId, iteration)` against the new ceiling.
 
-Policy is graph-level today; node-level bounds always halt (no per-node policy variation). Sub-graph bounds inherit policy from the parent unless explicitly overridden.
+`bounds` lives on `Graph` (overall budget for the whole tree, including sub-graphs) and on per-kind attrs that have spend potential (`LLMAttrs.bounds`, `TaskAttrs.bounds.maxMs`). Per-kind bounds have no `policy` — they always halt the offending node when exceeded; policy is graph-level.
+
+Sub-graph bounds inherit from the parent unless explicitly overridden (see [runtime.md § Budget inheritance](runtime.md#budget-inheritance)).
 
 ## Node
 
@@ -61,18 +67,25 @@ interface Node<I, O> {
   readonly inputSchema:  StandardSchemaV1<I>;
   readonly outputSchema: StandardSchemaV1<O>;
   readonly kind:         NodeKind;                // see kinds.md
-  readonly thread?:      ThreadId;                // continuity hint, not data flow
-  readonly bounds?: {
-    maxCostUsd?: number;
-    maxTokens?:  number;
-    maxMs?:      number;
-  };
+  // kind-specific attrs live alongside (LLMAttrs, TaskAttrs, etc.)
 }
 ```
 
-A node's input comes from its incoming edge's `select` transform (or identity). A node's output is consumed by its outgoing edges' transforms. `thread` is a *continuity* hint — it tells the runtime to include prior thread messages in this node's call context — and is orthogonal to data flow.
+The Node interface is minimal: identity, typed schemas, kind discriminator. Per-kind attributes (thread, bounds, prompt, command, etc.) live on the kind's attrs — see [kinds.md](kinds.md). Generic fields on the Node interface that only apply to some kinds (today's `thread`, `bounds`) were misplaced; moved to the kinds that need them.
 
-There is **no node-level `retry` policy**. The runtime handles provider-level transient retries (HTTP 429, network resets) below the surface via the `pause_provider` mechanism. Author-controlled retry is expressed in the graph topology — see [retarget edges](#edge) with `retryBudget`. One retry knob, one model: the graph encodes the retry policy.
+A node's input comes from its incoming edge's `select` transform (or identity). A node's output is consumed by its outgoing edges' transforms.
+
+### `NodeId` scheme
+
+```
+NodeId ::= string matching /^[a-z][a-z0-9-]{0,62}$/
+```
+
+Kebab-case, 1–63 chars, leading letter. No reserved IDs — `start` / `exit` are conventions, not special-cased by the runtime. Validator rejects out-of-format IDs at IR-compile time.
+
+### No node-level retry policy
+
+The runtime handles provider-level transient retries (HTTP 429, network resets) below the surface via the `pause_provider` mechanism. Author-controlled retry is expressed in the graph topology — see [retarget edges](#edge) with `retryBudget`. One retry knob, one model: the graph encodes the retry policy.
 
 ## Edge
 
@@ -117,7 +130,7 @@ path  := "outcome.tag" | "value.verdict" | "value.findings.length" | …
 value := string | number | boolean | null
 ```
 
-Paths read into the upstream node's `Outcome<O>` shape. `outcome.tag` is the discriminator (`ok` / `err` / `paused` / `aborted`); `value.<path>` traverses the typed payload. The **same path namespace** serves predicates (routing) and transforms (data hand-off) — a deliberate departure from today's two-tier DOT model, where substitution reads `$<id>.output[.path]` and conditions read `outcome` + `context.<key>` with no overlap.
+Paths read into the upstream node's `Outcome<O>` shape. `outcome.tag` is the discriminator (`ok` / `err` / `aborted` — three variants; `paused` is a `RunStatus`, not an Outcome); `value.<path>` traverses the typed payload for `ok`; `error.<path>` for `err`. The **same path namespace** serves predicates (routing) and transforms (data hand-off) — a deliberate departure from today's two-tier DOT model, where substitution reads `$<id>.output[.path]` and conditions read `outcome` + `context.<key>` with no overlap.
 
 This unification means **Wait isn't a special case**. An HITL node's routing reads its `resumeSchema`-typed payload via `value.<path>` predicates, the same way an LLM or Reduce node's routing does. Today's accelerator-label matching (`label="[A] Approve"`) becomes a UI affordance; the schema and structured payload drive the predicate.
 
@@ -161,13 +174,14 @@ This is the same indirection used by `Reduce { kind: 'function' }` — the regis
 type Outcome<O, Err = NodeError> =
   | { tag: 'ok';      value: O }
   | { tag: 'err';     error: Err }
-  | { tag: 'paused';  reason: PauseReason; resumeSchema: StandardSchemaV1<unknown> }
   | { tag: 'aborted'; reason: string };
 ```
 
-Four cases, total. Type system enforces exhaustiveness on consumers. `paused` carries the resume schema so the runtime can validate operator input at the IO boundary — today's HITL accepts arbitrary payloads; the typed model rejects mismatches structurally.
+**Three cases, total.** Type system enforces exhaustiveness on consumers. There is no `paused` variant — paused is a *runtime status* (`RunStatus`), not a terminal outcome. Edges only fire when a node has terminated; a Wait node that suspends doesn't produce an Outcome until it resumes (at which point its Outcome is `ok` with the resume value).
 
-There is no `retriable` field. Retry is a property of the graph topology (retarget edges with `retryBudget`), not of an outcome — an err just routes to wherever its edge predicates say. The transient-provider-retry case (HTTP 429, network reset) lives below the handler surface as today's `pause_provider` mechanism, not on `Outcome`.
+No `retriable` field on err — retry is a property of the graph topology (retarget edges with `retryBudget`), not of an outcome. An err just routes to wherever its edge predicates say. The transient-provider-retry case (HTTP 429, network reset) lives below the handler surface as today's `pause_provider` mechanism, not on `Outcome`.
+
+`RunStatus` is the orthogonal axis: `running` | `paused` (with sub-reasons: `paused_hitl`, `paused_budget`, etc.) | `completed` | `halted`. Runtime concern; doesn't appear on node Outcome.
 
 ## Where each property is enforced
 

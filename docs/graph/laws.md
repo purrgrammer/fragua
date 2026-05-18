@@ -12,7 +12,7 @@ Stating them explicitly serves three purposes:
 
 1. **Schema compatibility at edges.** For every edge `(a → b)`: `Output(a) ⊆ select(Input(b))`. Compile error on violation. The single biggest authoring win.
 
-2. **Outcome totality.** Every node returns exactly one `Outcome<O>` case. Discriminated union; exhaustiveness checked on consumers.
+2. **Outcome totality.** Every node returns exactly one `Outcome<O>` case (`ok` | `err` | `aborted` — three variants). Discriminated union; exhaustiveness checked on consumers. `paused` is a `RunStatus`, not an Outcome variant — edges only fire on terminated nodes.
 
 3. **Sub-graph closure.** `Graph<I, O>` implements `Node<I, O>`. The category is closed under composition.
 
@@ -32,7 +32,7 @@ Stating them explicitly serves three purposes:
 
 9. **Identity.** `id<I> : Node<I, I>` exists with `id ∘ f ≡ f ∘ id ≡ f`.
 
-10. **Map fusion** (deterministic `Task` bodies only — NOT `LLM`; `Task.idempotencyKey` is required, so this premise is structural): `Map(f) ∘ Map(g) ≡ Map(f ∘ g)`. Holds semantically; whether the runtime exploits it as an optimization is separate.
+10. **Map fusion** (deterministic `Task` bodies only — NOT `LLM`; the determinism premise is author-asserted, not structurally guaranteed): `Map(f) ∘ Map(g) ≡ Map(f ∘ g)`. Holds semantically when `f` and `g` are deterministic given their inputs; whether the runtime exploits it as an optimization is separate.
 
 11. **Reduce associativity** (builtin function reducers whose `⊕` is associative — `concat`, `json_merge` are; `majority_vote` is not): order of reduction is irrelevant.
 

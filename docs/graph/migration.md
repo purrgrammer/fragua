@@ -40,7 +40,7 @@ The near-duplicate `change` / `feature` pair collapses into one graph with a `mo
 
 ### `fix-bug.dot`
 
-`LLM(reproduce, self-retarget) → LLM(fix) → Task(detect-runner, idempotent by manifest hash) → LLM(verify)`. `detect-runner` formalizes as a `Task` because it's a side-effecting probe that's idempotent — same shape as today's `tool` node plus the explicit `idempotencyKey`.
+`LLM(reproduce, self-retarget) → LLM(fix) → Task(detect-runner) → LLM(verify)`. `detect-runner` formalizes as a `Task` — same shape as today's `tool` node.
 
 ### `review.dot`
 
@@ -115,14 +115,94 @@ The runtime semantics carry forward; the authoring surface and the data-flow con
 
 ## What retires from DOT
 
-A handful of DOT facilities that exist today don't translate one-to-one — and don't need to. SDK-level replacements cover the same intent more legibly:
+Comprehensive list. Every DOT facility that the typed model deliberately doesn't inherit:
 
-- **`cluster_<name>` subgraphs as class-derivation.** Today's `subgraph cluster_review { ... }` is *not* a sub-graph in the typed sense — it's a flat sibling namespace that derives a class for `model_stylesheet` rules. Retires alongside `class=` and `model_stylesheet=`. The typed equivalent for "these three nodes share a model" is the SDK helper `.withModelGroup(['plan', 'review'], 'claude-opus-4-7')` — explicit, no class system. *Real* sub-graphs (composable units with their own inputs/outputs) use the `subgraph(...)` builder per [sdk.md § Sub-graph composition](sdk.md#sub-graph-composition).
-- **`model_stylesheet`** and **node `class=`**. Bulk styling moves to SDK helpers; per-node `llm_model` / `llm_provider` stays.
-- **`fidelity=`**. Shared-thread continuity is implicitly full; the typed model carries data via edge transforms, not via "include N prior messages."
-- **`max_goal_gate_retries`** as a graph-level chained-retarget cap. Replaced by explicit per-retarget-edge `retryBudget`. Each gate's retarget edge is its own decision; no graph-level fallback chain.
-- **`default_retry_policy`**. No node-level retry policy in the typed model; retries are graph topology.
-- **`${context.<key>}`** substitution. Run-state KV as a side-channel retires; typed edges carry data instead.
+| Today | Replacement |
+|---|---|
+| `$ARGUMENTS` | Typed graph input `I` |
+| `$<id>.output` substitution | Edge transforms |
+| `$<id>.output.<path>` | Edge transforms with PathExpr |
+| `$<id>.stderr` | `Outcome.err.error.stderr` |
+| `$goal` | TemplateExpr context var `${graph.contractVersion}` and similar |
+| `${context.<key>}` substitution | Typed edges (no side-channel KV) |
+| `condition="outcome=..."` | Predicate DSL `o.tag === 'ok'` |
+| `condition="context.<key>=..."` | Predicate DSL over `o.value.<path>` |
+| `outcome=success \| fail \| error` | `Outcome.tag = 'ok' \| 'err' \| 'aborted'` |
+| `max_retries=` on node | Retarget self-edge |
+| `goal_gate=true` | Retarget edge with `retryBudget` |
+| `retry_target=` | Retarget edge target |
+| `fallback_retry_target=` | Multiple retarget edges with cascading predicates |
+| `max_goal_gate_retries=` | Per-edge `retryBudget` |
+| `class=` | SDK helpers (`.withModelGroup(...)`) |
+| `model_stylesheet=` | SDK helpers |
+| `cluster_<name>` class-derivation | Real sub-graphs use `subgraph(...)` builder |
+| `default_fidelity` | Dropped with fidelity |
+| `default_max_retries` | SDK default helpers |
+| `default_retry_policy` | No node-level retry policy |
+| `default_*` graph-level defaults | SDK defaults |
+| Shape vocabulary (`Mdiamond`, `Msquare`, `box`, `diamond`, `hexagon`, `parallelogram`, `component`, `tripleoctagon`) | NodeKind discriminator (`llm` / `task` / `wait` / `map` / `reduce` / `subgraph`); `start` / `exits` on Graph for lifecycle |
+| `type=` shape override | NodeKind only |
+| `prompt=` raw string | `prompt: { system?, user }` template specs |
+| `allowed_tools=` CSV string | `tools: ToolRef[]` typed array |
+| `llm_model=`, `llm_provider=` | Typed fields |
+| `tool_command=` | `Task.command` |
+| `fidelity=` on codergen | Shared thread = full prior context (no truncation tier) |
+| LLM `parseOutput.fromAssistantText` fallback parser | Drop; downstream Task parses if needed |
+| `budget_policy=` keyword | `bounds.policy: 'stop' \| 'warn' \| 'pause'` |
+| `Outcome.paused` | `RunStatus.paused` (orthogonal axis) |
+| `Outcome.err.retriable` | Retarget edges (retry is graph topology) |
+| Edge `subscribe` callback API | `events: AsyncIterable` only |
+
+What stays (rationale: independent design merit, not attractor inheritance):
+
+- Provider + model abstraction
+- Tool registry (via extensions)
+- `skills` / `agents` catalogs (system-prompt discovery surfaces)
+- Worktree provisioner
+- HITL pause/resume model
+- Budget enforcement
+- Event-sourced reducer
+- Replay determinism
+
+## `change.dot` retry translation (worked example)
+
+The two retry patterns in `change.dot` translate to the typed model's retarget edges:
+
+```ts
+const change = defineGraph<ChangeInput, ChangeOutput>('change', '1.0.0')
+  .input(ChangeInputSchema)
+  .output(ChangeOutputSchema)
+  .bounds({ maxCostUsd: 10.0, policy: 'stop' })
+
+  .node('plan',      llm({ model: 'claude-opus-4-7',  prompt: { user: '...' } }))
+  .node('implement', llm({ model: 'claude-sonnet-4-6', thread: 'dev', prompt: { user: '...' } }))
+  .node('review',    llm({ model: 'claude-sonnet-4-6', thread: 'dev', prompt: { user: '...' } }))
+  .node('ci',        task({ command: 'bun run ci' }))
+  .node('fix',       llm({ bounds: { maxCostUsd: 0.10, maxTokens: 300_000 }, prompt: { user: '...' } }))
+  .node('commit',    llm({ prompt: { user: '...' } }))
+
+  // Pattern 1: review goal-gate cycle (today: goal_gate + retry_target + max_goal_gate_retries=2)
+  .edge('plan',      'implement')
+  .edge('plan',      'done', { when: (o) => o.tag === 'err' })
+
+  .edge('implement', 'review')
+  .edge('implement', 'done', { when: (o) => o.tag === 'err' })
+
+  .edge('review',    'implement', retarget({ when: (o) => o.tag === 'err', retryBudget: 2 }))
+  .edge('review',    'ci',   { when: (o) => o.tag === 'ok' })
+  .edge('review',    'done', { when: (o) => o.tag === 'err' })   // fires when retarget exhausted
+
+  // Pattern 2: ci-fix loop (today: ci.max_retries=5 with fix→ci backward edge)
+  .edge('ci',        'commit', { when: (o) => o.tag === 'ok' })
+  .edge('ci',        'fix',    { when: (o) => o.tag === 'err' })
+  .edge('fix',       'ci',   retarget({ when: (o) => o.tag === 'ok', retryBudget: 5 }))
+  .edge('fix',       'done', { when: (o) => o.tag === 'err' })   // fix itself aborts → halt
+
+  .edge('commit',    'done')
+  .compile();
+```
+
+Both retries express. Cost: ~3 extra `done` fallback edges that today's DOT model leaves implicit ("no matching outgoing edge → halt"). The typed model makes every termination path explicit; SDK ergonomic helpers (`.haltOnError(...)`, `.edge(...).onError('done')`) can collapse the boilerplate without changing the IR.
 
 ## Order of operations
 

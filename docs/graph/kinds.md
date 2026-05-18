@@ -16,88 +16,82 @@ User-authored JS reaches into runs through **the SDK's extension surface** (`@sw
 
 ```ts
 type LLMAttrs<I, O> = {
-  provider:    string;
-  model:       string;
-  tools?:      ToolRef[];                       // resolved against Environment.tools
-  thread?:     ThreadId;                        // optional continuity
-  bounds?:     { maxCostUsd?, maxTokens?, maxMs? };
+  provider:        string;                      // 'anthropic' | 'openai' | ...
+  model:           string;                      // provider-native model id
+  tools?:          ToolRef[];                   // resolved against Environment.tools
+  thread?:         ThreadId;                    // optional continuity hint
+  bounds?:         { maxCostUsd?: number; maxTokens?: number; maxMs?: number };
   reasoningEffort?: 'low' | 'medium' | 'high';
 
-  buildPrompt: (input: I, ctx: NodeContext) => Promise<LLMRequest>;
-  parseOutput: 'tool-call' | 'structured-response' | {
-    fromAssistantText: (s: string) => O;        // fallback parser
-  };
-  outputRetries?: number;                       // default: 1 (see "Output failure" below)
+  prompt:          PromptSpec;                  // declarative template
+  parseOutput:     'tool-call' | 'structured-response';
+  outputRetries?:  number;                      // default: 1
 };
 
-type ToolRef = string;                          // bare name; e.g. 'web_fetch', 'read', 'bash'
+type PromptSpec = {
+  system?:   TemplateExpr;                      // optional system message
+  user:      TemplateExpr;                      // required user message
+};
+
+type ToolRef =
+  | string                                      // 'web_fetch' — bare; ambiguous if multiple extensions provide it
+  | { extension: string; name: string };        // 'bitrefill/web_fetch' — explicit
 ```
 
-A typed input is rendered into messages by `buildPrompt`. The LLM call produces typed `O` via one of three mechanisms:
+A typed input is rendered to messages by interpolating `prompt.user` (and `prompt.system` if set) against `I` via the [TemplateExpr DSL](expressions.md#templateexpr--string-templates-with-placeholders). The LLM call produces typed `O` via one of two mechanisms:
 
-1. **Terminal output tool** (default). Implicit `emit_output` tool whose schema is `O`. The LLM is required to call it to terminate; the tool result is the output. Observable in the event log, fallback-friendly, works on any provider with tool use.
+1. **Terminal output tool** (default). Implicit `emit_output` tool whose schema is `O`. The LLM is required to call it to terminate; the tool result is the output. Observable in the event log, works on any provider with tool use.
 2. **Structured response.** Provider-native (`response_format`, JSON mode). Faster path when the provider supports it natively.
-3. **Fallback text parser.** Author-supplied parser. Used only when neither tool-call nor structured-response is available.
 
-Tools are referenced by bare name (`'web_fetch'`, `'read'`, `'bash'`); `Environment.tools` resolves them at bind time. Tool versioning is an extension-management concern (the extension's own version pin in project config), not a workflow concern — if a deployment needs a specific tool version, it pins the extension, not the workflow.
+There is no fallback text parser. Authors who can't use either output mode restructure with a downstream `Task` that parses prose.
+
+Tools are referenced by name; `Environment.tools` resolves at bind. Bare-string refs fail with "ambiguous tool name" if multiple extensions register the same name; the explicit `{ extension, name }` form disambiguates. Tool versioning is an extension-management concern (the extension's own version pin in project config), not a workflow concern.
 
 ### Output failure handling
 
 The model may decline to call the output tool, or call it with arguments that fail the output schema. Default behavior: feed the validation error back as a user message ("Your previous output didn't match the schema: <error>. Please call `emit_output` again with valid arguments."), retry once. On the second failure, emit `Outcome.err` with the validation error in the body; downstream edges route on it. `outputRetries?: number` overrides the cap (default 1).
 
-The `fallback` parser case is different — if the author supplied `parseOutput: { fromAssistantText: ... }`, parse errors there are `Outcome.err` immediately; no LLM retry.
+### Prompt expressivity ceiling
+
+`prompt.user` and `prompt.system` are TemplateExpr strings — placeholders against `I`, no conditionals, no loops, no function calls outside the filter registry. The constraint is deliberate: it keeps the IR pure data. Authors who need conditional sections or loops factor the work into an upstream `Task` that produces typed prompt-data; the LLM node consumes the structured data via a simple template.
+
+If you find yourself wanting `{{#if input.urgent}}...{{/if}}` in a template, that's the signal to author an upstream Task that builds the typed `{ heading, urgentSection?, ... }` shape, then template against that.
 
 ## Task
 
 ```ts
 type TaskAttrs<I, O> = {
-  // What to run. Today's `tool_command` shape extended with structured
-  // I/O knobs and idempotency metadata.
-  command:         string;                        // shell command; substitution supported
-  inputMode?:      'stdin-json' | 'args' | 'env'; // default: stdin-json
-  outputMode?:     'stdout-json' | 'stdout-text'; // default: stdout-json when I/O is typed
-  cwd?:            string;
-  env?:            Record<string, string>;
-  retriableExitCodes?: number[];                  // default: [] (every non-zero is non-retriable)
-
-  // Cacheability + replay safety — REQUIRED
-  idempotencyKey:  (input: I) => string;          // no default; author asserts explicitly
-  cache?:          { ttlMs: number };
+  command:    TemplateExpr;                       // shell command; placeholders substitute from I
+  inputMode?: 'stdin-json' | 'args' | 'env';      // default: stdin-json
+  outputMode?: 'stdout-json' | 'stdout-text';     // default: stdout-json when I/O is typed
+  cwd?:       string;
+  env?:       Record<string, string>;
+  bounds?:    { maxMs?: number };
 };
 ```
 
-The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors who want a deterministic pure transform write a script (`./scripts/extract-areas`) and declare it idempotent; the runtime caches by `idempotencyKey` so replays don't re-execute side effects.
-
-### `idempotencyKey` is required
-
-The SDK provides two helpers for the common cases:
-
-```ts
-import { task, inputHashKey, alwaysFreshKey } from '@swarm/sdk';
-
-task({ command: 'bun ./extract.ts', idempotencyKey: inputHashKey  })   // pure transform
-task({ command: 'bun run ci',       idempotencyKey: i => i.gitSha })   // pin by sha
-task({ command: 'curl ...',         idempotencyKey: alwaysFreshKey })  // never cache
-```
-
-`inputHashKey` is `i => sha256(canonicalJson(i))`; `alwaysFreshKey` is `() => crypto.randomUUID()`. The default-by-input-hash idiom is *available* via `inputHashKey` but never implicit — the author has to write the choice. Forces thinking about it; CI fetches and moving targets stop being silent footguns.
-
-`retriableExitCodes` opts specific non-zero exit codes into the retarget-edge retry path. Default empty: every non-zero exit is `Outcome.err` and routes via edge predicates. Authors who want "exit 75 (EX_TEMPFAIL) → retry" set `retriableExitCodes: [75]` and add a retarget self-edge with `retryBudget`.
+The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors write a script (`./scripts/extract-areas`) and pipe typed I/O through it.
 
 ### Examples
 
-- **Deterministic pure transform** (was: Function): `command="bun ./scripts/extract-areas.ts"`, input piped as JSON on stdin, output parsed as JSON from stdout. `idempotencyKey: inputHashKey`. Process spawn cost is ms-scale; this is fine for anything not on a hot inner loop.
-- **Run CI**: `command="bun run ci"`, `idempotencyKey: i => i.gitSha`. Cached: same sha → cached result, no re-run.
-- **Fetch a doc**: `command="curl …"`, `idempotencyKey: i => \`${i.url}|${i.etag}\``.
-- **Apply a patch**: `command="bun ./scripts/apply-patch.ts"`, `idempotencyKey: i => sha256(i.patch)`.
+- **Deterministic pure transform**: `command: 'bun ./scripts/extract-areas.ts'`, input piped as JSON on stdin, output parsed as JSON from stdout. Process spawn cost is ms-scale; fine for anything not on a hot inner loop.
+- **Run CI**: `command: 'bun run ci'`. Just runs; replay reads the logged Outcome from the event store.
+- **Fetch a doc**: `command: 'curl ${input.url}'`.
+- **Apply a patch**: `command: 'bun ./scripts/apply-patch.ts'`.
 
-The author asserts idempotency by setting the key. The runtime trusts it — a non-idempotent body declared idempotent is a bug, surfaced when replay diverges from the original run.
+### Replay vs caching
+
+Replay determinism comes from the event log: a replayed run reads the Outcome that was logged on the original run; the command never re-executes. This is sufficient for the runtime contract — authors don't need to assert idempotency on the IR.
+
+Caching across runs (LRU on `(command, canonicalized input, env, cwd)`) is a future runtime-internal optimization that doesn't surface in the IR. Authors who need "always fresh" semantics inside a single run write a fresh upstream input value (a `Map` with a per-element nonce, etc.); authors who need cross-run dedup wait for the runtime to add caching.
+
+The earlier `idempotencyKey` / `cache` fields were author-facing surface for a feature swarm doesn't ship today. Dropped to keep the IR honest.
 
 For non-idempotent ad-hoc shell calls, prefer the `bash` tool inside an `LLM` node rather than a Task — that's what it's for.
 
-### Task stderr access
+### Task error body and stderr access
 
-On exit-zero success, stderr is captured in the streaming-partials event log (observable via `IO<E>`) but **not** surfaced on the Node's typed `O`. On non-zero exit, the failure body becomes:
+On non-zero exit, the failure body carries stdout, stderr, and exit code:
 
 ```ts
 Outcome.err = {
@@ -106,22 +100,43 @@ Outcome.err = {
 };
 ```
 
-Downstream edges can route on `o.error.exitCode` (e.g., to distinguish `EX_TEMPFAIL=75` from other failures) and read the stderr text via `o.error.stderr`. The legacy `$<id>.stderr` substitution from today's DOT retires with substitution generally — typed edges carry the error body directly.
+Downstream edges route on `o.error.exitCode` (e.g., distinguish `EX_TEMPFAIL=75` from other failures) and read stderr text via `o.error.stderr`. Authors who want "exit 75 → retry" wire a retarget self-edge:
+
+```ts
+.edge('myTask', 'myTask', retarget({
+  when: (o) => o.tag === 'err' && o.error.exitCode === 75,
+  retryBudget: 3,
+}))
+```
+
+On exit-zero success, stderr is captured in the streaming-partials event log (observable via `IO<E>`) but not surfaced on the Node's typed `O`. The legacy `$<id>.stderr` substitution retires with substitution generally — typed edges carry the error body directly.
 
 ## Wait
 
 ```ts
 type WaitAttrs<I, O> =
-  | { source: 'human'; prompt: (i: I) => HumanPrompt; resumeSchema: StandardSchemaV1<O> }
-  | { source: 'http';  callbackPath: string;          expect:       StandardSchemaV1<O> }
-  | { source: 'timer'; durationMs: number;            onFire:       O };
+  | {
+      source:       'human';
+      prompt:       { question: TemplateExpr; description?: TemplateExpr };
+      resumeSchema: StandardSchemaV1<O>;
+    }
+  | {
+      source:       'http';
+      callbackPath: string;                       // relative URL; runtime knows base
+      expect:       StandardSchemaV1<O>;
+    }
+  | {
+      source:       'timer';
+      durationMs:   number;                       // for "wait until X", compute durationMs at start
+      onFire:       O;                            // const value the timer produces
+    };
 ```
 
 A pause primitive. **Each `Wait` node has exactly one source** — `human`, `http`, or `timer` — and its typed output `O` is that source's payload. Today's HITL hexagon is the `human` source; HTTP callbacks and timer firings become first-class on the same primitive with their own variants.
 
 The single-source choice is deliberate. Almost every real Wait is HITL-only; forcing a tagged union on every node penalizes the common case for a rare one. Multi-source ("wait for human OR timeout") is expressed by composition: `Map(extract: () => [humanWait, timerWait], body: subgraph, policy: 'first_success')`. Explicit and rare; the common HITL case stays clean.
 
-The `Outcome` of a `Wait` node is `{ tag: 'ok'; value: O }` once resolved; before that, the node sits in `{ tag: 'paused' }` state and the runtime emits `fact.run_paused`. Resumption events flow in via `IO<E>` and the runtime validates them against the source's schema (`resumeSchema` for human, `expect` for http) before propagating. Validator rejects multi-source Wait at IR build time.
+The `Outcome` of a `Wait` node is `{ tag: 'ok'; value: O }` once resolved. While the Wait is suspended, the run has `RunStatus.paused` (the orthogonal axis — `paused` is a runtime status, not an Outcome variant); the runtime emits `fact.run_paused`. Resumption events flow in via `IO<E>` and the runtime validates them against the source's schema (`resumeSchema` for human, `expect` for http) before propagating to the Outcome. Validator rejects multi-source Wait at IR build time.
 
 ### Routing on `Wait` output
 
@@ -130,7 +145,7 @@ Wait isn't a special case for routing. Outgoing edges read the typed `O` via the
 ```ts
 .node('signoff', wait({
   source:       'human',
-  prompt:       () => ({ question: 'Approve to ship?' }),
+  prompt:       { question: 'Approve to ship ${input.summary}?' },
   resumeSchema: Type.Object({
     choice: Type.Union([Type.Literal('approve'), Type.Literal('reject'), Type.Literal('defer')]),
     note:   Type.Optional(Type.String()),
@@ -149,9 +164,9 @@ This is a deliberate departure from today's two-tier model (substitution paths f
 
 ```ts
 type MapAttrs<I, Elem, BodyOut, O> = {
-  extract:     (i: I) => readonly Elem[];
+  extract:     TransformExpr;                     // path/expression yielding Elem[]
   body:        Node<Elem, BodyOut>;               // sub-graph or single node
-  concurrency: number;
+  concurrency: number;                            // > 0; runtime caps at extracted-array length
   policy:      'wait_all' | 'first_success' | 'collect_settled';
 };
 ```
@@ -212,10 +227,14 @@ Validation (reachability, predicate completeness, DAG property) applies **per su
 
 ## Cross-kind invariants
 
-- **`Task`** bodies are externally observable (process-spawned); the IR carries only `command` + idempotency metadata. The author asserts idempotency by setting `idempotencyKey`; the runtime trusts that and caches by key for replay.
+- **`Task`** bodies are externally observable (process-spawned); the IR carries only `command` and I/O wiring. Replay reads the logged Outcome from the event store; no idempotency assertion needed from the author.
 - **`LLM`** is the only kind whose output isn't fully deterministic. The event log captures every turn; replay uses the logged result, not a fresh call.
 - **`Map`** and **`Reduce`** with builtin function reducers are fully replayable (logged element outcomes feed the reducer; builtin code is stable across runs).
-- **`Wait`** suspends and resumes via the event log; the resume event is the output.
+- **`Wait`** suspends and resumes via the event log; the resume event is the output. Suspension is a `RunStatus` (`paused`), not an Outcome variant.
 - **`Subgraph`** is pure structural composition; the replay property of the parent is the conjunction of the replay properties of the child sub-graphs.
 
-The replay property holds across all six kinds when the Environment is deterministic (injected `clock`, `rng`) and Task bodies honor their declared `idempotencyKey`.
+The replay property holds across all six kinds when the Environment is deterministic (injected `clock`, `rng`) — Task outputs are read from the event log on replay, so determinism doesn't depend on author-asserted properties of the Task body.
+
+### No function-typed attrs in the IR
+
+Every kind's attrs above use [declarative expression types](expressions.md) — `TemplateExpr`, `PathExpr`, `TransformExpr`, `PredicateExpr`, `BuiltinRef`. No kind carries a TS function in the IR. The SDK desugars author-friendly forms (template literal strings, single-expression arrows, imported builtins) at `.compile()` time. Authors who need richer logic factor the work into an upstream Task. This is the constraint that keeps the IR pure data and replays deterministic.
