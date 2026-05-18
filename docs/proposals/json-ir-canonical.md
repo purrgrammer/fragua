@@ -2,7 +2,7 @@
 title: JSON IR as the canonical workflow form
 status: proposed
 maturity: designed
-last-reviewed: 2026-05-17
+last-reviewed: 2026-05-18
 ---
 
 # JSON IR as the canonical workflow form
@@ -283,10 +283,9 @@ Per AGENTS.md ground rule #1:
 
 ## Addendum — 2026-05-17 review
 
-Four points landed during the codergen-context-output-tools / G1 work
-and the orchestration of that work, none of which change the core
-design but each of which needs to be reflected in the implementation
-PR.
+Four points landed during a parallel design review, none of which
+change the core design but each of which needs to be reflected in the
+implementation PR.
 
 ### A. `/runs/:id` projection: drop the embedded `workflowSource`
 
@@ -311,12 +310,9 @@ payload meaningfully on long-prompted workflows. Listed task #16
 
 ### B. JSON IR allows nested objects for fields DOT escapes as strings
 
-> **Note (post-2026-05-17):** the original live example for this rule
-> was the `output_schema=` attribute introduced by
-> `codergen-context-output-tools.md`. That proposal has been scrapped;
-> the principle still applies for any future attribute whose authored
-> value is JSON-shaped (e.g. the typed inputs/outputs/context surface
-> when it lands).
+The rule applies whenever a node attribute's authored value is
+JSON-shaped (e.g. the typed inputs/outputs/context surface when it
+lands).
 
 In DOT, any JSON-shaped attribute value must be inline-escaped
 (`some_attr = "{\"type\":\"object\",...}"`); in JSON IR the same field
@@ -375,3 +371,41 @@ consumes the JSON IR schema, doesn't change it. But it's the
 motivating reason to push hard on the Typebox-first decision (§2)
 since the SDK's value proposition is type inference across the graph,
 which requires the schema to be the source of truth.
+
+### F. Cross-reference: `docs/graph/` typed Graph model
+
+A `docs/graph/` directory landed 2026-05-18 describing the typed
+`Graph<I, O, E>` model the JSON IR is the canonical form for. It
+covers:
+
+- **types.md** — `Graph`, `Node`, `Edge`, `Outcome`, edge
+  predicate / transform DSL
+- **kinds.md** — six node kinds (`LLM`, `Function`, `Task`, `Wait`,
+  `Map`, `Reduce`)
+- **runtime.md** — `Environment`, `BoundGraph`, `Run<I, O, E>`,
+  `IO<E>`
+- **laws.md** — algebraic + operational invariants, property-test
+  templates
+- **patterns.md** — Anthropic "Building Effective Agents" patterns
+  expressed in the typed model
+- **migration.md** — every current workflow translated to the new
+  model
+
+The canonical-IR flip described in this proposal is the **first
+concrete step** of that larger direction. Once the IR is stable and
+the Typebox schema is published in `@swarm/types`, the typed
+Node / Edge attribute extensions (LLM structured output, edge DSL,
+Map / Reduce kinds, retarget edges as data) layer on without further
+schema-version bumps if planned correctly — they're additive fields
+on existing IR shapes.
+
+Implications for this proposal:
+
+- §Out of scope's "TS workflow-builder library" bullet retires — the
+  SDK direction is now explicit (`docs/graph/runtime.md`, Addendum E
+  above).
+- `schemaVersion: 1` stays at `1` for the canonical-IR flip; typed
+  extensions land as optional fields, bumping to `2` only when a
+  non-additive break is needed.
+- §Doc updates required gains: `docs/graph/migration.md` if any
+  workflow's translation changes during implementation.

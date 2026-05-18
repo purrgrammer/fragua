@@ -22,7 +22,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Per-project DB retention](./db-retention.md) | specified | `swarm db prune --project` retention CLI |
 | [Periodic introspection workflow](./introspection-workflow.md) | specified | archival path for the synthesised review (route through `ctx.artifacts.put(...)` keyed by date) is the only outstanding piece — workflow + primitives shipped |
 | [Extensions — custom tools](./extensions-tools.md) | designed | v0 landed: `@swarm/extension` package, workspace loader (discover + adapter), daemon wiring, `web_fetch` reference extension, 16 unit tests. Outstanding: hot reload, daemon_events, trust config, CLI subcommands, web-bundler renderer integration, Tool component reshape — see proposal |
-| [swarm-author SKILL.md final sweep](./swarm-author-skill-rewrite.md) | design | deferred until JSON IR canonical, `@swarm/sdk`, and typed inputs/outputs tracks settle; proposal lists outdated surface and open questions |
 
 ## Accepted (design done; awaiting scheduling)
 
@@ -38,6 +37,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Parallel branches as first-class executor citizens (sub-runs)](./parallel.md) | specified | branches today are single-node, opaque to the executor's dispatch loop, and inherit none of its per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection). Concrete production symptom: `review.dot`'s `lens_correctness` spent $1.72 vs $0.30 cap (5.7× over). Approach: each branch becomes a child `run_state` row with `parent_run_id` linkage; reuses 100% of existing executor machinery. P0 extracts `dispatchOne`/`foldIntents`/`claimAndAdvance` from the executor's monolithic loop; P2 cuts `parallel.ts` over to sub-runs; P3 unlocks multi-node branch subgraphs + HITL inside branches. No feature flag; direct cutover with parity tests gating P2 |
 | [Extensions — custom tools and hooks (unified)](./project-extensions.md) | designed | folds tools and hooks back into one factory file riding the loader from `./extensions-tools.md`; four hook events — `tool.before_call` / `tool.after_call` / `agent.before_start` (feedback: `block` / mutate `input` / replace `content` / replace `systemPrompt`) and `agent.turn_end` (read-only `AssistantMessage`); ships after tools |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
+| [Worktree snapshots at node boundaries](./worktree-snapshots.md) | designed | capture worktree state as a git tree under `refs/swarm/snapshots/<runId>/<eventIdx>` after every `fact.node_completed` and on HITL pause. Three payoffs — diff-on-HITL, race-free UI files/diff view, prerequisite for run forkability. No branches, no tags, no synthetic refs in the user's namespace. Composes with [parallel sub-runs](./parallel.md) and supersedes the snapshot subset of [file-server](./file-server.md) |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
 | [Analytics — follow-up roadmap](./analytics.md) | sketch | menu of charts cut from v1 |
 | [Per-workflow analytics](./per-workflow-analytics.md) | sketch | workflow filter on `/analytics`; identity = `(scope, name)` not sha; metric decomposition (input/output/cache-read/cache-write) |
@@ -51,13 +51,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 | [Payload-cap pressure signal](./payload-pressure-signal.md) | sketch | introspect found `events.payload` writes 5 B from the 4 KB cap; surface near-cap pressure as a daemon event + analytics tile + run-detail warning so operators see the wall before hitting it; `cap-overflow.md` owns the spill/halt path for both `events.payload` and `run_state.routing` |
 | [JSON IR as canonical workflow form](./json-ir-canonical.md) | designed | flip storage from DOT-text to canonical JSON IR; Typebox-first schema published from `@swarm/types`; DOT becomes authoring sugar that lowers at upload; schema v4 → v5 with try-migrate per row; `$ref`/include + DOT-superset features deferred to follow-ups |
 | [Multi-account support per provider](./multi-account.md) | sketch | first-class `(provider, account)` credentials with reserved `"default"` account; selection via run intent / schedule / project config / global config; workflows stay account-agnostic. Drivers: billing/org separation, per-run credentials. Composes with deferred [`credentials.md`](./credentials.md) — lower-cost ordering is multi-account first against `auth.json`, credentials-in-DB second with the two-level shape baked in |
-| [Per-model CLI ops for custom providers](./provider-model-ops.md) | sketch | `swarm providers add-model / rm-model / ls-models / edit-model` lets operators manage individual model entries inside a custom provider's `provider_config` row without re-walking the whole `add --custom` wizard. Closes the UX regression that opened when `~/.swarm/models.json` stopped being hand-editable |
-
-## Discarded
-
-| Proposal | Discarded | Why |
-|---|---|---|
-| [Codergen context + output tools](./codergen-context-output-tools.md) | 2026-05-17 | first cut shipped then reverted; the *invocation shape* (`context_set` / `emit_output` tools + `output_schema` attr) didn't survive contact with the consuming workflows. Redesign expected after JSON IR canonical + typed inputs/outputs/context land; see the scrap banner in the proposal for what to carry forward |
 
 ## Deferred
 
