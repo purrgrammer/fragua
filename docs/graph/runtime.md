@@ -174,14 +174,59 @@ A node never sees the full `Environment`. The capability boundary is structural 
 - **`bounds` exceeded** with `policy: 'stop'` — runtime aborts whatever's mid-execution.
 - **`maxMs` per-node timeout** — fires on the offending node only.
 - **Parent run cancellation** — propagates recursively to sub-Runs.
+- **`Race` losing branches** — when one branch resolves, AbortSignal propagates to the others.
 
 When a Wait suspends, `ctx.signal` does NOT fire — the run pauses, the signal stays clean, the Wait resumes by appending an event. Cancel while paused: the signal fires, the Wait transitions to `Outcome.aborted`.
 
-## Sub-Runs: one mechanism, two entry points
+## Edge-selection algorithm
 
-Both `Map` elements and direct `Subgraph`-kind nodes run as **sub-Runs**: child `run_state` rows with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). One mechanism, two entry points into it. The runtime doesn't distinguish "sub-graph because Map.body" from "sub-graph because direct Subgraph node" — both produce sub-Run rows that inherit the parent's per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection).
+When a node completes with `Outcome<O>`, the runtime picks the outgoing edge to fire next via this exact algorithm:
 
-Net effect: HITL inside a parallel branch, multi-node branch sub-graphs, retargets inside sub-graphs — all work as first-class features because every sub-graph is just another Run.
+```
+edge_selection(node, outcome):
+  outgoing = edges where edge.from == node
+  // Step 1: filter by predicate
+  candidates = [e for e in outgoing if matches(e.when, outcome)]
+  // Step 2: separate retargets from forwards
+  retargets = [e in candidates if e.kind == 'retarget' and budget_remaining(e) > 0]
+  forwards  = [e in candidates if e.kind == 'forward']
+  // Step 3: retargets win first (when budget remains)
+  if retargets:
+    chosen = first(retargets)    // source-order; validator requires disjoint predicates
+    increment_budget_counter(chosen)
+    return chosen
+  if forwards:
+    chosen = first(forwards)     // source-order; validator requires disjoint predicates within forward set
+    return chosen
+  // Step 4: no edge matched
+  halt(run, reason='no_matching_edge', detail='node {node} produced {outcome.tag} with no outgoing edge matching')
+```
+
+### Retry budget scope and persistence
+
+`retryBudget` is **per edge instance, per containing run**. A retarget edge with `retryBudget: 5` in the top-level graph fires at most 5 times in the top-level Run; the same edge instance in a sub-Run has its own counter scoped to that sub-Run.
+
+Counters persist via `fact.retarget_fired` events in the event log. Replay reconstructs counters by counting the facts. The validator rejects retarget edges without an explicit `retryBudget`.
+
+### Predicate matching rules
+
+- `when` absent → predicate always matches.
+- `when` present and predicate is in the decidable subset → matches deterministically.
+- `when` present and predicate is outside the decidable subset → matches per the runtime's predicate evaluator. The validator can't prove disjointness across non-decidable predicates; authors writing such predicates must ensure source-order resolves ties intentionally.
+
+### Source-order priority
+
+Within the retargets-list (or the forwards-list), the first edge in IR source order that matches wins. The validator warns when multiple edges in the same set could match the same `Outcome` (only for predicates in the decidable subset where overlap can be proven).
+
+### Halt on no-matching-edge
+
+If neither retargets (with budget) nor forwards match, the run halts with `reason: 'no_matching_edge'`. This is the typed-model equivalent of today's "no outgoing edge after fail" silent halt — now explicit, with a fact in the log.
+
+## Sub-Runs: one mechanism, four entry points
+
+`Map` elements, `Race` branches, direct `Subgraph`-kind nodes, and any nested `Graph<I, O>` used as a node all run as **sub-Runs**: child `run_state` rows with `parent_run_id` linkage, per [`../proposals/parallel.md`](../proposals/parallel.md). One mechanism, multiple entry points into it. The runtime doesn't distinguish their origins — they're all sub-Runs that inherit the parent's per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection).
+
+Net effect: HITL inside a parallel branch, multi-node branch sub-graphs, retargets inside sub-graphs, racing heterogeneous nodes — all work as first-class features because every sub-graph is just another Run.
 
 ## Budget inheritance
 
@@ -204,11 +249,23 @@ map({
 })
 ```
 
-## Sub-graph and Map event surface
+## Sub-Run event model
 
-Sub-graph events (and Map element events) emit on the parent run's stream wrapped in a `fact.subgraph_event` envelope with a `nodeIdPath` prefix. Subscribers to the parent's `IO<E>` see the nested fact; subscribers to the sub-graph's own `IO<E>` (returned from `runGraph` for an explicit sub-Run) see the raw inner fact.
+Each Run — top-level or nested — has its own slice of the event log, keyed by `run_id`. Sub-Run events do **not** duplicate into the parent's stream; instead, descendant views are constructed by querying for `parent_run_id` linkage. This aligns with the [parallel.md](../proposals/parallel.md) proposal and avoids:
 
-This means dashboards can subscribe to the parent once and render nested by path; the SDK's typed `IO<E>` on a child `Run` filters to its own slice. Same event log, two views.
+- **Write amplification** — events would otherwise be written twice (child log + parent envelope).
+- **Replay ambiguity** — which event log is canonical for the child?
+- **Cost rollup confusion** — costs are now summed by traversing the run tree, not by counting parent-stream entries.
+
+Operator views:
+
+- **`/runs/:id/events`** — events for run `id` only. Default, cheapest.
+- **`/runs/:id/events?descendants=true`** — union of events from `id` and all transitive sub-Runs. Constructed by recursive SQL on `parent_run_id`. UI default for parent-of-Maps to keep the trace readable.
+- **`/runs/:id/tree`** — the run tree (parent + descendants) with status, cost, and event counts per node. Compact summary surface.
+
+SSE subscribers can request descendant streams via a `descendants=true` query param; the server merges live; the client doesn't need to manage multiple SSE connections.
+
+Cost / token rollups are computed by walking the run tree; the parent's `metrics.totalCostUsd` includes descendants. Replay walks the tree the same way, deterministically.
 
 ## Properties to preserve through the migration
 

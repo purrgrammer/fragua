@@ -67,14 +67,38 @@ Edge transforms and `Map.extract` use this. More expressive than PathExpr.
 transform ::= path                                # bare path: pull a value
             | "pick(" path ("," path)* ")"        # keep listed fields
             | "omit(" path ("," path)* ")"
-            | "set(" path "," value ")"
+            | "set(" path "," value ")"           # set to a literal OR a path-ref
             | "rename(" "{" identifier ":" identifier ("," identifier ":" identifier)* "}" ")"
             | "merge(" transform "," transform ")"
+            | "construct(" "{" identifier ":" value ("," identifier ":" value)* "}" ")"
             | "take(" path "," integer ")"        # first N elements
             | "drop(" path "," integer ")"        # skip first N
             | "json(" path ")"                    # serialize value to JSON string
-value     ::= STRING | NUMBER | BOOL | NULL
+value     ::= literal | path-ref
+literal   ::= STRING | NUMBER | BOOL | NULL
+path-ref  ::= "{" "ref" ":" path "}"              # value pulled from a path
 ```
+
+### `set` and `construct` for computed fields
+
+`set(path, value)` and the field values in `construct({...})` accept either a literal OR a path-ref:
+
+```
+set(decision, { ref: value.choice })              # decision = value.choice (path-ref)
+set(approved, true)                                # approved = true (literal)
+
+construct({
+  verdict: { ref: value.verdict },                 # from path
+  reviewer: 'sonnet',                              # literal
+  timestamp: { ref: outcome.completedAt },         # from path
+})
+```
+
+The SDK desugars `{ ...o.value, decision: o.value.choice }` to a `merge` of `value` (the spread) with a `construct({ decision: { ref: 'value.choice' } })` (the override).
+
+### Array map and reduce
+
+Out of scope for v1. For per-element transforms over an array, fan out via `Map` (a real node with sub-Runs); for shape changes that need per-element logic, write a Task. The transform DSL stays compositional at the record level, not the array-element level.
 
 For `Map.extract`, the result must be array-shaped — checked at bind time against the upstream output schema.
 
@@ -120,6 +144,48 @@ Builtin categories shipped at v1:
 | Edge predicates | (small fixed set; expand as needed by real workflow drift) |
 
 Not user-extensible at the IR level — extensions register *tools*, not builtins. Builtin behavior is a stable contract; changes get new names (`concat_v2`).
+
+## Canonical JSON shapes
+
+Each expression type serializes to a stable JSON shape. The canonical form is what `workflow_sha` hashes; the SDK emits this shape from desugared arrows / strings / builder calls.
+
+```jsonc
+// TemplateExpr
+{ "template": "Task: ${input.task}\nFiles: ${input.files | join(', ')}" }
+
+// PathExpr (path-only access)
+{ "path": "input.files[0].name" }
+
+// TransformExpr
+{ "op": "pick",    "paths": ["input.task", "input.files"] }
+{ "op": "set",     "path":  "decision", "value": { "ref": "value.choice" } }
+{ "op": "set",     "path":  "approved", "value": { "lit": true } }
+{ "op": "construct", "fields": {
+    "verdict":   { "ref": "value.verdict" },
+    "reviewer":  { "lit": "sonnet" }
+} }
+{ "op": "merge",   "left": <transform>, "right": <transform> }
+
+// PredicateExpr
+{ "op": "eq",       "path": "value.verdict",       "value": { "lit": "approve" } }
+{ "op": "and",      "lhs":  <predicate>,           "rhs":   <predicate> }
+{ "op": "exists",   "path": "value.optional" }
+{ "op": "matches",  "path": "value.text",          "regex": "^[A-Z]+$" }
+{ "op": "in",       "path": "value.severity",      "values": ["high", "critical"] }
+
+// BuiltinRef
+{ "kind": "ref", "ref": "majority_vote" }
+```
+
+Canonicalization rules for `workflow_sha`:
+
+- Field order within objects: alphabetical (per the canonical-JSON pinning in `docs/proposals/json-ir-canonical.md`).
+- Whitespace normalised to the canonical form before hashing.
+- Numbers: integer form when integral; no trailing zeros in decimals.
+- Strings: UTF-8, no escapes beyond JSON-required.
+- Nested expressions hashed recursively as part of the parent IR.
+
+The IR-validator validates each expression node against its op schema at bind time. Unknown ops are rejected.
 
 ## SDK desugaring
 

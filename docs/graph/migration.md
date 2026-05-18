@@ -102,6 +102,27 @@ The three channels stay; the mechanism of (1) and (2) becomes cleaner.
 - **Goal-gate retarget chain.** Today: W007 if missing. Tomorrow: type-level requirement (a `goal_gate` node *must* have a typed retarget edge).
 - **LLM output contract.** Today: no contract; downstream parses prose. Tomorrow: terminal output tool with schema; validation at the LLM boundary.
 
+## OutcomeStatus migration matrix
+
+Today's swarm engine uses a wider `OutcomeStatus` taxonomy than the typed model's three-variant `Outcome`. Each maps explicitly:
+
+| Today's OutcomeStatus | Typed-model equivalent |
+|---|---|
+| `success` | `Outcome.ok` with typed `value` |
+| `fail` | `Outcome.err` with typed `error` body |
+| `error` | Run-level `fact.run_halted { reason: 'error' }`; not a node `Outcome` |
+| `partial_success` (some Map branches failed) | `Map.policy = 'collect_settled'` produces `Settled<O>[]` with per-element `{ ok } \| { err }` |
+| `skipped` (Map element skipped due to `first_success`) | Not a node Outcome — the sub-Run was either never started or aborted; visible in the sub-Run's `RunStatus` |
+| `retry` (runtime-internal retriable failure) | Below the handler surface as `pause_provider` mechanism; not exposed as a node Outcome |
+| `paused_hitl` | `RunStatus.paused_hitl`; not a node Outcome (Wait nodes have no terminal Outcome until resumed) |
+| `paused` | `RunStatus.paused` with reason discriminator |
+| `aborted` / `aborted_exit` | `Outcome.aborted` with `reason: string` |
+| `quarantined` | `RunStatus.quarantined`; recovery via `intent.unquarantine` |
+| Today's HITL "preferred label" routing | UI affordance only; Wait routes via predicate over the resume payload schema |
+| Today's "suggested next ids" from handler | Edge predicate matching over `Outcome` (no separate suggested-routing channel) |
+
+The typed model deliberately collapses node-vs-run statuses into orthogonal axes: `Outcome` per node, `RunStatus` per Run. Today's flat enum mixed both; the split clarifies which is which.
+
 ## What stays the same
 
 - Event-sourced reducer.

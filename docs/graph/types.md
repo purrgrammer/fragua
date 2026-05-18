@@ -8,7 +8,7 @@ The core algebra of the typed Graph model. Every type here is Typebox-derived so
 type Graph<I, O, E = DefaultGraphEvent> = {
   id:               string;
   contractVersion:  string;                       // author-supplied semver, e.g. "1.2.0"; informational
-  irVersion:        number;                       // IR schema version; load-bearing for migration
+  schemaVersion:    number;                       // IR schema version; load-bearing for migration
   inputSchema:      StandardSchemaV1<I>;
   outputSchema:     StandardSchemaV1<O>;
   nodes:            ReadonlyMap<NodeId, AnyNode>;
@@ -22,7 +22,7 @@ type Graph<I, O, E = DefaultGraphEvent> = {
 ### Two version fields
 
 - **`contractVersion: string`** — author-supplied semver tag, e.g. `"1.2.0"`. Informational; surfaced in UIs for version-listing per `(scope, name)`. Affects sha only because it's in the IR; doesn't drive any runtime logic.
-- **`irVersion: number`** — IR schema version. Load-bearing for schema-migration paths. v1 at first ship.
+- **`schemaVersion: number`** — IR schema version. Load-bearing for schema-migration paths. v1 at first ship. Matches the `schema_version` column in the `workflows` SQL table.
 
 ### No `events` field
 
@@ -47,13 +47,15 @@ type Bounds = {
   maxCostUsd?: number;
   maxTokens?:  number;
   maxMs?:      number;
-  policy?:     'stop' | 'warn' | 'pause';      // default: 'stop'
+  policy?:     'stop' | 'warn' | 'pause';      // default: 'pause'
 };
 ```
 
-- **`stop`** — exceed → `fact.run_halted { reason: 'budget' }`. Terminal.
+- **`pause`** (default) — exceed → `fact.run_paused { reason: 'budget' }`. Operator raises the ceiling via `intent.budget_adjusted`, then `intent.resume` re-dispatches the same `(nodeId, iteration)` against the new ceiling. Operator-friendly: budget-exhausted runs don't die; they wait for a decision.
+- **`stop`** — exceed → `fact.run_halted { reason: 'budget' }`. Terminal. Use for CI-style "fail fast on overspend" gates.
 - **`warn`** — exceed → emit budget event, keep going. Non-blocking observability.
-- **`pause`** — exceed → `fact.run_paused { reason: 'budget' }`. Operator raises the ceiling via `intent.budget_adjusted`, then `intent.resume` re-dispatches the same `(nodeId, iteration)` against the new ceiling.
+
+Default matches today's swarm engine. Workflows that need terminal halt (e.g., `analyze.dot`'s tighter budget) opt into `'stop'` explicitly; `'warn'` is for non-blocking dashboards.
 
 `bounds` lives on `Graph` (overall budget for the whole tree, including sub-graphs) and on per-kind attrs that have spend potential (`LLMAttrs.bounds`, `TaskAttrs.bounds.maxMs`). Per-kind bounds have no `policy` — they always halt the offending node when exceeded; policy is graph-level.
 

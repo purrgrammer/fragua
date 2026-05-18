@@ -20,9 +20,9 @@ Stating them explicitly serves three purposes:
 
 4. **Reachability.** Every node reachable from `start`; every node reaches an `exit`. Dead code rejected.
 
-5. **Predicate completeness.** For each node, the union of outgoing forward edges' `when` predicates covers all of `O`, or an explicit `else` edge exists. Statically decidable when predicates are in the DSL form.
+5. **Predicate completeness (decidable subset only).** For each node, the union of outgoing forward edges' `when` predicates either covers all of `O` *or* an explicit `else` edge exists. Statically decidable only when every predicate in the set is in the **decidable subset**: `eq` / `ne` / `in` / `exists` over enum-typed fields with finite literal-value sets. Outside the subset (regex, inequality on continuous types, BuiltinRef predicates), completeness is undecidable; the validator emits a warning and requires the author to declare an explicit else edge.
 
-6. **Predicate disjointness.** At most one forward edge from a given node fires per outcome (retarget edges excluded).
+6. **Predicate disjointness (decidable subset only).** At most one forward edge from a given node fires per outcome (retarget edges excluded). Same decidable-subset caveat as completeness. When predicates lie outside the subset, source-order resolves ties; the validator warns.
 
 7. **DAG property.** Forward edges form a DAG; only retarget edges close cycles; every retarget edge has `retryBudget`.
 
@@ -53,6 +53,22 @@ Stating them explicitly serves three purposes:
 18. **Retry budget exhaustion.** A retarget edge with `retryBudget = N` fires at most `N` times per run.
 
 19. **Termination.** Every run reaches an `exit` or a halt fact in bounded steps. Consequence of: forward edges DAG + bounded retry budgets + bounded `Wait` timeouts.
+
+## Generator constraint: stay inside the decidable subset
+
+When generating arbitrary graphs for property-based testing, the generators must produce only the predicate forms the validator can actually prove properties about — otherwise the test framework will assert violations on predicates the validator correctly *can't* decide.
+
+```ts
+namespace g {
+  // OK — generators stay inside the decidable subset
+  function decidablePredicate<O>(): Arbitrary<PredicateExpr<O>>;  // eq/ne/in/exists over enum fields only
+
+  // Separate generator for fully-general predicates (used only for runtime evaluator tests)
+  function generalPredicate<O>(): Arbitrary<PredicateExpr<O>>;
+}
+```
+
+Properties asserting completeness/disjointness use the decidable generator; properties asserting runtime evaluator correctness use the general generator. This split keeps the property suite honest about which guarantees are formal vs best-effort.
 
 ## Property-based testing templates
 

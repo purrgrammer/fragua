@@ -1,6 +1,6 @@
 # Node kinds
 
-Six IR `kind` discriminator values: five **compute** kinds (`llm`, `task`, `wait`, `map`, `reduce`) and one **structural** kind (`subgraph`) that wraps a child `Graph<I, O>` so it composes as a node. Authoring picks the compute kind explicitly; sub-graphs are produced by composing graphs via the SDK (`.node('id', subgraph(childGraph))` or by passing a compiled `Graph<I, O>` directly to `.node()`).
+Seven IR `kind` discriminator values: **compute** kinds (`llm`, `task`), **suspend** kind (`wait`), **composition** kinds (`map`, `reduce`, `race`, `subgraph`). Authoring picks the compute / suspend kind explicitly; composition kinds compose other nodes.
 
 There is no `Conditional`/`Router` kind — routing is an edge property (`when` predicate), not a node kind. Diamonds disappear from the model.
 
@@ -60,24 +60,70 @@ If you find yourself wanting `{{#if input.urgent}}...{{/if}}` in a template, tha
 ## Task
 
 ```ts
-type TaskAttrs<I, O> = {
-  command:    TemplateExpr;                       // shell command; placeholders substitute from I
-  inputMode?: 'stdin-json' | 'args' | 'env';      // default: stdin-json
-  outputMode?: 'stdout-json' | 'stdout-text';     // default: stdout-json when I/O is typed
-  cwd?:       string;
-  env?:       Record<string, string>;
-  bounds?:    { maxMs?: number };
-};
+type TaskAttrs<I, O> =
+  | {
+      // PRIMARY: argv form. Safe by default — no shell, no injection surface.
+      argv:       ArgvExpr;                       // [cmd, ...args]; each slot is a TemplateExpr or path-ref
+      inputMode?: 'stdin-json' | 'env';           // default: stdin-json. (args not available — argv slots ARE the args)
+      outputMode?: 'stdout-json' | 'stdout-text'; // default: stdout-json when I/O is typed
+      cwd?:       string;                         // relative to worktree root; default = worktree
+      env?:       Record<string, string>;         // explicit declaration only; never inherits host env
+      bounds?:    { maxMs?: number; maxStdoutBytes?: number; maxStderrBytes?: number };
+    }
+  | {
+      // OPT-IN: shell form. Authors who need pipes, redirects, shell-builtins.
+      shell:      { command: TemplateExpr };      // executed via /bin/sh -c
+      inputMode?: 'stdin-json' | 'args' | 'env';
+      outputMode?: 'stdout-json' | 'stdout-text';
+      cwd?:       string;
+      env?:       Record<string, string>;
+      bounds?:    { maxMs?: number; maxStdoutBytes?: number; maxStderrBytes?: number };
+    };
+
+type ArgvExpr = (TemplateExpr | { ref: PathExpr })[];   // each element is a single argv slot
 ```
+
+The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors write a script (`./scripts/extract-areas`) and pipe typed I/O through it.
+
+### Argv vs shell
+
+**Default to `argv`.** Each slot is a separate process argument; the runtime executes via `execve` directly (no shell). Path-refs from typed input drop into argv slots verbatim — no quoting, no escaping, no injection surface even for inputs containing shell metacharacters.
+
+```ts
+.node('lint', task({
+  argv: ['biome', 'check', { ref: 'input.path' }],   // path-ref drops in as one arg
+}))
+
+.node('rebase', task({
+  argv: ['git', 'rebase', { ref: 'input.baseRef' }, '--onto', { ref: 'input.target' }],
+}))
+```
+
+**Opt into `shell` for pipes / redirects / shell-builtins.** Authors who need `bun run ci`, `for f in ...`, or pipe operations use the shell form explicitly. The runtime wraps with `/bin/sh -c "${command}"`. Authors are responsible for quoting; the validator warns on shell forms that interpolate path-refs without explicit quoting filters.
+
+```ts
+.node('ci', task({
+  shell: { command: 'bun run ci' },                  // no input interpolation, safe
+}))
+```
+
+The validator flags shell-form commands that contain path-ref placeholders without an `| sh-quote` filter as a security warning. Not a hard error (escape hatches exist) but visible.
+
+### Security model
+
+- **`env`**: explicitly declared in the IR. Tasks never inherit the host environment. Authors who need `$PATH` etc. declare them in `env: { PATH: '...' }`.
+- **`cwd`**: defaults to the run's worktree root; relative paths resolve there. Absolute paths outside the worktree are rejected by the validator unless the workflow author explicitly opts in via `allowAbsoluteCwd: true` (rare).
+- **Output caps**: `maxStdoutBytes` / `maxStderrBytes` cap streaming output to prevent runaway producers. Default: 10 MiB stdout, 1 MiB stderr. Exceeding caps truncates output, marks the Outcome with a `truncated: true` flag, and emits a warning fact.
+- **No filesystem isolation by default** — Tasks run in the worktree. Authors who need stronger isolation use a containerized command (`docker run ...`).
 
 The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors write a script (`./scripts/extract-areas`) and pipe typed I/O through it.
 
 ### Examples
 
-- **Deterministic pure transform**: `command: 'bun ./scripts/extract-areas.ts'`, input piped as JSON on stdin, output parsed as JSON from stdout. Process spawn cost is ms-scale; fine for anything not on a hot inner loop.
-- **Run CI**: `command: 'bun run ci'`. Just runs; replay reads the logged Outcome from the event store.
-- **Fetch a doc**: `command: 'curl ${input.url}'`.
-- **Apply a patch**: `command: 'bun ./scripts/apply-patch.ts'`.
+- **Deterministic pure transform**: `argv: ['bun', './scripts/extract-areas.ts']`, input piped as JSON on stdin, output parsed as JSON from stdout. Process spawn cost is ms-scale; fine for anything not on a hot inner loop.
+- **Run CI**: `shell: { command: 'bun run ci' }`. Just runs; replay reads the logged Outcome from the event store.
+- **Fetch a doc**: `argv: ['curl', '-fsSL', { ref: 'input.url' }]`. Path-ref drops as one arg; no quoting needed.
+- **Apply a patch**: `argv: ['bun', './scripts/apply-patch.ts']`, input via stdin-json.
 
 ### Replay vs caching
 
@@ -134,7 +180,7 @@ type WaitAttrs<I, O> =
 
 A pause primitive. **Each `Wait` node has exactly one source** — `human`, `http`, or `timer` — and its typed output `O` is that source's payload. Today's HITL hexagon is the `human` source; HTTP callbacks and timer firings become first-class on the same primitive with their own variants.
 
-The single-source choice is deliberate. Almost every real Wait is HITL-only; forcing a tagged union on every node penalizes the common case for a rare one. Multi-source ("wait for human OR timeout") is expressed by composition: `Map(extract: () => [humanWait, timerWait], body: subgraph, policy: 'first_success')`. Explicit and rare; the common HITL case stays clean.
+The single-source choice is deliberate. Almost every real Wait is HITL-only; forcing a tagged union on every node penalizes the common case for a rare one. Multi-source ("wait for human OR timeout") is expressed via the [`Race`](#race) kind — a structural combinator that takes heterogeneous branches and fires on first-to-succeed. Wait stays single-source; Race composes.
 
 The `Outcome` of a `Wait` node is `{ tag: 'ok'; value: O }` once resolved. While the Wait is suspended, the run has `RunStatus.paused` (the orthogonal axis — `paused` is a runtime status, not an Outcome variant); the runtime emits `fact.run_paused`. Resumption events flow in via `IO<E>` and the runtime validates them against the source's schema (`resumeSchema` for human, `expect` for http) before propagating to the Outcome. Validator rejects multi-source Wait at IR build time.
 
@@ -199,6 +245,46 @@ Fan-in: take an array, produce an aggregate. Two flavors:
 - **LLM reducer** — calls a model on `Elem[]` to synthesize a structured `O`. Use for cross-finding synthesis, narrative merges, anything that needs judgment.
 
 Today's `tripleoctagon` is conceptually a Reduce, currently restricted to the heuristic-concatenator builtin regardless of whether `prompt=` is set (see [../proposals/fan-in-to-reduce.md](../proposals/fan-in-to-reduce.md)). The typed `Reduce` makes the LLM-vs-builtin choice explicit instead of inferring from prompt presence.
+
+## Race
+
+```ts
+type RaceAttrs<I, O> = {
+  branches: ReadonlyArray<Node<I, O>>;    // heterogeneous; same input I, same output O
+  policy?:  'first_success' | 'first_settled';   // default: first_success
+};
+```
+
+Structural combinator that runs multiple branches concurrently and produces the output of whichever one finishes first. Unlike `Map`, branches can be heterogeneous (an LLM, a Wait, a Task) — each is a separately-typed `Node<I, O>` with the same `I` and `O`.
+
+The canonical use is "wait for human OR auto-fire on timeout":
+
+```ts
+const humanWithTimeout = race({
+  branches: [
+    wait({
+      source:       'human',
+      prompt:       { question: 'Approve to ship?' },
+      resumeSchema: ChoiceSchema,
+    }),
+    wait({
+      source:     'timer',
+      durationMs: 24 * 60 * 60 * 1000,    // 24h
+      onFire:     { choice: 'defer' },     // auto-fire payload
+    }),
+  ],
+  policy: 'first_success',
+});
+```
+
+Policies:
+
+- **`first_success`** (default) — first branch to produce `Outcome.ok` wins; others are aborted.
+- **`first_settled`** — first branch to produce *any* terminal Outcome (ok, err, aborted) wins; others are aborted. Useful when you want to know "something terminated, and what."
+
+The SDK provides a `humanWithTimeout({...})` sugar helper for the common pattern.
+
+Race runs each branch as a sub-Run (see [runtime.md](runtime.md)). Cancellation of losing branches propagates AbortSignals; in-flight LLM calls close their streams; subprocess Tasks get SIGTERM. The losing branches' partial work is logged for audit.
 
 ## Subgraph
 

@@ -13,7 +13,7 @@ The typed Graph model addresses both. The runtime semantics — event-sourced re
 
 1. **[types.md](types.md)** — `Graph<I, O, E>`, `Node<I, O>`, `Edge<O, I'>`, `Outcome<O>`, `Bounds`. The core algebra.
 2. **[expressions.md](expressions.md)** — `TemplateExpr` / `PathExpr` / `TransformExpr` / `PredicateExpr` / `BuiltinRef`. The expression-language IR that replaces TS functions in node attrs.
-3. **[kinds.md](kinds.md)** — six IR `kind` values: five **compute** kinds (`llm`, `task`, `wait`, `map`, `reduce`) plus one **structural** kind (`subgraph`) for composition. User-authored compute lives in `Task` (scripts/commands); user JS reaches runs through extensions, not through a graph node body. No `Function` kind.
+3. **[kinds.md](kinds.md)** — seven IR `kind` values: compute (`llm`, `task`), suspend (`wait`), composition (`map`, `reduce`, `race`, `subgraph`). User-authored compute lives in `Task` (scripts/commands); user JS reaches runs through extensions, not through a graph node body. No `Function` kind.
 4. **[runtime.md](runtime.md)** — `Environment`, `BoundGraph`, `Run<I, O, E>`, `IO<E>`. How a graph executes.
 5. **[laws.md](laws.md)** — algebraic and operational invariants + property-based testing strategy.
 6. **[patterns.md](patterns.md)** — the eight Anthropic patterns (chain / route / sectioning / voting / orchestrator-workers / evaluator-optimizer / autonomous / augmented) expressed in the typed model.
@@ -28,7 +28,7 @@ The migration lands in layers, each independently useful:
 2. **Typed schemas on nodes.** Each node carries `inputSchema` and `outputSchema`. LLM nodes terminate via a structured-output tool whose schema is `O`. Edge transforms become typed selectors.
 3. **TS builder (`@swarm/sdk`).** A typed builder that emits the JSON IR from TS code. Authoring becomes IDE-native; the IR stays the wire contract.
 4. **Edge DSL.** Predicate + transform DSL with named-function escape hatch. Edges stay hashable / portable / cross-language emittable.
-5. **Six-kind IR / five-compute-kind model.** Compute kinds: `LLM`, `Task`, `Wait`, `Map`, `Reduce`. Structural kind: `Subgraph` (any compiled `Graph<I, O>` as a Node). `Conditional`/diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
+5. **Seven-kind IR model.** Compute kinds: `LLM`, `Task`. Suspend kind: `Wait`. Composition kinds: `Map`, `Reduce`, `Race`, `Subgraph`. `Conditional`/diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
 6. **Run / Environment split.** `bind(graph, env)` resolves IR refs (tools, models, functions). `Run.fresh(boundGraph, input)` produces a `Run<I, O, E>` exposing `IO<E>`.
 
 DOT stays as an authoring surface throughout. The runtime accepts JSON IR over the wire; DOT lowers client-side or server-side. Comments don't round-trip; structure does.

@@ -147,13 +147,14 @@ Forward-compatible field plan:
   Typebox JSON Schemas embedded verbatim. Absent → today's
   stringly-typed behaviour (input from `$ARGUMENTS` / substitution,
   output from last assistant message).
-- `kind?: NodeKind` on `Node` — the typed discriminator. Six values:
-  `'llm' | 'task' | 'wait' | 'map' | 'reduce' | 'subgraph'`. Five
-  compute kinds + one structural kind (`subgraph`) that inlines a
-  child `Graph<I, O>` for composition. Absent → derive from shape
-  (today's behavior, compute kinds only). There is no `Function`
-  kind — user JS reaches runs through `@swarm/sdk` extensions
-  (`defineTool` / `defineHook`), not through a graph node body.
+- `kind?: NodeKind` on `Node` — the typed discriminator. Seven
+  values: `'llm' | 'task' | 'wait' | 'map' | 'reduce' | 'race' | 'subgraph'`.
+  Compute kinds (`llm`, `task`); suspend kind (`wait`); composition
+  kinds (`map`, `reduce`, `race`, `subgraph`). Absent → derive from
+  shape (today's behavior, compute kinds only). There is no
+  `Function` kind — user JS reaches runs through `@swarm/sdk`
+  extensions (`defineTool` / `defineHook`), not through a graph
+  node body.
 - `predicate?: PredicateExpr`, `transform?: TransformExpr` on
   `Edge` — see [`docs/graph/expressions.md`](../graph/expressions.md)
   for the AST grammar. SDK desugars single-expression arrows to AST

@@ -9,8 +9,9 @@ Single TypeScript package authors consume. Subsumes today's `@swarm/extension` (
 ```ts
 import {
   defineGraph,
-  llm, task, wait, map, reduce,         // compute-kind builders
-  subgraph,                              // structural-kind builder (wrap a Graph as a Node)
+  llm, task, wait, map, reduce, race,   // compute / suspend / composition builders
+  subgraph,                              // structural builder (wrap a Graph as a Node)
+  humanWithTimeout,                      // sugar: Race of human Wait + timer Wait
   edge, retarget,                        // edge builders
 } from '@swarm/sdk';
 
@@ -21,6 +22,46 @@ import type {
 ```
 
 Authors build a typed graph; `.compile()` returns `{ graph, ir, sha }`. The IR is the wire contract; the graph is the typed handle.
+
+### Direct expression builders
+
+The SDK accepts arrow-form predicates and transforms (sugar) and exposes direct expression builders as the canonical API. Both forms emit the same IR. Use direct builders when arrow extraction is brittle (closures, complex shapes) or when you want to construct expressions programmatically:
+
+```ts
+import { eq, ne, and, or, exists, matches, path, lit } from '@swarm/sdk/expr';
+
+// Arrow form (sugar)
+.edge('review', 'commit', { when: (o) => o.value.verdict === 'approve' })
+
+// Direct builder form (canonical)
+.edge('review', 'commit', { when: eq(path('value.verdict'), lit('approve')) })
+
+// Composed predicates — direct builders are cleaner for complex cases
+.edge('triage', 'escalate', {
+  when: and(
+    eq(path('value.severity'), lit('high')),
+    or(
+      exists(path('value.linkedCve')),
+      matches(path('value.title'), '^CVE-\\d{4}-\\d+'),
+    ),
+  ),
+})
+```
+
+Same for transforms:
+
+```ts
+import { pick, set, construct, merge, ref } from '@swarm/sdk/expr';
+
+.edge('a', 'b', {
+  select: construct({
+    verdict:  ref('value.verdict'),
+    reviewer: lit('sonnet'),
+  }),
+})
+```
+
+The direct-builder API is the canonical authoring surface; arrow forms are SDK sugar that desugars to the same calls. Authors who want the most reliable type inference or programmatic construction use the direct API.
 
 ### Sub-graph composition
 
