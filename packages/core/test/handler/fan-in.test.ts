@@ -26,12 +26,14 @@ function stubCtx(
     routing?: Record<string, unknown>;
     nodeOutputs?: ReadonlyMap<string, NodeOutput>;
     emitCb?: (type: string, payload: Record<string, unknown>) => void;
+    artifactPut?: (key: string, content: string | Uint8Array, mime?: string) => void;
   } = {},
 ): HandlerContext {
   const _emittedEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const nodeId = overrides.nodeId ?? "join";
   return {
     runId: "run-1",
-    nodeId: overrides.nodeId ?? "join",
+    nodeId,
     iteration: 0,
     signal: new AbortController().signal,
     routing: overrides.routing ?? {},
@@ -40,7 +42,11 @@ function stubCtx(
     tools: emptyRegistry,
     messages: { append: () => ({ ordinal: 0 }), recent: () => [], since: () => [] },
     artifacts: {
-      put: () => ({ runId: "run-1", nodeId: "join", iteration: 0, key: "", sha256: "", sizeBytes: 0, mime: null }),
+      put: (key, content, mime) => {
+        overrides.artifactPut?.(key, content, mime);
+        const bytes = typeof content === "string" ? new TextEncoder().encode(content).length : content.byteLength;
+        return { runId: "run-1", nodeId, iteration: 0, key, sha256: "stub-sha", sizeBytes: bytes, mime: mime ?? null };
+      },
       get: () => new Uint8Array(),
       ref: () => null,
       getFrom: () => new Uint8Array(),
@@ -81,6 +87,8 @@ describe("makeFanInHandler heuristic path", () => {
       expect(result.routingDelta?.["fan_in.join.all_failed"]).toBe(false);
       expect(result.tokens).toBe(0);
       expect(result.costUsd).toBe(0);
+      // Heuristic path never persists an output artifact.
+      expect(result.outputRef).toBeUndefined();
     }
   });
 
@@ -160,10 +168,12 @@ describe("makeFanInHandler LLM path", () => {
     ["branch_b", { success: true, output: "output of branch B", timestamp: 1001 }],
   ]);
 
-  test("delegate winner becomes the routing winner", async () => {
+  test("delegate returns synthesised output; handler writes outputRef to result", async () => {
     const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const artifactCalls: Array<{ key: string; content: string }> = [];
+    const synthesised = "## Code Review\n\nIntegrated findings across branches.";
     const { delegate } = makeDelegate(() => ({
-      winner: "branch_b",
+      output: synthesised,
       tokens: 42,
       costUsd: 0.01,
       modelName: "claude-stub",
@@ -172,7 +182,7 @@ describe("makeFanInHandler LLM path", () => {
       parallelNodeId: "fanout",
       evaluator: {
         kind: "llm",
-        prompt: "pick the better branch",
+        prompt: "integrate the findings",
         delegate,
         nodeAttrs: {},
       },
@@ -182,76 +192,108 @@ describe("makeFanInHandler LLM path", () => {
       routing: baseRouting,
       nodeOutputs: baseNodeOutputs,
       emitCb: (type, payload) => emitted.push({ type, payload }),
+      artifactPut: (key, content) => {
+        artifactCalls.push({ key, content: typeof content === "string" ? content : "" });
+      },
     });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.routingDelta?.["fan_in.join.winner"]).toBe("branch_b");
+      expect(result.outputRef?.key).toBe("output");
+      expect(result.outputRef?.nodeId).toBe("join");
       expect(result.tokens).toBe(42);
       expect(result.costUsd).toBe(0.01);
       expect(result.modelName).toBe("claude-stub");
+      // Synthesis doesn't pick a branch — no winner key in routingDelta.
+      expect(result.routingDelta?.["fan_in.join.winner"]).toBeUndefined();
+      expect(result.routingDelta?.["fan_in.join.all_failed"]).toBe(false);
     }
-    const completed = emitted.find((e) => e.type === "fan_in.completed");
-    expect(completed?.payload["evaluator"]).toBe("llm");
-    expect(completed?.payload["winner"]).toBe("branch_b");
-    expect(completed?.payload["tokens"]).toBe(42);
+    expect(artifactCalls).toEqual([{ key: "output", content: synthesised }]);
   });
 
-  test("delegate winner outside candidate set halts with structured detail", async () => {
-    const { delegate } = makeDelegate(() => ({
-      winner: "ghost_branch",
-      tokens: 5,
-      costUsd: 0.001,
-    }));
+  test("emits fan_in.completed with evaluator='llm' and no winner field", async () => {
+    const emitted: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const { delegate } = makeDelegate(() => ({ output: "some doc", tokens: 5, costUsd: 0.001 }));
     const spec = makeFanInHandler({
       parallelNodeId: "fanout",
-      evaluator: {
-        kind: "llm",
-        prompt: "pick",
-        delegate,
-        nodeAttrs: {},
-      },
+      evaluator: { kind: "llm", prompt: "integrate", delegate, nodeAttrs: {} },
     });
-    const ctx = stubCtx({ nodeId: "join", routing: baseRouting, nodeOutputs: baseNodeOutputs });
-    const result = await spec.handler(ctx);
-    expect(result.kind).toBe("halt");
-    if (result.kind === "halt") {
-      expect(result.detail).toMatch(/fan_in_llm_picked_unknown_branch/);
-      expect(result.detail).toMatch(/ghost_branch/);
-      expect(result.detail).toMatch(/branch_a/);
-      expect(result.detail).toMatch(/branch_b/);
-    }
+    const ctx = stubCtx({
+      nodeId: "join",
+      routing: baseRouting,
+      nodeOutputs: baseNodeOutputs,
+      emitCb: (type, payload) => emitted.push({ type, payload }),
+    });
+    await spec.handler(ctx);
+    const completed = emitted.find((e) => e.type === "fan_in.completed");
+    expect(completed).toBeDefined();
+    expect(completed?.payload["evaluator"]).toBe("llm");
+    expect(completed?.payload["allFailed"]).toBe(false);
+    expect(completed?.payload["outputBytes"]).toBe("some doc".length);
+    expect(completed?.payload).not.toHaveProperty("winner");
+    expect(completed?.payload).not.toHaveProperty("rankedOrder");
   });
 
-  test("delegate returning a failure halts with the failure reason in detail", async () => {
+  test("provider error from delegate halts with fan_in_llm_provider_error", async () => {
     const { delegate } = makeDelegate(() => ({
       failure: {
-        reason: "fan_in_llm_emit_missing" as const,
-        detail: "no WINNER: <branchId> line found in the LLM reply",
+        reason: "fan_in_llm_provider_error" as const,
+        detail: "upstream 503",
       },
     }));
     const spec = makeFanInHandler({
       parallelNodeId: "fanout",
-      evaluator: {
-        kind: "llm",
-        prompt: "pick",
-        delegate,
-        nodeAttrs: {},
-      },
+      evaluator: { kind: "llm", prompt: "integrate", delegate, nodeAttrs: {} },
     });
     const ctx = stubCtx({ nodeId: "join", routing: baseRouting, nodeOutputs: baseNodeOutputs });
     const result = await spec.handler(ctx);
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") {
-      expect(result.detail).toMatch(/fan_in_llm_emit_missing/);
+      expect(result.detail).toMatch(/fan_in_llm_provider_error/);
+      expect(result.detail).toMatch(/upstream 503/);
     }
+  });
+
+  test("all branches failed → outcomeStatus='fail' but synthesis still runs and output is captured", async () => {
+    const artifactCalls: Array<{ key: string; content: string }> = [];
+    const { delegate, calls } = makeDelegate(() => ({
+      output: "All branches failed; here's a summary of failures.",
+      tokens: 10,
+      costUsd: 0.002,
+    }));
+    const spec = makeFanInHandler({
+      parallelNodeId: "fanout",
+      evaluator: { kind: "llm", prompt: "integrate", delegate, nodeAttrs: {} },
+    });
+    const ctx = stubCtx({
+      nodeId: "join",
+      routing: {
+        "parallel.fanout.results": candidateResults([
+          { branchId: "branch_a", status: "fail" },
+          { branchId: "branch_b", status: "fail" },
+        ]),
+      },
+      nodeOutputs: baseNodeOutputs,
+      artifactPut: (key, content) => {
+        artifactCalls.push({ key, content: typeof content === "string" ? content : "" });
+      },
+    });
+    const result = await spec.handler(ctx);
+    expect(calls).toHaveLength(1);
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("fail");
+      expect(result.outputRef?.key).toBe("output");
+      expect(result.routingDelta?.["fan_in.join.all_failed"]).toBe(true);
+    }
+    expect(artifactCalls).toHaveLength(1);
   });
 
   test("delegate receives branchOutputs resolved from nodeOutputs", async () => {
     const capturedInputs: LlmFanInInput[] = [];
     const delegate: LlmFanInDelegate = async (input) => {
       capturedInputs.push(input);
-      return { winner: "branch_a", tokens: 0, costUsd: 0 };
+      return { output: "doc", tokens: 0, costUsd: 0 };
     };
     const spec = makeFanInHandler({
       parallelNodeId: "fanout",
@@ -280,7 +322,7 @@ describe("makeFanInHandler LLM path", () => {
     const capturedInputs: LlmFanInInput[] = [];
     const delegate: LlmFanInDelegate = async (input) => {
       capturedInputs.push(input);
-      return { winner: "branch_a", tokens: 0, costUsd: 0 };
+      return { output: "doc", tokens: 0, costUsd: 0 };
     };
     const spec = makeFanInHandler({
       parallelNodeId: "fanout",
@@ -311,7 +353,7 @@ describe("makeFanInHandler LLM path", () => {
       evaluator: {
         kind: "llm",
         prompt: "choose",
-        delegate: async () => ({ winner: "x", tokens: 0, costUsd: 0 }),
+        delegate: async () => ({ output: "x", tokens: 0, costUsd: 0 }),
         nodeAttrs: {},
       },
     });

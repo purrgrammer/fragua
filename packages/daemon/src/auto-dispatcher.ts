@@ -43,10 +43,12 @@ export interface AutoDispatcherOpts {
    * Absent kind → handler's own built-in default applies. */
   defaultMaxMs?: { codergen?: number; tool?: number };
   /**
-   * Optional delegate that drives an LLM evaluation when a
-   * `tripleoctagon` node carries a non-empty `prompt=` attribute.
-   * When absent, tripleoctagons with `prompt=` produce a halt spec
-   * at construction time (attractor §4.9 LLM-eval path).
+   * Optional delegate that drives LLM synthesis of branch outputs when
+   * a `tripleoctagon` node carries a non-empty `prompt=` attribute. The
+   * synthesised document becomes the fan-in node's `output` artifact;
+   * downstream nodes read it via `$<fanInId>.output` substitution. When
+   * absent, tripleoctagons with `prompt=` produce a halt spec at
+   * construction time (attractor §4.9 LLM-reducer path).
    */
   fanInLlmDelegate?: LlmFanInDelegate;
 }

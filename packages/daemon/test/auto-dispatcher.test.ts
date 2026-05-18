@@ -468,9 +468,9 @@ describe("auto-dispatcher → fan_in LLM wiring", () => {
     const capturedInputs: import("@swarm/core/handler").LlmFanInInput[] = [];
     const delegate: import("@swarm/core/handler").LlmFanInDelegate = async (input) => {
       capturedInputs.push(input);
-      // Return the first candidate id as winner.
-      const firstId = input.candidates[0]?.branchId ?? "unknown";
-      return { winner: firstId, tokens: 5, costUsd: 0.001 };
+      // Return a synthesised document; the handler persists it as the
+      // fan-in node's `output` artifact.
+      return { output: "synthesised review of branches", tokens: 5, costUsd: 0.001 };
     };
 
     const dispatcher = new Dispatcher();

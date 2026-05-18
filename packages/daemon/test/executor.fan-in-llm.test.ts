@@ -1,13 +1,13 @@
-// End-to-end integration test for fan_in LLM evaluation.
+// End-to-end integration test for fan_in LLM synthesis.
 //
 // Exercises the path where a tripleoctagon carries prompt= and a stub
-// LlmFanInDelegate picks the winner from three branch candidates.
-// Verifies:
+// LlmFanInDelegate returns a synthesised document. Verifies:
 //   - The delegate is invoked with branch outputs populated from the
 //     store's artifact namespace.
-//   - run_state.routing["fan_in.pick.winner"] equals the id the
-//     delegate returned.
-//   - fact.fan_in.completed carries evaluator:"llm".
+//   - The synthesised document is captured as the fan-in node's
+//     `output` artifact and reaches downstream nodes via
+//     `$<fanInId>.output` substitution.
+//   - fact.fan_in.completed carries evaluator:"llm" and no winner key.
 //   - The run completes successfully.
 
 import { describe, expect, test } from "bun:test";
@@ -21,7 +21,8 @@ import { runOne } from "../src/executor.ts";
 import { wakePending } from "../src/wake-pending.ts";
 import { mockCodergenSpec } from "./helpers.ts";
 
-// Three-branch DOT with prompt= on the tripleoctagon.
+// Three-branch DOT with prompt= on the tripleoctagon plus a downstream
+// codergen that reads the synthesised output.
 const LLM_FAN_IN_DOT = `
 digraph G {
   start  [shape=Mdiamond]
@@ -29,7 +30,7 @@ digraph G {
   a      [prompt="investigate severity A"]
   b      [prompt="investigate severity B"]
   c      [prompt="investigate severity C"]
-  pick   [shape=tripleoctagon, prompt="pick the highest-severity branch"]
+  pick   [shape=tripleoctagon, prompt="integrate findings into a single review"]
   done   [shape=Msquare]
   start -> fanout
   fanout -> a
@@ -88,22 +89,15 @@ async function driveTo(harness: ReturnType<typeof freshHarness>, runId: string, 
   }
 }
 
-describe("fan_in LLM evaluation end-to-end", () => {
-  test("three-branch parallel where LLM picks highest-severity branch", async () => {
+describe("fan_in LLM synthesis end-to-end", () => {
+  test("three-branch parallel where LLM synthesises a unified document from all branch outputs", async () => {
     const capturedInputs: LlmFanInInput[] = [];
+    const synthesised =
+      "# Combined Review\n\n## Scope\nThree lenses ran in parallel.\n\n## Findings\n1. critical — SQL injection (from branch_b)\n2. medium — perf regression (branch_c)\n3. low — minor issue (branch_a)";
 
-    // Delegate that picks whichever branch has "critical" in its output.
     const delegate: LlmFanInDelegate = async (input) => {
       capturedInputs.push(input);
-      let chosen = input.candidates[0]?.branchId ?? "a";
-      for (const cand of input.candidates) {
-        const out = input.branchOutputs.get(cand.branchId) ?? "";
-        if (out.includes("critical")) {
-          chosen = cand.branchId;
-          break;
-        }
-      }
-      return { winner: chosen, tokens: 100, costUsd: 0.005 };
+      return { output: synthesised, tokens: 100, costUsd: 0.005 };
     };
 
     const sha = "wf_llm_fan_in";
@@ -118,27 +112,76 @@ describe("fan_in LLM evaluation end-to-end", () => {
     const final = harness.store.getState(runId)!;
     expect(final.status).toBe("completed");
 
-    // Delegate was called once (at the fan-in node).
+    // Delegate was called once at the fan-in node, with all three branches.
     expect(capturedInputs).toHaveLength(1);
     const inp = capturedInputs[0]!;
     expect(inp.candidates).toHaveLength(3);
-    expect(inp.prompt).toBe("pick the highest-severity branch");
+    expect(inp.prompt).toBe("integrate findings into a single review");
+    // Branch outputs are populated from the store's artifact namespace.
+    expect(inp.branchOutputs.get("b") ?? "").toContain("critical");
 
-    // Branch b has "critical" in its output — delegate should have
-    // received it and picked "b".
-    const bOutput = inp.branchOutputs.get("b") ?? "";
-    expect(bOutput).toContain("critical");
+    // No winner key written for the LLM synthesis path.
+    expect(final.routing["fan_in.pick.winner"]).toBeUndefined();
 
-    // Winner is "b" — the critical branch.
-    const winner = final.routing["fan_in.pick.winner"];
-    expect(winner).toBe("b");
-
-    // fact.fan_in.completed carries evaluator:"llm".
+    // fact.fan_in.completed carries evaluator:"llm" and no winner field.
     const events = harness.store.getEvents(runId);
     const fanInCompleted = events.find((e) => e.type === "fan_in.completed");
     expect(fanInCompleted).toBeDefined();
-    expect((fanInCompleted!.payload as Record<string, unknown>)["evaluator"]).toBe("llm");
-    expect((fanInCompleted!.payload as Record<string, unknown>)["winner"]).toBe("b");
+    const payload = fanInCompleted!.payload as Record<string, unknown>;
+    expect(payload["evaluator"]).toBe("llm");
+    expect(payload["outputBytes"]).toBe(synthesised.length);
+    expect(payload).not.toHaveProperty("winner");
+
+    harness.store.close();
+  });
+
+  test("synthesised output is captured as the fan-in's `output` artifact (downstream $<fanInId>.output read path)", async () => {
+    // The handler-level test (packages/core/test/handler/fan-in.test.ts)
+    // proves the synthesis output flows into result.outputRef via
+    // ctx.artifacts.put. Here we verify it round-trips through the
+    // store: after the run completes, the fan-in node's `output`
+    // artifact can be read back. The executor's nodeOutputs fold
+    // (packages/store/src/store.ts:getNodeOutputs) walks the same
+    // fact.node_completed payload["outputRef"] used by every other
+    // codergen-style node, so any downstream `$<fanInId>.output`
+    // substitution sees the synthesised text.
+    const synthesised = "## Synthesised review\n\nCritical: SQL injection. Recommend immediate fix.";
+    const delegate: LlmFanInDelegate = async () => ({ output: synthesised, tokens: 10, costUsd: 0.001 });
+
+    const sha = "wf_llm_fan_in_artifact";
+    const harness = freshHarness(sha, delegate);
+    harness.store.saveWorkflow(sha, "llm-fan-in-artifact", LLM_FAN_IN_DOT);
+
+    const runId = "run_artifact";
+    harness.store.enqueueRun({ runId, workflowSha: sha });
+    await driveTo(harness, runId);
+
+    expect(harness.store.getState(runId)!.status).toBe("completed");
+
+    // 1. The fact.node_completed for `pick` carries outputRef pointing
+    //    at the fan-in's `output` artifact.
+    const events = harness.store.getEvents(runId);
+    const pickCompleted = events.find(
+      (e) => e.type === "fact.node_completed" && (e.payload as Record<string, unknown>)["nodeId"] === "pick",
+    );
+    expect(pickCompleted).toBeDefined();
+    expect((pickCompleted!.payload as Record<string, unknown>)["outputRef"]).toBe("pick:output");
+
+    // 2. The artifact bytes round-trip the synthesised document.
+    const bytes = harness.store.getArtifact({
+      runId,
+      nodeId: "pick",
+      iteration: 0,
+      key: "output",
+    });
+    expect(new TextDecoder().decode(bytes)).toBe(synthesised);
+
+    // 3. The store's getNodeOutputs fold — the same surface the
+    //    executor hands to handlers as ctx.nodeOutputs for downstream
+    //    `$<fanInId>.output` substitution — sees the synthesised text
+    //    under `pick`.
+    const nodeOutputs = harness.store.getNodeOutputs(runId);
+    expect(nodeOutputs.get("pick")?.output).toBe(synthesised);
 
     harness.store.close();
   });
@@ -160,9 +203,9 @@ describe("fan_in LLM evaluation end-to-end", () => {
     `;
 
     const delegateCalls: number[] = [];
-    const delegate: LlmFanInDelegate = async (input) => {
+    const delegate: LlmFanInDelegate = async (_input) => {
       delegateCalls.push(1);
-      return { winner: input.candidates[0]?.branchId ?? "a", tokens: 0, costUsd: 0 };
+      return { output: "should-not-be-called", tokens: 0, costUsd: 0 };
     };
 
     const sha = "wf_heuristic_with_delegate";
@@ -199,6 +242,8 @@ describe("fan_in LLM evaluation end-to-end", () => {
     const fanInCompleted = events.find((e) => e.type === "fan_in.completed");
     expect(fanInCompleted).toBeDefined();
     expect((fanInCompleted!.payload as Record<string, unknown>)["evaluator"]).toBe("heuristic");
+    // Heuristic path keeps the winner key.
+    expect(fanInCompleted!.payload as Record<string, unknown>).toHaveProperty("winner");
 
     harness2.store.close();
   });

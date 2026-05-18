@@ -1,30 +1,31 @@
 // parallel.fan_in handler.
 //
 // Consumes `parallel.<parallelNodeId>.results` from routing (written by
-// the parallel handler in the preceding node), feeds the candidates to
-// either a deterministic heuristic or an LLM delegate, and publishes the
-// winner back into routing under `fan_in.<nodeId>.winner` so downstream
-// codergen/tool nodes can reference it via `${context.fan_in.*}`
-// substitution.
+// the parallel handler in the preceding node) and produces either a
+// picked winner (heuristic path) or a synthesised document (LLM path).
 //
 // Two evaluation paths (attractor §4.9):
 //
 //   Heuristic (prompt= absent/empty):
 //     `foldFanIn` ranks candidates by (status, -score, branchId) and
-//     picks the top. Zero cost; deterministic; replay-safe.
+//     picks the top. Writes the winner's branchId to
+//     `fan_in.<nodeId>.winner` in routing. Zero cost; deterministic;
+//     replay-safe.
 //
 //   LLM (prompt= set):
 //     A delegate function (supplied by the daemon layer via
-//     `FanInHandlerConfig.evaluator`) synthesises the branch outputs
-//     into a prompt and calls an LLM. The LLM must end its reply with
-//     with `{winner: <branchId>}`. The delegate also has access to
-//     a single `WINNER: <branchId>` line. The evaluator parses it out
-//     of the final assistant text.
+//     `FanInHandlerConfig.evaluator`) feeds the branch outputs to an
+//     LLM and returns a synthesised document. The handler persists
+//     that document as an `output` artifact and surfaces `outputRef`
+//     on the HandlerResult so downstream nodes can read it via
+//     `$<fanInId>.output` substitution. No winner is picked — the
+//     LLM's text IS the fan-in's output. Replayable because the
+//     delegate result is logged verbatim.
 
 import { FAN_IN_VERSION, type FanInCandidate, foldFanIn } from "../../engine/fan-in.ts";
 import { substitute } from "../../engine/substitution.ts";
 import type { NodeAttrs } from "../../types/graph.ts";
-import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
+import type { ArtifactRef, Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
 // ── LLM delegate types (no agent import — dep direction: core ← agent) ──
 
@@ -44,7 +45,10 @@ export interface LlmFanInInput {
 }
 
 export interface LlmFanInSuccess {
-  winner: string;
+  /** The synthesised document produced by the LLM. Becomes the fan-in
+   *  node's `output` artifact; downstream nodes read it via
+   *  `$<fanInId>.output` substitution. */
+  output: string;
   tokens?: number;
   costUsd?: number;
   modelName?: string;
@@ -52,7 +56,7 @@ export interface LlmFanInSuccess {
 
 export interface LlmFanInFailure {
   failure: {
-    reason: "fan_in_llm_emit_missing" | "fan_in_llm_picked_unknown_branch" | "fan_in_llm_provider_error";
+    reason: "fan_in_llm_provider_error";
     detail: string;
   };
 }
@@ -159,41 +163,39 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
         } satisfies HandlerResult;
       }
 
-      const { winner: chosenId, tokens = 0, costUsd = 0, modelName } = delegateResult;
-
-      // Validate winner is in candidate set.
-      const candidateIds = candidates.map((c) => c.branchId);
-      if (!candidateIds.includes(chosenId)) {
-        return {
-          kind: "halt",
-          reason: "error",
-          detail: `fan_in "${ctx.nodeId}": fan_in_llm_picked_unknown_branch — chose "${chosenId}", candidates: ${candidateIds.join(", ")}`,
-        } satisfies HandlerResult;
-      }
+      const { output, tokens = 0, costUsd = 0, modelName } = delegateResult;
 
       const allFailed = candidates.every((c) => c.status === "fail");
       const outcomeStatus: "success" | "fail" = allFailed ? "fail" : "success";
 
-      // Ranked order: winner first, then remaining candidates in their
-      // original order (LLM doesn't provide a full ranking).
-      const rankedOrder = [chosenId, ...candidateIds.filter((id) => id !== chosenId)];
+      // Persist the synthesised document as an artifact and surface its
+      // ref so downstream `$<fanInNodeId>.output` substitution resolves
+      // through the executor's nodeOutputs fold. Best-effort: an artifact
+      // write failure must not break the run — downstream references
+      // will resolve to "" until the node re-runs. Matches the codergen
+      // handler-bridge pattern.
+      let outputRef: ArtifactRef | undefined;
+      if (output.length > 0) {
+        try {
+          outputRef = ctx.artifacts.put("output", output, "text/plain", { replace: true });
+        } catch {
+          outputRef = undefined;
+        }
+      }
 
       ctx.emit("fan_in.completed", {
         fanInNodeId: ctx.nodeId,
         parallelNodeId: cfg.parallelNodeId,
-        winner: chosenId,
         allFailed,
-        rankedOrder,
         evaluator: "llm",
+        outputBytes: output.length,
         tokens,
         costUsd,
         ...(modelName !== undefined ? { modelName } : {}),
       });
 
-      const winnerKey = `fan_in.${ctx.nodeId}.winner`;
       const allFailedKey = `fan_in.${ctx.nodeId}.all_failed`;
       const routingDelta: Record<string, unknown> = {
-        [winnerKey]: chosenId,
         [allFailedKey]: allFailed,
       };
 
@@ -204,6 +206,7 @@ export function makeFanInHandler(cfg: FanInHandlerConfig): HandlerSpec {
         costUsd,
         routingDelta,
         ...(modelName !== undefined ? { modelName } : {}),
+        ...(outputRef !== undefined ? { outputRef } : {}),
       };
       if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
       return result;
