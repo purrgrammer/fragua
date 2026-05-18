@@ -1,0 +1,102 @@
+// review.dot — multi-lens code review with parallel sub-agents.
+//
+// PRECONDITION for PR / branch inputs: working tree must be clean. The scope
+// node will `gh pr checkout <n>` (or `git checkout <branch>`) so lenses can
+// read files on disk directly. If the tree is dirty, scope aborts with a
+// suggestion to commit / stash. After the run, your checkout will be on the
+// PR / target branch — `git checkout -` to return.
+//
+// Shape:
+//   start → scope → dispatch → synthesize → verify → done
+//
+// scope:      resolves $ARGUMENTS into TARGET / PATHS / LOC / FOCUS / CONTEXT
+//             / CHECKOUT; checks out PR/branch when applicable; CHECKOUT
+//             surfaces the side-effect so the operator sees it.
+// dispatch:   fans out four named lens agents in parallel — lens-correctness
+//             / lens-security / lens-performance / lens-architecture (see
+//             .agents/agents/lens-*.md). Stops at LENSES_DONE.
+// synthesize: reads the lens results off the shared thread, dedupes, ranks,
+//             and emits the final review (severity sections + next steps).
+// verify:     goal-gate. Spot-checks evidence + severity calibration. REJECT
+//             retargets synthesize (lens results are still in the thread, no
+//             dispatch re-run).
+//
+// All four nodes share `thread_id="review"`. Only `synthesize` runs on opus +
+// reasoning_effort=high; everything else stays on sonnet. The four lens
+// profiles set their own model in frontmatter — correctness/security on
+// opus, performance/architecture on sonnet.
+//
+// Input forms ($ARGUMENTS resolved by the `scope` node):
+//   - empty                             → uncommitted changes (`git diff HEAD`)
+//   - "<commitish>"                     → e.g. "HEAD~3..HEAD", a sha, "main..feature"
+//   - "<path-or-glob>"                  → e.g. "packages/server/src", "src/auth.ts"
+//   - "PR <n>" / "<branch>"             → checks out branch, diff vs base
+//   - any of the above + free-text hint → e.g. "src/auth.ts focus on session handling"
+//
+// Examples:
+//   bun run swarm run review
+//   bun run swarm run review --input="HEAD~5..HEAD"
+//   bun run swarm run review --input="packages/server/src/store"
+//   bun run swarm run review --input="feat/oauth focus on token storage"
+
+digraph review {
+  graph [
+    goal                  = "Multi-lens code review (correctness, security, performance, architecture) with deduped, ranked synthesis and an evidence-quality gate."
+    label                 = "review"
+    default_fidelity      = "compact"
+    budget_usd            = 2.50
+    max_goal_gate_retries = 2
+    model_stylesheet      = "
+      *           { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
+      #synthesize { llm_model: claude-opus-4-7; reasoning_effort: high; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+
+  scope [
+    thread_id     = "review"
+    allowed_tools = "read, grep, find, bash"
+    max_cost_usd  = 0.30
+    prompt        = "Determine review target from $ARGUMENTS and prep the tree.\n\nClassify into: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).\n\nFor PR/branch DIFF: 1) `git status --porcelain` — if non-empty, emit `<abort>working tree dirty</abort>`. 2) `gh pr checkout <n>` or `git fetch origin <branch> && git checkout <branch>`. 3) Resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. For commit ranges, DO NOT switch branches.\n\nIf target is empty, emit `<abort>nothing to review</abort>`.\n\nList changed paths via `git diff --name-only <base>..<head>` / as given / `git diff --name-only HEAD`. Paths must be real on-disk, repo-relative.\n\nOutput exactly (no preamble):\n\nTARGET: <DIFF|FILES|UNCOMMITTED> <args>\nPATHS: <comma-sep>\nLOC: <approx>\nFOCUS: <hint or general>\nCONTEXT: <one sentence>\nCHECKOUT: <branch you switched to, or 'unchanged' if no checkout happened>"
+  ]
+
+  dispatch [
+    thread_id     = "review"
+    allowed_tools = "agent"
+    max_cost_usd  = 1.20
+    prompt        = "Dispatch the four lenses against the scope resolved above.\n\nIssue all four `agent` toolcalls in parallel; do not serialise. Pass the full scope output verbatim as each lens's `prompt` — they need PATHS / FOCUS / CONTEXT / CHECKOUT to scope their work.\n\n  agent({ agent: \"lens-correctness\",  prompt: \"<scope output verbatim>\" })\n  agent({ agent: \"lens-security\",     prompt: \"<scope output verbatim>\" })\n  agent({ agent: \"lens-performance\",  prompt: \"<scope output verbatim>\" })\n  agent({ agent: \"lens-architecture\", prompt: \"<scope output verbatim>\" })\n\nAfter all four sub-agents return, reply with EXACTLY: `LENSES_DONE: <count> returned`."
+  ]
+
+  synthesize [
+    thread_id     = "review"
+    fidelity      = "full"
+    allowed_tools = "read"
+    max_cost_usd  = 0.60
+    prompt        = "Integrate the four lens results into a single ranked code review — emit it verbatim as your reply. Use exactly these headings:\n\n# Code Review\n\n## Scope\nOne paragraph aggregating the file paths cited across the findings below — name the touched packages/areas and the type of change (uncommitted diff, commit range, branch). If CHECKOUT is set to a branch, note it. If every lens reported `OK`, name the surface anyway.\n\n## Critical\n## High\n## Medium\n## Low\n\nUnder each severity, one finding per item:\n  - **path:line** — one-line claim.\n    - Why: one sentence.\n    - Fix: one sentence or short snippet.\n    - Lens: correctness | security | performance | architecture (multiple if dedup'd).\n\nRules:\n  - DEDUPE. If two lenses flag the same issue, list once, combine the Lens field, take the higher severity.\n  - PROMOTE. A correctness/security finding marked `medium` but cross-flagged by another lens may move to `high` — note `(cross-flagged)` after the claim.\n  - DROP NOISE. Skip Low items that don't add signal (subjective style without evidence). Keep Low only if specific and actionable.\n  - NO INVENTION. Don't add findings the lenses didn't raise. Don't soften severity without reason — if you down-rank, justify in Why.\n\nIf every lens reported `OK:` (or returned no findings), replace the severity sections with:\n\n## All clear\nOne paragraph: what was reviewed, why no issues stood out, what the reviewers couldn't see (runtime, integration). One sentence on confidence.\n\nEnd with:\n\n## Next steps\nUp to 3 concrete, ordered actions, one line each. If All clear, a single 'No follow-up required.' line."
+  ]
+
+  verify [
+    thread_id     = "review"
+    fidelity      = "full"
+    goal_gate     = true
+    retry_target  = "synthesize"
+    allowed_tools = "read, grep"
+    max_cost_usd  = 0.30
+    prompt        = "Evidence-quality gate for the code review. Judge it on its own merits.\n\nCheck against three invariants:\n\n1. Every finding's `path:line` is verifiable — spot-check 2–3 random findings by reading the cited path and confirming the claim is anchored in real code (not hallucinated).\n\n2. Severity calibration is sane — no LOW for genuinely misleading claims, no CRITICAL for nitpicks; cross-flagged findings should be at HIGH or above.\n\n3. Output schema is followed — Scope section is present; severity sections are correctly ordered (Critical → High → Medium → Low) or replaced by 'All clear'; Next steps section is present and concise.\n\nIf all three pass, reply with EXACTLY: `APPROVE`.\n\nIf any fail, call the `abort` tool with reason `REJECT: <one-line summary of the worst violation>`."
+  ]
+
+  done [shape=Msquare]
+
+  start      -> scope
+  scope      -> done [condition="outcome=fail"]
+  scope      -> dispatch
+
+  dispatch   -> done [condition="outcome=fail"]
+  dispatch   -> synthesize
+
+  synthesize -> done [condition="outcome=fail"]
+  synthesize -> verify
+
+  verify     -> done
+}

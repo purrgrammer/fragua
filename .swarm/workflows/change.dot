@@ -58,6 +58,12 @@ digraph change {
     ]
   }
 
+  // Format is a tool node — biome --write normalises whitespace, imports,
+  // and any other purely-mechanical fixes before CI runs. Runs once; on
+  // failure (e.g. biome parse error) the workflow halts so a human can
+  // inspect rather than have `fix` patch around a broken format pass.
+  format [shape=parallelogram, tool_command="bun run format"]
+
   // CI is a tool node — happy path costs zero LLM tokens. Only on
   // failure does `fix` spin up; the backward edge fix→ci retries up
   // to max_retries=5 times (matching the original "5 fix rounds"
@@ -90,7 +96,10 @@ digraph change {
   // the terminal sees review unsatisfied and retargets to retry_target=
   // implement. The cycle caps at max_goal_gate_retries.
   review -> done [condition="outcome=fail"]
-  review -> ci
+  review -> format
+
+  format -> done [condition="outcome=fail"]
+  format -> ci
 
   ci  -> commit [condition="outcome=success"]
   ci  -> fix    [condition="outcome=fail"]

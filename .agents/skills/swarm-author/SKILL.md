@@ -474,7 +474,7 @@ Run twice if you have the budget — once cold, once with prior artifacts cleare
 - **Don't pair `goal_gate=true` with no retarget.** W007.
 - **Don't use a tool node to gather data for a downstream codergen.** Tool nodes are side-effect-only. If you need to run a deterministic script and reason about its output, call the script from inside a codergen's `bash` tool — the codergen reads stdout in its own context. The `collect → analyze` (tool → codergen) chain is the anti-pattern that motivated retiring `$<node>.output` substitution.
 - **Don't run a heavy collector inside the same node that's a goal-gate retarget target.** Each retarget re-runs the collector and re-dumps its (often large) JSON into the thread, multiplying tokens for no information gain. Split `collect` into its own codergen node sharing `thread_id` with the analyser — the bash tool result stays in the thread across retries while only the analyser re-runs. Reference: `narrative-drift.dot`, `structural-drift.dot`.
-- **Don't leak runtime plumbing into prompts.** No "the previous turn in this shared `dev` thread …" — the LLM doesn't need to model threads. Describe the task; reference the artifact ("the PLAN_REALISED block from the prior turn", "the drift table from the prior turn").
+- **Don't leak runtime plumbing into prompts.** No "the previous turn in this shared `dev` thread …", "your context contains …", "in a SINGLE assistant message" — the LLM doesn't need to model threads, turn boundaries, or message boundaries. Describe the task and reference the artifact by name ("the PLAN_REALISED block", "the drift table", "the collector snapshot"); the LLM already sees its own context.
 
 ---
 
