@@ -77,15 +77,16 @@ for (const b of blocks) {
   if (second !== -1) {
     let count = 2;
     let pos = second;
-    while ((pos = content.indexOf(edit.old_string, pos + 1)) !== -1) count++;
+    while (true) {
+      pos = content.indexOf(edit.old_string, pos + 1);
+      if (pos === -1) break;
+      count++;
+    }
     failures.push(`${edit.reason}: old_string is ambiguous (${count} matches)`);
     continue;
   }
 
-  content =
-    content.slice(0, first) +
-    edit.new_string +
-    content.slice(first + edit.old_string.length);
+  content = content.slice(0, first) + edit.new_string + content.slice(first + edit.old_string.length);
   applied++;
 }
 
