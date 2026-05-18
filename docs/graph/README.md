@@ -12,7 +12,7 @@ The typed Graph model addresses both. The runtime semantics — event-sourced re
 ## Reading order
 
 1. **[types.md](types.md)** — `Graph<I, O, E>`, `Node<I, O>`, `Edge<O, I'>`, `Outcome<O>`, edge predicate/transform DSL. The core algebra.
-2. **[kinds.md](kinds.md)** — six node kinds: `LLM`, `Function`, `Task`, `Wait`, `Map`, `Reduce`.
+2. **[kinds.md](kinds.md)** — five node kinds: `LLM`, `Task`, `Wait`, `Map`, `Reduce`. User-authored compute lives in `Task` (scripts/commands); user JS reaches runs through extensions, not through a graph node body. No `Function` kind.
 3. **[runtime.md](runtime.md)** — `Environment`, `BoundGraph`, `Run<I, O, E>`, `IO<E>`. How a graph executes.
 4. **[laws.md](laws.md)** — algebraic and operational invariants + property-based testing strategy.
 5. **[patterns.md](patterns.md)** — the eight Anthropic patterns (chain / route / sectioning / voting / orchestrator-workers / evaluator-optimizer / autonomous / augmented) expressed in the typed model.
@@ -26,7 +26,7 @@ The migration lands in layers, each independently useful:
 2. **Typed schemas on nodes.** Each node carries `inputSchema` and `outputSchema`. LLM nodes terminate via a structured-output tool whose schema is `O`. Edge transforms become typed selectors.
 3. **TS builder (`@swarm/sdk`).** A typed builder that emits the JSON IR from TS code. Authoring becomes IDE-native; the IR stays the wire contract.
 4. **Edge DSL.** Predicate + transform DSL with named-function escape hatch. Edges stay hashable / portable / cross-language emittable.
-5. **Six-kind model.** `Function`, `Task`, `Map`, `Reduce` join `LLM` and `Wait`. `Conditional`/diamond disappears (routing is an edge property).
+5. **Five-kind model.** `Task`, `Map`, `Reduce` join `LLM` and `Wait`. `Conditional`/diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
 6. **Run / Environment split.** `bind(graph, env)` resolves IR refs (tools, models, functions). `Run.fresh(boundGraph, input)` produces a `Run<I, O, E>` exposing `IO<E>`.
 
 DOT stays as an authoring surface throughout. The runtime accepts JSON IR over the wire; DOT lowers client-side or server-side. Comments don't round-trip; structure does.

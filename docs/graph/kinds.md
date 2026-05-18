@@ -1,8 +1,16 @@
 # Node kinds
 
-Six kinds. Each is a discriminated case of `NodeKind`. Authoring picks the kind explicitly; the runtime dispatches on it.
+Five kinds. Each is a discriminated case of `NodeKind`. Authoring picks the kind explicitly; the runtime dispatches on it.
 
 There is no `Conditional`/`Router` kind — routing is an edge property (`when` predicate), not a node kind. Diamonds disappear from the model.
+
+There is also no `Function` kind for user-authored JS bodies. The three places "function-shaped" code shows up — edge predicates / transforms, fan-in reducers, and small compute nodes — each have a better home:
+
+- **Edge predicates / transforms** are expressed in the predicate / transform DSL (see [types.md](types.md)); their TS-builder form (`(o) => o.value.choice`) desugars to AST at compile time and never runs as JS at runtime.
+- **Fan-in reducers** are either `Reduce { kind: 'llm' }` for synthesis or `Reduce { kind: 'function' }` pointing at a small *runtime-provided* builtin registry (`concat`, `majority_vote`, `json_merge`, `dedup_rank`). Not user-extensible at the IR level.
+- **Domain compute nodes** ("extract areas from a snapshot", "pick a model from a heuristic") express as `Task` — scripts or commands with idempotency metadata. Process spawn overhead is ms-scale; almost nothing in this category is hot enough to need in-process execution.
+
+User-authored JS reaches into runs through **extensions** (`@swarm/extension` — tools and hooks called from `LLM` nodes), not through a graph node kind. That's a separate, already-loaded surface.
 
 ## LLM
 
@@ -30,33 +38,36 @@ A typed input is rendered into messages by `buildPrompt`. The LLM call produces 
 
 Tools are referenced by name (`ToolRef`); `Environment.tools` resolves them at bind time.
 
-## Function
-
-```ts
-type FunctionAttrs<I, O> = {
-  ref: FunctionRef;                              // named handle in FunctionRegistry
-};
-```
-
-Pure, deterministic, side-effect-free. Sync or async. The function is registered in `Environment.functions` and looked up at bind time. The IR carries the ref, not the code — `workflow_sha` is stable across formatter changes.
-
-Examples: extract a list of areas from a discover snapshot; compute a hash; pick a model based on a heuristic.
-
 ## Task
 
 ```ts
 type TaskAttrs<I, O> = {
-  ref:            FunctionRef;
-  idempotencyKey: (input: I) => string;          // for caching / replay
-  cache?:         { ttlMs: number };
+  // What to run. Today's `tool_command` shape extended with structured
+  // I/O knobs and idempotency metadata.
+  command:         string;                        // shell command; substitution supported
+  inputMode?:      'stdin-json' | 'args' | 'env'; // default: stdin-json
+  outputMode?:     'stdout-json' | 'stdout-text'; // default: stdout-json when I/O is typed
+  cwd?:            string;
+  env?:            Record<string, string>;
+
+  // Cacheability + replay safety
+  idempotencyKey?: (input: I) => string;          // default: canonicalized input hash
+  cache?:          { ttlMs: number };
 };
 ```
 
-Idempotent side-effect. Cacheable by `idempotencyKey`. Replay-safe: a Task with the same key returns the cached result without re-executing.
+The single "user-authored compute" node kind. Covers today's `tool` nodes (`parallelogram` in DOT) and absorbs what was previously called a `Function` node. Authors who want a deterministic pure transform write a script (`./scripts/extract-areas`) and declare it idempotent; the runtime caches by `idempotencyKey` so replays don't re-execute side effects.
 
-Examples: run CI (idempotency key = git sha); fetch a doc (key = URL + last-modified); apply a patch (key = patch hash).
+Examples (drawn from current and target workflows):
 
-The boundary between `Function` and `Task`: `Function` is pure; `Task` has effects but is *cacheable*. A non-idempotent side effect is a bug — express it as an `LLM` node with the `bash` tool if it must exist.
+- **Deterministic pure transform** (was: Function): `command="bun ./scripts/extract-areas.ts"`, input piped as JSON on stdin, output parsed as JSON from stdout. `idempotencyKey = i => sha256(JSON.stringify(i))`. Process spawn cost is ms-scale; this is fine for anything not on a hot inner loop.
+- **Run CI**: `command="bun run ci"`, `idempotencyKey = i => i.gitSha`. Cached: same sha → cached result, no re-run.
+- **Fetch a doc**: `command="curl …"`, `idempotencyKey = i => \`${i.url}|${i.etag}\``.
+- **Apply a patch**: `command="bun ./scripts/apply-patch.ts"`, `idempotencyKey = i => sha256(i.patch)`.
+
+The author asserts idempotency by setting the key. The runtime trusts it — a non-idempotent body declared idempotent is a bug, surfaced when replay diverges from the original run. Side-effecting bodies without an idempotency key are valid but won't replay correctly; the validator warns when `idempotencyKey` is absent on a Task that produces typed output.
+
+For non-idempotent ad-hoc shell calls, prefer the `bash` tool inside an `LLM` node rather than a Task — that's what it's for.
 
 ## Wait
 
@@ -93,7 +104,7 @@ Wait isn't a special case for routing. Outgoing edges read the typed `O` via the
 
 The DOT-era accelerator labels (`label="[A] Approve"`) become **UI affordances**, not routing keys. They're hints for the operator (or for a CLI prompt) about which canonical payloads to send; the schema is the source of truth, and predicates read structured fields. A rich `resumeSchema` can carry far more than a flat enum — radio + free-text + checkboxes — while routing still reads the structured payload.
 
-This is a deliberate departure from today's two-tier model (substitution paths for prompts, condition paths for routing). In the typed model the path namespace is one: predicates and transforms both read the same `Outcome<O>` shape, and Wait is no different from LLM, Reduce, Function, or any sub-graph.
+This is a deliberate departure from today's two-tier model (substitution paths for prompts, condition paths for routing). In the typed model the path namespace is one: predicates and transforms both read the same `Outcome<O>` shape, and Wait is no different from LLM, Reduce, Task, Map, or any sub-graph.
 
 ## Map
 
@@ -120,22 +131,22 @@ This is the primitive that replaces today's `component` fan-out, and the one tha
 
 ```ts
 type ReduceAttrs<Elem, O> =
-  | { kind: 'function'; ref: FunctionRef }
+  | { kind: 'function'; builtin: BuiltinReducerRef }   // runtime-provided
   | { kind: 'llm';      llm: LLMAttrs<readonly Elem[], O> };
 ```
 
 Fan-in: take an array, produce an aggregate. Two flavors:
 
-- **Function reducer** — deterministic, hashable, replay-stable. Use for majority votes, sums, ranks, dedup, severity-merges.
-- **LLM reducer** — calls a model on `Elem[]` to synthesize a structured `O`. Use for cross-finding synthesis, narrative merges.
+- **Function reducer** — references a named builtin from a small runtime-provided registry: `concat` (today's heuristic), `majority_vote`, `json_merge`, `dedup_rank`. Deterministic, hashable, replay-stable. Not user-extensible at the IR level — extensions register tools, not reducers. For ad-hoc deterministic aggregation that isn't covered by a builtin, feed `Map`'s output into a downstream `Task` instead.
+- **LLM reducer** — calls a model on `Elem[]` to synthesize a structured `O`. Use for cross-finding synthesis, narrative merges, anything that needs judgment.
 
-Today's `tripleoctagon` is conceptually a Reduce, currently restricted to the function form (deterministic heuristic concatenator) regardless of whether `prompt=` is set. The typed `Reduce` makes the LLM-vs-function choice explicit instead of inferring from prompt presence.
+Today's `tripleoctagon` is conceptually a Reduce, currently restricted to the heuristic-concatenator builtin regardless of whether `prompt=` is set (see [../proposals/fan-in-to-reduce.md](../proposals/fan-in-to-reduce.md)). The typed `Reduce` makes the LLM-vs-builtin choice explicit instead of inferring from prompt presence.
 
 ## Cross-kind invariants
 
-- **`Function` and `Task`** must be **pure-on-bind**: bodies can have side effects, but the IR ref is stable across runs; replaying the event log against the same Environment produces the same result.
+- **`Task`** bodies are externally observable (process-spawned); the IR carries only `command` + idempotency metadata. The author asserts idempotency by setting `idempotencyKey`; the runtime trusts that and caches by key for replay.
 - **`LLM`** is the only kind whose output isn't fully deterministic. The event log captures every turn; replay uses the logged result, not a fresh call.
-- **`Map` and `Reduce`** with function bodies are fully replayable (logged element outcomes feed the reducer).
+- **`Map`** and **`Reduce`** with builtin function reducers are fully replayable (logged element outcomes feed the reducer; builtin code is stable across runs).
 - **`Wait`** suspends and resumes via the event log; the resume event is the output.
 
-The replay property holds across all six kinds when the Environment is deterministic (injected `clock`, `rng`).
+The replay property holds across all five kinds when the Environment is deterministic (injected `clock`, `rng`) and Task bodies honor their declared `idempotencyKey`.

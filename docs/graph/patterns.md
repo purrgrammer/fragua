@@ -97,8 +97,8 @@ Predicate completeness is statically checkable — a routing graph with uncovere
   policy:      'wait_all',
 }))
 .node('aggregate', reduce({
-  kind: 'function',
-  ref:  { name: 'majorityVote' },
+  kind:    'function',
+  builtin: 'majority_vote',          // runtime-provided builtin
 }))
 .edge('vote', 'aggregate')
 ```

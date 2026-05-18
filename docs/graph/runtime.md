@@ -20,8 +20,11 @@ This split makes today's "validate model is registered at `POST /workflows`" che
 type Environment = {
   store:        EventStore;             // event log (today: SQLite)
   providers:    ProviderRegistry;       // anthropic / openai / … + credentials
-  tools:        ToolRegistry;           // IR tool ids → implementations
-  functions:    FunctionRegistry;       // IR fn ids → implementations
+  tools:        ToolRegistry;           // IR tool ids → implementations (via extensions)
+  builtins:     BuiltinRegistry;        // runtime-provided edge / reducer builtins
+                                         // (concat, majority_vote, json_merge,
+                                         //  dedup_rank, severityAtLeastHigh, …)
+                                         // not user-extensible
   skills?:      SkillCatalog;
   agents?:      AgentCatalog;
   cwd:          string;                 // worktree root
@@ -33,6 +36,13 @@ type Environment = {
   httpHooks?:   HttpCallbackEndpoint;
 };
 ```
+
+User-authored code reaches the runtime through two surfaces:
+
+- **`tools`** — extensions (`@swarm/extension`) register tools and hooks at boot; `LLM` nodes invoke them by name. The "user JS lives here" answer.
+- **`Task` bodies** — process-spawned scripts referenced by `command`. The runtime never resolves user JS itself; the process boundary is the sandbox.
+
+There is no `FunctionRegistry` for arbitrary user JS bodies. The graph's IR never carries user JS source or compiled artifacts; it carries names that resolve to either extension tools (via `tools`) or runtime-provided builtins (via `builtins`).
 
 Two properties to maintain:
 
@@ -52,7 +62,8 @@ Resolves every IR reference against the Environment:
 
 - LLM `provider` + `model` against `env.providers`
 - LLM `tools` against `env.tools`
-- `Function` / `Task` / edge function refs against `env.functions`
+- Edge / reducer builtin refs against `env.builtins`
+- `Task` commands resolved against the worktree's `cwd` and shell at execution time (not bind time, since commands can substitute `$<id>.output`-style late-bound values)
 - Sub-graph refs recursively
 
 Returns a `BoundGraph` on success, or an array of `BindError`s listing every unresolved ref. Today's `POST /workflows` rejection with `code="model_unresolved"` becomes a `bind` failure; same logic, one place, reusable from CLI, daemon, dev-time.

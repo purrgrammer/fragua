@@ -40,7 +40,7 @@ The near-duplicate `change` / `feature` pair collapses into one graph with a `mo
 
 ### `fix-bug.dot`
 
-`LLM(reproduce, self-retarget) → LLM(fix) → Task(detect-runner, idempotent by manifest hash) → LLM(verify)`. `detect-runner` formalizes as a `Task` because it's a side-effecting probe that's idempotent.
+`LLM(reproduce, self-retarget) → LLM(fix) → Task(detect-runner, idempotent by manifest hash) → LLM(verify)`. `detect-runner` formalizes as a `Task` because it's a side-effecting probe that's idempotent — same shape as today's `tool` node plus the explicit `idempotencyKey`.
 
 ### `review.dot`
 
@@ -121,7 +121,7 @@ The migration lands in layers, each independently useful:
 2. **Typed schemas on nodes.** Each node carries `inputSchema` and `outputSchema`. Optional fields on the IR; default to `unknown` (back-compat with non-typed nodes).
 3. **TS builder.** `@swarm/sdk` (or similar) emits the typed IR from TS code. Authoring becomes IDE-native; the IR stays the wire contract.
 4. **Edge DSL.** Predicate + transform DSL with named-function escape hatch. Replaces today's stringly-typed `condition=`.
-5. **Six-kind model.** `Function`, `Task`, `Map`, `Reduce` join `LLM` and `Wait`. `Conditional` / diamond disappears.
+5. **Five-kind model.** `Task`, `Map`, `Reduce` join `LLM` and `Wait`. `Conditional` / diamond disappears (routing is an edge property); no `Function` kind (user JS lives in extensions, deterministic compute in `Task`).
 6. **Run / Environment split.** `bind(graph, env)` → `BoundGraph`. `Run.fresh / replay / resume` peer constructors. `IO<E>` first-class.
 
 DOT keeps working throughout. Workflows authored in DOT today survive the migration as-is; new features are TS-only.

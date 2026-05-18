@@ -70,11 +70,11 @@ Edges carry hashable, portable data. The runtime executes them; cross-language c
 ```ts
 type EdgePredicate<O> =
   | { kind: 'expr'; ast: PredicateExpr }    // serialized AST, hashable, portable
-  | { kind: 'ref';  ref: FunctionRef };      // named handle, code in registry
+  | { kind: 'ref';  ref: BuiltinRef };       // runtime-provided builtin (not user JS)
 
 type EdgeTransform<O, I2> =
   | { kind: 'expr'; ast: TransformExpr }
-  | { kind: 'ref';  ref: FunctionRef };
+  | { kind: 'ref';  ref: BuiltinRef };
 ```
 
 ### Predicate DSL
@@ -117,11 +117,13 @@ expr := pick(...paths)       — keep only these fields
       | path-extract          — pull a sub-value
 ```
 
-### Named function refs
+### Named builtin refs
 
-When the DSL doesn't suffice, an edge references a function in the `FunctionRegistry`. The IR carries `{ kind: 'ref', ref: { name: 'feedbackFromReject' } }`; the runtime resolves it at bind time. Stable hash, code lives in the registry. Lint warns on ref edges to encourage data-shaped logic.
+When the DSL doesn't suffice, an edge references a *runtime-provided builtin* — a small fixed set of functions the runtime ships (predicates and transforms common enough to warrant inclusion, but too gnarly to express as DSL ASTs). The IR carries `{ kind: 'ref', ref: { name: 'severityAtLeastHigh' } }`; the runtime resolves it at bind time against `Environment.builtins`. Stable hash, code lives in the runtime release, not in user IRs.
 
-This is the same indirection used by `Function` and `Task` node bodies — uniform across the IR.
+Not user-extensible at the IR level. Authors who need richer logic either split into multiple edges, pre-compute via a `Task` node, or — for genuinely user-authored hooks — use the `@swarm/extension` surface (tools, hooks) consumed from an `LLM` node. Lint warns on `ref` edges to encourage data-shaped logic and signal when the DSL falls short for an author.
+
+This is the same indirection used by `Reduce { kind: 'function' }` — the registry contains a small set of named builtins (`concat`, `majority_vote`, `json_merge`, `dedup_rank`, plus the edge-builtins). User-authored JS never lives in the IR.
 
 ## Outcome
 

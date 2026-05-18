@@ -148,8 +148,11 @@ Forward-compatible field plan:
   stringly-typed behaviour (input from `$ARGUMENTS` / substitution,
   output from last assistant message).
 - `kind?: NodeKind` on `Node` — the typed discriminator
-  (`LLM | Function | Task | Wait | Map | Reduce`). Absent → derive
-  from shape (today's behavior).
+  (`LLM | Task | Wait | Map | Reduce`). Absent → derive from shape
+  (today's behavior). There is no `Function` kind — see
+  `docs/graph/kinds.md`: user-authored compute lives in `Task`
+  (scripts/commands); user JS reaches runs through extensions, not
+  through a graph node body.
 - `predicate?: PredicateExpr`, `transform?: TransformExpr` on `Edge`
   — typed predicate/transform DSL. Absent → today's stringly-typed
   `condition` is the only routing input.
@@ -604,8 +607,8 @@ covers:
 
 - **types.md** — `Graph`, `Node`, `Edge`, `Outcome`, edge
   predicate / transform DSL
-- **kinds.md** — six node kinds (`LLM`, `Function`, `Task`, `Wait`,
-  `Map`, `Reduce`)
+- **kinds.md** — five node kinds (`LLM`, `Task`, `Wait`, `Map`,
+  `Reduce`); user-authored JS lives in extensions, not graph bodies
 - **runtime.md** — `Environment`, `BoundGraph`, `Run<I, O, E>`,
   `IO<E>`
 - **laws.md** — algebraic + operational invariants, property-test

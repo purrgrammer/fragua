@@ -55,12 +55,17 @@ From `docs/graph/kinds.md`:
 
 ```ts
 type ReduceAttrs<Elem, O> =
-  | { kind: 'function'; ref: FunctionRef }
+  | { kind: 'function'; builtin: BuiltinReducerRef }   // runtime-provided
   | { kind: 'llm';      llm: LLMAttrs<readonly Elem[], O> };
 ```
 
-- **`function`** — deterministic, hashable, replay-stable.
-  Today's heuristic concatenator is the canonical default.
+- **`function`** — references a named builtin from the small
+  runtime-provided registry (`concat`, `majority_vote`,
+  `json_merge`, `dedup_rank`). Deterministic, hashable, replay-stable.
+  Not user-extensible at the IR level — for custom deterministic
+  aggregation, feed `Map`'s output into a downstream `Task` instead.
+  Today's heuristic concatenator is the `concat` builtin and stays
+  the default for unprompted tripleoctagons.
 - **`llm`** — calls a model on `Elem[]` to synthesize structured
   `O`. This is what `prompt=` on `tripleoctagon` was meant to mean.
 
@@ -122,16 +127,18 @@ tripleoctagons — no behavior change for workflows that didn't set
    reducer but also wants a prose comment in `prompt=` for humans.
    Probably yes; cheap to add.
 
-2. **Builtin function reducers.** Today there's one — the heuristic
-   concatenator. Others worth naming as named refs in the function
-   registry:
+2. **Builtin reducer registry contents.** Today there's one — the
+   heuristic concatenator (the `concat` builtin under the typed
+   model). The initial registry adds:
    - `majority_vote` — for parallel voting (homogeneous branches,
      same-task variance).
    - `json_merge` — deep-merge structured outputs.
    - `dedup_rank` — collect findings, dedup, rank by severity.
-   These ship as the initial builtin registry; named via
-   `reduce_function="majority_vote"` on the tripleoctagon (in DOT)
-   or the corresponding TS-builder method.
+   These are runtime-provided (not user-extensible at the IR
+   level); named via `reduce_builtin="majority_vote"` on the
+   tripleoctagon (in DOT) or the corresponding TS-builder method.
+   Custom deterministic aggregation that isn't covered by a builtin
+   feeds `Map`'s output into a downstream `Task`.
 
 3. **Branch-failure policy.** Today: a failed branch aborts the
    whole fan-in. The typed model exposes `Map.policy = wait_all |
