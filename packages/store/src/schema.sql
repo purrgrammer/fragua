@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 12
+-- swarm event store schema — Revision 13
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -62,6 +62,12 @@
 -- layer (`ModelRegistry.loadCustomModels`); one broken row no longer
 -- poisons the entire registry. No `apiKey` field — credentials always
 -- come from `provider_credentials`. Pure additive; no row migrations.
+-- v12 → v13: drop graph-level parallel/fan_in primitive. Parent linkage
+-- columns (`parent_run_id`, `parent_node_id`, `parallel_index`,
+-- `subgraph_root_node_id`, `subgraph_terminal_node_id`) and the
+-- `idx_run_state_parent` index are removed. `running_children` is
+-- dropped from the status CHECK. Sub-agents remain an inline tool
+-- (no child `run_state` row); only the sub-RUN machinery is gone.
 
 CREATE TABLE IF NOT EXISTS schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -86,7 +92,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','running_children','paused','paused_hitl','paused_auto',
+    'queued','running','paused','paused_hitl','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -129,17 +135,6 @@ CREATE TABLE IF NOT EXISTS run_state (
   -- NOT cascade here, so a run keeps its lineage even after the schedule
   -- is removed. No `REFERENCES schedules(id)` constraint by design.
   schedule_id TEXT,
-  -- Parallel sub-run linkage (P1.1 of docs/proposals/parallel.md). All
-  -- NULL on top-level runs. A sub-run row carries its parent's run id,
-  -- the component node that fanned out, its 0-based position in the
-  -- fan-out, and the subgraph slice it dispatches through (root
-  -- inclusive, terminal exclusive — the parent's collect phase reads
-  -- outcomes when the terminal would be entered).
-  parent_run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL,
-  parent_node_id TEXT,
-  parallel_index INTEGER,
-  subgraph_root_node_id TEXT,
-  subgraph_terminal_node_id TEXT,
   total_cost_usd REAL GENERATED ALWAYS AS
     (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
   billed_tokens INTEGER GENERATED ALWAYS AS
@@ -157,9 +152,6 @@ CREATE INDEX IF NOT EXISTS idx_run_state_cwd ON run_state(cwd);
 CREATE INDEX IF NOT EXISTS idx_runs_by_schedule
   ON run_state(schedule_id)
   WHERE schedule_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_run_state_parent
-  ON run_state(parent_run_id)
-  WHERE parent_run_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS events (
   run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,

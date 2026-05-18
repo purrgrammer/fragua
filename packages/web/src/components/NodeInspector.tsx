@@ -128,21 +128,6 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
           </Section>
         )}
 
-      {/* Parallel — fan-in target is the convergent tripleoctagon, discovered
-       *  by the runtime via edges (attractor §4.8). The `fan_in` attr is the
-       *  swarm-author convention for declaring it explicitly; show whichever
-       *  is set so authors can confirm the wiring without leaving the panel. */}
-      {(attrs.join_policy !== undefined || typeof attrs["fan_in"] === "string") && (
-        <Section title="parallel">
-          {typeof attrs["fan_in"] === "string" && (attrs["fan_in"] as string).length > 0 && (
-            <Field label="fan_in" value={<code className="text-sw-text">{attrs["fan_in"] as string}</code>} />
-          )}
-          {attrs.join_policy !== undefined && (
-            <Field label="join policy" value={<code className="text-sw-text">{attrs.join_policy}</code>} />
-          )}
-        </Section>
-      )}
-
       {/* Tool (graph-level shell step) */}
       {typeof attrs.tool_command === "string" && attrs.tool_command.length > 0 && (
         <Section title="tool">

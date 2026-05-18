@@ -33,7 +33,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Notes |
 |---|---|---|
-| [Parallel branches as first-class executor citizens (sub-runs)](./parallel.md) | specified | branches today are single-node, opaque to the executor's dispatch loop, and inherit none of its per-turn services (watchdog, budgets, retries, intent fold, HITL, goal gates, edge selection). Concrete production symptom: `review.dot`'s `lens_correctness` spent $1.72 vs $0.30 cap (5.7× over). Approach: each branch becomes a child `run_state` row with `parent_run_id` linkage; reuses 100% of existing executor machinery. P0 extracts `dispatchOne`/`foldIntents`/`claimAndAdvance` from the executor's monolithic loop; P2 cuts `parallel.ts` over to sub-runs; P3 unlocks multi-node branch subgraphs + HITL inside branches. No feature flag; direct cutover with parity tests gating P2 |
 | [Worktree design](./worktree-design.md) | sketch | current state unsatisfying; this doc enumerates why |
 | [Worktree snapshots at node boundaries](./worktree-snapshots.md) | designed | capture worktree state as a git tree under `refs/swarm/snapshots/<runId>/<eventIdx>` after every `fact.node_completed` and on HITL pause. Three payoffs — diff-on-HITL, race-free UI files/diff view, prerequisite for run forkability. No branches, no tags, no synthetic refs in the user's namespace. Composes with [parallel sub-runs](./parallel.md) and supersedes the snapshot subset of [file-server](./file-server.md) |
 | [Sane + configurable handler timeouts](./timeouts.md) | specified | concrete plan; not yet scheduled |
@@ -66,7 +65,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 <details>
 <summary>Design records for delivered capability — capability claims live in the root README. Click to expand.</summary>
 
-- [Descendant event stream](./descendant-event-stream.md)
 - [Project config file](./project-config.md)
 - [Doc-vs-code drift CI lint](./drift-lint.md)
 - [Bound the OCC retry loop](./occ-retry-ceiling.md)
@@ -74,7 +72,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Harness](./harness.md)
 - [Schema additions for project-aware runs](./schema-additions.md)
 - [Workflow resolution by name](./workflow-resolution.md)
-- [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md)
 - [Recoverable pause unification](./recoverable-budget-pause.md)
 - [Watchdog timeout → pause-retry, not abort](./watchdog-timeout-pause-retry.md)
 - [Run isolation via worktrees](./run-isolation.md)
@@ -91,5 +88,16 @@ qualification (drift-lint enforces this). Partially-landed work stays
 - [Custom-provider config in the store](./provider-config-storage.md)
 - [Per-model CLI ops for custom providers](./provider-model-ops.md)
 - [`paused{reason:"max_retries"}` — Stage 3 / max_retries slice](./paused-max-retries.md)
+
+</details>
+
+## Archived
+
+<details>
+<summary>Proposals targeting primitives that have since been retired — kept as historical record. Click to expand.</summary>
+
+- [Parallel branches as first-class executor citizens (sub-runs)](./parallel.md) — the parallel/fan_in primitive was removed; concurrent dispatch now lives in the codergen `agent` tool
+- [Parallel branch outputs — substitution + UI awareness](./parallel-branch-outputs.md) — substitution + UI surfaces targeted the parallel runtime, which no longer exists
+- [Per-parent descendant event stream](./descendant-event-stream.md) — descendant tracking was a parallel-sub-run feature; obsolete now that parallel is retired
 
 </details>

@@ -83,8 +83,6 @@ function stubCtx(overrides: Partial<HandlerContext> = {}): HandlerContext & {
     },
     externalCall: async (_, fn) => fn("stub-key"),
     args: overrides.args ?? {},
-    nodeOutputs: overrides.nodeOutputs ?? new Map(),
-    subRunOutcomes: overrides.subRunOutcomes ?? new Map(),
     emit: (type, payload) => emitted.push({ type, payload }),
     withScope: () => {
       throw new Error("stubCtx: withScope not implemented for this test");
@@ -150,7 +148,6 @@ describe("makeToolHandler — happy path", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("success");
-      expect(result.routingDelta?.["tool.lint.exit_code"]).toBe(0);
     }
     const stdoutArt = ctx.__artifacts.find((a) => a.key === "lint:stdout");
     expect(stdoutArt?.content).toBe("OK\n");
@@ -172,7 +169,6 @@ describe("makeToolHandler — happy path", () => {
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
-      expect(result.routingDelta?.["tool.tests.exit_code"]).toBe(1);
     }
     expect(ctx.__artifacts.find((a) => a.key === "tests:stderr")?.content).toBe("2 tests failed\n");
   });
@@ -213,48 +209,20 @@ describe("makeToolHandler — substitution", () => {
     expect(ranWith).toBe("bun test 'auth.ts'");
   });
 
-  test("${context.name} from routing is substituted (shell-quoted)", async () => {
-    const ctx = stubCtx({ routing: { pkg: "@swarm/core" } });
+  test("a $ARGUMENTS value carrying a newline stays one shell token (POSIX single-quoted)", async () => {
+    const ctx = stubCtx({ args: { $ARGUMENTS: "9876\n" } });
     let ranWith = "";
     const spec = makeToolHandler({
-      toolCommand: "bun run --filter='${context.pkg}' typecheck",
+      toolCommand: "echo $ARGUMENTS",
       spawner: async (cmd) => {
         ranWith = cmd;
         return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
       },
     });
     await spec.handler(ctx);
-    // Pre-quoted templates keep working: the inner `'…'` from the
-    // template + the outer `'…'` from escapeForShell concatenate at
-    // shell tokenisation back into the unquoted value.
-    expect(ranWith).toBe("bun run --filter=''@swarm/core'' typecheck");
-  });
-
-  test("$<nodeId>.output from prior nodes is shell-quoted (newline-bearing artifact stays one token)", async () => {
-    // Regression: the crowdin-review bug. find_pr's output artifact
-    // ended in `\n` (an `echo` adds it). Without escapeForShell, the
-    // newline got interpolated raw and turned a one-line `gh pr review
-    // …` chain into four /bin/sh statements. The fix wraps the value
-    // in single quotes so the trailing newline becomes part of the
-    // single argument.
-    const ctx = stubCtx({
-      nodeOutputs: new Map([["find_pr", { output: "9876\n", success: true, timestamp: 1 }]]),
-    });
-    let ranWith = "";
-    const spec = makeToolHandler({
-      toolCommand:
-        "gh pr review $find_pr.output --approve && gh pr update-branch $find_pr.output && gh pr merge $find_pr.output --auto --squash",
-      spawner: async (cmd) => {
-        ranWith = cmd;
-        return { exitCode: 0, stdout: "", stderr: "", durationMs: 1 };
-      },
-    });
-    await spec.handler(ctx);
-    // Each substitution wrapped in '…'; the newline is captured inside
-    // the quoted token rather than ending the statement.
-    expect(ranWith).toBe(
-      "gh pr review '9876\n' --approve && gh pr update-branch '9876\n' && gh pr merge '9876\n' --auto --squash",
-    );
+    // Single-quote wrapping keeps the newline inside one token rather
+    // than ending the statement.
+    expect(ranWith).toBe("echo '9876\n'");
   });
 
   test("a value containing single quotes is escaped per POSIX (close-quote, escaped quote, reopen)", async () => {
@@ -269,28 +237,6 @@ describe("makeToolHandler — substitution", () => {
     });
     await spec.handler(ctx);
     expect(ranWith).toBe("echo 'it'\\''s fine'");
-  });
-});
-
-describe("makeToolHandler — output capture", () => {
-  test("stdout lands as artifact 'output' and outputRef is on the transition", async () => {
-    // Mirrors the codergen capture contract: a tool node produces a single
-    // canonical "output" artifact that downstream `$<nodeId>.output`
-    // substitution dereferences. Without this, $build.output (where build
-    // is a tool node) silently became "".
-    const ctx = stubCtx({ nodeId: "build" });
-    const spec = makeToolHandler({
-      toolCommand: "bun run build",
-      spawner: fakeSpawner({ exitCode: 0, stdout: "compiled 12 files\n", stderr: "" }),
-    });
-    const result = await spec.handler(ctx);
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.outputRef?.nodeId).toBe("build");
-      expect(result.outputRef?.key).toBe("output");
-    }
-    const outputArt = ctx.__artifacts.find((a) => a.key === "output");
-    expect(outputArt?.content).toBe("compiled 12 files\n");
   });
 });
 
@@ -541,7 +487,6 @@ describe("makeToolHandler — smoke test with real Bun spawner", () => {
     const result = await spec.handler(ctx);
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
-      expect(result.routingDelta?.["tool.die.exit_code"]).not.toBe(0);
     }
   });
 });

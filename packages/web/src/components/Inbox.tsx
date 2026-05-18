@@ -80,7 +80,6 @@ const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | und
   // halted/paused.
   queued: undefined,
   running: undefined,
-  running_children: undefined,
   completed: undefined,
   cancelled: undefined,
   halted: undefined,
@@ -97,16 +96,10 @@ export interface InboxProps {
 export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
   // Ask for `limit + 1` so the extra row signals overflow without a
   // separate count query. Server enforces filter/order/limit.
-  //
-  // `includeChildAttention: true` widens the filter so a parent in
-  // `running_children` whose branch paused on budget / HITL also
-  // surfaces — sub-runs themselves stay hidden (server enforces
-  // topLevelOnly). See `docs/proposals/parallel.md` UI plan §P2/§P5.
   const { data, isPending } = useQuery(
     queries.runs.list({
       status: ATTENTION_STATUSES,
       order: "oldest",
-      includeChildAttention: true,
       ...(limit !== undefined ? { limit: limit + 1 } : {}),
     }),
   );
@@ -159,22 +152,11 @@ export function Inbox({ limit, viewAllHref }: InboxProps): JSX.Element {
 function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.Element | null {
   // Pick the most-actionable surface state, preferring sub-run
   // attention when only the children need help. Order matches the
-  // operator's "what should I look at first" priority:
-  //   1. parent itself in an attention state — pre-existing behavior
-  //   2. parent in running_children with a paused/hitl/quarantined child
-  //   3. neither — skip (filter widened with includeChildAttention=true
-  //      can return parents whose only child is the running one;
-  //      shouldn't render here).
-  const selfMeta = row.runStatus ? REASON_META[row.runStatus] : undefined;
-  const childReason = selfMeta == null ? digestReason(row) : null;
-  const meta = selfMeta ?? childReason?.meta;
+  const meta = row.runStatus ? REASON_META[row.runStatus] : undefined;
   if (!meta) return null;
   const { Icon, label, iconClass, borderVar } = meta;
   const wf = row.workflowName ?? row.workflow;
   const { initial, animate, exit, transition } = rowEnterFromBottom(reduce);
-  // Reason text: parent's own reason wins; otherwise cite the branch
-  // (e.g. "lens_correctness: awaiting input" when a child is HITL).
-  const reasonText = selfMeta != null ? label : `${childReason?.branchHint ?? "branch"}: ${label}`;
   return (
     <motion.li
       layout
@@ -188,7 +170,7 @@ function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.El
         to={`/runs/${row.runId}`}
         title={displayTooltip(row)}
         data-testid={`inbox-run-${row.runId}`}
-        data-reason={selfMeta != null ? row.runStatus : `child:${childReason?.status ?? ""}`}
+        data-reason={row.runStatus}
         style={{ borderLeftColor: borderVar }}
         className="flex w-full min-w-0 items-center gap-3 rounded-sw-none border border-sw-border border-l-2 bg-sw-surface px-3 py-2 text-sw-sm hover:[&_.inbox-row-title]:underline"
       >
@@ -199,38 +181,8 @@ function InboxRow({ row, reduce }: { row: RunSummary; reduce: boolean }): JSX.El
             {wf}
           </Badge>
         ) : null}
-        <span className="shrink-0 text-sw-xs text-sw-muted tabular-nums">{reasonText}</span>
+        <span className="shrink-0 text-sw-xs text-sw-muted tabular-nums">{label}</span>
       </Link>
     </motion.li>
   );
-}
-
-/** When the parent itself isn't paused but one of its children is,
- *  surface that as the row's reason. Picks the most-actionable child
- *  status (HITL > paused > quarantined) and uses the parent's
- *  childStatusDigest counts as the only signal — full per-branch
- *  paused-reason resolution lives in the parent's run-detail page. */
-function digestReason(
-  row: RunSummary,
-): { meta: ReasonMeta; status: NonNullable<RunSummary["runStatus"]>; branchHint: string } | null {
-  const d = row.childStatusDigest;
-  if (d == null) return null;
-  if (d.pausedHitl > 0) {
-    return { meta: REASON_META.paused_hitl!, status: "paused_hitl", branchHint: branchHint(d.pausedHitl, "branch") };
-  }
-  if (d.paused > 0) {
-    return { meta: REASON_META.paused!, status: "paused", branchHint: branchHint(d.paused, "branch") };
-  }
-  if (d.quarantined > 0) {
-    return {
-      meta: REASON_META.quarantined!,
-      status: "quarantined",
-      branchHint: branchHint(d.quarantined, "branch"),
-    };
-  }
-  return null;
-}
-
-function branchHint(n: number, kind: string): string {
-  return n === 1 ? kind : `${n} ${kind}es`;
 }

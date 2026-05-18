@@ -20,7 +20,13 @@ import { createServer, daemonInfoFromStore, registryPreflight, type ServerPorts 
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
 import { loadConfig } from "../config.ts";
+import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
+
+/** True when running inside a `bun build --compile` binary. In that mode
+ * the source tree is gone and the web bundle ships embedded; on-disk
+ * discovery would fail. */
+const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 /** TCP port used when neither `--port` nor `web.port` (in
  * `~/.swarm/config.jsonc`) is set. Picked once and stable so the user
@@ -106,10 +112,14 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   mkdirSync(dirname(storePath), { recursive: true });
   const discoveryPath = resolve(dirname(storePath), "serve.json");
   const store = new SqliteStore({ path: storePath });
-  // Caller (CLI commands) supplies an explicit `webDistDir` after running
-  // `ensureWebBundle()` so a fresh build is mounted; tests omit it and
-  // fall back to the no-build discovery walk so they don't spawn vite.
-  const webDistDir = "webDistDir" in opts ? opts.webDistDir : findWebDistDir();
+  // Compiled binary: skip the on-disk walk entirely and serve from the
+  // embedded asset map. The caller's `webDistDir` (even if explicitly
+  // undefined) is ignored — there is no fs in the binary.
+  // Dev / source install: callers (CLI commands) supply an explicit
+  // `webDistDir` after running `ensureWebBundle()` so a fresh build is
+  // mounted; tests omit it and fall back to the no-build discovery walk
+  // so they don't spawn vite.
+  const webDistDir = COMPILED ? undefined : "webDistDir" in opts ? opts.webDistDir : findWebDistDir();
   // Default daemon detection: read the daemon_lock row (and runStateCounts)
   // from the shared store on every /health request. Caller-provided
   // `opts.ports.daemonInfo` wins (lets tests inject fixtures).
@@ -143,6 +153,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     modelRegistry,
     ...(maxQueuedRuns !== undefined ? { maxQueuedRuns } : {}),
     ...(webDistDir !== undefined ? { webDistDir } : {}),
+    ...(COMPILED ? { webBundle: EMBEDDED_WEB_ASSETS } : {}),
   });
   // Bind to "::" so the socket accepts both IPv6 and IPv4-mapped connections
   // (kernel default IPV6_V6ONLY=0 on Linux/macOS). This makes EADDRINUSE fire
@@ -187,12 +198,17 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
   const origin = `http://localhost:${port}`;
   // In web mode the API is scoped under `/api/*`; API-only mode keeps bare
   // paths. Discovery publishes the prefix so `swarm run` appends routes
-  // verbatim (e.g. `${url}/runs`) regardless of mode.
-  const url = webDistDir ? `${origin}/api` : origin;
+  // verbatim (e.g. `${url}/runs`) regardless of mode. The compiled binary
+  // ships the SPA embedded, so it's "web mode" with no distDir.
+  const webMode = webDistDir !== undefined || COMPILED;
+  const url = webMode ? `${origin}/api` : origin;
+  // For diagnostics: the on-disk dist path if available, otherwise a
+  // marker so the discovery file shows the SPA is embedded.
+  const webSource = webDistDir ?? (COMPILED ? "(embedded)" : null);
   try {
     writeFileSync(
       discoveryPath,
-      JSON.stringify({ url, origin, port, pid: process.pid, storePath, webDistDir: webDistDir ?? null }, null, 2),
+      JSON.stringify({ url, origin, port, pid: process.pid, storePath, webDistDir: webSource }, null, 2),
     );
   } catch {
     // Non-fatal: discovery file is a convenience, not a requirement.
@@ -202,7 +218,7 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
     url,
     port,
     storePath,
-    webDistDir,
+    webDistDir: webSource ?? undefined,
     async close() {
       try {
         unlinkSync(discoveryPath);
@@ -220,11 +236,15 @@ export async function startServer(opts: ServeCommandOptions = {}): Promise<Serve
  */
 export async function serveCommand(opts: ServeCommandOptions = {}): Promise<number> {
   // Build / refresh the web bundle before binding so the moment the URL
-  // prints, the latest UI is what gets served. Caller-supplied
+  // prints, the latest UI is what gets served. Compiled binary: skip the
+  // vite spawn entirely — the bundle ships embedded. Caller-supplied
   // `webDistDir` (including the explicit `undefined` for API-only) wins
-  // — that's how tests skip the vite spawn.
-  const startOpts: ServeCommandOptions =
-    "webDistDir" in opts ? opts : { ...opts, webDistDir: (await ensureWebBundle()).distDir };
+  // in dev — that's how tests skip the vite spawn too.
+  const startOpts: ServeCommandOptions = COMPILED
+    ? opts
+    : "webDistDir" in opts
+      ? opts
+      : { ...opts, webDistDir: (await ensureWebBundle()).distDir };
   let handle: ServerHandle;
   try {
     handle = await startServer(startOpts);

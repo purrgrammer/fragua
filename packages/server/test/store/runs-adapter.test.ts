@@ -56,11 +56,6 @@ function makeState(overrides: Partial<RunState> = {}): RunState {
     workflowScope: null,
     workflowPath: null,
     scheduleId: null,
-    parentRunId: null,
-    parentNodeId: null,
-    parallelIndex: null,
-    subgraphRootNodeId: null,
-    subgraphTerminalNodeId: null,
     ...overrides,
   };
 }
@@ -274,101 +269,6 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
       { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 2 },
     ];
     expect(deriveSelectedEdges(events)).toEqual([{ from: "diff", to: "review", iteration: 0 }]);
-  });
-
-  // The parallel handler dispatches every branch in one shot without
-  // going through the standard edge selector — fan-out edges never
-  // appear as `edge.selected`. `parallel.fan_in` joins via
-  // `fan_in.completed` and likewise leaves the fan-in edges unrecorded.
-  // Without synthesis the Graph view leaves every parallel-section edge
-  // dim/dashed even on a successfully-completed run.
-  test("synthesises parent → branch edges from fact.node_started.parentNodeId", () => {
-    const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "start", to: "fanout", iteration: 0 }), seq: 3 },
-      { ...ev("fact.node_started", { nodeId: "fanout", iteration: 0 }), seq: 6 },
-      {
-        ...ev("fact.node_started", {
-          nodeId: "drift",
-          iteration: 0,
-          parentNodeId: "fanout",
-          parallelIndex: 3,
-        }),
-        seq: 16,
-      },
-      {
-        ...ev("fact.node_started", {
-          nodeId: "plugin_validate",
-          iteration: 0,
-          parentNodeId: "fanout",
-          parallelIndex: 0,
-        }),
-        seq: 13,
-      },
-    ];
-    expect(deriveSelectedEdges(events)).toEqual([
-      { from: "start", to: "fanout", iteration: 0 },
-      { from: "fanout", to: "drift", iteration: 0 },
-      { from: "fanout", to: "plugin_validate", iteration: 0 },
-    ]);
-  });
-
-  test("synthesises branch → fan_in edges from fact.node_completed.parentNodeId+nextNode", () => {
-    const events: StoredEvent[] = [
-      {
-        ...ev("fact.node_completed", {
-          nodeId: "drift",
-          iteration: 0,
-          parentNodeId: "fanout",
-          parallelIndex: 3,
-          outcomeStatus: "success",
-          nextNode: "verdict",
-        }),
-        seq: 361,
-      },
-      {
-        ...ev("fact.node_completed", {
-          nodeId: "plugin_validate",
-          iteration: 0,
-          parentNodeId: "fanout",
-          parallelIndex: 0,
-          outcomeStatus: "success",
-          nextNode: "verdict",
-        }),
-        seq: 37,
-      },
-    ];
-    expect(deriveSelectedEdges(events)).toEqual([
-      { from: "drift", to: "verdict", iteration: 0 },
-      { from: "plugin_validate", to: "verdict", iteration: 0 },
-    ]);
-  });
-
-  test("non-branch fact.node_started/completed (no parentNodeId) does NOT synthesise an edge", () => {
-    // Top-level nodes already have an `edge.selected` from the standard
-    // selector — no synthesis needed, and synthesising would double-count.
-    const events: StoredEvent[] = [
-      { ...ev("fact.node_started", { nodeId: "start", iteration: 0 }), seq: 2 },
-      { ...ev("fact.node_completed", { nodeId: "start", iteration: 0, nextNode: "fanout" }), seq: 5 },
-    ];
-    expect(deriveSelectedEdges(events)).toEqual([]);
-  });
-
-  test("dedups when a future daemon emits both edge.selected and the synth lifecycle pair", () => {
-    // Defensive: if the daemon ever does record edge.selected for parallel
-    // branches at the same iteration, the synth pass must not double-count.
-    const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "fanout", to: "drift", iteration: 0 }), seq: 12 },
-      {
-        ...ev("fact.node_started", {
-          nodeId: "drift",
-          iteration: 0,
-          parentNodeId: "fanout",
-          parallelIndex: 3,
-        }),
-        seq: 16,
-      },
-    ];
-    expect(deriveSelectedEdges(events)).toEqual([{ from: "fanout", to: "drift", iteration: 0 }]);
   });
 });
 

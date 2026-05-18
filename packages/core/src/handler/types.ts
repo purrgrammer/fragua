@@ -6,7 +6,6 @@
 // helpers, which the executor wires to the event store.
 
 import type { AgentMessage, Message as PiMessage } from "@swarm/types";
-import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 
 export type SideEffect = "none" | "idempotent" | "external";
@@ -146,23 +145,6 @@ export interface ExternalCallParams {
  */
 export type ExternalCall = <T>(params: ExternalCallParams, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
 
-/**
- * Inline outcome the parent's projection records for a terminated
- * sub-run. The parallel handler in collect phase reads these to
- * synthesise the fan_in input shape. Mirrors the payload of
- * `fact.subrun_completed`. See D5 of `docs/proposals/parallel.md`.
- */
-export interface SubRunOutcome {
-  subRunId: string;
-  parentNodeId: string;
-  parallelIndex: number;
-  finalStatus: "completed" | "halted" | "cancelled";
-  costUsd: number;
-  billedTokens: number;
-  outputRef?: { nodeId: string; key: string };
-  fanInScore?: number;
-}
-
 export interface HandlerContext {
   readonly runId: string;
   readonly nodeId: string;
@@ -185,31 +167,10 @@ export interface HandlerContext {
    * Substitution args for prompt templating. Passed to `substitute()` before
    * the prompt hits the LLM. Today the only key is `$ARGUMENTS` (sourced
    * from `run_state.routing.input` — CLI positional or POST /runs body).
-   * Other tokens (`${context.*}`, `$<nodeId>.output[.path]`) read from the
-   * substitution context, not from this map.
+   * Other tokens (`${context.*}`, `$goal`) read from the substitution
+   * context, not from this map.
    */
   readonly args: Readonly<Record<string, string>>;
-  /**
-   * Captured outputs of prior nodes in this run, keyed by `nodeId`. The
-   * executor folds the run's `fact.node_completed` events with `outputRef`
-   * set into this map before each dispatch, dereferencing the artifact text
-   * once. Handlers pass it through to `substitute()` so prompt tokens like
-   * `$plan.output` resolve to the captured assistant text. When a node has
-   * been re-entered via a backward edge, the most recent iteration's
-   * output wins.
-   */
-  readonly nodeOutputs: ReadonlyMap<string, NodeOutput>;
-  /**
-   * Inline outcomes for every sub-run that has terminated under this
-   * parent run, folded from `fact.subrun_completed` events on the
-   * parent's own log. Keyed by sub-run id; payloads carry final status,
-   * cost, billed tokens, optional `outputRef`, optional `fanInScore`.
-   * Empty on top-level runs and on parent runs that haven't fanned out
-   * yet. Used by the parallel handler's collect phase to synthesise
-   * fan_in input without re-reading sub-run projections. See P2.3 / D5
-   * of `docs/proposals/parallel.md`.
-   */
-  readonly subRunOutcomes: ReadonlyMap<string, SubRunOutcome>;
   /**
    * Emit an observability event (agent.*, llm.*, tool.*, cost.recorded,
    * summary.*). The executor persists these to the store under their
@@ -238,15 +199,12 @@ export interface HandlerContext {
   readonly budgetSnapshot?: BudgetSnapshotInput;
   /**
    * Return a new HandlerContext with the same run-level resources
-   * (store, llm, http, recorder, signal, routing, args, nodeOutputs,
+   * (store, llm, http, recorder, signal, routing, args,
    * emitObservability, env) but rebuilt scope-sensitive surfaces:
    * `artifacts`, `messages`, `externalCall`, `emit`, `tools` (re-narrowed
    * by `allowedTools` / `deniedTools`), and `env` (re-wrapped read-only
-   * when the new toolset has no mutator). Used by the auto-dispatcher
-   * to hand each parallel branch a context that carries its own
-   * `(nodeId, iteration)` instead of leaking the parent's via closure
-   * capture. Omitted fields in `override` fall through to the current
-   * scope's values. See `ScopeOverrides`.
+   * when the new toolset has no mutator). Omitted fields in `override`
+   * fall through to the current scope's values. See `ScopeOverrides`.
    */
   readonly withScope: (override: ScopeOverrides) => HandlerContext;
 }
@@ -254,7 +212,7 @@ export interface HandlerContext {
 /** Inputs to `HandlerContext.withScope`. Required `nodeId` and `iteration`
  * are the two non-negotiable scope axes; the rest mirror the
  * scope-sensitive subset of `BuildContextOpts`. Run-level resources
- * (store / llm / http / signal / routing / recorder / args / nodeOutputs
+ * (store / llm / http / signal / routing / recorder / args
  * / emitObservability / env) are deliberately omitted — they're captured
  * once at top-level construction and reused across all `withScope` calls. */
 export interface ScopeOverrides {
@@ -295,8 +253,6 @@ export type HandlerResult =
       /** Suggested next node ids in priority order — matched against
        * unconditional edges' `to` after label matching fails. */
       suggestedNextIds?: string[];
-      outputRef?: ArtifactRef;
-      routingDelta?: Record<string, unknown>;
       /** Single-line reason emitted by the handler when `outcomeStatus="fail"`.
        * Surfaces verbatim as `fact.run_halted.detail` when the fail outcome
        * routes to a terminal node (executor's `aborted_exit` path). Optional
@@ -331,7 +287,6 @@ export type HandlerResult =
       kind: "yield_hitl";
       label: string;
       options: Array<{ key: string; label: string; to: string }>;
-      routingDelta?: Record<string, unknown>;
     }
   | {
       kind: "halt";
@@ -384,28 +339,4 @@ export type HandlerResult =
        * it exactly — no jitter, no exponential cap. Absent → daemon falls
        * back to its own full-jitter exponential schedule. */
       retryAfterMs?: number;
-    }
-  | {
-      /** Parallel handler requests a fan-out into N sub-runs. The
-       * executor mints sub-run IDs, enqueues each as a child `run_state`
-       * row, and transitions the parent to `running_children` via
-       * `fact.fanout_started`. The wake-pending sweep promotes the
-       * parent back to `queued` once every sub-run reaches a
-       * terminal status; the next dispatch re-enters the
-       * parallel handler in collect phase (detected via the
-       * `parallel.<nodeId>.sub_run_ids` routing key). P2.2 of
-       * `docs/proposals/parallel.md`. */
-      kind: "fanout_pending";
-      /** Branch root node ids — direct downstream targets of the
-       * component node in the parent's DOT graph. Sub-runs dispatch
-       * through the subgraph slice anchored at each id. */
-      branchNodeIds: readonly string[];
-      /** Convergence node the parent re-enters on collect. Sub-runs
-       * terminate BEFORE entering it; their `subgraph_terminal_node_id`
-       * points here. */
-      fanInNode: string;
-      /** Join policy hint. Surfaced into the parent's routing so a
-       * `first_success` sweep can race-cancel siblings (P4). Defaults to
-       * `wait_all`. */
-      joinPolicy?: "wait_all" | "first_success";
     };

@@ -67,13 +67,12 @@ A workflow is a Graphviz DOT graph. Each node has a shape that maps to a handler
 | `Mdiamond` | `start` |
 | `Msquare` | `exit` |
 | `box` | `codergen` (LLM call) |
-| `diamond` | `conditional` |
 | `hexagon` | `wait.human` |
 | `parallelogram` | `tool` (graph-level shell step) |
-| `component` | `parallel` |
-| `tripleoctagon` | `parallel.fan_in` |
 
-An explicit `type=` node attribute overrides the shape→handler mapping. The value must name one of the eight handler kinds (`E016`); a shape/`type=` divergence is legal but flagged with `W012`.
+An explicit `type=` node attribute overrides the shape→handler mapping. The value must name one of the five handler kinds (`E016`); a shape/`type=` divergence is legal but flagged with `W012`.
+
+Concurrent dispatch is not a graph primitive — it lives inside a codergen node via the `agent` tool. A codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn (each with its own LLM context window, tool pool, and observability bracket on the parent's event stream) and synthesises in its own thread. See `review.dot` / `orchestrate.dot` for the canonical orchestrator-workers shape.
 
 Loops are **backward conditional edges** bounded by `max_retries` on the target node — there is no `loop` primitive. A node that should re-run on `outcome=retry` takes an edge back to itself or to an upstream node with `[condition="outcome=retry"]`, and its `max_retries` attribute caps how many times the retry counter can bump before the run pauses with `fact.run_paused{reason:"max_retries"}` (operator-resumable; raise the cap via `intent.max_retries_adjusted`).
 
@@ -100,16 +99,14 @@ The `events` log is the source of truth for run state; the `run_state` row is th
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused, paused_hitl, paused_auto, running_children, halted, cancelled, quarantined}
+queued → running → {completed, paused, paused_hitl, paused_auto, halted, cancelled, quarantined}
           ▲            │
           └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
-                              or wake-pending timer for paused_auto;
-                              running_children → queued on fact.fanout_completed once every sub-run terminal)
+                              or wake-pending timer for paused_auto)
 ```
 
 - **`queued`** — enqueued; ready to be claimed.
 - **`running`** — a daemon has claimed it and is dispatching handlers.
-- **`running_children`** — the run dispatched a parallel fan-out and is waiting for its sub-runs to converge. Not a pause: the parent's worktree and provisioner state stay live, the claim loop must not re-pick it, and the wake-pending sweep transitions the parent back to `queued` (collect phase) on `fact.fanout_completed` once every sub-run reaches a terminal status (`completed`, `cancelled`, or `halted`). Paused or quarantined sub-runs block convergence until they resume, cancel, halt, or complete. Operator endpoints (`/cancel`, `/pause`) target the parent normally — `cancel` cascades to children via `intent.cancel_requested` on every active sub-run (D10), `pause` waits for the in-flight sub-runs to settle. See `docs/proposals/parallel.md` P1.2.
 - **`paused_hitl`** — a `wait.human` node yielded. `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`.
 - **`paused`** — operator-resumable pause. `fact.run_paused.payload.reason` discriminates the action shape. All wake on `intent.resume`; some pauses pair `intent.resume` with a cap-adjustment intent. The full reason set:
 
@@ -208,17 +205,15 @@ Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcom
 
 ### 3.8 Substitution
 
-The following tokens expand in node `prompt` and `tool_command` strings before the handler sees them:
+One token expands in node `prompt` and `tool_command` strings before the handler sees them:
 
 | Token | Meaning |
 |---|---|
 | `$ARGUMENTS` | The run's `--input` text (CLI positional or `POST /runs` body). |
-| `$goal` | Graph-level `goal` attribute. |
-| `$<nodeId>.output` | Raw text output of a prior node (codergen last turn's text, or tool stdout). |
-| `$<nodeId>.output.<path>` | JSON-path dive into structured output; returns `""` if absent. |
-| `${context.<key>}` | Lookup in the run's `routing` projection. |
 
-Validator code `E005` flags `$<id>.output` references to unknown node ids.
+Cross-node data transfer happens through **shared threads + fidelity** (§3.3), not through prompt substitution. Two codergens with the same `thread_id="…"` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
+
+Tool nodes (parallelogram, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside a codergen's `bash` tool instead of synthesising a tool-node-then-codergen chain.
 
 ### 3.9 Budgets
 
@@ -289,7 +284,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **Interviewer interface** (attractor §6). Replaced by `wait.human` nodes plus the `intent.hitl_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context resets happen via per-edge `fidelity=truncate|compact|summary:*`; full restarts happen by enqueueing a new run. Validator: `W014`.
-- **`tripleoctagon.prompt` LLM-eval branch** (attractor §4.9). Implemented. When `prompt=` is set on a tripleoctagon, the daemon dispatches an LLM call over the branch candidate outputs instead of the deterministic heuristic ranker. The LLM ends its reply with a single `WINNER: <branchId>` line; the evaluator parses it out of the final assistant message and validates against the candidate set. When `prompt=` is absent or empty, the heuristic path runs unchanged.
+- **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). The `component` (parallel) and `tripleoctagon` (parallel.fan_in) shapes are not honored; the executor has no fan-out / fan-in primitive. Concurrent dispatch lives in the codergen `agent` tool — a single codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.dot` / `orchestrate.dot`).
 
 **Surfaced as warnings, not errors:**
 

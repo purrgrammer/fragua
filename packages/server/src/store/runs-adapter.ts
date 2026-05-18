@@ -6,16 +6,8 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  ActiveDescendantNodeRow,
-  IEventStore,
-  ListRunIdsOpts,
-  RunState,
-  RunStatus,
-  RunSummaryRow,
-  StoredEvent,
-} from "@swarm/store";
-import type { ChildStatusDigest, HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
+import type { IEventStore, ListRunIdsOpts, RunState, RunStatus, RunSummaryRow, StoredEvent } from "@swarm/store";
+import type { HitlOption, NodeState, RunDetail, RunSummary, SelectedEdge } from "../schemas.ts";
 
 export type UiStatus = RunSummary["status"];
 
@@ -28,7 +20,6 @@ export function mapStatus(status: RunStatus): UiStatus {
     case "halted":
       return "fail";
     case "running":
-    case "running_children":
       return "running";
     case "queued":
       return "queued";
@@ -41,19 +32,11 @@ export function mapStatus(status: RunStatus): UiStatus {
   }
 }
 
-/** Build a RunSummary from a run's projection + its event tail.
- *
- * Sub-runs (state.parentRunId set) inherit the parent's title — the
- * operator surface treats a fan-out as one logical run and renders sub-
- * runs as nested branches. The auto-titler is skipped for sub-runs
- * (executor.ts), so without this lookup their title would always be
- * empty. `parentTitle` is the resolved string (caller looked up the
- * parent's projection) or undefined when the parent isn't available. */
+/** Build a RunSummary from a run's projection + its event tail. */
 export function runStateToSummary(
   state: RunState,
   events: StoredEvent[],
   workflowName: string | undefined,
-  parentTitle?: string,
 ): RunSummary {
   const first = events[0];
   const last = events[events.length - 1];
@@ -76,24 +59,12 @@ export function runStateToSummary(
   if (state.workflowSha) summary.workflow = state.workflowSha;
   if (workflowName !== undefined) summary.workflowName = workflowName;
   if (durationMs !== undefined) summary.durationMs = durationMs;
-  // Title resolution order: own title → parent's title (sub-runs inherit
-  // the operator-facing label) → event-derived title. Sub-runs skip
-  // the auto-titler so own title is always null; parentTitle backfills
-  // it when the caller looked up the parent. Top-level runs ignore
-  // parentTitle (parentRunId is null).
   const ownTitle = state.title && state.title.length > 0 ? state.title : undefined;
-  const inheritedTitle =
-    state.parentRunId != null && parentTitle != null && parentTitle.length > 0 ? parentTitle : undefined;
-  const title = ownTitle ?? inheritedTitle ?? pickTitle(events);
+  const title = ownTitle ?? pickTitle(events);
   if (title !== undefined) summary.title = title;
   const input = pickInput(state.routing);
   if (input !== undefined) summary.input = input;
   if (state.cwd != null) summary.cwd = state.cwd;
-  // Parallel sub-run linkage (P5 of docs/proposals/parallel.md).
-  if (state.parentRunId != null) summary.parentRunId = state.parentRunId;
-  if (state.parentNodeId != null) summary.parentNodeId = state.parentNodeId;
-  if (state.parallelIndex != null) summary.parallelIndex = state.parallelIndex;
-  if (state.subgraphRootNodeId != null) summary.branchNodeId = state.subgraphRootNodeId;
   return summary;
 }
 
@@ -124,43 +95,14 @@ export function runSummaryRowToSummary(row: RunSummaryRow): RunSummary {
   if (durationMs !== undefined) summary.durationMs = durationMs;
 
   const ownTitle = row.title != null && row.title.length > 0 ? row.title : undefined;
-  const inheritedTitle =
-    row.parentRunId != null && row.parentTitle != null && row.parentTitle.length > 0 ? row.parentTitle : undefined;
   const eventTitle = row.eventTitle != null && row.eventTitle.length > 0 ? row.eventTitle : undefined;
-  const title = ownTitle ?? inheritedTitle ?? eventTitle;
+  const title = ownTitle ?? eventTitle;
   if (title !== undefined) summary.title = title;
 
   const input = pickInput(routing);
   if (input !== undefined) summary.input = input;
   if (row.cwd != null) summary.cwd = row.cwd;
-  if (row.parentRunId != null) summary.parentRunId = row.parentRunId;
-  if (row.parentNodeId != null) summary.parentNodeId = row.parentNodeId;
-  if (row.parallelIndex != null) summary.parallelIndex = row.parallelIndex;
-  if (row.branchNodeId != null) summary.branchNodeId = row.branchNodeId;
-  const digest = digestFromRow(row);
-  if (digest != null) summary.childStatusDigest = digest;
   return summary;
-}
-
-/** Build the ChildStatusDigest from raw SQL counts. Returns undefined
- *  when the row has no children (digest is omitted from the wire so
- *  top-level runs stay clean). The SQL emits NULL for every count when
- *  no child rows match the LEFT JOIN. */
-function digestFromRow(row: RunSummaryRow): ChildStatusDigest | undefined {
-  if (row.childTotal == null || row.childTotal === 0) return undefined;
-  return {
-    total: row.childTotal,
-    running: row.childRunning ?? 0,
-    runningChildren: row.childRunningChildren ?? 0,
-    paused: row.childPaused ?? 0,
-    pausedHitl: row.childPausedHitl ?? 0,
-    pausedAuto: row.childPausedAuto ?? 0,
-    queued: row.childQueued ?? 0,
-    completed: row.childCompleted ?? 0,
-    cancelled: row.childCancelled ?? 0,
-    halted: row.childHalted ?? 0,
-    quarantined: row.childQuarantined ?? 0,
-  };
 }
 
 /** Pick the most recent auto-generated title from the event stream.
@@ -188,10 +130,6 @@ export function runStateToDetail(
   events: StoredEvent[],
   workflowName: string | undefined,
   workflowSource: string | undefined,
-  opts: {
-    effectiveActiveNodes?: readonly ActiveDescendantNodeRow[];
-    childStatusDigest?: ChildStatusDigest;
-  } = {},
 ): RunDetail {
   const summary = runStateToSummary(state, events, workflowName);
   const detail: RunDetail = {
@@ -210,17 +148,6 @@ export function runStateToDetail(
     selectedEdges: deriveSelectedEdges(events),
   };
   if (workflowSource !== undefined) detail.workflowSource = workflowSource;
-  if (opts.effectiveActiveNodes != null && opts.effectiveActiveNodes.length > 0) {
-    detail.effectiveActiveNodes = opts.effectiveActiveNodes.map((r) => {
-      const out: { runId: string; nodeId: string; branchNodeId?: string } = {
-        runId: r.runId,
-        nodeId: r.nodeId,
-      };
-      if (r.branchNodeId != null) out.branchNodeId = r.branchNodeId;
-      return out;
-    });
-  }
-  if (opts.childStatusDigest != null) detail.childStatusDigest = opts.childStatusDigest;
 
   if (state.cwd != null) {
     const candidate = join(state.cwd, ".swarm", "worktrees", state.runId);
@@ -341,22 +268,7 @@ function deriveNodeStates(events: StoredEvent[]): NodeState[] {
  *  carry it, so we rewrite it here to point at the actual retarget
  *  destination. We rewrite (vs. drop) because consumers count one
  *  selectedEdge per gate visit to derive retarget firings; dropping
- *  would silently undercount and dim the synthetic retarget edge.
- *
- *  Parallel synthesis: the parallel handler dispatches every branch in
- *  one shot without going through the standard edge selector, and
- *  `parallel.fan_in` joins via `fan_in.completed` rather than picking an
- *  edge — so neither the (parent → branch) fan-out nor the
- *  (branch → fan_in) fan-in shows up as `edge.selected`. The Graph view
- *  reads "taken" from `selectedEdges`, which leaves every parallel-section
- *  edge dim/dashed even on a successfully-completed run. We synthesise
- *  the missing traversals here:
- *    - `fact.node_started` with `parentNodeId` ⇒ (parentNodeId → nodeId)
- *    - `fact.node_completed` with `parentNodeId` + `nextNode`
- *      ⇒ (nodeId → nextNode)
- *  Dedup against any matching `edge.selected` already in `out` so a
- *  future daemon that emits both at the same iteration won't double-count
- *  this edge in the `· ×N` traversal badge. */
+ *  would silently undercount and dim the synthetic retarget edge. */
 function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
   const out: SelectedEdge[] = [];
   const seen = new Set<string>();
@@ -375,28 +287,6 @@ function deriveSelectedEdges(events: StoredEvent[]): SelectedEdge[] {
       const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
       const retargetTo = goalGateRetargetTarget(events, i, p.from);
       pushEdge(p.from, retargetTo ?? p.to, iteration);
-      continue;
-    }
-    if (ev.type === "fact.node_started") {
-      const p = ev.payload as { nodeId?: unknown; iteration?: unknown; parentNodeId?: unknown };
-      if (typeof p.nodeId !== "string" || typeof p.parentNodeId !== "string" || p.parentNodeId.length === 0) continue;
-      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
-      pushEdge(p.parentNodeId, p.nodeId, iteration);
-      continue;
-    }
-    if (ev.type === "fact.node_completed") {
-      const p = ev.payload as { nodeId?: unknown; iteration?: unknown; parentNodeId?: unknown; nextNode?: unknown };
-      if (
-        typeof p.nodeId !== "string" ||
-        typeof p.parentNodeId !== "string" ||
-        p.parentNodeId.length === 0 ||
-        typeof p.nextNode !== "string" ||
-        p.nextNode.length === 0
-      ) {
-        continue;
-      }
-      const iteration = typeof p.iteration === "number" && Number.isFinite(p.iteration) ? p.iteration : 0;
-      pushEdge(p.nodeId, p.nextNode, iteration);
     }
   }
   return out;

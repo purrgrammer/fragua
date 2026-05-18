@@ -1,8 +1,6 @@
 export * from "./backend.ts";
 export * from "./credentials/index.ts";
 export * from "./event-bridge.ts";
-export type { MakeFanInLlmDelegateOpts } from "./fan-in-evaluator.ts";
-export { makeFanInLlmDelegate } from "./fan-in-evaluator.ts";
 export * from "./fidelity.ts";
 export * from "./handler-bridge.ts";
 export * from "./message-store.ts";

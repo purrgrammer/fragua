@@ -82,7 +82,6 @@ async function runOnce(opts: {
     const outcome = await backend.run({
       node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
       prompt: "load the frontend skill",
-      context: {},
       thread_id: undefined,
       fidelity: "compact",
       signal: new AbortController().signal,

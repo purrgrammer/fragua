@@ -3,22 +3,9 @@
 // Used as a DispatcherResolver fallback so new workflows added via HTTP
 // after daemon start get their nodes registered on first dispatch. Each
 // node's spec is derived from its shape / `type` attribute.
-//
-// Two-pass build: first pass creates specs for leaf kinds (codergen,
-// tool, wait.human, etc.); second pass creates `parallel` specs whose
-// `resolveChild` closures read from the specs map, and `fan_in` specs
-// that point at their paired parallel node.
 
-import type { DiscoveryResult, Node, NodeAttrs } from "@swarm/core";
-import {
-  discoverFanInTarget,
-  findParallelParent,
-  InvalidDurationError,
-  parseDotSource,
-  parseDurationMs,
-  prepareGraph,
-} from "@swarm/core";
-import type { LlmFanInDelegate } from "@swarm/core/handler";
+import type { Node, NodeAttrs } from "@swarm/core";
+import { InvalidDurationError, parseDotSource, parseDurationMs, prepareGraph } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import type { IEventStore } from "@swarm/store";
 import type { DispatcherResolver } from "./dispatch.ts";
@@ -42,15 +29,6 @@ export interface AutoDispatcherOpts {
    * `timeout` nor `max_ms`. Keyed by handler kind (`codergen`, `tool`).
    * Absent kind → handler's own built-in default applies. */
   defaultMaxMs?: { codergen?: number; tool?: number };
-  /**
-   * Optional delegate that drives LLM synthesis of branch outputs when
-   * a `tripleoctagon` node carries a non-empty `prompt=` attribute. The
-   * synthesised document becomes the fan-in node's `output` artifact;
-   * downstream nodes read it via `$<fanInId>.output` substitution. When
-   * absent, tripleoctagons with `prompt=` produce a halt spec at
-   * construction time (attractor §4.9 LLM-reducer path).
-   */
-  fanInLlmDelegate?: LlmFanInDelegate;
 }
 
 /**
@@ -108,7 +86,7 @@ export function autoDispatcherResolver(opts: AutoDispatcherOpts): DispatcherReso
     if (specs == null) {
       const workflow = opts.store.getWorkflow(workflowSha);
       if (workflow == null) return null;
-      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs, opts.fanInLlmDelegate);
+      specs = specsForGraph(workflow.dotSource, opts.codergenFactory, opts.defaultMaxMs);
       perWorkflow.set(workflowSha, specs);
     }
     return specs.get(nodeId) ?? null;
@@ -119,12 +97,8 @@ function specsForGraph(
   dotSource: string,
   codergenFactory?: AutoDispatcherOpts["codergenFactory"],
   defaultMaxMs?: AutoDispatcherOpts["defaultMaxMs"],
-  fanInLlmDelegate?: LlmFanInDelegate,
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
-  // Apply transforms (stylesheet, …) so node.attrs reflect the resolved
-  // configuration before per-node specs are derived. Stylesheet syntax
-  // errors are caught at upload via E015; here we just apply silently.
   prepareGraph(graph);
   const outgoing = new Map<string, Array<{ to: string; label?: string }>>();
   for (const edge of graph.edges) {
@@ -137,10 +111,8 @@ function specsForGraph(
   }
   const specs = new Map<string, HandlerSpec>();
 
-  // Pass 1: leaf handler kinds.
   for (const node of Object.values(graph.nodes)) {
     const kind = handlerKindOf(node.attrs);
-    if (kind === "parallel" || kind === "parallel.fan_in") continue;
     const edges = outgoing.get(node.id) ?? [];
     const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
@@ -165,74 +137,7 @@ function specsForGraph(
     }
   }
 
-  // Pass 2: parallel + fan_in, which need cross-node references. Per
-  // attractor §4.8, branches are sub-executions that terminate at a
-  // converging `tripleoctagon` — discovered structurally via edges, not
-  // via a swarm-only `fan_in` attribute (dropped in PR P).
-  for (const node of Object.values(graph.nodes)) {
-    const kind = handlerKindOf(node.attrs);
-    if (kind === "parallel") {
-      const discovery = discoverFanInTarget(graph, node.id);
-      if (discovery.kind !== "ok") {
-        // Validator flags these at authoring; at runtime we halt with a
-        // clear message rather than silently no-op into a bad state.
-        specs.set(node.id, malformedParallelSpec(node.id, describeDiscoveryFailure(discovery)));
-        continue;
-      }
-      const joinPolicy = node.attrs.join_policy === "first_success" ? "first_success" : "wait_all";
-      specs.set(
-        node.id,
-        handler.makeParallelHandler({
-          children: discovery.branches,
-          fanInNode: discovery.fanInNode,
-          joinPolicy,
-        }),
-      );
-    } else if (kind === "parallel.fan_in") {
-      const parallelNodeId = findParallelParent(graph, node.id);
-      if (parallelNodeId == null) {
-        specs.set(node.id, malformedFanInSpec(node.id));
-        continue;
-      }
-      const rawPrompt = typeof node.attrs.prompt === "string" ? node.attrs.prompt.trim() : "";
-      if (rawPrompt.length > 0) {
-        if (fanInLlmDelegate == null) {
-          specs.set(
-            node.id,
-            malformedFanInSpec(
-              node.id,
-              "prompt= set but no LLM delegate configured — start the daemon with --llm-provider/--llm-model",
-            ),
-          );
-          continue;
-        }
-        specs.set(
-          node.id,
-          handler.makeFanInHandler({
-            parallelNodeId,
-            evaluator: {
-              kind: "llm",
-              prompt: node.attrs.prompt as string,
-              delegate: fanInLlmDelegate,
-              nodeAttrs: node.attrs,
-            },
-          }),
-        );
-      } else {
-        specs.set(node.id, handler.makeFanInHandler({ parallelNodeId }));
-      }
-    }
-  }
-
   return specs;
-}
-
-function describeDiscoveryFailure(d: DiscoveryResult): string {
-  if (d.kind === "no-branches") return "has no outgoing branches";
-  if (d.kind === "no-fan-in") return "no tripleoctagon (parallel.fan_in) reachable from any branch";
-  if (d.kind === "ambiguous-fan-in") return `multiple tripleoctagons reachable: ${d.candidates.join(", ")}`;
-  if (d.kind === "branches-diverge") return "branches converge on different tripleoctagons";
-  return "unknown discovery failure";
 }
 
 function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
@@ -248,19 +153,6 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
   };
 }
 
-function malformedParallelSpec(nodeId: string, reason = "missing branches or fan-in"): HandlerSpec {
-  return {
-    kind: "parallel",
-    sideEffect: "none",
-    maxMs: 50,
-    handler: async () => ({
-      kind: "halt",
-      reason: "error",
-      detail: `parallel node "${nodeId}": ${reason}`,
-    }),
-  };
-}
-
 function malformedWaitHumanSpec(nodeId: string, message: string): HandlerSpec {
   return {
     kind: "wait.human",
@@ -270,20 +162,6 @@ function malformedWaitHumanSpec(nodeId: string, message: string): HandlerSpec {
       kind: "halt",
       reason: "error",
       detail: `wait.human node "${nodeId}": ${message}`,
-    }),
-  };
-}
-
-function malformedFanInSpec(nodeId: string, reason?: string): HandlerSpec {
-  const detail = reason ?? `fan_in node "${nodeId}" is not referenced by any component (parallel) node`;
-  return {
-    kind: "parallel.fan_in",
-    sideEffect: "none",
-    maxMs: 50,
-    handler: async () => ({
-      kind: "halt",
-      reason: "error",
-      detail: `fan_in "${nodeId}": ${detail}`,
     }),
   };
 }
@@ -335,17 +213,6 @@ function specForNode(
           costUsd: 0,
         }),
       };
-    case "conditional":
-      // Branching-point: no work beyond evaluating the outgoing edge
-      // conditions against state.routing. Leaving nextNode unset lets
-      // the executor's edge selector apply the 5-rule priority; empty
-      // outcomeStatus defaults to "success" for unconditional fallthrough.
-      return {
-        kind: "conditional",
-        sideEffect: "none",
-        maxMs: 50,
-        handler: async () => ({ kind: "transition", tokens: 0, costUsd: 0 }),
-      };
     case "start":
       // Entry sentinel. Conventionally a single unconditional edge to
       // the first real node. Defer to the selector for consistency with
@@ -383,16 +250,10 @@ function handlerKindOf(attrs: { shape?: string; type?: string }): string {
       return "start";
     case "Msquare":
       return "exit";
-    case "diamond":
-      return "conditional";
     case "hexagon":
       return "wait.human";
     case "parallelogram":
       return "tool";
-    case "component":
-      return "parallel";
-    case "tripleoctagon":
-      return "parallel.fan_in";
     default:
       return "codergen";
   }

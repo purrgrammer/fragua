@@ -341,16 +341,7 @@ function resolveShape(attrs: AttrPairs, scope: Scope): NodeShape {
 }
 
 function isNodeShape(s: string): s is NodeShape {
-  return (
-    s === "Mdiamond" ||
-    s === "Msquare" ||
-    s === "box" ||
-    s === "diamond" ||
-    s === "hexagon" ||
-    s === "component" ||
-    s === "tripleoctagon" ||
-    s === "parallelogram"
-  );
+  return s === "Mdiamond" || s === "Msquare" || s === "box" || s === "hexagon" || s === "parallelogram";
 }
 
 function deriveClass(subgraphId: string, label: string | undefined): string | undefined {

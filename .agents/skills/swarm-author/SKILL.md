@@ -1,7 +1,7 @@
 ---
 name: swarm-author
-description: Author or edit a swarm workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/parallel/HITL here", "what does condition= accept", "which substitution variables exist", or otherwise asks about shaping a workflow under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches agent-design patterns first (chaining/routing/sectioning/voting/orchestrator-workers/evaluator-optimizer/autonomous/augmented), then the DOT primitives, then the three input channels (shared thread, substitution, environment re-derivation), then idiomatic prompts, validator diagnostics, and a smoke recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
-version: 0.3.0
+description: Author or edit a swarm workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/HITL here", "what does condition= accept", or otherwise asks about shaping a workflow under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches agent-design patterns first (chaining/routing/orchestrator-workers/evaluator-optimizer/autonomous/augmented), then the DOT primitives, then the two input channels (shared thread, environment re-derivation), then idiomatic prompts, validator diagnostics, and a smoke recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
+version: 0.4.0
 ---
 
 # swarm-author — pattern-first workflow authoring
@@ -10,7 +10,7 @@ A workflow is a small DAG that wires LLM calls, tools, waits, and reducers into 
 
 - the job has 2+ distinct steps with different concerns or different tool needs
 - you want backtracking on a quality gate (review rejects → re-implement)
-- you want bounded parallelism (multi-lens review, multi-source research)
+- you want bounded concurrent dispatch (multi-lens review, multi-source research) — handled inside a codergen via the `agent` tool, not as a graph shape
 - you need an explicit HITL pause point
 
 Reach for a **single codergen node** (no graph at all) when:
@@ -53,18 +53,6 @@ classify -> fallback
 
 Not currently represented in the catalog — `change.dot` + `feature.dot` would collapse into one routed graph cleanly.
 
-### Parallel — sectioning
-
-N concurrent branches, each examining a different concern, joined by a reducer. `component → branches → tripleoctagon`.
-
-Reference: `review.dot` (4 lenses → synthesised report).
-
-### Parallel — voting
-
-Same task N times, aggregate. Same shape as sectioning, branches identical, reducer is a vote / median / majority. Useful when you want variance and majority-rules confidence on a high-stakes call.
-
-Not currently in the catalog (gap). Supported by the same primitives.
-
 ### Orchestrator-workers
 
 Single codergen orchestrator with `agent` in `allowed_tools`. The model decides how many sub-agents to spawn and what they do. Use when decomposition is dynamic.
@@ -86,10 +74,9 @@ Reference: `merge.dot` (the heaviest current case).
 ### Choosing
 
 1. **One step or many?** One → augmented LLM. Many → continue.
-2. **Subtasks known upfront?** No → orchestrator-workers. Yes → continue.
-3. **Concurrent or sequential?** Concurrent + different concerns → sectioning. Concurrent + same task → voting. Sequential → chaining.
-4. **Need backtracking?** Yes → evaluator-optimizer. No → straight chain.
-5. **Need branching by input?** Yes → routing.
+2. **Subtasks known upfront?** No → orchestrator-workers (concurrent dispatch via the `agent` tool — see `review.dot`). Yes → continue.
+3. **Sequential or backtracking?** Sequential → chaining. Backtracking → evaluator-optimizer.
+4. **Need branching by input?** Yes → routing.
 
 Pick before drawing. Topology follows the pattern, not the other way around.
 
@@ -106,40 +93,37 @@ Workflows live in two places, resolved in this order:
 
 ---
 
-## 3. The three input channels
+## 3. The two input channels
 
-A node's input comes from one of three places. Pick consciously per node; don't combine them when you mean only one.
+A node's input comes from one of two places. Pick consciously per node.
 
-### Shared thread (continuity)
+### Shared thread + fidelity (continuity)
 
-Two nodes with the same `thread_id="…"` share an LLM conversation. The downstream node sees the upstream's reply as a regular assistant message in its context — no substitution needed; the data is naturally present.
+Two nodes with the same `thread_id="…"` share an LLM conversation. The downstream node sees the upstream's reply as a regular assistant message in its context — no substitution, no copy-paste. The data is naturally present.
+
+The downstream node controls how much of that conversation it sees via `fidelity=`:
+
+| Mode | Meaning |
+|---|---|
+| `full` | The complete prior transcript. Default for evaluators / reviewers that need every turn. |
+| `compact` | Compact replay format (default for most nodes). Cheaper than full; tool result content is preserved. |
+| `truncate` | Headers + tail only. |
+| `summary:low\|medium\|high` | A summariser-generated narrative tail in place of the older turns. Use when the thread is long enough that fidelity matters more than verbatim recall. |
 
 Idiomatic uses:
 
-- `implement` + `review` share `dev` — the reviewer judges from the conversation, not from re-pasted output.
-- `audit` + `diff` share `audit` — diff reads the audit report from context.
-
-### Substitution (data hand-off across thread boundaries)
-
-When the producer doesn't share a thread with the consumer (or the producer is a tool, which doesn't participate in threads), substitute upstream output explicitly:
-
-| Token | Meaning |
-|---|---|
-| `$ARGUMENTS` | CLI positional input (or `--input`). |
-| `$<nodeId>.output` | Output of a prior node — codergen last turn or tool stdout. Used when no shared thread carries the data: typically tool→codergen or fan-out→reducer. |
-| `$<nodeId>.output.<path>` | JSON path into the node's structured output (`data`), if present. |
-| `$<nodeId>.stderr` | Tool node stderr channel. Empty for codergen. |
-| `$goal` | The graph's `goal` attribute. |
-
-> **Prefer shared threads over substitution when both nodes are codergens that benefit from continuity.** Substitution is correct when threads don't apply (tool stdout, fan-out reducers) but redundant — a verbatim duplicate — when a thread already carries the message. In the typed model under `docs/graph/`, edge transforms replace substitution entirely; this is the transitional knob.
-
-E005 flags `$<id>.output` when `<id>` isn't a known node id.
+- `implement` + `review` share `dev` — the reviewer judges from the conversation, with `fidelity=full` so it sees every diff turn. The implementer's `PLAN_REALISED` block sits in the thread as the last assistant message.
+- `audit` + `diff` + `review` + `propose_patch` share `audit` — each turn reads the prior structured output from the conversation; no substitution needed.
 
 ### Environment re-derivation
 
-Some nodes don't need an upstream artifact at all — they derive everything from environment (git, fs, an external API). Make this explicit in the prompt ("Fresh thread — read state via git"). Examples: `commit` everywhere, `merge.dot`'s preflight, `ci` tool nodes.
+Some nodes don't need an upstream artifact at all — they derive everything from environment (git, fs, an external API, a script via `bash`). Make this explicit in the prompt ("Fresh thread — read state via git" or "Run `bun .swarm/scripts/foo/collect.ts` via the bash tool and read its JSON output"). Examples: `commit` everywhere, `merge.dot`'s preflight, `ci` tool nodes, the single-codergen workflows under `.swarm/workflows/` that wrap a collector script.
 
 When the source of truth is the environment, re-derive. It's cheaper than threading and harder to get wrong.
+
+### Prompt substitution
+
+Exactly one token expands in node `prompt` and `tool_command` strings: `$ARGUMENTS` — the run's `--input` (CLI positional or `POST /runs` body). Cross-node data transfer is **not** a substitution surface; use a shared thread + fidelity.
 
 ---
 
@@ -152,11 +136,10 @@ Each node has a Graphviz shape; the shape picks the handler. Explicit `type="<ha
 | `Mdiamond` | `start` | Lifecycle marker. Exactly one per graph. | — |
 | `Msquare` | `exit` | Lifecycle marker. At least one. | — |
 | `box` (default) | `codergen` | One LLM turn with tools. | `prompt=` |
-| `diamond` | `conditional` | Pure edge routing. No LLM, no prompt. | — |
 | `hexagon` | `wait.human` | Pauses with `fact.run_paused_hitl`. | `prompt=` |
 | `parallelogram` | `tool` | Deterministic shell step. | `tool_command=` |
-| `component` | `parallel` | Fan-out branch spawner. | — |
-| `tripleoctagon` | `parallel.fan_in` | Joins branches. | — |
+
+Concurrent dispatch lives inside a codergen via the `agent` tool, not as a graph shape (see Orchestrator-workers under §1).
 
 Loops and waits aren't primitives. Loops are backward conditional edges (§8). Waits are `wait.human` nodes.
 
@@ -204,13 +187,16 @@ Quote DOT-special values: `prompt = "with, commas"`. String arrays are comma-sep
 
 ## 6. Tool nodes (parallelogram)
 
-Deterministic shell steps. Exit 0 → `outcome=success`; non-zero → `outcome=fail`. stdout/stderr capture as artifacts (keys `<nodeId>:stdout`, `<nodeId>:stderr`).
+**Side-effect-only.** Deterministic shell steps. Exit 0 → `outcome=success`; non-zero → `outcome=fail`. The exit code is the entire user-visible result — tool nodes do **not** feed data forward to downstream nodes. Stdout/stderr are captured as artifacts (keys `<nodeId>:stdout`, `<nodeId>:stderr`) for debugging / replay.
 
 ```dot
+ci   [shape=parallelogram, tool_command="bun run ci", max_retries=5]
 lint [shape=parallelogram, tool_command="bun run lint"]
 ```
 
-Substitution applies to `tool_command`. Use tool nodes for CI gates, environment probes, idempotent side-effect commands. Don't use them for LLM prompts that happen to shell out — that's the codergen `bash` tool.
+Use tool nodes for CI gates, deploys, idempotent side-effect commands, anything whose value is "did it succeed?". `$ARGUMENTS` substitutes (POSIX-quoted); no other substitution.
+
+**Don't use tool nodes to gather data and feed it to a downstream codergen.** If a workflow needs to run a script and reason about its output, put the script invocation inside a codergen's `bash` tool — the codergen reads the script's stdout in its own context. A `collect → analyze` chain (tool → codergen) is an anti-pattern; collapse it to one codergen with `allowed_tools = "bash, read"` that runs `bun .swarm/scripts/foo/collect.ts` itself.
 
 E008 rejects empty `tool_command`.
 
@@ -295,49 +281,6 @@ REJECT routes via the fail edge to `done`; the goal-gate enforcement at `done` s
 **`max_retries` vs `max_goal_gate_retries`.** `max_retries` is *handler*-level (retry the same node N times on RETRY within one pass). Goal-gate retargets are *workflow*-level (jump backwards and re-run upstream nodes). A node can use both.
 
 W007 fires on `goal_gate=true` with no retarget at any level.
-
----
-
-## 10. Parallel — sectioning and voting
-
-`component`-shaped nodes fan out: each outgoing edge becomes a concurrent branch. Branches converge on a `tripleoctagon` (fan-in). The fan-in target is discovered structurally from edges.
-
-### Sectioning — N concerns, one reducer
-
-```dot
-explore [shape=component, join_policy="wait_all"]
-
-lens_correctness [class="lens", prompt = "find CORRECTNESS risks — one per line", allowed_tools = "read, bash"]
-lens_style       [class="lens", prompt = "find STYLE regressions",                allowed_tools = "read, bash"]
-lens_security    [class="lens", prompt = "find SECURITY concerns",                allowed_tools = "read, bash"]
-
-collect [shape=tripleoctagon]
-
-explore -> lens_correctness
-explore -> lens_style
-explore -> lens_security
-lens_correctness -> collect
-lens_style       -> collect
-lens_security    -> collect
-```
-
-- `join_policy="wait_all"` (default) — fire when every branch completes.
-- `join_policy="first_success"` — fire on first success; others abort.
-
-### Voting — N runs of the same task
-
-Same shape, branches identical, reducer aggregates. Useful when you want variance and majority-rules confidence. (No example currently in the catalog; same primitives.)
-
-### Fan-in reducer kinds
-
-`tripleoctagon` runs one of two reducers, picked by `prompt=` presence:
-
-- **Heuristic (no `prompt=`)** — deterministic ranker over branch outcomes. Writes the winner's branchId to `fan_in.<id>.winner` in routing. Zero cost, replay-stable. Best for parallel voting / "pick the best outcome" patterns.
-- **LLM synthesis (`prompt=` set)** — feeds every branch's `$<branchId>.output` text to the LLM and returns its reply verbatim as the fan-in node's `output` artifact. Downstream nodes read it as `$<fanInId>.output`. Best for "integrate four lenses into one review" patterns. Requires the daemon to have an LLM provider/model configured (the harness wires this automatically; the CI primitive needs `--llm-provider`/`--llm-model`).
-
-See `review.dot`'s `collect` for the canonical LLM-synthesis fan-in. The synthesised document is sliced to ~4 KB by the codergen backend's `Outcome.notes` cap.
-
-E007 catches structural fan-in problems. HITL inside a parallel branch is not supported in v1 — put HITL outside the fan-out.
 
 ---
 
@@ -482,8 +425,6 @@ For `retry_policy` presets, `model_stylesheet` selectors, subgraphs: `references
 Common codes:
 
 - **E004** — edge references a non-existent node id (typo).
-- **E005** — `$<id>.output` references unknown node id.
-- **E007** — `component` missing or pointing at wrong fan-in.
 - **E016** — `type=` names an unknown handler.
 - **W003** — only conditional edges, no `outcome=fail` catch-all.
 - **W004** — hexagon edge using legacy `context.hitl.*`.
@@ -520,11 +461,10 @@ Run twice if you have the budget — once cold, once with prior artifacts cleare
 - **Don't re-invent the `abort` tool.** Force-included on every codergen node; downstream edges route on `outcome=fail`.
 - **Don't conditionally route on `outcome=error`.** States are `success` and `fail`. `fact.run_halted { reason:"error" }` is terminal, not edge-eligible.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Edits apply to future runs.
-- **Don't put HITL inside a parallel branch.** Not supported; coerces to fail.
 - **Don't use legacy `context.hitl.<id>=…` on hexagon edges.** W004. Use `[K] Label`.
 - **Don't pair `goal_gate=true` with no retarget.** W007.
-- **Don't substitute `$<node>.output` when producer and consumer share a thread.** Redundant — the message is already in context. Substitution is correct for tool→codergen and fan-out→reducer; not for default data transfer between codergens.
-- **Don't leak runtime plumbing into prompts.** No "the previous turn in this shared `dev` thread …" — the LLM doesn't need to model threads. Describe the task; reference the artifact.
+- **Don't use a tool node to gather data for a downstream codergen.** Tool nodes are side-effect-only. If you need to run a deterministic script and reason about its output, call the script from inside a codergen's `bash` tool — the codergen reads stdout in its own context. The `collect → analyze` (tool → codergen) chain is the anti-pattern that motivated retiring `$<node>.output` substitution.
+- **Don't leak runtime plumbing into prompts.** No "the previous turn in this shared `dev` thread …" — the LLM doesn't need to model threads. Describe the task; reference the artifact ("the PLAN_REALISED block from the prior turn", "the drift table from the prior turn").
 
 ---
 

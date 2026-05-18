@@ -29,7 +29,6 @@ const UiStatus = Type.Union([
 const RawRunStatus = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
-  Type.Literal("running_children"),
   Type.Literal("paused"),
   Type.Literal("paused_hitl"),
   Type.Literal("paused_auto"),
@@ -38,26 +37,6 @@ const RawRunStatus = Type.Union([
   Type.Literal("halted"),
   Type.Literal("quarantined"),
 ]);
-
-/** Counts of descendant sub-runs grouped by their lifecycle status.
- * Present on a parent's `RunSummary` whenever the parent has at least
- * one child row in `run_state` (whether terminal or in-flight). Absent
- * for top-level runs with no children. Drives badges + Inbox surfacing
- * without N+1 calls to `/runs/:id/children`. */
-export const ChildStatusDigest = Type.Object({
-  total: Type.Integer({ minimum: 1 }),
-  running: Type.Integer({ minimum: 0 }),
-  runningChildren: Type.Integer({ minimum: 0 }),
-  paused: Type.Integer({ minimum: 0 }),
-  pausedHitl: Type.Integer({ minimum: 0 }),
-  pausedAuto: Type.Integer({ minimum: 0 }),
-  queued: Type.Integer({ minimum: 0 }),
-  completed: Type.Integer({ minimum: 0 }),
-  cancelled: Type.Integer({ minimum: 0 }),
-  halted: Type.Integer({ minimum: 0 }),
-  quarantined: Type.Integer({ minimum: 0 }),
-});
-export type ChildStatusDigest = Static<typeof ChildStatusDigest>;
 
 /** Summary row returned by `GET /runs`. */
 export const RunSummary = Type.Object({
@@ -80,20 +59,6 @@ export const RunSummary = Type.Object({
    * the only project identifier in the harness-by-default model. Absent
    * for ephemeral runs (CI primitives, tests). */
   cwd: Type.Optional(Type.String()),
-  /** Sub-run linkage when this row is a parallel sub-run (P5 of
-   * `docs/proposals/parallel.md`). Absent on top-level runs. The web UI
-   * groups sub-runs under their parent's run-detail page and the cost
-   * panel renders each as its own line. `branchNodeId` is the branch's
-   * root node id (e.g. `lens_correctness`) — the operator-facing label
-   * for the branch, distinct from the synthetic sub-run id. */
-  parentRunId: Type.Optional(Type.String()),
-  parentNodeId: Type.Optional(Type.String()),
-  parallelIndex: Type.Optional(Type.Integer({ minimum: 0 })),
-  branchNodeId: Type.Optional(Type.String()),
-  /** Counts of descendant sub-runs grouped by status. Present only when
-   * the row has children. Used by the runs list / Inbox to render
-   * "▶3 ⏸1" digest chips without fetching `/runs/:id/children`. */
-  childStatusDigest: Type.Optional(ChildStatusDigest),
 });
 export type RunSummary = Static<typeof RunSummary>;
 
@@ -157,25 +122,6 @@ export const RunDetail = Type.Object({
    * been disposed (run terminal + provisioner cleanup) or for runs
    * whose cwd wasn't a git repo (per-run LocalEnvironment fallback). */
   worktreePath: Type.Optional(Type.String()),
-  /** Current node ids active inside descendant sub-runs (P3 of the
-   * sub-runs UI plan). Empty for runs with no children or no active
-   * descendants. The Graph view unions this set with the run's own
-   * running nodes so branch-internal progress lights up. `branchNodeId`
-   * is the branch's root node id (operator-facing label). */
-  effectiveActiveNodes: Type.Optional(
-    Type.Array(
-      Type.Object({
-        runId: Type.String(),
-        nodeId: Type.String(),
-        branchNodeId: Type.Optional(Type.String()),
-      }),
-    ),
-  ),
-  /** Counts of descendant sub-runs grouped by status. Mirrors the field
-   * on `RunSummary`; present whenever the run has at least one child
-   * row. The run-detail header uses this to render the branch summary
-   * pill ("running · 3 branches: 2✓ 1⏸"). */
-  childStatusDigest: Type.Optional(ChildStatusDigest),
 });
 export type RunDetail = Static<typeof RunDetail>;
 

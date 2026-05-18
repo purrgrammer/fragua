@@ -10,9 +10,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E002 | Multiple start nodes — pick one. |
 | E003 | No exit node (`shape=Msquare`). |
 | E004 | Edge references a node id that doesn't exist. Typo in source or target. |
-| E005 | `$<id>.output` references an unknown node id. |
 | E006 | Cycle with no reachable exit — the run can't terminate. |
-| E007 | `component` node without valid `fan_in=` (missing or wrong shape). |
 | E008 | `parallelogram` node without `tool_command=`. |
 | E009 | `hexagon` node has no outgoing edges — operator's selection has nowhere to route. |
 | E010 | `hexagon` outgoing edges produce duplicate accelerator keys (e.g. two `[A] …`). |
@@ -21,8 +19,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E013 | Exit node has outgoing edges (attractor §11.2). |
 | E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
-| E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | conditional | wait.human | parallel | parallel.fan_in | tool`). Typo or invented type — there is no extension surface. |
-| E018 | A node inside a parallel branch subgraph is reachable from multiple branch roots — each branch must own its interior nodes exclusively. The executor's per-sub-run subgraph slice cannot decide which sub-run dispatches the shared node. Split the node or restructure so each branch's subgraph is disjoint. Proposal: `docs/proposals/parallel.md` §P3.3. |
+| E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | wait.human | tool`). Typo or invented type — there is no extension surface. |
 
 ## Warnings
 
@@ -42,6 +39,5 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | W012 | Node `type=` and shape resolve to different handlers. `type=` wins at dispatch (attractor §2.6 + §4.2); the warning flags the divergence. Suppress by aligning shape with `type=` or by dropping `type=` when it duplicates the shape's canonical handler. |
 | W013 | Unrecognised attribute name on a node, edge, or graph. The parser passes unknown attributes through silently (`NodeAttrs[extra: string]`); this lint catches typos like `goalgate=true` or `max_ms=…` (the runtime expects `maxMs`). Canonical list: `packages/core/src/types/graph.ts` (`NodeAttrs` / `EdgeAttrs` / `GraphAttrs`). |
 | W014 | Attractor-only attribute that swarm intentionally does not honor (currently `auto_status` on nodes, `loop_restart` on edges). See SPEC.md §5 for rationale. Drop the attribute or accept the no-op. |
-| W017 | Cycle inside a parallel branch subgraph (same node reachable via two intra-branch paths, `info` severity). Allowed only when guarded by `max_retries` / `retry_target` (per-node) or `default_max_retries` / `default_retry_policy` (graph-level) on the backward edge — see SPEC §3.6. Suppressed entirely when any retry guard is present; surfaces as `info` when unguarded so authors know the subgraph isn't a pure DAG. Cross-branch ownership (a node reachable from two branch roots) is the separate blocking **E018**. Proposal: `docs/proposals/parallel.md` §P3.3. |
 
 `--strict` makes warnings fail the command. The CLI doesn't expose it yet; the API (`validate(graph, {strict:true})`) does.

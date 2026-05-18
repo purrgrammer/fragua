@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@swarm/types";
-import type { NodeOutput } from "../engine/substitution.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import { ENV_MUTATOR_TOOLS, makeReadOnlyEnv } from "../types/read-only-env.ts";
 import { makeExternalCall } from "./external-call.ts";
@@ -16,7 +15,6 @@ import type {
   MessagesApi,
   ScopeOverrides,
   SideEffectRecorder,
-  SubRunOutcome,
   ToolRegistry,
 } from "./types.ts";
 
@@ -53,16 +51,6 @@ export interface BuildContextOpts {
    * from `routing.input`); empty when the run has no input string.
    * Passed through to HandlerContext unchanged. */
   args?: Readonly<Record<string, string>>;
-  /** Captured outputs of prior nodes (latest iteration wins). Materialised
-   * by the executor from prior `fact.node_completed` events that have
-   * `outputRef`. When omitted, the context exposes an empty map and every
-   * `$<nodeId>.output` token resolves to "". */
-  nodeOutputs?: ReadonlyMap<string, NodeOutput>;
-  /** Inline sub-run outcomes folded from this run's `fact.subrun_completed`
-   * events. The executor builds the map before each dispatch so the
-   * parallel handler's collect phase reads it without re-walking the
-   * event log. Empty Map when no sub-runs have terminated yet. */
-  subRunOutcomes?: ReadonlyMap<string, SubRunOutcome>;
   /** Observability sink. Every ctx.emit(type, payload) call routes here.
    * The executor wires this to a collector it drains into
    * store.appendObservabilityEvents after the node's terminal fact lands.
@@ -78,9 +66,6 @@ export interface BuildContextOpts {
    * sets this when a graph or node ceiling is configured. */
   budgetSnapshot?: BudgetSnapshotInput;
 }
-
-const EMPTY_NODE_OUTPUTS: ReadonlyMap<string, NodeOutput> = new Map();
-const EMPTY_SUBRUN_OUTCOMES: ReadonlyMap<string, SubRunOutcome> = new Map();
 
 /** Run-level resources captured once at top-level context construction
  * and reused across every `withScope` rescoping. Anything keyed off
@@ -98,8 +83,6 @@ interface CtxUpstream {
   tools: ToolRegistry;
   recorder: SideEffectRecorder;
   args: Readonly<Record<string, string>>;
-  nodeOutputs: ReadonlyMap<string, NodeOutput>;
-  subRunOutcomes: ReadonlyMap<string, SubRunOutcome>;
   emitObservability: (type: string, payload: Record<string, unknown>) => void;
   /** Un-wrapped env. The read-only proxy is reapplied per scope based
    * on the scope's tool narrowing. */
@@ -128,8 +111,6 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     tools: opts.tools,
     recorder: opts.recorder,
     args: opts.args ?? {},
-    nodeOutputs: opts.nodeOutputs ?? EMPTY_NODE_OUTPUTS,
-    subRunOutcomes: opts.subRunOutcomes ?? EMPTY_SUBRUN_OUTCOMES,
     emitObservability: opts.emitObservability ?? (() => {}),
     ...(opts.env !== undefined ? { env: opts.env } : {}),
   };
@@ -259,8 +240,6 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
     artifacts,
     externalCall,
     args: upstream.args,
-    nodeOutputs: upstream.nodeOutputs,
-    subRunOutcomes: upstream.subRunOutcomes,
     emit,
     withScope,
     ...(scope.hitlInput !== undefined ? { hitlInput: scope.hitlInput } : {}),

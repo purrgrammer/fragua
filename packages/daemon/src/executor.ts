@@ -59,11 +59,6 @@ type LlmCallFn = core.LlmCallFn;
  * Outcome of a single dispatch turn. `dispatchOne` returns this so the
  * outer loop can decide whether to continue iterating or exit (because
  * the run reached a terminal / paused state, or another short-circuit).
- *
- * P0.2 of `docs/proposals/parallel.md`: extracted from the monolithic
- * while loop so sub-runs (a child `run_state` row driven through the
- * same `runExecutor` → `runOne` → `runOneInner` path) reuse the
- * per-turn services unchanged.
  */
 export type DispatchOutcome = { kind: "terminal" } | { kind: "continue" };
 
@@ -362,12 +357,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       state.status === "paused" ||
       state.status === "paused_hitl" ||
       state.status === "paused_auto" ||
-      state.status === "quarantined" ||
-      // Parent waiting on sub-runs: the wake-pending sweep will move it
-      // back to `queued` on `fact.fanout_completed`. Re-claiming here
-      // would race the sweep and trip the executor into running the
-      // component a second time.
-      state.status === "running_children"
+      state.status === "quarantined"
     ) {
       return { kind: "terminal" };
     }
@@ -458,9 +448,8 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // idempotent but we avoid the extra lookup.
     if (opts.provisioner && runEnv === undefined) {
       try {
-        const provisionOpts: { cwd?: string; parentRunId?: string } = {};
+        const provisionOpts: { cwd?: string } = {};
         if (state.cwd != null) provisionOpts.cwd = state.cwd;
-        if (state.parentRunId != null) provisionOpts.parentRunId = state.parentRunId;
         runEnv = await opts.provisioner.ensure(runId, provisionOpts);
         opts.store.appendDaemonEvent({ type: "daemon.worktree_provisioned", payload: { runId, ok: true } }, { runId });
       } catch (err) {
@@ -483,12 +472,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
 
     if (needsStart) {
-      // Sub-runs (P1.1 / P2.1 of docs/proposals/parallel.md) start at
-      // the branch root they were enqueued against, not the workflow's
-      // `start` node. The subgraph slice fences edge selection at
-      // `subgraph_terminal_node_id` below — see the
-      // "subgraph_terminal_node_id" check after edge selection.
-      const start = state.subgraphRootNodeId ?? routingString(state.routing, "start_node") ?? "start";
+      const start = routingString(state.routing, "start_node") ?? "start";
       const baseGitSha = opts.provisioner?.baseGitSha(runId) ?? undefined;
       const startFacts: FactEvent[] = [
         {
@@ -501,10 +485,9 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           },
         },
       ];
-      // Seed graph-level routing keys at run start so $goal substitution
-      // and `${context.graph.goal}` references resolve from turn 1
-      // onward (attractor §4.5 / §5.1). Closes the silent bug where
-      // the agent reads routing["graph.goal"] but nothing wrote it.
+      // Seed graph-level routing keys at run start so the agent backend
+      // can pick up the workflow goal/label for system-prompt framing.
+      // Internal plumbing, not user-facing context KV.
       const startGraph = graphFor(state.workflowSha);
       const startRoutingPatch: Record<string, unknown> = {};
       if (typeof startGraph?.attrs.goal === "string" && startGraph.attrs.goal !== "") {
@@ -535,14 +518,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
         return { kind: "continue" };
       }
       onOccResolved(start, 0);
-      // Skip the auto-titler for sub-runs: they share the parent's
-      // identity (branchNodeId is the operator-facing label, not a
-      // summarised prose title), the title call is a wasted LLM round
-      // (~$0.005 × N branches per fan-out), and on cold starts the
-      // titler's call can race the parent's executor — visible in
-      // production as a `daemon.worktree_provisioned` event firing
-      // twice for the parent.
-      if (opts.autoTitler && state.parentRunId == null) {
+      if (opts.autoTitler) {
         const input = routingString(state.routing, "input") ?? "";
         const goal = graphFor(workflowSha)?.attrs.goal;
         const req: TitleRequest = {
@@ -700,8 +676,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // A handler that reaches for `ctx.tools.get("bash")` on a node that
     // didn't allow "bash" gets `unknown tool: bash`, same as for an
     // unregistered tool. The filter lives at HandlerContext construction
-    // so every handler kind (codergen, tool, parallel branches, custom)
-    // respects the same structural enforcement.
+    // so every handler kind respects the same structural enforcement.
     const graph = graphFor(state.workflowSha);
     const nodeAttrs = graph?.nodes[currentNode]?.attrs;
     const allowedTools = Array.isArray(nodeAttrs?.allowed_tools)
@@ -710,17 +685,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     const deniedTools = Array.isArray(nodeAttrs?.denied_tools)
       ? (nodeAttrs.denied_tools as readonly string[])
       : undefined;
-
-    // Captured outputs of every prior node, keyed by nodeId. Re-folded on
-    // every dispatch from `fact.node_completed` events that carry an
-    // outputRef. Without this, downstream `$<nodeId>.output` substitution
-    // resolves to the empty string and aborts cascade through the graph.
-    const nodeOutputs = opts.store.getNodeOutputs(runId);
-
-    // Inline sub-run outcomes from this parent run's own
-    // `fact.subrun_completed` events. The parallel handler's collect
-    // phase reads them to synthesise the fan_in input shape.
-    const subRunOutcomes = foldSubRunOutcomes(opts.store, runId);
 
     const ctxOpts: core.BuildContextOpts = {
       runId,
@@ -740,8 +704,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       tools: opts.tools,
       recorder,
       args: buildSubstitutionArgs(runId, effectiveRouting),
-      nodeOutputs,
-      subRunOutcomes,
       emitObservability: (type, payload) => {
         // Stamp nodeId + iteration so the UI can scope without the
         // handler having to thread it through every payload.
@@ -1115,85 +1077,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       consecutiveAborts = 0;
     }
 
-    // Fanout: the parallel handler requested a sub-run fan-out. P2.2 of
-    // docs/proposals/parallel.md. The executor:
-    //   1. Mints sub-run IDs (deterministic from
-    //      `(parentRunId, parentNodeId, iteration, branchIndex)` so a
-    //      replay reproduces them).
-    //   2. Enqueues each sub-run with parent linkage + subgraph slice
-    //      pointers. Sub-runs share the parent's `workflow_sha` and
-    //      `cwd`; the slice is `(subgraph_root_node_id,
-    //      subgraph_terminal_node_id)`.
-    //   3. Appends `fact.fanout_started` on the parent's log inside
-    //      one OCC commit — the reducer transitions the parent to
-    //      `running_children` and stamps the sub-run id list into
-    //      routing so the collect-phase handler reads them on resume.
-    // The wake-pending sweep promotes the parent back to `queued` on
-    // `fact.fanout_completed` once every sub-run reaches a
-    // terminal status. The parent's runOneInner
-    // terminates here (returns terminal) — the slot is released for
-    // sub-runs to claim.
-    if (result.kind === "fanout_pending") {
-      flushObservability();
-      const joinPolicy: "wait_all" | "first_success" =
-        result.joinPolicy === "first_success" ? "first_success" : "wait_all";
-      const childRunIds: string[] = result.branchNodeIds.map(
-        (_branchNode, branchIndex) => `${runId}__${currentNode}__i${iteration}__b${branchIndex}`,
-      );
-      for (let i = 0; i < result.branchNodeIds.length; i++) {
-        const branchNodeId = result.branchNodeIds[i]!;
-        const childRunId = childRunIds[i]!;
-        try {
-          opts.store.enqueueRun({
-            runId: childRunId,
-            workflowSha: state.workflowSha,
-            priority: state.priority,
-            parentRunId: runId,
-            parentNodeId: currentNode,
-            parallelIndex: i,
-            subgraphRootNodeId: branchNodeId,
-            subgraphTerminalNodeId: result.fanInNode,
-            ...(state.cwd !== null ? { cwd: state.cwd } : {}),
-          });
-        } catch (err) {
-          // A duplicate enqueue means an earlier crash-resume already
-          // wrote the sub-run row. Best-effort: keep going; OCC on the
-          // parent fanout_started commit will reconcile.
-          if (!(err instanceof Error) || !/already exists|UNIQUE/i.test(err.message)) {
-            throw err;
-          }
-        }
-      }
-      const fanoutFacts: FactEvent[] = [
-        {
-          type: "fact.fanout_started",
-          payload: {
-            parentNodeId: currentNode,
-            childRunIds,
-            fanInNode: result.fanInNode,
-          },
-        },
-      ];
-      const fanoutRouting: Record<string, unknown> = {
-        [`parallel.${currentNode}.sub_run_ids`]: childRunIds,
-        [`parallel.${currentNode}.fan_in_node`]: result.fanInNode,
-        [`parallel.${currentNode}.join_policy`]: joinPolicy,
-      };
-      const advanceAppliedTo = decision.appliedSeqs.length > 0 ? Math.max(...decision.appliedSeqs) : undefined;
-      const fanoutAppendOpts: { routingPatch: Record<string, unknown>; advanceAppliedTo?: number } = {
-        routingPatch: fanoutRouting,
-      };
-      if (advanceAppliedTo !== undefined) fanoutAppendOpts.advanceAppliedTo = advanceAppliedTo;
-      const fanoutOk = await tryAppendFact(opts.store, runId, recorder.version(), fanoutFacts, fanoutAppendOpts);
-      if (!fanoutOk) {
-        const { halted } = await onOccConflict("fact.fanout_started", currentNode, iteration, recorder.version());
-        if (halted) return { kind: "terminal" };
-        return { kind: "continue" };
-      }
-      onOccResolved(currentNode, iteration);
-      return { kind: "terminal" };
-    }
-
     // Edge selection is recorded with `edge.selected` AFTER the
     // goal-gate retarget check, not at selection time. Goal-gate
     // retarget can override `result.nextNode` to a different target
@@ -1201,15 +1084,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // is never actually traversed and `edge.selected` would lie. We
     // hold the selection here, then emit it only if no retarget fired.
     let pendingEdgeSelection: EdgeSelection | undefined;
-    // True iff the subgraph fence (sub-run hitting its
-    // subgraph_terminal_node_id) rewrote the transition to `__end__`.
-    // Distinct from a workflow-declared terminal (Msquare done) which
-    // a top-level run reaches cleanly. The budget-pause arm uses this
-    // to decide whether a terminal-on-breach should pause (sub-run:
-    // the cap was actually blown, the "terminal" is synthetic) or
-    // complete cleanly (top-level: budget gate is a fence, declared
-    // exit doesn't need pausing).
-    let subgraphFenceTriggered = false;
 
     // Attach LLM accounting into the node_completed fact if the handler
     // didn't set these explicitly.
@@ -1274,15 +1148,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // parseable workflow) — terminal by default.
           result.nextNode = "__end__";
         }
-      }
-      // Sub-run subgraph fence (P2.1 / P2.3 of docs/proposals/parallel.md):
-      // when the resolved transition would enter the fan_in convergence
-      // node, terminate the sub-run instead. The parent's wake-pending
-      // sweep reads each sub-run's terminal status to roll up outcomes
-      // and emit `fact.subrun_completed` + `fact.fanout_completed`.
-      if (state.subgraphTerminalNodeId != null && result.nextNode === state.subgraphTerminalNodeId) {
-        result.nextNode = "__end__";
-        subgraphFenceTriggered = true;
       }
     }
 
@@ -1699,41 +1564,12 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Budget pause: swap fact.node_started for fact.run_paused{reason:"budget"}
     // so the run releases its slot and waits for `intent.budget_adjusted`
     // + `intent.resume`. node_completed is preserved (metrics + the
-    // nextNode routing fact).
-    //
-    // Two terminal-interaction shapes:
-    //   1. Workflow-declared terminal (Msquare done; top-level clean
-    //      exit). result-to-facts already emitted `fact.run_completed`.
-    //      Adding `fact.run_paused` would clobber the terminal status
-    //      and leave `currentNode` pointed at a terminal sentinel — on
-    //      resume the dispatcher would crash trying to find a handler
-    //      for `done`. Budget enforcement after a clean terminal
-    //      transition is moot: the run is finished. Skip the pause.
-    //   2. Subgraph fence terminal (sub-run whose nextNode = fan_in
-    //      was rewritten to `__end__` by the fence above). The cap
-    //      WAS blown; the terminal is synthetic. Strip the terminal
-    //      facts and emit the pause so the operator can raise the cap
-    //      and resume. Mirrors the halt arm's strip pattern below.
+    // nextNode routing fact). Workflow-declared terminal exits
+    // (fact.run_completed / fact.run_halted) are preserved — the run is
+    // finished and budget enforcement on a clean exit is moot.
     if (budgetPause !== undefined) {
       const alreadyTerminal = facts.some((f) => f.type === "fact.run_completed" || f.type === "fact.run_halted");
-      if (alreadyTerminal && subgraphFenceTriggered) {
-        // Sub-run subgraph-fence terminal: strip + replace.
-        facts = facts.filter(
-          (f) => f.type !== "fact.run_completed" && f.type !== "fact.run_halted" && f.type !== "fact.node_started",
-        );
-        facts.push({
-          type: "fact.run_paused",
-          payload: {
-            reason: "budget",
-            nodeId: state.currentNode ?? "",
-            scope: budgetPause.scope,
-            metric: budgetPause.metric,
-            limit: budgetPause.limit,
-            actual: budgetPause.actual,
-          },
-        });
-      } else if (!alreadyTerminal) {
-        // Non-terminal turn: standard swap of node_started → run_paused.
+      if (!alreadyTerminal) {
         facts = facts.filter((f) => f.type !== "fact.node_started");
         facts.push({
           type: "fact.run_paused",
@@ -1747,9 +1583,6 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           },
         });
       }
-      // else: workflow-declared terminal + breach → preserved as
-      // completion (legacy semantics; budget gate is moot on a clean
-      // exit).
     }
 
     // Budget halt: preserve fact.node_completed (so projection +
@@ -1920,58 +1753,11 @@ async function tryAppendFact(
   }
 }
 
-/**
- * Fold every `fact.subrun_completed` event on this run's own log into a
- * Map keyed by sub-run id. Late events overwrite earlier ones, which
- * matches the semantics of a sub-run that legitimately re-emits (e.g.
- * provider auto-retry chain on the wake-pending side that re-folds
- * outcomes after a fresh terminal). Empty Map on runs that haven't
- * fanned out (the cheap path — `getEventsByType` is a single indexed
- * scan returning zero rows).
- */
-function foldSubRunOutcomes(store: IEventStore, runId: string): Map<string, core.SubRunOutcome> {
-  const out = new Map<string, core.SubRunOutcome>();
-  const events = store.getEventsByType(runId, "fact.subrun_completed");
-  for (const ev of events) {
-    const p = ev.payload as {
-      subRunId?: string;
-      parentNodeId?: string;
-      parallelIndex?: number;
-      finalStatus?: "completed" | "halted" | "cancelled";
-      costUsd?: number;
-      billedTokens?: number;
-      outputRef?: { nodeId: string; key: string };
-      fanInScore?: number;
-    };
-    if (
-      typeof p.subRunId !== "string" ||
-      typeof p.parentNodeId !== "string" ||
-      typeof p.parallelIndex !== "number" ||
-      p.finalStatus === undefined
-    ) {
-      continue;
-    }
-    const outcome: core.SubRunOutcome = {
-      subRunId: p.subRunId,
-      parentNodeId: p.parentNodeId,
-      parallelIndex: p.parallelIndex,
-      finalStatus: p.finalStatus,
-      costUsd: p.costUsd ?? 0,
-      billedTokens: p.billedTokens ?? 0,
-    };
-    if (p.outputRef !== undefined) outcome.outputRef = p.outputRef;
-    if (p.fanInScore !== undefined) outcome.fanInScore = p.fanInScore;
-    out.set(p.subRunId, outcome);
-  }
-  return out;
-}
-
 function mergeRoutingPatches(
   fromIntents: Record<string, unknown>,
-  result: core.HandlerResult,
+  _result: core.HandlerResult,
 ): Record<string, unknown> | undefined {
-  const fromResult = result.kind === "transition" || result.kind === "yield_hitl" ? result.routingDelta : undefined;
-  const merged: Record<string, unknown> = { ...fromIntents, ...fromResult };
+  const merged: Record<string, unknown> = { ...fromIntents };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 

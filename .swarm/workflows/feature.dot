@@ -8,6 +8,10 @@
 // gated with retarget=implement; max_goal_gate_retries=3 gives one extra
 // cycle since multi-package work tends to surface late dependency issues.
 //
+// `plan`, `implement`, and `review` share `thread_id="dev"` — downstream
+// nodes read the plan / PLAN_REALISED block from the shared conversation,
+// not from substituted output.
+//
 //   bun run swarm run feature \
 //     --input="Implement docs/proposals/scheduled-runs.md end-to-end."
 
@@ -28,19 +32,20 @@ digraph feature {
   start [shape=Mdiamond]
 
   plan [
+    thread_id = "dev"
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. If no proposal file is referenced, abort with reason `feature workflow requires a docs/proposals/*.md anchor; for ad-hoc work use change.dot`.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - no proposal anchor (per pre-flight above)\n\nMulti-package work and shared-contract changes (store schema, event envelope, handler contracts) ARE in scope here — that's why this workflow exists. Don't refuse them.\n\nRead the full proposal + the docs/proposals files it cross-references + the AGENTS.md doc-obligation table to identify same-PR doc updates. Survey the existing code at every package the proposal touches.\n\nOutput a numbered plan:\n  1. Files to create/modify (full paths). Group by package. Include same-PR doc updates from AGENTS.md §1.\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence. One per logical unit minimum.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers.\n  5. Cross-package dependencies: which packages must land/typecheck before which others, in what order."
     allowed_tools = "read, grep, find, ls"
   ]
 
   subgraph cluster_dev {
     implement [
-      prompt = "Implement $plan.output. Follow the cross-package dependency order from plan §5. Stay inside the package(s) and files the plan §1 names — anything else is scope creep. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it).\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package, in dependency order; fix errors before moving to the next package. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked in <pkg>: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nApply the same-PR doc updates from plan §1. Don't invent extras.\n\nEnd your reply with a PLAN_REALISED block in EXACTLY this shape — the reviewer reads this against the diff, so it must list every plan §1/§2/§3/§5 item:\n\nPLAN_REALISED:\n  files_by_package:\n    <package>:\n      - <path> — created | modified | skipped (<why>)\n  tests:\n    - <file>::<describe-or-test-name> — added | already-present | skipped (<why>)\n  exports:\n    - <symbol> in <package> — added | changed | unchanged\n  doc_updates:\n    - <doc-path> — applied | skipped (<why>)\n  dependency_order_followed: yes | no (<why>)\n  skipped:\n    - <plan item> — <why>"
+      prompt = "Implement the plan from the prior turn. Follow the cross-package dependency order from plan §5. Stay inside the package(s) and files the plan §1 names — anything else is scope creep. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it).\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package, in dependency order; fix errors before moving to the next package. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked in <pkg>: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nApply the same-PR doc updates from plan §1. Don't invent extras.\n\nEnd your reply with a PLAN_REALISED block in EXACTLY this shape — the reviewer reads this against the diff, so it must list every plan §1/§2/§3/§5 item:\n\nPLAN_REALISED:\n  files_by_package:\n    <package>:\n      - <path> — created | modified | skipped (<why>)\n  tests:\n    - <file>::<describe-or-test-name> — added | already-present | skipped (<why>)\n  exports:\n    - <symbol> in <package> — added | changed | unchanged\n  doc_updates:\n    - <doc-path> — applied | skipped (<why>)\n  dependency_order_followed: yes | no (<why>)\n  skipped:\n    - <plan item> — <why>"
       allowed_tools = "read, write, edit, grep, bash"
       thread_id     = "dev"
     ]
 
     review [
-      prompt = "Judge the diff against the implementer's PLAN_REALISED block (files-by-package / tests / exports / doc_updates / skipped) and `git diff HEAD`.\n\nCheck:\n  (a) Diff matches PLAN_REALISED — every claimed file/test/export/doc-update is present in the diff and nothing else is. Cross-package changes are expected; only flag files PLAN_REALISED did not declare.\n  (b) Every test in PLAN_REALISED's `tests:` list is realised (file exists, name matches, assertion is non-trivial).\n  (c) Bugs, type errors, security issues.\n  (d) Same-PR doc updates declared in PLAN_REALISED's `doc_updates:` list actually landed (ARCH §-references, README claims, skill cheat sheets where applicable).\n  (e) Doc-state claims match reality. Any prose edit asserting shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`. Reality wins.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 3 cycles)."
+      prompt = "Judge the diff against the implementer's PLAN_REALISED block from the prior turn (files-by-package / tests / exports / doc_updates / skipped) and `git diff HEAD`.\n\nCheck:\n  (a) Diff matches PLAN_REALISED — every claimed file/test/export/doc-update is present in the diff and nothing else is. Cross-package changes are expected; only flag files PLAN_REALISED did not declare.\n  (b) Every test in PLAN_REALISED's `tests:` list is realised (file exists, name matches, assertion is non-trivial).\n  (c) Bugs, type errors, security issues.\n  (d) Same-PR doc updates declared in PLAN_REALISED's `doc_updates:` list actually landed (ARCH §-references, README claims, skill cheat sheets where applicable).\n  (e) Doc-state claims match reality. Any prose edit asserting shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`. Reality wins.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 3 cycles)."
       allowed_tools = "read, grep, bash"
       thread_id     = "dev"
       fidelity      = "full"
@@ -57,7 +62,7 @@ digraph feature {
 
   fix [
     class         = "fix"
-    prompt        = "CI failed. Failure log: $ci.output. Read the failures, make the minimal change to fix them, then stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
+    prompt        = "CI failed. Re-run `bun run ci` via the bash tool, read the failure log directly from its output, then make the minimal change to fix it and stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
     allowed_tools = "read, write, edit, bash"
     max_cost_usd  = 0.30
     max_tokens    = 800000

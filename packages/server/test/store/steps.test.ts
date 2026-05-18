@@ -171,107 +171,6 @@ describe("eventsToSteps", () => {
     expect(merged[1]!.cost).toBeUndefined();
   });
 
-  test("branch step rows surface parentNodeId and parallelIndex from the preceding fact.node_started", () => {
-    // Parallel handler emits per-branch fact.node_started with
-    // parentNodeId / parallelIndex; llm.start itself does NOT carry
-    // them. The reducer stamps the metadata onto the next llm.start
-    // for that nodeId so the UI can group branch rows under their parent.
-    const events = [
-      ev("fact.node_started", 100, { nodeId: "fork", iteration: 1 }),
-      ev("llm.start", 150, { nodeId: "fork" }),
-      ev("fact.node_started", 200, { nodeId: "lensA", iteration: 1, parentNodeId: "fork", parallelIndex: 0 }),
-      ev("llm.start", 250, { nodeId: "lensA" }),
-      ev("fact.node_started", 300, { nodeId: "lensB", iteration: 1, parentNodeId: "fork", parallelIndex: 1 }),
-      ev("llm.start", 350, { nodeId: "lensB" }),
-    ];
-    const steps = eventsToSteps(events);
-    expect(steps).toHaveLength(3);
-    const fork = steps.find((s) => s.nodeId === "fork")!;
-    const lensA = steps.find((s) => s.nodeId === "lensA")!;
-    const lensB = steps.find((s) => s.nodeId === "lensB")!;
-    expect(fork.parentNodeId).toBeUndefined();
-    expect(fork.parallelIndex).toBeUndefined();
-    expect(lensA.parentNodeId).toBe("fork");
-    expect(lensA.parallelIndex).toBe(0);
-    expect(lensB.parentNodeId).toBe("fork");
-    expect(lensB.parallelIndex).toBe(1);
-  });
-
-  test("parallel codergen branches: fact.node_completed stamps wall durationMs from lifecycle facts", () => {
-    // Parallel branches run inline under the parent component's dispatch,
-    // so their `llm.start`/`llm.done` timestamps are pi-agent-core-
-    // buffered and collapse to ~0. `fillOrphanDurations`'s neighbour
-    // trick can't resolve a wall figure either (sibling branches share
-    // a `startedAt` to the ms). The reducer must stamp the truthful
-    // wall duration directly from `fact.node_completed.ts − fact.node_started.ts`.
-    const events = [
-      ev("fact.node_started", 1000, { nodeId: "lensA", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
-      ev("fact.node_started", 1000, { nodeId: "lensB", iteration: 0, parentNodeId: "fork", parallelIndex: 1 }),
-      // llm.start arrives "later" but pi-agent-core's flush at end-of-call collapses
-      // both buffered timestamps onto each other — simulate by giving them ts close to
-      // the (later) llm.done. The exact value doesn't matter for the test; what matters
-      // is that the fact.node_completed handler stamps the wall figure regardless.
-      ev("llm.start", 5000, { nodeId: "lensA" }),
-      ev("llm.start", 5000, { nodeId: "lensB" }),
-      // Branches complete at different real wall times (the daemon-written
-      // fact.node_completed.ts is truthful and sync).
-      ev("fact.node_completed", 6500, { nodeId: "lensA", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
-      ev("fact.node_completed", 8000, { nodeId: "lensB", iteration: 0, parentNodeId: "fork", parallelIndex: 1 }),
-    ];
-    const steps = eventsToSteps(events);
-    const lensA = steps.find((s) => s.nodeId === "lensA")!;
-    const lensB = steps.find((s) => s.nodeId === "lensB")!;
-    // 6500 − 1000 = 5500
-    expect(lensA.durationMs).toBe(5500);
-    // 8000 − 1000 = 7000
-    expect(lensB.durationMs).toBe(7000);
-  });
-
-  test("parallel-branch durationMs stamp overrides a racey 0 from buffered llm.start/llm.done", () => {
-    // Reproduces the production symptom: llm.start opened the step, llm.done
-    // (also buffered) folded a near-zero durationMs onto it. The
-    // fact.node_completed handler must overwrite, not respect-if-set.
-    // We don't directly synthesise the racey 0 here (eventsToSteps doesn't
-    // currently set durationMs from llm.done — see file header), but the
-    // contract is symmetric either way: the lifecycle-facts wall figure wins.
-    const events = [
-      ev("fact.node_started", 100, { nodeId: "branch", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
-      ev("llm.start", 105, { nodeId: "branch" }),
-      ev("fact.node_completed", 3000, { nodeId: "branch", iteration: 0, parentNodeId: "fork", parallelIndex: 0 }),
-    ];
-    const [step] = eventsToSteps(events);
-    expect(step?.durationMs).toBe(2900);
-  });
-
-  test("top-level (non-branch) fact.node_completed does NOT stamp durationMs (preserves the existing path)", () => {
-    // fillOrphanDurations handles top-level codergens via neighbour-step boundaries;
-    // the new stamp must scope itself to branches (parentNodeId present) so it
-    // doesn't double-write or compete with the existing path for sequential codergens.
-    const events = [
-      ev("fact.node_started", 100, { nodeId: "scope", iteration: 0 }),
-      ev("llm.start", 110, { nodeId: "scope" }),
-      ev("fact.node_completed", 2000, { nodeId: "scope", iteration: 0 }),
-    ];
-    const [step] = eventsToSteps(events);
-    expect(step?.durationMs).toBeUndefined();
-  });
-
-  test("a top-level fact.node_started for a previously-branch nodeId clears stale branch metadata", () => {
-    // Defensive: if a node id reappears as top-level (e.g. workflow
-    // edited mid-replay), the next llm.start must NOT inherit the old
-    // branch attribution.
-    const events = [
-      ev("fact.node_started", 100, { nodeId: "x", iteration: 1, parentNodeId: "p", parallelIndex: 0 }),
-      ev("llm.start", 150, { nodeId: "x" }),
-      ev("fact.node_started", 1000, { nodeId: "x", iteration: 1 }),
-      ev("llm.start", 1050, { nodeId: "x" }),
-    ];
-    const steps = eventsToSteps(events);
-    expect(steps).toHaveLength(2);
-    expect(steps[0]!.parentNodeId).toBe("p");
-    expect(steps[1]!.parentNodeId).toBeUndefined();
-  });
-
   test("a node paused then resumed coalesces into a single step (cost breakdown unifies pause/resume halves)", () => {
     // Wire shape on the Run detail Cost breakdown for a paused+resumed
     // node: the daemon emits fact.node_started → llm.start, then on
@@ -445,25 +344,6 @@ describe("eventsToSteps", () => {
     expect(tool?.cost).toBeUndefined(); // no LLM call → no aggregate
     expect(tool?.provider).toBeUndefined();
     expect(tool?.model).toBeUndefined();
-  });
-
-  test("tool-node synthesis carries parentNodeId + parallelIndex when the tool ran as a parallel branch", () => {
-    const events: StoredEvent[] = [
-      ev("fact.node_started", 1_000, { nodeId: "fanout", iteration: 0 }),
-      ev("fact.node_started", 1_100, {
-        nodeId: "plugin_validate",
-        iteration: 0,
-        parentNodeId: "fanout",
-        parallelIndex: 0,
-      }),
-      ev("fact.node_completed", 1_500, { nodeId: "plugin_validate", iteration: 0, outcomeStatus: "success" }),
-    ];
-    const steps = eventsToSteps(events);
-    const tool = steps.find((s) => s.nodeId === "plugin_validate");
-    expect(tool).toBeDefined();
-    expect(tool?.parentNodeId).toBe("fanout");
-    expect(tool?.parallelIndex).toBe(0);
-    expect(tool?.durationMs).toBe(400);
   });
 
   test("a codergen node (with llm.start) does NOT also produce a tool-node step at completion", () => {

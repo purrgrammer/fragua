@@ -135,14 +135,6 @@ If the ending is ambiguous (`fact.run_halted { reason: "error" }` with no detail
 # HTTP
 curl -fsS "$URL/runs/$RUN/events.json" | jq '.[] | {seq, type, payload, at: .ts}'
 
-# Parent + every descendant sub-run, merged in (ts, runId, seq) order.
-# Use this when the question is "why isn't the descendant view
-# updating?" — the live tail of this stream is what RunDetail
-# subscribes to via the per-parent SSE
-# (`/runs/:id/events/stream?include=descendants`, unfiltered firehose
-# scoped to one parent's tree). docs/proposals/descendant-event-stream.md.
-curl -fsS "$URL/runs/$RUN/events.json?include=descendants" | jq '.[] | {originRunId, seq, type, ts}'
-
 # SQL — chunks; events run into thousands on long runs.
 sqlite3 -readonly "$DB" <<SQL
 .mode json
@@ -175,8 +167,8 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | Fact type | Payload highlights | When you'd read it |
 |---|---|---|
 | `fact.dispatch_started` | `nodeId`, `iteration` | Marks the boundary where an executor pass picked up the run; `dispatch_started_at` on `run_state` syncs from this. Useful for active-time accounting. |
-| `fact.node_started` | `nodeId`, `iteration`, `parentNodeId?`, `parallelIndex?` | Node entered. Repeated rows on the same `(nodeId, iteration)` indicate a backward conditional edge looping; cap is the node's `max_retries`. |
-| `fact.node_completed` | `nodeId`, `iteration`, `outcomeStatus?`, `tokens`, `costUsd` + 4-bucket splits, `nextNode`, `outputRef?`, `parentNodeId?`, `parallelIndex?`, `score?` | Node finished. `outcomeStatus="fail"` here matches against `condition="outcome=fail"` edges; the run can still continue. |
+| `fact.node_started` | `nodeId`, `iteration` | Node entered. Repeated rows on the same `(nodeId, iteration)` indicate a backward conditional edge looping; cap is the node's `max_retries`. |
+| `fact.node_completed` | `nodeId`, `iteration`, `outcomeStatus?`, `tokens`, `costUsd` + 4-bucket splits, `nextNode`, `outputRef?` | Node finished. `outcomeStatus="fail"` here matches against `condition="outcome=fail"` edges; the run can still continue. |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partial*` | Mid-flight abort. `cause`: `steer \| pause \| cancel \| timeout \| shutdown \| abort_loop \| error`. |
 | `fact.intents_folded` | `intentSeq`, `folded` | Intent fold landed. Useful when the timeline shows a steer/pause/hitl that didn't visibly change behaviour — read `folded` to see what the fold did. |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId\|null`, `iteration` | Message metadata. Don't read these raw; query `messages` (§6). |
@@ -239,7 +231,7 @@ sqlite3 -readonly "$DB" "SELECT content FROM messages WHERE run_id='$RUN' AND or
 Roles, in brief:
 
 - `system` — `SystemPromptMessage { role, content, timestamp }`. Per-call assembled system prompt; written by `PiCodergenBackend` to keep `llm.start` under the 4KB event cap. Filtered out before pi-ai (which carries the system prompt separately).
-- `user` — `UserMessage`. The substituted prompt the node's `prompt = "…"` compiled into. Verify `$ARGUMENTS`, `$<nodeId>.output`, `${context.*}` resolved.
+- `user` — `UserMessage`. The substituted prompt the node's `prompt = "…"` compiled into. Verify `$ARGUMENTS` resolved (the only substitution token).
 - `assistant` — `AssistantMessage`. `content` is `(TextContent | ThinkingContent | ToolCall)[]` in block order. A self-abort is a `ToolCall` block `name:"abort"` with `arguments.reason`.
 - `toolResult` — `ToolResultMessage`. Top-level `toolCallId` pairs back to `assistant.ToolCall.id`; `toolName` + `isError` are siblings.
 
@@ -269,8 +261,7 @@ cat "$(dirname "$DB")/blobs/${SHA:0:2}/$SHA"
 
 Conventional keys:
 
-- `<nodeId>:stdout` / `<nodeId>:stderr` — `tool` (parallelogram) shell captures.
-- `output` — codergen node's final text, referenced downstream by `$<nodeId>.output`.
+- `<nodeId>:stdout` / `<nodeId>:stderr` — `tool` (parallelogram) shell captures, kept for debugging / replay (tool nodes don't feed data forward).
 
 Binary artifacts (mime ≠ text/*) — copy to disk, don't `cat` in-terminal.
 
@@ -432,7 +423,6 @@ The bidirectional handle the parent LLM sees back is the `agent` tool's result: 
 
 Per `docs/ARCHITECTURE.md` §12.1, these surfaces parse/serialize but aren't wired:
 
-- **HITL inside parallel branches.** A `yield_hitl` from inside a `component` coerces to `fail`. Nested HITL not supported in v1.
 - **Per-node provider preflight.** `POST /runs` checks that *some* provider key is configured, not the specific provider on each node. A workflow hardcoding an unconfigured provider fails at *dispatch* with `fact.run_halted`, not at enqueue.
 
 When something looks broken, check §12.1 first.

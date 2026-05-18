@@ -110,62 +110,6 @@ export function selectMessagesNarrow(
     .all(runId, opts.sinceOrdinal, limit);
 }
 
-/** NarrowMessage row stamped with the run that produced it. Used by
- *  the descendants-merge variant below: when sub-runs are included,
- *  the caller needs to distinguish parent rows from child rows to
- *  group them by `originRunId` in the UI (P8 of the sub-runs UI plan).
- *  Top-level rows always have `originRunId === <queried runId>`. */
-export interface NarrowMessageWithOriginRow extends NarrowMessageRow {
-  originRunId: string;
-}
-
-const SELECT_MESSAGES_NARROW_WITH_DESCENDANTS_SQL = `
-  WITH RECURSIVE descendants(run_id) AS (
-    SELECT ?1
-    UNION ALL
-    SELECT c.run_id FROM run_state c JOIN descendants d ON c.parent_run_id = d.run_id
-  ),
-  message_appends AS (
-    SELECT e.run_id,
-           CAST(json_extract(e.payload, '$.ordinal') AS INTEGER) AS ordinal,
-           MAX(e.ts) AS appended_ts,
-           MAX(e.seq) AS appended_seq
-      FROM events e
-      JOIN descendants d ON d.run_id = e.run_id
-     WHERE e.type = 'fact.message_appended'
-     GROUP BY e.run_id, CAST(json_extract(e.payload, '$.ordinal') AS INTEGER)
-  )
-  SELECT m.ordinal AS ordinal,
-         m.content AS content,
-         m.node_id AS node_id,
-         m.run_id  AS originRunId
-    FROM messages m
-    JOIN descendants d ON d.run_id = m.run_id
-    LEFT JOIN message_appends a ON a.run_id = m.run_id AND a.ordinal = m.ordinal
-   WHERE m.ordinal > ?2
-   ORDER BY COALESCE(a.appended_ts, 0) ASC,
-            COALESCE(a.appended_seq, m.ordinal) ASC,
-            m.run_id ASC,
-            m.ordinal ASC
-   LIMIT ?3
-`;
-
-/** Narrow message stream for a run + all its descendants, in
- *  `(ordinal, run_id)` order. Used by the run-detail conversation
- *  surface so each parallel branch's transcript appears inline under
- *  its parent. `originRunId` is stamped on every row — top-level rows
- *  carry the queried run id; sub-run rows carry the child's id. */
-export function selectMessagesNarrowWithDescendants(
-  db: Database,
-  runId: string,
-  opts: { sinceOrdinal: number; limit?: number },
-): NarrowMessageWithOriginRow[] {
-  const limit = opts.limit ?? NO_LIMIT;
-  return db
-    .query<NarrowMessageWithOriginRow, [string, number, number]>(SELECT_MESSAGES_NARROW_WITH_DESCENDANTS_SQL)
-    .all(runId, opts.sinceOrdinal, limit);
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // Writes
 // ─────────────────────────────────────────────────────────────────────

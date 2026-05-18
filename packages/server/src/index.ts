@@ -52,6 +52,12 @@ export interface ServerOptions {
    * under `/api/*` (matching the client's BASE_URL = "/api"). Leave unset
    * for API-only deployments or tests. */
   webDistDir?: string;
+  /** In-memory web bundle (path → embedded asset path). Used by the
+   * `bun build --compile` binary: every dist file is imported with
+   * `with { type: "file" }`, and the resulting virtual paths under
+   * `/$bunfs/root/` are passed in here. Mutually exclusive with
+   * `webDistDir`; when both are set, `webBundle` wins. */
+  webBundle?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
   /** Optional enqueue preflight; passed through to the store routes.
    * When set, POST /runs rejects with code="provider_unavailable" if the
    * resolver returns `ok: false`. The CLI's `serve` / `daemon` commands
@@ -140,15 +146,35 @@ function staticFileResponse(filePath: string): Response | null {
   }
 }
 
+function embeddedFileResponse(virtualPath: string, urlPath: string): Response | null {
+  // Bun.file() on a `/$bunfs/root/…` path returned by a `with { type: "file" }`
+  // import resolves to the embedded bytes. We re-stream the blob so Hono
+  // sets content-length from the underlying File.
+  try {
+    const file = Bun.file(virtualPath);
+    const ct = MIME[extname(urlPath).toLowerCase()] ?? "application/octet-stream";
+    return new Response(file, { headers: { "content-type": ct } });
+  } catch {
+    return null;
+  }
+}
+
+function toMap(input: ReadonlyMap<string, string> | Readonly<Record<string, string>>): ReadonlyMap<string, string> {
+  if (input instanceof Map) return input;
+  return new Map(Object.entries(input));
+}
+
 export function createServer(opts: ServerOptions): Hono {
   const api = buildApiApp(opts);
-  if (!opts.webDistDir) return api;
+  const bundle = opts.webBundle ? toMap(opts.webBundle) : undefined;
+  const distDir = opts.webDistDir ? resolve(opts.webDistDir) : undefined;
 
-  const distDir = resolve(opts.webDistDir);
-  const indexHtml = join(distDir, "index.html");
-  if (!existsSync(indexHtml)) {
-    // No built bundle — serve API only. Callers (the CLI) print a hint.
-    return api;
+  // Embedded bundle wins over a passed distDir (compiled binary path).
+  // Otherwise we need a distDir whose index.html exists; missing → API only.
+  const hasEmbedded = bundle !== undefined && bundle.size > 0;
+  if (!hasEmbedded) {
+    if (!distDir) return api;
+    if (!existsSync(join(distDir, "index.html"))) return api;
   }
 
   const app = new Hono();
@@ -175,14 +201,28 @@ export function createServer(opts: ServerOptions): Hono {
       return c.json({ error: "not_found", path: pathname }, 404);
     }
     if (pathname !== "/") {
-      const filePath = join(distDir, pathname);
-      if (filePath.startsWith(distDir)) {
-        const res = staticFileResponse(filePath);
-        if (res) return res;
+      const key = pathname.replace(/^\/+/, "");
+      if (hasEmbedded) {
+        const virtualPath = bundle?.get(key);
+        if (virtualPath) {
+          const res = embeddedFileResponse(virtualPath, pathname);
+          if (res) return res;
+        }
+      } else if (distDir) {
+        const filePath = join(distDir, pathname);
+        if (filePath.startsWith(distDir)) {
+          const res = staticFileResponse(filePath);
+          if (res) return res;
+        }
       }
     }
     // SPA fallback for client-side routes (e.g. `/runs/:id`).
-    const res = staticFileResponse(indexHtml);
+    if (hasEmbedded) {
+      const indexPath = bundle?.get("index.html");
+      const res = indexPath ? embeddedFileResponse(indexPath, "/index.html") : null;
+      return res ?? c.notFound();
+    }
+    const res = distDir ? staticFileResponse(join(distDir, "index.html")) : null;
     return res ?? c.notFound();
   });
   return app;

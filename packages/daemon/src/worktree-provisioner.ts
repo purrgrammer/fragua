@@ -93,15 +93,6 @@ export interface ProvisionOpts {
    * outside the daemon's home repo (multi-project model). When
    * omitted, the provisioner uses its constructor default. */
   cwd?: string;
-  /** Parent run id when this run is a parallel sub-run (P1.1 of
-   * docs/proposals/parallel.md). Sub-runs inherit the parent's
-   * worktree directory rather than cloning their own (proposal D4:
-   * "Sub-runs inherit parent's cwd AND the parent's worktree
-   * directory. No new worktree per branch.") The provisioner returns
-   * the parent's env unchanged; dispose(subRunId) is a no-op (the
-   * parent owns the worktree's lifecycle). Omitted for top-level
-   * runs. */
-  parentRunId?: string;
 }
 
 export interface Provisioner {
@@ -130,11 +121,6 @@ export class WorktreeProvisioner implements Provisioner {
   private readonly resolveRunBootstrap: ((cwd: string) => Promise<ResolvedRunBootstrap>) | undefined;
   private readonly envs = new Map<string, ExecutionEnvironment>();
   private readonly inflight = new Map<string, Promise<ExecutionEnvironment>>();
-  /** subRunId → parentRunId. Sub-runs share the parent's worktree env
-   *  per proposal D4. We track aliases so `dispose(subRunId)` can
-   *  no-op (parent owns the lifecycle) and `envFor` / `baseGitSha`
-   *  consult the parent's record. */
-  private readonly aliasOf = new Map<string, string>();
 
   constructor(opts: WorktreeProvisionerOptions = {}) {
     this.repoRoot = opts.repoRoot ?? process.cwd();
@@ -169,32 +155,6 @@ export class WorktreeProvisioner implements Provisioner {
     const pending = this.inflight.get(runId);
     if (pending) return pending;
 
-    // Sub-run path (proposal D4): reuse the parent's worktree env
-    // rather than cloning a new worktree. The parent is provisioned
-    // separately (by its own dispatch) before fanning out, so ensure()
-    // can await it. We record the alias so envFor / baseGitSha /
-    // dispose consult the parent's record.
-    if (opts.parentRunId != null) {
-      const parentId = opts.parentRunId;
-      const parentEnv = this.envs.get(parentId);
-      if (parentEnv != null) {
-        this.aliasOf.set(runId, parentId);
-        return parentEnv;
-      }
-      const parentInflight = this.inflight.get(parentId);
-      if (parentInflight != null) {
-        const env = await parentInflight;
-        this.aliasOf.set(runId, parentId);
-        return env;
-      }
-      // Parent hasn't been provisioned yet (or was already disposed).
-      // Fall through to provision a fresh env for this run — degrades
-      // to legacy per-branch worktrees rather than crashing the run.
-      // This shouldn't normally happen (executor dispatches parent →
-      // fanout_pending → enqueues sub-runs; parent's env is cached by
-      // then), but it's a safe fallback.
-    }
-
     const promise = this.create(runId, opts);
     this.inflight.set(runId, promise);
     try {
@@ -207,12 +167,6 @@ export class WorktreeProvisioner implements Provisioner {
   }
 
   async dispose(runId: string, ctx?: DisposeContext): Promise<DisposeResult> {
-    // Sub-run alias: parent owns the worktree's lifecycle. Drop the
-    // alias entry and return without touching the parent's env.
-    if (this.aliasOf.has(runId)) {
-      this.aliasOf.delete(runId);
-      return { branch: null };
-    }
     const env = this.envs.get(runId);
     if (!env) return { branch: null };
     this.envs.delete(runId);
@@ -223,21 +177,12 @@ export class WorktreeProvisioner implements Provisioner {
   }
 
   envFor(runId: string): ExecutionEnvironment | undefined {
-    const direct = this.envs.get(runId);
-    if (direct != null) return direct;
-    const parentId = this.aliasOf.get(runId);
-    if (parentId == null) return undefined;
-    return this.envs.get(parentId);
+    return this.envs.get(runId);
   }
 
   baseGitSha(runId: string): string | null {
-    const direct = this.envs.get(runId);
-    if (direct instanceof WorktreeEnvironment) return direct.baseGitSha;
-    const parentId = this.aliasOf.get(runId);
-    if (parentId != null) {
-      const parent = this.envs.get(parentId);
-      if (parent instanceof WorktreeEnvironment) return parent.baseGitSha;
-    }
+    const env = this.envs.get(runId);
+    if (env instanceof WorktreeEnvironment) return env.baseGitSha;
     return null;
   }
 

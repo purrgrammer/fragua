@@ -142,14 +142,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
     if (!runId || opts.terminal === undefined) return;
 
     let cancelled = false;
-    // `includeDescendants: true` merges parent + sub-run messages so
-    // each parallel branch's transcript flows into the parent's
-    // conversation surface naturally — RunConversation groups by
-    // nodeId, and sub-run rows carry the same branch root nodeId as
-    // the parent's `branchesByParent` entry. P8 of the sub-runs UI
-    // plan. Top-level runs with no descendants get just their own
-    // messages back.
-    getRunMessages(runId, 0, { includeDescendants: true })
+    getRunMessages(runId, 0)
       .then((rows) => {
         if (cancelled || rows.length === 0) return;
         lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
@@ -171,7 +164,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
   useEffect(() => {
     if (!runId || opts.terminal === undefined || !opts.descendantRefreshToken) return;
     let cancelled = false;
-    getRunMessages(runId, 0, { includeDescendants: true })
+    getRunMessages(runId, 0)
       .then((rows) => {
         if (cancelled || rows.length === 0) return;
         lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;
@@ -275,12 +268,7 @@ export function useRunLive(runId: string | null | undefined, opts: UseRunLiveOpt
         const id = runId;
         refetchTimerRef.current = setTimeout(() => {
           refetchTimerRef.current = null;
-          // Descendants merge: per-run ordinals are independent, so
-          // we can't slice by `sinceOrdinal` cleanly. Refetch the
-          // full set on each lifecycle nudge and replace the
-          // message buffer wholesale — cheap for typical run sizes
-          // and correct across sub-run boundaries.
-          getRunMessages(id, 0, { includeDescendants: true })
+          getRunMessages(id, 0)
             .then((rows) => {
               if (rows.length === 0) return;
               lastOrdinalRef.current = rows[rows.length - 1]!.ordinal;

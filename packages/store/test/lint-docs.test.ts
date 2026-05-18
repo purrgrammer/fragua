@@ -486,6 +486,7 @@ const SECTION_TO_STATUS: Record<string, string> = {
   Proposed: "proposed",
   Deferred: "deferred",
   Discarded: "discarded",
+  Archived: "archived",
 };
 
 function parseFrontMatterField(md: string, field: string): string | null {

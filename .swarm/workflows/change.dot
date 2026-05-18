@@ -1,13 +1,18 @@
 // change.dot — daily driver: plan → implement → review → ci → commit.
 //
+// `plan`, `implement`, and `review` share `thread_id="dev"` — the
+// implementer and reviewer read the plan / PLAN_REALISED block from the
+// shared conversation, not from substituted output.
+//
 // REJECT loops back to implement automatically. Review is goal-gated with
 // retry_target=implement, and the §3.4 retarget chain is capped by
 // graph.max_goal_gate_retries (=2 here) so a stubborn reviewer can't burn
 // the run forever.
 //
-// CI runs as a tool node (zero LLM cost on the happy path). On failure
-// the `fix` codergen runs once and the backward edge re-enters ci; the
-// loop caps at max_retries=5 on ci. Merge is a separate workflow —
+// CI runs as a tool node — pure side effect, exit code drives outcome.
+// On failure the `fix` codergen runs CI itself via bash, reads the
+// failure log in its own context, and patches; the backward edge
+// fix→ci retries up to max_retries=5. Merge is a separate workflow —
 // `swarm run merge` after.
 //
 //   bun run swarm run change \
@@ -28,6 +33,7 @@ digraph change {
   start [shape=Mdiamond]
 
   plan [
+    thread_id = "dev"
     prompt = "Task (authoritative, do not substitute): $ARGUMENTS.\n\nPre-flight: if $ARGUMENTS names or references a `docs/proposals/*.md` file, read its YAML frontmatter `status:` field FIRST. If `status: shipped`, abort with reason `already shipped: <path> (status: shipped at line N)`. Implementation already landed; re-running burns Opus. Don't fall back to grepping the body — frontmatter is the source of truth.\n\nAbort when:\n  - empty / blocked / names nothing specific\n  - touches >3 packages OR shared contracts (HandlerContext, executor internals, store schema, event envelope)\n  - >500 lines of non-test code\n\nRead just enough to plan. Output a numbered plan:\n  1. Files to create/modify (full paths).\n  2. Tests to add: file path, exact `describe`/`test` name, one assertion sentence.\n  3. Public exports added/changed (symbol + package).\n  4. Implementation notes per file. Cite existing symbols + line numbers."
     allowed_tools = "read, grep, find"
   ]
@@ -37,13 +43,13 @@ digraph change {
   // future stylesheet rule on that scope.
   subgraph cluster_dev {
     implement [
-      prompt = "Implement $plan.output. Stay inside the package(s) the plan names. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it). Don't touch docs/SPEC.md or AGENTS.md unless the plan says so.\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nEnd your reply with a PLAN_REALISED block in EXACTLY this shape — the reviewer reads this against the diff, so it must list every plan §1/§2/§3 item:\n\nPLAN_REALISED:\n  files:\n    - <path> — created | modified | skipped (<why>)\n  tests:\n    - <file>::<describe-or-test-name> — added | already-present | skipped (<why>)\n  exports:\n    - <symbol> in <package> — added | changed | unchanged\n  skipped:\n    - <plan item> — <why>"
+      prompt = "Implement the plan from the prior turn. Stay inside the package(s) the plan names. If $ARGUMENTS asks for push / PR / merge, attempt it only when `git remote` is non-empty; if no remote, note `no remote — skipping push/PR` in the summary and continue (never abort over it). Don't touch docs/SPEC.md or AGENTS.md unless the plan says so.\n\nAfter edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; fix errors. Cap typecheck-fix at 5 cycles per package — then abort with reason `typecheck blocked: <top error>`.\n\nFor every test in plan §2: grep the file for the `describe`/`test` name. If missing or weaker than promised, add it; re-typecheck.\n\nEnd your reply with a PLAN_REALISED block in EXACTLY this shape — the reviewer reads this against the diff, so it must list every plan §1/§2/§3 item:\n\nPLAN_REALISED:\n  files:\n    - <path> — created | modified | skipped (<why>)\n  tests:\n    - <file>::<describe-or-test-name> — added | already-present | skipped (<why>)\n  exports:\n    - <symbol> in <package> — added | changed | unchanged\n  skipped:\n    - <plan item> — <why>"
       allowed_tools = "read, write, edit, grep, bash"
       thread_id     = "dev"
     ]
 
     review [
-      prompt = "Judge the diff against the implementer's PLAN_REALISED block (files / tests / exports / skipped) and `git diff HEAD`.\n\nCheck:\n  (a) Diff matches PLAN_REALISED — every claimed file/test/export is present in the diff and nothing else is.\n  (b) Every test in PLAN_REALISED's `tests:` list is realised (file exists, name matches, assertion is non-trivial).\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files in the diff that PLAN_REALISED doesn't list, OR shared contracts touched without being listed.\n  (e) Doc-state claims match reality. Any prose edit that asserts shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`, don't trust the words on the page. Reality wins. If the diff says something is 'still outstanding' that already exists on disk, REJECT.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 2 cycles)."
+      prompt = "Judge the diff against the implementer's PLAN_REALISED block from the prior turn and `git diff HEAD`.\n\nCheck:\n  (a) Diff matches PLAN_REALISED — every claimed file/test/export is present in the diff and nothing else is.\n  (b) Every test in PLAN_REALISED's `tests:` list is realised (file exists, name matches, assertion is non-trivial).\n  (c) Bugs, type errors, security issues.\n  (d) Scope creep — files in the diff that PLAN_REALISED doesn't list, OR shared contracts touched without being listed.\n  (e) Doc-state claims match reality. Any prose edit that asserts shipped / landed / outstanding / on-paper / in-progress — verify against the filesystem with `ls` / `grep`, don't trust the words on the page. Reality wins. If the diff says something is 'still outstanding' that already exists on disk, REJECT.\n\nIf approved, reply `APPROVE: <one line>`. If rejected, abort with reason `REJECT: <one line>. fixes: <numbered list, 1-5 items>`.\n\nBe strict. Implement re-runs automatically on REJECT (capped at 2 cycles)."
       allowed_tools = "read, grep, bash"
       thread_id     = "dev"
       fidelity      = "full"
@@ -60,7 +66,7 @@ digraph change {
   ci [shape=parallelogram, tool_command="bun run ci", max_retries=5]
 
   fix [
-    prompt        = "CI failed. Failure log: $ci.output. Read the failures, make the minimal change to fix them, then stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
+    prompt        = "CI failed. Re-run `bun run ci` via the bash tool, read the failure log directly from its output, then make the minimal change to fix it and stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
     allowed_tools = "read, write, edit, bash"
     max_cost_usd  = 0.10
     max_tokens    = 300000

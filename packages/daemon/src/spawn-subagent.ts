@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { materialiseForChild } from "@swarm/agent";
-import type { CodergenBackend, ContextMap, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
+import type { CodergenBackend, EventType, ExecutionEnvironment, Node, Outcome } from "@swarm/core";
 import { fail } from "@swarm/core";
 import type { IEventStore } from "@swarm/store";
 import type { AnyTool, Skill, SubagentResult, SubagentSpec, ToolRegistry } from "@swarm/workspace";
@@ -379,10 +379,6 @@ export function makeSpawnSubagent(
       outcome = await deps.backend.run({
         node,
         prompt: spec.prompt,
-        // Sub-agent gets a fresh context — no inherited routing
-        // substitutions. The LLM constructed the prompt to be
-        // self-contained.
-        context: {} as ContextMap,
         // Distinct thread keeps the sub-agent's pi-ai message store
         // separate from the parent's main thread. The backend keys its
         // in-process MessageStore by (runId, threadId).

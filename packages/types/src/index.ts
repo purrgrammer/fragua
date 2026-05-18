@@ -26,9 +26,9 @@ export type { AgentDefinition, AgentDefinitionScope, AgentDefinitionsConfig } fr
 export {
   ALL_DAEMON_EVENT_TYPES,
   ALL_EVENT_TYPES,
-  AUTO_WAKE_PAUSE_REASONS,
   type AnyEvent,
   type AnyEventType,
+  AUTO_WAKE_PAUSE_REASONS,
   type DaemonEvent,
   type DaemonEventEnvelope,
   type DaemonEventType,

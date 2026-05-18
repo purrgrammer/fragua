@@ -113,74 +113,6 @@ describe("toFlowGraph — pure transform", () => {
   });
 });
 
-describe("GraphView — parallel branches", () => {
-  it("branch nodes render with active styling when their state is running, and the winner gets a success accent after fan_in", () => {
-    const src = `digraph g {
-      fork [shape=box]
-      lensA [shape=box]
-      lensB [shape=box]
-      sink [shape=box]
-      fork -> lensA
-      fork -> lensB
-      lensA -> sink
-      lensB -> sink
-    }`;
-    const graph = parseDotSource(src);
-
-    // ——— During fan-out: parent + branches all running.
-    const detailRunning = makeDetail({
-      runId: "r1",
-      nodes: [
-        { nodeId: "fork", iteration: 0, state: "running", lastEventSeq: 1 },
-        { nodeId: "lensA", iteration: 0, state: "running", lastEventSeq: 2 },
-        { nodeId: "lensB", iteration: 0, state: "running", lastEventSeq: 3 },
-      ],
-      selectedEdges: [
-        { from: "fork", to: "lensA", iteration: 0 },
-        { from: "fork", to: "lensB", iteration: 0 },
-      ],
-      workflowSource: src,
-    });
-    const { flowNodes: midFlight } = toFlowGraph(detailRunning, graph, {
-      activeNodeIds: new Set(["fork", "lensA", "lensB"]),
-      winnerBranchIds: new Set(),
-    });
-    const byIdMid = new Map(
-      midFlight.map((n) => [n.id, n.data as { active: boolean; winner: boolean; state: string }]),
-    );
-    expect(byIdMid.get("fork")?.active).toBe(true);
-    expect(byIdMid.get("lensA")?.active).toBe(true);
-    expect(byIdMid.get("lensB")?.active).toBe(true);
-    expect(byIdMid.get("lensA")?.winner).toBe(false);
-    expect(byIdMid.get("lensB")?.winner).toBe(false);
-    // sink is not running → not active.
-    expect(byIdMid.get("sink")?.active).toBe(false);
-
-    // ——— After fan_in: branches completed, winner picked.
-    const detailDone = makeDetail({
-      runId: "r1",
-      nodes: [
-        { nodeId: "fork", iteration: 0, state: "completed", lastEventSeq: 1 },
-        { nodeId: "lensA", iteration: 0, state: "completed", lastEventSeq: 2 },
-        { nodeId: "lensB", iteration: 0, state: "completed", lastEventSeq: 3 },
-      ],
-      selectedEdges: [
-        { from: "fork", to: "lensA", iteration: 0 },
-        { from: "fork", to: "lensB", iteration: 0 },
-      ],
-      workflowSource: src,
-    });
-    const { flowNodes: postFanIn } = toFlowGraph(detailDone, graph, {
-      activeNodeIds: new Set(),
-      winnerBranchIds: new Set(["lensB"]),
-    });
-    const byIdDone = new Map(postFanIn.map((n) => [n.id, n.data as { active: boolean; winner: boolean }]));
-    expect(byIdDone.get("lensA")?.winner).toBe(false);
-    expect(byIdDone.get("lensB")?.winner).toBe(true);
-    expect(byIdDone.get("fork")?.winner).toBe(false);
-  });
-});
-
 describe("toFlowGraph — back-edge detection + edge labels", () => {
   it("marks back-edges whose target sits at an earlier depth as isBackEdge", () => {
     const src = `digraph g {
@@ -576,27 +508,6 @@ describe("toFlowGraph — metadata is gated by handler type", () => {
     }
   });
 
-  it("conditional nodes expose only state + maxRetries — no model/provider/effort/thread/cmd", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      pick [shape=diamond, max_retries=3]
-      done [shape=Msquare]
-      start -> pick -> done
-    }`;
-    const d = dataOf(src, "pick");
-    expect(d.maxRetries).toBe(3);
-    expect(d.model).toBeUndefined();
-    expect(d.provider).toBeUndefined();
-    expect(d.reasoningEffort).toBeUndefined();
-    expect(d.threadId).toBeUndefined();
-    expect(d.toolCommand).toBeUndefined();
-    expect(d.retryTarget).toBeUndefined();
-    expect(d.fanInTarget).toBeUndefined();
-    expect(d.joinPolicy).toBeUndefined();
-    expect(d.fanInRank).toBeUndefined();
-  });
-
   it("wait.human nodes expose no LLM or tool metadata", () => {
     const src = `digraph g {
       graph [${CASCADE}]
@@ -615,65 +526,6 @@ describe("toFlowGraph — metadata is gated by handler type", () => {
     expect(d.fanInTarget).toBeUndefined();
     expect(d.joinPolicy).toBeUndefined();
     expect(d.fanInRank).toBeUndefined();
-  });
-
-  it("parallel nodes expose fanInTarget + joinPolicy but not model/provider/effort/thread", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      fork [shape=component, fan_in="join", join_policy="wait_all", max_retries=4]
-      a [shape=box]
-      b [shape=box]
-      join [shape=tripleoctagon]
-      done [shape=Msquare]
-      start -> fork
-      fork -> a -> join
-      fork -> b -> join
-      join -> done
-    }`;
-    const d = dataOf(src, "fork");
-    expect(d.fanInTarget).toBe("join");
-    expect(d.joinPolicy).toBe("wait_all");
-    expect(d.model).toBeUndefined();
-    expect(d.provider).toBeUndefined();
-    expect(d.reasoningEffort).toBeUndefined();
-    expect(d.threadId).toBeUndefined();
-    expect(d.toolCommand).toBeUndefined();
-    expect(d.retryTarget).toBeUndefined();
-    expect(d.fanInRank).toBeUndefined();
-    // `parallel` is a structural fan-out — the branches retry, not the
-    // component itself — so max_retries is intentionally suppressed here.
-    expect(d.maxRetries).toBeUndefined();
-  });
-
-  it("parallel.fan_in nodes with a prompt expose model/provider/effort; without a prompt they don't", () => {
-    const src = `digraph g {
-      graph [${CASCADE}]
-      start [shape=Mdiamond]
-      fork [shape=component]
-      a [shape=box]
-      b [shape=box]
-      rank [shape=tripleoctagon, prompt="rank these", thread_id="shared"]
-      heur [shape=tripleoctagon, thread_id="shared"]
-      done [shape=Msquare]
-      start -> fork
-      fork -> a -> rank
-      fork -> b -> rank
-      rank -> heur -> done
-    }`;
-    const ranked = dataOf(src, "rank");
-    expect(ranked.fanInRank).toBe("prompt");
-    expect(ranked.model).toBe("opus");
-    expect(ranked.provider).toBe("anthropic");
-    expect(ranked.reasoningEffort).toBe("high");
-    expect(ranked.threadId).toBe("shared");
-
-    const heuristic = dataOf(src, "heur");
-    expect(heuristic.fanInRank).toBe("heuristic");
-    expect(heuristic.model).toBeUndefined();
-    expect(heuristic.provider).toBeUndefined();
-    expect(heuristic.reasoningEffort).toBeUndefined();
-    expect(heuristic.threadId).toBeUndefined();
   });
 
   it("codergen retains the full LLM metadata set", () => {
@@ -848,55 +700,6 @@ describe("toFlowGraph — handler-specific body fields", () => {
     };
     expect(review.goalGate).toBe(true);
     expect(review.retryTarget).toBe("implement");
-  });
-
-  it("surfaces fan_in target + join_policy on parallel nodes", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
-      a [shape=box]
-      b [shape=box]
-      pick_best [shape=tripleoctagon]
-      done [shape=Msquare]
-      start -> explore
-      explore -> a
-      explore -> b
-      a -> pick_best
-      b -> pick_best
-      pick_best -> done
-    }`;
-    const graph = parseDotSource(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const explore = flowNodes.find((n) => n.id === "explore")?.data as {
-      fanInTarget?: string;
-      joinPolicy?: string;
-    };
-    expect(explore.fanInTarget).toBe("pick_best");
-    expect(explore.joinPolicy).toBe("wait_all");
-  });
-
-  it("classifies parallel.fan_in as prompt-rank vs heuristic", () => {
-    const src = `digraph g {
-      start [shape=Mdiamond]
-      explore [shape=component, fan_in=heur, join_policy="wait_all"]
-      a [shape=box]
-      b [shape=box]
-      heur [shape=tripleoctagon]
-      llm [shape=tripleoctagon, prompt="rank these by severity"]
-      done [shape=Msquare]
-      start -> explore
-      explore -> a
-      explore -> b
-      a -> heur
-      b -> heur
-      heur -> llm
-      llm -> done
-    }`;
-    const graph = parseDotSource(src);
-    const { flowNodes } = toFlowGraph(null, graph);
-    const byId = new Map(flowNodes.map((n) => [n.id, n.data as { fanInRank?: string }]));
-    expect(byId.get("heur")?.fanInRank).toBe("heuristic");
-    expect(byId.get("llm")?.fanInRank).toBe("prompt");
   });
 
   it("flags loop_restart edges with a · loop_restart label suffix and routes through loop handles", () => {
@@ -1138,7 +941,7 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
     // `review -> done` fires once.
     const src = `digraph loop {
       audit [shape=box]
-      review [shape=diamond]
+      review [shape=box]
       done [shape=Msquare]
       audit -> review
       review -> audit [condition="outcome=fail"]

@@ -506,8 +506,7 @@ export class PiCodergenBackend implements CodergenBackend {
     // modes. `full` returns "" and the user prompt is unchanged. `truncate`
     // / `compact` / `summary:*` produce a <swarm-context> block framing
     // the agent with goal + run + digest of priorMessages.
-    const graphGoalRaw = input.context["graph.goal"];
-    const graphGoal = typeof graphGoalRaw === "string" && graphGoalRaw.length > 0 ? graphGoalRaw : undefined;
+    const graphGoal = typeof input.goal === "string" && input.goal.length > 0 ? input.goal : undefined;
     // Summariser events land under synthetic node ids (see
     // @swarm/core/types/summariser.ts). `buildFidelitySeed` wires the
     // emit callback so `summary.started` / `summary.completed` /

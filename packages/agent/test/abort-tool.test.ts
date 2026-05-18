@@ -116,7 +116,6 @@ async function runWithAbort(opts: {
     const outcome = await backend.run({
       node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
       prompt: "do the thing",
-      context: {},
       thread_id: undefined,
       fidelity: "compact",
       signal: new AbortController().signal,

@@ -27,8 +27,11 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { SqliteStore } from "@swarm/store";
 import chalk from "chalk";
+import { EMBEDDED_WEB_ASSETS } from "../web-assets.ts";
 import { ensureWebBundle } from "../web-build.ts";
 import { startServer } from "./serve.ts";
+
+const COMPILED = Object.keys(EMBEDDED_WEB_ASSETS).length > 0;
 
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 50;
@@ -50,9 +53,11 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   console.log(chalk.dim(`  store: ${dbPath}`));
 
   // Build / refresh the web bundle before binding so the moment the URL
-  // prints, the latest UI is what gets served. Skipped automatically for
-  // production installs (no src/) and SWARM_NO_WEB_BUILD=1.
-  const web = await ensureWebBundle();
+  // prints, the latest UI is what gets served. Compiled binary: the
+  // bundle is embedded — skip the vite spawn entirely (there's no source
+  // tree to read from anyway). Dev / source install: skipped
+  // automatically for production installs (no src/) and SWARM_NO_WEB_BUILD=1.
+  const webDistDir = COMPILED ? undefined : (await ensureWebBundle()).distDir;
 
   // 1. HTTP server (in-process). Binds before the daemon spawns so the
   //    URL is ready to publish the moment the daemon takes the lock.
@@ -60,7 +65,7 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   //    `web.port` from ~/.swarm/config.jsonc > DEFAULT_WEB_PORT (6767).
   let serverHandle: Awaited<ReturnType<typeof startServer>>;
   try {
-    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir: web.distDir };
+    const startOpts: Parameters<typeof startServer>[0] = { dbPath, webDistDir };
     if (opts.port !== undefined) startOpts.port = opts.port;
     serverHandle = await startServer(startOpts);
   } catch (err) {
@@ -69,8 +74,14 @@ export async function harnessCommand(opts: HarnessCommandOptions = {}): Promise<
   }
 
   // 2. Daemon subprocess. `swarm daemon start --db <path>` does its own
-  //    setup; we just spawn + monitor.
-  const daemonProc = Bun.spawn([process.execPath, process.argv[1]!, "daemon", "start", "--db", dbPath], {
+  //    setup; we just spawn + monitor. Compiled binary: re-invoke
+  //    ourselves (`process.execPath`) with no script arg — the entry is
+  //    the binary itself. Dev: re-invoke `bun <argv[1]>` so the daemon
+  //    runs from the same source tree.
+  const daemonArgv = COMPILED
+    ? [process.execPath, "daemon", "start", "--db", dbPath]
+    : [process.execPath, process.argv[1]!, "daemon", "start", "--db", dbPath];
+  const daemonProc = Bun.spawn(daemonArgv, {
     stdio: ["ignore", "inherit", "inherit"],
   });
 

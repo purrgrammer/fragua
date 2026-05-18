@@ -47,12 +47,6 @@ export interface RunStateRow {
   base_git_sha: string | null;
   branch: string | null;
   schedule_id: string | null;
-  // Parallel sub-run linkage (P1.1). NULL on top-level runs.
-  parent_run_id: string | null;
-  parent_node_id: string | null;
-  parallel_index: number | null;
-  subgraph_root_node_id: string | null;
-  subgraph_terminal_node_id: string | null;
 }
 
 /** Per-run identity + version + lastAppliedSeq + status. Returned by
@@ -75,9 +69,7 @@ const SELECT_RUN_STATE_FULL_SQL = `
          priority, enqueued_at, ready_at, node_started_at,
          dispatch_started_at, updated_at, title,
          cwd, workflow_name, workflow_scope, workflow_path,
-         base_git_sha, branch, schedule_id,
-         parent_run_id, parent_node_id, parallel_index,
-         subgraph_root_node_id, subgraph_terminal_node_id
+         base_git_sha, branch, schedule_id
     FROM run_state
    WHERE run_id = ?
 `;
@@ -116,10 +108,6 @@ export interface ListRunIdsOpts {
    *  this filter — by design, since they're ephemeral runs without a
    *  filesystem context. Backed by `idx_run_state_cwd`. */
   cwd?: string;
-  /** Narrow to sub-runs of a single parent. Exact match against
-   *  `run_state.parent_run_id`. Used by `GET /runs/:id/children` (P5 of
-   *  docs/proposals/parallel.md). Backed by `idx_run_state_parent`. */
-  parentRunId?: string;
   /** "newest" → most-recently-updated first (archive view). "oldest" →
    *  smallest enqueued_at first (Inbox metaphor — neglect surfaces). */
   order?: "newest" | "oldest";
@@ -127,17 +115,7 @@ export interface ListRunIdsOpts {
   limit?: number;
 }
 
-export interface ListRunSummaryRowsOpts extends ListRunIdsOpts {
-  /** Exclude sub-runs. Used by top-level `GET /runs`; child lists pass
-   *  `parentRunId` instead. */
-  topLevelOnly?: boolean;
-  /** Widen the status filter to "self matches OR a descendant
-   *  matches". Used by the Inbox so a parent in `running_children`
-   *  whose child paused on budget still surfaces as needing attention,
-   *  without leaking sub-runs into the list. No-op when `statuses` is
-   *  unset. */
-  includeChildAttention?: boolean;
-}
+export type ListRunSummaryRowsOpts = ListRunIdsOpts;
 
 export interface RunSummaryRow {
   runId: string;
@@ -147,12 +125,7 @@ export interface RunSummaryRow {
   routing: string;
   title: string | null;
   eventTitle: string | null;
-  parentTitle: string | null;
   cwd: string | null;
-  parentRunId: string | null;
-  parentNodeId: string | null;
-  parallelIndex: number | null;
-  branchNodeId: string | null;
   enqueuedAt: number;
   firstEventTs: number | null;
   lastEventTs: number | null;
@@ -162,28 +135,12 @@ export interface RunSummaryRow {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
-  // Child-status digest — counts of descendants grouped by
-  // status. Populated for any row that has at least one child row
-  // pointing at it via `parent_run_id`; zero/null for top-level rows
-  // with no children. The wire-level digest object is assembled by the
-  // adapter; SQL just sums the raw counts.
-  childTotal: number | null;
-  childRunning: number | null;
-  childRunningChildren: number | null;
-  childPaused: number | null;
-  childPausedHitl: number | null;
-  childPausedAuto: number | null;
-  childQueued: number | null;
-  childCompleted: number | null;
-  childCancelled: number | null;
-  childHalted: number | null;
-  childQuarantined: number | null;
 }
 
 /** Enumerate run ids with filtering, ordering, and limit pushed into SQL.
  *  Returns `[]` for `statuses: []` without hitting the DB. */
 export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] {
-  const { statuses, cwd, parentRunId, order = "newest", limit } = opts;
+  const { statuses, cwd, order = "newest", limit } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
   const clauses: string[] = [];
   const args: (RunStatus | string | number)[] = [];
@@ -194,10 +151,6 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
   if (cwd !== undefined) {
     clauses.push("cwd = ?");
     args.push(cwd);
-  }
-  if (parentRunId !== undefined) {
-    clauses.push("parent_run_id = ?");
-    args.push(parentRunId);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const orderBy = order === "oldest" ? "enqueued_at ASC" : "updated_at DESC";
@@ -210,51 +163,21 @@ export function selectRunIds(db: Database, opts: ListRunIdsOpts = {}): string[] 
     .map((r) => r.run_id);
 }
 
-/** SQL-backed projection for `GET /runs` / child-run summary rows.
- *  Avoids hydrating full event logs just to derive count, duration, and
- *  title fallback. */
+/** SQL-backed projection for `GET /runs`. Avoids hydrating full event
+ *  logs just to derive count, duration, and title fallback. */
 export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts = {}): RunSummaryRow[] {
-  const { statuses, cwd, parentRunId, order = "newest", limit, topLevelOnly, includeChildAttention } = opts;
+  const { statuses, cwd, order = "newest", limit } = opts;
   if (statuses !== undefined && statuses.length === 0) return [];
 
   const clauses: string[] = [];
   const args: (RunStatus | string | number)[] = [];
   if (statuses) {
-    if (includeChildAttention === true) {
-      // Widen: self status matches OR any descendant's status matches.
-      // Used by the Inbox so a parent whose branch (or nested branch)
-      // paused on budget still appears in the attention list.
-      const ph = statuses.map(() => "?").join(",");
-      clauses.push(
-        `(r.status IN (${ph}) OR EXISTS (
-            WITH RECURSIVE descendants(run_id, status) AS (
-              SELECT c.run_id, c.status
-                FROM run_state c
-               WHERE c.parent_run_id = r.run_id
-              UNION ALL
-              SELECT c.run_id, c.status
-                FROM run_state c
-                JOIN descendants d ON c.parent_run_id = d.run_id
-            )
-            SELECT 1 FROM descendants
-             WHERE status IN (${ph})
-          ))`,
-      );
-      args.push(...statuses, ...statuses);
-    } else {
-      clauses.push(`r.status IN (${statuses.map(() => "?").join(",")})`);
-      args.push(...statuses);
-    }
+    clauses.push(`r.status IN (${statuses.map(() => "?").join(",")})`);
+    args.push(...statuses);
   }
   if (cwd !== undefined) {
     clauses.push("r.cwd = ?");
     args.push(cwd);
-  }
-  if (parentRunId !== undefined) {
-    clauses.push("r.parent_run_id = ?");
-    args.push(parentRunId);
-  } else if (topLevelOnly === true) {
-    clauses.push("r.parent_run_id IS NULL");
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -265,8 +188,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
   const sql = `
     WITH selected AS (
       SELECT r.run_id, r.workflow_sha, r.workflow_name, r.status, r.routing, r.metrics,
-             r.title, r.cwd, r.parent_run_id, r.parent_node_id, r.parallel_index,
-             r.subgraph_root_node_id, r.enqueued_at, r.updated_at
+             r.title, r.cwd, r.enqueued_at, r.updated_at
         FROM run_state r
         ${where}
        ORDER BY ${orderBy}, r.run_id ASC
@@ -287,35 +209,6 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
         JOIN selected s ON s.run_id = e.run_id
        WHERE e.type = 'run.title_generated'
        GROUP BY e.run_id
-    ),
-    descendants AS (
-      SELECT s.run_id AS root_run_id,
-             c.run_id,
-             c.status
-        FROM selected s
-        JOIN run_state c ON c.parent_run_id = s.run_id
-      UNION ALL
-      SELECT d.root_run_id,
-             c.run_id,
-             c.status
-        FROM descendants d
-        JOIN run_state c ON c.parent_run_id = d.run_id
-    ),
-    child_counts AS (
-      SELECT root_run_id,
-             COUNT(*)                                                  AS childTotal,
-             SUM(CASE WHEN status = 'running'          THEN 1 ELSE 0 END) AS childRunning,
-             SUM(CASE WHEN status = 'running_children' THEN 1 ELSE 0 END) AS childRunningChildren,
-             SUM(CASE WHEN status = 'paused'           THEN 1 ELSE 0 END) AS childPaused,
-             SUM(CASE WHEN status = 'paused_hitl'      THEN 1 ELSE 0 END) AS childPausedHitl,
-             SUM(CASE WHEN status = 'paused_auto'      THEN 1 ELSE 0 END) AS childPausedAuto,
-             SUM(CASE WHEN status = 'queued'           THEN 1 ELSE 0 END) AS childQueued,
-             SUM(CASE WHEN status = 'completed'        THEN 1 ELSE 0 END) AS childCompleted,
-             SUM(CASE WHEN status = 'cancelled'        THEN 1 ELSE 0 END) AS childCancelled,
-             SUM(CASE WHEN status = 'halted'           THEN 1 ELSE 0 END) AS childHalted,
-             SUM(CASE WHEN status = 'quarantined'      THEN 1 ELSE 0 END) AS childQuarantined
-        FROM descendants
-       GROUP BY root_run_id
     )
     SELECT s.run_id AS runId,
            s.workflow_sha AS workflowSha,
@@ -324,12 +217,7 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            s.routing AS routing,
            s.title AS title,
            json_extract(title_event.payload, '$.title') AS eventTitle,
-           parent.title AS parentTitle,
            s.cwd AS cwd,
-           s.parent_run_id AS parentRunId,
-           s.parent_node_id AS parentNodeId,
-           s.parallel_index AS parallelIndex,
-           s.subgraph_root_node_id AS branchNodeId,
            s.enqueued_at AS enqueuedAt,
            eb.firstEventTs AS firstEventTs,
            eb.lastEventTs AS lastEventTs,
@@ -338,25 +226,12 @@ export function selectRunSummaryRows(db: Database, opts: ListRunSummaryRowsOpts 
            CAST(COALESCE(json_extract(s.metrics, '$.totalInputTokens'), 0) AS INTEGER) AS totalInputTokens,
            CAST(COALESCE(json_extract(s.metrics, '$.totalOutputTokens'), 0) AS INTEGER) AS totalOutputTokens,
            CAST(COALESCE(json_extract(s.metrics, '$.totalCacheReadTokens'), 0) AS INTEGER) AS totalCacheReadTokens,
-           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens,
-           cc.childTotal            AS childTotal,
-           cc.childRunning          AS childRunning,
-           cc.childRunningChildren  AS childRunningChildren,
-           cc.childPaused           AS childPaused,
-           cc.childPausedHitl       AS childPausedHitl,
-           cc.childPausedAuto       AS childPausedAuto,
-           cc.childQueued           AS childQueued,
-           cc.childCompleted        AS childCompleted,
-           cc.childCancelled        AS childCancelled,
-           cc.childHalted           AS childHalted,
-           cc.childQuarantined      AS childQuarantined
+           CAST(COALESCE(json_extract(s.metrics, '$.totalCacheWriteTokens'), 0) AS INTEGER) AS totalCacheWriteTokens
       FROM selected s
       LEFT JOIN workflows w ON w.sha = s.workflow_sha
-      LEFT JOIN run_state parent ON parent.run_id = s.parent_run_id
       LEFT JOIN event_bounds eb ON eb.run_id = s.run_id
       LEFT JOIN latest_title_seq lts ON lts.run_id = s.run_id
       LEFT JOIN events title_event ON title_event.run_id = lts.run_id AND title_event.seq = lts.seq
-      LEFT JOIN child_counts cc ON cc.root_run_id = s.run_id
      ORDER BY ${order === "oldest" ? "s.enqueued_at ASC" : "s.updated_at DESC"}, s.run_id ASC
   `;
 
@@ -426,10 +301,8 @@ const INSERT_RUN_STATE_SQL = `
     run_id, version, status, current_node, workflow_sha,
     schema_version, routing, metrics, next_seq, last_applied_seq, priority,
     enqueued_at, ready_at, node_started_at, dispatch_started_at, updated_at,
-    cwd, workflow_name, workflow_scope, workflow_path, schedule_id,
-    parent_run_id, parent_node_id, parallel_index,
-    subgraph_root_node_id, subgraph_terminal_node_id
-  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    cwd, workflow_name, workflow_scope, workflow_path, schedule_id
+  ) VALUES (?, 1, 'queued', NULL, ?, ?, ?, ?, 1, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
 `;
 
 export function insertRunState(
@@ -449,11 +322,6 @@ export function insertRunState(
     workflowScope: "global" | "local" | "path" | "ephemeral" | null;
     workflowPath: string | null;
     scheduleId: string | null;
-    parentRunId: string | null;
-    parentNodeId: string | null;
-    parallelIndex: number | null;
-    subgraphRootNodeId: string | null;
-    subgraphTerminalNodeId: string | null;
   },
 ): void {
   db.query(INSERT_RUN_STATE_SQL).run(
@@ -471,11 +339,6 @@ export function insertRunState(
     args.workflowScope,
     args.workflowPath,
     args.scheduleId,
-    args.parentRunId,
-    args.parentNodeId,
-    args.parallelIndex,
-    args.subgraphRootNodeId,
-    args.subgraphTerminalNodeId,
   );
 }
 
@@ -487,34 +350,9 @@ export function updateRunStateTitle(db: Database, runId: string, title: string, 
   db.query(UPDATE_RUN_STATE_TITLE_SQL).run(title, now, runId);
 }
 
-// Sub-run claim invariant (P1.1 of docs/proposals/parallel.md):
-//   a queued row is ONLY claimable when either
-//     - it's top-level (parent_run_id IS NULL), OR
-//     - its parent's status is 'running_children' (meaning the parent
-//       has committed fact.fanout_started and is awaiting its children).
-//
-// Without this filter, the executor would race: children are enqueued
-// in N separate transactions BEFORE the parent commits fact.fanout_started,
-// so a concurrent tick can claim a child while the parent is still
-// 'running' (no `parallel.<node>.sub_run_ids` on routing yet). The
-// child would then dispatch, complete, and try to wake the parent
-// out of a state it never entered.
-//
-// The EXISTS subquery hits the run_state(run_id) primary key — O(1)
-// per queued row; idx_run_state_parent makes the outer filter cheap.
-// Parent-status check uses `IN` so a future status (e.g. paused
-// running_children) only needs a literal added here.
 const SELECT_NEXT_QUEUED_RUN_SQL = `
   SELECT run_id, version FROM run_state
    WHERE status = 'queued'
-     AND (
-       parent_run_id IS NULL
-       OR EXISTS (
-         SELECT 1 FROM run_state p
-          WHERE p.run_id = run_state.parent_run_id
-            AND p.status = 'running_children'
-       )
-     )
    ORDER BY priority DESC, ready_at ASC, run_id ASC
    LIMIT 1
 `;
@@ -614,227 +452,6 @@ export function writeRunStateProjection(
     args.baseGitSha,
     args.branch,
     args.runId,
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Cost rollup for parents with running sub-runs (P1.4)
-// ─────────────────────────────────────────────────────────────────────
-
-export interface ParentCostSnapshot {
-  /** Parent's own `total_cost_usd` from its `run_state.metrics`. Already
-   *  includes folded `fact.subrun_completed` rollup contributions
-   *  (terminal sub-runs' cost lands here via the reducer). */
-  ownCostUsd: number;
-  /** Sum of `total_cost_usd` across every sub-run whose
-   *  `parent_run_id = ?` AND whose status is non-terminal (i.e. still
-   *  in-flight). Terminal sub-runs are excluded because their cost is
-   *  already counted in `ownCostUsd` via the rollup. */
-  inFlightCostUsd: number;
-  /** Same shape for billed tokens. */
-  ownBilledTokens: number;
-  inFlightBilledTokens: number;
-}
-
-const PARENT_COST_SNAPSHOT_SQL = `
-  SELECT
-    (SELECT COALESCE(total_cost_usd, 0)
-       FROM run_state
-      WHERE run_id = ?) AS ownCostUsd,
-    (SELECT COALESCE(billed_tokens, 0)
-       FROM run_state
-      WHERE run_id = ?) AS ownBilledTokens,
-    COALESCE(SUM(c.total_cost_usd), 0) AS inFlightCostUsd,
-    COALESCE(SUM(c.billed_tokens), 0) AS inFlightBilledTokens
-    FROM run_state c
-   WHERE c.parent_run_id = ?
-     AND c.status NOT IN ('completed','cancelled','halted')
-`;
-
-/** Aggregate the cost-gate snapshot for a parent run currently in
- *  `running_children`: own projection plus every in-flight sub-run's
- *  live `total_cost_usd`. Terminal sub-run cost is already folded into
- *  the parent's metrics via `fact.subrun_completed` (reducer), so we
- *  exclude them here to avoid double-counting. See D3 of
- *  `docs/proposals/parallel.md`. */
-export function selectParentCostSnapshot(db: Database, parentRunId: string): ParentCostSnapshot {
-  const row = db
-    .query<
-      { ownCostUsd: number; ownBilledTokens: number; inFlightCostUsd: number; inFlightBilledTokens: number },
-      [string, string, string]
-    >(PARENT_COST_SNAPSHOT_SQL)
-    .get(parentRunId, parentRunId, parentRunId);
-  return {
-    ownCostUsd: row?.ownCostUsd ?? 0,
-    ownBilledTokens: row?.ownBilledTokens ?? 0,
-    inFlightCostUsd: row?.inFlightCostUsd ?? 0,
-    inFlightBilledTokens: row?.inFlightBilledTokens ?? 0,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Sub-run discovery for cancel propagation (P1.5)
-// ─────────────────────────────────────────────────────────────────────
-
-const SELECT_ACTIVE_CHILDREN_SQL = `
-  SELECT run_id
-    FROM run_state
-   WHERE parent_run_id = ?
-     AND status NOT IN ('completed','cancelled','halted')
-`;
-
-/** Returns the run-id list of every sub-run linked to `parentRunId`
- *  that has not yet reached a terminal status. Used by cancel
- *  propagation (D10): cancelling a parent appends
- *  `intent.cancel_requested` on each of these. */
-export function selectActiveChildren(db: Database, parentRunId: string): string[] {
-  return db
-    .query<{ run_id: string }, [string]>(SELECT_ACTIVE_CHILDREN_SQL)
-    .all(parentRunId)
-    .map((r) => r.run_id);
-}
-
-export interface ActiveDescendantNodeRow {
-  runId: string;
-  nodeId: string;
-  branchNodeId: string | null;
-}
-
-const SELECT_ACTIVE_DESCENDANT_NODES_SQL = `
-  WITH RECURSIVE descendants(run_id) AS (
-    SELECT run_id FROM run_state WHERE parent_run_id = ?
-    UNION ALL
-    SELECT c.run_id FROM run_state c JOIN descendants d ON c.parent_run_id = d.run_id
-  )
-  SELECT r.run_id                   AS runId,
-         r.current_node              AS nodeId,
-         r.subgraph_root_node_id     AS branchNodeId
-    FROM descendants d
-    JOIN run_state r ON r.run_id = d.run_id
-   WHERE r.current_node IS NOT NULL
-     AND r.status NOT IN ('completed','cancelled','halted','quarantined')
-`;
-
-/** Walk descendants recursively and return each non-terminal sub-run's
- *  current node. Used by `RunDetail.effectiveActiveNodes` so the graph
- *  view can light up branch nodes whose state lives in child runs.
- *  Empty for runs with no children or no active descendants. */
-export function selectActiveDescendantNodes(db: Database, parentRunId: string): ActiveDescendantNodeRow[] {
-  return db.query<ActiveDescendantNodeRow, [string]>(SELECT_ACTIVE_DESCENDANT_NODES_SQL).all(parentRunId);
-}
-
-export interface ChildStatusDigestRow {
-  total: number;
-  running: number;
-  runningChildren: number;
-  paused: number;
-  pausedHitl: number;
-  pausedAuto: number;
-  queued: number;
-  completed: number;
-  cancelled: number;
-  halted: number;
-  quarantined: number;
-}
-
-const SELECT_CHILD_STATUS_DIGEST_SQL = `
-  WITH RECURSIVE descendants(run_id, status) AS (
-    SELECT run_id, status
-      FROM run_state
-     WHERE parent_run_id = ?
-    UNION ALL
-    SELECT c.run_id, c.status
-      FROM run_state c
-      JOIN descendants d ON c.parent_run_id = d.run_id
-  )
-  SELECT COUNT(*)                                                AS total,
-         SUM(CASE WHEN status = 'running'          THEN 1 ELSE 0 END) AS running,
-         SUM(CASE WHEN status = 'running_children' THEN 1 ELSE 0 END) AS runningChildren,
-         SUM(CASE WHEN status = 'paused'           THEN 1 ELSE 0 END) AS paused,
-         SUM(CASE WHEN status = 'paused_hitl'      THEN 1 ELSE 0 END) AS pausedHitl,
-         SUM(CASE WHEN status = 'paused_auto'      THEN 1 ELSE 0 END) AS pausedAuto,
-         SUM(CASE WHEN status = 'queued'           THEN 1 ELSE 0 END) AS queued,
-         SUM(CASE WHEN status = 'completed'        THEN 1 ELSE 0 END) AS completed,
-         SUM(CASE WHEN status = 'cancelled'        THEN 1 ELSE 0 END) AS cancelled,
-         SUM(CASE WHEN status = 'halted'           THEN 1 ELSE 0 END) AS halted,
-         SUM(CASE WHEN status = 'quarantined'      THEN 1 ELSE 0 END) AS quarantined
-    FROM descendants
-`;
-
-/** Single-row digest of descendant status counts. Returns null
- *  when the run has no children — caller treats that as "no digest". */
-export function selectChildStatusDigest(db: Database, parentRunId: string): ChildStatusDigestRow | null {
-  const row = db.query<ChildStatusDigestRow, [string]>(SELECT_CHILD_STATUS_DIGEST_SQL).get(parentRunId);
-  if (row == null || row.total === 0) return null;
-  return row;
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Metrics-only delta (no OCC, no event)
-// ─────────────────────────────────────────────────────────────────────
-
-/** Additive deltas to `run_state.metrics` JSON, applied in a single
- *  `UPDATE … SET metrics = json_set(…)` so neither JS nor any external
- *  process needs to read-modify-write. Powers cross-run cost rollup
- *  (parent absorbs completed sub-run cost) without churning the parent's
- *  OCC version. See P0.3 of `docs/proposals/parallel.md`.
- *
- *  Only numeric fields supported. Map-shaped fields (`models`,
- *  `nodeCosts`, `loopCounts`) require non-trivial merge semantics and
- *  flow through the reducer via `fact.node_completed` instead. */
-export interface MetricsDeltaRow {
-  billedTokens: number;
-  totalCostUsd: number;
-  totalInputCostUsd: number;
-  totalOutputCostUsd: number;
-  totalCacheReadCostUsd: number;
-  totalCacheWriteCostUsd: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheWriteTokens: number;
-  activeMs: number;
-}
-
-const APPLY_METRICS_DELTA_SQL = `
-  UPDATE run_state
-     SET metrics = json_set(
-           metrics,
-           '$.billedTokens',           CAST(COALESCE(json_extract(metrics, '$.billedTokens'),           0) AS INTEGER) + ?,
-           '$.totalCostUsd',           CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'),           0) AS REAL)    + ?,
-           '$.totalInputCostUsd',      CAST(COALESCE(json_extract(metrics, '$.totalInputCostUsd'),      0) AS REAL)    + ?,
-           '$.totalOutputCostUsd',     CAST(COALESCE(json_extract(metrics, '$.totalOutputCostUsd'),     0) AS REAL)    + ?,
-           '$.totalCacheReadCostUsd',  CAST(COALESCE(json_extract(metrics, '$.totalCacheReadCostUsd'),  0) AS REAL)    + ?,
-           '$.totalCacheWriteCostUsd', CAST(COALESCE(json_extract(metrics, '$.totalCacheWriteCostUsd'), 0) AS REAL)    + ?,
-           '$.totalInputTokens',       CAST(COALESCE(json_extract(metrics, '$.totalInputTokens'),       0) AS INTEGER) + ?,
-           '$.totalOutputTokens',      CAST(COALESCE(json_extract(metrics, '$.totalOutputTokens'),      0) AS INTEGER) + ?,
-           '$.totalCacheReadTokens',   CAST(COALESCE(json_extract(metrics, '$.totalCacheReadTokens'),   0) AS INTEGER) + ?,
-           '$.totalCacheWriteTokens',  CAST(COALESCE(json_extract(metrics, '$.totalCacheWriteTokens'),  0) AS INTEGER) + ?,
-           '$.activeMs',               CAST(COALESCE(json_extract(metrics, '$.activeMs'),               0) AS INTEGER) + ?
-         ),
-         updated_at = ?
-   WHERE run_id = ?
-`;
-
-/** Apply an additive metrics delta to `run_state.metrics` without
- *  bumping `version` or appending an event. No-op when `runId` is
- *  unknown (UPDATE matches 0 rows). Runs inside a write transaction —
- *  caller's responsibility to grab the lock. */
-export function applyMetricsDelta(db: Database, runId: string, delta: MetricsDeltaRow, now: number): void {
-  db.query(APPLY_METRICS_DELTA_SQL).run(
-    delta.billedTokens,
-    delta.totalCostUsd,
-    delta.totalInputCostUsd,
-    delta.totalOutputCostUsd,
-    delta.totalCacheReadCostUsd,
-    delta.totalCacheWriteCostUsd,
-    delta.totalInputTokens,
-    delta.totalOutputTokens,
-    delta.totalCacheReadTokens,
-    delta.totalCacheWriteTokens,
-    delta.activeMs,
-    now,
-    runId,
   );
 }
 

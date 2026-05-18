@@ -97,7 +97,7 @@ describe("selectorMatches", () => {
 
   test("shape selector matches by shape attr", () => {
     expect(selectorMatches({ kind: "shape", value: "box" }, nodeOf({ id: "a", shape: "box" }))).toBe(true);
-    expect(selectorMatches({ kind: "shape", value: "box" }, nodeOf({ id: "a", shape: "diamond" }))).toBe(false);
+    expect(selectorMatches({ kind: "shape", value: "box" }, nodeOf({ id: "a", shape: "hexagon" }))).toBe(false);
   });
 
   test("class selector matches by classes array", () => {

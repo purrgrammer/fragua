@@ -42,12 +42,5 @@ it does NOT prompt for a key. Authenticated custom providers get a
 credential row via the normal `swarm providers add <name>` flow; the
 two writes are independent (a keyless Ollama is fine).
 
-`!cmd` / env-var resolution is gone repo-wide. Secrets that previously
-lived under `models.json`'s `apiKey: "!cmd …"` form belong in
-`provider_credentials` instead — either as a literal key or via
-OAuth. A custom provider that needs a non-`Authorization` header can
-set `authHeader: true` on its `provider_config` row so the stored key
-gets injected into `Authorization: Bearer …` at request time.
-
 See the [CLI README](../packages/cli/README.md) for the full operations
 reference.

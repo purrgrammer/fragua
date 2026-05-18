@@ -1,9 +1,11 @@
 ---
 title: Parallel branches as first-class executor citizens (sub-runs)
-status: proposed
+status: archived
 maturity: specified
 last-reviewed: 2026-05-15
 ---
+
+> **Archived** — the parallel/fan_in primitive was removed; concurrent dispatch now lives in the codergen `agent` tool. See review.dot for the orchestrator+agent pattern.
 
 > **Status:** proposed (specified). Successor to [`parallel-branch-outputs.md`](./parallel-branch-outputs.md), which fixed observability (`$<branchId>.output` substitution, per-branch lifecycle events, UI rendering). This proposal addresses the deeper architectural gap surfaced by those fixes: parallel branches are second-class citizens of the executor and inherit none of its per-turn services.
 

@@ -50,15 +50,15 @@ describe("parseDotSource", () => {
   test("node defaults apply to subsequent nodes", () => {
     const g = parseDotSource(`
       digraph {
-        node [shape=diamond]
+        node [shape=hexagon]
         a
         b [shape=box]
         c
       }
     `);
-    expect(g.nodes["a"]!.shape).toBe("diamond");
+    expect(g.nodes["a"]!.shape).toBe("hexagon");
     expect(g.nodes["b"]!.shape).toBe("box");
-    expect(g.nodes["c"]!.shape).toBe("diamond");
+    expect(g.nodes["c"]!.shape).toBe("hexagon");
   });
 
   test("graph-level attributes stored on attrs", () => {
@@ -125,11 +125,11 @@ describe("parseDotSource", () => {
     const g = parseDotSource(`
       digraph {
         n [label="first"]
-        n [shape=diamond]
+        n [shape=hexagon]
       }
     `);
     expect(g.nodes["n"]!.attrs.label).toBe("first");
-    expect(g.nodes["n"]!.shape).toBe("diamond");
+    expect(g.nodes["n"]!.shape).toBe("hexagon");
   });
 
   test("explicit class attribute parsed", () => {

@@ -2,28 +2,22 @@
 
 import type { FidelityMode } from "./fidelity.ts";
 
-/** Attractor node shapes, each mapping to a handler. The canonical 8 from
- * attractor-spec §2.8. `loop` and `stack.manager_loop` are intentionally
- * absent — loops are backward conditional edges bounded by `max_retries`
- * on the target node (§3.6 / §5.2). */
+/** Node shapes, each mapping to a handler. Loops are backward conditional
+ * edges bounded by `max_retries` on the target node (SPEC §3.6 / §5.2);
+ * parallel fan-out lives in the codergen `agent` tool, not at the graph
+ * level. */
 export type NodeShape =
   | "Mdiamond" // start
   | "Msquare" // exit
   | "box" // codergen (default)
-  | "diamond" // conditional
   | "hexagon" // wait.human
-  | "component" // parallel
-  | "tripleoctagon" // parallel.fan_in
   | "parallelogram"; // tool
 
 export const HANDLER_BY_SHAPE = {
   Mdiamond: "start",
   Msquare: "exit",
   box: "codergen",
-  diamond: "conditional",
   hexagon: "wait.human",
-  component: "parallel",
-  tripleoctagon: "parallel.fan_in",
   parallelogram: "tool",
 } as const satisfies Record<NodeShape, string>;
 
@@ -86,14 +80,8 @@ export interface NodeAttrs {
   fallback_retry_target?: string;
   auto_status?: boolean;
   allow_partial?: boolean;
-  /** Parallel-node config (component shape). Per attractor §4.8 the
-   * fan-in target is discovered structurally via edges (the converging
-   * tripleoctagon), not declared as an attribute — see
-   * `engine/parallel-discovery.ts`. */
-  join_policy?: "wait_all" | "first_success";
   /** Tool-node config (parallelogram shape). Shell command executed by
-   * the tool handler. Substitution is applied: $ARGUMENTS,
-   * $nodeId.output[.path], ${context.*}. */
+   * the tool handler. `$ARGUMENTS` substitutes (POSIX-quoted). */
   tool_command?: string;
   /** Per-node cumulative cost ceiling in USD. Cumulative across all
    * iterations of this node within the run. When crossed at a turn

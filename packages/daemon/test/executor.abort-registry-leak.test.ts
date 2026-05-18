@@ -1,6 +1,6 @@
-// Regression: a throw in the per-turn build section (graph load, node-
-// output fold, context build) must not leave a stale AbortRegistry
-// entry. The fix moves `register` to sit immediately before the handler
+// Regression: a throw in the per-turn build section (graph load,
+// context build, …) must not leave a stale AbortRegistry entry. The
+// fix moves `register` to sit immediately before the handler
 // `try`/`finally` — ahead of it, a build-path throw leaked the entry
 // because the sole `unregister` lives in that `finally`, and the next
 // claim of the same runId then tripped `register`'s already-registered
@@ -12,7 +12,7 @@ import { runOne } from "../src/executor.ts";
 import { enqueue, registerTerminalEcho, rig } from "./helpers.ts";
 
 describe("executor — AbortRegistry is not leaked on a build-path throw", () => {
-  test("getNodeOutputs throwing mid-build leaves the registry clean", async () => {
+  test("a store fault thrown mid-build leaves the registry clean", async () => {
     const r = rig({
       dot: `digraph {
         start [shape=Mdiamond];
@@ -36,12 +36,12 @@ describe("executor — AbortRegistry is not leaked on a build-path throw", () =>
     });
     registerTerminalEcho(r.dispatcher, r.workflowSha, "done");
 
-    // Fault-inject getNodeOutputs — it's called inside the per-turn build
-    // block, ahead of the handler dispatch. Every other surface passes
-    // through untouched so the run still halts cleanly.
+    // Fault-inject a store read used inside the per-turn build block,
+    // ahead of the handler dispatch. Every other surface passes through
+    // untouched so the run still halts cleanly.
     const faultyStore = new Proxy(r.store, {
       get(target, prop, receiver) {
-        if (prop === "getNodeOutputs") {
+        if (prop === "getWorkflow") {
           return () => {
             throw new Error("simulated store fault");
           };

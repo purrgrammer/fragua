@@ -57,9 +57,6 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
         costUsd: result.costUsd,
         nextNode,
       };
-      if (result.outputRef != null) {
-        payload.outputRef = `${result.outputRef.nodeId}:${result.outputRef.key}`;
-      }
       if (result.modelName != null) payload.modelName = result.modelName;
       if (result.outcomeStatus != null) payload.outcomeStatus = result.outcomeStatus;
       // Input/output/cache split — emit only when non-zero so legacy
@@ -201,15 +198,6 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
           },
         });
       }
-      return facts;
-    }
-    case "fanout_pending": {
-      // Handled directly by the executor's dispatchOne — emits
-      // `fact.fanout_started` + enqueues sub-runs + transitions to
-      // `running_children` without going through resultToFacts. The
-      // result-mapper never sees this kind; we keep the case for
-      // exhaustiveness so adding a new HandlerResult kind in the future
-      // surfaces here too.
       return facts;
     }
   }

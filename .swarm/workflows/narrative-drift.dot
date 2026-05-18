@@ -2,12 +2,18 @@
 // per-skill SKILL.md vs the code each skill documents, STATUS.md "delivers
 // today" claims vs current code, and proposal hygiene.
 //
-// Read-only by design. The `audit` node fans out N parallel `agent`
+// Read-only by design. A single orchestrator codergen runs the collect
+// script via bash to get the snapshot, then fans out N parallel `agent`
 // toolcalls in ONE turn (the doc-sync.dot pattern): one subagent per
 // SKILL.md, plus one for the claims + proposals pass. Each subagent's
 // full file reads stay in its own context; only a structured ~350-word
-// summary returns. The parent's history holds N small summaries instead
-// of N×file-bodies — keeps the workflow cheap on a fat skill catalogue.
+// summary returns. The orchestrator's history holds N small summaries
+// instead of N×file-bodies — keeps the workflow cheap on a fat skill
+// catalogue.
+//
+// `audit` and `review` share `thread_id="audit"` — the reviewer reads
+// the consolidated findings from the conversation, not from substituted
+// output.
 //
 //   bun run swarm run narrative-drift
 //   bun run swarm run narrative-drift --input="only swarm-*"
@@ -30,41 +36,28 @@ digraph narrative_drift {
 
   start [shape=Mdiamond]
 
-  collect [
-    shape        = parallelogram
-    tool_command = "bun .swarm/scripts/narrative-drift/collect.ts $ARGUMENTS"
-  ]
-
   audit [
-    allowed_tools = "agent, read, bash, grep, find"
+    thread_id     = "audit"
+    allowed_tools = "agent, bash, read, grep, find"
     max_cost_usd  = 2.50
-    prompt        = "Build a drift report by fanning out per-area subagents in ONE turn (parallel dispatch).\n\nInputs:\n  - $collect.output: JSON with `skills[]` ({path, name, description, target_hint, lines, sha256_12}), `status` and `readme` (each with delivers_today / does_not_deliver — STATUS.md preferred, README.md fallback if STATUS is empty), `proposals[]` ({file, title, status, maturity, last_reviewed}), `proposals_index` (verbatim docs/proposals/README.md).\n  - $ARGUMENTS: optional operator focus (e.g., 'only swarm-*', 'skip frontend'); empty means full scan.\n\nFan-out plan:\n  1. For each entry in `skills[]` (subject to $ARGUMENTS filter), dispatch ONE `agent` toolcall using SKILL TEMPLATE below.\n  2. ALSO dispatch ONE agent for claims + proposals using CLAIMS TEMPLATE below.\n  3. Issue ALL `agent` toolcalls in a SINGLE assistant message — parallel dispatch. Do NOT serialise across turns.\n  4. After all subagents return, assemble their summaries into one report — see REPORT SHAPE.\n\nSKILL TEMPLATE (substitute <SKILL.path>, <NAME>, <TARGET_HINT> per dispatch):\n\n  Inspect the skill at <SKILL.path>. Cross-reference its claims against the code it documents.\n  TARGET HINT (where to look first): <TARGET_HINT>\n\n  Read-only. Produce a STRUCTURED summary in this exact shape — no prose preamble:\n\n  ## skill:<NAME>\n  **purpose**: 1 sentence — what this skill is supposed to teach.\n  **findings**: bullet list of drift between SKILL.md and current code. Each item:\n    - SEVERITY (CRITICAL | HIGH | MEDIUM | LOW): one-line claim\n      cite (a) SKILL.md location (line or section) AND (b) code surface (file:line) — both required.\n    'no findings' is a valid result if the skill is current.\n  **stale_signals**: concrete signals the skill is stale (references to files that no longer exist, mentions of removed APIs, examples whose imports now resolve differently). 'none' if unsurprising.\n\n  Constraints: ≤ 350 words. No speculation; cite file:line for every non-obvious claim.\n\nCLAIMS TEMPLATE (one-shot):\n\n  Inspect the project's 'what swarm delivers today' claims and proposal hygiene.\n\n  Read STATUS.md (preferred) or README.md (fallback) for `## What swarm delivers today` and `## What swarm does not deliver today`. Read docs/proposals/*.md frontmatter via the paths in $collect.output.proposals[].\n\n  Read-only. Produce STRUCTURED summary — no prose preamble:\n\n  ## claims+proposals\n  **claims_findings**: bullet list of each 'delivers today' claim with one of:\n    - BACKED: cite file:line of supporting code/tests.\n    - UNBACKED: no obvious evidence; describe what would back it.\n    - PARTIAL: partially shipped; describe the gap.\n    Severity tag CRITICAL / HIGH / MEDIUM / LOW.\n  **proposals_findings**:\n    - status=shipped proposals whose capability is NOT in 'delivers today' — MEDIUM.\n    - status=in-progress proposals whose prose contradicts the YAML frontmatter — MEDIUM.\n    - any proposal absent from proposals_index — LOW.\n\n  Constraints: ≤ 500 words. Cite file:line and exact frontmatter values.\n\nREPORT SHAPE (your FINAL assistant message):\n\n  # Narrative drift — <ISO date from $collect.output.collected_at>\n\n  <verbatim concatenation of each subagent's structured summary, in dispatch order>\n\n  ## Cross-cutting observations\n  Any drift theme that spans subagents (e.g. 'all swarm-* skills reference removed APIs'). Skip if nothing crosses.\n\nIf $collect.output has no skills and no claims (empty status / readme / proposals), call the `abort` tool with reason `collect output insufficient — nothing to audit`."
-  ]
-
-  diff [
-    allowed_tools = "read"
-    max_cost_usd  = 1.00
-    prompt        = "Consolidate the per-subagent findings from $audit.output into a single severity-grouped drift table.\n\nWalk every subagent section ('## skill:<name>' and '## claims+proposals') and copy each finding into the table verbatim. Do not invent, drop, or paraphrase.\n\nOutput format — markdown table, your FINAL assistant message, no preamble:\n\n  | Severity | Source | SKILL.md / doc location | Code surface | Drift |\n  |---|---|---|---|---|\n  | CRITICAL | swarm-author | SKILL.md §6 (validator codes) | packages/core/src/engine/validator.ts:120 | E016 not in skill table |\n  | MEDIUM | claims+proposals | STATUS.md:14 'workflow_resolution' | (no evidence found) | UNBACKED |\n\nSeverity calibration: keep what each subagent reported. Do NOT relabel.\n\nIf $audit.output reports no findings across all subagents, reply with EXACTLY: `no narrative drift detected`."
+    prompt        = "Build a drift report by fanning out per-area subagents in ONE turn (parallel dispatch).\n\nFirst: run `bun .swarm/scripts/narrative-drift/collect.ts $ARGUMENTS` via the bash tool. The script returns JSON with `skills[]` ({path, name, description, target_hint, lines, sha256_12}), `status` and `readme` (each with delivers_today / does_not_deliver — STATUS.md preferred, README.md fallback if STATUS is empty), `proposals[]` ({file, title, status, maturity, last_reviewed}), `proposals_index` (verbatim docs/proposals/README.md).\n\nFan-out plan:\n  1. For each entry in `skills[]` (subject to $ARGUMENTS filter), dispatch ONE `agent` toolcall using SKILL TEMPLATE below.\n  2. ALSO dispatch ONE agent for claims + proposals using CLAIMS TEMPLATE below.\n  3. Issue ALL `agent` toolcalls in a SINGLE assistant message — parallel dispatch. Do NOT serialise across turns.\n  4. After all subagents return, consolidate their summaries into a single drift table — see TABLE SHAPE.\n\nSKILL TEMPLATE (substitute <SKILL.path>, <NAME>, <TARGET_HINT> per dispatch):\n\n  Inspect the skill at <SKILL.path>. Cross-reference its claims against the code it documents.\n  TARGET HINT (where to look first): <TARGET_HINT>\n\n  Read-only. Produce a STRUCTURED summary in this exact shape — no prose preamble:\n\n  ## skill:<NAME>\n  **purpose**: 1 sentence — what this skill is supposed to teach.\n  **findings**: bullet list of drift between SKILL.md and current code. Each item:\n    - SEVERITY (CRITICAL | HIGH | MEDIUM | LOW): one-line claim\n      cite (a) SKILL.md location (line or section) AND (b) code surface (file:line) — both required.\n    'no findings' is a valid result if the skill is current.\n  **stale_signals**: concrete signals the skill is stale (references to files that no longer exist, mentions of removed APIs, examples whose imports now resolve differently). 'none' if unsurprising.\n\n  Constraints: ≤ 350 words. No speculation; cite file:line for every non-obvious claim.\n\nCLAIMS TEMPLATE (one-shot):\n\n  Inspect the project's 'what swarm delivers today' claims and proposal hygiene.\n\n  Read STATUS.md (preferred) or README.md (fallback) for `## What swarm delivers today` and `## What swarm does not deliver today`. Read docs/proposals/*.md frontmatter via the paths supplied in the orchestrator's snapshot.\n\n  Read-only. Produce STRUCTURED summary — no prose preamble:\n\n  ## claims+proposals\n  **claims_findings**: bullet list of each 'delivers today' claim with one of:\n    - BACKED: cite file:line of supporting code/tests.\n    - UNBACKED: no obvious evidence; describe what would back it.\n    - PARTIAL: partially shipped; describe the gap.\n    Severity tag CRITICAL / HIGH / MEDIUM / LOW.\n  **proposals_findings**:\n    - status=shipped proposals whose capability is NOT in 'delivers today' — MEDIUM.\n    - status=in-progress proposals whose prose contradicts the YAML frontmatter — MEDIUM.\n    - any proposal absent from proposals_index — LOW.\n\n  Constraints: ≤ 500 words. Cite file:line and exact frontmatter values.\n\nTABLE SHAPE — your FINAL assistant message:\n\n  # Narrative drift — <ISO date from snapshot.collected_at>\n\n  | Severity | Source | SKILL.md / doc location | Code surface | Drift |\n  |---|---|---|---|---|\n  | CRITICAL | swarm-author | SKILL.md §6 (validator codes) | packages/core/src/engine/validator.ts:120 | E016 not in skill table |\n  | MEDIUM | claims+proposals | STATUS.md:14 'workflow_resolution' | (no evidence found) | UNBACKED |\n\nWalk every subagent section ('## skill:<name>' and '## claims+proposals') and copy each finding into the table verbatim. Do not invent, drop, or paraphrase. Keep severity labels exactly as the subagents reported them.\n\nIf no findings across all subagents, reply with EXACTLY: `no narrative drift detected`. If the snapshot has no skills and no claims (empty status / readme / proposals), call the `abort` tool with reason `collect output insufficient — nothing to audit`."
   ]
 
   review [
-    allowed_tools = "read"
+    thread_id     = "audit"
+    fidelity      = "full"
     goal_gate     = true
     retry_target  = "audit"
     max_cost_usd  = 0.80
-    prompt        = "Judge the drift table at $diff.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a SKILL.md / doc location AND a code surface (or 'no evidence found' for UNBACKED claims).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the relevant SKILL.md or doc.\n  3. Coverage looks reasonable — every skill in $collect.output.skills[] has at least one row attributable to it OR an explicit 'no findings' note in the upstream $audit.output. Wholly silent skills are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`. The run will retarget to `audit` and rebuild the report (capped by max_goal_gate_retries=2)."
+    allowed_tools = "read"
+    prompt        = "Judge the drift table from the prior turn for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every finding cites BOTH a SKILL.md / doc location AND a code surface (or 'no evidence found' for UNBACKED claims).\n  2. No fabricated claims — spot-check 2–3 findings by re-reading the relevant SKILL.md or doc.\n  3. Coverage looks reasonable — every skill referenced in the snapshot has at least one row attributable to it OR an explicit 'no findings' note. Wholly silent skills are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with EXACTLY one line: `APPROVE`.\n\nIf it fails, call the `abort` tool with reason `REJECT: <one-line reason>`. The run will retarget to `audit` and rebuild the report (capped by max_goal_gate_retries=2)."
   ]
 
   done [shape=Msquare]
 
-  start    -> collect
-  collect  -> done [condition="outcome=fail"]
-  collect  -> audit
+  start  -> audit
+  audit  -> done [condition="outcome=fail"]
+  audit  -> review
 
-  audit    -> done [condition="outcome=fail"]
-  audit    -> diff
-
-  diff     -> review
-
-  review   -> done
+  review -> done
 }

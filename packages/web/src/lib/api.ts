@@ -59,7 +59,6 @@ export interface RunSummary {
   runStatus?:
     | "queued"
     | "running"
-    | "running_children"
     | "paused"
     | "paused_hitl"
     | "paused_auto"
@@ -79,33 +78,6 @@ export interface RunSummary {
   /** Project root the run was enqueued from. Mirrors `run_state.cwd`.
    * Absent for ephemeral runs (CI primitives, tests). */
   cwd?: string;
-  /** Parallel sub-run linkage — P5 of docs/proposals/parallel.md. Absent
-   * on top-level runs. `branchNodeId` is the branch's root node id
-   * (e.g. `lens_correctness`) — the human-readable branch label. */
-  parentRunId?: string;
-  parentNodeId?: string;
-  parallelIndex?: number;
-  branchNodeId?: string;
-  /** Counts of descendant sub-runs grouped by status. Present only on
-   * parents with at least one child row. Drives the runs-list /
-   * Inbox / detail-header digest chips. */
-  childStatusDigest?: ChildStatusDigest;
-}
-
-/** Status counts of a parent's descendant sub-runs. Server-side
- * aggregate; renders as a compact chip ("▶3 ⏸1") in lists + detail. */
-export interface ChildStatusDigest {
-  total: number;
-  running: number;
-  runningChildren: number;
-  paused: number;
-  pausedHitl: number;
-  pausedAuto: number;
-  queued: number;
-  completed: number;
-  cancelled: number;
-  halted: number;
-  quarantined: number;
 }
 
 export interface NodeState {
@@ -149,7 +121,6 @@ export interface RunDetail {
   runStatus?:
     | "queued"
     | "running"
-    | "running_children"
     | "paused"
     | "paused_hitl"
     | "paused_auto"
@@ -179,20 +150,6 @@ export interface RunDetail {
    * `<cwd>/.swarm/worktrees/<runId>`. Absent once the worktree was
    * disposed or for runs that never had one. */
   worktreePath?: string;
-  /** Sub-run linkage when this detail belongs to a child run.
-   * Direct-URL navigations to a child id redirect to the parent's
-   * page with `?branch=<branchNodeId>` anchored. */
-  parentRunId?: string;
-  parentNodeId?: string;
-  parallelIndex?: number;
-  branchNodeId?: string;
-  /** Current node ids active inside descendant sub-runs. Empty for
-   * runs with no children or no active descendants. The Graph view
-   * unions this set with the run's own running nodes. */
-  effectiveActiveNodes?: Array<{ runId: string; nodeId: string; branchNodeId?: string }>;
-  /** Counts of descendant sub-runs grouped by status. Mirrors the
-   * field on `RunSummary`; drives the run-detail header summary. */
-  childStatusDigest?: ChildStatusDigest;
 }
 
 /** One row in `GET /runs/:runId/changes`. Server projects
@@ -513,12 +470,6 @@ export interface ListRunsFilter {
   limit?: number;
   /** Narrow to a single project root (exact `run_state.cwd` match). */
   cwd?: string;
-  /** Widen the status filter so parents whose ACTIVE CHILDREN match
-   * one of the requested statuses also surface (without ever returning
-   * sub-runs themselves). Used by the Inbox so a parent in
-   * `running_children` whose branch paused on budget still shows up.
-   * No-op without `status`. */
-  includeChildAttention?: boolean;
 }
 
 export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
@@ -530,7 +481,6 @@ export async function listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
   if (filter?.order && filter.order !== "newest") params.set("order", filter.order);
   if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter?.cwd !== undefined && filter.cwd.length > 0) params.set("cwd", filter.cwd);
-  if (filter?.includeChildAttention === true) params.set("includeChildAttention", "true");
   const qs = params.toString();
   const path = qs ? `/runs?${qs}` : "/runs";
   return getJson(path, (v): v is RunSummary[] => Array.isArray(v) && v.every(isRunSummary));
@@ -617,19 +567,6 @@ export async function getRun(id: string): Promise<RunDetail> {
   return getJson(`/runs/${encodeURIComponent(id)}`, isRunDetail);
 }
 
-/** Sub-runs of a parent — P5 of docs/proposals/parallel.md. */
-export async function getRunChildren(id: string): Promise<RunSummary[]> {
-  const body = await getJson(
-    `/runs/${encodeURIComponent(id)}/children`,
-    (v): v is { children: RunSummary[] } =>
-      typeof v === "object" &&
-      v !== null &&
-      Array.isArray((v as { children?: unknown }).children) &&
-      (v as { children: unknown[] }).children.every(isRunSummary),
-  );
-  return body.children;
-}
-
 export async function listWorkflows(): Promise<WorkflowSummary[]> {
   return getJson("/workflows", (v): v is WorkflowSummary[] => Array.isArray(v) && v.every(isWorkflowSummary));
 }
@@ -705,20 +642,13 @@ export async function getAgent(locId: string): Promise<AgentDetail> {
   return getJson(`/agents/${encodeURIComponent(locId)}`, isAgentDetail);
 }
 
-export async function getRunEvents(id: string, opts: { includeDescendants?: boolean } = {}): Promise<RunEventsPayload> {
+export async function getRunEvents(id: string): Promise<RunEventsPayload> {
   // The server returns a bare array of StoredEvents (see
   // packages/server/src/store/runs-routes.ts). Older call sites here
   // expected an `{events, lastSeq}` envelope; we adapt on the client so
   // the callers that need `lastSeq` for SSE resume still work, and we
   // don't tie the public REST surface to an envelope format.
-  //
-  // `includeDescendants` opts into the merged view (parent + every
-  // sub-run's events in ts order). The run-detail page uses this so
-  // branch-meta / RunConversation / GraphView / CostInspector all see
-  // sub-run activity as inline branches of the parent. D2 of
-  // `docs/proposals/parallel.md`.
-  const qs = opts.includeDescendants ? "?include=descendants" : "";
-  const events = await getJson<unknown[]>(`/runs/${encodeURIComponent(id)}/events.json${qs}`, (v): v is unknown[] =>
+  const events = await getJson<unknown[]>(`/runs/${encodeURIComponent(id)}/events.json`, (v): v is unknown[] =>
     Array.isArray(v),
   );
   const last = events[events.length - 1] as { seq?: unknown } | undefined;
@@ -745,21 +675,11 @@ export interface RunMessageRow {
   ordinal: number;
   content: AgentMessage;
   nodeId: string | null;
-  /** Set when the parent's messages were fetched with
-   * `includeDescendants: true`. Lets
-   * RunConversation route each row into its branch's section
-   * regardless of the row's nodeId. */
-  originRunId?: string;
 }
 
-export async function getRunMessages(
-  id: string,
-  sinceOrdinal?: number,
-  opts: { includeDescendants?: boolean } = {},
-): Promise<RunMessageRow[]> {
+export async function getRunMessages(id: string, sinceOrdinal?: number): Promise<RunMessageRow[]> {
   const params = new URLSearchParams();
   if (sinceOrdinal != null && sinceOrdinal > 0) params.set("sinceOrdinal", String(sinceOrdinal));
-  if (opts.includeDescendants) params.set("include", "descendants");
   const qs = params.toString();
   const path = qs ? `/runs/${encodeURIComponent(id)}/messages?${qs}` : `/runs/${encodeURIComponent(id)}/messages`;
   return getJson(path, (v): v is RunMessageRow[] => Array.isArray(v));

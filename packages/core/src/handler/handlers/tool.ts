@@ -1,9 +1,11 @@
-// tool handler — attractor-spec §4.10 graph-level shell step.
+// tool handler — graph-level shell step (SPEC §3.1 `parallelogram`).
 //
-// A `tool` node (parallelogram shape) runs `node.attrs.tool_command` as a
-// single shell invocation — no LLM, no agent loop. It is the deterministic
-// complement to codergen: fixed string goes in, exit code + captured
-// stdout/stderr come out, outcome maps directly.
+// A `tool` node runs `node.attrs.tool_command` as a single shell
+// invocation — no LLM, no agent loop. Side-effect only: exit 0 →
+// `outcome=success`; non-zero → `outcome=fail`. The command may
+// substitute `$ARGUMENTS`. Tool nodes do not feed data forward to
+// downstream nodes — that's the codergen's job, not a deterministic
+// shell step.
 //
 // Distinct from agent-callable tools (read / write / edit / bash) that an
 // LLM invokes inside a codergen turn. Those live in the ToolRegistry the
@@ -12,23 +14,11 @@
 //
 // Design choices:
 //
-//   - `tool_command` is substituted through the same prompt substitution
-//     machinery codergen uses ($ARGUMENTS, $nodeId.output[.path],
-//     ${context.x}). This is the only place the substitution fires
-//     outside prompts.
-//
-//   - Exit 0 → outcome=success. Non-zero → outcome=fail. Bash has no
-//     native "retry" signal; a workflow that wants retry wraps the tool
-//     node in a codergen that inspects stdout and emits the desired
-//     outcome. (Future: allow tools to print a trailing `OUTCOME: retry`
-//     line; omitted for now — YAGNI.)
-//
-//   - Stdout + stderr are written as artifacts keyed by `${nodeId}:stdout`
-//     / `${nodeId}:stderr` so downstream nodes can `$toolNodeId.output`
-//     against them through the normal substitution path. A
-//     `tool_node`-role message row is also appended to `messages`
-//     carrying the command, cwd, exit code, and a tail-truncated
-//     stdout/stderr — that's what RunConversation reads.
+//   - Stdout + stderr are captured as artifacts keyed by `${nodeId}:stdout`
+//     / `${nodeId}:stderr` for debugging / replay; a `tool_node`-role
+//     message row is also appended to `messages` carrying the command,
+//     cwd, exit code, and a tail-truncated stdout/stderr — that's what
+//     RunConversation reads.
 //
 //   - Execution routes through `ctx.env.exec(...)` when an
 //     `ExecutionEnvironment` is wired (production; isolates per-run
@@ -46,7 +36,6 @@
 
 import type { ToolNodeMessage } from "@swarm/types";
 import { substitute } from "../../engine/substitution.ts";
-import type { ContextMap } from "../../types/context.ts";
 import type { ExecutionEnvironment } from "../../types/execution.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
 
@@ -60,10 +49,6 @@ export interface ToolConfig {
   /** Hard timeout. Defaults to 5 minutes — a shell step that needs more
    * should probably be broken up. */
   maxMs?: number;
-  /** Optional ContextMap merged with routing when substituting
-   * `${context.*}` tokens in the tool command. Prompt substitution
-   * matches codergen's merge order: defaults first, routing overrides. */
-  defaultContext?: ContextMap;
   /** Spawn function injection point for tests. Defaults to `runWithBun`. */
   spawner?: SpawnFn;
 }
@@ -93,19 +78,15 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    const context = mergeContext(cfg.defaultContext, ctx.routing);
-    // Tool commands are shell strings. Substituted values can contain
-    // whitespace, newlines, quotes, or anything else a previous node
-    // legitimately captured into an artifact (an upstream `echo "$PR"`
-    // for example produces `"9876\n"`). Without escapeForShell, that
-    // trailing newline turns one statement into several when /bin/sh
-    // re-tokenises the rendered command — every substitution becomes
-    // an injection vector. Codergen prompts don't need this: prose
-    // tolerates stray whitespace; shell does not.
+    // Tool commands are shell strings. `$ARGUMENTS` may contain
+    // whitespace, newlines, quotes, or anything else the run's input
+    // legitimately carries. Without escapeForShell, that trailing
+    // newline turns one statement into several when /bin/sh re-tokenises
+    // the rendered command — every substitution becomes an injection
+    // vector. Codergen prompts don't need this: prose tolerates stray
+    // whitespace; shell does not.
     const command = substitute(rawCommand, {
       args: ctx.args,
-      context,
-      nodeOutputs: ctx.nodeOutputs,
       escapeForShell: true,
     });
 
@@ -162,21 +143,16 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       } satisfies HandlerResult;
     }
 
-    // Persist stdout/stderr as artifacts so downstream nodes can read
-    // them via $nodeId.output.stdout / .stderr substitution. Shell output
-    // is non-deterministic by nature (timestamps, pids, paths), so retries
-    // within the same iteration legitimately produce different content —
-    // pass `replace: true` so a quarantine-retry doesn't trip
-    // ArtifactCollisionError.
+    // Persist stdout/stderr as artifacts for debugging / replay. Shell
+    // output is non-deterministic by nature (timestamps, pids, paths),
+    // so retries within the same iteration legitimately produce
+    // different content — pass `replace: true` so a quarantine-retry
+    // doesn't trip ArtifactCollisionError.
     const stdoutArtifactKey = `${ctx.nodeId}:stdout`;
     ctx.artifacts.put(stdoutArtifactKey, ranResult.stdout, "text/plain", { replace: true });
     if (ranResult.stderr.length > 0) {
       ctx.artifacts.put(`${ctx.nodeId}:stderr`, ranResult.stderr, "text/plain", { replace: true });
     }
-    // The bare `output` artifact is the contract the executor's nodeOutputs
-    // fold reads via `outputRef` below; downstream `$<nodeId>.output`
-    // resolves to stdout, the natural "what did the tool produce" default.
-    const outputRef = ctx.artifacts.put("output", ranResult.stdout, "text/plain", { replace: true });
 
     // Append a `tool_node` message so the conversation view can render
     // the execution as a Terminal card without round-tripping to the
@@ -214,10 +190,6 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       outcomeStatus,
       tokens: 0,
       costUsd: 0,
-      outputRef,
-      routingDelta: {
-        [`tool.${ctx.nodeId}.exit_code`]: ranResult.exitCode,
-      },
     };
     if (cfg.nextNode !== undefined) result.nextNode = cfg.nextNode;
     return result;
@@ -265,16 +237,6 @@ async function runCommand(
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
   }
   return runWithBun(command, signal);
-}
-
-function mergeContext(defaults: ContextMap | undefined, routing: Readonly<Record<string, unknown>>): ContextMap {
-  const out: ContextMap = { ...(defaults ?? {}) };
-  for (const [k, v] of Object.entries(routing)) {
-    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
-      out[k] = v as ContextMap[string];
-    }
-  }
-  return out;
 }
 
 function isAbortError(err: unknown): boolean {

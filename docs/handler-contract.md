@@ -41,11 +41,7 @@ The context object the executor hands to every handler. The fields below are the
 
 ### `ctx.args: Readonly<Record<string, string>>`
 
-Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. Today the only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Other tokens (`${context.*}`, `$<nodeId>.output[.path]`) read from the substitution context, not from this map.
-
-### `ctx.nodeOutputs: ReadonlyMap<string, NodeOutput>`
-
-Captured outputs of prior nodes in this run, keyed by `nodeId`. Before each dispatch the executor folds the run's `fact.node_completed` events that carry `outputRef` into this map and dereferences each artifact's text once. Handlers pass it through to `substitute()` so prompt tokens like `$plan.output` resolve to the captured assistant text. When a node has been re-entered via a backward edge, the most recent iteration's output wins.
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. The only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Cross-node data transfer happens through shared threads + fidelity (SPEC §3.3), not through prompt substitution.
 
 ### `ctx.emit(type, payload): void`
 
@@ -70,18 +66,18 @@ interface BudgetSnapshotInput {
 
 ### `ctx.withScope(override): HandlerContext`
 
-Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces. The auto-dispatcher uses this to hand each parallel branch a context that carries its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
+Return a new `HandlerContext` with the same run-level resources but rebuilt scope-sensitive surfaces. The codergen `agent` tool uses this to hand each inline sub-agent spawn a context that carries its own `(nodeId, iteration)` instead of leaking the parent's via closure capture.
 
 Six surfaces are rebuilt against the new scope:
 
 - **`artifacts`** — `put` / `get` / `ref` write and read under `(runId, scope.nodeId, scope.iteration, key)`.
 - **`messages.append`** — rows are attributed with the new `nodeId` / `iteration`.
-- **`externalCall`** — the idempotency key is keyed off `(runId, scope.nodeId, scope.iteration, argsHash, attempt)`, so repeated retries of the same provider call don't collide across branches.
-- **`emit`** — observability payloads stamp the new `nodeId` / `iteration`, overriding the executor's parent stamp via spread-last.
+- **`externalCall`** — the idempotency key is keyed off `(runId, scope.nodeId, scope.iteration, argsHash, attempt)`, so repeated retries of the same provider call don't collide across sub-agent spawns.
+- **`emit`** — observability payloads stamp the new `nodeId` / `iteration`, overriding the parent stamp via spread-last.
 - **`tools`** — re-narrowed by `scope.allowedTools` / `scope.deniedTools` (a hard filter; `tools.get(name)` for an excluded tool throws `unknown tool: …`).
 - **`env`** — re-wrapped read-only when the new toolset has no mutator (`bash` / `write` / `edit`); a handler that loses its write tools also loses raw filesystem access.
 
-Run-level resources — `store`, `llm`, `http`, `recorder`, `signal`, `routing`, `args`, `nodeOutputs`, `emitObservability`, raw `env` — are reused unchanged across every `withScope` call. They're captured once at top-level construction.
+Run-level resources — `store`, `llm`, `http`, `recorder`, `signal`, `routing`, `args`, `emitObservability`, raw `env` — are reused unchanged across every `withScope` call. They're captured once at top-level construction.
 
 ```typescript
 interface ScopeOverrides {
@@ -111,8 +107,6 @@ return {
   outcomeStatus?: "success",            // matched against edge `condition="outcome=<s>"` clauses; defaults to "success"
   preferredLabel?: "go-on",             // matched against unconditional edges' `label` attr
   suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
-  outputRef?: ArtifactRef,              // optional; executor records it
-  routingDelta?: { key: value },        // merged into run_state.routing
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
@@ -123,17 +117,8 @@ return {
   cacheReadTokens?: 0,
   cacheWriteTokens?: 0,
   modelName?: "gemini-1.5-pro",         // for per-model rollups
-  // ── executor-stamped on parallel branches; handlers must not set these ──
-  parentNodeId?: string;                // id of the parent component node; unset for top-level nodes
-  parallelIndex?: number;               // branch index within the parent's children list; unset for top-level nodes
-  score?: number;                       // ranking score for fan_in; surface via routingDelta.score, not here directly
 };
 ```
-
-Three fields in the shape above — `parentNodeId`, `parallelIndex`, and `score` — appear in the persisted `fact.node_started` / `fact.node_completed` payloads but are **stamped by the executor, not constructed by handlers**. Handlers should not set them directly.
-
-- **`parentNodeId`** and **`parallelIndex`** are written by the auto-dispatcher when the node ran as a branch of a `component`/parallel fan-out. They are left unset on top-level nodes. Reducers key off `parentNodeId` to skip the `currentNode = nextNode` transition during fan-out (the parent component stays the active node) while still accruing per-node metrics under the branch id. See `fact.node_started.parentNodeId` / `fact.node_completed.parentNodeId` in `packages/types/src/swarm-events.ts`.
-- **`score`** is the optional ranking value a branch surfaces by including `score` in its `routingDelta` (e.g. `routingDelta: { score: 0.87 }`). The executor copies it from `run_state.routing` onto `fact.node_completed.score`. The `fan_in` node reads it for `(status, -score, id)` winner ordering; the event log preserves it so post-mortems can reproduce the ranking without re-running. Authoritative payload shapes: `packages/types/src/swarm-events.ts` (`fact.node_started` payload lines ~155–167; `fact.node_completed` payload lines ~170–219), mirrored in `docs/ARCHITECTURE.md` §3.
 
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
@@ -152,7 +137,6 @@ return {
     { key: "A", label: "[A] Approve", to: "publish" },
     { key: "R", label: "[R] Revise",  to: "revise"  },
   ],
-  routingDelta?: { key: value },        // optional; merged into run_state.routing before the pause
 };
 ```
 
@@ -247,131 +231,12 @@ Declare your handler's risk level on the spec:
 - `sideEffect: "external"` — must use `ctx.externalCall`
 
 ### 4. No state outside the projection
-`ctx.routing` is the only cross-turn state. A handler that stashes data on `this`, a module-level `Map`, or a file will silently lose it on daemon restart. If you need durable state:
+`ctx.routing` is the only cross-turn state surface, fed by the intent fold (budget overrides, max_retries adjustments, priority). A handler that stashes data on `this`, a module-level `Map`, or a file will silently lose it on daemon restart. If you need to surface data that another turn must read, write it to:
 
-- Small (≤8KB total): `routingDelta` in the return → merged into `run_state.routing`
-- Large: `ctx.artifacts.put(key, content)` → 16MB max, deduplicated by sha256
+- **Messages** (`ctx.messages.append`) when downstream nodes share a thread — the next turn loads the prior conversation via fidelity (full / compact / summary).
+- **Artifacts** (`ctx.artifacts.put(key, content)`) for blob-shaped output — 16MB max, deduplicated by sha256, addressable by `(run, node, iteration, key)`.
 
 ---
-
-## Parallel fan-out / fan-in
-
-Use `component` (parallel) + `tripleoctagon` (parallel.fan_in) to fork
-a run into N branches that explore alternatives in parallel, rank the
-outcomes, and continue down a single path (attractor §4.8 / §4.9).
-
-Swarm's parallel is **deliberation-only** (regime C): each branch gets
-an in-memory deep-cloned routing snapshot and shares the parent run's
-single worktree. Branches must NOT mutate the filesystem; restrict
-their `allowed_tools` to read-only sets and have the follow-up node
-(after fan_in) perform any actual writes.
-
-```dot
-  explore [
-    shape    = component
-    fan_in   = pick_best     // required — points at the fan_in node
-    join_policy = "wait_all" // or "first_success"
-  ]
-  approach_a [ prompt = "..." allowed_tools = "read, bash" ]
-  approach_b [ prompt = "..." allowed_tools = "read, bash" ]
-  pick_best [ shape = tripleoctagon ]   // heuristic ranking by (status, -score, id)
-
-  explore -> approach_a
-  explore -> approach_b
-  approach_a -> pick_best
-  approach_b -> pick_best
-  pick_best -> next_step
-```
-
-Branch outcomes land in routing under
-`parallel.<parallelNodeId>.results = [{branchId, status, score?}, …]`.
-
-#### Reducer kinds
-
-`tripleoctagon` runs one of two reducers, picked by `prompt=` presence:
-
-**Heuristic reducer (default; `prompt=` absent or empty).** A
-deterministic ranker over branch outcomes — picks the top by
-`(status, -score, branchId)`. Writes the winner's branchId to routing
-under `fan_in.<nodeId>.winner`; downstream nodes read it via
-`${context.fan_in.<nodeId>.winner}` substitution. Zero cost,
-replay-stable. Best for parallel voting and "pick the best outcome"
-patterns.
-
-**LLM reducer (`prompt=` non-empty; attractor §4.9).** Feeds every
-branch's `$<branchId>.output` text to an LLM and returns its reply
-verbatim as the fan-in node's `output` artifact. Downstream nodes read
-it as `$<fanInNodeId>.output` (the same substitution surface every other
-codergen-style node uses). No winner is picked — the LLM's text IS the
-fan-in's output. Best for "integrate four lenses into one document"
-patterns. The framed prompt is:
-
-```
-<user prompt>
-
-=== branch:<branchId> (status=<status>[, score=<score>]) ===
-<$<branchId>.output text>
-
-=== branch:... ===
-...
-```
-
-The codergen tool pool is empty for this call (the backend's
-force-included `abort` remains available). Model + provider selection
-follows the same `llm_model` / `llm_provider` attributes on the
-tripleoctagon as for any codergen node; a graph-level `model_stylesheet`
-applies. The synthesised document is sliced to ~4 KB by the codergen
-backend's `Outcome.notes` cap — long outputs truncate.
-
-Failure mode: `fan_in_llm_provider_error` — provider transport error,
-same pause semantics as a regular codergen node.
-
-Replay: the heuristic reducer is fully deterministic; the LLM reducer
-is non-deterministic at first execution but replayable because the
-delegate's logged output is the source of truth on re-execution.
-
-Limits (v1): a branch that returns `yield_hitl` is coerced to `fail`
-with a documented reason; nested HITL in a parallel fan-out is not
-supported. A branch's `externalCall` intent/done facts attribute to
-the parent parallel node's id for idempotency purposes.
-
-### Quarantine inside a parallel branch
-
-If any branch's `externalCall` orphans (handler crashed mid-`fn`,
-sweep on next startup finds an `intent` with no matching `done`), the
-**entire parent run** quarantines. There is no "quarantine just one
-branch" model — quarantine is a run-level state machine transition
-(`status='quarantined'`) and parallel branches don't have their own
-status row. Concretely:
-
-- All sibling branches in the same fan-out are abandoned. Their
-  in-memory work is lost; any artifacts they wrote stay in the
-  `artifacts` table (the run isn't deleted, just paused).
-- The fan_in node never fires for that quarantine cycle.
-- Operator triages via `intent.unquarantine`. The three resolutions
-  behave as on a non-parallel run, but the unit of work is the
-  whole parallel node, not the orphan branch:
-  - `cancel` → `fact.run_cancelled`. Whole run dies.
-  - `retry` → `fact.run_resumed`. Run goes back to queued. Executor
-    re-dispatches the parent parallel node, which re-spawns ALL
-    branches from scratch (including the ones that succeeded
-    on the prior attempt). The orphan branch's external call uses
-    the same `idempotencyKey`, so the provider dedups; siblings
-    that succeeded before run again — they're idempotent by
-    construction (no filesystem mutations) so this is acceptable
-    but burns extra tokens.
-  - `treat_as_done` → synthesised `fact.side_effect_done` for each
-    orphan + `fact.run_resumed`. Same re-dispatch story as `retry`.
-
-If branch-level isolation matters for your workflow (e.g. one
-branch made a real-world side effect that's expensive to redo),
-either:
-- model branches as `sideEffect: "external"` with provider
-  idempotency and trust the dedup;
-- or split the parallel into a sequence of single-node steps so
-  the failure granularity matches the recovery granularity.
-
-Per-branch quarantine is intentionally out of scope for v1.
 
 ## Agent tools (LLM-callable, inside a codergen turn)
 
@@ -418,10 +283,10 @@ into the framework:
    `allowed_tools` names zero registered tools, the backend fails the
    call loudly rather than handing the model an empty menu.
 
-Parallel branches rely on this narrowing to stay read-only: a branch
-node with `allowed_tools = "read"` cannot invoke `bash` / `write` /
-`edit` at either boundary. Prompt prose that says "you have read-only
-tools" is descriptive; the enforcement is the narrowing.
+Read-only nodes rely on this narrowing: a node with `allowed_tools = "read"`
+cannot invoke `bash` / `write` / `edit` at either boundary. Prompt
+prose that says "you have read-only tools" is descriptive; the
+enforcement is the narrowing.
 
 **`ctx.env` follows the same policy.** If the narrowed toolset carries
 no mutator (`bash` / `write` / `edit`), `ctx.env` is wrapped so
@@ -483,18 +348,19 @@ scripts. Exit 0 → `outcome=success`; non-zero → `outcome=fail`.
   ]
 ```
 
-`tool_command` goes through the same substitution as codergen prompts:
-`$ARGUMENTS`, `$nodeId.output[.path]`, `${context.x}`. Stdout + stderr
-become artifacts keyed by
-`${nodeId}:stdout` / `${nodeId}:stderr`, so downstream codergen nodes
-can reference them via `$toolNodeId.output`.
+`tool_command` substitutes `$ARGUMENTS` (POSIX-quoted) and runs the
+shell command. Stdout + stderr become artifacts keyed by
+`${nodeId}:stdout` / `${nodeId}:stderr` for debugging / replay; tool
+nodes do not feed data forward to downstream nodes. A workflow that
+needs to run a deterministic script and reason about its output should
+call the script from inside a codergen's `bash` tool instead of
+synthesising a tool-node-then-codergen chain.
 
 A tool node is not an agent tool. Agent-callable tools (read / write /
 edit / bash) are what an LLM invokes *inside* a codergen turn; the
-graph-level `tool` node is a distinct primitive for fixed shell steps
-with no LLM in the loop. See `.swarm/workflows/ci-gate.dot` for a pure-tool
-example and `.swarm/workflows/showcase.dot` for a tool node alongside
-parallel / fan_in / wait.human.
+graph-level `tool` node is a distinct primitive for side-effect-only
+shell steps (CI gates, idempotent commands) with no LLM in the loop.
+See `.swarm/workflows/ci-gate.dot` for a pure-tool example.
 
 ## Codergen self-abort (`abort` tool)
 

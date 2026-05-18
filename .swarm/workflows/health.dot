@@ -1,34 +1,33 @@
 // health.dot — operational health snapshot of the swarm SQLite store.
-// One tool node wrapping .swarm/scripts/health/collect.ts. No LLM cost.
 //
-// Lifted out of the original introspect.dot pipeline so it can run on its
-// own cadence (hourly / on-demand) without dragging the drift workflows
-// along. The script labels each metric OK | WATCH | ALERT against
-// pre-defined thresholds — no LLM judgement needed.
+// A single codergen node runs .swarm/scripts/health/collect.ts via the
+// bash tool, then summarises the OK/WATCH/ALERT verdicts in its own
+// reply. The script already labels each metric; the codergen narrates.
 //
-// rollup.dot doesn't actually read this workflow's stored runs; it shells
-// out to the same script directly because health is a *now*-snapshot
-// (operational state, not historical findings). This workflow exists so
-// trends are queryable from `run_state` for future analysis and so a
-// missing snapshot is a visible run failure rather than silent.
+// Why a codergen, not a tool node: a workflow without an LLM has nothing
+// to read its own output. Tool nodes are for side effects (CI gates,
+// idempotent commands); data-gathering belongs inside a codergen.
 //
 //   bun run swarm run health
 
 digraph health {
   graph [
-    goal  = "Snapshot operational health of the swarm event store: run-status mix, halt-reason distribution, payload-size pressure, routing-size pressure, handler-timeout leaks, quarantines, daemon-event types."
-    label = "health"
+    goal             = "Snapshot operational health of the swarm event store and narrate the OK/WATCH/ALERT verdicts."
+    label            = "health"
+    default_fidelity = "compact"
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-haiku-4-5; }"
   ]
 
   start [shape=Mdiamond]
 
-  collect [
-    shape        = parallelogram
-    tool_command = "bun .swarm/scripts/health/collect.ts"
+  snapshot [
+    prompt        = "Run `bun .swarm/scripts/health/collect.ts` and read its JSON output. Summarise as a short markdown report — your FINAL assistant message, no preamble:\n\n# Swarm health — <collected_at>\n\n## Status\n<one paragraph: worst_label, distinct counts of OK/WATCH/ALERT, db_status>\n\n## Metrics\n| Label | Metric | Value | Note |\n|---|---|---|---|\n| <OK\\|WATCH\\|ALERT> | <id> | <value> | <note or —> |\n\nQuote the script's labels verbatim. If `db_status` is `missing` or `empty`, surface that under Status and skip the Metrics table."
+    allowed_tools = "bash, read"
+    max_cost_usd  = 0.05
   ]
 
   done [shape=Msquare]
 
-  start   -> collect
-  collect -> done
+  start    -> snapshot
+  snapshot -> done
 }

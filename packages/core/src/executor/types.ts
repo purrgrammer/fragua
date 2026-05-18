@@ -4,7 +4,6 @@
 
 import type { AgentMessage } from "@swarm/types";
 import type { BudgetSnapshotInput } from "../handler/types.ts";
-import type { ContextMap } from "../types/context.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
 import type { FidelityMode } from "../types/fidelity.ts";
@@ -20,7 +19,9 @@ export interface CodergenBackend {
 export interface CodergenInput {
   node: Node;
   prompt: string;
-  context: ContextMap;
+  /** Workflow `goal` attribute, threaded for the agent's system-prompt
+   * framing. Optional; absent for graphs with no `goal=`. */
+  goal?: string;
   thread_id: string | undefined;
   fidelity: FidelityMode;
   signal: AbortSignal;

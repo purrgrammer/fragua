@@ -16,7 +16,6 @@ import {
   firstCredentialedProvider,
   ModelRegistry,
   makeCodergenHandler,
-  makeFanInLlmDelegate,
   PiCodergenBackend,
   PiSummariserBackend,
   type SpawnSubagentParentCtx,
@@ -288,7 +287,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
-  let fanInLlmDelegate: Parameters<typeof autoDispatcherResolver>[0]["fanInLlmDelegate"];
   let steeringRegistry: SteeringRegistry | undefined;
   if (useLlm) {
     // `env` is wired per-run via the WorktreeProvisioner below —
@@ -378,7 +376,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // the selector to pick based on outcome status + condition matching
     // (e.g. `implement -> done [condition="outcome=fail"]` vs the
     // unconditional `implement -> verify`).
-    fanInLlmDelegate = makeFanInLlmDelegate({ backendOpts });
     codergenFactory = (node, _nextNode, maxMs) => {
       const factoryOpts: Parameters<typeof makeCodergenHandler>[0] = { node, backendOpts };
       if (maxMs !== undefined) factoryOpts.maxMs = maxMs;
@@ -405,7 +402,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     autoDispatcherResolver({
       store,
       ...(codergenFactory ? { codergenFactory } : {}),
-      ...(fanInLlmDelegate ? { fanInLlmDelegate } : {}),
       ...(Object.keys(defaultMaxMs).length > 0 ? { defaultMaxMs } : {}),
     }),
   );

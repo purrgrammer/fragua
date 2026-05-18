@@ -2,17 +2,6 @@ export type { BuildContextOpts } from "./context.ts";
 export { buildHandlerContext } from "./context.ts";
 export type { MakeExternalCallOpts } from "./external-call.ts";
 export { makeExternalCall } from "./external-call.ts";
-export type {
-  FanInHandlerConfig,
-  LlmFanInDelegate,
-  LlmFanInFailure,
-  LlmFanInInput,
-  LlmFanInResult,
-  LlmFanInSuccess,
-} from "./handlers/fan-in.ts";
-export { makeFanInHandler } from "./handlers/fan-in.ts";
-export type { JoinPolicy, ParallelBranchResult, ParallelConfig } from "./handlers/parallel.ts";
-export { makeParallelHandler } from "./handlers/parallel.ts";
 export type { SpawnFn, ToolConfig, ToolRunResult } from "./handlers/tool.ts";
 export { makeToolHandler, runWithBun } from "./handlers/tool.ts";
 export type { HitlInput, HitlOption, WaitHumanConfig } from "./handlers/wait-human.ts";

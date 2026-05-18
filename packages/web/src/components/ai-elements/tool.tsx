@@ -184,15 +184,7 @@ function humanizeToolName(toolName: string): string {
   return [first.charAt(0).toUpperCase() + first.slice(1).toLowerCase(), ...rest.map((w) => w.toLowerCase())].join(" ");
 }
 
-export const ToolHeader = ({
-  className,
-  title,
-  type,
-  state,
-  toolName,
-  labelOverride,
-  ...props
-}: ToolHeaderProps) => {
+export const ToolHeader = ({ className, title, type, state, toolName, labelOverride, ...props }: ToolHeaderProps) => {
   const derivedName = type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
   // `title` carries the canonical tool name (e.g. `bash`) when the
   // caller has it; fall back to the derived slug. Look up the registry

@@ -42,12 +42,6 @@ deterministic even when the LLM bodies are not.
 You need credentials for at least one LLM provider. The fastest path:
 
 ```sh
-export ANTHROPIC_API_KEY=...      # or OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, ...
-```
-
-Or run the interactive setup, which writes to `~/.swarm/`:
-
-```sh
 bun run swarm providers add       # pick a provider, paste a key
 bun run swarm providers           # list configured providers + their default models
 bun run swarm providers ls-models <provider>            # list models declared under a custom provider

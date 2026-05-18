@@ -15,7 +15,7 @@ Foundational patterns only. If a situation isn't covered here, derive it from th
 ## Principles (earlier wins on conflict)
 
 1. **Aggregations belong in SQL.** Sums, counts, max/min, grouped totals — never `.reduce()` over `getEvents(runId, { limit: BIG })`. SQL has the planner, the indexes, and one source of truth. In-memory folding is only correct when the projection is fundamentally non-aggregatable (a list of message blocks, a finalText built from streaming deltas, etc.). When you see a TypeScript loop accumulating a number, replace it with a query.
-2. **SQL lives in `<domain>-queries.ts`, not in handlers.** Every named query gets a function in the matching `packages/store/src/<domain>-queries.ts` (one of: `analytics`, `artifact`, `daemon`, `event`, `message`, `run-state`, `schedule`, `workflow`). Route handlers and adapters in `packages/server` import named functions from `@swarm/store`; they never inline `db.prepare("SELECT …")`. The queries files are the audit point for what the database is asked, and the only place a column rename has to land.
+2. **SQL lives in `<domain>-queries.ts`, not in handlers.** Every named query gets a function in the matching `packages/store/src/<domain>-queries.ts` (one of: `analytics`, `artifact`, `daemon`, `event`, `message`, `provider-config`, `provider-credentials`, `run-state`, `schedule`, `workflow`). Route handlers and adapters in `packages/server` import named functions from `@swarm/store`; they never inline `db.prepare("SELECT …")`. The queries files are the audit point for what the database is asked, and the only place a column rename has to land.
 3. **Reducers are pure.** `applyFact` and `eventsToSteps` style folders take inputs, return outputs, and never read clocks, fetch the network, or mutate globals. Same input ⇒ same output, every time. They're called from tests AND production with the same contract.
 4. **The store guards its own invariants.** `IEventStore` enforces seq monotonicity, the 4KB payload cap, expected-version concurrency, and CASCADE on run deletion. Callers don't reimplement those checks. If you need a new invariant, push it into `store.ts` (not into a route handler).
 5. **Observability events skip the reducer.** `appendObservabilityEvents` (`agent.*`, `llm.*`, `tool.*`, `cost.recorded`) shares the seq space but does NOT bump `run_state.version` and does NOT require `expectedVersion`. Handlers can emit them mid-step without racing the terminal `appendFact`.
@@ -55,8 +55,10 @@ packages/store/src/
   artifact-queries.ts     ← artifact blob lookups
   daemon-queries.ts       ← supervisor / executor coordination reads
   event-queries.ts        ← event log reads (getEvents, type-filtered scans)
-  message-queries.ts      ← messages table (uncapped LLM content)
-  run-state-queries.ts    ← per-run projections + aggregations (owns getStepAggregates)
+  message-queries.ts              ← messages table (uncapped LLM content)
+  provider-config-queries.ts      ← per-provider config rows (provider_config table)
+  provider-credentials-queries.ts ← per-provider credential rows (provider_credentials table; api_key | oauth)
+  run-state-queries.ts            ← per-run projections + aggregations (owns getStepAggregates)
   schedule-queries.ts     ← schedule + run-of-schedule reads
   workflow-queries.ts     ← workflow registry reads
 packages/server/src/store/

@@ -56,11 +56,6 @@ export interface NodeStartedData {
   node_type?: string;
   /** Raw `node.attrs.prompt` before any substitution. */
   prompt_template?: string;
-  /** Keys present in the ContextMap at the moment the handler starts.
-   * Values elided to avoid payload blow-up and accidental secret leaks. */
-  context_keys?: string[];
-  /** Upstream node ids whose outputs are available for substitution. */
-  node_outputs_in_scope?: string[];
   /** Model hint from `node.attrs.llm_model` — authoritative binding is on `llm.start`. */
   model?: string;
   /** Provider hint from `node.attrs.llm_provider`. */

@@ -109,20 +109,6 @@ describe("NodeInspector", () => {
     expect(text).toContain("dev");
   });
 
-  it("surfaces fan_in target + join_policy on a parallel node", () => {
-    const src = `digraph demo {
-      explore [shape=component, fan_in=pick_best, join_policy="wait_all"]
-    }`;
-    const explore = parseDotSource(src).nodes["explore"];
-    expect(explore).toBeTruthy();
-    if (!explore) return;
-    const { container } = render(<NodeInspector node={explore} />);
-    const text = container.textContent ?? "";
-    expect(text).toContain("fan_in");
-    expect(text).toContain("pick_best");
-    expect(text).toContain("wait_all");
-  });
-
   // Per-handler relevance gating — stylesheet cascade can pin
   // `llm_model` / `thread_id` / `max_retries` on nodes that never act
   // on those attrs (terminals, tools, heuristic fan_ins). The drawer
@@ -175,31 +161,5 @@ describe("NodeInspector", () => {
     expect(text).not.toContain("reasoning");
     expect(text).not.toContain("thread");
     expect(text).not.toContain("model & context");
-  });
-
-  it("heuristic parallel.fan_in (no prompt) hides the model section", () => {
-    const src = `digraph demo {
-      pick [shape=tripleoctagon, llm_model="opus-4"]
-    }`;
-    const pick = parseDotSource(src).nodes["pick"];
-    expect(pick).toBeTruthy();
-    if (!pick) return;
-    const { container } = render(<NodeInspector node={pick} />);
-    const text = container.textContent ?? "";
-    expect(text).not.toContain("opus-4");
-    expect(text).not.toContain("model & context");
-  });
-
-  it("parallel.fan_in WITH prompt shows the model section", () => {
-    const src = `digraph demo {
-      pick [shape=tripleoctagon, llm_model="opus-4", prompt="rank the candidates"]
-    }`;
-    const pick = parseDotSource(src).nodes["pick"];
-    expect(pick).toBeTruthy();
-    if (!pick) return;
-    const { container } = render(<NodeInspector node={pick} />);
-    const text = container.textContent ?? "";
-    expect(text).toContain("opus-4");
-    expect(text).toContain("model & context");
   });
 });

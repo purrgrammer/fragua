@@ -21,7 +21,6 @@ function canonicalizeRunsFilter(filter?: ListRunsFilter): ListRunsFilter | null 
   if (filter.order && filter.order !== "newest") out.order = filter.order;
   if (filter.limit !== undefined) out.limit = filter.limit;
   if (filter.cwd && filter.cwd.length > 0) out.cwd = filter.cwd;
-  if (filter.includeChildAttention === true) out.includeChildAttention = true;
   return Object.keys(out).length === 0 ? null : out;
 }
 
@@ -63,23 +62,14 @@ export const queries = {
         queryFn: () => api.getRunSteps(id),
       }),
     /** Full event log. Heavier than `/steps` — only use when something
-     * needs the raw event stream (branch metadata, fan_in winner, etc.).
-     * Re-keying on `totalEvents` upstream gives a cheap invalidator.
-     *
-     * Defaults to the merged descendants view (`?include=descendants`)
-     * so sub-run activity surfaces as inline branches on the parent's
-     * detail page — D2 of `docs/proposals/parallel.md`. Top-level runs
-     * without sub-runs return their own events with `originRunId =
-     * runId`. Pass `includeDescendants: false` for the raw per-run
-     * view (post-mortem tools that want the parent's log only). */
-    events: (id: string, opts: { includeDescendants?: boolean } = {}) => {
-      const includeDescendants = opts.includeDescendants ?? true;
-      return queryOptions({
-        queryKey: [...queries.runs.all(), "events", id, includeDescendants ? "merged" : "raw"] as const,
-        queryFn: () => api.getRunEvents(id, { includeDescendants }),
+     * needs the raw event stream. Re-keying on `totalEvents` upstream
+     * gives a cheap invalidator. */
+    events: (id: string) =>
+      queryOptions({
+        queryKey: [...queries.runs.all(), "events", id] as const,
+        queryFn: () => api.getRunEvents(id),
         enabled: id.length > 0,
-      });
-    },
+      }),
     tree: (id: string) =>
       queryOptions({
         queryKey: [...queries.runs.all(), id, "tree"] as const,
@@ -110,14 +100,6 @@ export const queries = {
         enabled: id.length > 0,
         staleTime: 30_000,
         retry: noRetryOnGone,
-      }),
-    /** Sub-runs of a parent (P5 of docs/proposals/parallel.md). Empty
-     *  array on top-level runs. */
-    children: (id: string) =>
-      queryOptions({
-        queryKey: [...queries.runs.all(), id, "children"] as const,
-        queryFn: () => api.getRunChildren(id),
-        enabled: id.length > 0,
       }),
   },
 

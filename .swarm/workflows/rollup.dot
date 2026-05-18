@@ -1,20 +1,13 @@
 // rollup.dot — periodic senior-engineer post-mortem.
 //
-// Reads the latest terminal run of each drift workflow (structural-drift,
-// narrative-drift, analyze) plus a fresh operational-health snapshot,
-// then asks the heavy reasoning model to produce a single prioritised
-// findings table + Idea/Architecture/Execution ratings + top
-// recommendations. Replaces introspect.dot's `synthesize` node with a
-// dedicated workflow whose cadence is decoupled from any individual probe.
-// synthesize output passes through a goal-gated `verify` node that checks
-// finding-citation, CADENCE-correspondence, recommendation-scope, and
-// rating-rationale invariants before the run reaches done.
-//
-// `collect_latest` queries ~/.swarm/swarm.db (project fallback) for the
-// last terminal run of each label, pulls the named output node's final
-// assistant message, and shells out to the health collector for now-state
-// metrics. If a workflow has never run, its slot is reported as a CADENCE
-// gap rather than a fabricated finding.
+// A single codergen runs `.swarm/scripts/rollup/latest.ts` via the bash
+// tool — the script pulls the latest terminal run of each drift workflow
+// (structural-drift, narrative-drift, analyze) and a fresh health
+// snapshot — then produces a prioritised findings table + Idea /
+// Architecture / Execution ratings + top recommendations. A second
+// codergen acts as the goal-gated verifier; both share `thread_id="rollup"`
+// so the verifier reads the report from the conversation, not from
+// substituted output.
 //
 //   bun run swarm run rollup
 //
@@ -37,34 +30,30 @@ digraph rollup {
 
   start [shape=Mdiamond]
 
-  collect_latest [
-    shape        = parallelogram
-    tool_command = "bun .swarm/scripts/rollup/latest.ts $ARGUMENTS"
-  ]
-
   synthesize [
     class         = "heavy"
-    allowed_tools = "read"
+    thread_id     = "rollup"
+    allowed_tools = "bash, read"
     max_cost_usd  = 2.50
-    prompt        = "Final assessment using $collect_latest.output. The input is a JSON snapshot with `drift[]` (one entry per workflow: structural-drift, narrative-drift, analyze) and `health` (operational metrics).\n\nEach `drift[].output` is the full assistant message from that workflow's most recent terminal run — a markdown findings table (or a 'no findings' notice). Quote findings VERBATIM. Do not invent terms, rephrase, or paraphrase. If a finding is unclear or appears to reference something that is not a real code/doc symbol, flag it `[unclear — verify]` and pass it through unchanged rather than guessing.\n\nIf `drift[].output` is null or `drift[].run` is null, the corresponding workflow has no recent terminal run — record a CADENCE gap (HIGH severity) noting the workflow needs to run, do NOT fabricate findings.\n\n`health.snapshot` is the health probe JSON: `db_status` (ok / missing / empty), `window` (last 7 days), `metrics[]` each with id / label (OK | WATCH | ALERT) / value / note, and `worst_label`. Treat its labels as authoritative — don't relabel. If `health.error` is set, surface it under operational health as HIGH.\n\nProduce three sections in your final assistant message:\n\n1. Findings — every drift + health finding from all sources, grouped by severity (CRITICAL / HIGH / MEDIUM / LOW), with file:line refs. Tabular. Keep skill-drift findings (rows from narrative-drift's `## skill:<name>` subagents) as a labelled subgroup so swarm-* skill rot is visible at a glance. Include CADENCE rows for missing runs.\n\n2. Ratings — Idea / Architecture / Execution out of 10. Two sentences of rationale per axis grounded in the findings above (cite specific finding IDs). Do not anchor on prior scores; score from the evidence in this snapshot.\n\n3. Top recommendations — 3 to 5 prioritised actions ordered by leverage. Each: one-line action; why it is load-bearing; rough scope (hours / days / weeks); whether a new proposal is warranted under docs/proposals/.\n\nSenior-engineer post-mortem tone. No emoji. No marketing language. File:line backing beats hand-wavy claims; flag low-confidence calls explicitly."
+    prompt        = "Final assessment across the latest terminal run of each drift workflow plus a fresh operational-health snapshot.\n\nFirst: run `bun .swarm/scripts/rollup/latest.ts $ARGUMENTS` via the bash tool. The script returns a JSON snapshot with `drift[]` (one entry per workflow: structural-drift, narrative-drift, analyze) and `health` (operational metrics).\n\nEach `drift[].output` is the full assistant message from that workflow's most recent terminal run — a markdown findings table (or a 'no findings' notice). Quote findings VERBATIM. Do not invent terms, rephrase, or paraphrase. If a finding is unclear or appears to reference something that is not a real code/doc symbol, flag it `[unclear — verify]` and pass it through unchanged rather than guessing.\n\nIf `drift[].output` is null or `drift[].run` is null, the corresponding workflow has no recent terminal run — record a CADENCE gap (HIGH severity) noting the workflow needs to run, do NOT fabricate findings.\n\n`health.snapshot` is the health probe JSON: `db_status` (ok / missing / empty), `window` (last 7 days), `metrics[]` each with id / label (OK | WATCH | ALERT) / value / note, and `worst_label`. Treat its labels as authoritative — don't relabel. If `health.error` is set, surface it under operational health as HIGH.\n\nProduce three sections in your final assistant message:\n\n1. Findings — every drift + health finding from all sources, grouped by severity (CRITICAL / HIGH / MEDIUM / LOW), with file:line refs. Tabular. Keep skill-drift findings (rows from narrative-drift's `## skill:<name>` subagents) as a labelled subgroup so swarm-* skill rot is visible at a glance. Include CADENCE rows for missing runs.\n\n2. Ratings — Idea / Architecture / Execution out of 10. Two sentences of rationale per axis grounded in the findings above (cite specific finding IDs). Do not anchor on prior scores; score from the evidence in this snapshot.\n\n3. Top recommendations — 3 to 5 prioritised actions ordered by leverage. Each: one-line action; why it is load-bearing; rough scope (hours / days / weeks); whether a new proposal is warranted under docs/proposals/.\n\nSenior-engineer post-mortem tone. No emoji. No marketing language. File:line backing beats hand-wavy claims; flag low-confidence calls explicitly."
   ]
 
   verify [
     class         = "heavy"
-    allowed_tools = "read"
+    thread_id     = "rollup"
+    fidelity      = "full"
     goal_gate     = true
     retry_target  = "synthesize"
     max_cost_usd  = 0.75
-    prompt        = "Evidence-quality gate for $synthesize.output. Judge the report on its own merits — every cross-reference you need is already inside the report.\n\nCheck the synthesize report against four invariants. Treat each as pass/fail; do not paraphrase weaknesses into prose.\n\n1. Every Finding row cites a source file:line reference OR an explicit absence note (no occurrence in <path>, not present in <module>, etc.). A bare claim with no anchor is a fail.\n\n2. Every CADENCE row names the specific workflow whose recent run is missing (e.g. `CADENCE: narrative-drift — no terminal run in window`). A CADENCE row that doesn't name a workflow is a fabricated gap — fail.\n\n3. Top recommendations each have a rough scope populated (hours / days / weeks). Missing scope on any recommendation is a fail.\n\n4. Idea / Architecture / Execution ratings each have rationale that cites specific finding IDs from the report. Ratings whose rationale is generic prose with no finding-ID anchor are a fail.\n\nIf all four invariants pass, reply with EXACTLY the single word APPROVE and nothing else. If any invariant fails, call the abort tool with reason REJECT: <one-line summary of the worst violation>. Do not rewrite the report. Do not soften failures. The synthesize node will re-run with this rejection visible in its thread."
+    allowed_tools = "read"
+    prompt        = "Evidence-quality gate for the synthesise report in the prior turn. Judge the report on its own merits — every cross-reference you need is already inside it.\n\nCheck against four invariants. Treat each as pass/fail; do not paraphrase weaknesses into prose.\n\n1. Every Finding row cites a source file:line reference OR an explicit absence note (no occurrence in <path>, not present in <module>, etc.). A bare claim with no anchor is a fail.\n\n2. Every CADENCE row names the specific workflow whose recent run is missing (e.g. `CADENCE: narrative-drift — no terminal run in window`). A CADENCE row that doesn't name a workflow is a fabricated gap — fail.\n\n3. Top recommendations each have a rough scope populated (hours / days / weeks). Missing scope on any recommendation is a fail.\n\n4. Idea / Architecture / Execution ratings each have rationale that cites specific finding IDs from the report. Ratings whose rationale is generic prose with no finding-ID anchor are a fail.\n\nIf all four invariants pass, reply with EXACTLY the single word APPROVE and nothing else. If any invariant fails, call the abort tool with reason `REJECT: <one-line summary of the worst violation>`. Do not rewrite the report. Do not soften failures. The synthesize node will re-run with this rejection visible in its thread."
   ]
 
   done [shape=Msquare]
 
-  start          -> collect_latest
-  collect_latest -> done [condition="outcome=fail"]
-  collect_latest -> synthesize
+  start      -> synthesize
+  synthesize -> done [condition="outcome=fail"]
+  synthesize -> verify
 
-  synthesize     -> verify
-
-  verify         -> done
+  verify     -> done
 }

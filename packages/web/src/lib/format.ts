@@ -167,17 +167,11 @@ export function formatCacheHitRate(
  * layer while the copy reads naturally. `data-testid` / `data-status`
  * attributes continue to use the raw value; only visible text goes
  * through this helper.
- *
- * `running_children` collapses to "running" — operators see the parent
- * as running; the sub-pill (`BranchDigestChip`) adds the branch summary
- * separately so the badge stays consistent across statuses.
  */
 export function statusLabel(status: string): string {
   switch (status) {
     case "fail":
       return "failure";
-    case "running_children":
-      return "running";
     default:
       return status;
   }

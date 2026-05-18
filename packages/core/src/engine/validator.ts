@@ -4,7 +4,6 @@
 import { parseAcceleratorKey } from "../accelerator.ts";
 import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType } from "../types/graph.ts";
 import { parseCondition } from "./condition.ts";
-import { discoverFanInTarget, validateBranchSubgraphs } from "./parallel-discovery.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
 
@@ -46,9 +45,6 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "class",
   "retry_target",
   "fallback_retry_target",
-  "auto_status",
-  "allow_partial",
-  "join_policy",
   "tool_command",
   "max_cost_usd",
   "max_tokens",
@@ -86,30 +82,12 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "budget_policy",
 ]);
 
-/** Attributes attractor defines but swarm's architecture makes meaningless.
- * Authors who set them get W014 with a pointer to SPEC.md §5 — better
- * than the previous silent no-op. */
-const ATTRACTOR_ONLY_NODE_ATTRS: ReadonlyMap<string, string> = new Map([
-  ["auto_status", "swarm handlers return typed HandlerResult directly — there is no missing-status path to synthesize"],
-]);
-
 const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([
   ["loop_restart", "swarm's fidelity model (per-edge truncate/compact/summary) supersedes the run-restart use case"],
 ]);
 
 function isEmptyCondition(cond: string | undefined): boolean {
   return !cond || cond.trim() === "";
-}
-
-const NODE_OUTPUT_RE = /\$([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.|\b)/g;
-
-function collectReferences(template: string): { nodeIds: string[] } {
-  const nodeIds: string[] = [];
-  for (const m of template.matchAll(NODE_OUTPUT_RE)) {
-    const id = m[1];
-    if (id && !nodeIds.includes(id)) nodeIds.push(id);
-  }
-  return { nodeIds };
 }
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -134,32 +112,6 @@ export class ValidationError extends Error {
     super(`graph validation failed: ${diagnostics.length} issues`);
     this.name = "ValidationError";
   }
-}
-
-/** Returns true when a cycle-revisited node is protected by a retry guard
- * at node level or graph level, per SPEC §3.6. When guarded, W017 is
- * suppressed entirely — the author has already acknowledged the backward
- * edge by setting up retry semantics. */
-function isCycleRetryGuarded(graph: Graph, nodeId: string): boolean {
-  const node = graph.nodes[nodeId];
-  if (!node) return false;
-  const a = node.attrs;
-  const ga = graph.attrs;
-  const mr = Number(a.max_retries);
-  if (Number.isFinite(mr) && mr > 0) return true;
-  if (typeof a.retry_target === "string" && a.retry_target.trim() !== "") return true;
-  if (typeof a.fallback_retry_target === "string" && a.fallback_retry_target.trim() !== "") return true;
-  if (typeof a.retry_policy === "string" && a.retry_policy !== "" && a.retry_policy !== "none") return true;
-  const legacyAlias = (ga as Record<string, unknown>)["default_max_retry"];
-  const gmr = ga.default_max_retries ?? (typeof legacyAlias === "number" ? legacyAlias : Number(legacyAlias));
-  if (typeof gmr === "number" && Number.isFinite(gmr) && gmr > 0) return true;
-  if (
-    typeof ga.default_retry_policy === "string" &&
-    ga.default_retry_policy !== "" &&
-    ga.default_retry_policy !== "none"
-  )
-    return true;
-  return false;
 }
 
 export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[] {
@@ -246,12 +198,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
 
   // W003: no fail-edge (or unconditional fallback) from codergen/tool nodes
   // with only conditional edges. A run can silently terminate otherwise.
-  // Skip diamond (conditional) and Msquare/Mdiamond — diamond's no-op
-  // handler structurally cannot return fail (attractor §4.7), and the
-  // start/exit shapes have their own structure rules.
+  // Skip Msquare/Mdiamond — start/exit shapes have their own structure rules.
   for (const n of nodes) {
     if (n.shape === "Mdiamond" || n.shape === "Msquare") continue;
-    if (n.shape === "diamond") continue;
     const out = graph.edges.filter((e) => e.from === n.id);
     if (out.length === 0) continue; // terminal behaviour ok; engine handles
     const anyUnconditional = out.some((e) => isEmptyCondition(e.attrs.condition));
@@ -358,68 +307,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         severity: "warning",
         code: "W010",
         message: `graph default_fidelity="${df}" is not a known mode`,
-      });
-    }
-  }
-
-  // W004: unresolved $nodeId.output references
-  for (const n of nodes) {
-    const prompt = n.attrs.prompt;
-    if (typeof prompt !== "string") continue;
-    const refs = collectReferences(prompt);
-    for (const id of refs.nodeIds) {
-      if (!nodeIds.has(id)) {
-        diags.push({
-          severity: "error",
-          code: "E005",
-          message: `node "${n.id}" references unknown node "$${id}.output"`,
-          nodeId: n.id,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      }
-    }
-  }
-
-  // E007: parallel node (component) must have branches that converge on
-  // a single tripleoctagon (parallel.fan_in). Per attractor §4.8 the
-  // fan-in target is discovered structurally via edges, not declared.
-  for (const n of nodes) {
-    if (n.shape !== "component") continue;
-    const out = graph.edges.filter((e) => e.from === n.id);
-    if (out.length === 0) {
-      diags.push({
-        severity: "error",
-        code: "E007",
-        message: `parallel node "${n.id}" has no outgoing branches`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-      continue;
-    }
-    const discovery = discoverFanInTarget(graph, n.id);
-    if (discovery.kind === "no-fan-in") {
-      diags.push({
-        severity: "error",
-        code: "E007",
-        message: `parallel "${n.id}" has no reachable tripleoctagon (parallel.fan_in) from any branch`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    } else if (discovery.kind === "ambiguous-fan-in") {
-      diags.push({
-        severity: "error",
-        code: "E007",
-        message: `parallel "${n.id}" has multiple tripleoctagons reachable from all branches: ${discovery.candidates.join(", ")} (must be exactly one)`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    } else if (discovery.kind === "branches-diverge") {
-      diags.push({
-        severity: "error",
-        code: "E007",
-        message: `parallel "${n.id}" branches converge on different tripleoctagons; ensure all branches reach the same fan-in node`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
     }
   }
@@ -765,23 +652,9 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     });
   }
 
-  // W014: attractor attribute that swarm's architecture makes inert.
-  // `auto_status` (node) and `loop_restart` (edge) are documented in
-  // attractor but the swarm runtime has no path that consults them; see
-  // SPEC.md §5 for rationale. The whitelist (W013) accepts them so
-  // they don't double-warn — this lint is their dedicated signal.
-  for (const n of nodes) {
-    for (const [key, why] of ATTRACTOR_ONLY_NODE_ATTRS) {
-      if (n.attrs[key] === undefined) continue;
-      diags.push({
-        severity: "warning",
-        code: "W014",
-        message: `node "${n.id}" sets ${key}= but swarm does not honor it (${why}); see SPEC.md §5`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
+  // W014: attractor edge attribute that swarm's architecture makes inert
+  // (`loop_restart`). Documented in attractor but the swarm runtime has
+  // no path that consults it; see SPEC.md §5 for rationale.
   for (const e of graph.edges) {
     for (const [key, why] of ATTRACTOR_ONLY_EDGE_ATTRS) {
       if (e.attrs[key] === undefined) continue;
@@ -794,52 +667,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       });
     }
   }
-
-  // E018: cross-branch node ownership in a parallel subgraph (P3.3 of
-  // docs/proposals/parallel.md). A node reachable from two branch roots
-  // is an unambiguous structural error — the executor's per-sub-run
-  // subgraph slice cannot decide which sub-run owns it.
-  //
-  // W017 (info): intra-branch cycle. Cycles inside a branch are tolerated
-  // only via the same `max_retries`/`retry_target` mechanisms top-level
-  // workflows use (SPEC §3.6). When any retry guard is present on the
-  // cycle node (or at graph level), the diagnostic is suppressed entirely;
-  // otherwise it surfaces as info so authors know the subgraph isn't a
-  // pure DAG.
-  for (const n of nodes) {
-    if (n.shape !== "component") continue;
-    const discovery = discoverFanInTarget(graph, n.id);
-    if (discovery.kind !== "ok") continue;
-    const report = validateBranchSubgraphs(graph, discovery.branches, discovery.fanInNode);
-    for (const finding of report.findings) {
-      if (finding.kind === "cross-branch") {
-        diags.push({
-          severity: "error",
-          code: "E018",
-          message: `node "${finding.nodeId}" is reachable from multiple branches of parallel "${n.id}" (${finding.branchRoots.join(", ")}). Each branch subgraph must own its interior nodes exclusively — split the node or restructure so each branch's subgraph is disjoint.`,
-          nodeId: finding.nodeId,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      } else if (finding.kind === "cycle") {
-        if (isCycleRetryGuarded(graph, finding.nodeId)) continue;
-        diags.push({
-          severity: "info",
-          code: "W017",
-          message: `branch subgraph rooted at "${finding.branchRoot}" contains a cycle through "${finding.nodeId}". Allowed only if guarded by max_retries / retry_target on the backward edge — see SPEC §3.6.`,
-          nodeId: finding.nodeId,
-          ...(n.loc !== undefined ? { loc: n.loc } : {}),
-        });
-      }
-    }
-  }
-
-  // W015 retired: tripleoctagon with `prompt=` now drives LLM synthesis
-  // of branch outputs at runtime (see
-  // `packages/core/src/handler/handlers/fan-in.ts` LLM path + the
-  // `fanInLlmDelegate` in the daemon auto-dispatcher). The synthesised
-  // document is captured as the fan-in node's `output` artifact and is
-  // reachable downstream via `$<fanInId>.output` substitution. The
-  // earlier warning that the prompt was ignored no longer applies.
 
   if (opts.strict) {
     return diags.map((d) => (d.severity === "warning" ? { ...d, severity: "error" as const } : d));

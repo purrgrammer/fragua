@@ -33,7 +33,6 @@ import {
   deleteOrphanBlobs,
   insertBlobIfAbsent,
   selectArtifactRef as querySelectArtifactRef,
-  selectNodeOutputRefs,
   upsertArtifact,
 } from "./artifact-queries.ts";
 import { BlobFS } from "./blob-fs.ts";
@@ -49,7 +48,6 @@ import {
   upsertDaemonLock,
 } from "./daemon-queries.ts";
 import {
-  type DescendantEventRow,
   insertEventDaemon,
   insertEventRunEnqueued,
   insertEventWeb,
@@ -57,9 +55,6 @@ import {
   type PendingIntentRow,
   selectEvents,
   selectEventsByType,
-  selectEventsForRunWithDescendantsAtFloor,
-  selectEventsForRunWithDescendantsForward,
-  selectEventsWithDescendants,
   selectFactSideEffectDone,
   selectFactSideEffectIntent,
   selectGlobalEventsAtFloor,
@@ -71,13 +66,11 @@ import {
 } from "./event-queries.ts";
 import {
   insertMessage,
-  type NarrowMessageWithOriginRow,
   selectActiveThreads,
   selectMaxMessageOrdinal,
   selectMessageByDedup,
   selectMessages,
   selectMessagesNarrow,
-  selectMessagesNarrowWithDescendants,
 } from "./message-queries.ts";
 import { Metrics, type MetricsSnapshot } from "./metrics.ts";
 import { migrate } from "./migrations.ts";
@@ -99,10 +92,7 @@ import {
 } from "./provider-credentials-queries.ts";
 import { applyFact, emptyMetrics } from "./reducers.ts";
 import {
-  type ActiveDescendantNodeRow,
-  applyMetricsDelta,
   bumpRunSeq,
-  type ChildStatusDigestRow,
   type CwdSummaryRow,
   claimQueuedRun,
   countQueuedRuns,
@@ -112,8 +102,6 @@ import {
   insertRunState,
   type ListRunIdsOpts,
   type ListRunSummaryRowsOpts,
-  type MetricsDeltaRow,
-  type ParentCostSnapshot,
   // queryRunCostTotals renamed at import for symmetry with the other
   // `query*` imports below; original symbol used by tests directly.
   getRunCostTotals as queryRunCostTotals,
@@ -122,14 +110,10 @@ import {
   type RunStateRow,
   type RunSummaryRow,
   type StepAggregateRow,
-  selectActiveChildren,
-  selectActiveDescendantNodes,
-  selectChildStatusDigest,
   selectCwds,
   selectGlobalMetricsTotals,
   selectGlobalModelBreakdown,
   selectNextQueuedRun,
-  selectParentCostSnapshot,
   selectRunIds,
   selectRunStateRow,
   selectRunSummaryRows,
@@ -160,7 +144,6 @@ import {
   type ArtifactRef,
   type ArtifactScope,
   ArtifactTooLargeError,
-  type ClaimEligibility,
   ConcurrencyError,
   type CreateScheduleParams,
   type DaemonEvent,
@@ -172,8 +155,6 @@ import {
   type FactAppendResult,
   type FactEvent,
   type GetDaemonEventsOpts,
-  type GetEventsForRunWithDescendantsAtFloorOpts,
-  type GetEventsForRunWithDescendantsForwardOpts,
   type GetEventsOpts,
   type GetGlobalEventsAtFloorOpts,
   type GetGlobalEventsForwardOpts,
@@ -187,10 +168,8 @@ import {
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_MESSAGE_CONTENT_BYTES,
   MAX_ROUTING_BYTES,
-  type MergedStoredEvent,
   type Message,
   MessageTooLargeError,
-  type MetricsDelta,
   type NarrowMessage,
   type ObservabilityEvent,
   PayloadTooLargeError,
@@ -286,11 +265,6 @@ function rowToRunState(row: RunStateRow): RunState {
     workflowScope: row.workflow_scope,
     workflowPath: row.workflow_path,
     scheduleId: row.schedule_id,
-    parentRunId: row.parent_run_id,
-    parentNodeId: row.parent_node_id,
-    parallelIndex: row.parallel_index,
-    subgraphRootNodeId: row.subgraph_root_node_id,
-    subgraphTerminalNodeId: row.subgraph_terminal_node_id,
   };
 }
 
@@ -488,28 +462,6 @@ export class SqliteStore implements IEventStore {
     return { seqs };
   }
 
-  addMetricsDelta(runId: string, delta: MetricsDelta): void {
-    const row: MetricsDeltaRow = {
-      billedTokens: delta.billedTokens ?? 0,
-      totalCostUsd: delta.totalCostUsd ?? 0,
-      totalInputCostUsd: delta.totalInputCostUsd ?? 0,
-      totalOutputCostUsd: delta.totalOutputCostUsd ?? 0,
-      totalCacheReadCostUsd: delta.totalCacheReadCostUsd ?? 0,
-      totalCacheWriteCostUsd: delta.totalCacheWriteCostUsd ?? 0,
-      totalInputTokens: delta.totalInputTokens ?? 0,
-      totalOutputTokens: delta.totalOutputTokens ?? 0,
-      totalCacheReadTokens: delta.totalCacheReadTokens ?? 0,
-      totalCacheWriteTokens: delta.totalCacheWriteTokens ?? 0,
-      activeMs: delta.activeMs ?? 0,
-    };
-    const now = this.now();
-    const startAt = performance.now();
-    this.writeTxn(() => {
-      applyMetricsDelta(this.db, runId, row, now);
-    });
-    this.metrics.recordWrite(performance.now() - startAt, "metrics_delta");
-  }
-
   // ─────────────── Daemon events ───────────────
 
   appendDaemonEvent(event: DaemonEvent, opts?: { runId?: string }): { seq: number; ts: number } {
@@ -569,11 +521,6 @@ export class SqliteStore implements IEventStore {
         workflowScope: params.workflowScope ?? null,
         workflowPath: params.workflowPath ?? null,
         scheduleId: params.scheduleId ?? null,
-        parentRunId: params.parentRunId ?? null,
-        parentNodeId: params.parentNodeId ?? null,
-        parallelIndex: params.parallelIndex ?? null,
-        subgraphRootNodeId: params.subgraphRootNodeId ?? null,
-        subgraphTerminalNodeId: params.subgraphTerminalNodeId ?? null,
       });
 
       const seq = bumpRunSeq(this.db, params.runId);
@@ -598,16 +545,9 @@ export class SqliteStore implements IEventStore {
     return selectRunSummaryRows(this.db, opts);
   }
 
-  claimNextRun(maxInFlight: number, opts?: { eligibility?: ClaimEligibility }): { runId: string } | null {
+  claimNextRun(maxInFlight: number): { runId: string } | null {
     const now = this.now();
     let claimed: string | null = null;
-    // P0.4: `eligibility.parentStatusIn` will gate sub-runs on parent
-    // status once P1.1 adds the `parent_run_id` column. Until then, the
-    // schema has no sub-runs, so every queued row is a top-level run and
-    // the filter is structurally a no-op. The parameter is accepted for
-    // signature stability — caller code wired in P0 keeps working when
-    // the SQL gains the join in P1.1.
-    const _eligibility = opts?.eligibility;
 
     this.writeTxn(() => {
       if (countRunningRuns(this.db) >= maxInFlight) return;
@@ -656,52 +596,6 @@ export class SqliteStore implements IEventStore {
     return selectEventsByType(this.db, runId, type).map(rowToStoredEvent);
   }
 
-  /**
-   * Merged event stream covering this run AND every descendant sub-run,
-   * in (ts, runId, seq) order. Sub-run events are returned with
-   * `parentNodeIdForBranch` / `parallelIndexForBranch` / `branchNodeId`
-   * stamped on each row so the parent's UI can render them as inline
-   * branches without re-querying. D2 of `docs/proposals/parallel.md`.
-   *
-   * Cost: one recursive CTE join per call; bounded by the descendant
-   * count (typically O(fanout-width)). Use for the run-detail page's
-   * unified view; per-run drill-downs should keep using `getEvents`.
-   */
-  getEventsFeedWithDescendants(runId: string, opts: { sinceTs?: number; limit?: number } = {}): MergedStoredEvent[] {
-    const rows: DescendantEventRow[] = selectEventsWithDescendants(this.db, runId, opts);
-    return rows.map((r) => {
-      const base = rowToStoredEvent(r);
-      const ev: MergedStoredEvent = { ...base, originRunId: r.originRunId };
-      if (r.parentNodeIdForBranch != null) ev.parentNodeIdForBranch = r.parentNodeIdForBranch;
-      if (r.parallelIndexForBranch != null) ev.parallelIndexForBranch = r.parallelIndexForBranch;
-      if (r.branchNodeId != null) ev.branchNodeId = r.branchNodeId;
-      // Backward-compat shim: rewrite sub-run branch-root
-      // fact.node_started / fact.node_completed payloads to look like
-      // the legacy inline-branch shape (`parentNodeId` + `parallelIndex`
-      // on the payload). Existing client code (branch-meta,
-      // RunConversation, CostInspector) keys off those fields and
-      // works unchanged. Only the branch root's events get this
-      // treatment; internal multi-node subgraph events flow through
-      // without parentNodeId, which keeps branch-meta from
-      // mis-classifying them as additional branches.
-      if (
-        r.branchNodeId != null &&
-        r.parentNodeIdForBranch != null &&
-        (ev.type === "fact.node_started" || ev.type === "fact.node_completed")
-      ) {
-        const p = ev.payload as Record<string, unknown> | null;
-        if (p != null && p["nodeId"] === r.branchNodeId) {
-          ev.payload = {
-            ...p,
-            parentNodeId: r.parentNodeIdForBranch,
-            ...(r.parallelIndexForBranch != null ? { parallelIndex: r.parallelIndexForBranch } : {}),
-          };
-        }
-      }
-      return ev;
-    });
-  }
-
   getGlobalEventsForward(opts: GetGlobalEventsForwardOpts): StoredEvent[] {
     return selectGlobalEventsForward(this.db, opts).map(rowToStoredEvent);
   }
@@ -712,14 +606,6 @@ export class SqliteStore implements IEventStore {
 
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[] {
     return selectGlobalEventsLatest(this.db, opts).map(rowToStoredEvent);
-  }
-
-  getEventsForRunWithDescendantsForward(opts: GetEventsForRunWithDescendantsForwardOpts): StoredEvent[] {
-    return selectEventsForRunWithDescendantsForward(this.db, opts).map(rowToStoredEvent);
-  }
-
-  getEventsForRunWithDescendantsAtFloor(opts: GetEventsForRunWithDescendantsAtFloorOpts): StoredEvent[] {
-    return selectEventsForRunWithDescendantsAtFloor(this.db, opts).map(rowToStoredEvent);
   }
 
   getUnappliedIntents(runId: string): StoredEvent[] {
@@ -832,22 +718,6 @@ export class SqliteStore implements IEventStore {
     }));
   }
 
-  getMessagesNarrowWithDescendants(
-    runId: string,
-    opts: { sinceOrdinal?: number; limit?: number } = {},
-  ): Array<NarrowMessage & { originRunId: string }> {
-    const queryOpts: Parameters<typeof selectMessagesNarrowWithDescendants>[2] = {
-      sinceOrdinal: opts.sinceOrdinal ?? 0,
-      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-    };
-    return selectMessagesNarrowWithDescendants(this.db, runId, queryOpts).map((r: NarrowMessageWithOriginRow) => ({
-      ordinal: r.ordinal,
-      content: JSON.parse(r.content),
-      nodeId: r.node_id,
-      originRunId: r.originRunId,
-    }));
-  }
-
   // ─────────────── Aggregations ───────────────
 
   getStepAggregates(runId: string): StepAggregateRow[] {
@@ -856,22 +726,6 @@ export class SqliteStore implements IEventStore {
 
   getRunCostTotals(runId: string): RunCostTotalsRow {
     return queryRunCostTotals(this.db, runId);
-  }
-
-  getParentCostSnapshot(parentRunId: string): ParentCostSnapshot {
-    return selectParentCostSnapshot(this.db, parentRunId);
-  }
-
-  activeChildRuns(parentRunId: string): string[] {
-    return selectActiveChildren(this.db, parentRunId);
-  }
-
-  activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[] {
-    return selectActiveDescendantNodes(this.db, parentRunId);
-  }
-
-  childStatusDigest(parentRunId: string): ChildStatusDigestRow | null {
-    return selectChildStatusDigest(this.db, parentRunId);
   }
 
   getKpiTotals(window: AnalyticsWindow): KpiTotalsRow {
@@ -1002,89 +856,6 @@ export class SqliteStore implements IEventStore {
       sizeBytes: row.size_bytes,
       mime: row.mime,
     };
-  }
-
-  getNodeOutputs(runId: string): Map<string, { output: string; success: boolean; timestamp: number }> {
-    const out = new Map<string, { output: string; success: boolean; timestamp: number }>();
-    const decoder = new TextDecoder();
-    // Cross-run substitution (P5 of docs/proposals/parallel.md):
-    //
-    //   1. Walk the parent chain UP and prepend their outputs. A
-    //      sub-run prompt like "review using $scope.output" needs to
-    //      see the parent's scope output. Parent's outputs are frozen
-    //      at fanout time — they don't change after sub-runs dispatch.
-    //
-    //   2. Add this run's own outputs.
-    //
-    //   3. Walk the direct children DOWN, adding their outputs. A
-    //      parent's downstream node (e.g. `synthesize`) reads
-    //      `$lens_correctness.output` — the artifact lives under the
-    //      child sub-run's namespace, not the parent's. Without this
-    //      hop the substitution silently resolves to the empty string
-    //      and cascades down the graph as aborted_exit.
-    //
-    // Order: parent first → self → children. `Map.set` later-wins, so
-    // a child's overwrite of the parent's nodeId is intentional (the
-    // child's output is the more recent thing — though parallel
-    // branches by construction don't re-emit a parent's nodeId).
-    const accumulateRefs = (sourceRunId: string): void => {
-      const refs = selectNodeOutputRefs(this.db, sourceRunId);
-      for (const ref of refs) {
-        const colon = ref.outputRefKey.indexOf(":");
-        if (colon < 0) continue;
-        const refNodeId = ref.outputRefKey.slice(0, colon);
-        const key = ref.outputRefKey.slice(colon + 1);
-        let bytes: Uint8Array;
-        try {
-          bytes = this.getArtifact({ runId: sourceRunId, nodeId: refNodeId, iteration: ref.iteration, key });
-        } catch {
-          continue;
-        }
-        let stderr: string | undefined;
-        try {
-          const stderrBytes = this.getArtifact({
-            runId: sourceRunId,
-            nodeId: refNodeId,
-            iteration: ref.iteration,
-            key: "stderr",
-          });
-          stderr = decoder.decode(stderrBytes);
-        } catch {
-          // stderr artifact is optional — absent for codergen nodes and silent tool runs
-        }
-        out.set(ref.nodeId, {
-          output: decoder.decode(bytes),
-          ...(stderr !== undefined ? { stderr } : {}),
-          success: ref.outcomeStatus !== "fail",
-          timestamp: ref.seq,
-        });
-      }
-    };
-
-    // (1) Parent chain (up). Bound to defend against pathological
-    // cycles (impossible per schema FK but cheap belt-and-suspenders).
-    const ancestry: string[] = [];
-    let cursor: string | null = runId;
-    let depth = 0;
-    while (cursor != null && depth < 32) {
-      const row = selectRunStateRow(this.db, cursor);
-      if (row == null || row.parent_run_id == null) break;
-      ancestry.push(row.parent_run_id);
-      cursor = row.parent_run_id;
-      depth++;
-    }
-    for (let i = ancestry.length - 1; i >= 0; i--) accumulateRefs(ancestry[i]!);
-
-    // (2) Self.
-    accumulateRefs(runId);
-
-    // (3) Direct children. The children query is a single indexed
-    // scan; we only walk one level deep to avoid an exponential blow
-    // on hypothetical nested fan-outs (not currently supported).
-    const childIds = selectRunIds(this.db, { parentRunId: runId });
-    for (const childId of childIds) accumulateRefs(childId);
-
-    return out;
   }
 
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null {

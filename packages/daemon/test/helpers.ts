@@ -94,15 +94,6 @@ export interface MockCodergenOpts {
    *  `"mock"` / `"mock-model"`. */
   provider?: string;
   modelName?: string;
-  /** When set, the handler writes an artifact at `ctx.artifacts.put(
-   *  "output", output)` and returns `outputRef` pointing to it. The
-   *  parent's `getNodeOutputs` then resolves `$<nodeId>.output` to
-   *  this content. Used by cross-run substitution tests. */
-  output?: string;
-  /** Optional dynamic output: receives `ctx.nodeOutputs` so the test
-   *  can verify cross-run substitution by writing back what the
-   *  handler saw. */
-  outputFn?: (lookup: ReadonlyMap<string, { output: string }>) => string;
 }
 
 export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSpec {
@@ -171,15 +162,6 @@ export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSp
         throw err;
       }
 
-      // Write output artifact if requested. Lets cross-run
-      // substitution tests assert that `$<nodeId>.output` resolves
-      // through the artifact namespace.
-      let outputRef: ReturnType<typeof ctx.artifacts.put> | undefined;
-      const outputContent = opts.outputFn != null ? opts.outputFn(ctx.nodeOutputs) : opts.output;
-      if (outputContent != null) {
-        outputRef = ctx.artifacts.put("output", outputContent, "text/plain");
-      }
-
       const result: handler.HandlerResult = {
         kind: "transition",
         outcomeStatus: opts.outcomeStatus ?? "success",
@@ -192,7 +174,6 @@ export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSp
         modelName,
       };
       if (opts.nextNode !== undefined) result.nextNode = opts.nextNode;
-      if (outputRef !== undefined) result.outputRef = outputRef;
       return result;
     },
   };

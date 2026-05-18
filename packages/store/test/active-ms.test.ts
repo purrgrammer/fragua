@@ -31,11 +31,6 @@ function blankState(): RunState {
     workflowScope: null,
     workflowPath: null,
     scheduleId: null,
-    parentRunId: null,
-    parentNodeId: null,
-    parallelIndex: null,
-    subgraphRootNodeId: null,
-    subgraphTerminalNodeId: null,
   };
 }
 

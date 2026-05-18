@@ -1,11 +1,10 @@
+/// <reference path="./globals.d.ts" />
 import type { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { CURRENT_SCHEMA_VERSION, MIN_COMPATIBLE_SCHEMA_VERSION } from "./pragmas.ts";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_SQL = readFileSync(join(HERE, "schema.sql"), "utf8");
+// Bun's bundler inlines the SQL into the JS output so `bun build --compile`
+// embeds it in the binary. Reading via `readFileSync(import.meta.dir + "/schema.sql")`
+// breaks in compiled mode — `/$bunfs/root/schema.sql` doesn't exist.
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 
 /** Thrown inside a migration step's transaction body when
  * `foreign_key_check` reports violations. Carries the raw rows so the
@@ -41,6 +40,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [10, MIGRATION_010_RUNNING_CHILDREN_STATUS()],
   [11, MIGRATION_011_PROVIDER_CREDENTIALS()],
   [12, MIGRATION_012_PROVIDER_CONFIG()],
+  [13, MIGRATION_013_DROP_PARALLEL_SUBRUNS()],
 ]);
 
 /**
@@ -780,6 +780,125 @@ function MIGRATION_012_PROVIDER_CONFIG(): string {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     ) STRICT;
+  `;
+}
+
+/**
+ * v12 → v13: drop the graph-level parallel/fan_in primitive. Removes the
+ * sub-run linkage columns (`parent_run_id`, `parent_node_id`,
+ * `parallel_index`, `subgraph_root_node_id`, `subgraph_terminal_node_id`)
+ * and the `idx_run_state_parent` index from `run_state`, and drops
+ * `running_children` from the status CHECK. Any in-flight rows still in
+ * `running_children` are deleted along with their event log; pre-release,
+ * no compat — AGENTS.md ground rule #11.
+ *
+ * SQLite has no `ALTER TABLE … DROP COLUMN` for generated columns nor
+ * `ALTER TABLE … DROP CHECK`, so the change rides a table rebuild.
+ */
+function MIGRATION_013_DROP_PARALLEL_SUBRUNS(): string {
+  return `
+    -- Ensure daemon_events exists. Older test fixtures pin v6/v7 schemas
+    -- without it; schema.sql creates it for fresh DBs. Mirroring the
+    -- DDL here lets the v13 step run cleanly on any path.
+    CREATE TABLE IF NOT EXISTS daemon_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL CHECK (length(payload) < 4096),
+      ts INTEGER NOT NULL,
+      run_id TEXT REFERENCES run_state(run_id) ON DELETE SET NULL
+    ) STRICT;
+
+    -- foreign_keys are OFF during the migration step, so the
+    -- daemon_events.run_id ON-DELETE-SET-NULL cascade does not fire
+    -- automatically. Null it out manually before the run_state DELETE
+    -- so the post-commit foreign_key_check does not surface dangling
+    -- run_ids.
+    UPDATE daemon_events SET run_id = NULL
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status = 'running_children' OR parent_run_id IS NOT NULL);
+    -- Drop any in-flight rows whose parent linkage still references them.
+    DELETE FROM events
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status = 'running_children' OR parent_run_id IS NOT NULL);
+    DELETE FROM messages
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status = 'running_children' OR parent_run_id IS NOT NULL);
+    DELETE FROM artifacts
+      WHERE run_id IN (SELECT run_id FROM run_state
+                       WHERE status = 'running_children' OR parent_run_id IS NOT NULL);
+    DELETE FROM run_state
+      WHERE status = 'running_children' OR parent_run_id IS NOT NULL;
+
+    CREATE TABLE run_state_v13 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_hitl','paused_auto',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      schedule_id TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v13 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    )
+    SELECT
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+    DROP INDEX IF EXISTS idx_runs_by_schedule;
+    DROP INDEX IF EXISTS idx_run_state_parent;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v13 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+    CREATE INDEX idx_runs_by_schedule
+      ON run_state(schedule_id)
+      WHERE schedule_id IS NOT NULL;
   `;
 }
 

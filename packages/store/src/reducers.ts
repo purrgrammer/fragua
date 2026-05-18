@@ -62,11 +62,6 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.node_started": {
-      // Branch facts (parentNodeId set) leave currentNode pointed at
-      // the parent component during fan-out; per-branch state is
-      // derived live from the events table. Top-level transitions take
-      // the normal path.
-      if (fact.payload.parentNodeId !== undefined) return next;
       next.status = "running";
       next.currentNode = fact.payload.nodeId;
       next.nodeStartedAt = now;
@@ -74,10 +69,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.node_completed": {
       const p = fact.payload;
-      const isBranch = p.parentNodeId !== undefined;
-      // Branch facts must not close the parent's dispatch interval —
-      // the parent is still running until its own fact.node_completed.
-      if (!isBranch) closeDispatchInterval(next, now);
+      closeDispatchInterval(next, now);
       next.metrics.billedTokens += p.tokens;
       next.metrics.totalCostUsd += p.costUsd;
       next.metrics.totalInputCostUsd += p.inputCostUsd ?? 0;
@@ -104,10 +96,6 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
         tokens: nodeBucket.tokens + (p.inputTokens ?? 0) + (p.outputTokens ?? 0),
         costUsd: nodeBucket.costUsd + p.costUsd,
       };
-      // Branch completion: don't redirect currentNode — the parent
-      // component is still the active node until all branches resolve
-      // and the parent itself emits fact.node_completed.
-      if (isBranch) return next;
       next.currentNode = p.nextNode;
       next.nodeStartedAt = now;
       return next;
@@ -187,43 +175,6 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
     }
     case "fact.run_branched": {
       next.branch = fact.payload.branch;
-      return next;
-    }
-    case "fact.fanout_started": {
-      // Parent transitions from `running` → `running_children`. The
-      // dispatch interval closes (parent isn't actively executing
-      // handler code; sub-runs run in parallel under their own claims),
-      // but `currentNode` stays pinned to the component so the
-      // collect-phase re-dispatch lands on the same node.
-      closeDispatchInterval(next, now);
-      next.status = "running_children";
-      next.nodeStartedAt = null;
-      return next;
-    }
-    case "fact.fanout_completed": {
-      // Every sub-run has reached a terminal status. Move the
-      // parent back into the queue so the next claim runs the collect
-      // phase on the component node. `readyAt = now` so the wake puts
-      // it at the front of the priority/ready_at sort.
-      next.status = "queued";
-      next.readyAt = now;
-      return next;
-    }
-    case "fact.subrun_completed": {
-      // Cost rollup: fold the sub-run's billed cost/tokens into the
-      // parent's metrics so budget gates see cumulative spend (parent +
-      // every completed sub-run) on the next gate check. In-flight
-      // sub-runs aggregate live via SQL at gate-check time (D3). Token
-      // splits roll up too so the parent's UI shows correct
-      // input/output/cache totals (defaults to 0 for back-compat with
-      // pre-split sub-runs).
-      const p = fact.payload;
-      next.metrics.totalCostUsd += p.costUsd;
-      next.metrics.billedTokens += p.billedTokens;
-      next.metrics.totalInputTokens += p.inputTokens ?? 0;
-      next.metrics.totalOutputTokens += p.outputTokens ?? 0;
-      next.metrics.totalCacheReadTokens += p.cacheReadTokens ?? 0;
-      next.metrics.totalCacheWriteTokens += p.cacheWriteTokens ?? 0;
       return next;
     }
     case "fact.run_requeued_after_crash": {

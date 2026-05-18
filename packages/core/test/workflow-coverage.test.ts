@@ -15,7 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { HANDLER_BY_SHAPE, type HandlerType, type NodeShape, parseDotSource, validate } from "../src/index.ts";
+import { parseDotSource, validate } from "../src/index.ts";
 
 const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "..", ".swarm", "workflows");
 
@@ -23,11 +23,6 @@ function listWorkflowFiles(): string[] {
   return readdirSync(WORKFLOWS_DIR)
     .filter((f) => f.endsWith(".dot"))
     .map((f) => join(WORKFLOWS_DIR, f));
-}
-
-function shapeOf(node: { shape?: string; attrs?: { shape?: string } }): NodeShape {
-  const s = node.shape ?? node.attrs?.shape ?? "box";
-  return s as NodeShape;
 }
 
 describe(".swarm/workflows/*.dot — coverage + validity", () => {
@@ -49,25 +44,4 @@ describe(".swarm/workflows/*.dot — coverage + validity", () => {
       expect(errors).toHaveLength(0);
     });
   }
-
-  test("every canonical handler kind appears in at least one shipped workflow", () => {
-    const expectedKinds = new Set<HandlerType>(Object.values(HANDLER_BY_SHAPE));
-    const seen = new Set<HandlerType>();
-    for (const path of files) {
-      const src = readFileSync(path, "utf8");
-      const graph = parseDotSource(src);
-      for (const node of Object.values(graph.nodes)) {
-        const kind = HANDLER_BY_SHAPE[shapeOf(node)];
-        seen.add(kind);
-      }
-    }
-    const missing = [...expectedKinds].filter((k) => !seen.has(k));
-    if (missing.length > 0) {
-      throw new Error(
-        `No shipped workflow demonstrates handler kind(s): ${missing.join(", ")}. ` +
-          "Add a node with the corresponding shape to one of .swarm/workflows/*.dot.",
-      );
-    }
-    expect(missing).toEqual([]);
-  });
 });

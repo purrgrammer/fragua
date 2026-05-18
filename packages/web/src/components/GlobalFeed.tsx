@@ -311,15 +311,8 @@ const FeedRow = memo(function FeedRow({ event, reduce }: FeedRowProps): JSX.Elem
       <Link
         to={`/runs/${event.runId}`}
         title={runTitleTooltip(event.runId, run)}
-        data-origin-run-id={run?.parentRunId != null ? event.runId : undefined}
-        data-branch-node-id={run?.branchNodeId}
         className="col-span-2 col-start-1 row-start-2 min-w-0 truncate font-medium text-sw-text hover:underline sm:col-span-1 sm:col-start-3 sm:row-start-1"
       >
-        {run?.parentRunId != null && run?.branchNodeId ? (
-          <span className="mr-1 font-mono text-[10px] uppercase tracking-[0.06em] text-sw-accent-thinking">
-            [{run.branchNodeId}]
-          </span>
-        ) : null}
         {displayRunTitle(event.runId, run)}
       </Link>
       {wf ? (

@@ -38,13 +38,10 @@ import type {
 } from "./analytics-queries.ts";
 import type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 import type {
-  ActiveDescendantNodeRow,
-  ChildStatusDigestRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
   ListRunSummaryRowsOpts,
-  ParentCostSnapshot,
   RunCostTotalsRow,
   RunSummaryRow,
   StepAggregateRow,
@@ -92,13 +89,10 @@ export type {
 export { decodeCursor, encodeCursor, getFirstRunAt } from "./analytics-queries.ts";
 export type { OrphanSideEffectRow, PendingIntentRow } from "./event-queries.ts";
 export type {
-  ActiveDescendantNodeRow,
-  ChildStatusDigestRow,
   GlobalMetricsTotalsRow,
   GlobalModelBreakdownRow,
   ListRunIdsOpts,
   ListRunSummaryRowsOpts,
-  ParentCostSnapshot,
   RunCostTotalsRow,
   RunSummaryRow,
   StepAggregateRow,
@@ -183,41 +177,6 @@ export interface RunMetrics {
   activeMs: number;
 }
 
-/**
- * Eligibility filter passed to {@link IEventWriter.claimNextRun}. The
- * picker walks queued runs in priority order; rows that fail the filter
- * are skipped (the picker keeps walking) rather than blocking. Top-level
- * runs (no `parent_run_id`) always pass.
- *
- * See P0.4 of `docs/proposals/parallel.md`.
- */
-export interface ClaimEligibility {
-  /** Sub-runs (rows with non-NULL `parent_run_id`) are eligible only
-   *  when the parent's status is in this list. If unset, sub-runs are
-   *  ignored — used by callers that only want top-level runs (e.g.,
-   *  pre-sub-run behaviour). */
-  parentStatusIn?: readonly RunStatus[];
-}
-
-/**
- * Additive deltas applied via {@link IEventWriter.addMetricsDelta}. Each
- * field is optional and treated as a delta to add to the current value
- * (missing → 0). Used for cross-run cost rollup (parallel sub-runs).
- */
-export interface MetricsDelta {
-  billedTokens?: number;
-  totalCostUsd?: number;
-  totalInputCostUsd?: number;
-  totalOutputCostUsd?: number;
-  totalCacheReadCostUsd?: number;
-  totalCacheWriteCostUsd?: number;
-  totalInputTokens?: number;
-  totalOutputTokens?: number;
-  totalCacheReadTokens?: number;
-  totalCacheWriteTokens?: number;
-  activeMs?: number;
-}
-
 export interface RunState {
   runId: string;
   version: number;
@@ -277,23 +236,6 @@ export interface RunState {
    * target, so a run keeps its lineage even after the schedule row is
    * gone. */
   scheduleId: string | null;
-  /** Parent run id when this row is a parallel sub-run; `null` on
-   * top-level runs. P1.1 of `docs/proposals/parallel.md`. ON DELETE
-   * SET NULL — parent GC leaves the sub-run as a free-standing row. */
-  parentRunId: string | null;
-  /** Component node id on the parent that fanned out into this sub-run.
-   * `null` on top-level runs. */
-  parentNodeId: string | null;
-  /** Sub-run's 0-based position in the parent's fan-out. `null` on
-   * top-level runs. */
-  parallelIndex: number | null;
-  /** Root of the parent-graph slice this sub-run dispatches through.
-   * `null` on top-level runs. */
-  subgraphRootNodeId: string | null;
-  /** Fan_in node where the sub-run converges. The sub-run terminates
-   * BEFORE entering this node; the parent's collect phase reads sub-run
-   * outcomes on the fan_in turn. `null` on top-level runs. */
-  subgraphTerminalNodeId: string | null;
 }
 
 /**
@@ -332,31 +274,6 @@ export interface StoredEvent {
   writer: EventWriter;
   payload: unknown;
   ts: number;
-}
-
-/**
- * StoredEvent enriched with the descendant linkage that the parent-run
- * merged view stamps onto sub-run events. `originRunId` is which run
- * actually wrote the event (parent vs sub-run); `parentNodeIdForBranch`
- * / `parallelIndexForBranch` / `branchNodeId` carry the sub-run's
- * fan-out slot so client renderers can treat sub-run events as inline
- * branches without re-querying. D2 of `docs/proposals/parallel.md`.
- */
-export interface MergedStoredEvent extends StoredEvent {
-  /** The runId that wrote this event. Equal to `runId` for parent
-   *  events; differs for sub-run events. */
-  originRunId: string;
-  /** Component node id on the parent that fanned out into the
-   *  sub-run that produced this event. Undefined on parent-origin
-   *  rows. */
-  parentNodeIdForBranch?: string;
-  /** 0-based branch slot on the parent's fan-out. Undefined on
-   *  parent-origin rows. */
-  parallelIndexForBranch?: number;
-  /** Branch root node id (the sub-run's `subgraph_root_node_id`).
-   *  Operator-facing label for the branch. Undefined on parent-origin
-   *  rows. */
-  branchNodeId?: string;
 }
 
 /**
@@ -592,16 +509,6 @@ export interface EnqueueRunParams {
    * leaves it undefined. Surfaced on `run_state.schedule_id`. Schedule
    * deletion does NOT cascade here; lineage outlives the schedule. */
   scheduleId?: string;
-  /** Parallel sub-run linkage. Set only by the parallel handler when
-   * fanning out into N sub-run rows; top-level enqueues leave these
-   * undefined. P1.1 of `docs/proposals/parallel.md`. All five fields
-   * are set or none — the executor / dispatcher refuses inconsistent
-   * partial linkage. */
-  parentRunId?: string;
-  parentNodeId?: string;
-  parallelIndex?: number;
-  subgraphRootNodeId?: string;
-  subgraphTerminalNodeId?: string;
 }
 
 export interface GetEventsOpts {
@@ -644,36 +551,6 @@ export interface GetGlobalEventsAtFloorOpts {
 export interface GetGlobalEventsLatestOpts {
   /** Allow-listed event kinds. Required — the global feed always filters. */
   kindIn: readonly string[];
-  limit: number;
-}
-
-export interface GetEventsForRunWithDescendantsForwardOpts {
-  /** Parent run id. Events from this run and every descendant sub-run
-   * (recursive via `run_state.parent_run_id`) are in scope. */
-  parentRunId: string;
-  /** Boundary `ts` cursor; events at `ts > floorTs`, plus events at
-   * `ts == floorTs` with `(run_id, seq) > (lastRunId, lastSeq)`, are
-   * returned. */
-  floorTs: number;
-  /** Lex-max `run_id` already emitted at `floorTs`. On first connect
-   * (no emission yet at this ts), pass the sentinel `""`. */
-  lastRunId: string;
-  /** Lex-max `seq` already emitted at `floorTs` for `lastRunId`. On
-   * first connect, pass `-1`. */
-  lastSeq: number;
-  limit: number;
-}
-
-export interface GetEventsForRunWithDescendantsAtFloorOpts {
-  /** Parent run id; same scoping as the forward variant. */
-  parentRunId: string;
-  /** Boundary `ts` to scan; only events at exactly this `ts` qualify. */
-  floorTs: number;
-  /** Pagination cursor — only events with `(run_id, seq) >
-   * (afterRunId, afterSeq)` qualify. Pass `""` / `-1` on the first
-   * call. */
-  afterRunId: string;
-  afterSeq: number;
   limit: number;
 }
 
@@ -740,15 +617,9 @@ export interface IEventWriter {
   /**
    * Atomically claim the next eligible queued run (highest priority, lowest
    * ready_at), or `null` when the daemon is at capacity or no run is
-   * eligible. Defaults to the historical behaviour: any `queued` run.
-   *
-   * P0.4 of `docs/proposals/parallel.md`: `opts.eligibility` parameterises
-   * the picker by an eligibility filter so sub-run-aware claiming can
-   * gate on the parent's status. Top-level runs (no `parent_run_id`)
-   * always pass through; sub-runs are claimed only when their parent's
-   * status is in `eligibility.parentStatusIn`.
+   * eligible.
    */
-  claimNextRun(maxInFlight: number, opts?: { eligibility?: ClaimEligibility }): { runId: string } | null;
+  claimNextRun(maxInFlight: number): { runId: string } | null;
   /**
    * Heal crash damage on daemon startup (requeue 'running' runs,
    * quarantine orphan side-effect intents). When the caller is the
@@ -795,21 +666,6 @@ export interface IEventWriter {
   // ─── Workflow catalog (write)
   saveWorkflow(sha: string, name: string, dotSource: string): void;
 
-  /**
-   * Apply additive deltas to `run_state.metrics` WITHOUT bumping `version`,
-   * WITHOUT appending an event, and WITHOUT folding through the reducer.
-   * For cross-run accounting hops (e.g., a parent absorbing completed
-   * sub-run cost) where the metric mutation is pure accounting and
-   * shouldn't churn the parent's OCC space — see P0.3 of
-   * `docs/proposals/parallel.md`.
-   *
-   * Map-shaped fields (`models`, `nodeCosts`, `loopCounts`) are NOT
-   * supported through this pathway; their merge semantics flow through
-   * the reducer via `fact.node_completed`. Concurrent calls serialise
-   * via the write-queue. No-op when `runId` is unknown.
-   */
-  addMetricsDelta(runId: string, delta: MetricsDelta): void;
-
   // ─── Maintenance
   vacuum(): void;
   gcBlobs(maxRows?: number): { deleted: number };
@@ -842,22 +698,6 @@ export interface IEventReader {
    */
   getEventsByType(runId: string, type: string): StoredEvent[];
   /**
-   * **UI feed** of parent + descendant sub-run events, in approximate
-   * `(ts, run_id, seq)` order. Each sub-run row carries the branch
-   * linkage (`parentNodeIdForBranch`, `parallelIndexForBranch`,
-   * `branchNodeId`) so a UI that previously read inline-branch
-   * `fact.node_started`/`fact.node_completed` events from the parent's
-   * log stays coherent when those events live on sub-run logs. D2 of
-   * `docs/proposals/parallel.md`. Top-level runs without descendants
-   * return their own events with `originRunId = runId`.
-   *
-   * NOT causal replay — cross-run timestamps share `ts` for events
-   * appended in one batch and tie-break on `(run_id, seq)`, so the
-   * merged order is approximate. Use `getEvents(runId)` for per-run
-   * replay (strict total order via per-run `seq`).
-   */
-  getEventsFeedWithDescendants(runId: string, opts?: { sinceTs?: number; limit?: number }): MergedStoredEvent[];
-  /**
    * Forward direction of the global SSE feed: cross-run, ascending
    * scan of events strictly after the `(floorTs, lastRunId, lastSeq)`
    * cursor, filtered by `kindIn`. Returns events in `(ts, run_id,
@@ -878,22 +718,6 @@ export interface IEventReader {
    * oldest-first. Powers the backfill route (`GET /events`).
    */
   getGlobalEventsLatest(opts: GetGlobalEventsLatestOpts): StoredEvent[];
-  /**
-   * Forward direction of the per-parent descendant SSE feed: events
-   * from `parentRunId` and every sub-run in its tree (recursive via
-   * `run_state.parent_run_id`), strictly after `(floorTs, lastRunId,
-   * lastSeq)`, in `(ts, run_id, seq)` ASC order. Unfiltered by design
-   * — the descendant stream consumes the full firehose scoped to the
-   * parent's tree. See `docs/proposals/descendant-event-stream.md`.
-   */
-  getEventsForRunWithDescendantsForward(opts: GetEventsForRunWithDescendantsForwardOpts): StoredEvent[];
-  /**
-   * Boundary rescan companion for the per-parent descendant SSE feed:
-   * events at exactly `floorTs` with `(run_id, seq) > (afterRunId,
-   * afterSeq)`. Paginated ASC from `("", -1)` by the loop; the loop
-   * filters duplicates via a per-`floorTs` Set.
-   */
-  getEventsForRunWithDescendantsAtFloor(opts: GetEventsForRunWithDescendantsAtFloorOpts): StoredEvent[];
   getUnappliedIntents(runId: string): StoredEvent[];
   /**
    * Run rows in the requested statuses, optionally narrowed to those
@@ -931,18 +755,6 @@ export interface IEventReader {
    * Output is the wire shape the `/runs/:id/messages` HTTP route ships.
    */
   getMessagesNarrow(runId: string, opts?: GetMessagesOpts): NarrowMessage[];
-
-  /**
-   * Narrow message stream for a run + every descendant (sub-runs,
-   * sub-sub-runs, …) in `(ordinal, runId)` order, each row stamped
-   * with `originRunId` so the UI can group / label by branch. Drives
-   * the run-detail conversation surface for parents with parallel
-   * sub-runs (P8 of the sub-runs UI plan).
-   */
-  getMessagesNarrowWithDescendants(
-    runId: string,
-    opts?: { sinceOrdinal?: number; limit?: number },
-  ): Array<NarrowMessage & { originRunId: string }>;
   /**
    * Distinct `(runId, threadId)` pairs that have ≥1 persisted message or
    * `llm.start` event under a non-terminal run. Used at daemon boot to
@@ -982,59 +794,10 @@ export interface IEventReader {
    */
   getRunCostTotals(runId: string): RunCostTotalsRow;
 
-  /**
-   * Aggregate cost snapshot for a parent run with active sub-runs.
-   * Returns `{ ownCostUsd, inFlightCostUsd, ownBilledTokens,
-   * inFlightBilledTokens }` so the budget gate can evaluate
-   * `own + inFlight` against the cap when a fan-out is mid-flight. The
-   * `own` half already includes terminal sub-runs (folded into the
-   * parent's metrics via `fact.subrun_completed`); `inFlight` covers
-   * live sub-runs whose final cost hasn't landed yet. See P1.4 / D3 of
-   * `docs/proposals/parallel.md`. Top-level runs return zero on the
-   * in-flight half (no sub-runs to aggregate).
-   */
-  getParentCostSnapshot(parentRunId: string): ParentCostSnapshot;
-
-  /**
-   * Run-id list of every sub-run linked to `parentRunId` whose status
-   * is non-terminal. Used by cancel propagation (P1.5 / D10):
-   * cancelling a parent appends `intent.cancel_requested` on each of
-   * these. Returns an empty array for top-level runs.
-   */
-  activeChildRuns(parentRunId: string): string[];
-
-  /**
-   * Walk descendants recursively and return each non-terminal sub-run's
-   * current node. Used by `RunDetail.effectiveActiveNodes` so the
-   * graph view lights up branch nodes whose state lives in child runs.
-   * Returns empty for runs with no children or no active descendants.
-   */
-  activeDescendantNodes(parentRunId: string): ActiveDescendantNodeRow[];
-
-  /**
-   * Counts of descendant sub-runs grouped by status. Returns null when
-   * the run has no descendants. Drives `RunSummary.childStatusDigest` and
-   * the parent's `RunDetail` header chips.
-   */
-  childStatusDigest(parentRunId: string): ChildStatusDigestRow | null;
-
   // ─── Artifacts (read)
   getArtifact(scope: ArtifactScope): Uint8Array;
   getArtifactRef(scope: ArtifactScope): ArtifactRef | null;
   findDoneForIntent(runId: string, idempotencyKey: string): ArtifactRef | null;
-  /**
-   * Captured outputs of every prior node in this run, keyed by `nodeId`.
-   * Folds `fact.node_completed` events that carry an `outputRef`,
-   * dereferences each artifact, and returns the latest entry per nodeId
-   * (so a re-entered loop sees the most recent iteration's output).
-   *
-   * Used by the executor to build the substitution `nodeOutputs` map at
-   * dispatch time. Returns an empty Map when no prior node has captured
-   * output. UTF-8-decodes artifact bytes; non-text artifacts (codergen
-   * always writes text/plain; tool nodes write stdout) round-trip
-   * losslessly through the decode.
-   */
-  getNodeOutputs(runId: string): Map<string, { output: string; stderr?: string; success: boolean; timestamp: number }>;
 
   // ─── Workflow catalog (read)
   getWorkflow(sha: string): WorkflowRow | null;

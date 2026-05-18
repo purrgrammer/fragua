@@ -1,9 +1,11 @@
 ---
 title: Parallel branch outputs — substitution + UI awareness
-status: shipped
+status: archived
 maturity: specified
 last-reviewed: 2026-05-04
 ---
+
+> **Archived** — the parallel/fan_in primitive was removed; concurrent dispatch now lives in the codergen `agent` tool. The substitution + UI work documented below targeted a runtime surface that no longer exists.
 
 > **Status:** All three phases shipped.
 > P0 (runtime: per-branch lifecycle events) shipped 2026-05-04 in

@@ -36,8 +36,6 @@ function stubCtx(
     },
     externalCall: async (_, fn) => fn("stub-key"),
     args: {},
-    nodeOutputs: new Map(),
-    subRunOutcomes: new Map(),
     emit: () => {},
     withScope: () => {
       throw new Error("stubCtx: withScope not implemented for this test");
@@ -119,20 +117,6 @@ describe("wait.human handler", () => {
     expect(lower.kind).toBe("transition");
     if (lower.kind === "transition") {
       expect(lower.suggestedNextIds).toEqual(["after"]);
-    }
-  });
-
-  test("transition emits no routing writes — choice and note live in the resume event for audit", async () => {
-    // The handler routes via suggestedNextIds + preferredLabel only.
-    // The operator's selected key and optional note are preserved
-    // verbatim in the intent.hitl_input event payload — not mirrored
-    // into run_state.routing. Operators who need free text on a
-    // running thread use intent.steer (swarm extension).
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ hitlInput: { selected: "A", note: "looks good" } }));
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.routingDelta).toBeUndefined();
     }
   });
 

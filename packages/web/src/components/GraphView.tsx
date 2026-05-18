@@ -41,7 +41,7 @@ import { useCallback, useMemo } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
-import { canRetry as canRetryHandler, fanInRank as fanInRankOf, showsLlm } from "../lib/node-metadata.ts";
+import { canRetry as canRetryHandler, showsLlm } from "../lib/node-metadata.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
@@ -85,10 +85,6 @@ export interface GraphViewProps {
    * component is also running, and both should glow. When unset, falls
    * back to the singular `activeNodeId`. */
   activeNodeIds?: ReadonlySet<string>;
-  /** Branch nodeIds picked by `fan_in.completed`. Rendered with a
-   * success-tone ring after fan-in to distinguish the chosen branch
-   * from completed-but-not-winner siblings. */
-  winnerBranchIds?: ReadonlySet<string>;
 }
 
 const NODE_TYPE = "swarmNode";
@@ -138,7 +134,6 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     orientation = "TB",
     hitlNodeId,
     activeNodeIds,
-    winnerBranchIds,
   } = props;
 
   // Backstop fetch for the `runId`-only call shape. RunDetail passes
@@ -184,9 +179,8 @@ export function GraphView(props: GraphViewProps): JSX.Element {
       orientation,
       hitlNodeId: resolvedHitlNodeId,
       activeNodeIds: activeNodeIds ?? null,
-      winnerBranchIds: winnerBranchIds ?? null,
     });
-  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId, activeNodeIds, winnerBranchIds]);
+  }, [readyDetail, graph, activeNodeId, selectedNodeId, orientation, hitlNodeId, activeNodeIds]);
 
   const handleNodeClick = useCallback(
     (_e: unknown, node: FlowNode) => {
@@ -280,8 +274,6 @@ function typeStripTone(handler: string, goalGate: boolean): string | null {
       return "bg-sw-accent-warn";
     case "wait.human":
       return "bg-sw-accent-human";
-    case "parallel":
-    case "parallel.fan_in":
     case "start":
     case "exit":
       return "bg-sw-accent-idle";
@@ -403,26 +395,6 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
             <span className="truncate" title={`retry_target=${d.retryTarget}`}>
               <span className="uppercase tracking-[0.06em]">retry</span>{" "}
               <code className="text-sw-text">{d.retryTarget}</code>
-            </span>
-          ) : null}
-          {/* Parallel nodes — fan_in target (declared) + join policy. */}
-          {d.fanInTarget ? (
-            <span className="truncate" title={`fan_in=${d.fanInTarget}`}>
-              <span className="uppercase tracking-[0.06em]">fan_in</span>{" "}
-              <code className="text-sw-text">{d.fanInTarget}</code>
-            </span>
-          ) : null}
-          {d.joinPolicy ? (
-            <span className="truncate" title={`join_policy=${d.joinPolicy}`}>
-              <span className="uppercase tracking-[0.06em]">join</span>{" "}
-              <code className="text-sw-text">{d.joinPolicy}</code>
-            </span>
-          ) : null}
-          {/* parallel.fan_in — distinguish LLM-rank (has prompt) vs heuristic. */}
-          {d.fanInRank ? (
-            <span className="truncate" title={`rank=${d.fanInRank}`}>
-              <span className="uppercase tracking-[0.06em]">rank</span>{" "}
-              <code className="text-sw-text">{d.fanInRank}</code>
             </span>
           ) : null}
           {/* Handler-level retry cap. Only render when explicitly set; the
@@ -594,15 +566,6 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  loops back to (or undefined when retargeting falls back to the
    *  graph-level chain). */
   retryTarget: string | undefined;
-  /** Component-node `fan_in` attr — the declared convergence target.
-   *  Per attractor §4.8 the runtime discovers fan_in via edges, but
-   *  the attr is the swarm-author convention and worth showing. */
-  fanInTarget: string | undefined;
-  /** Component-node `join_policy` (`wait_all` | `first_success`). */
-  joinPolicy: string | undefined;
-  /** parallel.fan_in nodes only — `"prompt"` when the node has a
-   *  `prompt` (LLM-rank), `"heuristic"` when it doesn't. */
-  fanInRank: "prompt" | "heuristic" | undefined;
   /** Handler-level retry ceiling (DOT `max_retries`). Surfaced in the
    *  body so loop-prone nodes are visible without opening the inspector. */
   maxRetries: number | undefined;
@@ -611,9 +574,6 @@ interface SwarmNodeData extends Record<string, unknown> {
   hasOutgoing: boolean;
   active: boolean;
   selected: boolean;
-  /** This branch nodeId was picked by a `fan_in.completed` event.
-   *  Rendered with a success-tone ring (mutually exclusive with `active`). */
-  winner: boolean;
   /** `true` when the executor hasn't reached this node — either "not yet"
    *  on a live run or "never will" on a terminal run. Rendered at reduced
    *  opacity so the executed path visually dominates. Always `false` in
@@ -627,11 +587,8 @@ export interface ToFlowGraphOptions {
   selectedNodeId?: string | null;
   orientation?: LayoutOrientation;
   hitlNodeId?: string | null;
-  /** Set of every running nodeId — includes parallel branches that
-   * `activeNodeId` (singular) can't represent during fan-out. */
+  /** Set of every running nodeId. */
   activeNodeIds?: ReadonlySet<string> | null;
-  /** Branch nodeIds picked by `fan_in.completed`. */
-  winnerBranchIds?: ReadonlySet<string> | null;
 }
 
 /**
@@ -662,7 +619,6 @@ export function toFlowGraph(
     orientation = "TB",
     hitlNodeId = null,
     activeNodeIds = null,
-    winnerBranchIds = null,
   } = opts;
   // `detail.nodes` is sorted by `(nodeId, iteration)` ascending, so
   // overwriting by nodeId keeps the latest iteration's state — the
@@ -788,20 +744,12 @@ export function toFlowGraph(
         handler === "codergen" && typeof a?.retry_target === "string" && a.retry_target !== ""
           ? a.retry_target
           : undefined,
-      // `fan_in` is in the attr-extra catch-all; cast safely.
-      fanInTarget:
-        handler === "parallel" && typeof a?.["fan_in"] === "string" && (a["fan_in"] as string) !== ""
-          ? (a["fan_in"] as string)
-          : undefined,
-      joinPolicy: handler === "parallel" && typeof a?.join_policy === "string" ? a.join_policy : undefined,
-      fanInRank: fanInRankOf(handler, a),
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
       state: resolvedState,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
       active: activeNodeIds ? activeNodeIds.has(id) : activeNodeId === id,
       selected: selectedNodeId === id,
-      winner: winnerBranchIds?.has(id) ?? false,
       // Unreached nodes during a run fade. Workflow-detail mode leaves
       // everything at full opacity.
       dim: hasRun && !reached.has(id),

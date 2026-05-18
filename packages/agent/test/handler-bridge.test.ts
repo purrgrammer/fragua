@@ -127,7 +127,6 @@ describe("makeCodergenHandler", () => {
       expect(result.tokens).toBe(42);
       expect(result.costUsd).toBeCloseTo(0.003, 6);
       expect(result.modelName).toBe("claude-stub");
-      expect(result.routingDelta).toMatchObject({ result: "four" });
     }
     store.close();
   });
@@ -188,10 +187,6 @@ describe("makeCodergenHandler", () => {
     if (result.kind === "transition") {
       expect(result.outcomeStatus).toBe("fail");
       expect(result.failureReason).toBe("provider unreachable");
-      // context_updates still flow through routingDelta; failureReason no
-      // longer smuggled there.
-      expect(result.routingDelta).toMatchObject({ thing: "value" });
-      expect(result.routingDelta?.["__failure_reason"]).toBeUndefined();
     }
     store.close();
   });
@@ -482,176 +477,6 @@ describe("makeCodergenHandler — oversized messages spill to artifact", () => {
     });
     expect(artifactBytes.length).toBeGreaterThan(MAX_MESSAGE_CONTENT_BYTES);
 
-    store.close();
-  });
-});
-
-describe("makeCodergenHandler — output capture + nodeOutputs substitution", () => {
-  test("final assistant text lands as artifact 'output' and outputRef is on the transition", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-cap-1", store, "plan");
-    const spec = makeCodergenHandler({
-      node: node({ id: "plan" }),
-      nextNode: "implement",
-      backend: stubBackend({ assistantText: "PLAN: 1) read 2) write" }),
-    });
-    const result = await spec.handler(ctx);
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.outputRef).toBeDefined();
-      expect(result.outputRef?.nodeId).toBe("plan");
-      expect(result.outputRef?.key).toBe("output");
-    }
-    const bytes = store.getArtifact({ runId: "r-cap-1", nodeId: "plan", iteration: 0, key: "output" });
-    expect(new TextDecoder().decode(bytes)).toBe("PLAN: 1) read 2) write");
-    store.close();
-  });
-
-  test("multi-turn: last assistant text wins (the agent's final answer)", async () => {
-    // A real agent often emits an interim assistant turn that calls a tool,
-    // then a final summary turn after the tool result. Downstream nodes
-    // reference the final answer, not whatever the agent muttered before
-    // calling bash.
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-cap-2", store, "implement");
-    const multiTurn: CodergenBackend = {
-      async run(input) {
-        input.persistMessage?.({
-          role: "assistant",
-          content: [{ type: "text", text: "let me check…" }],
-          api: "anthropic" as never,
-          provider: "anthropic" as never,
-          model: "claude-stub",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 1,
-        });
-        input.persistMessage?.({
-          role: "toolResult",
-          toolCallId: "x",
-          toolName: "bash",
-          content: [{ type: "text", text: "exit 0" }],
-          isError: false,
-          timestamp: 2,
-        });
-        input.persistMessage?.({
-          role: "assistant",
-          content: [{ type: "text", text: "FINAL: implementation complete" }],
-          api: "anthropic" as never,
-          provider: "anthropic" as never,
-          model: "claude-stub",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 3,
-        });
-        return ok({});
-      },
-    };
-    const spec = makeCodergenHandler({ node: node({ id: "implement" }), backend: multiTurn });
-    await spec.handler(ctx);
-    const text = new TextDecoder().decode(
-      store.getArtifact({ runId: "r-cap-2", nodeId: "implement", iteration: 0, key: "output" }),
-    );
-    expect(text).toBe("FINAL: implementation complete");
-    store.close();
-  });
-
-  test("no assistant turn → no outputRef, no 'output' artifact written", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-cap-3", store, "n1");
-    const spec = makeCodergenHandler({
-      node: node({ id: "n1" }),
-      backend: stubBackend({}), // no assistantText
-    });
-    const result = await spec.handler(ctx);
-    if (result.kind === "transition") expect(result.outputRef).toBeUndefined();
-    expect(store.getArtifactRef({ runId: "r-cap-3", nodeId: "n1", iteration: 0, key: "output" })).toBeNull();
-    store.close();
-  });
-
-  test("ctx.nodeOutputs is plumbed into the rendered prompt as $<nodeId>.output", async () => {
-    // This is the exact bug from run 01kqg7njj2yr0sxmbd: the review node's
-    // prompt referenced `$plan.output` and `$implement.output`, both
-    // substituted to empty. Without this test the whole capture+plumbing
-    // change is invisible — only the integration through the executor
-    // proves the bug is dead.
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "digraph{}");
-    store.enqueueRun({ runId: "r-sub-no", workflowSha: "sha" });
-    const ac = new AbortController();
-    const tools = new handler.InMemoryToolRegistry();
-    const nodeOutputs: ReadonlyMap<string, { output: string; success: boolean; timestamp: number }> = new Map([
-      ["plan", { output: "PLAN: 1) read 2) write", success: true, timestamp: 0 }],
-      ["implement", { output: "DIFF: ok", success: true, timestamp: 1 }],
-    ]);
-    const ctx = handler.buildHandlerContext({
-      runId: "r-sub-no",
-      nodeId: "review",
-      iteration: 0,
-      signal: ac.signal,
-      routing: {},
-      store,
-      llm: handler.makeLlmClient({
-        signal: ac.signal,
-        call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
-      }),
-      http: handler.makeHttpClient({ signal: ac.signal }),
-      tools,
-      args: {},
-      nodeOutputs,
-      recorder: {
-        recordIntent: () => {},
-        recordDone: () => {},
-        recordFailed: () => {},
-      },
-    });
-
-    let seen: string | undefined;
-    const capture: CodergenBackend = {
-      async run(input) {
-        seen = input.prompt;
-        return ok({});
-      },
-    };
-    const spec = makeCodergenHandler({
-      node: node({ id: "review", attrs: { shape: "box", prompt: "Inputs: $plan.output | $implement.output" } }),
-      backend: capture,
-    });
-    await spec.handler(ctx);
-    expect(seen).toBe("Inputs: PLAN: 1) read 2) write | DIFF: ok");
-    store.close();
-  });
-
-  test("missing prior output substitutes to '' (the existing contract for unknown nodes)", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-sub-missing", store, "review");
-    let seen: string | undefined;
-    const capture: CodergenBackend = {
-      async run(input) {
-        seen = input.prompt;
-        return ok({});
-      },
-    };
-    const spec = makeCodergenHandler({
-      node: node({ id: "review", attrs: { shape: "box", prompt: "[$plan.output]" } }),
-      backend: capture,
-    });
-    await spec.handler(ctx);
-    expect(seen).toBe("[]");
     store.close();
   });
 });

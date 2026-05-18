@@ -55,7 +55,6 @@ describe("PiCodergenBackend — cancel signal", () => {
         const outcome = await backend.run({
           node: { id: "n", shape: "box", attrs: {}, classes: [] },
           prompt: "do work",
-          context: {},
           thread_id: undefined,
           fidelity: "compact",
           signal: controller.signal,

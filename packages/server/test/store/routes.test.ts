@@ -508,128 +508,6 @@ describe("GET /runs/:id/steps", () => {
     expect(typeof body[0]!.durationMs).toBe("number");
     expect(body[0]!.durationMs).toBeGreaterThanOrEqual(0);
   });
-
-  test("parent steps include descendant sub-run LLM calls with per-run cost aggregates", async () => {
-    const { createServer } = await import("../../src/index.ts");
-    const app = createServer({ store });
-    store.enqueueRun({ runId: "steps-parent", workflowSha: "wf" });
-    store.enqueueRun({
-      runId: "steps-child",
-      workflowSha: "wf",
-      parentRunId: "steps-parent",
-      parentNodeId: "fanout",
-      parallelIndex: 0,
-      subgraphRootNodeId: "lens",
-      subgraphTerminalNodeId: "fan_in",
-    });
-
-    const c0 = store.getState("steps-child")!;
-    store.appendFact(
-      "steps-child",
-      [
-        {
-          type: "fact.run_started",
-          payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "lens" },
-        },
-      ],
-      c0.version,
-    );
-    const c1 = store.getState("steps-child")!;
-    store.appendFact(
-      "steps-child",
-      [{ type: "fact.node_started", payload: { nodeId: "lens", iteration: 0 } }],
-      c1.version,
-    );
-    store.appendObservabilityEvents("steps-child", [
-      { type: "llm.start", payload: { nodeId: "lens", model: "stub" } },
-      {
-        type: "cost.recorded",
-        payload: { nodeId: "lens", input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.012 },
-      },
-    ]);
-    const c2 = store.getState("steps-child")!;
-    store.appendFact(
-      "steps-child",
-      [
-        {
-          type: "fact.node_completed",
-          payload: { nodeId: "lens", iteration: 0, tokens: 15, costUsd: 0.012, nextNode: "__end__" },
-        },
-        { type: "fact.run_completed", payload: { finalNode: "__end__" } },
-      ],
-      c2.version,
-    );
-
-    const res = await app.request("/runs/steps-parent/steps");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{
-      nodeId: string;
-      originRunId?: string;
-      parentNodeId?: string;
-      parallelIndex?: number;
-      cost?: { cost_usd: number; input_tokens: number; output_tokens: number };
-    }>;
-    expect(body).toHaveLength(1);
-    expect(body[0]!.nodeId).toBe("lens");
-    expect(body[0]!.originRunId).toBe("steps-child");
-    expect(body[0]!.parentNodeId).toBe("fanout");
-    expect(body[0]!.parallelIndex).toBe(0);
-    expect(body[0]!.cost?.cost_usd).toBeCloseTo(0.012);
-    expect(body[0]!.cost?.input_tokens).toBe(10);
-    expect(body[0]!.cost?.output_tokens).toBe(5);
-  });
-});
-
-describe("GET /runs/:id detail", () => {
-  test("parent detail includes descendant branch node state but keeps parent SSE cursor", async () => {
-    const { createServer } = await import("../../src/index.ts");
-    const app = createServer({ store });
-    store.enqueueRun({ runId: "detail-parent", workflowSha: "wf" });
-    store.enqueueRun({
-      runId: "detail-child",
-      workflowSha: "wf",
-      parentRunId: "detail-parent",
-      parentNodeId: "fanout",
-      parallelIndex: 0,
-      subgraphRootNodeId: "lens",
-      subgraphTerminalNodeId: "fan_in",
-    });
-    const p0 = store.getState("detail-parent")!;
-    store.appendFact(
-      "detail-parent",
-      [
-        {
-          type: "fact.run_started",
-          payload: { workflowSha: "wf", schemaVersion: p0.schemaVersion, startNode: "fanout" },
-        },
-      ],
-      p0.version,
-    );
-    const parentLastSeq = store.getEvents("detail-parent").at(-1)!.seq;
-    const c0 = store.getState("detail-child")!;
-    store.appendFact(
-      "detail-child",
-      [
-        {
-          type: "fact.run_started",
-          payload: { workflowSha: "wf", schemaVersion: c0.schemaVersion, startNode: "lens" },
-        },
-      ],
-      c0.version,
-    );
-    const c1 = store.getState("detail-child")!;
-    store.appendFact(
-      "detail-child",
-      [{ type: "fact.node_started", payload: { nodeId: "lens", iteration: 0 } }],
-      c1.version,
-    );
-
-    const res = await app.request("/runs/detail-parent");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { lastEventSeq: number; nodes: Array<{ nodeId: string; state: string }> };
-    expect(body.lastEventSeq).toBe(parentLastSeq);
-    expect(body.nodes.some((node) => node.nodeId === "lens" && node.state === "running")).toBe(true);
-  });
 });
 
 describe("GET /runs?status= filter", () => {
@@ -1373,7 +1251,7 @@ describe("global event feed (cross-run)", () => {
 
   test("GET /events strips bookkeeping kinds even when present in the store", async () => {
     // Seed run "c" with a mix: one allowlisted anchor (run_started) and
-    // the four kinds that were removed from FEED_EVENT_KINDS.
+    // bookkeeping kinds that were removed from FEED_EVENT_KINDS.
     store.enqueueRun({ runId: "c", workflowSha: "wf" });
     const c0 = store.getState("c")!;
     const c1 = store.appendFact(
@@ -1388,31 +1266,10 @@ describe("global event feed (cross-run)", () => {
       [{ type: "fact.run_branched", payload: { branch: "swarm/runs/c" } }],
       c1.newVersion,
     );
-    const c3 = store.appendFact(
-      "c",
-      [{ type: "fact.fanout_started", payload: { parentNodeId: "n", childRunIds: ["sub-1"], fanInNode: "collect" } }],
-      c2.newVersion,
-    );
-    const c4 = store.appendFact(
-      "c",
-      [
-        {
-          type: "fact.fanout_completed",
-          payload: {
-            parentNodeId: "n",
-            fanInNode: "collect",
-            outcomes: [
-              { subRunId: "sub-1", parallelIndex: 0, finalStatus: "completed" as const, costUsd: 0, billedTokens: 0 },
-            ],
-          },
-        },
-      ],
-      c3.newVersion,
-    );
     store.appendFact(
       "c",
       [{ type: "fact.message_appended", payload: { ordinal: 0, role: "assistant", nodeId: null, iteration: 1 } }],
-      c4.newVersion,
+      c2.newVersion,
     );
 
     const routes = createRoutes({ store });
@@ -1423,10 +1280,8 @@ describe("global event feed (cross-run)", () => {
 
     // The anchor must be present (proves run "c" was seen).
     expect(types).toContain("fact.run_started");
-    // The four removed kinds must not appear.
+    // The removed kinds must not appear.
     expect(types).not.toContain("fact.run_branched");
-    expect(types).not.toContain("fact.fanout_started");
-    expect(types).not.toContain("fact.fanout_completed");
     expect(types).not.toContain("fact.message_appended");
     // Every returned type must be in the trimmed FEED_EVENT_KINDS allowlist.
     const allowed = new Set<string>(FEED_EVENT_KINDS);

@@ -85,24 +85,16 @@ export interface StepSnapshot {
   provider?: string;
   model?: string;
   fidelity?: string;
-  /** Set when this step ran as a branch of a parallel/component fan-out:
-   * the parent component's nodeId. Sourced from the matching
-   * `fact.node_started.payload.parentNodeId` (the parallel handler
-   * attaches it on lifecycle facts, not on `llm.start`). The UI groups
-   * branch rows under their parent step. */
+  /** Set on sub-agent steps to the parent step's nodeId so the UI
+   *  renders sub-agent rows indented under the calling parent. */
   parentNodeId?: string;
-  /** Branch index within the parallel parent's `children` list.
-   * Populated only for parallel branches. */
-  parallelIndex?: number;
   /** Per-invocation discriminator for sub-agent steps: the parent
    *  step's `startSeq` at the moment the sub-agent was spawned. Lets
    *  the Cost-tab consumer group sub-agents under the right parent
    *  invocation when a goal_gate retargets back to a `parentNodeId`
    *  that has already spawned children — without this, the second
    *  invocation's sub-agents pool with the first under the same
-   *  `parentNodeId` key. Optional for back-compat with parallel
-   *  branches (a parallel parent runs once per node window, no
-   *  collision risk). */
+   *  `parentNodeId` key. */
   parentStartSeq?: number;
   /** Per-spawn discriminator for sub-agent steps. Populated when the
    *  step's `nodeId` starts with `__subagent:` — sub-agents emit their
@@ -140,13 +132,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // timestamp instead of the buffered `llm.start.ts`. See the file
   // header for the wall-clock-anchoring story.
   const lastNodeStartedTs = new Map<string, number>();
-  // nodeId → branch metadata last seen on `fact.node_started`. The
-  // parallel handler tags only the lifecycle facts with parentNodeId /
-  // parallelIndex (not `llm.start`); we stamp them onto the next
-  // `llm.start` snapshot for the same nodeId. A top-level re-run of the
-  // same id (parentNodeId unset) clears the entry so stale branch
-  // metadata never leaks across windows.
-  const branchMetaByNode = new Map<string, { parentNodeId: string; parallelIndex?: number }>();
   // nodeIds for which we've already opened the FIRST step of the
   // current node window. The first step uses `fact.node_started.ts`;
   // subsequent loop iterations fall back to `llm.start.ts` (we have no
@@ -211,10 +196,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // the Cost breakdown alongside LLM steps — the parallelogram
   // branches in a fan-out are otherwise invisible there. Real
   // duration is `completed.ts − started.ts`; cost stays absent.
-  const pendingToolNode = new Map<
-    string,
-    { startTs: number; startSeq: number; parentNodeId?: string; parallelIndex?: number }
-  >();
+  const pendingToolNode = new Map<string, { startTs: number; startSeq: number }>();
 
   for (const ev of events) {
     const data = (ev.payload ?? {}) as Record<string, unknown>;
@@ -288,27 +270,14 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
         } else {
           lastNodeStartedTs.set(nodeId, ev.ts);
           firstStepEmittedForNode.delete(nodeId);
-          const parentNodeId = stringField(data, "parentNodeId");
-          const piRaw = data["parallelIndex"];
-          const parallelIndex = typeof piRaw === "number" ? piRaw : undefined;
-          if (parentNodeId) {
-            const meta: { parentNodeId: string; parallelIndex?: number } = { parentNodeId };
-            if (parallelIndex !== undefined) meta.parallelIndex = parallelIndex;
-            branchMetaByNode.set(nodeId, meta);
-          } else {
-            branchMetaByNode.delete(nodeId);
-          }
           // Mark this node as a potential tool step. If an `llm.start`
           // arrives before completion, this entry is cleared (it's a
           // codergen and the existing path opens a real step for it).
           // Otherwise we emit a tool step at completion.
-          const pending: { startTs: number; startSeq: number; parentNodeId?: string; parallelIndex?: number } = {
+          pendingToolNode.set(nodeId, {
             startTs: ev.ts,
             startSeq: ev.seq ?? steps.length,
-          };
-          if (parentNodeId) pending.parentNodeId = parentNodeId;
-          if (parallelIndex !== undefined) pending.parallelIndex = parallelIndex;
-          pendingToolNode.set(nodeId, pending);
+          });
         }
       }
       continue;
@@ -335,32 +304,9 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
           const originRunId = ev.originRunId ?? ev.runId;
           if (originRunId) step.originRunId = originRunId;
           if (Number.isFinite(dur) && dur >= 0) step.durationMs = dur;
-          if (pending.parentNodeId !== undefined) step.parentNodeId = pending.parentNodeId;
-          if (pending.parallelIndex !== undefined) step.parallelIndex = pending.parallelIndex;
           steps.push(step);
           lastStepIdxForNode.set(nodeId, steps.length - 1);
           pendingToolNode.delete(nodeId);
-        } else if (stringField(data, "parentNodeId")) {
-          // Parallel codergen branch. The branch ran inside the parent's
-          // inline dispatch (`parallel.ts:childSpec.handler(childCtx)`)
-          // and `fillOrphanDurations`'s neighbour-boundary trick can't
-          // resolve a wall duration — sibling branches share a
-          // `startedAt` to the ms, and the parent's exit row anchors
-          // BEFORE the branches'. Result: a racey 0ms (when llm.start
-          // opened the step and llm.done collapsed onto it) or an
-          // undefined that the UI fallback later renders as the whole
-          // parent block's duration. Stamp the truthful wall figure
-          // directly from the lifecycle facts (daemon-written, sync) —
-          // same shape as the `subagent.end` block above.
-          const stepIdx = lastStepIdxForNode.get(nodeId);
-          const startedTs = lastNodeStartedTs.get(nodeId);
-          if (stepIdx !== undefined && startedTs !== undefined) {
-            const target = steps[stepIdx];
-            if (target !== undefined) {
-              const dur = ev.ts - startedTs;
-              if (Number.isFinite(dur) && dur >= 0) target.durationMs = dur;
-            }
-          }
         }
       }
       continue;
@@ -375,19 +321,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       // Cost-breakdown row.
       const pausedNodeId = stringField(data, "nodeId");
       if (pausedNodeId) pausedOpenNodes.add(pausedNodeId);
-      continue;
-    }
-
-    if (ev.type === "fact.fanout_started") {
-      // The node identified by `payload.parentNodeId` is a parallel.*
-      // component — it dispatches branches as sub-runs and never opens
-      // an LLM call of its own. Suppress the synthetic tool-step that
-      // would otherwise fire at fact.node_completed with a wall-clock
-      // duration covering the entire fan-out window; the operator's
-      // mental model is "spend lived in the branches", which the
-      // per-branch rows already show.
-      const fanParent = stringField(data, "parentNodeId");
-      if (fanParent) pendingToolNode.delete(fanParent);
       continue;
     }
 
@@ -430,11 +363,6 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
       const originRunId = ev.originRunId ?? ev.runId;
       if (originRunId) step.originRunId = originRunId;
       assignOptional(step, data);
-      const branchMeta = nodeId ? branchMetaByNode.get(nodeId) : undefined;
-      if (branchMeta) {
-        step.parentNodeId = branchMeta.parentNodeId;
-        if (branchMeta.parallelIndex !== undefined) step.parallelIndex = branchMeta.parallelIndex;
-      }
       // Sub-agent steps: the `__subagent:<id>` nodeId is a synthetic
       // namespace (chosen so the SQL aggregator doesn't conflate
       // sub-agent cost with the parent's calling node). Stamp the
