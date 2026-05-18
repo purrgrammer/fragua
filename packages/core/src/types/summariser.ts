@@ -56,8 +56,8 @@ export interface SummariseInput {
   /** Bypass the purpose-derived system prompt with a custom string.
    *  When set, the summariser also sends `input` verbatim as the user
    *  message (no "Goal: …" or "Prior conversation to compress:"
-   *  prefix). Used by extension tools that need a generic small-model
-   *  call against the configured summariser provider. */
+   *  prefix). Used by tools that need a generic small-model call
+   *  against the configured summariser provider. */
   system_prompt_override?: string;
 }
 

@@ -76,10 +76,6 @@ export type ToolPart = ToolUIPart | DynamicToolUIPart;
 export type ToolHeaderProps = {
   title?: string;
   className?: string;
-  /** Override the default icon resolution. Used by extension-paired
-   *  `*.web.tsx` renderers that ship their own Lucide icon. When unset,
-   *  falls back to `TOOL_PRESENTATION[name]` then `WrenchIcon`. */
-  iconOverride?: LucideIcon;
   /** Override the rendered label. Used by callers that want a richer
    *  per-call name (e.g. an `agent` toolCall surfaces as
    *  `Agent · <description>`); if unset, falls back to
@@ -194,7 +190,6 @@ export const ToolHeader = ({
   type,
   state,
   toolName,
-  iconOverride,
   labelOverride,
   ...props
 }: ToolHeaderProps) => {
@@ -204,7 +199,7 @@ export const ToolHeader = ({
   // for icon + human-readable label, and humanize unknown tools.
   const raw = title ?? derivedName;
   const entry = lookupTool(raw);
-  const Icon = iconOverride ?? entry?.icon ?? WrenchIcon;
+  const Icon = entry?.icon ?? WrenchIcon;
   const label = labelOverride ?? entry?.label ?? humanizeToolName(raw);
 
   return (

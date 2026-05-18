@@ -333,9 +333,9 @@ export class PiCodergenBackend implements CodergenBackend {
     // also doesn't pay for the catalogue's tokens (~1 KB per profile).
     const wantsAgentTool = selectedTools.some((t) => t.name === "agent");
     const agentsCatalog = wantsAgentTool && runCwdAgents.length > 0 ? renderAgentsCatalog(runCwdAgents) : "";
-    // Per-run swarm context for extension tools. Built-ins ignore this
-    // field; loader-wrapped extensions need it to construct their
-    // `ExtensionContext`. Captured by closure on each `toAgentTool`
+    // Per-run swarm context. Built-in I/O tools ignore this field; the
+    // `agent` tool reads `spawnSubagent` + `skillCatalog` + `agentCatalog`
+    // to drive sub-agent runs. Captured by closure on each `toAgentTool`
     // call — a fresh `Agent({tools})` is built per `backend.run()`,
     // so closure values are correct for that run.
     const swarmEmit = input.emit;
@@ -409,7 +409,7 @@ export class PiCodergenBackend implements CodergenBackend {
       // codergen call uses, so sub-agent observability lands on the
       // parent's stream as a slice. The factory stamps `subagent_id`
       // on every payload before calling this. When the parent has no
-      // emit (tests / extensions), sub-agents become a no-op stream.
+      // emit (tests), sub-agents become a no-op stream.
       const parentEmit = input.emit
         ? async (type: EventType, data: Record<string, unknown>) => {
             await input.emit!(type, data);

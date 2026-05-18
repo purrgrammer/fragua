@@ -17,7 +17,6 @@
     "@mariozechner/pi-ai": "0.71.0",
     "@sinclair/typebox": "0.34.41",
     "@swarm/core": "workspace:*",
-    "@swarm/extension": "workspace:*",
     "@swarm/types": "workspace:*",
     "diff": "8.0.4",
     "turndown": "7.2.4",

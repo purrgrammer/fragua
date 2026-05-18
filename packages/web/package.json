@@ -23,7 +23,6 @@
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",
     "@swarm/core": "workspace:*",
-    "@swarm/extension": "workspace:*",
     "@swarm/types": "workspace:*",
     "@tanstack/react-query": "5.99.1",
     "@xyflow/react": "12.10.2",

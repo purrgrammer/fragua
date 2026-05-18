@@ -34,7 +34,7 @@ import {
   WorktreeProvisioner,
 } from "@swarm/daemon";
 import { SqliteStore } from "@swarm/store";
-import { CORE_TOOLS, discoverAgents, discoverSkills, loadExtensions, ToolRegistry } from "@swarm/workspace";
+import { CORE_TOOLS, discoverAgents, discoverSkills, ToolRegistry } from "@swarm/workspace";
 import chalk from "chalk";
 import { loadConfig, loadProjectConfig, resolveTimeouts } from "../config.ts";
 
@@ -286,35 +286,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     }
   };
 
-  // Discover and load extensions once at boot. Same scopes as skills
-  // (`<cwd>/.swarm/extensions/`, `~/.swarm/extensions/`); precedence on
-  // tool-name collision is project-beats-user. Hot reload is deferred —
-  // a new extension drop requires a daemon restart.
-  const {
-    extensions: loadedExtensions,
-    tools: extensionTools,
-    warnings: extensionWarnings,
-  } = await loadExtensions({
-    cwd,
-    homeDir: homedir(),
-  });
-  for (const w of extensionWarnings) console.warn(chalk.yellow(`extensions: ${w}`));
-  if (loadedExtensions.length > 0) {
-    const okCount = loadedExtensions.filter((e) => e.error === undefined).length;
-    const errCount = loadedExtensions.length - okCount;
-    const toolCount = extensionTools.length;
-    const summary =
-      `loaded ${okCount} extension${okCount === 1 ? "" : "s"} ` +
-      `(${toolCount} tool${toolCount === 1 ? "" : "s"})` +
-      (errCount > 0 ? `, ${errCount} failed` : "");
-    console.log(chalk.dim(summary));
-    for (const ext of loadedExtensions) {
-      if (ext.error !== undefined) {
-        console.warn(chalk.yellow(`  ✗ ${ext.extensionId}: ${ext.error}`));
-      }
-    }
-  }
-
   const useLlm = provider != null && model != null;
   let codergenFactory: Parameters<typeof autoDispatcherResolver>[0]["codergenFactory"];
   let fanInLlmDelegate: Parameters<typeof autoDispatcherResolver>[0]["fanInLlmDelegate"];
@@ -332,20 +303,6 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // "hallucinates" command output that never ran.
     const registry = new ToolRegistry();
     registry.registerAll(CORE_TOOLS);
-    // Append extension-loaded tools after built-ins. The loader already
-    // applied project-beats-user precedence; the registry's
-    // `registerAll` throws on duplicates so a custom tool named after a
-    // built-in (e.g. `bash`) surfaces here as a startup error rather
-    // than silently shadowing.
-    if (extensionTools.length > 0) {
-      try {
-        registry.registerAll(extensionTools);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red(`extensions: failed to merge tools: ${message}`));
-        return 1;
-      }
-    }
     // Shared `inProcessWrites` — one Set for the whole daemon process so
     // every codergen backend (one per workflow node — see the factory
     // below) sees the same "we've written to this (runId, threadId)"
@@ -524,7 +481,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // (model not registered / no default for provider), `summariserInfo.backend`
   // is undefined and the label carries the rejection reason — surface it
   // loudly so the operator updates `.swarm/config.jsonc` rather than
-  // chasing the failure through extension tools at runtime.
+  // chasing the failure at runtime.
   if (summariserInfo.backend) {
     console.log(chalk.dim(`  summariser: ${summariserInfo.label}`));
   } else if (summariserInfo.label) {
@@ -601,10 +558,10 @@ function buildSummariserBackend(args: {
   if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   // Validate at boot — the summariser's resolveModel throws lazily on
   // first call, which surfaces deep inside whatever path triggered it
-  // (autoTitler / fidelity=summary:* / extension tool's `ctx.summarise`)
-  // and looks like a tool failure rather than a config error. Catching
-  // it here gives the operator one obvious "fix this in config.jsonc"
-  // line at startup. `swarm providers` lists valid ids per provider.
+  // (autoTitler / fidelity=summary:*) and looks like a tool failure
+  // rather than a config error. Catching it here gives the operator
+  // one obvious "fix this in config.jsonc" line at startup.
+  // `swarm providers` lists valid ids per provider.
   if (!modelRegistry.find(sumProvider, sumModel)) {
     return {
       backend: undefined,

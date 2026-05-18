@@ -97,7 +97,7 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
     const ctx = opts?.swarmContext;
     if (ctx?.spawnSubagent == null) {
       return {
-        text: "agent tool requires host wiring \u2014 swarmContext.spawnSubagent is missing. This usually means the runtime didn't supply a sub-agent factory (tests/extensions hosts often skip it).",
+        text: "agent tool requires host wiring \u2014 swarmContext.spawnSubagent is missing. This usually means the runtime didn't supply a sub-agent factory (tests often skip it).",
         is_error: true,
       };
     }

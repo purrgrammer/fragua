@@ -19,12 +19,10 @@ import type { AgentDefinition, Skill } from "@swarm/types";
 
 export type { DirEntry, ExecResult, ExecutionEnvironment };
 
-/** Per-call swarm context passed to extension tools through
- *  `ToolExecuteOptions.swarmContext`. Built-in tools (read / write /
- *  edit / bash) ignore this field — they run off `env` alone.
- *  Loader-wrapped extension tools require it to construct their
- *  `ExtensionContext`. The `agent` tool reads `spawnSubagent` +
- *  `skillCatalog` to drive sub-agent runs. */
+/** Per-call swarm context passed through `ToolExecuteOptions.swarmContext`.
+ *  Built-in I/O tools (read / write / edit / bash) ignore this field —
+ *  they run off `env` alone. The `agent` tool reads `spawnSubagent`,
+ *  `skillCatalog`, and `agentCatalog` to drive sub-agent runs. */
 export interface SwarmToolContext {
   readonly runId: string;
   readonly nodeId: string;
@@ -34,8 +32,7 @@ export interface SwarmToolContext {
   readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
   /** Spawn a sub-agent run from inside a codergen turn. Wired by the
    *  daemon (per call) when the parent node's tool pool includes
-   *  `agent`. Absent in tests / extension hosts that don't drive
-   *  sub-agents. */
+   *  `agent`. Absent in tests that don't drive sub-agents. */
   readonly spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>;
   /** Parent's resolved skill catalog. The `agent` tool's `spec.skills`
    *  is filtered against this set; sub-agents never see a skill the
@@ -43,8 +40,8 @@ export interface SwarmToolContext {
   readonly skillCatalog?: readonly Skill[];
   /** Parent's resolved agent-definition catalogue (project + user
    *  scopes merged). The `agent` tool resolves its `agent: <name>`
-   *  argument against this set. Absent in tests / extension hosts
-   *  that don't drive sub-agents. */
+   *  argument against this set. Absent in tests that don't drive
+   *  sub-agents. */
   readonly agentCatalog?: readonly AgentDefinition[];
 }
 
@@ -145,10 +142,10 @@ export interface TruncationPolicy {
 /** Per-call options the host can pass to a tool. Fields are optional
  * so adapters that don't care can ignore them; tools that do
  * (long-running bash, abortable network calls, streaming progress,
- * extensions needing run-scoped context) read what they need off the
- * third argument. Mirrors `AgentTool.execute`'s signal/onUpdate
- * plumbing in pi-agent-core, plus a swarm-specific `swarmContext`
- * slot for extension tools. */
+ * `agent` driving sub-agents) read what they need off the third
+ * argument. Mirrors `AgentTool.execute`'s signal/onUpdate plumbing in
+ * pi-agent-core, plus a swarm-specific `swarmContext` slot the `agent`
+ * tool uses for sub-agent spawning. */
 export interface ToolExecuteOptions<TResult = ContextValue> {
   /** Cancellation signal. Tools should clean up promptly when fired. */
   signal?: AbortSignal;
@@ -156,8 +153,8 @@ export interface ToolExecuteOptions<TResult = ContextValue> {
    * output (bash, long curls) call this with partial `ToolOutput`s
    * during execution; consumers can render a live preview. */
   onUpdate?: (partial: ToolOutput<TResult>) => void;
-  /** Swarm-side run context. Required by extension-supplied tools to
-   * construct their `ExtensionContext`; ignored by built-ins. */
+  /** Swarm-side run context. Required by the `agent` tool to drive
+   * sub-agents; ignored by built-in I/O tools. */
   swarmContext?: SwarmToolContext;
   /** Pi-agent-core tool-call id (e.g. `toolu_01ABC…`). The `agent` tool
    * stamps this onto the resulting `subagent.start` event so the web
@@ -233,11 +230,10 @@ export type AnyTool = Tool<any, any>;
 /** Tool registry. Tool names are bare identifiers (lowercase, alphanumeric +
  * underscore, starting with a letter). The graph-level `tool` node is a
  * separate primitive — namespace distinction is structural, not encoded
- * in the name. Custom tools loaded from `.swarm/tools/*.ts` land here via
- * `register()` alongside the core four. The map stores `AnyTool` so a
- * tool typed as `Tool<{path:string}, ReadResultData>` can sit next to a
- * tool typed as `Tool<{command:string}, BashResultData>` — TypeScript
- * can't infer a useful upper bound across heterogeneous result types. */
+ * in the name. The map stores `AnyTool` so a tool typed as
+ * `Tool<{path:string}, ReadResultData>` can sit next to a tool typed as
+ * `Tool<{command:string}, BashResultData>` — TypeScript can't infer a
+ * useful upper bound across heterogeneous result types. */
 export class ToolRegistry {
   private readonly tools = new Map<string, AnyTool>();
 

@@ -23,7 +23,6 @@
 //   - `streaming-message`          — the in-flight assistant buffer
 //   - `conversation-empty`         — empty state
 
-import { renderers as extensionRenderers } from "virtual:swarm-extensions";
 import type { AssistantMessage, TextContent, ToolNodeMessage, ToolResultMessage } from "@swarm/types";
 import { type ReactNode, useMemo, useState } from "react";
 import {
@@ -1121,7 +1120,6 @@ function AssistantMessageRow({
       }
     } else if (chunk.type === "toolCall") {
       const result = toolResultsById.get(chunk.id);
-      const extRenderer = extensionRenderers.get(chunk.name);
       // Embedded sub-agent transcript: when this is an `agent`
       // toolCall, look up the sub-agent's messages by subagent_id
       // (carried on the matching toolResult's
@@ -1191,7 +1189,6 @@ function AssistantMessageRow({
             state={result ? (result.isError ? "output-error" : "output-available") : "input-available"}
             title={chunk.name}
             {...(agentLabel ? { labelOverride: agentLabel } : {})}
-            {...(extRenderer?.icon ? { iconOverride: extRenderer.icon } : {})}
           />
           <ToolContent>
             {!isAgent && <ToolInput input={chunk.arguments} />}
@@ -1359,17 +1356,6 @@ function RichToolResult({
   // rather than a generic ToolOutput dump.
   if (toolName === "abort") {
     return <AbortToolResult params={params as { reason?: string } | undefined} result={result} />;
-  }
-  // Extension-paired *.web.tsx renderer takes precedence over the
-  // hardcoded built-in branches below. The renderer's `content` slots
-  // into <ToolContent> here (isCustom=false). isCustom=true is not
-  // handled at this level — the calling site would need to bypass
-  // <Tool> entirely; deferred until a real tool needs it.
-  const extRenderer = extensionRenderers.get(toolName);
-  if (extRenderer?.render) {
-    const isStreaming = !result;
-    const rendered = extRenderer.render(params, result, { isStreaming, isPartial: false });
-    return <div className="space-y-[var(--sw-space-3)]">{rendered.content}</div>;
   }
   if (!result) return null;
   const text = flattenText(result.content);
