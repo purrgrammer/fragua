@@ -1,0 +1,71 @@
+// voting.dot — parallel voting on a binary judgment.
+//
+// Pattern: parallel voting. N independent voters judge the same input;
+// downstream tally counts votes deterministically and reports majority.
+// Useful when a single LLM call's verdict is noisy enough to warrant
+// multiple samples — high-stakes go/no-go calls, severity classifications,
+// content moderation, anywhere variance across runs matters.
+//
+// Today's swarm expresses voting via the same primitives as parallel
+// sectioning (review.dot): `component` → N identical branches →
+// `tripleoctagon` with a reducer prompt that reads each branch via
+// `$<voter>.output` substitution and counts votes deterministically.
+//
+// Difference from sectioning: the branches are IDENTICAL — same prompt,
+// same model, same tools. Variance comes from model nondeterminism at
+// the provider's natural sampling temperature. The reducer's job is to
+// count, not synthesise, so the count is deterministic given the votes.
+//
+//   bun run swarm run voting --input="should we ship this PR? <diff or commit ref>"
+
+digraph voting {
+  graph [
+    goal             = "Parallel voting on a binary judgment — three independent samples, majority wins."
+    label            = "voting"
+    default_fidelity = "compact"
+    budget_usd       = 1.00
+    model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+  ]
+
+  start [shape=Mdiamond]
+
+  fanout [shape=component, join_policy="wait_all"]
+
+  voter_a [class="voter",
+    prompt = "Judge: $ARGUMENTS\n\nReply with EXACTLY one line in this shape:\n\n  VERDICT: APPROVE | REJECT — <one-sentence rationale>\n\nDon't reason in prose; do your reasoning silently and emit only the VERDICT line. You are one of three independent voters; reach your conclusion on your own."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 0.20
+  ]
+
+  voter_b [class="voter",
+    prompt = "Judge: $ARGUMENTS\n\nReply with EXACTLY one line in this shape:\n\n  VERDICT: APPROVE | REJECT — <one-sentence rationale>\n\nDon't reason in prose; do your reasoning silently and emit only the VERDICT line. You are one of three independent voters; reach your conclusion on your own."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 0.20
+  ]
+
+  voter_c [class="voter",
+    prompt = "Judge: $ARGUMENTS\n\nReply with EXACTLY one line in this shape:\n\n  VERDICT: APPROVE | REJECT — <one-sentence rationale>\n\nDon't reason in prose; do your reasoning silently and emit only the VERDICT line. You are one of three independent voters; reach your conclusion on your own."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 0.20
+  ]
+
+  tally [
+    shape         = tripleoctagon
+    prompt        = "Three independent voters reviewed the same target. Their VERDICT lines:\n\n  Voter A: $voter_a.output\n  Voter B: $voter_b.output\n  Voter C: $voter_c.output\n\nCount APPROVE vs REJECT votes deterministically and report. Output verbatim:\n\nDECISION: APPROVE | REJECT (majority of 3)\n\nVOTES:\n  - A: <verbatim VERDICT line>\n  - B: <verbatim VERDICT line>\n  - C: <verbatim VERDICT line>\n\nMAJORITY RATIONALE: <one paragraph synthesising the rationales given by the majority voters>\n\nMINORITY VIEW: <one sentence on the dissenting voter's reasoning; if all three agreed, write 'unanimous'>\n\nRules:\n  - Do NOT override the count. 2+ APPROVE → DECISION: APPROVE; else DECISION: REJECT.\n  - Do NOT introduce a tie — three voters mean no tie is possible.\n  - If any voter failed to emit a parseable VERDICT line, mark them as `(unparseable)` in VOTES and treat as no-vote; majority is then based on the remaining two."
+    allowed_tools = "read"
+  ]
+
+  done [shape=Msquare]
+
+  start -> fanout
+
+  fanout -> voter_a
+  fanout -> voter_b
+  fanout -> voter_c
+
+  voter_a -> tally
+  voter_b -> tally
+  voter_c -> tally
+
+  tally -> done
+}

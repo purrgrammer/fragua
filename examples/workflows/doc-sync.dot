@@ -1,0 +1,123 @@
+// doc-sync.dot — keep AGENTS.md / CLAUDE.md in sync with the codebase.
+//
+// Pattern: orchestrator-workers + HITL + apply tail. End-to-end loop:
+// detect doc → snapshot layout → parallel area auditors via `agent`
+// toolcalls → drift report → goal-gated review → edit-block proposal →
+// operator signoff (HITL) → apply via deterministic script → verify.
+//
+// The audit node fans out N parallel `agent()` toolcalls in ONE turn
+// (the agent-multi pattern). Each sub-agent's full file reads stay in
+// its own context; only a structured ~350-word summary returns. The
+// parent's history holds N small summaries instead of N×file-bodies —
+// keeps the workflow cheap on large monorepos without blowing the
+// parent's context.
+//
+// EXTERNAL DEPENDENCY: the `apply` tool node shells to
+// `bun ~/.swarm/scripts/doc-sync/apply.ts`. A reference implementation
+// lives at `examples/workflows/doc-sync/apply.ts`; install it to
+// `~/.swarm/scripts/doc-sync/` before running.
+//
+//   bun run swarm run doc-sync
+//   bun run swarm run doc-sync --input="focus on packages/ and docs/"
+//
+// budget_policy="pause" emits fact.run_paused{reason:"budget"} on the
+// ceiling instead of terminal-halting. Operator raises the cap via
+// POST /runs/:id/budget (intent.budget_adjusted), then intent.resume
+// re-dispatches the same (nodeId, iteration) against the new ceiling.
+
+digraph doc_sync {
+  graph [
+    goal                  = "Audit codebase architecture and filesystem layout against AGENTS.md/CLAUDE.md, surface drift, propose and apply edits with HITL signoff."
+    label                 = "doc-sync"
+    default_fidelity      = "compact"
+    budget_usd            = 5.00
+    budget_policy         = "pause"
+    max_goal_gate_retries = 2
+    model_stylesheet      = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+  ]
+
+  start [shape=Mdiamond]
+
+  detect_doc [
+    prompt        = "Identify the project's agent-instructions document. Check (in order): AGENTS.md, CLAUDE.md. Follow symlinks; if both exist and resolve to the same inode, treat as a single canonical target and prefer the AGENTS.md path.\n\nReply with EXACTLY one line: the relative path to the canonical doc (e.g. `AGENTS.md` or `CLAUDE.md`). No prose, no preamble, no trailing whitespace.\n\nIf neither file exists at the project root, emit `<abort>no AGENTS.md or CLAUDE.md found at project root</abort>`."
+    allowed_tools = "read, bash"
+    max_cost_usd  = 0.10
+  ]
+
+  discover [
+    shape        = parallelogram
+    tool_command = "sh -c 'echo \"# canonical_doc: $detect_doc.output\"; echo; echo \"# tracked files\"; git ls-files 2>/dev/null | head -400 || find . -maxdepth 4 -type f -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" -not -path \"*/dist/*\" -not -path \"*/build/*\" -not -path \"*/.swarm/*\" -not -path \"*/.cache/*\" 2>/dev/null | head -400; echo; echo \"# top-level entries\"; ls -la 2>/dev/null | head -50; echo; echo \"# doc files\"; ls -la AGENTS.md CLAUDE.md 2>/dev/null || true; readlink AGENTS.md 2>/dev/null || true; readlink CLAUDE.md 2>/dev/null || true; echo; echo \"# manifests\"; for f in package.json tsconfig.json pyproject.toml Cargo.toml go.mod deno.json bun.lockb bun.lock; do [ -e \"$f\" ] && ls -la \"$f\"; done; true'"
+  ]
+
+  audit [
+    prompt        = "Build a 'ground-truth' summary of the codebase the next node will diff against the canonical doc.\n\nInputs:\n  - $discover.output: filesystem snapshot. Its first line is `# canonical_doc: <path>` — that's the relative path to the doc under audit (do not modify; treat as authoritative read target). The rest is tracked files, top-level entries, manifests.\n  - $ARGUMENTS: optional operator focus (e.g. 'just packages/', 'skip docs/'); empty means full scan.\n\nFan-out plan:\n  1. From $discover.output, pick AT MOST 8 areas to inspect. Areas are top-level dirs OR coherent subtrees (e.g. 'packages/store', 'docs', 'scripts/'). Skip noise: node_modules, .git, dist, build, .cache, .swarm, vendor, target, .next, coverage. Honour $ARGUMENTS if present.\n  2. Issue ALL `agent` toolcalls in a SINGLE assistant message — parallel dispatch. Do not serialise across turns.\n  3. Each toolcall:\n       name: <area-path>             e.g. \"packages/store\"\n       prompt: see template below, with <AREA> substituted\n       allowed_tools: [\"read\", \"grep\", \"find\", \"ls\"]\n  4. After all sub-agents return, assemble their summaries into a single ground-truth report (markdown).\n\nSub-agent prompt template (substitute <AREA>):\n\n  Inspect the directory `<AREA>` of this project. Read-only. Produce a STRUCTURED summary in this exact shape — no prose preamble:\n\n  ## <AREA>\n  **purpose**: 1 sentence — what this area does in the project.\n  **key_files**: bullet list of the 3–7 most load-bearing files with one-line descriptions.\n  **public_api**: what other code in the project depends on (entry points, exports, CLI subcommands, HTTP routes, schema tables — whichever applies). 'none' if internal-only.\n  **conventions**: bullet list of patterns visible in this area (naming, file layout, testing style, dependency direction, error-handling style). Only what's evidenced by the files; no speculation.\n  **surprises**: anything a docs reader would NOT expect from the area's name or the project's stated shape. 'none' if unsurprising.\n\n  Constraints: ≤ 350 words total. Cite file:line for any non-obvious claim. Do NOT summarise contents of node_modules / dist / build / .git / .cache / .swarm / .next / vendor / target / coverage — if <AREA> resolves to one of these, reply EXACTLY 'SKIP: <AREA> is a build/runtime/cache directory, not in audit scope'. If <AREA> is empty or doesn't exist, reply EXACTLY 'EMPTY: <AREA> not found or empty'.\n\nGround-truth report shape (your FINAL assistant message):\n\n  # Ground truth — <repo name from cwd>\n\n  **Doc under audit:** <path from $discover.output's `# canonical_doc:` line>\n\n  ## Layout overview\n  One paragraph describing the top-level shape (monorepo? single package? what's where?). Pull from $discover.output.\n\n  ## Areas\n  <verbatim concatenation of each sub-agent's structured summary, in dispatch order>\n\n  ## Cross-cutting observations\n  Things that span areas (dependency direction, shared tooling, monorepo workspace boundaries). Only if evidenced. Skip the section if nothing crosses.\n\nDo NOT compare against the doc here — that's the next node's job. Do NOT propose edits. Just describe what's in the codebase. If you cannot identify ANY auditable areas from $discover.output, emit `<abort>discover output insufficient — no auditable areas found</abort>`."
+    allowed_tools = "agent, read, bash, grep, find"
+    thread_id     = "audit"
+  ]
+
+  diff [
+    prompt        = "Cross-reference the doc against the ground-truth report (its `**Doc under audit:** <path>` header names the doc to read). Read that doc, then diff its claims against the ground-truth.\n\nFor every claim the doc makes about codebase shape (stack, dependency direction, codebase map, commands, file layout, conventions), classify as one of:\n  - **OK** — claim matches ground truth.\n  - **STALE** — claim is concrete and contradicted by ground truth. Cite doc:line and contradicting evidence from $audit.output.\n  - **MISSING** — ground truth shows something significant the doc doesn't mention (a new package, a new top-level dir, a new CLI subcommand, a renamed file). Cite the un-documented thing and where in the doc a new line/section would fit.\n\nIgnore claims that aren't filesystem-derivable (philosophical rules, ground-rule prose, commit conventions in the abstract, prose 'why' explanations). The workflow scope is sync with the codebase shape, not editorial review.\n\nOutput format — markdown table, your FINAL assistant message, no preamble:\n\n  | Severity | Kind | Doc location | Claim / gap | Evidence |\n  |---|---|---|---|---|\n  | CRITICAL | STALE | AGENTS.md:42 | 'web → server → store' | packages/web/src/lib/foo.ts imports @swarm/daemon (audit §packages/web) |\n  | HIGH | MISSING | (insert before AGENTS.md:60) | no entry for packages/observability | new package since last doc edit (audit §packages/observability) |\n  | LOW | OK | AGENTS.md:14 | 'Bun ≥ 1.2' | engines field in root package.json |\n\nSeverity calibration: CRITICAL = misleading; HIGH = significant gap a reader would miss; MEDIUM = minor inconsistency; LOW = OK rows for traceability.\n\nEvery non-OK row MUST cite both (a) the doc location and (b) the audit evidence. A row without both is invalid; drop it. Do NOT fabricate; if you can't substantiate a row from $audit.output verbatim, drop it."
+    allowed_tools = "read"
+    max_cost_usd  = 1.00
+    thread_id     = "audit"
+    fidelity      = "full"
+  ]
+
+  review [
+    prompt       = "Judge the drift table at $diff.output for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.\n\nChecklist:\n  1. Every non-OK row cites BOTH doc location AND audit evidence.\n  2. No fabricated claims — spot-check 2–3 non-OK rows by re-reading the doc cited in the row's `Doc location` column (use the read tool) and re-checking the cited evidence with grep against the file system.\n  3. Coverage looks reasonable — the table should have at least one OK / STALE / MISSING row covering each top-level area cited in the drift table. Wholly silent areas (areas with NO rows) are a red flag.\n  4. Severity calibration is sane (no LOW for genuinely misleading claims; no CRITICAL for nitpicks).\n\nIf the table passes, reply with `APPROVE` on the first line, a blank line, then the drift table from $diff.output VERBATIM. The next node consumes this verbatim table.\n\nIf it fails, reply with `<abort>REJECT: <one-line reason></abort>`. The run will retarget to `audit` and rebuild the ground truth (capped by max_goal_gate_retries=2)."
+    allowed_tools = "read"
+    goal_gate    = true
+    retry_target = "audit"
+    max_cost_usd = 0.80
+  ]
+
+  propose_patch [
+    prompt        = "Translate the drift table in $review.output (the lines after `APPROVE`) into a list of edit blocks. Each row's `Doc location` column names the file to edit (e.g. `AGENTS.md:42`).\n\nFor each STALE row: emit one block with `old_string` (the misleading text from the doc, copied VERBATIM with enough surrounding context to be unique within the file) and `new_string` (the corrected text, matching the doc's tone and markdown style).\n\nFor each MISSING row: emit one block with `old_string` set to the existing line/section header the new content should be inserted AFTER (verbatim, unique anchor) and `new_string` set to that anchor PLUS a newline PLUS the new section text.\n\nDo NOT modify the file yet. Output a JSON array — your FINAL assistant message, no preamble, no postscript, no markdown fence:\n\n  [\n    { \"reason\": \"STALE AGENTS.md:42 — wrong dependency arrow\",\n      \"old_string\": \"...verbatim text from doc...\",\n      \"new_string\": \"...corrected text...\" },\n    { \"reason\": \"MISSING — packages/observability\",\n      \"old_string\": \"...anchor line from doc...\",\n      \"new_string\": \"...anchor line + new entry...\" }\n  ]\n\nRules:\n  - `old_string` MUST be unique within the doc. If the natural target text appears more than once, expand it with surrounding context until unique.\n  - Preserve the doc's existing tone, casing, list style, and markdown conventions. Match the surrounding section's voice — don't smuggle in a different writing style.\n  - PRESERVE UNRELATED EXISTING CONTENT. When the drift row asks you to add or correct items in a list, table row, or section, your `new_string` MUST include every existing item from the `old_string` that the diff did NOT flag as wrong — plus the additions, plus the corrections to specifically-flagged claims. Do NOT silently drop items, re-curate priorities, or trim entries you personally judge less load-bearing. Your job is targeted addition + correction, not editorial rewrite. If you think an existing entry should be removed, it needs its own STALE row in $diff.output first.\n  - One block per drift row. Don't bundle multiple unrelated changes into one block.\n  - Skip OK rows entirely.\n  - If a STALE/MISSING row is too ambiguous to edit safely (e.g. anchor text isn't unique even with context, or the correct replacement isn't obvious from $audit.output), emit `{ \"reason\": \"...\", \"skipped\": true, \"why\": \"...\" }` instead of `old_string` / `new_string`.\n\nIf the patch list is empty (no actionable rows after applying the rules above), reply with `[]`."
+    allowed_tools = "read"
+    max_cost_usd  = 1.00
+  ]
+
+  signoff [
+    shape  = hexagon
+    prompt = "Drift report and proposed edit blocks are ready. The patch is the JSON array in $propose_patch.output ({reason, old_string, new_string} per block; or {reason, skipped, why} for ambiguous rows). Choose how to proceed."
+  ]
+
+  apply [
+    shape        = parallelogram
+    tool_command = "bun ~/.swarm/scripts/doc-sync/apply.ts $detect_doc.output $propose_patch.output"
+  ]
+
+  verify [
+    prompt        = "Re-read the doc at $detect_doc.output and confirm every non-OK drift row from $diff.output is now resolved.\n\nFor each non-OK row in the original drift table:\n  - STALE: confirm the corrected text is present and the original misleading text is gone.\n  - MISSING: confirm the new section/line is present at the anchor.\n  - skipped (per $propose_patch.output): mark `unresolved (skipped)` — that's expected, not a verify failure.\n\nReply with a markdown table — your FINAL assistant message:\n\n  | Original row | Status | Note |\n  |---|---|---|\n  | STALE AGENTS.md:42 | resolved | dependency arrow now reads `web → server → store ← daemon` |\n  | MISSING packages/observability | resolved | new entry under codebase map at line 88 |\n  | STALE AGENTS.md:88 | unresolved (skipped) | block was marked skipped: ambiguous anchor |\n\nIf any row is unresolved AND was NOT marked skipped (i.e. apply claimed success but the change isn't actually present), emit `<abort>verify failed: <count> rows applied but not present in doc; see table</abort>` AFTER the table."
+    allowed_tools = "read"
+    max_cost_usd  = 0.50
+  ]
+
+  done [shape=Msquare]
+
+  start         -> detect_doc
+  detect_doc    -> done [condition="outcome=fail"]
+  detect_doc    -> discover
+
+  discover      -> done [condition="outcome=fail"]
+  discover      -> audit
+
+  audit         -> done [condition="outcome=fail"]
+  audit         -> diff
+
+  diff          -> review
+
+  review        -> done [condition="outcome=fail"]
+  review        -> propose_patch
+
+  propose_patch -> signoff
+
+  signoff       -> apply [label="[A] Apply"]
+  signoff       -> done  [label="[O] Output only"]
+  signoff       -> done  [label="[R] Reject"]
+
+  apply         -> done [condition="outcome=fail"]
+  apply         -> verify
+
+  verify        -> done
+}

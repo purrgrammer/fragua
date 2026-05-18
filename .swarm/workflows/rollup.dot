@@ -66,6 +66,5 @@ digraph rollup {
 
   synthesize     -> verify
 
-  verify         -> done [condition="outcome=fail"]
   verify         -> done
 }

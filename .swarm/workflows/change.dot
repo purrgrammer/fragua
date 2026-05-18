@@ -60,7 +60,6 @@ digraph change {
   ci [shape=parallelogram, tool_command="bun run ci", max_retries=5]
 
   fix [
-    class         = "fix"
     prompt        = "CI failed. Failure log: $ci.output. Read the failures, make the minimal change to fix them, then stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters."
     allowed_tools = "read, write, edit, bash"
     max_cost_usd  = 0.10
@@ -68,7 +67,6 @@ digraph change {
   ]
 
   commit [
-    class         = "commit"
     prompt        = "Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.\n\nIf `git status --short` is empty, emit `COMMITTED: no changes`.\n\nOtherwise: `git add` explicit paths, commit with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha>`. Don't push."
     allowed_tools = "read, write, edit, bash"
   ]

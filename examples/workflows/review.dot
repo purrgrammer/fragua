@@ -1,0 +1,97 @@
+// review.dot — parallel multi-lens code review with LLM synthesis.
+//
+// Pattern: parallel sectioning + fan-in synthesis. Four read-only lenses
+// (correctness, security, performance, architecture) examine the same
+// target concurrently; the tripleoctagon join node dedupes and ranks
+// findings via its own LLM call, reading each lens via `$<branchId>.output`
+// substitution.
+//
+// PRECONDITION for PR / branch inputs: working tree must be clean. The
+// scope node will `gh pr checkout <n>` (or `git checkout <branch>`) so
+// lenses can read files on disk directly. If the tree is dirty, scope
+// aborts with a suggestion to commit / stash. After the run, your
+// checkout will be on the PR / target branch — `git checkout -` to
+// return.
+//
+// Input forms ($ARGUMENTS resolved by the `scope` node):
+//   - empty                             → uncommitted changes (`git diff HEAD`)
+//   - "<commitish>"                     → e.g. "HEAD~3..HEAD", a sha, "main..feature"
+//   - "<path-or-glob>"                  → e.g. "packages/server/src", "src/auth.ts"
+//   - "PR <n>" / "<branch>"             → checks out branch, diff vs base
+//   - any of the above + free-text hint → e.g. "src/auth.ts focus on session handling"
+//
+// Examples:
+//   bun run swarm run review
+//   bun run swarm run review --input="HEAD~5..HEAD"
+//   bun run swarm run review --input="packages/server/src/store"
+//   bun run swarm run review --input="feat/oauth focus on token storage"
+
+digraph review {
+  graph [
+    goal             = "Multi-lens code review (correctness, security, performance, architecture) with deduped, ranked synthesis."
+    label            = "review"
+    default_fidelity = "compact"
+    model_stylesheet = "
+      *        { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
+      #collect { llm_model: claude-opus-4-7; reasoning_effort: high; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+
+  scope [
+    prompt = "Determine review target from $ARGUMENTS and prep the tree.\n\nClassify into: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).\n\nFor PR/branch DIFF: 1) `git status --porcelain` — if non-empty, emit `<abort>working tree dirty</abort>`. 2) `gh pr checkout <n>` or `git fetch origin <branch> && git checkout <branch>`. 3) Resolve base via `gh pr view --json baseRefName` or `git merge-base HEAD origin/main`. For commit ranges, DO NOT switch branches.\n\nIf target is empty, emit `<abort>nothing to review</abort>`.\n\nList changed paths via `git diff --name-only <base>..<head>` / as given / `git diff --name-only HEAD`. Paths must be real on-disk, repo-relative.\n\nOutput exactly (no preamble, ≤10 lines):\n\nTARGET: <DIFF|FILES|UNCOMMITTED> <args>\nPATHS: <comma-sep>\nLOC: <approx>\nFOCUS: <hint or general>\nCONTEXT: <one sentence>"
+    allowed_tools = "read, grep, find, bash"
+    max_cost_usd  = 0.50
+  ]
+
+  lens_correctness [class="lens",
+    prompt = "CORRECTNESS lens on $scope.output.\n\nLook for: logic bugs, off-by-one, races, missing null checks, broken invariants, mishandled errors/promises, type unsoundness, dead branches, edge cases. Read PATHS directly. Cross-check call sites where it matters. Skip cosmetic (architecture's lane).\n\nOutput up to 5 findings, one per line, no preamble, no Why/Fix verbosity:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. Synthesise picks fixes — keep yourself terse. If none, output exactly: `OK: no correctness issues`."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 1.50
+  ]
+
+  lens_security [class="lens",
+    prompt = "SECURITY lens on $scope.output.\n\nLook for: injection (SQL, shell, XSS, proto, path traversal), unvalidated input across trust boundaries, auth/authz gaps, secret leaks, unsafe deserialisation, weak crypto, SSRF, open redirect, missing rate-limit on sensitive ops, data exposure, obvious CVE deps. Anchor in OWASP where it fits. Don't flag without checking surrounding sanitisation.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no security issues`."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 1.50
+  ]
+
+  lens_performance [class="lens",
+    prompt = "PERFORMANCE lens on $scope.output.\n\nLook for: complexity surprises (O(n²) on a hot path), N+1, unbounded loops/recursion, redundant work, large allocations/leaks, blocking I/O on hot paths, unnecessary serialisation/cloning, missing obvious indexes, oversized payloads, sync work that should batch/stream. Measure-before-optimise: flag with confidence proportional to evidence. Constant-factor nit on a cold path is not a finding.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no performance issues`."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 1.50
+  ]
+
+  lens_architecture [class="lens",
+    prompt = "ARCHITECTURE / MAINTAINABILITY lens on $scope.output.\n\nLook for: coupling crossing sensible boundaries, leaky abstractions, SRP violations, repeated logic that invites drift (not 3-line dupes), missing/wrong abstraction, misleading naming, public surface exposing internals, inconsistent error handling, half-finished implementations, scope creep. Project conventions are already in your system prompt — don't re-read.\n\nOutput up to 5 findings, one per line, no preamble:\n  [SEV] path:line — one-line claim.\n\nSEV ∈ {critical, high, medium, low}. If none, output exactly: `OK: no architecture issues`."
+    allowed_tools = "read, grep, bash"
+    max_cost_usd  = 1.50
+  ]
+
+  explore [shape=component, join_policy="wait_all"]
+
+  collect [
+    shape         = tripleoctagon
+    prompt        = "You are integrating findings from four parallel lenses. Each lens output is provided verbatim below.\n\nCORRECTNESS:\n$lens_correctness.output\n\nSECURITY:\n$lens_security.output\n\nPERFORMANCE:\n$lens_performance.output\n\nARCHITECTURE:\n$lens_architecture.output\n\nProduce a single ranked review. Use exactly these headings:\n\n# Code Review\n\n## Scope\nSummarise what was reviewed by aggregating the file paths cited across the findings below — one paragraph naming the touched packages/areas and the type of change (uncommitted diff, commit range, branch). If every lens reported `OK`, name the surface anyway.\n\n## Critical\n## High\n## Medium\n## Low\n\nUnder each severity, one finding per item:\n  - **path:line** — one-line claim.\n    - Why: one sentence.\n    - Fix: one sentence or short snippet.\n    - Lens: correctness | security | performance | architecture (multiple if dedup'd).\n\nRules:\n  - DEDUPE. If two lenses flag the same issue, list once, combine the Lens field, take the higher severity.\n  - PROMOTE. A correctness/security finding marked `medium` but cross-flagged by another lens may move to `high` — note `(cross-flagged)` after the claim.\n  - DROP NOISE. Skip Low items that don't add signal (subjective style without evidence). Keep Low only if specific and actionable.\n  - NO INVENTION. Don't add findings the lenses didn't raise. Don't soften severity without reason — if you down-rank, justify in Why.\n\nIf every lens reported `OK:` (or returned no findings), replace the severity sections with:\n\n## All clear\nOne paragraph: what was reviewed, why no issues stood out, what the reviewers couldn't see (runtime, integration). One sentence on confidence.\n\nEnd with:\n\n## Next steps\nUp to 3 concrete, ordered actions, one line each. If All clear, a single 'No follow-up required.' line."
+    allowed_tools = "read"
+  ]
+
+  done [shape=Msquare]
+
+  start -> scope
+  scope -> done [condition="outcome=fail"]
+  scope -> explore
+
+  explore -> lens_correctness
+  explore -> lens_security
+  explore -> lens_performance
+  explore -> lens_architecture
+
+  lens_correctness  -> collect
+  lens_security     -> collect
+  lens_performance  -> collect
+  lens_architecture -> collect
+
+  collect -> done
+}
