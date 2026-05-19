@@ -120,7 +120,7 @@ describe("worktree isolation under same-cwd daemon", () => {
   test("sub-agent (agent tool) inherits parent env: write inside spawned agent lands in worktree", async () => {
     // The `agent` tool reads `swarmContext.spawnSubagent` and hands it
     // a SubagentSpec. The spawn factory in production threads
-    // `parentCtx.parentEnv` straight into the child codergen call;
+    // `parentCtx.parentEnv` straight into the child llm call;
     // tests simulate that contract by capturing the env the factory
     // was given and running a sentinel write against it. The
     // contract: whatever env this test's `spawnSubagent` receives,

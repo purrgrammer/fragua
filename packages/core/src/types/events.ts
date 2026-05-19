@@ -52,7 +52,7 @@ export interface NodeCompletedData {
  * (start, exit, conditional, fan_in) simply omit them.
  */
 export interface NodeStartedData {
-  /** Handler key — `codergen`, `loop`, `human`, `parallel`, ... */
+  /** Handler key — `llm`, `loop`, `human`, `parallel`, ... */
   node_type?: string;
   /** Raw `node.attrs.prompt` before any substitution. */
   prompt_template?: string;
@@ -126,7 +126,7 @@ export interface BudgetSnapshot {
 
 /**
  * Per-LLM-call record. Fires once per actual `backend.run()` invocation —
- * that means once for a codergen node, N times for a loop node with N
+ * that means once for a llm node, N times for a loop node with N
  * iterations, and zero times for non-LLM handlers. Carries the snapshot
  * of what the agent was actually asked so `events.jsonl` alone is enough
  * to reconstruct "what the agent saw at step N".
@@ -375,7 +375,7 @@ export interface RunCanceledData {
  * emits between this and the matching `subagent.end` carries
  * `subagent_id` on its payload as a discriminator. The `nodeId` on the
  * envelope is the synthetic `__subagent:<uuid>` namespace, not the
- * parent codergen node — that's tracked separately on `parent_node_id`
+ * parent llm node — that's tracked separately on `parent_node_id`
  * so the steps aggregator can group sub-agent rows under the spawning
  * call.
  *
@@ -393,14 +393,14 @@ export interface RunCanceledData {
  * either alone, or neither (a bare `agent({ prompt })` spawn). */
 export interface SubagentStartData {
   subagent_id: string;
-  /** The parent codergen node that issued the `agent` tool call. */
+  /** The parent llm node that issued the `agent` tool call. */
   parent_node_id: string;
   /** Iteration index on the parent node when the spawn fired. */
   iteration: number;
-  /** Provider the sub-agent's codergen call resolved to. Inherited from
+  /** Provider the sub-agent's llm call resolved to. Inherited from
    * the parent unless a resolved profile carried `provider:` frontmatter. */
   provider: string;
-  /** Model id the sub-agent's codergen call resolved to. Inherited from
+  /** Model id the sub-agent's llm call resolved to. Inherited from
    * the parent unless a resolved profile carried `model:` frontmatter. */
   model: string;
   /** Free-form caller-supplied label. See header comment. */

@@ -119,7 +119,7 @@ steps:
     expect(body.error).toMatch(/garbage/);
   });
 
-  test("accepts max_ms=0 as the unbounded sentinel for codergen", async () => {
+  test("accepts max_ms=0 as the unbounded sentinel for llm", async () => {
     const res = await req("POST", "/workflows", {
       name: "ok",
       source: `name: ok
@@ -151,7 +151,7 @@ steps:
     expect(body.code).toBe("invalid_timeout_attr");
   });
 
-  test('accepts timeout="0" / "0s" as the unbounded sentinel for codergen', async () => {
+  test('accepts timeout="0" / "0s" as the unbounded sentinel for llm', async () => {
     for (const t of ["0", "0s", "0ms"]) {
       const res = await req("POST", "/workflows", {
         name: "ok",

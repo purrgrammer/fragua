@@ -69,7 +69,7 @@ export interface PiCodergenBackendOptions {
    * that don't need the preamble. */
   runEnv?: RunEnvironment;
   /** Shared "threads we've written to" registry, keyed by `runId::threadId`.
-   * Each codergen node builds its own `PiCodergenBackend` (see
+   * Each llm node builds its own `PiCodergenBackend` (see
    * `packages/cli/src/commands/daemon.ts`), so a per-instance Set can't
    * tell "same daemon, different node on the shared thread" from
    * "different daemon after a restart". Pass a daemon-scoped Set here so
@@ -78,7 +78,7 @@ export interface PiCodergenBackendOptions {
    * pre-existing thread still finds its key present. Omit in
    * tests/one-shots to get the per-instance behaviour. */
   inProcessWrites?: Set<string>;
-  /** Shared per-run live-agent + steer-buffer registry. Each codergen
+  /** Shared per-run live-agent + steer-buffer registry. Each llm
    * node builds its own `PiCodergenBackend`, so a per-instance registry
    * can't deliver a steer issued during node A to node B's agent on the
    * same run. Pass one daemon-scoped registry here and supervisor's
@@ -126,7 +126,7 @@ export interface SpawnSubagentParentCtx {
   /** Per-run isolation facts (cwd, bootstrap, runId) the parent saw.
    *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
   parentRunEnv?: RunEnvironment;
-  /** Skills the parent codergen call had visible. Sub-agents intersect
+  /** Skills the parent llm call had visible. Sub-agents intersect
    *  `spec.skills` against this set. */
   parentSkills: readonly Skill[];
   /** Parent's `allowed_tools` attribute (or undefined when the node
@@ -135,12 +135,12 @@ export interface SpawnSubagentParentCtx {
   parentAllowedTools?: readonly string[];
   /** Parent's `denied_tools`. */
   parentDeniedTools?: readonly string[];
-  /** Provider the parent codergen call resolved to. The child inherits
+  /** Provider the parent llm call resolved to. The child inherits
    *  by default — no per-call model selection from the LLM. */
   parentProvider: string;
-  /** Model id the parent codergen call resolved to. */
+  /** Model id the parent llm call resolved to. */
   parentModel: string;
-  /** Execution environment from the parent codergen call. Sub-agents
+  /** Execution environment from the parent llm call. Sub-agents
    *  inherit verbatim — no per-call worktree isolation, the
    *  sub-agent's read/write/edit/bash see the same filesystem the
    *  parent did. */
@@ -399,7 +399,7 @@ export class PiCodergenBackend implements CodergenBackend {
       typeof input.node.attrs["system_prompt"] === "string" ? (input.node.attrs["system_prompt"] as string) : undefined;
     // Derive the per-call RunEnvironment from the resolved env.
     // `deriveRunEnv` always returns a value (every env has `cwd()`),
-    // so every codergen call sees an `<environment>` block in its
+    // so every llm call sees an `<environment>` block in its
     // system prompt regardless of env implementation. The
     // construction-time `this.runEnv` is honoured only as a fallback
     // for callers that wired it explicitly — it can override the
@@ -433,7 +433,7 @@ export class PiCodergenBackend implements CodergenBackend {
     Object.assign(swarmContext, { skillCatalog: effectiveSkills, agentCatalog: runCwdAgents });
     if (this.spawnSubagentFactory !== undefined) {
       // The sub-agent's emit channel: same `input.emit` the parent's
-      // codergen call uses, so sub-agent observability lands on the
+      // llm call uses, so sub-agent observability lands on the
       // parent's stream as a slice. The factory stamps `subagent_id`
       // on every payload before calling this. When the parent has no
       // emit (tests), sub-agents become a no-op stream.
@@ -797,7 +797,7 @@ export class PiCodergenBackend implements CodergenBackend {
       // `fact.node_aborted` (not a node_completed-into-terminal halt),
       // leave the run running, and let the next dispatch's fold consume
       // the pending pause/cancel intent through the normal R1/R4 rules.
-      // Without this rethrow, an operator-paused codergen turn halts
+      // Without this rethrow, an operator-paused llm turn halts
       // with `reason="aborted_exit"` instead of pausing.
       if (last.stopReason === "aborted" && input.signal?.aborted) {
         const err = new Error(last.errorMessage ?? "stream aborted");
@@ -871,7 +871,7 @@ export class PiCodergenBackend implements CodergenBackend {
 
   /** Release every per-run resource this backend holds for `runId`.
    * Called by the executor after a run reaches a terminal status. Without
-   * this, a run that buffered a steer but never started another codergen
+   * this, a run that buffered a steer but never started another llm
    * node would leak its `pendingSteers` entry until daemon restart —
    * bounded but pointless. Also wipes the `MessageStore` slot and any
    * `inProcessWrites` entries for the run so checkpoint bookkeeping
@@ -925,7 +925,7 @@ function parseRetryAfterMs(headers: Record<string, string>): number | undefined 
 }
 
 /** Derive a `RunEnvironment` from the execution env. Always returns a
- *  value — every env has `cwd()`, so every codergen call gets a uniform
+ *  value — every env has `cwd()`, so every llm call gets a uniform
  *  `<environment>` block (no structural `worktreePath` probe that
  *  silently skipped `LocalEnvironment`). A `WorktreeEnvironment`'s own
  *  `runId` / `bootstrapCommand` are picked up when present so the
@@ -982,7 +982,7 @@ function lastAssistantMessage(
  * signals "I cannot proceed" by calling `abort({ reason })`; the tool sets
  * `terminate: true` so the loop stops after its batch. The contract is
  * taught by the tool's own description and documented in
- * `docs/handler-contract.md` § "Codergen self-abort".
+ * `docs/handler-contract.md` § "Llm self-abort".
  *
  * Walks the whole message array — not just the last message — so the abort
  * still wins when it was emitted alongside other tool calls in a
@@ -1015,7 +1015,7 @@ export function findAbortToolCall(
 /**
  * Scan the transcript for a call to the synthesised `route` tool
  * (docs/proposals/llm-routing.md D2/D3). The tool only exists for the
- * lifetime of one codergen call — see `buildRouteTool` — and its sole
+ * lifetime of one llm call — see `buildRouteTool` — and its sole
  * effect is to terminate the agent loop. The chosen route is recovered
  * here from the assistant's tool-call block.
  *

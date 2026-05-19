@@ -4,7 +4,7 @@
 //   (a) heartbeat — keeps daemon_lock alive
 //   (b) intent detection — trips per-run AbortControllers when web writes
 //       a non-steer intent while the executor is mid-handler; forwards
-//       steer text to the codergen backend's queue without tripping
+//       steer text to the llm backend's queue without tripping
 //   (c) stuck-node watchdog — detects handlers that exceeded their
 //       maxMs + leak grace and force-aborts them
 //
@@ -25,13 +25,13 @@ export interface SupervisorOpts {
   nodeLeakGraceMs?: number;
   /** Per-handler maxMs lookup. Supervisor uses this to compute leak threshold.
    * Returns `undefined` for nodes that opted out of wall-clock bounding
-   * (codergen `max_ms=0`); the supervisor skips the leak-trip for those
-   * nodes — see docs/proposals/codergen-unbounded-time.md. */
+   * (llm `max_ms=0`); the supervisor skips the leak-trip for those
+   * nodes — see docs/proposals/llm-unbounded-time.md. */
   handlerMaxMsFor?: (workflowSha: string, nodeId: string) => number | undefined;
-  /** Forward steer text into the codergen backend's queue. pi-agent-core's
+  /** Forward steer text into the llm backend's queue. pi-agent-core's
    * `Agent.steer()` enqueues into a `steeringQueue` that drains at end of
    * turn; tripping the abort controller would force the in-flight LLM
-   * call to end with `stopReason: "aborted"`, which the codergen handler
+   * call to end with `stopReason: "aborted"`, which the llm handler
    * (backend.ts:464) collapses into a `fail` outcome. Steers must therefore
    * bypass the trip and ride the queue. Only fires for steers in batches
    * with no other intent type — a co-arriving cancel/pause/hitl trips and
@@ -41,7 +41,7 @@ export interface SupervisorOpts {
 
 const DEFAULT_TICK_MS = 50;
 const DEFAULT_HEARTBEAT_MS = 5_000;
-// Matches the executor's grace; see docs/proposals/codergen-maxms-backstop.md.
+// Matches the executor's grace; see docs/proposals/llm-maxms-backstop.md.
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 
 export function startSupervisor(opts: SupervisorOpts): {
@@ -85,7 +85,7 @@ export function startSupervisor(opts: SupervisorOpts): {
         // it out so the supervisor doesn't mistake it for a mid-flight
         // cancel/pause/etc. when lastAppliedSeq hasn't advanced past
         // it yet (e.g., sub-runs whose first dispatched node is a
-        // long-running codergen, no fast noop start node to advance
+        // long-running llm, no fast noop start node to advance
         // applied seq before the 50ms tick).
         const operatorIntents = fresh.filter((e) => e.type !== "intent.run_enqueued");
         const hasNonSteer = operatorIntents.some((e) => e.type !== "intent.steering_requested");

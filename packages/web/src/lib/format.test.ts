@@ -60,7 +60,7 @@ describe("formatCacheHitRate", () => {
   });
 
   test("3-arg with realistic warm-thread shape (the failure case)", () => {
-    // Snapshot from a real codergen turn: cacheRead 164847, input 6,
+    // Snapshot from a real llm turn: cacheRead 164847, input 6,
     // cacheWrite 83035. Pre-fix denom = 164853 → 99.99% → "100.0%"
     // displayed. Post-fix denom = 247888 → ~66.5%.
     const r = formatCacheHitRate(164847, 6, 83035);

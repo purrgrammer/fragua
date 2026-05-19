@@ -59,7 +59,7 @@ export function enqueue(rig: TestRig, runId: string, startNode: string, priority
 }
 
 /**
- * Realistic-shaped codergen stub for testing per-turn services that
+ * Realistic-shaped llm stub for testing per-turn services that
  * react to `cost.recorded` events (budget gates, cost rollup, abort
  * propagation, etc.).
  *
@@ -67,7 +67,7 @@ export function enqueue(rig: TestRig, runId: string, startNode: string, priority
  * one shot — they bypass the entire cost-bearing path. This stub:
  *
  *   - Emits `agent.start`, per-call `cost.recorded` (with full token
- *     split), then `agent.end` — matching the codergen backend's event
+ *     split), then `agent.end` — matching the llm backend's event
  *     shape closely enough for the executor's mirroring to fire.
  *   - Honours `ctx.signal` between calls so cancel / budget-trip /
  *     timeout abort the handler at the next boundary.
@@ -114,7 +114,7 @@ export function mockCodergenSpec(opts: MockCodergenOpts = {}): handler.HandlerSp
   const modelName = opts.modelName ?? "mock-model";
 
   return {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "none",
     maxMs: 60_000,
     handler: async (ctx) => {

@@ -1,6 +1,6 @@
-// Unbounded codergen wall-clock tests — docs/proposals/codergen-unbounded-time.md.
+// Unbounded llm wall-clock tests — docs/proposals/llm-unbounded-time.md.
 //
-// When a codergen handler spec has `maxMs: undefined` (the user wrote
+// When a llm handler spec has `maxMs: undefined` (the user wrote
 // `max_ms=0` / `timeout="0"` in DOT), the executor must:
 //   - NOT compose `AbortSignal.timeout(...)` into the merged ctx.signal
 //   - NOT race the handler against a leak-watchdog setTimeout
@@ -17,8 +17,8 @@ import { runOne } from "../src/executor.ts";
 import { IntentArrivedError } from "../src/supervisor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
-describe("unbounded codergen — no AbortSignal.timeout fires", () => {
-  test("a codergen spec with maxMs undefined does not abort a long-running handler past the 4h ceiling", async () => {
+describe("unbounded llm — no AbortSignal.timeout fires", () => {
+  test("a llm spec with maxMs undefined does not abort a long-running handler past the 4h ceiling", async () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
@@ -29,9 +29,9 @@ describe("unbounded codergen — no AbortSignal.timeout fires", () => {
     });
     let capturedSignal: AbortSignal | undefined;
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
-      // maxMs intentionally omitted — the unbounded codergen path.
+      // maxMs intentionally omitted — the unbounded llm path.
       handler: async (ctx) => {
         capturedSignal = ctx.signal;
         return { kind: "transition", nextNode: "done", tokens: 1, costUsd: 0 };
@@ -83,7 +83,7 @@ describe("unbounded codergen — no AbortSignal.timeout fires", () => {
         store,
         codergenFactory: (_node, _next, maxMs) => {
           const spec: handler.HandlerSpec = {
-            kind: "codergen",
+            kind: "llm",
             sideEffect: "external",
             handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
           };
@@ -104,8 +104,8 @@ describe("unbounded codergen — no AbortSignal.timeout fires", () => {
   });
 });
 
-describe("unbounded codergen — operator + shutdown aborts still apply", () => {
-  test("a codergen spec with maxMs undefined still aborts on operator cancel", async () => {
+describe("unbounded llm — operator + shutdown aborts still apply", () => {
+  test("a llm spec with maxMs undefined still aborts on operator cancel", async () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     const r = rig({ yaml });
     const registry = new AbortRegistry();
@@ -117,7 +117,7 @@ describe("unbounded codergen — operator + shutdown aborts still apply", () => 
     });
     let observed = false;
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       // unbounded
       handler: async (ctx) => {
@@ -160,7 +160,7 @@ describe("unbounded codergen — operator + shutdown aborts still apply", () => 
     r.store.close();
   });
 
-  test("a codergen spec with maxMs undefined still aborts on shutdown signal", async () => {
+  test("a llm spec with maxMs undefined still aborts on shutdown signal", async () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     const r = rig({ yaml });
     const shutdown = new AbortController();
@@ -172,7 +172,7 @@ describe("unbounded codergen — operator + shutdown aborts still apply", () => 
     });
     let observed = false;
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       handler: async (ctx) => {
         shutdown.abort();

@@ -173,7 +173,7 @@ describe("validate — handler lints", () => {
     expect(e009?.nodeId).toBe("gate");
   });
 
-  test("W009 codergen with empty prompt and empty label", () => {
+  test("W009 llm with empty prompt and empty label", () => {
     const g = mkGraph({
       nodes: { s: "start", work: "llm", done: "exit" },
       edges: [
@@ -195,7 +195,7 @@ describe("validate — handler lints", () => {
     expect(validate(g).some((d) => d.code === "W009")).toBe(false);
   });
 
-  test("W011 codergen bare `model` (no llm_ prefix)", () => {
+  test("W011 llm bare `model` (no llm_ prefix)", () => {
     const g = mkGraph({
       nodes: { s: "start", work: { type: "llm", attrs: { prompt: "x", model: "claude-opus-4-7" } }, done: "exit" },
       edges: [

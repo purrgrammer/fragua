@@ -203,7 +203,7 @@ describe("eventsToSteps", () => {
 
   test("sub-agent step rows derive a wall duration from subagent.start/end timestamps (not from buffered llm.start neighbours)", () => {
     // Reproduces the Cost-tab '0ms' bug for sub-agent rows. Wire shape
-    // when a parent codergen step spawns a sub-agent (see
+    // when a parent llm step spawns a sub-agent (see
     // `packages/daemon/src/spawn-subagent.ts` + the `__subagent:<uuid>`
     // synthetic nodeId in `eventsToSteps`):
     //
@@ -222,7 +222,7 @@ describe("eventsToSteps", () => {
     // handful of ms — '0ms' in the UI. The fix anchors `startedAt` to
     // the matching `subagent.start.ts` and stamps `durationMs` from
     // `subagent.end.ts - subagent.start.ts` (both truthful), threaded
-    // through the same `durationMs` field codergen rows already use so
+    // through the same `durationMs` field llm rows already use so
     // the existing CostInspector renders it.
     const events: StoredEvent[] = [
       ev("fact.node_started", 900, { nodeId: "p1" }),
@@ -327,7 +327,7 @@ describe("eventsToSteps", () => {
 
   // Tool nodes (parallelogram in DOT) never open an `llm.start`. Without
   // synthesis they're invisible in the Cost breakdown — for parallel
-  // sections that mix codergen + tool branches the tool branches just
+  // sections that mix llm + tool branches the tool branches just
   // disappear from the panel.
   test("emits a synthetic step for a tool node — no llm.start, just fact.node_started + completed", () => {
     const events: StoredEvent[] = [
@@ -347,7 +347,7 @@ describe("eventsToSteps", () => {
     expect(tool?.model).toBeUndefined();
   });
 
-  test("a codergen node (with llm.start) does NOT also produce a tool-node step at completion", () => {
+  test("a llm node (with llm.start) does NOT also produce a tool-node step at completion", () => {
     // Defensive: an llm.start arrives between fact.node_started and
     // fact.node_completed for the same nodeId. Only one step should
     // emit — the LLM-anchored one. The pending-tool entry must clear.

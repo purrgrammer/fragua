@@ -258,9 +258,9 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 //   human         → human   (steel blue)  — HITL / paused_human (hexagon, kind=human)
 //   tool          → loop    (teal)        — deterministic shell step (no LLM)
 //   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence
-//   codergen      → (no strip — neutral baseline; the LLM majority)
+//   llm      → (no strip — neutral baseline; the LLM majority)
 //
-// `goal_gate` wins over handler: a codergen node with goal_gate=true
+// `goal_gate` wins over handler: a llm node with goal_gate=true
 // acts as a validation gate, which is the more specific signal. Tool
 // nodes keep their own hue even if some future workflow flags them as
 // gates — but goal_gate isn't currently meaningful on tool nodes, so
@@ -553,11 +553,11 @@ interface SwarmNodeData extends Record<string, unknown> {
    *  label, so the header can suppress a title that'd just duplicate
    *  the id. */
   customLabel: string | undefined;
-  /** Semantic handler type (`codergen`, `human`, `tool`, `start`, `exit`). */
+  /** Semantic handler type (`llm`, `human`, `tool`, `start`, `exit`). */
   handler: string;
   /** Whether this node carries `goal_gate=true`. Drives the green
    *  left-edge strip so operators can spot validation gates even when
-   *  the handler is plain `codergen`. */
+   *  the handler is plain `llm`. */
   goalGate: boolean;
   /** DOT model attribute, when set. */
   model: string | undefined;
@@ -754,9 +754,9 @@ export function toFlowGraph(
       threadId: isLlmHandler && typeof a?.thread_id === "string" ? a.thread_id : undefined,
       toolCommand: handler === "tool" && typeof a?.tool_command === "string" ? truncate(a.tool_command, 40) : undefined,
       // goal_gate (and therefore the §3.4 retarget chain) is only meaningful
-      // on codergen nodes today — `typeStripTone` documents the precedence.
+      // on llm nodes today — `typeStripTone` documents the precedence.
       retryTarget:
-        handler === "codergen" && typeof a?.retry_target === "string" && a.retry_target !== ""
+        handler === "llm" && typeof a?.retry_target === "string" && a.retry_target !== ""
           ? a.retry_target
           : undefined,
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,

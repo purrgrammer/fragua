@@ -20,7 +20,7 @@ export interface AgentDefinition {
    *  not enforced). Used in the parent's catalogue block. */
   description: string;
   /** Optional provider-specific model id. When set, overrides the parent
-   *  codergen node's model on spawn. Inherits parent's choice when
+   *  llm node's model on spawn. Inherits parent's choice when
    *  omitted. */
   model?: string;
   /** Optional provider name. Inherits parent's choice when omitted. */
@@ -48,7 +48,7 @@ export interface AgentDefinition {
   source_dir: string;
   /** Project cwd this record is anchored to. Set only when `scope === "project"`.
    *  Discovery walks every known project cwd and emits a superset; the
-   *  codergen-time filter prunes to `scope === "user" || project_cwd === run.cwd`. */
+   *  llm-time filter prunes to `scope === "user" || project_cwd === run.cwd`. */
   project_cwd?: string;
   /** When set, the profile was discovered but should not appear in the
    *  parent's catalogue. Reserved for forward-compat (V3 per-node

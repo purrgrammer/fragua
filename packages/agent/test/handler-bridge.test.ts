@@ -363,10 +363,10 @@ describe("makeCodergenHandler", () => {
   });
 });
 
-// Regression / property suite for "codergen routing belongs to the edge
+// Regression / property suite for "llm routing belongs to the edge
 // selector, not the handler". Before this was locked in, the daemon's
 // codergenFactory forwarded `first = outbound[0]` to makeCodergenHandler,
-// which meant every codergen call forced its nextNode to whichever edge
+// which meant every llm call forced its nextNode to whichever edge
 // happened to appear first in the DOT — bypassing the selector and
 // sending e.g. `outcome=success` runs down an `outcome=fail` branch
 // just because that branch was declared first.

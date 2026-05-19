@@ -27,7 +27,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "spend", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -38,7 +38,7 @@ steps:
       }),
     });
     r.dispatcher.register(r.workflowSha, "checkpoint", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "none",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "done", tokens: 0, costUsd: 0 }),
@@ -110,7 +110,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "spend", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "done", tokens: 100, costUsd: 1.5 }),
@@ -159,7 +159,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "spend", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -240,7 +240,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "spend", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "spend", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "done", tokens: 100, costUsd: 1.5 }),
@@ -292,13 +292,13 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "a", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "a", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "b", tokens: 0, costUsd: 0.85 }),
     });
     r.dispatcher.register(r.workflowSha, "b", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "done", tokens: 0, costUsd: 0.1 }),
@@ -352,7 +352,7 @@ steps:
     });
     let returnedCleanly = false;
     r.dispatcher.register(r.workflowSha, "orchestrate", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 1_000,
       handler: async (ctx) => {

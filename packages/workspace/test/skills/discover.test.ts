@@ -53,7 +53,7 @@ describe("discoverSkills", () => {
     expect(skills[0]!.scope).toBe("user");
   });
 
-  test("project + user collisions coexist in the superset (filter resolves at codergen time)", async () => {
+  test("project + user collisions coexist in the superset (filter resolves at llm time)", async () => {
     const cwd = join(tmp, "proj");
     const home = join(tmp, "home");
     await mkdir(cwd, { recursive: true });
@@ -287,7 +287,7 @@ ${Array.from({ length: 600 }, (_, i) => `line ${i}`).join("\n")}`;
     expect(byCwd.get(projA)?.description).toBe("A's frontend");
     expect(byCwd.get(projB)?.description).toBe("B's frontend");
     // Each carries the right project_cwd anchor — that's what the
-    // codergen-time filter reads.
+    // llm-time filter reads.
     expect(byCwd.get(projA)?.scope).toBe("project");
     expect(byCwd.get(projB)?.scope).toBe("project");
   });

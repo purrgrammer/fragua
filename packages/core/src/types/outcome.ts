@@ -21,7 +21,7 @@ export const OutcomeSchema = Type.Object(
      */
     non_retryable: Type.Optional(Type.Boolean()),
     /**
-     * Set by the codergen agent boundary when an LLM provider returns a
+     * Set by the llm agent boundary when an LLM provider returns a
      * transport error mid-stream (HTTP 402/429/5xx, pre-response network
      * reset). Routes the run to `paused` (with `fact.run_paused` reason
      * `provider_error` or `payment_required`) instead of the normal
@@ -40,14 +40,14 @@ export const OutcomeSchema = Type.Object(
         retryAfterMs: Type.Optional(Type.Number()),
       }),
     ),
-    /** Set by the codergen agent boundary when the LLM exited the node
+    /** Set by the llm agent boundary when the LLM exited the node
      * via the synthesised `route` tool (see
      * docs/proposals/llm-routing.md D2). The handler-bridge forwards
      * this onto `HandlerResult.transition.route`, which the daemon
      * persists into `fact.node_completed.payload.route`. Absent on
      * non-routing nodes. */
     route: Type.Optional(Type.String()),
-    /** Set by the codergen agent boundary when a routing-node turn ended
+    /** Set by the llm agent boundary when a routing-node turn ended
      * with no isolated `route` tool call (or the call was paired with
      * other tool calls). The handler-bridge converts this into a
      * `HandlerResult.halt` with this reason; the daemon emits
@@ -117,7 +117,7 @@ export function failProvider(
 }
 
 /**
- * Mark an outcome as a hard halt with a named HaltReason. The codergen
+ * Mark an outcome as a hard halt with a named HaltReason. The llm
  * agent boundary uses this for routing-node failure modes
  * (`route_not_picked`, `route_call_not_isolated`) so the handler-bridge
  * converts the outcome into `HandlerResult { kind: "halt", reason }`

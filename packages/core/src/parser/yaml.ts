@@ -159,7 +159,7 @@ const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied
 const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
   ["outcome", new Set(["success", "fail"])],
-  ["kind", new Set(["codergen", "tool", "human"])],
+  ["kind", new Set(["llm", "tool", "human"])],
   ["summary", new Set(["low", "medium", "high"])],
   ["reasoning_effort", new Set(["low", "medium", "high"])],
 ]);
@@ -431,8 +431,8 @@ export function parseWorkflow(source: string): Graph {
     // Lower type to IR kind/type for engine consumers.
     attrs["shape"] = shape;
     if (typeStr === "llm") {
-      attrs["kind"] = "codergen";
-      attrs["type"] = "codergen";
+      attrs["kind"] = "llm";
+      attrs["type"] = "llm";
     } else if (typeStr === "human" || typeStr === "tool") {
       attrs["kind"] = typeStr;
       attrs["type"] = typeStr;

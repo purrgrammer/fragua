@@ -234,7 +234,7 @@ export type HaltReason =
   | "aborted_exit"
   | "occ_exhausted"
   | "timeout_exhausted"
-  /** Routing node's codergen turn ended without an isolated call to the
+  /** Routing node's llm turn ended without an isolated call to the
    * synthesised `route` tool. See docs/proposals/llm-routing.md D3. */
   | "route_not_picked"
   /** Routing node's `route` tool call shared an assistant response with
@@ -387,7 +387,7 @@ export type FactEvent =
          * UI distinguish "completed OK" from "completed with outcome=fail"
          * without walking `edge.selected` / `fact.run_halted`. */
         outcomeStatus?: "success" | "fail" | "retry";
-        /** Present iff the source node declared `routes=` and the codergen
+        /** Present iff the source node declared `routes=` and the llm
          * agent exited via the synthesised `route` tool. The chosen route
          * name; the engine's Step-0 edge selector keys on this. */
         route?: string;

@@ -17,7 +17,7 @@
 //     registry; reject only when no provider recognises it.
 //   - Neither set → skip (the daemon's default is applied at runtime).
 //
-// Codergen nodes only — other handler kinds (start/exit/tool/wait.human/
+// Llm nodes only — other handler kinds (start/exit/tool/wait.human/
 // conditional/parallel) don't LLM-dispatch.
 
 import { join } from "node:path";
@@ -51,7 +51,7 @@ function getDefaultRegistry(): ModelRegistry {
   return cachedRegistry;
 }
 
-/** Validate a DOT workflow's codergen-node model declarations. */
+/** Validate a DOT workflow's llm-node model declarations. */
 export function validateWorkflowModels(
   dotSource: string,
   registry: ModelRegistry = getDefaultRegistry(),

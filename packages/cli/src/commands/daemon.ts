@@ -120,7 +120,7 @@ export interface DaemonCommandOptions {
   /** Max concurrent runs. Default 4. */
   concurrency?: number;
   /** LLM provider override. When set with `llmModel`, enables the real
-   * codergen path. Mirrors workflow node `llm_provider` (attractor §2.6). */
+   * llm path. Mirrors workflow node `llm_provider` (attractor §2.6). */
   llmProvider?: string;
   /** LLM model id. Mirrors workflow node `llm_model` (attractor §2.6). */
   llmModel?: string;
@@ -187,7 +187,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   process.once("SIGTERM", onSig);
 
   // Shared summariser — one PiSummariserBackend per daemon process, used
-  // by BOTH the AutoTitler (run-title generation) AND every codergen
+  // by BOTH the AutoTitler (run-title generation) AND every llm
   // backend's per-node `summary=low|medium|high` path. Without reuse the
   // summary path has no backend wired and degrades to a deterministic
   // role-census + tail template with a soft warning (visible in events.jsonl).
@@ -201,7 +201,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   // Discover skills once at boot. Walks every cwd that has ever been a
   // run target (`store.listCwds()`) plus the daemon's own startup cwd,
   // emitting a superset across all known projects. Per-run filtering
-  // happens at codergen dispatch time. New project cwds discovered after
+  // happens at llm dispatch time. New project cwds discovered after
   // boot trigger an auto-scan on first sight.
   const knownCwds = store.listCwds().map((r) => r.cwd);
   const projectCwds = Array.from(new Set([cwd, ...knownCwds]));
@@ -220,7 +220,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   }
 
   // Discover named sub-agent profiles across the same project set.
-  // Catalogue lands on every codergen call whose tool pool includes
+  // Catalogue lands on every llm call whose tool pool includes
   // `agent`; per-run filter at dispatch picks the right slice.
   const { agents: discoveredAgents, warnings: agentWarnings } = await discoverAgents({
     projectCwds,
@@ -236,7 +236,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
   }
 
   // Auto-scan-on-first-sight. The catalogues above are a superset across
-  // every cwd known at boot. When the dispatcher prepares a codergen call
+  // every cwd known at boot. When the dispatcher prepares a llm call
   // for a `run.cwd` that wasn't in `store.listCwds()` yet — typically the
   // first run for a freshly-onboarded project — we incrementally scan
   // that cwd and merge results into the live arrays before the backend
@@ -302,7 +302,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     const registry = new ToolRegistry();
     registry.registerAll(CORE_TOOLS);
     // Shared `inProcessWrites` — one Set for the whole daemon process so
-    // every codergen backend (one per workflow node — see the factory
+    // every llm backend (one per workflow node — see the factory
     // below) sees the same "we've written to this (runId, threadId)"
     // signal. The Set's job is to stop `computeResumeDecision` from
     // misreading a legitimate cross-node dispatch (e.g. `implement` →
@@ -322,7 +322,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     // registry to the supervisor's `onSteer` so an `intent.steering_requested`
     // routes into pi-agent-core's `steeringQueue` (drained at end-of-turn)
     // rather than tripping the abort controller — which would force the
-    // codergen handler to classify the in-flight call's `stopReason: "aborted"`
+    // llm handler to classify the in-flight call's `stopReason: "aborted"`
     // as a fail outcome.
     steeringRegistry = new SteeringRegistry();
     const backendOpts = {
@@ -340,7 +340,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       inProcessWrites,
       steering: steeringRegistry,
       // Tier-1 skills catalog — rendered into the system prompt of every
-      // codergen call, filtered per-node by `attrs.skills` /
+      // llm call, filtered per-node by `attrs.skills` /
       // `skills_disabled`. Empty array is a valid no-op.
       skills: discoveredSkills,
       // Named sub-agent profiles. The backend renders the `## Available
@@ -349,7 +349,7 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       agentDefinitions: discoveredAgents,
       ...(summariserInfo.backend ? { summariser: summariserInfo.backend } : {}),
       // Wire the per-call sub-agent spawner. The closure built by
-      // makeSpawnSubagent runs the sub-agent's codergen call inline
+      // makeSpawnSubagent runs the sub-agent's llm call inline
       // against the parent's event stream — no child run, no separate
       // dispatcher path. Each spawn synthesises a one-off backend so
       // the per-call factory has a `backend` reference that doesn't
@@ -370,9 +370,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
     };
     // `nextNode` is intentionally NOT forwarded to makeCodergenHandler.
     // The factory receives the first outgoing edge as a legacy-compat
-    // hint for tool/transition nodes, but for codergen that would force
+    // hint for tool/transition nodes, but for llm that would force
     // every call to route to whichever edge happens to appear first in
-    // the DOT — bypassing the edge selector. Real codergen nodes need
+    // the DOT — bypassing the edge selector. Real llm nodes need
     // the selector to pick based on outcome status + condition matching
     // (e.g. `implement -> done [condition="outcome=fail"]` vs the
     // unconditional `implement -> verify`).
@@ -395,8 +395,8 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
       };
     };
   }
-  const defaultMaxMs: { codergen?: number; tool?: number } = {};
-  if (timeouts.codergen !== undefined) defaultMaxMs.codergen = timeouts.codergen;
+  const defaultMaxMs: { llm?: number; tool?: number } = {};
+  if (timeouts.llm !== undefined) defaultMaxMs.llm = timeouts.llm;
   if (timeouts.tool !== undefined) defaultMaxMs.tool = timeouts.tool;
   dispatcher.setResolver(
     autoDispatcherResolver({
@@ -537,7 +537,7 @@ interface SummariserInfo {
 }
 
 /** Construct the shared `PiSummariserBackend` used by AutoTitler + every
- * codergen backend's per-node `summary=` path. Returns `{ backend:
+ * llm backend's per-node `summary=` path. Returns `{ backend:
  * undefined }` when there's no usable provider/model combination — the
  * caller decides how to surface that (AutoTitler disables itself;
  * summary paths already warn + fall back to the deterministic template). */

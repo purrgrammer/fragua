@@ -39,7 +39,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "implement", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -102,7 +102,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "implement", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -113,7 +113,7 @@ steps:
       }),
     });
     r.dispatcher.register(r.workflowSha, "verify", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
@@ -166,7 +166,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "implement", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "implement", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -229,7 +229,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "check", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "check", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -267,8 +267,8 @@ steps:
     r.store.close();
   });
 
-  test("codergen fail routes through condition=outcome=fail to a recovery node (build-feature: review→fix)", async () => {
-    // Regression for the handler-bridge bug that collapsed every codergen
+  test("llm fail routes through condition=outcome=fail to a recovery node (build-feature: review→fix)", async () => {
+    // Regression for the handler-bridge bug that collapsed every llm
     // fail outcome to a terminal halt — blocking review → fix recovery in
     // build-feature.dot. With the fix, fail flows through as a transition
     // and the edge selector picks the explicit fail-edge.
@@ -290,7 +290,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "review", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "review", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -301,7 +301,7 @@ steps:
       }),
     });
     r.dispatcher.register(r.workflowSha, "fix", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -310,7 +310,7 @@ steps:
       },
     });
     r.dispatcher.register(r.workflowSha, "verify", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 1, costUsd: 0 }),
@@ -347,7 +347,7 @@ steps:
     r.store.close();
   });
 
-  test("codergen fail with no condition=outcome=fail edge halts (no silent fallthrough)", async () => {
+  test("llm fail with no condition=outcome=fail edge halts (no silent fallthrough)", async () => {
     // Mirrors quick-change.dot's commit/merge nodes — no fail-edge means
     // a fail outcome should halt rather than route into the unconditional
     // success edge.
@@ -365,13 +365,13 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "commit", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "commit", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", outcomeStatus: "fail", tokens: 1, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "merge", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -433,7 +433,7 @@ describe("executor — observability emission", () => {
     const r = rig();
     // Custom handler that emits a small agent.* trail before transitioning.
     r.dispatcher.register(r.workflowSha, "start", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 1_000,
       handler: async (ctx) => {
@@ -479,7 +479,7 @@ describe("executor — observability emission", () => {
   test("emit buffer flushes even when the handler throws / aborts", async () => {
     const r = rig();
     r.dispatcher.register(r.workflowSha, "start", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 1_000,
       handler: async (ctx) => {
@@ -701,7 +701,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "restricted", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "restricted", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "none",
       maxMs: 100,
       handler: async (ctx) => {
@@ -825,7 +825,7 @@ steps:
     });
     for (const n of ["s1", "s2"] as const) {
       r.dispatcher.register(r.workflowSha, n, {
-        kind: "codergen",
+        kind: "llm",
         sideEffect: "external",
         maxMs: 100,
         handler: async (ctx) => {
@@ -836,7 +836,7 @@ steps:
     }
     let s3Calls = 0;
     r.dispatcher.register(r.workflowSha, "s3", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async (ctx) => {
@@ -930,7 +930,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "s1", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "s1", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async (ctx) => {
@@ -955,7 +955,7 @@ steps:
       },
     });
     r.dispatcher.register(r.workflowSha, "s2", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async (ctx) => {
@@ -981,7 +981,7 @@ steps:
     });
     let s3Calls = 0;
     r.dispatcher.register(r.workflowSha, "s3", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {

@@ -25,7 +25,7 @@ function setupRun(r: TestRig, nodeName: string, sleepMs: number): void {
     handler: async () => ({ kind: "transition", nextNode: nodeName, tokens: 0, costUsd: 0 }),
   });
   r.dispatcher.register(r.workflowSha, nodeName, {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "external",
     maxMs: 5_000,
     handler: async (ctx) => {
@@ -139,7 +139,7 @@ describe("executor — concurrency", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 5_000,
       handler: async () => {
@@ -202,7 +202,7 @@ describe("executor — concurrency", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 10_000,
       handler: async () => {

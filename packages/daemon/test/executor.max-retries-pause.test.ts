@@ -66,7 +66,7 @@ describe("executor — max_retries pause + operator resume", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -149,7 +149,7 @@ describe("executor — max_retries pause + operator resume", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       // Always returns retry — every dispatch will exhaust the cap.
@@ -259,7 +259,7 @@ describe("intent.max_retries_adjusted — override read", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {

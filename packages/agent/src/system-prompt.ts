@@ -45,7 +45,7 @@ export interface ContextBlock {
 
 /** Auto-prepend `AGENTS.md` to a node's declared `context_files` list.
  * AGENTS.md is the project primer (repo layout, codebase map, ground
- * rules) and is applied to every codergen call so workflow authors
+ * rules) and is applied to every llm call so workflow authors
  * don't have to thread `context_files = "AGENTS.md"` through every
  * node. An explicit declaration already containing `AGENTS.md` is
  * preserved verbatim — no duplication, no order changes. */
@@ -117,7 +117,7 @@ export interface RunEnvironment {
    * `ExecutionEnvironment.cwd()` for this run. Always set; mirrors
    * whatever env the executor wired (a `WorktreeEnvironment`'s
    * `worktreePath`, or a bare `LocalEnvironment`'s `cwd`). Surfaced to
-   * the model as `cwd:` so every codergen call sees a uniform
+   * the model as `cwd:` so every llm call sees a uniform
    * `<environment>` block regardless of env implementation — no
    * brittle structural probe for `worktreePath`. */
   cwd: string;
@@ -170,7 +170,7 @@ export interface BuildFrameworkBlocksInput {
 /** Assemble everything that frames a persona — env / protocol / agents
  *  catalogue / skills catalogue / project conventions — without the
  *  persona itself. The persona is appended by callers (`buildSystemPrompt`
- *  for codergen nodes, `materialiseForChild` for sub-agents). Order is
+ *  for llm nodes, `materialiseForChild` for sub-agents). Order is
  *  identical to the full assembly so the framework parts compose
  *  identically whether the consumer is a parent or a child. */
 export function buildFrameworkBlocks({

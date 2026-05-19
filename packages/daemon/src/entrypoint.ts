@@ -41,7 +41,7 @@ export interface DaemonMainOpts {
   provisioner?: Provisioner;
   /** Supervisor's leak watchdog fallback when the dispatcher cannot
    * resolve a spec for the run's current node. Defaults to the
-   * codergen budget (30m) so the watchdog never trips a legitimate
+   * llm budget (30m) so the watchdog never trips a legitimate
    * long-running node ahead of the executor's own deadline. Tests
    * can pass a smaller value. */
   unknownSpecFallbackMs?: number;
@@ -72,9 +72,9 @@ export interface DaemonMainOpts {
   /** Max rows visited per `gcBlobs` sweep. Bounds latency on huge
    * stores. Defaults to 1000. */
   blobGcMaxRows?: number;
-  /** Forward steer text into the codergen backend's queue when an
+  /** Forward steer text into the llm backend's queue when an
    * `intent.steering_requested` arrives mid-handler. Wired by the CLI to
-   * a daemon-scoped `SteeringRegistry` shared across every codergen
+   * a daemon-scoped `SteeringRegistry` shared across every llm
    * backend. Without this, steers either land via the standard intent
    * fold on re-dispatch or stay buffered until the next `beginRun`. */
   onSteer?: (runId: string, text: string) => void;
@@ -86,10 +86,10 @@ export interface DaemonMainOpts {
 
 const DEFAULT_LOCK_TTL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 16;
-// Matches @swarm/agent's codergen default — the supervisor must never
-// trip a legitimate long-running codergen node just because the spec
+// Matches @swarm/agent's llm default — the supervisor must never
+// trip a legitimate long-running llm node just because the spec
 // wasn't resolvable at the moment of the leak check. See
-// docs/proposals/codergen-maxms-backstop.md for the framing.
+// docs/proposals/llm-maxms-backstop.md for the framing.
 const DEFAULT_UNKNOWN_SPEC_FALLBACK_MS = 4 * 60 * 60 * 1000;
 
 export interface DaemonHandle {

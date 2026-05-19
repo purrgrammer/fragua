@@ -1,7 +1,7 @@
 // The `abort` tool — the agent backend's self-abort contract.
 //
 // An agent that cannot proceed calls `abort({ reason })`. The tool is
-// force-included on every codergen node (even under `allowed_tools=""`),
+// force-included on every llm node (even under `allowed_tools=""`),
 // sets `terminate: true` so the loop stops after its batch, and the
 // backend turns the call into a non-retryable `fail` outcome that
 // workflows wire with `condition="outcome=fail"`.

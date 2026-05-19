@@ -1,6 +1,6 @@
 // Provider auto-retry — end-to-end test through the executor.
 //
-// Registers a codergen handler that returns `kind: "pause_provider"` with
+// Registers a llm handler that returns `kind: "pause_provider"` with
 // a configurable httpStatus, drives `runOne`, and asserts the daemon
 // classified the failure correctly: 429/5xx → paused_auto with
 // fact.run_paused{reason:"provider_retry"} + fact.provider_retry_attempted
@@ -20,7 +20,7 @@ function registerPauseProviderNode(
   retryAfterMs?: number,
 ): void {
   r.dispatcher.register(r.workflowSha, nodeId, {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "external",
     maxMs: 100,
     handler: async () => ({

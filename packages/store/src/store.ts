@@ -683,7 +683,7 @@ export class SqliteStore implements IEventStore {
       });
       // Signal the per-run SSE stream that a new message row landed, so
       // clients can refetch the messages tail. Without this, tool-handler
-      // appends are invisible to the client until the next codergen
+      // appends are invisible to the client until the next llm
       // emits `agent.message_end`. Dedup hits don't insert a row, so
       // they don't emit either — the client's last refetch already
       // covers the existing ordinal.

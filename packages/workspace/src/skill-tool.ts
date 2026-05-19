@@ -1,6 +1,6 @@
 // `skill` tool — load a skill from the catalogue.
 //
-// Always available on every codergen call. The catalogue is the same
+// Always available on every llm call. The catalogue is the same
 // set rendered into `<available_skills>` in the system prompt; this
 // tool turns "model decides to use skill X" into an explicit,
 // observable tool call instead of a `read` against `<location>`.

@@ -43,14 +43,14 @@ export interface Skill {
   /** Byte length of SKILL.md raw bytes. */
   bytes: number;
   /** Scope where the skill was discovered. Project beats user on collisions
-   * (resolved at codergen-time per-run, not at discovery — see `project_cwd`). */
+   * (resolved at llm-time per-run, not at discovery — see `project_cwd`). */
   scope: SkillScope;
   /** The well-known path the skill came from (absolute), e.g.
    * "/Users/x/.agents/skills". Useful for UI "source" columns. */
   source_dir: string;
   /** Project cwd this record is anchored to. Set only when `scope === "project"`.
    * Discovery walks every known project cwd and emits a superset; the
-   * codergen-time filter prunes to `scope === "user" || project_cwd === run.cwd`.
+   * llm-time filter prunes to `scope === "user" || project_cwd === run.cwd`.
    * Two projects can both legitimately ship a skill named `frontend` — they
    * coexist in the superset, distinguished by this field. */
   project_cwd?: string;

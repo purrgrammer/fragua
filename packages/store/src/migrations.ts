@@ -454,7 +454,7 @@ function MIGRATION_004_LOCAL_WORKFLOW_SCOPE(): string {
  *   writer (enqueueRun), not by CHECK — SQLite can't express
  *   conditional NOT NULL.
  * - Parent linkage columns (`parent_run_id`, `parent_node_id`,
- *   `parent_iteration`) anchor sub-agent runs back to the codergen
+ *   `parent_iteration`) anchor sub-agent runs back to the llm
  *   iteration that spawned them. Foreign-key cascade is SET NULL so
  *   GC'ing a parent leaves the child as a free-standing run.
  * - New partial index `idx_run_state_parent` covers parent_run_id

@@ -103,7 +103,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
   }
 
   // Merge multi-turn / pause+resume duplicates: each `llm.start`
-  // becomes its own StepSnapshot, so a codergen handler that takes
+  // becomes its own StepSnapshot, so a llm handler that takes
   // multiple turns produces N rows for one nodeId; raise+resume
   // produces another N. Collapse them into ONE row per
   // (originRunId, nodeId, parentNodeId, parallelIndex, parentStartSeq,
@@ -212,7 +212,7 @@ export function CostInspector({ runId, totalEvents, isLive = false }: CostInspec
 
 /** Merge CONSECUTIVE steps that share the same logical "node window":
  *  same originRunId, same nodeId, same parent linkage. Each `llm.start`
- *  in the server's stream produces one StepSnapshot; codergen
+ *  in the server's stream produces one StepSnapshot; llm
  *  multi-turn and pause-resume both yield several within the same
  *  node window. Operators care about the node's TOTAL spend, not the
  *  per-turn rows, so we sum here. `turns` carries the merge count for

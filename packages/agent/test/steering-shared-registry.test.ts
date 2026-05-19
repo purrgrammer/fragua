@@ -1,6 +1,6 @@
 // PiCodergenBackend honours an externally-supplied SteeringRegistry.
 //
-// Each codergen node builds its own backend (per packages/cli/src/commands/daemon.ts),
+// Each llm node builds its own backend (per packages/cli/src/commands/daemon.ts),
 // so per-instance steering registries can't deliver a steer issued while
 // node A is active to node B's agent on the same run. The daemon shares
 // one registry across all backends; this test pins the wiring.

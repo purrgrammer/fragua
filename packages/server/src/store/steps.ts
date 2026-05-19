@@ -19,7 +19,7 @@
 // happen-time. So `llm.start.ts` is closer to "when the call ended"
 // than "when it started" — and the durations we'd derive from
 // `llm.start → next llm.start` understate node activity by exactly the
-// buffered duration. On run 01kq4fp0vvygdwz6hp the 4 codergen steps
+// buffered duration. On run 01kq4fp0vvygdwz6hp the 4 llm steps
 // summed to 96s against a 251s run total: 155s missing.
 //
 // `fact.node_started` and `fact.node_completed` are written by the
@@ -190,7 +190,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
   // nodeId → metadata captured on `fact.node_started` for a node
   // that may turn out to be a tool node (parallelogram). If an
   // `llm.start` arrives for the nodeId before its `fact.node_completed`,
-  // the entry is cleared (it's a codergen, the existing path handles
+  // the entry is cleared (it's a llm, the existing path handles
   // it). If `fact.node_completed` arrives with the entry still
   // present, we emit a synthetic tool step so tool nodes appear in
   // the Cost breakdown alongside LLM steps — the parallelogram
@@ -272,7 +272,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
           firstStepEmittedForNode.delete(nodeId);
           // Mark this node as a potential tool step. If an `llm.start`
           // arrives before completion, this entry is cleared (it's a
-          // codergen and the existing path opens a real step for it).
+          // llm and the existing path opens a real step for it).
           // Otherwise we emit a tool step at completion.
           pendingToolNode.set(nodeId, {
             startTs: ev.ts,
@@ -325,7 +325,7 @@ export function eventsToSteps(events: readonly StepEvent[]): StepSnapshot[] {
     }
 
     if (ev.type === "llm.start") {
-      // This node opened an LLM call — it's a codergen, not a tool
+      // This node opened an LLM call — it's a llm, not a tool
       // node. Clear any pending tool-step entry so we don't emit a
       // duplicate row at fact.node_completed time.
       if (nodeId !== "") pendingToolNode.delete(nodeId);

@@ -1,12 +1,12 @@
 // Skill discovery. Walks `~/.agents`, `~/.claude` and every project cwd
 // passed in `projectCwds`, emitting a superset of records. Project-scope
-// records carry `project_cwd`; the codergen-time filter prunes to a
+// records carry `project_cwd`; the llm-time filter prunes to a
 // single project per run.
 //
 // Within-bucket precedence: for project scope, `.agents/skills` beats
 // `.claude/skills` per cwd; for user scope, same order. Cross-scope
 // (project↔user) and cross-project shadowing is NOT applied at discovery
-// — both happen at codergen filter time, since the answer depends on
+// — both happen at llm filter time, since the answer depends on
 // `run.cwd`. See `filterCatalogueForRun` in `catalog.ts`.
 
 import { createHash } from "node:crypto";
@@ -102,7 +102,7 @@ function buildRoots(opts: DiscoverOptions, config: SkillsConfig): Root[] {
     //   - under any of `projectCwds` → project, `project_cwd` = that cwd
     //   - under `homeDir` (and not under any project) → user
     //   - otherwise → project with no `project_cwd` (degraded record;
-    //     codergen filter will exclude it because it can't match any
+    //     llm filter will exclude it because it can't match any
     //     `run.cwd`, but the UI still surfaces it)
     // Relative paths resolve against `projectCwds[0]` if any, else
     // `homeDir`. Absolute paths are honoured as-is.

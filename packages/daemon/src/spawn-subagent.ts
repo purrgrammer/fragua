@@ -1,5 +1,5 @@
 // makeSpawnSubagent — the per-call factory that runs a sub-agent
-// inline as a codergen call against the parent's event stream.
+// inline as a llm call against the parent's event stream.
 //
 // A sub-agent is NOT a run. It can't be enqueued, can't be paused or
 // resumed independently, and has no `run_state` row. It is a tool
@@ -52,11 +52,11 @@ export interface SpawnSubagentParentCtx {
    *  Sub-agents inherit verbatim — same worktree, same bootstrap. */
   parentRunEnv?: import("@swarm/agent").RunEnvironment;
   parentSkills: readonly Skill[];
-  /** Provider/model the parent codergen call resolved to. The child
+  /** Provider/model the parent llm call resolved to. The child
    *  inherits both verbatim — no per-call model selection from the LLM. */
   parentProvider: string;
   parentModel: string;
-  /** Execution environment from the parent codergen call. The child's
+  /** Execution environment from the parent llm call. The child's
    *  tool pool runs against the same env (no per-call worktree
    *  isolation in V1). */
   parentEnv: ExecutionEnvironment;
@@ -76,7 +76,7 @@ export interface SpawnSubagentParentCtx {
  *  `priorMessages` load uncontaminated by sub-agent turns. */
 const SUBAGENT_NODE_PREFIX = "__subagent:";
 
-/** Build a `spawnSubagent` closure scoped to one parent codergen call.
+/** Build a `spawnSubagent` closure scoped to one parent llm call.
  *  Wired by the daemon into `PiCodergenBackend.spawnSubagentFactory`
  *  so `swarmContext.spawnSubagent` resolves per call. */
 export function makeSpawnSubagent(
@@ -277,7 +277,7 @@ export function makeSpawnSubagent(
     const childProvider = spec.provider ?? parentCtx.parentProvider;
     const childModel = spec.model ?? parentCtx.parentModel;
 
-    // Synthetic node passed to the codergen backend. The backend
+    // Synthetic node passed to the llm backend. The backend
     // reads `system_prompt`, `allowed_tools`, `skills`, `llm_provider`,
     // `llm_model` off `node.attrs`. The nodeId itself isn't stored
     // anywhere persistent — it's only used to namespace messages in
@@ -408,7 +408,7 @@ export function makeSpawnSubagent(
     };
 
     // Cancellation: thread the tool's signal + the daemon shutdown
-    // signal into a fresh AbortController that the codergen call
+    // signal into a fresh AbortController that the llm call
     // listens on. No DB intent — there's no child run to cancel via
     // the standard fold; abort propagation is purely in-process.
     const childCtrl = new AbortController();

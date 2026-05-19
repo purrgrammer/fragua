@@ -29,7 +29,7 @@ describe.skip("NodeInspector", () => {
     expect(within(container).getByTestId("node-inspector-empty")).toBeTruthy();
   });
 
-  it("surfaces identity, model, and prompt for a codergen node", () => {
+  it("surfaces identity, model, and prompt for a llm node", () => {
     const nodes = nodesFromDot();
     const a = nodes["a"];
     expect(a).toBeTruthy();
@@ -38,12 +38,12 @@ describe.skip("NodeInspector", () => {
     const q = within(container);
     const panel = q.getByTestId("node-inspector");
     expect(panel.getAttribute("data-node-id")).toBe("a");
-    expect(panel.getAttribute("data-handler")).toBe("codergen");
+    expect(panel.getAttribute("data-handler")).toBe("llm");
     expect(panel.textContent ?? "").toContain("opus-4");
     expect(q.getByTestId("node-inspector-prompt").textContent).toBe("plan the work");
   });
 
-  it("renders a human node header without a codergen prompt block", () => {
+  it("renders a human node header without a llm prompt block", () => {
     const nodes = nodesFromDot();
     const b = nodes["b"];
     expect(b).toBeTruthy();

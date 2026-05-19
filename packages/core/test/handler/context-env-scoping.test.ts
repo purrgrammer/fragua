@@ -111,7 +111,7 @@ describe("buildHandlerContext — env scoping follows allowed_tools", () => {
 
   test("empty registry + allowed_tools lists mutators → env stays writable", async () => {
     // Regression for the daemon path: swarm's executor receives an empty
-    // sentinel registry while codergen uses its own. The env-wrap decision
+    // sentinel registry while llm uses its own. The env-wrap decision
     // must be based on the declared allowed_tools, not the runtime registry.
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = buildHandlerContext({

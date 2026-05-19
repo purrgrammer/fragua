@@ -297,7 +297,7 @@ describe("CostInspector", () => {
   });
 
   describe("sub-agents — goal-gate retry scoping", () => {
-    // Bug: when a parent codergen is goal-gated and retargets to itself,
+    // Bug: when a parent llm is goal-gated and retargets to itself,
     // the parent runs twice (two `llm.start`s → two parent step rows under
     // the same `parent_node_id`), and each invocation spawns its own set
     // of sub-agents. The Cost tab used to group sub-agent children by

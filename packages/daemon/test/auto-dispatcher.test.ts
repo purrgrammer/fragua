@@ -13,7 +13,7 @@ describe("autoDispatcherResolver", () => {
     dispatcher.setResolver(autoDispatcherResolver({ store }));
 
     expect(dispatcher.get("sha", "start").kind).toBe("start");
-    expect(dispatcher.get("sha", "mid").kind).toBe("codergen");
+    expect(dispatcher.get("sha", "mid").kind).toBe("llm");
     expect(dispatcher.get("sha", "exit").kind).toBe("exit");
 
     store.close();
@@ -233,7 +233,7 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
         codergenFactory: (node, _next, maxMs) => {
           if (node.id === nodeId) recorded = maxMs;
           const spec: import("@swarm/core/handler").HandlerSpec = {
-            kind: "codergen",
+            kind: "llm",
             sideEffect: "external",
             handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
           };
@@ -254,27 +254,27 @@ describe("auto-dispatcher → codergenFactory unbounded propagation", () => {
     return out;
   }
 
-  test('max_ms=0 passes "unbounded" to the codergen factory', () => {
+  test('max_ms=0 passes "unbounded" to the llm factory', () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 0}\n`;
     const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe("unbounded");
     expect(specMaxMs).toBeUndefined();
   });
 
-  test('timeout="0s" passes "unbounded" to the codergen factory', () => {
+  test('timeout="0s" passes "unbounded" to the llm factory', () => {
     const yaml = `name: t\nsteps:\n  impl:\n    type: llm\n    prompt: x\n    timeout: "0s"\n`;
     const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe("unbounded");
     expect(specMaxMs).toBeUndefined();
   });
 
-  test("no max_ms passes undefined to the codergen factory", () => {
+  test("no max_ms passes undefined to the llm factory", () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     const { recordedMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBeUndefined();
   });
 
-  test("max_ms=5000 passes the number 5000 to the codergen factory", () => {
+  test("max_ms=5000 passes the number 5000 to the llm factory", () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x, max_ms: 5000}\n`;
     const { recordedMaxMs, specMaxMs } = captureMaxMsForNode(yaml, "impl");
     expect(recordedMaxMs).toBe(5_000);

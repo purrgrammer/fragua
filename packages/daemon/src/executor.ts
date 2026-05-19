@@ -131,10 +131,10 @@ export interface ExecutorOpts {
 }
 
 const DEFAULT_POLL_MS = 50;
-// 30s gives a codergen handler mid-bash-tool room to honour `signal`
+// 30s gives a llm handler mid-bash-tool room to honour `signal`
 // cleanly: SIGTERM → SIGKILL escalation, file-handle close, fdsync,
 // pi-ai abort latency, in-flight blob writes. 10s was too tight on
-// real long-running children; see docs/proposals/codergen-maxms-backstop.md.
+// real long-running children; see docs/proposals/llm-maxms-backstop.md.
 const DEFAULT_LEAK_GRACE_MS = 30_000;
 const DEFAULT_SHUTDOWN_DRAIN_MS = 30_000;
 const DEFAULT_ABORT_LOOP_CEILING = 5;
@@ -642,7 +642,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     let reactiveBudgetHaltDetail: string | undefined;
     // Symmetric to the halt path above, but for `budget_policy="pause"`
     // (the default). Before this landed, pause-policy breaches waited
-    // for the post-handler boundary — which the codergen agent loop
+    // for the post-handler boundary — which the llm agent loop
     // routinely overshot by 10×+ in one dispatch (73 LLM calls, $3.29
     // on a $0.30 cap on the original review.dot lens regression). The
     // reactive gate now aborts the handler mid-flight and the abort
@@ -704,16 +704,16 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           payload: { nodeId: currentNode, iteration, ...payload },
         });
         // Mirror handler-emitted `cost.recorded` into the per-turn
-        // accumulator. Codergen bypasses ctx.llm.call() and reports
+        // accumulator. Llm bypasses ctx.llm.call() and reports
         // usage through ctx.emit (handler-bridge.ts forwards every
         // pi-agent-core message_end → cost.recorded). Without this
         // mirror, the abort branch's `partial` payload reads zero on
-        // codergen handlers — fact.node_aborted would land with
+        // llm handlers — fact.node_aborted would land with
         // partialTokens=0/partialCostUsd=0 and run_state.metrics +
         // budget_usd would silently undercount aborted spend. The
         // completion path is unaffected: it only backfills result
         // fields when the handler returned zeros (executor.ts §below),
-        // and codergen's HandlerResult already carries populated
+        // and llm's HandlerResult already carries populated
         // tokens/costUsd from its own accumulator (handler-bridge
         // surfaces the same cost.recorded stream into the result).
         // Per AGENTS.md ground rule #5: this accumulator is turn-local,
@@ -734,7 +734,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           // sub-agent fan-out. Fires once per dispatch — the halt /
           // pause flags short-circuit subsequent events. Both stop AND
           // pause policies abort mid-handler (pause was previously
-          // post-handler only, which the codergen agent loop routinely
+          // post-handler only, which the llm agent loop routinely
           // overshot by 10×+; the post-handler arm still exists as a
           // belt-and-suspenders catch for handlers that don't emit
           // `cost.recorded`).
@@ -844,7 +844,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
           result = raced;
         }
       } else {
-        // Unbounded codergen (DOT `max_ms=0`): no AbortSignal.timeout in the
+        // Unbounded llm (DOT `max_ms=0`): no AbortSignal.timeout in the
         // merged signal, so no leak watchdog either — cost/token bounds and
         // operator intents are the operative ceiling. Steer + shutdown still
         // abort cleanly via `ctx.signal`.
@@ -1085,7 +1085,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       // Split fields: only fill from executor accounting when the handler
       // didn't already report any. Handlers that already know their own
       // split (handler-bridge aggregating cost.recorded) win — the
-      // executor's LlmAccounting doesn't see codergen calls that go
+      // executor's LlmAccounting doesn't see llm calls that go
       // through the agent backend.
       if ((result.inputTokens ?? 0) === 0 && totalInputTokens > 0) result.inputTokens = totalInputTokens;
       if ((result.outputTokens ?? 0) === 0 && totalOutputTokens > 0) result.outputTokens = totalOutputTokens;
@@ -1396,7 +1396,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       }
     }
 
-    // Provider auto-retry: when a codergen turn returns pause_provider,
+    // Provider auto-retry: when a llm turn returns pause_provider,
     // consult the policy module to decide whether this is auto-retry
     // (transient transport error, schedule a backoff), manual (operator
     // must intervene — auth/billing/schema), or halt-exhausted (chain
@@ -1442,7 +1442,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // only swap the success continuations (node_started / run_completed).
     // Mid-dispatch pause races (intent arrives AFTER the fold but
     // BEFORE the handler returned) flow through the abort-throw path:
-    // the codergen agent rethrows on signal-tripped + aborted-stream
+    // the llm agent rethrows on signal-tripped + aborted-stream
     // so the executor's catch block writes fact.node_aborted, leaves
     // the run running, and the next dispatch's fold consumes the
     // pause intent normally.

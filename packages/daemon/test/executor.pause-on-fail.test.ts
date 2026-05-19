@@ -1,4 +1,4 @@
-// Mid-dispatch pause — operator clicks Pause while a codergen handler
+// Mid-dispatch pause — operator clicks Pause while a llm handler
 // is mid-stream. The supervisor trips the abort signal; the agent
 // rethrows AbortError instead of converting to a fail outcome (see
 // packages/agent/src/backend.ts). The executor's existing wasAborted
@@ -6,7 +6,7 @@
 // and the next dispatch's fold consumes the pause intent through the
 // normal R4 path, producing fact.run_paused with reason=operator.
 //
-// This test stubs the codergen with a hand-rolled handler that throws
+// This test stubs the llm with a hand-rolled handler that throws
 // AbortError when its signal is tripped. It does NOT exercise the
 // pi-ai integration directly; that's covered by the agent unit suite.
 
@@ -25,7 +25,7 @@ describe("executor — pause mid-dispatch routes through abort-throw + next-fold
       handler: async () => ({ kind: "transition", nextNode: "impl", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async (ctx) => {

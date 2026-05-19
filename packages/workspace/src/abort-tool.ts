@@ -1,4 +1,4 @@
-// `abort` tool — the universal self-abort signal for codergen agents.
+// `abort` tool — the universal self-abort signal for llm agents.
 //
 // An agent that cannot proceed (missing target, contradictory
 // constraints, external blocker) calls `abort` instead of producing an
@@ -6,7 +6,7 @@
 // it and turns it into a non-retryable `fail` outcome, which workflows
 // wire with `condition="outcome=fail"`.
 //
-// Always available on every codergen call. Wiring lives in
+// Always available on every llm call. Wiring lives in
 // `packages/agent/src/backend.ts` — even when a node pins
 // `allowed_tools` or lists `abort` under `denied_tools`, the backend
 // force-includes this tool. Built-in is built-in.

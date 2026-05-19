@@ -212,7 +212,7 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
   // read-only filesystem access. We read the rules directly from
   // allowed_tools / denied_tools rather than `scopedTools.has(...)`: the
   // executor's registry is sometimes intentionally empty (e.g. swarm's
-  // daemon hands codergen its own registry; the executor's `tools` is a
+  // daemon hands llm its own registry; the executor's `tools` is a
   // sentinel) and querying an empty registry would falsely wrap every
   // node's env.
   const isMutatorAllowed = (name: string): boolean => {

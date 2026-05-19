@@ -47,7 +47,7 @@ export interface ServerDeps {
    */
   preflightProviders?: () => { ok: true } | { ok: false; detail: string };
   /**
-   * Validate every codergen node's `(provider, model)` declaration at
+   * Validate every llm node's `(provider, model)` declaration at
    * workflow registration. Rejects typos that would otherwise only
    * surface mid-run (after an expensive `plan` phase already spent
    * tokens). Injected rather than imported so @swarm/server stays

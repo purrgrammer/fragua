@@ -4,19 +4,19 @@ import type { SummaryLevel } from "./summary.ts";
 
 /** Node shapes, each mapping to a handler. Loops are backward conditional
  * edges bounded by `max_retries` on the target node (SPEC §3.6 / §5.2);
- * parallel fan-out lives in the codergen `agent` tool, not at the graph
+ * parallel fan-out lives in the llm `agent` tool, not at the graph
  * level. */
 export type NodeShape =
   | "Mdiamond" // start
   | "Msquare" // exit
-  | "box" // codergen (default)
+  | "box" // llm (default)
   | "hexagon" // human
   | "parallelogram"; // tool
 
 export const HANDLER_BY_SHAPE = {
   Mdiamond: "start",
   Msquare: "exit",
-  box: "codergen",
+  box: "llm",
   hexagon: "human",
   parallelogram: "tool",
 } as const satisfies Record<NodeShape, string>;
@@ -26,12 +26,12 @@ export type HandlerType = (typeof HANDLER_BY_SHAPE)[NodeShape];
 /** Authoring-time node kind. Separate from `HandlerType`/`HANDLER_BY_SHAPE`
  * (which drives runtime handler dispatch). Populated from an explicit
  * `kind=` attribute, or derived from `shape` via `SHAPE_TO_KIND`. */
-export type NodeKind = "codergen" | "tool" | "human";
+export type NodeKind = "llm" | "tool" | "human";
 
 /** Maps node shapes to their `NodeKind` for shape→kind derivation.
  * Start/exit shapes have no kind; explicit `kind=` always wins. */
 export const SHAPE_TO_KIND = {
-  box: "codergen",
+  box: "llm",
   hexagon: "human",
   parallelogram: "tool",
 } as const satisfies Partial<Record<NodeShape, NodeKind>>;
@@ -136,7 +136,7 @@ export interface EdgeAttrs {
    * this outcome. Phase 1: parsed and validated, no runtime selection effect
    * yet — see docs/proposals/llm-routing.md. */
   outcome?: "success" | "fail";
-  /** Route-keyed edge — selected when the source node's codergen call exits
+  /** Route-keyed edge — selected when the source node's llm call exits
    * via `route({name: …})`. Phase 1: parsed and validated, no runtime
    * selection effect yet — see docs/proposals/llm-routing.md. */
   route?: string;

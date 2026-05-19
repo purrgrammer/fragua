@@ -1,4 +1,4 @@
-// Regression: a codergen-shaped handler that emits cost.recorded
+// Regression: a llm-shaped handler that emits cost.recorded
 // events (via ctx.emit, the way handler-bridge does) and is then
 // aborted by its own maxMs MUST surface those costs on
 // fact.node_aborted.{partialTokens, partialCostUsd}, and the
@@ -6,7 +6,7 @@
 //
 // Today the executor's abort path reads its own LlmAccounting
 // accumulator (turnBilled / totalCostUsd) which is fed only by
-// ctx.llm.call(). Codergen handlers bypass ctx.llm and aggregate
+// ctx.llm.call(). Llm handlers bypass ctx.llm and aggregate
 // cost.recorded into local closures inside makeCodergenHandler;
 // when the handler aborts mid-turn, those closures never reach
 // the executor and the resulting fact.node_aborted carries
@@ -28,7 +28,7 @@ import { runOne } from "../src/executor.ts";
 import { enqueue, rig } from "./helpers.ts";
 
 describe("executor — abort path surfaces handler-emitted cost.recorded as partial usage", () => {
-  test("aborted codergen-shaped handler reports partial tokens/cost on fact.node_aborted and in run_state.metrics", async () => {
+  test("aborted llm-shaped handler reports partial tokens/cost on fact.node_aborted and in run_state.metrics", async () => {
     const yaml = `name: t\nsteps:\n  impl: {type: llm, prompt: x}\n`;
     const r = rig({ yaml });
     r.dispatcher.register(r.workflowSha, "start", {
@@ -37,13 +37,13 @@ describe("executor — abort path surfaces handler-emitted cost.recorded as part
       maxMs: 1_000,
       handler: async () => ({ kind: "transition", nextNode: "impl", tokens: 0, costUsd: 0 }),
     });
-    // Codergen-shaped handler: emit cost.recorded the way
+    // Llm-shaped handler: emit cost.recorded the way
     // handler-bridge does (via ctx.emit, not via ctx.llm.call —
-    // codergen bypasses LlmAccounting entirely), then hang until
+    // llm bypasses LlmAccounting entirely), then hang until
     // maxMs trips. This mirrors what PiCodergenBackend does between
     // the first message_end and the abort trigger on a long run.
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 30,
       handler: async (ctx) => {
@@ -113,7 +113,7 @@ describe("executor — abort path surfaces handler-emitted cost.recorded as part
     // the partial accumulator on fact.node_aborted MUST reflect
     // that turn's spend. Before the fix both fields were 0 because
     // the executor's LlmAccounting never saw the handler-emitted
-    // costs (codergen bypasses ctx.llm.call). Each subsequent
+    // costs (llm bypasses ctx.llm.call). Each subsequent
     // retry-on-abort dispatches the handler fresh and emits the
     // same cost.recorded pair, so every fact.node_aborted carries
     // its own turn's partial — not a cumulative total.

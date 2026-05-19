@@ -315,7 +315,7 @@ export interface StepSnapshot {
   };
   /** Set client-side by CostInspector.mergeStepsByNode when this row
    * collapses multiple `llm.start` windows for the same node
-   * (multi-turn codergen, pause+resume cycles). Surfaces as a small
+   * (multi-turn llm, pause+resume cycles). Surfaces as a small
    * "× N turns" badge so the operator knows the row is a sum. */
   turns?: number;
 }

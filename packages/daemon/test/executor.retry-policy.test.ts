@@ -56,7 +56,7 @@ describe("executor — retry-policy enforcement", () => {
       handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "flaky", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -103,7 +103,7 @@ describe("executor — retry-policy enforcement", () => {
       handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "flaky", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -160,7 +160,7 @@ describe("executor — retry-policy enforcement", () => {
       handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "flaky", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({
@@ -209,7 +209,7 @@ describe("executor — retry-policy enforcement", () => {
       handler: async () => ({ kind: "transition", nextNode: "flaky", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "flaky", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({

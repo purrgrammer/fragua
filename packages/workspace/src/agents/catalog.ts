@@ -1,4 +1,4 @@
-// Render the catalogue block injected into the parent codergen call's
+// Render the catalogue block injected into the parent llm call's
 // system prompt when the `agent` tool is in the pool. One bullet per
 // discovered profile (name + description). Bodies are NOT included
 // here — they materialise on spawn into the sub-agent's own system

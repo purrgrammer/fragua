@@ -99,7 +99,7 @@ describe("loadConfig", () => {
   test("parses the timeouts section with leakGrace + shutdownDrain", async () => {
     await write(`{
       "timeouts": {
-        "codergen": "30m",
+        "llm": "30m",
         "tool": "5m",
         "http": "30s",
         "leakGrace": "10s",
@@ -107,7 +107,7 @@ describe("loadConfig", () => {
       }
     }`);
     const cfg = await load();
-    expect(cfg.timeouts?.codergen).toBe("30m");
+    expect(cfg.timeouts?.llm).toBe("30m");
     expect(cfg.timeouts?.tool).toBe("5m");
     expect(cfg.timeouts?.http).toBe("30s");
     expect(cfg.timeouts?.leakGrace).toBe("10s");
@@ -220,7 +220,7 @@ describe("resolveTimeouts", () => {
   test("each key parses through parseDurationMs", () => {
     const r = resolveTimeouts({
       timeouts: {
-        codergen: "30m",
+        llm: "30m",
         tool: "5m",
         bootstrap: 600_000,
         shell: "30s",
@@ -229,7 +229,7 @@ describe("resolveTimeouts", () => {
         shutdownDrain: "30s",
       },
     });
-    expect(r.codergen).toBe(30 * 60 * 1000);
+    expect(r.llm).toBe(30 * 60 * 1000);
     expect(r.tool).toBe(5 * 60 * 1000);
     expect(r.bootstrap).toBe(600_000);
     expect(r.shell).toBe(30_000);
@@ -239,12 +239,12 @@ describe("resolveTimeouts", () => {
   });
 
   test("invalid value throws with config-prefixed message", () => {
-    expect(() => resolveTimeouts({ timeouts: { codergen: "garbage" } })).toThrow(/config: timeouts\.codergen:/);
+    expect(() => resolveTimeouts({ timeouts: { llm: "garbage" } })).toThrow(/config: timeouts\.llm:/);
   });
 
   test("unset keys stay undefined (caller falls through to handler defaults)", () => {
-    const r = resolveTimeouts({ timeouts: { codergen: "10m" } });
-    expect(r.codergen).toBe(10 * 60 * 1000);
+    const r = resolveTimeouts({ timeouts: { llm: "10m" } });
+    expect(r.llm).toBe(10 * 60 * 1000);
     expect(r.tool).toBeUndefined();
     expect(r.http).toBeUndefined();
   });
@@ -255,14 +255,14 @@ describe("resolveTimeouts", () => {
       .map(([n, u]) => [`${n}${u}`, n * ({ ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[u] ?? 1)] as const);
     fc.assert(
       fc.property(validDuration, ([input, expected]) => {
-        expect(resolveTimeouts({ timeouts: { codergen: input } }).codergen).toBe(expected);
+        expect(resolveTimeouts({ timeouts: { llm: input } }).llm).toBe(expected);
       }),
     );
   });
 
   test("property — any invalid value surfaces a config-prefixed error", () => {
     // "0" / "0s" / integer 0 are no longer invalid — parseDurationMs accepts
-    // them as the unbounded sentinel (docs/proposals/codergen-unbounded-time.md).
+    // them as the unbounded sentinel (docs/proposals/llm-unbounded-time.md).
     // Negative numbers and malformed strings still throw.
     const badValue = fc.oneof(
       fc.constantFrom("garbage", "", "   ", "-1", "5x", "1.5m"),
@@ -270,7 +270,7 @@ describe("resolveTimeouts", () => {
     );
     fc.assert(
       fc.property(badValue, (v) => {
-        expect(() => resolveTimeouts({ timeouts: { codergen: v as string | number } })).toThrow(/config: timeouts\./);
+        expect(() => resolveTimeouts({ timeouts: { llm: v as string | number } })).toThrow(/config: timeouts\./);
       }),
     );
   });

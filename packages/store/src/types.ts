@@ -765,7 +765,7 @@ export interface IEventReader {
   /**
    * Distinct `(runId, threadId)` pairs that have ≥1 persisted message or
    * `llm.start` event under a non-terminal run. Used at daemon boot to
-   * rehydrate the shared `inProcessWrites` set so a resumed codergen
+   * rehydrate the shared `inProcessWrites` set so a resumed llm
    * dispatch on a pre-existing thread doesn't misread its own transcript
    * as a foreign one. `threadId` is derived from two sources unioned:
    *  - distinct `messages.node_id` (covers the common `thread_id == node_id` case)

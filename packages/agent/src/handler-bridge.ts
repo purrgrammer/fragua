@@ -35,7 +35,7 @@ export interface MakeCodergenHandlerOpts {
    *   - `"unbounded"` — per-node opt-out (sourced from DOT `max_ms=0` /
    *     `timeout="0"` via the auto-dispatcher); HandlerSpec.maxMs is left
    *     absent so the executor skips AbortSignal.timeout and the leak
-   *     watchdog. See docs/proposals/codergen-unbounded-time.md.
+   *     watchdog. See docs/proposals/llm-unbounded-time.md.
    *   - `undefined` — author didn't specify; HandlerSpec.maxMs gets the
    *     4h DEFAULT_MAX_MS runaway backstop. */
   maxMs?: number | "unbounded";
@@ -49,7 +49,7 @@ type HandlerResult = handler.HandlerResult;
 // bound. Day-to-day capping is the job of cost / tokens / iterations /
 // operator intents. Set this high enough that no legitimate workflow
 // trips it; any handler that runs longer is pathologically stuck.
-// See docs/proposals/codergen-maxms-backstop.md for the framing.
+// See docs/proposals/llm-maxms-backstop.md for the framing.
 const DEFAULT_MAX_MS = 4 * 60 * 60 * 1000;
 
 export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec {
@@ -206,7 +206,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
 
     // Provider transport error: pause the run instead of halting so an
     // operator can `intent.resume` after fixing the upstream issue (top
-    // up balance, rotate key, wait out a 5xx). The codergen agent
+    // up balance, rotate key, wait out a 5xx). The llm agent
     // boundary attaches `provider_error` when classifying a failed
     // stream; handlers never construct it themselves.
     if (outcome.provider_error != null) {
@@ -222,7 +222,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       return result satisfies HandlerResult;
     }
 
-    // Hard-halt outcomes from the codergen agent boundary
+    // Hard-halt outcomes from the llm agent boundary
     // (docs/proposals/llm-routing.md D3 — `route_not_picked` /
     // `route_call_not_isolated`). The backend never constructs a
     // `HandlerResult.halt` itself; it signals via `outcome.halt_reason`
@@ -283,7 +283,7 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
   };
 
   const spec: HandlerSpec = {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "external",
     handler: run,
   };

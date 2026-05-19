@@ -7,7 +7,7 @@
 //
 //   handler            | LLM cfg? | retries? | tool_command? | fan_in cfg?
 //   -------------------|----------|----------|---------------|------------
-//   codergen           |  yes     |  yes     |  no           |  no
+//   llm           |  yes     |  yes     |  no           |  no
 //   conditional        |  no*     |  yes     |  no           |  no
 //   wait.human         |  no      |  yes     |  no           |  no
 //   tool               |  no      |  yes     |  yes          |  no
@@ -28,7 +28,7 @@ import type { NodeAttrs } from "@swarm/core";
  *  `prompt` (otherwise the heuristic ranker runs and the model attrs
  *  are dead config). */
 export function showsLlm(handler: string, attrs: NodeAttrs | undefined): boolean {
-  if (handler === "codergen") return true;
+  if (handler === "llm") return true;
   if (handler === "parallel.fan_in") {
     return typeof attrs?.prompt === "string" && attrs.prompt.trim() !== "";
   }

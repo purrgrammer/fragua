@@ -11,7 +11,7 @@ describe("validateWorkflowModels", () => {
     expect(validateWorkflowModels(yaml).ok).toBe(true);
   });
 
-  test("accepts a codergen step with a correct (provider, model) pair", () => {
+  test("accepts a llm step with a correct (provider, model) pair", () => {
     const yamlAnthropic = `name: t
 steps:
   impl: {type: llm, prompt: x, model: "claude-sonnet-4-6", provider: "anthropic"}

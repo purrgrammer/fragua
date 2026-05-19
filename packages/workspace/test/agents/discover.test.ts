@@ -44,7 +44,7 @@ describe("discoverAgents", () => {
     expect(agents).toHaveLength(4);
   });
 
-  test("project + user collisions coexist in the superset (filter resolves at codergen time)", async () => {
+  test("project + user collisions coexist in the superset (filter resolves at llm time)", async () => {
     const cwd = join(tmp, "proj");
     const home = join(tmp, "home");
     await mkdir(cwd, { recursive: true });

@@ -83,7 +83,7 @@ describe("classifyAbortCause", () => {
   });
 });
 
-/** Register a single workflow with a hanging codergen impl node so we
+/** Register a single workflow with a hanging llm impl node so we
  *  can drive watchdog timeouts deterministically. The impl handler
  *  rejects on AbortSignal so the executor's catch block sees a real
  *  abort, not a clean handler return. */
@@ -95,7 +95,7 @@ function registerHangingWorkflow(r: ReturnType<typeof rig>, implMaxMs: number): 
     handler: async () => ({ kind: "transition", nextNode: "impl", tokens: 0, costUsd: 0 }),
   });
   r.dispatcher.register(r.workflowSha, "impl", {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "external",
     maxMs: implMaxMs,
     handler: async (ctx) =>
@@ -129,7 +129,7 @@ describe("executor — timeout projects as fact.node_aborted cause=timeout", () 
       handler: async () => ({ kind: "transition", nextNode: "impl", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 20,
       handler: async (ctx) => {

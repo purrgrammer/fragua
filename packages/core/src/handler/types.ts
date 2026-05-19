@@ -14,10 +14,10 @@ export interface HandlerSpec {
   kind: string;
   sideEffect: SideEffect;
   /** Hard per-call timeout. Applied via AbortSignal.timeout inside the
-   * executor. Optional — codergen-kind handlers may omit it to disable
+   * executor. Optional — llm-kind handlers may omit it to disable
    * wall-clock bounding (per-node opt-in via DOT `max_ms=0` /
    * `timeout="0"`); cost/token attrs remain the operative ceiling. See
-   * docs/proposals/codergen-unbounded-time.md. */
+   * docs/proposals/llm-unbounded-time.md. */
   maxMs?: number;
   handler: Handler;
 }
@@ -255,7 +255,7 @@ export type HandlerResult =
        * the executor's edge selector. Defaults to "success". Unannotated
        * edges default to `outcome=success`. */
       outcomeStatus?: "success" | "fail" | "retry";
-      /** Set by the codergen backend when the agent exited the node via
+      /** Set by the llm backend when the agent exited the node via
        * the synthesised `route` tool (see
        * docs/proposals/llm-routing.md D2). The engine's route-case edge
        * selector keys on this; the daemon persists it onto
@@ -321,7 +321,7 @@ export type HandlerResult =
       // converted reasons `"abort_loop"` and `"provider_exhausted"`
       // are emitted by the executor directly as `fact.run_paused`,
       // never as halts.
-      // Routing-node halts emitted by the codergen agent boundary
+      // Routing-node halts emitted by the llm agent boundary
       // (docs/proposals/llm-routing.md D3) flow through verbatim —
       // result-to-facts does not translate them, they land as
       // `fact.run_halted` with the matching `HaltReason`.
@@ -357,7 +357,7 @@ export type HandlerResult =
        * the run to `paused`. An operator `intent.resume` wakes the run
        * and re-dispatches the same `(nodeId, iteration)` with the
        * rehydrated transcript. Handlers never construct this themselves
-       * — the codergen agent boundary detects provider transport errors
+       * — the llm agent boundary detects provider transport errors
        * and returns this kind on the handler's behalf. */
       kind: "pause_provider";
       httpStatus: number | null;

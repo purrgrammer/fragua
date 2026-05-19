@@ -5,7 +5,7 @@
 // side.
 //
 // `?project_cwd=<cwd>` scopes the list to globals + that one project,
-// matching what a run in that cwd actually sees at codergen time.
+// matching what a run in that cwd actually sees at llm time.
 
 import { RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router-dom";

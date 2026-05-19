@@ -7,7 +7,7 @@
 //
 // `defaultDisabled: true` keeps `agent` out of every node's tool set
 // unless the workflow opts in via `allowed_tools="\u2026,agent"`. The host
-// (the daemon's per-call codergen context) wires `swarmContext.spawnSubagent`;
+// (the daemon's per-call llm context) wires `swarmContext.spawnSubagent`;
 // without it the tool returns an `is_error` so the LLM sees a clear
 // "host doesn't support sub-agents" signal rather than a silent stall.
 

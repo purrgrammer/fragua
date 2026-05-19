@@ -61,7 +61,7 @@ const Skills = Type.Object(
 
 const Timeouts = Type.Object(
   {
-    codergen: Type.Optional(TimeoutValue),
+    llm: Type.Optional(TimeoutValue),
     tool: Type.Optional(TimeoutValue),
     bootstrap: Type.Optional(TimeoutValue),
     shell: Type.Optional(TimeoutValue),
@@ -153,7 +153,7 @@ export type SwarmConfig = Static<typeof SwarmConfigSchema>;
 /** Every timeout key, resolved to milliseconds. Absent keys stay
  * `undefined` so callers fall through to handler defaults. */
 export interface ResolvedTimeouts {
-  codergen?: number;
+  llm?: number;
   tool?: number;
   bootstrap?: number;
   shell?: number;
@@ -168,7 +168,7 @@ export interface ResolvedTimeouts {
 export function resolveTimeouts(cfg: SwarmConfig): ResolvedTimeouts {
   const out: ResolvedTimeouts = {};
   if (cfg.timeouts == null) return out;
-  const keys = ["codergen", "tool", "bootstrap", "shell", "http", "leakGrace", "shutdownDrain"] as const;
+  const keys = ["llm", "tool", "bootstrap", "shell", "http", "leakGrace", "shutdownDrain"] as const;
   for (const key of keys) {
     const raw = cfg.timeouts[key];
     if (raw == null) continue;

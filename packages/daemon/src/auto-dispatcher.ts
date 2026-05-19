@@ -15,7 +15,7 @@ type HandlerSpec = handler.HandlerSpec;
 export interface AutoDispatcherOpts {
   store: IEventStore;
   /**
-   * Optional factory that builds a real codergen handler for `box`-shape
+   * Optional factory that builds a real llm handler for `box`-shape
    * nodes. When provided, the auto-dispatcher uses it instead of the
    * trivial noop transition so any box node that reaches the daemon is
    * executed via a real LLM backend. `nextNode` is passed as a legacy
@@ -26,9 +26,9 @@ export interface AutoDispatcherOpts {
    */
   codergenFactory?: (node: Node, nextNode: string, maxMs: number | "unbounded" | undefined) => HandlerSpec;
   /** Per-kind fallback `maxMs` when the DOT node declares neither
-   * `timeout` nor `max_ms`. Keyed by handler kind (`codergen`, `tool`).
+   * `timeout` nor `max_ms`. Keyed by handler kind (`llm`, `tool`).
    * Absent kind → handler's own built-in default applies. */
-  defaultMaxMs?: { codergen?: number; tool?: number };
+  defaultMaxMs?: { llm?: number; tool?: number };
 }
 
 /**
@@ -41,10 +41,10 @@ export interface AutoDispatcherOpts {
  *
  * Returns `undefined` (a) when neither attr is set and `fallbackMs` is
  * undefined, OR (b) when an explicit `max_ms=0` / `timeout="0"` is set
- * (the unbounded sentinel for codergen — see
- * docs/proposals/codergen-unbounded-time.md). The two cases collapse here;
+ * (the unbounded sentinel for llm — see
+ * docs/proposals/llm-unbounded-time.md). The two cases collapse here;
  * `specsForGraph` re-inspects the raw attrs to distinguish them for the
- * codergen factory.
+ * llm factory.
  *
  * Malformed values reach this function only when the DOT was parsed
  * without enqueue-time validation (tests, direct-store inserts). We
@@ -62,8 +62,8 @@ export function resolveMaxMs(attrs: NodeAttrs, fallbackMs: number | undefined): 
     return ms === 0 ? undefined : ms;
   }
   // Same 0→undefined collapse on the fallback path: config-level
-  // `timeouts.codergen: 0` is the unbounded sentinel just like the
-  // node-attr form. Without this, a `timeouts.codergen: 0` in
+  // `timeouts.llm: 0` is the unbounded sentinel just like the
+  // node-attr form. Without this, a `timeouts.llm: 0` in
   // `.swarm/config.jsonc` resolves to a 0-ms abort timer.
   return fallbackMs === 0 ? undefined : fallbackMs;
 }
@@ -118,7 +118,7 @@ function specsForGraph(
     const first = edges[0]?.to ?? "__end__";
     let resolvedMaxMs: number | undefined;
     try {
-      const fallback = kind === "codergen" ? defaultMaxMs?.codergen : kind === "tool" ? defaultMaxMs?.tool : undefined;
+      const fallback = kind === "llm" ? defaultMaxMs?.llm : kind === "tool" ? defaultMaxMs?.tool : undefined;
       resolvedMaxMs = resolveMaxMs(node.attrs, fallback);
     } catch (err) {
       if (err instanceof InvalidDurationError) {
@@ -127,7 +127,7 @@ function specsForGraph(
       }
       throw err;
     }
-    const useFactory = kind === "codergen" && codergenFactory != null;
+    const useFactory = kind === "llm" && codergenFactory != null;
     if (useFactory) {
       const codergenMaxMs: number | "unbounded" | undefined = explicitlyUnbounded(node.attrs)
         ? "unbounded"
@@ -143,7 +143,7 @@ function specsForGraph(
 
 function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
   return {
-    kind: "codergen",
+    kind: "llm",
     sideEffect: "none",
     maxMs: 50,
     handler: async () => ({
@@ -264,7 +264,7 @@ function handlerKindOf(attrs: { shape?: string; type?: string; kind?: string }):
   // attribute) wins over shape-based derivation but loses to `type=`.
   if (typeof attrs.type === "string" && attrs.type.length > 0) return attrs.type;
   if (typeof attrs.kind === "string" && attrs.kind.length > 0) {
-    // Authoring-kind names align with handler kinds for human/codergen/tool.
+    // Authoring-kind names align with handler kinds for human/llm/tool.
     return attrs.kind;
   }
   switch (attrs.shape) {
@@ -277,6 +277,6 @@ function handlerKindOf(attrs: { shape?: string; type?: string; kind?: string }):
     case "parallelogram":
       return "tool";
     default:
-      return "codergen";
+      return "llm";
   }
 }

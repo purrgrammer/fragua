@@ -64,7 +64,7 @@ export interface ServerOptions {
    * wire `envProviderPreflight` by default; leave unset in tests. */
   preflightProviders?: () => { ok: true } | { ok: false; detail: string };
   /** Optional workflow-registration validator. When set, POST /workflows
-   * rejects with code="model_unresolved" if any codergen node declares a
+   * rejects with code="model_unresolved" if any llm node declares a
    * `(provider, model)` pair the provider registry doesn't recognise.
    * The CLI's `daemon` command wires in the real pi-ai-backed resolver;
    * tests can omit it or inject a stub. */

@@ -35,7 +35,7 @@ describe("mergeStepsByNode", () => {
     expect(out[0]?.cost?.cost_usd).toBeCloseTo(0.05);
   });
 
-  test("multi-turn codergen (3 llm.starts, same node, same run) → 1 row; cost summed; turns=3", () => {
+  test("multi-turn llm (3 llm.starts, same node, same run) → 1 row; cost summed; turns=3", () => {
     const base = { nodeId: "lens", originRunId: "r" } as const;
     const rows = [
       withCost(step({ ...base, startSeq: 4 }), 0.05, 100),

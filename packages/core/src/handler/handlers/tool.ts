@@ -4,11 +4,11 @@
 // invocation — no LLM, no agent loop. Side-effect only: exit 0 →
 // `outcome=success`; non-zero → `outcome=fail`. The command may
 // substitute `$ARGUMENTS`. Tool nodes do not feed data forward to
-// downstream nodes — that's the codergen's job, not a deterministic
+// downstream nodes — that's the llm's job, not a deterministic
 // shell step.
 //
 // Distinct from agent-callable tools (read / write / edit / bash) that an
-// LLM invokes inside a codergen turn. Those live in the ToolRegistry the
+// LLM invokes inside a llm turn. Those live in the ToolRegistry the
 // pi-agent backend passes to each call; the ToolRegistry is untouched
 // here.
 //
@@ -85,7 +85,7 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
     // legitimately carries. Without escapeForShell, that trailing
     // newline turns one statement into several when /bin/sh re-tokenises
     // the rendered command — every substitution becomes an injection
-    // vector. Codergen prompts don't need this: prose tolerates stray
+    // vector. Llm prompts don't need this: prose tolerates stray
     // whitespace; shell does not.
     const command = substitute(rawCommand, {
       args: ctx.args,

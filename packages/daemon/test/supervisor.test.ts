@@ -103,9 +103,9 @@ describe("supervisor — pause-aware leak detection", () => {
   });
 
   test("does not trip a controller for a node whose handlerMaxMsFor returns undefined", async () => {
-    // Unbounded codergen (DOT max_ms=0) — the supervisor must skip the
+    // Unbounded llm (DOT max_ms=0) — the supervisor must skip the
     // leak-trip entirely, even after arbitrarily long elapsed time. See
-    // docs/proposals/codergen-unbounded-time.md.
+    // docs/proposals/llm-unbounded-time.md.
     const clk = fakeClock(1_000_000_000_000);
     const registry = new AbortRegistry(clk.now);
     const store = makeRunningStore("unbounded-1", "sha");
@@ -138,7 +138,7 @@ describe("supervisor — pause-aware leak detection", () => {
 describe("supervisor — intent-aware abort policy", () => {
   // pi-agent-core's Agent.steer() enqueues into a steeringQueue that drains
   // at end-of-turn. Tripping the abort controller on a steer would kill the
-  // in-flight LLM call and force the codergen handler to classify the
+  // in-flight LLM call and force the llm handler to classify the
   // resulting `stopReason: "aborted"` as fail (backend.ts:464-478) — exactly
   // the cancel/timeout collapse the comment there warns about. The supervisor
   // must hand steer text to the backend's queue and leave the controller alone.

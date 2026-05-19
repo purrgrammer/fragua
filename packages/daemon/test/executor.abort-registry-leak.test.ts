@@ -21,7 +21,7 @@ describe("executor — AbortRegistry is not leaked on a build-path throw", () =>
       handler: async () => ({ kind: "transition", nextNode: "impl", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "impl", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => ({ kind: "transition", outcomeStatus: "success", tokens: 0, costUsd: 0 }),

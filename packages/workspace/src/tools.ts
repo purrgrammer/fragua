@@ -1,6 +1,6 @@
 // Agent tools — read / write / edit / bash. The four power tools.
 //
-// These are the LLM-callable primitives that drive every codergen
+// These are the LLM-callable primitives that drive every llm
 // node. They mirror pi-coding-agent's tools 1:1 in behavior so swarm
 // agents debug the same way pi-coding-agent users do, and a fix
 // upstream can land here verbatim.
@@ -471,7 +471,7 @@ import { webFetchTool } from "./web-fetch.ts";
 // opt in per node; everything else stays unaffected.
 //
 // `skill` and `abort` are built-in: included here so they land in every
-// node's tool pool by default, AND force-included by the codergen
+// node's tool pool by default, AND force-included by the llm
 // backend even when a node's `allowed_tools` / `denied_tools` would
 // exclude them — always available, zero .dot migration.
 export const CORE_TOOLS: AnyTool[] = [
@@ -500,7 +500,7 @@ export function stripAgentTool(tools: AnyTool[]): AnyTool[] {
 
 // ─── rehydrate sanitiser ───────────────────────────────────────────
 //
-// When a daemon crash interrupts a codergen call mid-tool-execution,
+// When a daemon crash interrupts a llm call mid-tool-execution,
 // the persisted transcript ends with an unpaired toolCall block:
 // `[..., assistant{toolCall A, toolCall B}]` with no following user
 // message carrying matching toolResults. Anthropic's API (and pi-ai's

@@ -1,11 +1,11 @@
 // Agent-definition discovery. Mirrors `skills/discover.ts`: walks
 // `~/.agents`, `~/.claude` and every project cwd in `projectCwds`,
 // emitting a superset. Project-scope records carry `project_cwd`; the
-// codergen-time filter prunes per-run.
+// llm-time filter prunes per-run.
 //
 // Within-bucket precedence: project = `.agents/agents` beats
 // `.claude/agents` per cwd; user scope same order. Cross-scope and
-// cross-project shadowing happens at codergen filter time.
+// cross-project shadowing happens at llm filter time.
 
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";

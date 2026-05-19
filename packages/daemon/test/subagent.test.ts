@@ -1,5 +1,5 @@
-// Sub-agent inline-codergen behaviour: a parent's `agent` tool call
-// drives a fresh codergen call against the same parent run, with all
+// Sub-agent inline-llm behaviour: a parent's `agent` tool call
+// drives a fresh llm call against the same parent run, with all
 // observability events forwarded onto the parent's stream stamped with
 // a `subagent_id`. No child run, no separate stream, no `fact.run_*`
 // for the sub-agent.
@@ -659,7 +659,7 @@ describe("makeSpawnSubagent", () => {
     seedParent(store, "parent-cost");
     const registry = freshRegistry();
     // Backend emits two cost.recorded events through the spawn's emit
-    // channel — exactly what the real codergen backend does at every
+    // channel — exactly what the real llm backend does at every
     // assistant message_end via packages/agent/src/event-bridge.ts.
     const backend = new StubBackend(async (input) => {
       await input.emit?.("cost.recorded", {

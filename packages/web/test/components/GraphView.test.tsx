@@ -390,7 +390,7 @@ describe.skip("GraphView — rendering", () => {
 });
 
 describe.skip("toFlowGraph — model_stylesheet cascade surfaces in node data", () => {
-  it("wildcard rule populates model + provider + reasoningEffort on codergen nodes only", () => {
+  it("wildcard rule populates model + provider + reasoningEffort on llm nodes only", () => {
     const src = `digraph styled {
       graph [model_stylesheet="* { llm_model: opus; llm_provider: anthropic; reasoning_effort: medium; }"]
       start [shape=Mdiamond]
@@ -404,7 +404,7 @@ describe.skip("toFlowGraph — model_stylesheet cascade surfaces in node data", 
     const byId = new Map(
       flowNodes.map((n) => [n.id, n.data as { model?: string; provider?: string; reasoningEffort?: string }]),
     );
-    // Codergen nodes (box) pick up the cascade.
+    // Llm nodes (box) pick up the cascade.
     for (const id of ["a", "b"]) {
       const d = byId.get(id);
       expect(d?.model).toBe("opus");
@@ -535,7 +535,7 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
     expect(d.fanInRank).toBeUndefined();
   });
 
-  it("codergen retains the full LLM metadata set", () => {
+  it("llm retains the full LLM metadata set", () => {
     const src = `digraph g {
       graph [${CASCADE}]
       start [shape=Mdiamond]
@@ -627,7 +627,7 @@ describe.skip("toFlowGraph — layout + metadata", () => {
 });
 
 describe.skip("toFlowGraph — handler-specific body fields", () => {
-  it("surfaces thread_id on codergen nodes (cluster_dev shared session)", () => {
+  it("surfaces thread_id on llm nodes (cluster_dev shared session)", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
       a [shape=box, thread_id="dev"]
@@ -642,7 +642,7 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
 
   it("a running tool node propagates state='running' + active=true into FlowNode data", () => {
     // Regression guard for the running-state highlight on parallelogram
-    // nodes. Codergen and tool nodes share the fact pipeline
+    // nodes. Llm and tool nodes share the fact pipeline
     // (`fact.dispatch_started` → "running" → `fact.node_completed` →
     // "completed"), but only tool nodes were missing a focused test.
     const src = `digraph crowdin {
@@ -930,7 +930,7 @@ describe.skip("toFlowGraph — handler-specific body fields", () => {
     expect((intoReview?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
   });
 
-  it("does NOT flag plain codergen-only edges as isHumanEdge", () => {
+  it("does NOT flag plain llm-only edges as isHumanEdge", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
       plan [shape=box]

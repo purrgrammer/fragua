@@ -207,7 +207,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W009: codergen (box) node has empty prompt and empty label. The agent
+  // W009: llm (box) node has empty prompt and empty label. The agent
   // boundary substitutes label for prompt when prompt is empty; both
   // empty leaves the LLM call with nothing to do. Catches "I forgot the
   // prompt" authoring mistakes.
@@ -219,7 +219,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
       diags.push({
         severity: "warning",
         code: "W009",
-        message: `codergen node "${n.id}" has empty prompt and empty label — the LLM call will have nothing to do`,
+        message: `llm node "${n.id}" has empty prompt and empty label — the LLM call will have nothing to do`,
         nodeId: n.id,
         ...(n.loc !== undefined ? { loc: n.loc } : {}),
       });
@@ -693,7 +693,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
   // SHAPE_TO_KIND. When the parser auto-derives kind from shape, the two
   // are always consistent (kind left undefined → derived). A contradiction
   // only arises when the author writes an explicit kind= that disagrees
-  // with the shape — e.g. kind=codergen shape=hexagon. The shape=hexagon
+  // with the shape — e.g. kind=llm shape=hexagon. The shape=hexagon
   // with kind=human alias is explicitly valid (same mapping).
   for (const n of nodes) {
     const explicitKind = n.attrs.kind;
@@ -720,7 +720,7 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     diags.push({
       severity: "error",
       code: "E026",
-      message: `node "${n.id}" sets text= but is not a human node (kind="${n.attrs.kind ?? "codergen"}") — text= is only meaningful on human nodes`,
+      message: `node "${n.id}" sets text= but is not a human node (kind="${n.attrs.kind ?? "llm"}") — text= is only meaningful on human nodes`,
       nodeId: n.id,
       ...(n.loc !== undefined ? { loc: n.loc } : {}),
     });

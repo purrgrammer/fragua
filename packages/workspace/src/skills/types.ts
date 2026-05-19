@@ -8,7 +8,7 @@ export type { Skill, SkillCatalogRecord, SkillScope, SkillsConfig } from "@swarm
 export interface DiscoverOptions {
   /** Project cwds to scan. Each yields project-scope records stamped
    * with `project_cwd`. Pass `[]` for user-scope-only discovery.
-   * Discovery emits a superset across every cwd; the codergen-time
+   * Discovery emits a superset across every cwd; the llm-time
    * filter prunes to a single project per run. */
   projectCwds: readonly string[];
   /** User home directory. Used for `~/.agents/skills/` etc. Pass empty

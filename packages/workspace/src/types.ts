@@ -30,7 +30,7 @@ export interface SwarmToolContext {
   readonly http: HttpClient;
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
   readonly summarise?: (input: SummariseInput) => Promise<SummariseOutput>;
-  /** Spawn a sub-agent run from inside a codergen turn. Wired by the
+  /** Spawn a sub-agent run from inside a llm turn. Wired by the
    *  daemon (per call) when the parent node's tool pool includes
    *  `agent`. Absent in tests that don't drive sub-agents. */
   readonly spawnSubagent?: (spec: SubagentSpec) => Promise<SubagentResult>;
@@ -56,7 +56,7 @@ export interface SubagentSpec {
   /** The only context the sub-agent sees — the LLM constructs it. */
   prompt: string;
   /** Optional per-call system prompt for the sub-agent. When omitted,
-   *  the codergen backend builds a fresh minimal system prompt for
+   *  the llm backend builds a fresh minimal system prompt for
    *  the sub-agent's own tool pool — the parent's *assembled* system
    *  prompt is NOT inherited (it would carry tools the sub-agent
    *  can't use and 10s of KB of irrelevant framing). The framework
@@ -131,7 +131,7 @@ export interface SubagentResult {
    *  payload field) and bracketed by `subagent.start` / `subagent.end`
    *  events carrying the same id. */
   subagentId: string;
-  /** Terminal disposition of the sub-agent's codergen call. */
+  /** Terminal disposition of the sub-agent's llm call. */
   status: "completed" | "halted" | "cancelled";
   /** Set when `status === 'halted'`. Free-form short string so the
    *  parent LLM can tell why the sub-agent failed without a separate
@@ -206,7 +206,7 @@ export interface Tool<TArgs = unknown, TResult = ContextValue> {
    * set that nodes get when they don't specify `allowed_tools`. The
    * tool only surfaces when a node explicitly names it. Used by
    * non-trivial side-effecting tools (web_fetch, future credential
-   * holders) so they don't silently leak into every codergen node. */
+   * holders) so they don't silently leak into every llm node. */
   defaultDisabled?: boolean;
   /** Execute the tool. Receives validated args, the execution env,
    * and optional per-call options (signal / onUpdate). */

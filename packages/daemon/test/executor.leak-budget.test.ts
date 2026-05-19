@@ -21,7 +21,7 @@ function leakingHandler(): {
   });
   return {
     spec: {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       // maxMs=20 + leakGrace=30 = 50ms budget before timeoutReject wins.
       maxMs: 20,

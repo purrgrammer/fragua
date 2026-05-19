@@ -54,7 +54,7 @@ describe("executor — retry counter reset on success (§3.5)", () => {
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -110,7 +110,7 @@ steps:
       handler: async () => ({ kind: "transition", nextNode: "work", tokens: 0, costUsd: 0 }),
     });
     r.dispatcher.register(r.workflowSha, "work", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
@@ -128,7 +128,7 @@ steps:
       },
     });
     r.dispatcher.register(r.workflowSha, "gate", {
-      kind: "codergen",
+      kind: "llm",
       sideEffect: "external",
       maxMs: 100,
       handler: async () => {
