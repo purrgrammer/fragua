@@ -51,7 +51,7 @@ import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { buildTree, extToLang, TreeNodeView } from "../lib/file-tree.tsx";
 import { percentFormatOptions, tokensCompactFormatOptions, usdFormatOptions } from "../lib/format.ts";
-import { parseAndPrepare } from "../lib/parse-workflow.ts";
+import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 import { shortRunId } from "../lib/runId.ts";
 import { formatDateTime, formatDuration, formatRelative } from "../lib/time.ts";
@@ -487,7 +487,7 @@ const RunGraphTab = memo(function RunGraphTab({
   const graph = useMemo(() => {
     if (!detail?.workflowSource) return null;
     try {
-      return parseAndPrepare(detail.workflowSource);
+      return parseWorkflow(detail.workflowSource);
     } catch {
       return null;
     }

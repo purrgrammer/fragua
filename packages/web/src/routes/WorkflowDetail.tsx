@@ -6,7 +6,7 @@
 // No live run is involved — this is the "what does this workflow do?"
 // answer before you press launch. Topology is parsed client-side via
 // `@swarm/core`'s `parseWorkflow`; on parse failure the server's raw
-// DOT is still rendered so operators can debug the source.
+// YAML source is still rendered so operators can debug it.
 //
 // Route params / data:
 //   - `:name` → `queries.workflows.detail(name)` → `{ name, label, path,
@@ -25,7 +25,7 @@ import { EmptyState } from "../components/ui/empty-state.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx";
 import { ApiError } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
-import { parseAndPrepare } from "../lib/parse-workflow.ts";
+import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 
 // Side drawer crossing ~28rem reads as rushed at the system's default
@@ -60,7 +60,7 @@ export function WorkflowDetail(): JSX.Element {
   const graph = useMemo(() => {
     if (!detail?.source) return null;
     try {
-      return parseAndPrepare(detail.source);
+      return parseWorkflow(detail.source);
     } catch {
       return null;
     }

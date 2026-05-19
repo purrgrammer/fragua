@@ -33,7 +33,6 @@ import { parseWorkflow } from "@swarm/core";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { GraphView, toFlowGraph } from "../../src/components/GraphView.tsx";
 import type { RunDetail } from "../../src/lib/api.ts";
-import { parseAndPrepare } from "../../src/lib/parse-workflow.ts";
 import { renderWithClient as render } from "../helpers/with-query-client.tsx";
 import { useDom } from "../setup.ts";
 
@@ -400,7 +399,7 @@ describe.skip("toFlowGraph — model_stylesheet cascade surfaces in node data", 
       done [shape=Msquare]
       start -> a -> b -> done
     }`;
-    const graph = parseAndPrepare(src);
+    const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const byId = new Map(
       flowNodes.map((n) => [n.id, n.data as { model?: string; provider?: string; reasoningEffort?: string }]),
@@ -429,7 +428,7 @@ describe.skip("toFlowGraph — model_stylesheet cascade surfaces in node data", 
       done [shape=Msquare]
       start -> a -> done
     }`;
-    const graph = parseAndPrepare(src);
+    const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const a = flowNodes.find((n) => n.id === "a")?.data as {
       model?: string;
@@ -465,7 +464,7 @@ describe.skip("toFlowGraph — metadata is gated by handler type", () => {
   };
 
   function dataOf(src: string, id: string): Meta {
-    const graph = parseAndPrepare(src);
+    const graph = parseWorkflow(src);
     const { flowNodes } = toFlowGraph(null, graph);
     const node = flowNodes.find((n) => n.id === id);
     if (!node) throw new Error(`no node ${id} in flow graph`);

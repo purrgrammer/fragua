@@ -42,7 +42,7 @@ import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
 import { humanizeRouteName } from "../lib/humanize.ts";
 import { canRetry as canRetryHandler, showsLlm } from "../lib/node-metadata.ts";
-import { parseAndPrepare } from "../lib/parse-workflow.ts";
+import { parseWorkflow } from "@swarm/core";
 import { queries } from "../lib/queries.ts";
 import { Canvas } from "./ai-elements/canvas.tsx";
 import { Controls } from "./ai-elements/controls.tsx";
@@ -153,7 +153,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     if (graphProp) return graphProp;
     if (!readyDetail?.workflowSource) return null;
     try {
-      return parseAndPrepare(readyDetail.workflowSource);
+      return parseWorkflow(readyDetail.workflowSource);
     } catch (err) {
       console.warn(
         "[GraphView] failed to parse workflow DOT for",
