@@ -36,6 +36,6 @@ digraph analyze {
   done [shape=Msquare]
 
   start   -> analyze
-  analyze -> done    [condition="outcome=fail"]
+  analyze -> done    [outcome=fail]
   analyze -> done
 }

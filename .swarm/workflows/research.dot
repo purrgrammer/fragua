@@ -67,7 +67,7 @@ digraph research {
   done [shape=Msquare]
 
   start    -> research
-  research -> done       [condition="outcome=fail"]
+  research -> done       [outcome=fail]
   research -> synthesize
   synthesize -> done
 }

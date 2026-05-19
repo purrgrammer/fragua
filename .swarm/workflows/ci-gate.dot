@@ -20,9 +20,9 @@ digraph ci_gate {
   done [shape=Msquare]
 
   start     -> lint
-  lint      -> typecheck [condition="outcome=success"]
-  lint      -> done      [condition="outcome=fail"]
-  typecheck -> test      [condition="outcome=success"]
-  typecheck -> done      [condition="outcome=fail"]
+  lint      -> typecheck [outcome=success]
+  lint      -> done      [outcome=fail]
+  typecheck -> test      [outcome=success]
+  typecheck -> done      [outcome=fail]
   test      -> done
 }

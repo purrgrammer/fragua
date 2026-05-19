@@ -89,13 +89,13 @@ digraph review {
   done [shape=Msquare]
 
   start      -> scope
-  scope      -> done [condition="outcome=fail"]
+  scope      -> done [outcome=fail]
   scope      -> dispatch
 
-  dispatch   -> done [condition="outcome=fail"]
+  dispatch   -> done [outcome=fail]
   dispatch   -> synthesize
 
-  synthesize -> done [condition="outcome=fail"]
+  synthesize -> done [outcome=fail]
   synthesize -> verify
 
   verify     -> done

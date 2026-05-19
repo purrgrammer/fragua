@@ -66,10 +66,10 @@ digraph structural_drift {
   done [shape=Msquare]
 
   start   -> collect
-  collect -> done [condition="outcome=fail"]
+  collect -> done [outcome=fail]
   collect -> drift
 
-  drift  -> done [condition="outcome=fail"]
+  drift  -> done [outcome=fail]
   drift  -> review
 
   review -> done

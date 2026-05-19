@@ -61,10 +61,10 @@ digraph narrative_drift {
   done [shape=Msquare]
 
   start   -> collect
-  collect -> done [condition="outcome=fail"]
+  collect -> done [outcome=fail]
   collect -> audit
 
-  audit  -> done [condition="outcome=fail"]
+  audit  -> done [outcome=fail]
   audit  -> review
 
   review -> done

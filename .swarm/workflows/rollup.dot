@@ -61,10 +61,10 @@ digraph rollup {
   done [shape=Msquare]
 
   start      -> collect
-  collect    -> done [condition="outcome=fail"]
+  collect    -> done [outcome=fail]
   collect    -> synthesize
 
-  synthesize -> done [condition="outcome=fail"]
+  synthesize -> done [outcome=fail]
   synthesize -> verify
 
   verify     -> done

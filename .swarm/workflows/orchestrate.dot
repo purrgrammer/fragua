@@ -40,7 +40,7 @@ digraph orchestrate {
   done [shape=Msquare]
 
   start -> orchestrate
-  orchestrate -> done [condition="outcome=fail"]
+  orchestrate -> done [outcome=fail]
   orchestrate -> synthesize
   synthesize -> done
 }

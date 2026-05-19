@@ -86,23 +86,23 @@ digraph change {
   done [shape=Msquare]
 
   start  -> plan
-  plan   -> done [condition="outcome=fail"]
+  plan   -> done [outcome=fail]
   plan   -> implement
 
-  implement -> done [condition="outcome=fail"]
+  implement -> done [outcome=fail]
   implement -> review
 
   // REJECT routes via this fail edge to terminal. Goal-gate enforcement at
   // the terminal sees review unsatisfied and retargets to retry_target=
   // implement. The cycle caps at max_goal_gate_retries.
-  review -> done [condition="outcome=fail"]
+  review -> done [outcome=fail]
   review -> format
 
-  format -> done [condition="outcome=fail"]
+  format -> done [outcome=fail]
   format -> ci
 
-  ci  -> commit [condition="outcome=success"]
-  ci  -> fix    [condition="outcome=fail"]
+  ci  -> commit [outcome=success]
+  ci  -> fix    [outcome=fail]
   fix -> ci
 
   commit -> done
