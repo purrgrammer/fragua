@@ -11,7 +11,7 @@ see [`docs/proposals/`](docs/proposals/README.md).
 - Foreground harness — daemon + HTTP under one supervisor (`swarm harness`) per machine, against a global `~/.swarm/swarm.db`; SQLite is the only coordination surface
 - Project-aware run schema (cwd + workflow metadata + harness URL columns) — `run_state.cwd` keys runs to project roots, `daemon_lock.{http_url, http_port, harness_version}` carry the running URL so CLIs discover the harness via the DB itself (no JSON rendezvous file in the default install)
 - Event store with intent/fact split, OCC on facts, content-addressed blobs on disk
-- 5 node kinds: `start`, `exit`, `codergen` (LLM agent), `wait.human`, `tool` (graph-level shell). Concurrent dispatch lives inside a codergen via the `agent` tool
+- 5 node kinds: `start`, `exit`, `codergen` (LLM agent), `human` (operator-gated routing, alias `shape=hexagon`), `tool` (graph-level shell). Concurrent dispatch lives inside a codergen via the `agent` tool
 - Replayable **control plane** (state machine, edge selection, intent fold). LLM bodies are best-effort and depend on provider determinism
 - Two-layer config cascade — global `~/.swarm/config.jsonc` (defaults, autoTitle, blocklist, …) overlaid by `<project>/.swarm/config.jsonc` (project-specific bootstrap). Project keys win; nested objects merge one level deep
 
@@ -30,7 +30,8 @@ see [`docs/proposals/`](docs/proposals/README.md).
 - Bare-name workflow resolution — global then local: `~/.swarm/workflows/<name>.dot` first, then `<cwd>/.swarm/workflows/<name>.dot`; anything path-shaped resolves verbatim
 - Per-node + per-run cost/token budgets with `warn` / `stop` / `pause` policies (default `pause`); Recoverable pause unification collapses the operator-resumable family to a single non-terminal `paused` status with reason-discriminated `fact.run_paused` (`operator` | `provider_error` | `payment_required` | `budget`); on a budget hit the operator raises the cap via `intent.budget_adjusted` (`POST /runs/:id/budget`, stored at `routing.budget_override.<scope>.<metric>`) and resumes, instead of losing upstream work to a terminal halt
 - Automatic retries inside workflows via backward conditional edges + `max_retries`
-- HITL via `wait.human` nodes returning `yield_hitl { label, options[] }`
+- LLM-directed routing primitive — a node declares `routes="a,b,c"` and the codergen exits via an ephemeral `route({name:"…"})` tool whose enum is materialised per-call; edges discriminate by `route=` (routing nodes) or `outcome=success|fail` (everything else). Replaces the legacy condition DSL with a two-case edge selector
+- Human-node gates via `kind=human` (or shape=hexagon alias) returning `yield_human { text, routes }`; resume via `intent.human_input { route, note? }` from `POST /runs/:id/human`. Per-edge `label="…"` overrides the derived button text
 - Auto-titler runs once per run (cost-bounded summariser)
 - Daemon-events audit log (process lifecycle, sweeps, GC, leak detection, worktree provisioning)
 - Doc-vs-code drift CI lint enforces AGENTS.md rule #1 — `bun run lint:docs` cross-checks `schema.sql` / `swarm-events.ts` / `handler/types.ts` / proposal index against `docs/`

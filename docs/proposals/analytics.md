@@ -40,11 +40,11 @@ otherwise needs a dedicated `fact.run_started` / terminal-fact pair
 scan with a sweep-line algorithm. Capacity planning + "did I get
 throttled" answer.
 
-### HITL stats
-Two numbers: count of pauses (`COUNT(*) WHERE status = 'paused_hitl'`
+### Human-node stats
+Two numbers: count of pauses (`COUNT(*) WHERE status = 'paused_human'`
 in window) and median time-to-resume (`fact.run_resumed.ts -
-fact.run_paused_hitl.ts`). Only worth surfacing if HITL is actually
-used in this install.
+fact.run_paused_human.ts`). Only worth surfacing if human nodes are
+actually used in this install.
 
 ## Cost-side
 
