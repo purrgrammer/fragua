@@ -1,6 +1,5 @@
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
-import { dotToYaml } from "../../core/test/helpers/dot-to-yaml.ts";
 import { autoDispatcherResolver } from "../src/auto-dispatcher.ts";
 import { Dispatcher } from "../src/dispatch.ts";
 
@@ -16,12 +15,10 @@ export interface TestRig {
  * graph topology, only the executor / store wiring. */
 const TRIVIAL_YAML = "name: t\nsteps:\n  start: {type: llm, prompt: hi}\n";
 
-/** `dot:` is the legacy fixture form; it routes through the test-only
- * `dotToYaml` shim. New tests should use `yaml:` directly. */
-export function rig(workflow: { sha?: string; name?: string; yaml?: string; dot?: string } = {}): TestRig {
+export function rig(workflow: { sha?: string; name?: string; yaml?: string } = {}): TestRig {
   const store = new SqliteStore({ path: ":memory:" });
   const sha = workflow.sha ?? "wf";
-  const source = workflow.yaml ?? (workflow.dot ? dotToYaml(workflow.dot) : TRIVIAL_YAML);
+  const source = workflow.yaml ?? TRIVIAL_YAML;
   store.saveWorkflow(sha, workflow.name ?? "t", source);
   const dispatcher = new Dispatcher();
   // Install the auto-dispatcher so synthesized start/exit nodes get default
