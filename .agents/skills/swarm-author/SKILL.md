@@ -21,7 +21,7 @@ Reach for a **single codergen node** (no graph at all) when:
 
 When in doubt, start with one node. Promote to a graph when you find yourself encoding the graph in prose.
 
-Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy), `docs/graph/` (the typed model the runtime is moving toward). Validator codes: `references/validator-codes.md`. Retry-policy presets, model stylesheets, subgraphs: `references/advanced-attrs.md`.
+Authoritative references: `docs/SPEC.md` §3 (primitives) + §4 (validation), `docs/ARCHITECTURE.md` §3 (event taxonomy). Validator codes: `references/validator-codes.md`. Retry-policy presets, model stylesheets, subgraphs: `references/advanced-attrs.md`.
 
 ---
 

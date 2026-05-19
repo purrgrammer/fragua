@@ -20,7 +20,7 @@ Two pain points the existing primitives can't address, surfacing one underlying 
 
 2. **Human-node authoring is brittle.** `wait.human` uses edge labels of shape `"[K] Display text"` parsed by `parseAcceleratorKey` at `packages/core/src/handler/handlers/wait-human.ts:88`. Duplicate accelerators throw at handler construction; the `[K]` prefix conflates UI vocabulary with routing wiring; the `prompt=` attribute is misleading (no LLM runs); only `doc-sync.dot::signoff` uses it today and the rest of the codebase has scrubbed human-checkpoint nodes out rather than fight the shape.
 
-**The simplification arc.** This proposal lives alongside two other planned cleanups: DOT → YAML (anchor: [json-ir-canonical.md](./json-ir-canonical.md)) and thread fidelity collapsing from `compact|full` to `fresh|full`. Together they push the workflow model toward a narrow, format-agnostic spine: nodes with typed kinds; edges discriminated by exactly one of `outcome` or `route`; threads with binary inheritance; no DOT-specific niceties (model stylesheets, graph transforms, condition DSLs). A unified `routes=` primitive both lands the LLM-routing feature and removes a large block of edge-selection machinery whose only consumer was the conditional-edge pattern this proposal eliminates.
+**The simplification arc.** This proposal lives alongside two other planned cleanups: DOT → YAML and thread fidelity collapsing to `thread`-presence (binary inheritance). Together they push the workflow model toward a narrow, format-agnostic spine: nodes with three primitives (llm, human, tool); edges discriminated by exactly one of `outcome` or `route`; threads with binary inheritance; no DOT-specific niceties (model stylesheets, graph transforms, condition DSLs). A unified `routes=` primitive both lands the LLM-routing feature and removes a large block of edge-selection machinery whose only consumer was the conditional-edge pattern this proposal eliminates.
 
 ## Design
 
@@ -430,7 +430,7 @@ Additional skill updates that don't trigger from a contract file but are load-be
 5. **Apply the doc + skill updates** per the table above. Drift-lint will catch anything missed.
 6. **Regenerate test fixtures** under `packages/core/test/` and `packages/store/test/` that reference the renamed status / event / intent tokens, or assert on the deleted outcome statuses.
 7. **Opportunistic follow-ups** as workflows hit their pain points: severity-aware escalation on `structural-drift` / `narrative-drift` / `rollup` (separate proposal), routing in `review.dot::scope`, `fix-bug.dot::reproduce`, `merge.dot::preflight`.
-8. **Out-of-scope follow-up:** DOT → YAML migration ([json-ir-canonical.md](./json-ir-canonical.md)) ports this routing primitive to the YAML form. Field mapping is 1:1 (no semantic change); the YAML proposal carries the porting work.
+8. **Out-of-scope follow-up:** DOT → YAML migration ports this routing primitive to the YAML authoring form. Field mapping is 1:1 (no semantic change).
 
 ## Considered alternatives
 
@@ -450,6 +450,4 @@ Additional skill updates that don't trigger from a contract file but are load-be
 ## Related proposals
 
 - [LLM-emit HITL via `<ask>` marker](./llm-emit-hitl.md) — complementary, not overlapping. That proposal extends the paused-human flow so a codergen mid-turn can ask the operator a clarification question (no new node type); this proposal adds the structured human routing node. The two compose: a codergen node can `<ask>` for mid-step input; a downstream human node can offer a structured choice between paths. The filename keeps the `hitl` token for historical continuity; its body updates to the `human` vocabulary when it lands.
-- [JSON IR as canonical workflow form](./json-ir-canonical.md) — sequencing dependency. This proposal lands in DOT; the YAML / JSON IR proposal ports it later. No double-work because the IR maps fields, not attribute syntax.
-- [Fan-in → Reduce migration](./fan-in-to-reduce.md) — orthogonal. That proposal addresses how parallel branches converge; this proposal addresses how a single node directs control flow. They land independently.
 - [Agent tool — LLM-spawned sub-agents](./agent-tool.md) — shipped. Worth contrasting: `agent` is a statically-registered tool whose schema is shared; `route` is the opposite end of the spectrum (ephemeral per-node synthesis with a node-derived enum). The codebase ends up with both patterns, deliberately.

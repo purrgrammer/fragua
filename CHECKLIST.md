@@ -2,16 +2,21 @@
 
 Pre-publish punch list. Drop or update items as you decide.
 
-- [.] Routing
 - [ ] YAML authoring format + cleanup
-  - llm_model ~> model, llm_provider ~> provider, remove model_stylesheet, remove transforms, per-run defaults + overrides
-  - YAML for config (coherent)
+  - llm_model ~> model
+  - llm_provider ~> provider
+  - remove model_stylesheet
+  - remove transforms
+  - per-run defaults + overrides
+  - max_ms ~> max_seconds (0 unbounded)
+  - YAML for config (symetry)
 - [ ] JSON IR, versioned workflows by sha
+- [ ] Summarization (checkpoint, cache, cost attribution, facts)
 - [ ] Sample workflows
 - [ ] Worktrees
-- [ ] Skills pass
 - [ ] Collapse migrations
 - [ ] Rename to fragua
+ + [ ] Skills pass & rename
 - [ ] E2E onboarding
 - [ ] CONTRIBUTING.md
 - [ ] README.md
