@@ -19,7 +19,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E013 | Exit node has outgoing edges (attractor §11.2). |
 | E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
-| E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | wait.human | tool`). Typo or invented type — there is no extension surface. |
+| E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | human | tool`). Typo or invented type — there is no extension surface. |
 | E017 | Routing node (non-empty `routes=`) has an outgoing edge with `outcome=`. Routing nodes must discriminate via `route=` only. |
 | E018 | Single edge sets both `outcome=` and `route=`. An edge must have exactly one discriminator. |
 | E019 | Edge `route=X` where source node either declares no `routes=`, or declares `routes=` that does not include `X`. |

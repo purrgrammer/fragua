@@ -115,7 +115,7 @@ const TERMINAL_TYPES = new Set([
   "fact.run_halted",
   "fact.run_cancelled",
   "fact.run_quarantined",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
 ]);
 
 const args = parseArgs(process.argv.slice(2));
@@ -212,7 +212,7 @@ for (const r of runs) {
     SELECT type, payload FROM events
     WHERE run_id = ? AND type IN (
       'fact.run_completed','fact.run_halted','fact.run_cancelled',
-      'fact.run_quarantined','fact.run_paused_hitl'
+      'fact.run_quarantined','fact.run_paused_human'
     )
     ORDER BY seq DESC LIMIT 1
   `).get(r.run_id) as { type: string; payload: string } | undefined;

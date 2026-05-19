@@ -176,7 +176,7 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool dispatched. Followed by exactly one `_done` or `_failed`; missing pair → orphan-side-effect quarantine on next daemon start. |
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed. Pair with the matching `_intent` row by `idempotencyKey`. |
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly. `retriable=true` → handler will redrive; `false` → permanent. |
-| `fact.run_paused_human` | `nodeId`, `label`, `options[]` | HITL yield. See §8 playbook. |
+| `fact.run_paused_human` | `nodeId`, `text`, `routes` | Human node yield. See §8 playbook. |
 | `fact.run_paused` | `reason`, reason-specific fields | Unified pause. Reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`) project to `paused_auto`; rest → `paused`. See §8. |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus\|null`, `delayMs` | One per attempt in an auto-retry chain. Walk these to reconstruct the retry timeline before a `provider_exhausted` halt. |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Run left a paused/quarantined state. `inputIntentSeq` points back at the operator intent that drove the wake (when applicable). |
@@ -326,7 +326,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_halted` | `"edge_no_match"` | Handler returned a route/outcome and no outgoing edge matched. Validator should make this unreachable for a pinned graph; runtime backstop. Cross-reference the graph (`SELECT pinned_graph FROM run_state WHERE run_id=…`) against the source node's outgoing edges. |
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to `intent.cancel_requested`. |
-| `fact.run_paused_human` | — | `wait.human` yielded. Payload: `{nodeId, label, options[]}`; resume via `/human`. |
+| `fact.run_paused_human` | — | `human` node yielded. Payload: `{nodeId, text, routes}`; resume via `/human`. |
 | `fact.run_paused` | `reason: "operator"` | Operator hit Pause. Status: `paused`. Wake on `intent.resume`. |
 | `fact.run_paused` | `reason: "provider_error"` | Manual-class provider transport error (400/401/403/404/413/422). Status: `paused`. Wake on `intent.resume` after fixing creds/request. |
 | `fact.run_paused` | `reason: "payment_required"` | Provider returned 402. Status: `paused`. Top up, then `intent.resume`. |

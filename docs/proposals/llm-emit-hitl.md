@@ -7,9 +7,9 @@ last-reviewed: 2026-05-02
 
 # LLM-emit HITL via `<ask>` marker
 
-> Today, HITL pauses are workflow-graph features: a `wait.human` node
-> declared by the workflow author, with edges-as-choices parsed by
-> `accelerator.ts` and resumed via `intent.hitl_input { selected, note }`.
+> Today, HITL pauses are workflow-graph features: a `human` node
+> declared by the workflow author, with edges-as-choices resolved via
+> `routes=` and resumed via `intent.human_input { route, note }`.
 > An LLM mid-step has no way to say "I need a human answer to continue."
 > If a planner needs clarification, the only options are abort the run
 > or guess. Attractor's interviewer pattern (§4.6, §6) covers the
@@ -25,7 +25,7 @@ A codergen step occasionally needs information that wasn't in
 - **Missing input.** "What's the failing test signature?"
 - **Confirmation under risk.** "About to delete 47 stale branches — proceed?"
 
-Today the workflow author has to either (a) pre-author a `wait.human`
+Today the workflow author has to either (a) pre-author a `human`
 node for every conceivable clarification (impossible — the LLM doesn't
 know what it doesn't know up front), or (b) tell the LLM to emit a
 prose question and rely on a human noticing the pause via steering.
@@ -36,7 +36,7 @@ gone the wrong way.
 What's missing is a marker the LLM can emit at end-of-turn that says
 "pause this run with my question; on resume my next message is the
 user's answer." Same trailing-line discipline as `<abort>`, same
-parser surface, same `paused_hitl` engine status — but the question
+parser surface, same `paused_human` engine status — but the question
 and the answer flow through the LLM's own transcript instead of an
 edge-choice mapping.
 
@@ -55,19 +55,19 @@ prose before it on the line, nothing after it on the message.
 Behaviour:
 
 1. Codergen handler parses the marker and returns
-   `kind: "yield_hitl"` with `label = question`, `options = []`.
-2. Engine commits `fact.run_paused_hitl { label: question }` and
-   transitions the run to `paused_hitl`. (Existing machinery.)
-3. Operator answers via `POST /runs/:id/hitl` with free-text input;
-   web posts `intent.hitl_input { selected: "", note: <answer> }`.
+   `kind: "yield_human"` with `text = question`, `routes = []`.
+2. Engine commits `fact.run_paused_human { text: question }` and
+   transitions the run to `paused_human`. (Existing machinery.)
+3. Operator answers via `POST /runs/:id/human` with free-text input;
+   web posts `intent.human_input { route: "", note: <answer> }`.
    (Existing machinery.)
-4. **New**: when a resumed `paused_hitl` node was emit-driven (the
-   `yield_hitl` had `options=[]`), the executor appends the answer
+4. **New**: when a resumed `paused_human` node was emit-driven (the
+   `yield_human` had `routes=[]`), the executor appends the answer
    as a **user message** in the codergen call's transcript instead
    of routing via outgoing edges. The same node re-enters with the
    rehydrated thread, the LLM sees the answer, and continues the
    work.
-5. Static `wait.human` nodes are unchanged — `options.length > 0`
+5. Static `human` nodes are unchanged — `routes.length > 0`
    keeps today's edge-choice semantics.
 
 ## Why this fits the existing architecture
@@ -76,17 +76,17 @@ Most of the engine surface is already in place:
 
 | Piece | Status |
 |---|---|
-| `kind: "yield_hitl"` handler return | exists (`packages/core/src/handler/types.ts:241`) |
-| `paused_hitl` run status | exists |
-| `fact.run_paused_hitl { label }` | exists |
-| `intent.hitl_input { selected, note }` | exists |
-| Resume path on `intent.hitl_input` | exists for static `wait.human` |
+| `kind: "yield_human"` handler return | exists (`packages/core/src/handler/types.ts:241`) |
+| `paused_human` run status | exists |
+| `fact.run_paused_human { text }` | exists |
+| `intent.human_input { route, note }` | exists |
+| Resume path on `intent.human_input` | exists for static `human` |
 | Free-text web/CLI answer surface | exists (steer plumbing) |
 
 The new surface is small:
 
 - One marker (`<ask>`) and its parser branch.
-- One resume convention: when `options=[]` on the paused node,
+- One resume convention: when `routes=[]` on the paused node,
   append `note` as a `role:"user"` message in the next codergen
   turn's thread rather than writing into `routingDelta`.
 - One system-prompt protocol-block addition (joined with the
@@ -97,13 +97,13 @@ The new surface is small:
 ## Why this does not conflict with `SPEC.md` §6.5
 
 §6.5 says swarm "replaces the question/answer Interviewer interface
-with `wait.human` nodes plus the `intent.hitl_input { selected, note }`
+with `human` nodes plus the `intent.human_input { route, note }`
 event." That holds for the **static gate** path — the typed Question
-model with accelerator-key edge mapping isn't coming back. The
+model with route-based edge mapping isn't coming back. The
 `<ask>` path is **additive** and doesn't reintroduce attractor's
 typed `Question` interface or pluggable `Interviewer` backends — it
 just lets an LLM step trigger the same pause-and-resume flow that
-`wait.human` triggers today, with the answer flowing through the
+`human` nodes trigger today, with the answer flowing through the
 transcript instead of through routing.
 
 ## Open questions
@@ -140,21 +140,22 @@ transcript instead of through routing.
      user message naturally.
 
 5. **What if the operator cancels instead of answering?**
-   - `intent.cancel` already terminates `paused_hitl` runs cleanly.
+   - `intent.cancel` already terminates `paused_human` runs cleanly.
      No new path; the question simply isn't answered and the run
      ends.
 
 6. **Web UI: which input surface?**
-   - Existing wait.human renderer shows an accelerator-key picker.
-     Emit-driven pauses (options=[]) need a freeform text box. Both
-     surfaces coexist on the run page: picker when options exist,
+   - Existing human-node renderer shows a route-button picker.
+     Emit-driven pauses (routes=[]) need a freeform text box. Both
+     surfaces coexist on the run page: picker when routes exist,
      text box when they don't.
-   - The HITL `label` is rendered as the question prompt — already
+   - The `text` field is rendered as the question prompt — already
      true today; no copy change needed.
 
 7. **Parser unification.**
    - Today: `parseAbortMarker(text) → {reason} | null`.
    - Proposed: `parseTerminalMarker(text) → {kind:"abort",reason} | {kind:"ask",question} | null`.
+     (Note: `kind` values in the returned union remain internal handler vocabulary, not swarm event types.)
    - Requires renaming the export. Caller (`backend.run`) routes on
      the `kind`. Tests fork into two describe blocks but share the
      strict-line rule.
@@ -186,7 +187,7 @@ transcript instead of through routing.
   call.
 - **Multi-choice edges from emit-driven asks.** Routing on the
   `<ask>` path goes back to the same node, not to a chosen edge.
-  Static `wait.human` keeps the edge-choice path.
+  Static `human` keeps the edge-choice path.
 - **Tool-call routing.** The `<ask>` marker stays text-emit so the
   contract is provider-portable. No dependency on tool-using
   providers.
@@ -196,16 +197,16 @@ transcript instead of through routing.
 1. Generalise `parseAbortMarker` → `parseTerminalMarker` (strict
    last-non-empty-line, returns abort | ask | null). Tests already
    cover the discipline; add ask-side cases.
-2. Codergen handler routes `ask` → `yield_hitl(label=question, options=[])`.
+2. Codergen handler routes `ask` → `yield_human(text=question, routes=[])`.
 3. Resume path: in `handler-bridge.ts`, on entry to a node where
-   the prior pause was emit-driven (`options=[]` recorded with the
+   the prior pause was emit-driven (`routes=[]` recorded with the
    pause), inject the answer as a user message in the thread before
    the codergen call.
 4. System-prompt `<protocol>` block gains the `<ask>` clause
    alongside `<abort>`. Same constant text for every codergen call;
    cache-key-clean.
-5. Web: add freeform input next to the existing wait.human picker
-   on `paused_hitl` runs.
+5. Web: add freeform input next to the existing human-node picker
+   on `paused_human` runs.
 6. Update `docs/SPEC.md` §6.4 to list `<ask>` as an extension and
    §6.5 to clarify what's still deliberately omitted. Update
    `docs/handler-contract.md` to document the `<ask>` self-emission

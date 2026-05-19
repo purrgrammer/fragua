@@ -138,7 +138,7 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 **`runStatus` lifecycle states beyond `running` / `completed`:**
 
 - `queued` — waiting for a daemon dispatch slot.
-- `paused_human` — `wait.human` gate yielded. Resume with `POST /runs/:id/human`.
+- `paused_human` — `human` node yielded. Resume with `POST /runs/:id/human`.
 - `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
 - `paused_auto` — daemon owes a clock tick. Reason on `fact.run_paused.payload.reason`: `handler_retry` (node returned `outcome=retry`, engine scheduled a backoff), or `provider_retry` (auto-retryable provider transport error — 408/429/5xx/529/network). The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_auto" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat); operators can short-circuit with `POST /runs/:id/resume`.
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
@@ -157,7 +157,7 @@ All endpoints return `{ seq }` — quote it in any follow-up so the user can fin
 | `/runs/:id/steer` | `{text}` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the steering text in the thread. |
 | `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); `runStatus` → `paused` (`reason:"operator"`). |
 | `/runs/:id/cancel` | `{reason?}` | `intent.cancel_requested` | Handler aborts (`cause:"cancel"`); terminal `fact.run_cancelled`. |
-| `/runs/:id/human` | `{route, note?}` | `intent.human_input` | For `wait.human`: routes to the outgoing edge whose `[K] Label` accelerator matches `route`. 400 if missing/empty. |
+| `/runs/:id/human` | `{route, note?}` | `intent.human_input` | For `kind=human` nodes: routes to the outgoing edge whose `route=` attribute equals the posted `route`. 400 if `route` is not in the node's declared `routes=` enum. |
 | `/runs/:id/resume` | `{note?}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued`. |
 | `/runs/:id/unquarantine` | `{resolution, note?}` | `intent.unquarantine` | Resolves the orphan side effect per `resolution` ∈ `treat_as_done | retry | cancel`. |
 | `/runs/:id/priority` | `{newPriority, note?}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. |
@@ -177,15 +177,15 @@ Wait for `fact.node_aborted { cause:"steer", intentSeq: <returned seq> }` → `f
 
 ### Pause + resume
 
-Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `wait.human` (structured) gates only; sending it to an operator-paused run is the wrong shape.
+Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `kind=human` (hexagon) nodes only; sending it to an operator-paused run is the wrong shape.
 
 ### Cancel
 
 Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide later if unsure.
 
-### HITL inputs
+### Human inputs
 
-For `wait.human` (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.options[].key`. See §5 + swarm-author §12.
+For human-node (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.routes`. See §5 + swarm-author §14.
 
 ### Priority + budget
 
@@ -193,19 +193,19 @@ For `wait.human` (hexagon) gates. `route` must match one of `fact.run_paused_hum
 
 ---
 
-## 5. HITL resume protocol
+## 5. Human resume protocol
 
 Runs sit in `paused_human` until you feed them. Read what they want:
 
 ```sh
 curl -fsS "$URL/runs/$RUN/events.json" \
   | jq '[.[] | select(.type=="fact.run_paused_human")] | last'
-# { seq, type, payload: { nodeId, label, options: [{key, label, to}, …] }, … }
+# { seq, type, payload: { nodeId, text, routes: ["apply", "output_only", "reject"] }, … }
 ```
 
-`route` must equal one of `options[].key`. Structured HITL is the only supported routing path (legacy `context.hitl.<nodeId>=…` raises validator W004 and isn't recognised by the structured handler).
+`route` must equal one of the strings in `payload.routes`. The server validates against the declared enum (400 on off-list); the handler re-checks as defense-in-depth.
 
-Present the decision to the user — don't answer HITL on their behalf unless they've explicitly delegated it.
+Present the decision to the user — don't answer on their behalf unless they've explicitly delegated it.
 
 ---
 
