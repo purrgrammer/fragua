@@ -112,6 +112,36 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // dispatch is a post-restart resume.
     const priorMessages = threadId ? loadPriorMessagesForThread(ctx, threadId) : undefined;
 
+    // Seed dedup memo from the LAST persisted system + user row for
+    // this (run, nodeId). Re-dispatching the same node on resume
+    // (operator pause + resume, raise & resume, provider-error
+    // auto-resume) produces a byte-identical system prompt
+    // (deterministic from node attrs) and re-passes the same input
+    // prompt to `agent.prompt(effectivePrompt)`, which pi-agent
+    // emits as a fresh user message_start/end. Without this memo
+    // the messages table grows N × {system, user} rows per N
+    // resume cycles, the conversation view shows visible
+    // duplicates, and downstream LLM rehydration carries the
+    // bloat. Walking the messages tail (limit 50 — practical
+    // bound for "most recent of each role") is cheaper than the
+    // unbounded `ctx.messages.since(0)` already used by
+    // `loadPriorMessagesForThread`.
+    let lastPersistedSystem: string | undefined;
+    let lastPersistedUser: string | undefined;
+    const nodeRows = ctx.messages.since(0).filter((m) => m.nodeId === ctx.nodeId);
+    for (let i = nodeRows.length - 1; i >= 0 && i >= nodeRows.length - 50; i--) {
+      const row = nodeRows[i];
+      if (row == null) continue;
+      const m = row.content as { role: string; content: unknown };
+      if (lastPersistedSystem === undefined && m.role === "system" && typeof m.content === "string") {
+        lastPersistedSystem = m.content;
+      }
+      if (lastPersistedUser === undefined && m.role === "user") {
+        lastPersistedUser = JSON.stringify(m.content);
+      }
+      if (lastPersistedSystem !== undefined && lastPersistedUser !== undefined) break;
+    }
+
     const summary = node.attrs.summary;
     const outcome: Outcome = await backend.run({
       node,
@@ -127,6 +157,17 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       ...(ctx.env !== undefined ? { env: ctx.env } : {}),
       ...(ctx.budgetSnapshot !== undefined ? { budgetSnapshot: ctx.budgetSnapshot } : {}),
       persistMessage: (message) => {
+        // Dedup system + initial-user messages against the most
+        // recent persisted ones for this (run, nodeId). See the
+        // seed block above for the rationale.
+        if (message.role === "system" && typeof message.content === "string") {
+          if (lastPersistedSystem === message.content) return;
+          lastPersistedSystem = message.content;
+        } else if (message.role === "user") {
+          const serialised = JSON.stringify(message.content);
+          if (lastPersistedUser === serialised) return;
+          lastPersistedUser = serialised;
+        }
         try {
           ctx.messages.append(message);
           return;

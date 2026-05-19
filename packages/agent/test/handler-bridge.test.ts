@@ -283,6 +283,84 @@ describe("makeCodergenHandler", () => {
     expect(seenPrompt?.includes("$ARGUMENTS")).toBe(false);
     store.close();
   });
+
+  test("dedups duplicate system + user rows on resumed dispatch (same content as prior tail)", async () => {
+    // Re-dispatching the same node on resume (operator pause &
+    // resume, raise & resume, provider-error auto-resume) writes
+    // a byte-identical system prompt (deterministic from node
+    // attrs) and re-passes the same input prompt to pi-agent,
+    // which emits it as a fresh user message. Without dedup the
+    // messages table grows N × {system, user} rows per N resume
+    // cycles. handler-bridge's persistMessage wrapper memos the
+    // last persisted system/user for this (run, nodeId) and
+    // drops byte-identical re-writes; pi-agent's transcript
+    // semantics aren't affected because the dropped rows would
+    // have been duplicates the next priorMessages load already
+    // covers via the prior bracket's row.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow("sha", "t", "digraph{}");
+    store.enqueueRun({ runId: "run-dedup", workflowSha: "sha" });
+    const ac = new AbortController();
+    const buildCtx = (): handler.HandlerContext =>
+      handler.buildHandlerContext({
+        runId: "run-dedup",
+        nodeId: "review",
+        iteration: 0,
+        signal: ac.signal,
+        routing: {},
+        store,
+        llm: handler.makeLlmClient({
+          signal: ac.signal,
+          call: async () => ({ content: "", tokens: 0, costUsd: 0, model: "stub" }),
+        }),
+        http: handler.makeHttpClient({ signal: ac.signal }),
+        tools: new handler.InMemoryToolRegistry(),
+        args: {},
+        recorder: { recordIntent: () => {}, recordDone: () => {}, recordFailed: () => {} },
+      });
+
+    const SYS = "you are a careful reviewer";
+    const USR = "review the diff";
+    let runCount = 0;
+    const backend: CodergenBackend = {
+      async run(input) {
+        runCount += 1;
+        input.persistMessage?.({ role: "system", content: SYS, timestamp: Date.now() });
+        input.persistMessage?.({ role: "user", content: USR, timestamp: Date.now() });
+        return ok({});
+      },
+    };
+
+    // Dispatch 1: fresh — both rows land.
+    const spec = makeCodergenHandler({ node: node({ id: "review" }), nextNode: "__end__", backend });
+    await spec.handler(buildCtx());
+    expect(runCount).toBe(1);
+    let rows = store.getMessages("run-dedup", { nodeId: "review" }).map((r) => r.content.role);
+    expect(rows).toEqual(["system", "user"]);
+
+    // Dispatch 2 (resume): same system + user content → dedup
+    // skips both; messages table unchanged.
+    await spec.handler(buildCtx());
+    expect(runCount).toBe(2);
+    rows = store.getMessages("run-dedup", { nodeId: "review" }).map((r) => r.content.role);
+    expect(rows).toEqual(["system", "user"]);
+
+    // Dispatch 3 with a CHANGED system prompt → persists the new
+    // one; the user prompt (still identical) is dropped.
+    const NEW_SYS = "you are an even more careful reviewer";
+    const backendChangedSys: CodergenBackend = {
+      async run(input) {
+        input.persistMessage?.({ role: "system", content: NEW_SYS, timestamp: Date.now() });
+        input.persistMessage?.({ role: "user", content: USR, timestamp: Date.now() });
+        return ok({});
+      },
+    };
+    const spec3 = makeCodergenHandler({ node: node({ id: "review" }), nextNode: "__end__", backend: backendChangedSys });
+    await spec3.handler(buildCtx());
+    rows = store.getMessages("run-dedup", { nodeId: "review" }).map((r) => r.content.role);
+    expect(rows).toEqual(["system", "user", "system"]);
+    store.close();
+  });
 });
 
 // Regression / property suite for "codergen routing belongs to the edge
