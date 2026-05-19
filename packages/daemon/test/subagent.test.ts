@@ -376,7 +376,7 @@ describe("makeSpawnSubagent", () => {
     const backend = new StubBackend((input) => {
       childSignal = input.signal;
       backendEntered = true;
-      return new Promise<Outcome>((resolve, reject) => {
+      return new Promise<Outcome>((_resolve, reject) => {
         const onAbort = (): void => {
           const err = new Error("aborted");
           err.name = "AbortError";

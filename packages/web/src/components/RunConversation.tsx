@@ -44,6 +44,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { AbortToolResult } from "@/components/run-conversation/AbortToolResult";
+import { RouteToolResult } from "@/components/run-conversation/RouteToolResult";
 import { SkillToolResult } from "@/components/run-conversation/SkillToolResult";
 import { WebFetchResult } from "@/components/run-conversation/WebFetchResult";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -944,6 +945,12 @@ function RichToolResult({
         isStreaming={!result}
       />
     );
+  }
+  // route: built-in routing signal. The chosen branch lands on params.name
+  // and is echoed on result.details.data.route — surface it as a named card
+  // rather than the generic "route: <name>" text dump.
+  if (toolName === "route") {
+    return <RouteToolResult params={params as { name?: string } | undefined} result={result} />;
   }
   // abort: built-in self-halt signal. The reason lands on params and is
   // echoed on result.details.data — surface it as an error-tone card
