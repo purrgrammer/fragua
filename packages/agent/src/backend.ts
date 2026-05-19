@@ -26,10 +26,10 @@ import {
   toCatalogRecord,
 } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import { buildSummarySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./thread.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
+import { buildSummarySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./thread.ts";
 import { toAgentTool } from "./tool-adapter.ts";
 
 export interface PiCodergenBackendOptions {

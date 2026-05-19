@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { CodergenInput, EventType, ExecutionEnvironment, Outcome } from "@swarm/core";
 import { ok } from "@swarm/core";
 import { SqliteStore } from "@swarm/store";
@@ -1209,5 +1210,402 @@ describe("makeSpawnSubagent", () => {
     expect(end.data["summary_chars"]).toBe("final summary text".length);
     expect(end.data["total_tool_calls"]).toBe(1);
     store.close();
+  });
+
+  describe("content-addressed pending-resume FIFO queue", () => {
+    // The user-facing semantic: a cancelled sub-agent enters a queue
+    // keyed by (parent_run, parent_node, iteration, args_hash). The
+    // NEXT agent-tool spawn with matching args pops the oldest pending
+    // entry and resumes it (replays its transcript), so an LLM retry
+    // that re-emits the same prompt automatically picks up where the
+    // cancelled bracket left off — no `resume_subagent_id` parameter,
+    // no LLM cooperation. See spawn-subagent.ts:findPendingResumeCandidate.
+
+    test("cancelled spawn + retry with matching args_hash resumes the prior bracket (FIFO)", async () => {
+      const store = freshStore();
+      seedParent(store, "parent-cx-1");
+      const registry = freshRegistry();
+      const ctrl = new AbortController();
+      // parentEmit must persist to the store so findPendingResumeCandidate
+      // (which reads subagent.start/end/resumed via store.getEventsByType)
+      // sees the prior bracket. Mirrors the real daemon's parentEmit
+      // (appendObservabilityEvents under the parent's runId).
+      const events: Array<{ type: EventType; data: Record<string, unknown> }> = [];
+      const emit = async (type: EventType, data: Record<string, unknown>) => {
+        events.push({ type, data });
+        store.appendObservabilityEvents("parent-cx-1", [{ type, payload: data }]);
+      };
+
+      // Spawn 1: persists a partial transcript, returns cancelled.
+      // The childCtrl is aborted via pre-aborted spec.signal so
+      // mapOutcomeStatus maps the throw to "cancelled" (not "halted").
+      const backend1 = new StubBackend((input) => {
+        input.persistMessage?.({
+          role: "user",
+          content: [{ type: "text", text: "lens 1 prompt" }],
+        } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+        input.persistMessage?.({
+          role: "assistant",
+          content: [{ type: "text", text: "halfway through the review…" }],
+          stopReason: "toolUse",
+        } as Parameters<NonNullable<CodergenInput["persistMessage"]>>[0]);
+        const err = new Error("cancelled mid-flight");
+        err.name = "AbortError";
+        throw err;
+      });
+      const preAborted1 = new AbortController();
+      preAborted1.abort();
+      const spawn1 = makeSpawnSubagent(
+        { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-1",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const ARGS_HASH = "deadbeefcafef00d11112222333344ff";
+      const r1 = await spawn1({
+        prompt: "lens 1",
+        signal: preAborted1.signal,
+        tool_call_id: "toolu_first",
+        args_hash: ARGS_HASH,
+      });
+      expect(r1.status).toBe("cancelled");
+      const startEvent = events.find((e) => e.type === "subagent.start")!;
+      expect(startEvent.data["args_hash"]).toBe(ARGS_HASH);
+      const cancelledId = r1.subagentId;
+
+      // Spawn 2: different tool_call_id (LLM minted a fresh one on
+      // retry) but SAME args_hash → must reuse cancelledId so the
+      // hydration path replays the partial transcript.
+      let seenPriorOnRetry: AgentMessage[] | undefined;
+      const backend2 = new StubBackend((input) => {
+        seenPriorOnRetry = input.priorMessages as AgentMessage[] | undefined;
+        return ok({ notes: "" });
+      });
+      const spawn2 = makeSpawnSubagent(
+        { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-1",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r2 = await spawn2({
+        prompt: "lens 1",
+        tool_call_id: "toolu_retry_fresh_id",
+        args_hash: ARGS_HASH,
+      });
+      // FIFO pop → same subagent_id as the cancelled spawn.
+      expect(r2.subagentId).toBe(cancelledId);
+      // Backend saw the prior transcript on input.priorMessages.
+      expect(seenPriorOnRetry).toBeDefined();
+      expect(seenPriorOnRetry!.length).toBeGreaterThanOrEqual(2);
+      // The resume emits subagent.resumed{reason:"transcript_hydrated"}
+      // for the in-flight case, NOT a fresh subagent.start.
+      const retryEvents = events.filter((e) => e.data["subagent_id"] === cancelledId);
+      const starts = retryEvents.filter((e) => e.type === "subagent.start");
+      expect(starts.length).toBe(1); // only the original start
+      const resumeds = retryEvents.filter((e) => e.type === "subagent.resumed");
+      expect(resumeds.length).toBe(1);
+      expect(resumeds[0]!.data["reason"]).toBe("transcript_hydrated");
+
+      // Spawn 3: same args_hash AGAIN, but the queue is now empty
+      // (cancelled bracket was consumed) → falls back to a fresh
+      // deterministic id, NOT cancelledId.
+      const backend3 = new StubBackend(() => ok({ notes: "" }));
+      const spawn3 = makeSpawnSubagent(
+        { store, registry, backend: backend3, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-1",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r3 = await spawn3({
+        prompt: "lens 1",
+        tool_call_id: "toolu_third",
+        args_hash: ARGS_HASH,
+      });
+      expect(r3.subagentId).not.toBe(cancelledId);
+      store.close();
+    });
+
+    test("only `cancelled` brackets are popped — completed ones don't pollute the queue", async () => {
+      const store = freshStore();
+      seedParent(store, "parent-cx-2");
+      const registry = freshRegistry();
+      const ctrl = new AbortController();
+      const emit = async (type: EventType, data: Record<string, unknown>) => {
+        store.appendObservabilityEvents("parent-cx-2", [{ type, payload: data }]);
+      };
+
+      // Spawn 1: completes successfully.
+      const backend1 = new StubBackend(() => ok({ notes: "" }));
+      const spawn1 = makeSpawnSubagent(
+        { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-2",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const ARGS_HASH = "1111222233334444aaaabbbbccccdddd";
+      const r1 = await spawn1({
+        prompt: "lens A",
+        tool_call_id: "toolu_a",
+        args_hash: ARGS_HASH,
+      });
+      expect(r1.status).toBe("completed");
+
+      // Spawn 2: same args, but the queue is empty (only a completed
+      // bracket exists, which doesn't pollute the queue) → fresh id.
+      const backend2 = new StubBackend(() => ok({ notes: "" }));
+      const spawn2 = makeSpawnSubagent(
+        { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-2",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r2 = await spawn2({
+        prompt: "lens A",
+        tool_call_id: "toolu_a2",
+        args_hash: ARGS_HASH,
+      });
+      expect(r2.subagentId).not.toBe(r1.subagentId);
+      store.close();
+    });
+
+    test("args_hash scope is per (parent_node_id, iteration) — different scopes don't share the queue", async () => {
+      const store = freshStore();
+      seedParent(store, "parent-cx-3");
+      const registry = freshRegistry();
+      const ctrl = new AbortController();
+      const emit = async (type: EventType, data: Record<string, unknown>) => {
+        store.appendObservabilityEvents("parent-cx-3", [{ type, payload: data }]);
+      };
+
+      // Cancelled spawn under parentNodeId="dispatch", iteration=0.
+      const backend1 = new StubBackend(() => {
+        const err = new Error("cancelled");
+        err.name = "AbortError";
+        throw err;
+      });
+      const spawnAt = (parentNodeId: string, parentIteration: number) =>
+        makeSpawnSubagent(
+          { store, registry, backend: backend1, shutdownSignal: ctrl.signal },
+          {
+            parentRunId: "parent-cx-3",
+            parentNodeId,
+            parentIteration,
+            parentSystemPrompt: "P",
+            parentSkills: [],
+            parentProvider: "anthropic",
+            parentModel: "claude-opus-4-7",
+            parentEnv: STUB_ENV,
+            parentEmit: emit,
+          },
+        );
+      const ARGS_HASH = "abcdef0011223344556677889900aabb";
+      const preAborted = new AbortController();
+      preAborted.abort();
+      const r1 = await spawnAt(
+        "dispatch",
+        0,
+      )({ prompt: "X", signal: preAborted.signal, tool_call_id: "toolu_x1", args_hash: ARGS_HASH });
+      expect(r1.status).toBe("cancelled");
+
+      // Retry with SAME args_hash but under a DIFFERENT parent node →
+      // no match (scope differs), fresh id.
+      const backend2 = new StubBackend(() => ok({ notes: "" }));
+      const spawn2 = makeSpawnSubagent(
+        { store, registry, backend: backend2, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-3",
+          parentNodeId: "other-node",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r2 = await spawn2({ prompt: "X", tool_call_id: "toolu_x2", args_hash: ARGS_HASH });
+      expect(r2.subagentId).not.toBe(r1.subagentId);
+
+      // Retry under SAME parent node but DIFFERENT iteration → also
+      // no match (goal-gate retarget shouldn't bleed in).
+      const backend3 = new StubBackend(() => ok({ notes: "" }));
+      const spawn3 = makeSpawnSubagent(
+        { store, registry, backend: backend3, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-3",
+          parentNodeId: "dispatch",
+          parentIteration: 1,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r3 = await spawn3({ prompt: "X", tool_call_id: "toolu_x3", args_hash: ARGS_HASH });
+      expect(r3.subagentId).not.toBe(r1.subagentId);
+
+      // Retry under same scope as the cancelled spawn → MATCHES.
+      const backend4 = new StubBackend(() => ok({ notes: "" }));
+      const spawn4 = spawnAt("dispatch", 0);
+      // Need backend4 wired; rebuild spawn with the correct backend.
+      void backend4; // (StubBackend wiring below)
+      const spawn4b = makeSpawnSubagent(
+        { store, registry, backend: backend4, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-3",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      void spawn4;
+      const r4 = await spawn4b({ prompt: "X", tool_call_id: "toolu_x4", args_hash: ARGS_HASH });
+      expect(r4.subagentId).toBe(r1.subagentId);
+      store.close();
+    });
+
+    test("six parallel siblings with same args_hash: each pops a distinct cancelled bracket, none collide", async () => {
+      // The review.dot live shape: parent fans out 6 same-args
+      // sub-agent calls. All get cancelled by a budget pause. On
+      // resume the parent re-emits 6 calls with the same args_hash;
+      // each pops a distinct cancelled bracket from the queue.
+      const store = freshStore();
+      seedParent(store, "parent-cx-4");
+      const registry = freshRegistry();
+      const ctrl = new AbortController();
+      const emit = async (type: EventType, data: Record<string, unknown>) => {
+        store.appendObservabilityEvents("parent-cx-4", [{ type, payload: data }]);
+      };
+
+      const ARGS_HASH = "ffeeddccbbaa99887766554433221100";
+      // Seed 6 distinct cancelled brackets directly via the store.
+      // Modelling the original cancellation path through spawn-subagent
+      // (sequential or parallel) is unnecessary for what this test
+      // pins — the FIFO queue at retry time is what we care about,
+      // and using the store directly keeps the setup unambiguous (no
+      // possibility of the setup phase itself triggering FIFO pops).
+      const cancelledIds: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const sid = `sib${i.toString().padStart(2, "0")}aabbccddeeff00112233445566778899`.slice(0, 32);
+        cancelledIds.push(sid);
+        store.appendObservabilityEvents("parent-cx-4", [
+          {
+            type: "subagent.start",
+            payload: {
+              subagent_id: sid,
+              parent_node_id: "fanout",
+              iteration: 0,
+              provider: "anthropic",
+              model: "claude-opus-4-7",
+              tool_call_id: `toolu_first_${i}`,
+              args_hash: ARGS_HASH,
+            },
+          },
+          {
+            type: "subagent.end",
+            payload: {
+              subagent_id: sid,
+              status: "cancelled",
+              summary_chars: 0,
+              total_tool_calls: 0,
+              costUsd: 0,
+              totalTokens: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+            },
+          },
+        ]);
+      }
+      expect(new Set(cancelledIds).size).toBe(6);
+
+      const makeSpawn = (backend: StubBackend) =>
+        makeSpawnSubagent(
+          { store, registry, backend, shutdownSignal: ctrl.signal },
+          {
+            parentRunId: "parent-cx-4",
+            parentNodeId: "fanout",
+            parentIteration: 0,
+            parentSystemPrompt: "P",
+            parentSkills: [],
+            parentProvider: "anthropic",
+            parentModel: "claude-opus-4-7",
+            parentEnv: STUB_ENV,
+            parentEmit: emit,
+          },
+        );
+
+      // 6 retries — IN PARALLEL — with same args_hash. Each must pop
+      // a DISTINCT cancelled bracket. If the FIFO consumption races
+      // (two siblings pick the same id before either emits
+      // subagent.resumed), we'd see duplicates here.
+      const okBackend = new StubBackend(() => ok({ notes: "" }));
+      const retries = await Promise.all(
+        Array.from({ length: 6 }, (_, i) =>
+          makeSpawn(okBackend)({
+            prompt: "lens",
+            tool_call_id: `toolu_retry_${i}`,
+            args_hash: ARGS_HASH,
+          }),
+        ),
+      );
+      const retriedIds = retries.map((r) => r.subagentId);
+      // No duplicates — each retry resumed a distinct cancelled bracket.
+      expect(new Set(retriedIds).size).toBe(6);
+      // Every retried id corresponds to a prior cancelled id (FIFO,
+      // so order matches insertion order: first retry → first cancelled).
+      const cancelledSet = new Set(cancelledIds);
+      for (const id of retriedIds) expect(cancelledSet.has(id)).toBe(true);
+      store.close();
+    });
   });
 });

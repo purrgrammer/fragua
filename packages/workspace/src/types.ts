@@ -101,6 +101,18 @@ export interface SubagentSpec {
    *  web UI's parent-toolCall → in-flight-sub-agent link. See
    *  `docs/proposals/sub-agent-crash-resilience.md`. */
   tool_call_id: string;
+  /** Content-addressed hash of the spec's canonical args (prompt +
+   *  system_prompt + allowed_tools + disallowed_tools + skills +
+   *  max_iterations + agent_def + model + provider). Drives the
+   *  pending-resume FIFO queue: a cancelled sub-agent enters a queue
+   *  keyed by `(parent_run, parent_node, iteration, args_hash)`; the
+   *  next spawn with matching args pops the oldest pending entry
+   *  and resumes it (replays its transcript), so an LLM retry that
+   *  reuses the same prompt automatically picks up where the
+   *  cancelled bracket left off — no `resume_subagent_id` parameter,
+   *  no LLM cooperation. Computed by the `agent` tool's `execute`
+   *  from the spec. */
+  args_hash?: string;
 }
 
 /** What `spawnSubagent` returns to the `agent` tool. The tool packs

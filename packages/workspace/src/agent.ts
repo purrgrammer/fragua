@@ -11,6 +11,7 @@
 // without it the tool returns an `is_error` so the LLM sees a clear
 // "host doesn't support sub-agents" signal rather than a silent stall.
 
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { lookupAgentDef } from "./agents/catalog.ts";
 import { normaliseToolName } from "./agents/normalise.ts";
@@ -155,6 +156,34 @@ export const agentTool: Tool<AgentToolArgs, AgentToolData> = {
       if (def !== undefined) spec.agentName = def.name;
 
       if (opts?.signal !== undefined) spec.signal = opts.signal;
+
+      // Content-addressed args hash, computed from the fully-resolved
+      // spec (after profile merge + tool normalisation). Drives the
+      // pending-resume FIFO queue in spawn-subagent — a cancelled
+      // sub-agent keyed by `(parent_run, parent_node, iteration,
+      // args_hash)` is automatically resumed by the next spawn whose
+      // args hash matches, so an LLM retry that re-emits the same
+      // prompt picks up the prior transcript without any explicit
+      // resume id. The hash deliberately excludes `tool_call_id`,
+      // `name`, and `signal` — those vary across retries (pi-ai
+      // mints fresh tool_call_ids) but shouldn't break the content
+      // address.
+      spec.args_hash = createHash("sha256")
+        .update(
+          JSON.stringify({
+            prompt: spec.prompt,
+            system_prompt: spec.system_prompt ?? null,
+            allowed_tools: spec.allowed_tools ? [...spec.allowed_tools].sort() : null,
+            disallowed_tools: spec.disallowed_tools ? [...spec.disallowed_tools].sort() : null,
+            skills: spec.skills ? [...spec.skills].sort() : null,
+            max_iterations: spec.max_iterations ?? null,
+            agent_def: spec.agentName ?? null,
+            model: spec.model ?? null,
+            provider: spec.provider ?? null,
+          }),
+        )
+        .digest("hex")
+        .slice(0, 32);
 
       const result = await ctx.spawnSubagent(spec);
       const data: AgentToolData = {

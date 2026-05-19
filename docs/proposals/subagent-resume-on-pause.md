@@ -1,26 +1,32 @@
 ---
 title: Graceful sub-agent resume across pause boundaries
-status: proposed
-maturity: sketch
+status: shipped
+maturity: specified
 last-reviewed: 2026-05-19
 ---
 
 # Graceful sub-agent resume across pause boundaries
 
-> **Status: sketch.** The lower-level mechanism (deterministic
-> `subagent_id` + crash-resilience hydration in
-> `packages/daemon/src/spawn-subagent.ts`) already works end-to-end —
-> a re-spawn with the same `tool_call_id` reads the partial transcript
-> from `messages` and replays it into `backend.run.priorMessages`.
-> See `packages/daemon/test/subagent.test.ts` →
-> "pause-cancelled sub-agent: partial transcript persists; re-spawn
-> with same tool_call_id hydrates it" for the proof.
+> **Status: shipped via a different path than Options A/B sketched
+> below.** The implementation is a content-addressed FIFO queue in
+> `packages/daemon/src/spawn-subagent.ts:findPendingResumeCandidate`,
+> driven by `subagent.start.args_hash` (sha256 over the spec's
+> canonical args, computed by the `agent` tool at execute time).
+> A cancelled bracket enters a queue keyed by `(parent_run,
+> parent_node_id, iteration, args_hash)`; the next spawn with
+> matching args pops the oldest pending entry and resumes it.
+> Symmetric with regular-tool rehydrate (nothing is silently
+> rewritten — the cancelled toolResult stays in the transcript),
+> no LLM cooperation required, no asymmetry between sub-agents
+> and other tools. See `packages/daemon/test/subagent.test.ts` →
+> "content-addressed pending-resume FIFO queue" suite for the
+> proof.
 >
-> The gap is at the pi-agent layer: today's pause-resume path persists
-> the cancelled tool result as PAIRED with the original `agent`
-> toolCall, so `sanitiseUnpairedToolCalls` never re-executes the
-> agent tool, and any LLM-initiated retry generates a NEW
-> `tool_call_id` → NEW `subagent_id` → hydration is bypassed.
+> The Options A (silent rollback of cancelled toolResults at
+> pause-commit) and B (explicit `resume_subagent_id` parameter)
+> sketched below are obsolete — they were inconsistent with
+> regular-tool rehydrate (A) or relied on LLM cooperation (B).
+> Kept here for design-history context.
 
 ## Problem
 

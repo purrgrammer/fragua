@@ -33,7 +33,6 @@ qualification (drift-lint enforces this). Partially-landed work stays
 
 | Proposal | Maturity | Notes |
 |---|---|---|
-| [Graceful sub-agent resume across pause boundaries](./subagent-resume-on-pause.md) | sketch | lower-level mechanism (deterministic `subagent_id` + crash-resilience hydration) already works; gap is at the pi-agent layer where the cancelled toolResult is persisted as PAIRED, so `sanitiseUnpairedToolCalls` doesn't re-execute on resume and any LLM retry picks a fresh id. Two options (silent rollback of cancelled toolResults vs. exposing `resume_subagent_id` to the LLM). |
 | [Worktrees](./worktrees.md) | designed | per-run worktree isolation + tree snapshots at HITL/terminal boundaries + operator-triggered post-run primitives (branch / commit / merge / discard) on two non-porcelain ref namespaces (`refs/swarm/snapshots/<runId>/<eventIdx>` + `refs/swarm/heads/<runId>`); terminal runs with non-empty diff vs base land in an operator **inbox**; clean runs disappear quietly. Replaces [worktree-design.md](./worktree-design.md) and [worktree-snapshots.md](./worktree-snapshots.md) |
 | [Worktree design](./worktree-design.md) | sketch | superseded by [worktrees.md](./worktrees.md); kept for context until that lands |
 | [Worktree snapshots at node boundaries](./worktree-snapshots.md) | designed | superseded by [worktrees.md](./worktrees.md); kept for context until that lands |
@@ -66,6 +65,7 @@ qualification (drift-lint enforces this). Partially-landed work stays
 <details>
 <summary>Design records for delivered capability — capability claims live in the root README. Click to expand.</summary>
 
+- [Graceful sub-agent resume across pause boundaries](./subagent-resume-on-pause.md) — content-addressed FIFO queue: cancelled sub-agent enters a queue keyed by `(parent_run, parent_node_id, iteration, args_hash)`; next spawn with matching args pops the oldest pending entry and resumes it. No LLM cooperation needed. Symmetric with regular-tool rehydrate.
 - [Project config file](./project-config.md)
 - [Doc-vs-code drift CI lint](./drift-lint.md)
 - [Bound the OCC retry loop](./occ-retry-ceiling.md)

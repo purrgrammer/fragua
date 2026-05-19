@@ -390,11 +390,29 @@ sqlite3 -readonly "$DB" \
 
 Sub-agents (the `agent` tool) have no `run_state` row and no separate event stream. Every event the sub-agent emits rides the **parent's** event stream with `subagent_id` on the payload as a discriminator. Three observability events bracket each spawn:
 
-- `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def? }`
+- `subagent.start { subagent_id, parent_node_id, iteration, model, provider, name?, agent_def?, tool_call_id?, args_hash? }`
 - `subagent.end { subagent_id, status, summary_chars, total_tool_calls, costUsd, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, halt_reason? }`
-- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on respawn after a daemon crash (proposal: `docs/proposals/sub-agent-crash-resilience.md`).
+- `subagent.resumed { subagent_id, reason: "already_completed" | "transcript_hydrated" }` — fires on either a daemon-crash respawn (proposal: `docs/proposals/sub-agent-crash-resilience.md`) OR a content-addressed FIFO pop (see below).
 
-`subagent_id` is **deterministic**: `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars. A respawn after a daemon crash hashes to the same id, rehydrates the prior transcript under the `__subagent:<id>` namespace in `messages`, and emits `subagent.resumed` (no fresh `start`).
+`subagent_id` is picked at spawn time via two paths:
+
+1. **Content-addressed FIFO queue (default when `subagent.start.args_hash` is present).** A cancelled sub-agent enters a queue keyed by `(parent_run, parent_node_id, iteration, args_hash)` where `args_hash` is sha256 over the spec's canonical args (prompt, system_prompt, allowed_tools, disallowed_tools, skills, max_iterations, agent_def, model, provider). The NEXT spawn with matching args pops the oldest pending entry (oldest = lowest seq), reuses its `subagent_id`, and emits `subagent.resumed{reason:"transcript_hydrated"}` to consume it. Lets a parent retry that uses byte-identical agent-tool args automatically resume the sub-agent's work-so-far across a budget pause / provider error / operator pause — no `resume_subagent_id` parameter, no LLM cooperation. "Pending" = latest terminal is `subagent.end{status:"cancelled"}` AND no subsequent `subagent.resumed` for the id. To audit which brackets are still pending for a run:
+   ```sh
+   sqlite3 -readonly "$DB" "
+     SELECT json_extract(s.payload, '\$.subagent_id'),
+            json_extract(s.payload, '\$.args_hash'),
+            json_extract(s.payload, '\$.parent_node_id')
+     FROM events s
+     WHERE s.run_id='$RUN' AND s.type='subagent.start'
+       AND EXISTS (SELECT 1 FROM events e WHERE e.run_id=s.run_id AND e.type='subagent.end'
+                    AND json_extract(e.payload,'\$.subagent_id')=json_extract(s.payload,'\$.subagent_id')
+                    AND json_extract(e.payload,'\$.status')='cancelled')
+       AND NOT EXISTS (SELECT 1 FROM events r WHERE r.run_id=s.run_id AND r.type='subagent.resumed'
+                       AND json_extract(r.payload,'\$.subagent_id')=json_extract(s.payload,'\$.subagent_id'));
+   "
+   ```
+
+2. **Fresh deterministic id (fallback).** `sha256(parentRunId, parentNodeId, parentIteration, tool_call_id)` truncated to 32 hex chars. Survives a daemon crash because pi-ai preserves `tool_call_id` byte-identically on the wire. Used when `args_hash` isn't set (older spawns, hand-rolled test events) or when no pending-resume candidate matches.
 
 ```sh
 # Bracket events for one parent run, ordered.
