@@ -611,3 +611,10 @@ separate proposal, downstream of (9).)
   HEAD points to an unborn branch — all return non-zero from
   `symbolic-ref` and we record null. Acceptable; document in the
   provisioner code.
+
+- **Eval reproducibility pins only output here.** Snapshots pin the
+  *output* tree of a run; serious evals also need input-side pinning
+  (workflow bytes sha, skill / agent content shas, exact model
+  string, swarm version, resolved system prompts). Needs its own
+  design pass — not a first-release blocker, but worth knowing this
+  proposal is half of the eventual eval reproducibility story.
