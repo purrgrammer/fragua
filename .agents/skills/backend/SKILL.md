@@ -1,7 +1,6 @@
 ---
 name: backend
 description: Server-side patterns for packages/server, packages/store, packages/core, packages/agent. Load this skill before writing or modifying any .ts under those packages — adapters, route handlers, store methods, queries, reducers, daemon code, agent backends. Encodes SQL aggregations over in-memory event folding, per-module <domain>-queries.ts files in packages/store/src/ as the single audit point for every SQL statement, store-layer access via IEventStore (no raw db handles in routes), reducer purity (no clocks, no I/O), event-store invariants (4KB payload cap, seq monotonicity, observability events skip the reducer), and Hono route shape. Pair with the `swarm-debug` skill when the change touches replay or post-mortem behavior.
-version: 0.1.0
 ---
 
 # Backend code patterns

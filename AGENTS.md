@@ -44,7 +44,7 @@ Dependency direction: `web → server → store ← daemon → core ← agent`. 
 
 | Package | Entry points | What lives here |
 |---|---|---|
-| `@swarm/types` | `src/index.ts`, `src/swarm-events.ts`, `src/agents.ts`, `src/skills.ts`, `src/events.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
+| `@swarm/types` | `src/index.ts`, `src/events.ts`, `src/agents.ts`, `src/skills.ts` | Shared `AgentMessage` + swarm-event declaration merges; imported by every package (`store`, `daemon`, `agent`, `server`, `web`, `core`, `cli`) |
 | `@swarm/store` | `src/store.ts`, `src/schema.sql`, `src/reducers.ts` | SQLite event store; pragmas; migrations; startup sweep |
 | `@swarm/core` | `src/handler/types.ts`, `src/engine/{edge-selection,substitution,retry-policy,thread}.ts`, `src/parser/yaml.ts` | Pure types; YAML parser; handler contract; engine reducers |
 | `@swarm/daemon` | `src/{entrypoint,executor,supervisor,auto-dispatcher,result-to-facts,recorder,wake-pending,worktree-provisioner,auto-titler}.ts` | Executor + supervisor fibers; intent fold; provisioner; recorder; wake-pending sweeper |
@@ -77,7 +77,7 @@ Named sub-agent profiles live alongside skills under `.agents/agents/` (project)
    | If you touch | Update in the same PR |
    |---|---|
    | `packages/store/src/schema.sql` | `ARCHITECTURE.md` §2 (schema) |
-   | `packages/types/src/swarm-events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `STATUS.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the doc claims |
+   | `packages/types/src/events.ts` — status / intent / fact / halt / quarantine types, or `DaemonEvent` literals | `ARCHITECTURE.md` §3 (event taxonomy); `SPEC.md` §3.4 if status enum changed; `.agents/skills/swarm-debug/SKILL.md` — §4.1 for new informational fact types, §8 for new halt/quarantine reasons or paused statuses, §8.1 for new schedule daemon-events, §8.2 for new subagent observability events; `STATUS.md` ("What swarm delivers today" / "What swarm does not deliver today") if a new status / intent / fact carries user-visible behaviour the doc claims |
    | `packages/core/src/handler/types.ts` | `handler-contract.md` |
    | `packages/core/src/handler/intent-fold.ts` | `docs/intent-fold.md` |
    | `packages/core/src/engine/validator.ts` — error/warning codes (E001–E0NN, W001–W0NN) | `.agents/skills/swarm-author/SKILL.md` validator-codes table |

@@ -1,7 +1,6 @@
 ---
 name: frontend
 description: React code patterns for packages/web. Load this skill before writing or modifying any .tsx/.ts under packages/web/src — components, hooks, routes, data-fetching, mutations, tests — including small changes like adding a useState, wiring a fetch or a POST/DELETE, extracting a child component, adding an onClick that mutates server state, or writing a test. Encodes small components with clear seams, server state through @tanstack/react-query query factories (never useState + useEffect for fetches), mutations through useMutation with cache invalidation, effects reserved for subscriptions, hooks over HOCs, measure before memoizing, tests that describe user behavior. Pair with the `design` skill for anything touching styles, tokens, or layout.
-version: 0.1.0
 ---
 
 # Frontend code patterns

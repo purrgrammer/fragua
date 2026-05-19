@@ -1,7 +1,6 @@
 ---
 name: swarm-run
 description: Drive a swarm run from enqueue to terminal state. Load this when the user says "run workflow X", "kick off change", "enqueue ci-gate", "start a run against …", "steer this run", "pause/cancel/resume run …", "send HITL input", "unquarantine <run>", "bump priority on …", or otherwise asks to operate on live runs (not analyse completed ones — that's swarm-debug). Teaches pre-flight (harness liveness + provider credentials), the two equivalent entry points (`swarm run` CLI vs. `POST /workflows` + `POST /runs`), how to watch a run over SSE / events.json / /steps, the intent vocabulary (steer, pause, cancel, hitl, unquarantine, priority) with post-conditions for each, and the HITL resume + quarantine-resolution protocols. Assumes Claude Code with Bash / Read / curl on a swarm checkout.
-version: 0.2.1
 ---
 
 # swarm-run — enqueue, watch, and control a live run

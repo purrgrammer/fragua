@@ -1,7 +1,6 @@
 ---
 name: design
 description: "Swarm UI design language for packages/web. Load this skill before writing or modifying any React/TSX component, CSS, style, or theme token in packages/web — including small changes like a button class, spacing, color, font size, radius, or animation, and any time you're choosing between a shadcn token (bg-card, text-foreground) and a Swarm token (bg-sw-surface, text-sw-muted, rounded-sw-card). The web UI is on Tailwind v4 with CSS-first config: there is no tailwind.config.ts, theme tokens live in globals.css's @theme inline block, dark mode is a @custom-variant on .dark. Encodes the 'clarity through restraint' philosophy: monospace voice, data-as-decor (no shadows/gradients), bento layouts with hairline borders, semantic color reserved strictly for state, light-mode default with both themes first-class, and motion that indicates state rather than decorates."
-version: 0.3.0
 ---
 
 # Swarm design language
