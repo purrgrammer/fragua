@@ -1,8 +1,8 @@
-// Filesystem WorkflowReader: scans `<workflowsDir>` for `*.dot` files and
+// Filesystem WorkflowReader: scans `<workflowsDir>` for `*.yaml` files and
 // reports their name, relative path, a short content sha, and any
-// `label="..."` attribute extracted from the DOT source. For
+// `label:` attribute extracted from the YAML source. For
 // `GET /workflows/:name` the `read` method returns the same metadata
-// plus the raw DOT source on demand.
+// plus the raw YAML source on demand.
 //
 // This adapter is the only place in @swarm/server that reads workflow
 // sources from disk. Handlers stay pure so tests can inject an in-memory
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { WorkflowDetail, WorkflowReader, WorkflowSummary } from "../ports.ts";
 
 export interface FsWorkflowReaderOptions {
-  /** Directory containing `*.dot` workflow sources. */
+  /** Directory containing `*.yaml` workflow sources. */
   workflowsDir: string;
 }
 
@@ -31,9 +31,9 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
         // RunReader's treatment of an empty runs directory.
         return [];
       }
-      const dots = entries.filter((n) => n.endsWith(".dot"));
+      const yamls = entries.filter((n) => n.endsWith(".yaml"));
       const out: WorkflowSummary[] = [];
-      for (const name of dots) {
+      for (const name of yamls) {
         const path = join(workflowsDir, name);
         let contents: string;
         try {
@@ -61,7 +61,7 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
       // but rejecting path separators + traversal here keeps this
       // adapter safe in isolation (unit tests call `read` directly).
       if (!isSafeName(name)) return undefined;
-      const path = join(workflowsDir, `${name}.dot`);
+      const path = join(workflowsDir, `${name}.yaml`);
       let source: string;
       try {
         source = await readFile(path, "utf8");
@@ -78,8 +78,8 @@ export function createFsWorkflowReader(opts: FsWorkflowReaderOptions): WorkflowR
 }
 
 /** Reject anything that could escape `workflowsDir` or address a file
- *  other than `<name>.dot`. The filename grammar the list endpoint
- *  already enforces is "basename of a *.dot file" — we mirror that. */
+ *  other than `<name>.yaml`. The filename grammar the list endpoint
+ *  already enforces is "basename of a *.yaml file" — we mirror that. */
 function isSafeName(name: string): boolean {
   if (name.length === 0 || name.length > 128) return false;
   if (name.includes("/") || name.includes("\\") || name.includes("\0")) return false;
@@ -92,27 +92,30 @@ function shortSha(contents: string): string {
   return createHash("sha256").update(contents).digest("hex").slice(0, 7);
 }
 
-/** Strip directory + extension from a DOT filename. */
+/** Strip directory + extension from a YAML filename. */
 function basenameWithoutExt(filename: string): string {
   const dot = filename.lastIndexOf(".");
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
 /**
- * Best-effort extraction of the graph-level `label="..."` attribute from
- * DOT source. We intentionally keep this a simple regex rather than
- * shelling out to a parser: the worst case is that a run-time graph with
- * a clever escape in its label falls back to `name` in the UI.
+ * Best-effort extraction of the top-level `label:` attribute from YAML
+ * source. We intentionally keep this a simple regex rather than
+ * full-parsing — the worst case is a run-time graph with a clever value
+ * in its label falls back to `name` in the UI listing.
  *
- * Matches the first `label = "..."` occurrence, tolerating whitespace
- * around the `=`. Returns `undefined` when no literal match is found.
+ * Matches `^label: <rest>` at the document root (line-start, no leading
+ * whitespace), stripping optional surrounding quotes. Returns undefined
+ * when no literal match is found.
  */
-function extractLabel(dotSource: string): string | undefined {
-  const m = dotSource.match(/\blabel\s*=\s*"((?:[^"\\]|\\.)*)"/);
+function extractLabel(yamlSource: string): string | undefined {
+  const m = yamlSource.match(/^label\s*:\s*(.+)$/m);
   if (!m) return undefined;
-  const raw = m[1];
+  const raw = m[1]?.trim();
   if (raw === undefined || raw === "") return undefined;
-  // Unescape the two sequences DOT commonly carries. Anything else we
-  // leave as-is — the regex already refused unterminated escapes.
-  return raw.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+  // Strip matching quotes (`"…"` or `'…'`) if the value was authored
+  // with them. Inline quotes inside an unquoted scalar pass through.
+  const quoted = raw.match(/^"((?:[^"\\]|\\.)*)"$|^'([^']*)'$/);
+  if (quoted) return (quoted[1] ?? quoted[2] ?? "").replace(/\\n/g, "\n").replace(/\\"/g, '"');
+  return raw;
 }

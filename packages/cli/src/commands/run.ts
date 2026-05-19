@@ -1,14 +1,14 @@
 // `swarm run <workflow>` — enqueue a run via HTTP and stream events.
 //
 // `<workflow>` resolves in two flavours:
-//   - bare name (no slash, no `.dot` suffix): looks up
-//     `~/.swarm/workflows/<name>.dot`. Misses surface as "workflow not
+//   - bare name (no slash, no `.yaml` suffix): looks up
+//     `~/.swarm/workflows/<name>.yaml`. Misses surface as "workflow not
 //     found" with a hint to either drop a file there or pass a path.
-//   - path (relative or absolute, with slash or `.dot` suffix): read
+//   - path (relative or absolute, with slash or `.yaml` suffix): read
 //     directly.
 //
 // Then:
-//   1. Read the DOT file.
+//   1. Read the YAML file.
 //   2. POST /workflows to register it and receive the sha.
 //   3. POST /runs with that sha + cwd + workflow metadata.
 //   4. Stream /runs/:id/stream (SSE) to stdout until the run reaches a
@@ -101,17 +101,17 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
 
   const resolved = await resolveWorkflow(cwd, opts.workflow);
   if (resolved == null) {
-    const looksLikePath = opts.workflow.includes("/") || opts.workflow.endsWith(".dot");
+    const looksLikePath = opts.workflow.includes("/") || opts.workflow.endsWith(".yaml");
     if (looksLikePath) {
       console.error(chalk.red(`run: workflow not found: ${opts.workflow} (resolved as path)`));
     } else {
       console.error(chalk.red(`run: workflow not found: ${opts.workflow}`));
       console.error(
         chalk.dim(
-          `  looked in ${globalWorkflowsDir()}/${opts.workflow}.dot, then ${projectWorkflowsDir(cwd)}/${opts.workflow}.dot`,
+          `  looked in ${globalWorkflowsDir()}/${opts.workflow}.yaml, then ${projectWorkflowsDir(cwd)}/${opts.workflow}.yaml`,
         ),
       );
-      console.error(chalk.dim(`  drop a .dot file in either location, or pass a path explicitly`));
+      console.error(chalk.dim(`  drop a .yaml file in either location, or pass a path explicitly`));
     }
     return 1;
   }

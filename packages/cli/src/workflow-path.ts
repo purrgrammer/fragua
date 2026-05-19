@@ -1,13 +1,13 @@
 // Workflow argument resolution shared by `swarm run` and `swarm validate`.
 //
-// Bare names (no slash, no `.dot` suffix) resolve in two stages:
-//   1. `~/.swarm/workflows/<name>.dot` — global. Generic workflows live
+// Bare names (no slash, no `.yaml` suffix) resolve in two stages:
+//   1. `~/.swarm/workflows/<name>.yaml` — global. Generic workflows live
 //      here so they're available from any cwd.
-//   2. `<cwd>/.swarm/workflows/<name>.dot` — project-local fallback.
+//   2. `<cwd>/.swarm/workflows/<name>.yaml` — project-local fallback.
 //      Project-internal workflows (this repo's introspect, ci-gate, …)
 //      stay near the codebase that owns them.
 //
-// Anything with a path separator or a `.dot` suffix is treated as a
+// Anything with a path separator or a `.yaml` suffix is treated as a
 // literal path so callers can still point at scratch files anywhere
 // on disk.
 
@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 export type WorkflowScope = "global" | "local" | "path";
 
 export interface ResolvedWorkflow {
-  /** Absolute path to the `.dot` file. */
+  /** Absolute path to the `.yaml` file. */
   dotPath: string;
   /** Logical workflow name (no extension, no directory). For bare-name
    * lookups this is the input verbatim; for path lookups it's the file
@@ -45,13 +45,13 @@ export async function resolveWorkflow(
   arg: string,
   opts: { homeDir?: string } = {},
 ): Promise<ResolvedWorkflow | null> {
-  const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".dot");
+  const looksLikePath = arg.includes("/") || arg.includes("\\") || arg.endsWith(".yaml");
   if (!looksLikePath) {
-    const globalCandidate = resolve(globalWorkflowsDir(opts.homeDir), `${arg}.dot`);
+    const globalCandidate = resolve(globalWorkflowsDir(opts.homeDir), `${arg}.yaml`);
     if (await fileExists(globalCandidate)) {
       return { dotPath: globalCandidate, name: arg, scope: "global" };
     }
-    const localCandidate = resolve(projectWorkflowsDir(cwd), `${arg}.dot`);
+    const localCandidate = resolve(projectWorkflowsDir(cwd), `${arg}.yaml`);
     if (await fileExists(localCandidate)) {
       return { dotPath: localCandidate, name: arg, scope: "local" };
     }

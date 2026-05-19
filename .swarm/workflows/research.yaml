@@ -1,0 +1,107 @@
+# research.yaml — fetch a list of URLs, return raw markdown per URL,
+# synthesise across all of them.
+#
+# Two-node research/synthesis pipeline driven by the `web_fetch` core
+# tool. The user's input carries both the question and the source
+# URLs; the agent splits them and dispatches one `web_fetch` per URL
+# in raw mode (no per-URL summariser cost), then the synthesise node
+# reads the full markdown of every source via the shared thread and
+# produces the answer directly. Higher fidelity than per-URL
+# summarisation because the final-answer model sees the cross-source
+# picture.
+#
+# Usage:
+#   bun run swarm run research --input='What changed in React 19? \
+#     https://react.dev/blog/2024/12/05/react-19 \
+#     https://react.dev/blog/2024/04/25/react-19-upgrade-guide'
+#
+# Both nodes share `thread_id: research`. Research emits only a
+# brief manifest as its assistant text; synthesise hydrates the full
+# shared thread (with web_fetch tool results carrying the raw markdown)
+# into its context — no markdown duplication into output tokens.
+
+name: research
+goal: Fetch a set of URLs supplied in $ARGUMENTS, extract material relevant to the user's question, and synthesise a unified answer with inline citations.
+label: research
+budget_usd: 0.50
+
+nodes:
+  start: {type: start}
+
+  research:
+    type: llm
+    llm_provider: anthropic
+    llm_model: claude-sonnet-4-6
+    thread_id: research
+    allowed_tools: [web_fetch]
+    max_cost_usd: 0.15
+    prompt: |
+      Fetch the URLs the user supplied so a downstream answer can quote them.
+
+      User input: $ARGUMENTS
+
+      Procedure:
+        1. The user input contains a question and one or more URLs.
+        2. Extract the URLs (any `http://` or `https://` substring is a source).
+        3. For EACH URL, call web_fetch with `url:` only. Do NOT pass a `prompt` argument — without it, web_fetch returns the page's raw markdown at full fidelity.
+           If web_fetch returns a cross-host redirect, re-call once with the redirect URL. Don't chase redirects beyond the first hop.
+           If web_fetch fails (auth-required, 4xx, 5xx, network), note the failure briefly and continue with the remaining URLs.
+        4. After every web_fetch call has settled, emit a SHORT final assistant message — only the manifest below, not the markdown.
+
+      Manifest format (emit verbatim, then stop):
+
+      # Sources fetched
+
+      **Question:** <the question, verbatim from the user input>
+
+      1. <URL> — ok | redirect <target> | error <one-line reason>
+      2. <URL> — …
+
+      Writing rules:
+        - Be brief. The whole manifest should be < 30 lines.
+        - Do NOT include the page markdown in the manifest.
+        - Keep the URL ordering identical to the user's input order so `[#N]` citations are stable.
+
+  synthesize:
+    type: llm
+    llm_provider: anthropic
+    llm_model: claude-sonnet-4-6
+    thread_id: research
+    allowed_tools: []
+    reasoning_effort: medium
+    max_cost_usd: 0.20
+    prompt: |
+      Answer the user's question using the web_fetch tool results — they carry the FULL raw markdown of each fetched URL and are the highest-fidelity content available. The manifest gives the canonical URL ordering for citations.
+
+      Procedure:
+        1. Read every web_fetch tool-result carefully.
+        2. Cross-reference: where do sources agree? disagree? what's only in one source?
+        3. Write the final reply in the shape below. Emit it verbatim — no file writes, no preamble, no postscript.
+
+      # Answer
+
+      ## TL;DR
+      One short paragraph (3-5 sentences) answering the question directly. State confidence — high if multiple sources align, medium if one source carries the load, low if sources conflict or coverage is thin.
+
+      ## Detail
+      The full answer in prose, organised by sub-topic rather than by source. Cite sources inline as `[#N]` matching the URL ordering in the manifest; multiple citations as `[#1, #3]`. Quote source-specific terms verbatim when precision matters — you have the raw markdown so quotation is honest.
+
+      ## Sources
+      A numbered list reproducing each URL from the manifest:
+        1. <URL>
+        2. <URL>
+        ...
+
+      Writing rules:
+        - Cite. Every non-trivial claim must point to at least one source by [#N].
+        - Don't fabricate. If the sources don't cover something the question asks about, say so — 'sources don't address X'.
+        - Don't synthesise from absence. If only one source says something, attribute it; don't promote a single-source claim to a consensus.
+        - Be terse. The TL;DR is the headline; the Detail section earns its length only by adding cross-source insight.
+
+  done: {type: exit}
+
+edges:
+  - {from: start, to: research}
+  - {from: research, to: done, outcome: fail}
+  - {from: research, to: synthesize}
+  - {from: synthesize, to: done}

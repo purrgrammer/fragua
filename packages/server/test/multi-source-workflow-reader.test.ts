@@ -28,11 +28,11 @@ async function setup(): Promise<Fixture> {
   await mkdir(join(projectAlpha, ".swarm", "workflows"), { recursive: true });
   await mkdir(join(projectBeta, ".swarm", "workflows"), { recursive: true });
 
-  await writeFile(join(globalDir, "shared.dot"), 'digraph shared { graph [ label = "Global shared" ] }\n');
-  await writeFile(join(projectAlpha, ".swarm", "workflows", "alpha-only.dot"), "digraph aonly { a -> b }\n");
-  await writeFile(join(projectBeta, ".swarm", "workflows", "beta-only.dot"), "digraph bonly { x -> y }\n");
+  await writeFile(join(globalDir, "shared.yaml"), 'digraph shared { graph [ label = "Global shared" ] }\n');
+  await writeFile(join(projectAlpha, ".swarm", "workflows", "alpha-only.yaml"), "digraph aonly { a -> b }\n");
+  await writeFile(join(projectBeta, ".swarm", "workflows", "beta-only.yaml"), "digraph bonly { x -> y }\n");
   // Name collision across sources: `shared` exists globally + in alpha.
-  await writeFile(join(projectAlpha, ".swarm", "workflows", "shared.dot"), "digraph shared { z -> w }\n");
+  await writeFile(join(projectAlpha, ".swarm", "workflows", "shared.yaml"), "digraph shared { z -> w }\n");
 
   const store = new SqliteStore({ path: ":memory:" });
   store.saveWorkflow("wf_sha_test", "noop", "digraph G { a -> b }");

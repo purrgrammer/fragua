@@ -37,8 +37,8 @@ describe("GET /workflows", () => {
 
   test("emits name, path, sha, optional label for each workflow", async () => {
     const items: WorkflowSummary[] = [
-      { name: "a", path: "workflows/a.dot", sha: "abc1234", label: "Alpha" },
-      { name: "b", path: "workflows/b.dot", sha: "def5678" },
+      { name: "a", path: "workflows/a.yaml", sha: "abc1234", label: "Alpha" },
+      { name: "b", path: "workflows/b.yaml", sha: "def5678" },
     ];
     const app = createServer({
       store: freshStore(),
@@ -48,8 +48,8 @@ describe("GET /workflows", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as WorkflowSummary[];
     expect(body.length).toBe(2);
-    expect(body[0]).toEqual({ name: "a", path: "workflows/a.dot", sha: "abc1234", label: "Alpha" });
-    expect(body[1]).toEqual({ name: "b", path: "workflows/b.dot", sha: "def5678" });
+    expect(body[0]).toEqual({ name: "a", path: "workflows/a.yaml", sha: "abc1234", label: "Alpha" });
+    expect(body[1]).toEqual({ name: "b", path: "workflows/b.yaml", sha: "def5678" });
   });
 });
 
@@ -59,12 +59,16 @@ describe("createFsWorkflowReader", () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "swarm-wf-"));
     await writeFile(
-      join(dir, "alpha.dot"),
-      'digraph alpha {\n  graph [ label = "Alpha workflow" ]\n  start [shape=Mdiamond]\n}\n',
+      join(dir, "alpha.yaml"),
+      'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',
       "utf8",
     );
-    await writeFile(join(dir, "beta.dot"), "digraph beta {\n  start [shape=Mdiamond]\n}\n", "utf8");
-    // Non-dot files must be ignored.
+    await writeFile(
+      join(dir, "beta.yaml"),
+      "name: beta\nnodes:\n  start: {type: start}\nedges: []\n",
+      "utf8",
+    );
+    // Non-yaml files must be ignored.
     await writeFile(join(dir, "README.md"), "not a workflow\n", "utf8");
   });
 
@@ -72,7 +76,7 @@ describe("createFsWorkflowReader", () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  test("scans *.dot files, computes short sha, extracts label, sorts by name", async () => {
+  test("scans *.yaml files, computes short sha, extracts label, sorts by name", async () => {
     const reader = createFsWorkflowReader({ workflowsDir: dir });
     const list = await reader.list();
     expect(list.length).toBe(2);
@@ -82,7 +86,7 @@ describe("createFsWorkflowReader", () => {
     expect(list[1]?.label).toBeUndefined();
     for (const w of list) {
       expect(w.sha).toMatch(/^[0-9a-f]{7}$/);
-      expect(w.path.endsWith(".dot")).toBe(true);
+      expect(w.path.endsWith(".yaml")).toBe(true);
     }
   });
 
@@ -97,7 +101,7 @@ describe("GET /workflows/:name", () => {
   test("returns 200 + full detail (summary + source) when the workflow exists", async () => {
     const detail = {
       name: "alpha",
-      path: "workflows/alpha.dot",
+      path: "workflows/alpha.yaml",
       sha: "abc1234",
       label: "Alpha",
       source: "digraph alpha {\n  start [shape=Mdiamond]\n}\n",
@@ -146,8 +150,8 @@ describe("createFsWorkflowReader.read", () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "swarm-wf-read-"));
     await writeFile(
-      join(dir, "alpha.dot"),
-      'digraph alpha {\n  graph [ label = "Alpha workflow" ]\n  start [shape=Mdiamond]\n}\n',
+      join(dir, "alpha.yaml"),
+      'name: alpha\nlabel: "Alpha workflow"\nnodes:\n  start: {type: start}\nedges: []\n',
       "utf8",
     );
   });
@@ -156,15 +160,15 @@ describe("createFsWorkflowReader.read", () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  test("returns the full DOT source plus summary metadata", async () => {
+  test("returns the full YAML source plus summary metadata", async () => {
     const reader = createFsWorkflowReader({ workflowsDir: dir });
     const detail = await reader.read("alpha");
     expect(detail).toBeDefined();
     expect(detail?.name).toBe("alpha");
     expect(detail?.label).toBe("Alpha workflow");
     expect(detail?.sha).toMatch(/^[0-9a-f]{7}$/);
-    expect(detail?.source).toContain("digraph alpha");
-    expect(detail?.source).toContain("Mdiamond");
+    expect(detail?.source).toContain("name: alpha");
+    expect(detail?.source).toContain("type: start");
   });
 
   test("returns undefined for an unknown workflow (no throw)", async () => {

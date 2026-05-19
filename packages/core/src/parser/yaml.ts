@@ -285,6 +285,22 @@ export function parseWorkflow(source: string): Graph {
       locOf: (k) => nodeAttrLocs.get(k) ?? { line: 0, col: 0 },
     });
     attrs.shape = shape;
+    // Lower the YAML discriminator to the engine's pre-cutover kind
+    // vocabulary (`codergen` / `human` / `tool`). The author writes
+    // `type: llm` but internally we still call it `codergen` until
+    // Phase 2 retires `kind` outright. Setting both `kind` and `type`
+    // here means handlerOf() resolves correctly without depending on
+    // SHAPE_TO_KIND back-derivation, and the validator's E025
+    // shape/kind-contradiction check passes.
+    if (typeStr === "llm") {
+      attrs.kind = "codergen";
+      attrs.type = "codergen";
+    } else if (typeStr === "human" || typeStr === "tool") {
+      attrs.kind = typeStr;
+      attrs.type = typeStr;
+    } else if (typeStr === "start" || typeStr === "exit") {
+      attrs.type = typeStr;
+    }
 
     nodes[nodeId] = {
       id: nodeId,

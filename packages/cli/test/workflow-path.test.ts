@@ -25,45 +25,45 @@ describe("resolveWorkflow", () => {
   });
 
   test("bare name in global wins", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.dot"), "digraph foo {}", "utf8");
+    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
-      dotPath: resolve(home, ".swarm/workflows/foo.dot"),
+      dotPath: resolve(home, ".swarm/workflows/foo.yaml"),
       name: "foo",
       scope: "global",
     });
   });
 
   test("bare name falls back to project when global misses", async () => {
-    await writeFile(join(cwd, ".swarm/workflows/foo.dot"), "digraph foo {}", "utf8");
+    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
-      dotPath: resolve(cwd, ".swarm/workflows/foo.dot"),
+      dotPath: resolve(cwd, ".swarm/workflows/foo.yaml"),
       name: "foo",
       scope: "local",
     });
   });
 
   test("global wins over local when both exist", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.dot"), "digraph foo {}", "utf8");
-    await writeFile(join(cwd, ".swarm/workflows/foo.dot"), "digraph different {}", "utf8");
+    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
+    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "digraph different {}", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r?.scope).toBe("global");
-    expect(r?.dotPath).toBe(resolve(home, ".swarm/workflows/foo.dot"));
+    expect(r?.dotPath).toBe(resolve(home, ".swarm/workflows/foo.yaml"));
   });
 
   test("explicit relative path resolves against cwd", async () => {
-    await writeFile(join(cwd, "scratch.dot"), "digraph scratch {}", "utf8");
-    const r = await resolveWorkflow(cwd, "./scratch.dot", { homeDir: home });
+    await writeFile(join(cwd, "scratch.yaml"), "digraph scratch {}", "utf8");
+    const r = await resolveWorkflow(cwd, "./scratch.yaml", { homeDir: home });
     expect(r).toEqual({
-      dotPath: resolve(cwd, "scratch.dot"),
+      dotPath: resolve(cwd, "scratch.yaml"),
       name: "scratch",
       scope: "path",
     });
   });
 
   test("explicit absolute path resolves directly", async () => {
-    const abs = resolve(cwd, "abs.dot");
+    const abs = resolve(cwd, "abs.yaml");
     await writeFile(abs, "digraph abs {}", "utf8");
     const r = await resolveWorkflow(cwd, abs, { homeDir: home });
     expect(r?.scope).toBe("path");
@@ -75,6 +75,6 @@ describe("resolveWorkflow", () => {
   });
 
   test("missing path → null", async () => {
-    expect(await resolveWorkflow(cwd, "./missing.dot", { homeDir: home })).toBeNull();
+    expect(await resolveWorkflow(cwd, "./missing.yaml", { homeDir: home })).toBeNull();
   });
 });

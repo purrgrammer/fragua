@@ -1,6 +1,6 @@
 // `swarm validate <workflow>` — parse + lint a workflow without executing.
 // `<workflow>` resolves the same way `swarm run` does: bare name looks up
-// `<cwd>/.swarm/workflows/<name>.dot`, anything pathy is read directly.
+// `<cwd>/.swarm/workflows/<name>.yaml`, anything pathy is read directly.
 
 import { readFile } from "node:fs/promises";
 import { validateWorkflowModels } from "@swarm/agent";
@@ -14,7 +14,7 @@ export async function validateCommand(workflow: string): Promise<number> {
   if (resolved == null) {
     console.error(
       chalk.red(
-        `validate: workflow not found: ${workflow} (looked in .swarm/workflows/${workflow}.dot, then as a path)`,
+        `validate: workflow not found: ${workflow} (looked in .swarm/workflows/${workflow}.yaml, then as a path)`,
       ),
     );
     return 1;

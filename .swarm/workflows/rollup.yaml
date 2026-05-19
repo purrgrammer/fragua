@@ -1,0 +1,108 @@
+# rollup.yaml — periodic senior-engineer post-mortem.
+#
+# A dedicated `collect` llm runs `.swarm/scripts/rollup/latest.ts` via
+# the bash tool — the script pulls the latest terminal run of each drift
+# workflow (structural-drift, narrative-drift, analyze) and a fresh health
+# snapshot. `synthesize` then produces a prioritised findings table + Idea /
+# Architecture / Execution ratings + top recommendations from that snapshot.
+# `verify` is the goal-gated reviewer; all three share `thread_id: rollup`.
+#
+# The split keeps the heavy collector off the goal-gate retarget path:
+# `verify` retargets `synthesize`, so a REJECT does not re-run the collector
+# script and re-dump its JSON into the thread.
+#
+#   bun run swarm run rollup
+#
+# Cadence: weekly. Pairs with the per-probe cadences:
+#   structural-drift  — daily
+#   narrative-drift   — weekly
+#   health            — hourly (for trend storage; rollup re-runs it inline)
+#   analyze           — daily (already scheduled in this project)
+
+name: rollup
+goal: Consume the latest terminal run of each drift workflow + a fresh health snapshot; produce a prioritised findings table, Idea/Architecture/Execution ratings, and top recommendations.
+label: rollup
+budget_usd: 3.50
+budget_policy: warn
+max_goal_gate_retries: 2
+
+nodes:
+  start: {type: start}
+
+  collect:
+    type: llm
+    llm_provider: anthropic
+    llm_model: claude-haiku-4-5
+    thread_id: rollup
+    allowed_tools: [bash]
+    max_cost_usd: 0.10
+    prompt: |
+      Run `bun .swarm/scripts/rollup/latest.ts $ARGUMENTS` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
+
+      If the script exits non-zero or returns malformed JSON, call the `abort` tool with reason `collector failed: <exit code or parse error>`.
+
+      Otherwise reply with EXACTLY: `collected`.
+
+  synthesize:
+    type: llm
+    llm_provider: anthropic
+    llm_model: claude-opus-4-7
+    reasoning_effort: high
+    thread_id: rollup
+    allowed_tools: [read]
+    max_cost_usd: 2.50
+    prompt: |
+      Final assessment across the latest terminal run of each drift workflow plus a fresh operational-health snapshot.
+
+      The collector snapshot contains `drift[]` (one entry per workflow: structural-drift, narrative-drift, analyze) and `health` (operational metrics).
+
+      Each `drift[].output` is the full assistant message from that workflow's most recent terminal run — a markdown findings table (or a 'no findings' notice). Quote findings VERBATIM. Do not invent terms, rephrase, or paraphrase. If a finding is unclear or appears to reference something that is not a real code/doc symbol, flag it `[unclear — verify]` and pass it through unchanged rather than guessing.
+
+      If `drift[].output` is null or `drift[].run` is null, the corresponding workflow has no recent terminal run — record a CADENCE gap (HIGH severity) noting the workflow needs to run, do NOT fabricate findings.
+
+      `health.snapshot` is the health probe JSON: `db_status` (ok / missing / empty), `window` (last 7 days), `metrics[]` each with id / label (OK | WATCH | ALERT) / value / note, and `worst_label`. Treat its labels as authoritative — don't relabel. If `health.error` is set, surface it under operational health as HIGH.
+
+      Produce three sections in your final assistant message:
+
+      1. Findings — every drift + health finding from all sources, grouped by severity (CRITICAL / HIGH / MEDIUM / LOW), with file:line refs. Tabular. Keep skill-drift findings (rows from narrative-drift's `## skill:<name>` subagents) as a labelled subgroup so swarm-* skill rot is visible at a glance. Include CADENCE rows for missing runs.
+
+      2. Ratings — Idea / Architecture / Execution out of 10. Two sentences of rationale per axis grounded in the findings above (cite specific finding IDs). Do not anchor on prior scores; score from the evidence in this snapshot.
+
+      3. Top recommendations — 3 to 5 prioritised actions ordered by leverage. Each: one-line action; why it is load-bearing; rough scope (hours / days / weeks); whether a new proposal is warranted under docs/proposals/.
+
+      Senior-engineer post-mortem tone. No emoji. No marketing language. File:line backing beats hand-wavy claims; flag low-confidence calls explicitly.
+
+  verify:
+    type: llm
+    llm_provider: anthropic
+    llm_model: claude-opus-4-7
+    reasoning_effort: high
+    thread_id: rollup
+    goal_gate: true
+    retry_target: synthesize
+    max_cost_usd: 0.75
+    allowed_tools: [read]
+    prompt: |
+      Evidence-quality gate for the synthesise report. Judge it on its own merits.
+
+      Check against four invariants. Treat each as pass/fail; do not paraphrase weaknesses into prose.
+
+      1. Every Finding row cites a source file:line reference OR an explicit absence note (no occurrence in <path>, not present in <module>, etc.). A bare claim with no anchor is a fail.
+
+      2. Every CADENCE row names the specific workflow whose recent run is missing (e.g. `CADENCE: narrative-drift — no terminal run in window`). A CADENCE row that doesn't name a workflow is a fabricated gap — fail.
+
+      3. Top recommendations each have a rough scope populated (hours / days / weeks). Missing scope on any recommendation is a fail.
+
+      4. Idea / Architecture / Execution ratings each have rationale that cites specific finding IDs from the report. Ratings whose rationale is generic prose with no finding-ID anchor are a fail.
+
+      If all four invariants pass, reply with EXACTLY the single word APPROVE and nothing else. If any invariant fails, call the abort tool with reason `REJECT: <one-line summary of the worst violation>`. Do not rewrite the report. Do not soften failures.
+
+  done: {type: exit}
+
+edges:
+  - {from: start, to: collect}
+  - {from: collect, to: done, outcome: fail}
+  - {from: collect, to: synthesize}
+  - {from: synthesize, to: done, outcome: fail}
+  - {from: synthesize, to: verify}
+  - {from: verify, to: done}
