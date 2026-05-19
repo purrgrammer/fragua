@@ -98,10 +98,10 @@ nodes:
         - Don't synthesise from absence. If only one source says something, attribute it; don't promote a single-source claim to a consensus.
         - Be terse. The TL;DR is the headline; the Detail section earns its length only by adding cross-source insight.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: research}
-  - {from: research, to: done, outcome: fail}
+  - {from: research, to: exit, outcome: fail}
   - {from: research, to: synthesize}
-  - {from: synthesize, to: done}
+  - {from: synthesize, to: exit}

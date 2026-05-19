@@ -442,6 +442,8 @@ Common codes:
 - **E024** — two edges from the same source share the same `outcome=` or `route=` value.
 - **E025** — explicit `kind=` contradicts the shape's `SHAPE_TO_KIND` mapping.
 - **E026** — `text=` on a non-human node.
+- **E027** — `summary=` set without a `thread_id` (summarising nothing).
+- **E028** — node id `exit` reserved for the graceful-halt sink; declare as `type: exit` or rename.
 - **W007** — `goal_gate=true` with no retarget chain.
 - **W011** — bare `model=` / `provider=` (use `llm_model=` / `llm_provider=`).
 - **W013** — unrecognised attribute name (typo source).

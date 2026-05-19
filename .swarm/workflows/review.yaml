@@ -158,14 +158,14 @@ nodes:
 
       If any fail, call the `abort` tool with reason `REJECT: <one-line summary of the worst violation>`.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: scope}
-  - {from: scope, to: done, outcome: fail}
+  - {from: scope, to: exit, outcome: fail}
   - {from: scope, to: dispatch}
-  - {from: dispatch, to: done, outcome: fail}
+  - {from: dispatch, to: exit, outcome: fail}
   - {from: dispatch, to: synthesize}
-  - {from: synthesize, to: done, outcome: fail}
+  - {from: synthesize, to: exit, outcome: fail}
   - {from: synthesize, to: verify}
-  - {from: verify, to: done}
+  - {from: verify, to: exit}

@@ -37,10 +37,10 @@ nodes:
     prompt: |
       Inspect the user message you just received. If it contains a literal `<swarm-context summary="medium">` opening tag, reply with EXACTLY one line: SAW_SUMMARY. Otherwise reply with EXACTLY one line: SAW_RAW. No other text.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: emit}
-  - {from: emit, to: done, outcome: fail}
+  - {from: emit, to: exit, outcome: fail}
   - {from: emit, to: consume}
-  - {from: consume, to: done}
+  - {from: consume, to: exit}

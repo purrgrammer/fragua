@@ -136,12 +136,12 @@ nodes:
 
       If it fails, call the `abort` tool with reason `REJECT: <one-line reason>`.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: collect}
-  - {from: collect, to: done, outcome: fail}
+  - {from: collect, to: exit, outcome: fail}
   - {from: collect, to: audit}
-  - {from: audit, to: done, outcome: fail}
+  - {from: audit, to: exit, outcome: fail}
   - {from: audit, to: review}
-  - {from: review, to: done}
+  - {from: review, to: exit}

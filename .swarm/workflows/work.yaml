@@ -137,36 +137,36 @@ nodes:
 
       Else: `git add` explicit paths (group related files; multi-package work may warrant multiple commits, one per logical chunk), commit each with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha or sha list>`. Don't push.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: triage}
 
   - {from: triage, to: plan, route: small,   label: "Small change"}
   - {from: triage, to: plan, route: feature, label: "Feature scope"}
-  - {from: triage, to: done, route: blocked, label: "Blocked"}
+  - {from: triage, to: exit, route: blocked, label: "Blocked"}
 
-  - {from: plan, to: done, outcome: fail}
+  - {from: plan, to: exit, outcome: fail}
   - {from: plan, to: implement}
 
-  - {from: implement, to: done, outcome: fail}
+  - {from: implement, to: exit, outcome: fail}
   - {from: implement, to: review}
 
-  - {from: review, to: done, outcome: fail}
+  - {from: review, to: exit, outcome: fail}
   - {from: review, to: format}
 
-  - {from: format, to: done, outcome: fail}
+  - {from: format, to: exit, outcome: fail}
   - {from: format, to: needs_human}
 
   - {from: needs_human, to: ci,      route: no,  label: "Auto-promote"}
   - {from: needs_human, to: approve, route: yes, label: "Needs human"}
 
   - {from: approve, to: ci,   route: yes,   label: "Promote"}
-  - {from: approve, to: done, route: no,    label: "Send back"}
-  - {from: approve, to: done, route: defer, label: "Defer"}
+  - {from: approve, to: exit, route: no,    label: "Send back"}
+  - {from: approve, to: exit, route: defer, label: "Defer"}
 
   - {from: ci, to: commit, outcome: success}
   - {from: ci, to: fix,    outcome: fail}
   - {from: fix, to: ci}
 
-  - {from: commit, to: done}
+  - {from: commit, to: exit}

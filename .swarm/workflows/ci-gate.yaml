@@ -16,12 +16,12 @@ nodes:
   typecheck: {type: tool, tool_command: "bun run --filter='*' typecheck"}
   test:      {type: tool, tool_command: "bun test $ARGUMENTS"}
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: lint}
   - {from: lint, to: typecheck, outcome: success}
-  - {from: lint, to: done, outcome: fail}
+  - {from: lint, to: exit, outcome: fail}
   - {from: typecheck, to: test, outcome: success}
-  - {from: typecheck, to: done, outcome: fail}
-  - {from: test, to: done}
+  - {from: typecheck, to: exit, outcome: fail}
+  - {from: test, to: exit}

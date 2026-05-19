@@ -252,6 +252,22 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
+  // E028: `exit` is reserved as the canonical graceful-halt sink. A node
+  // named `exit` must declare `type: exit` — any other type would shadow
+  // the reserved name and confuse readers (and a future implicit-sink
+  // implementation that bypasses declaration entirely).
+  for (const n of nodes) {
+    if (n.id !== "exit") continue;
+    if (n.shape === "Msquare") continue;
+    diags.push({
+      severity: "error",
+      code: "E028",
+      message: `node id "exit" is reserved for the graceful-halt sink — declare it as \`type: exit\` or rename`,
+      nodeId: n.id,
+      ...(n.loc !== undefined ? { loc: n.loc } : {}),
+    });
+  }
+
   // E009: human node needs ≥1 outgoing edge — otherwise the operator has
   // no choices. Human nodes declare those choices via routes= (for the
   // route-discriminated model) or bare edges; either way an edgeless human

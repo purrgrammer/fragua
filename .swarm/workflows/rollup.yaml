@@ -97,12 +97,12 @@ nodes:
 
       If all four invariants pass, reply with EXACTLY the single word APPROVE and nothing else. If any invariant fails, call the abort tool with reason `REJECT: <one-line summary of the worst violation>`. Do not rewrite the report. Do not soften failures.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: collect}
-  - {from: collect, to: done, outcome: fail}
+  - {from: collect, to: exit, outcome: fail}
   - {from: collect, to: synthesize}
-  - {from: synthesize, to: done, outcome: fail}
+  - {from: synthesize, to: exit, outcome: fail}
   - {from: synthesize, to: verify}
-  - {from: verify, to: done}
+  - {from: verify, to: exit}

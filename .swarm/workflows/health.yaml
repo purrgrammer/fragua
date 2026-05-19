@@ -37,8 +37,8 @@ nodes:
 
       Quote the script's labels verbatim. If `db_status` is `missing` or `empty`, surface that under Status and skip the Metrics table.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: snapshot}
-  - {from: snapshot, to: done}
+  - {from: snapshot, to: exit}

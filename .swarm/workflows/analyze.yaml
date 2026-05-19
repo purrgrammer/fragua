@@ -57,9 +57,9 @@ nodes:
 
       Rules: cite numbers not vibes; one run = low confidence, probably skip; a wanted-but-absent signal goes under a final '## Signals not collected'.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: analyze}
-  - {from: analyze, to: done, outcome: fail}
-  - {from: analyze, to: done}
+  - {from: analyze, to: exit, outcome: fail}
+  - {from: analyze, to: exit}

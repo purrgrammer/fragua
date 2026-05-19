@@ -54,10 +54,10 @@ nodes:
     prompt: |
       Synthesize a final answer from the sub-agent results. Reconcile conflicts; write ONE unified answer that addresses $ARGUMENTS. Don't list reports — produce a unified result.
 
-  done: {type: exit}
+  exit: {type: exit}
 
 edges:
   - {from: start, to: orchestrate}
-  - {from: orchestrate, to: done, outcome: fail}
+  - {from: orchestrate, to: exit, outcome: fail}
   - {from: orchestrate, to: synthesize}
-  - {from: synthesize, to: done}
+  - {from: synthesize, to: exit}

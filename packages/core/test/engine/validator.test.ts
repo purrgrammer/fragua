@@ -123,6 +123,27 @@ describe("validate", () => {
     expect(diags.find((d) => d.code === "E006")).toBeUndefined();
   });
 
+  test("E028: node id `exit` reserved unless type:exit", () => {
+    const diags = validate(
+      parseYaml(
+        ["name: g", "nodes:", "  start: {type: start}", "  exit: {type: llm, prompt: hi}", "edges:", "  - {from: start, to: exit}", ""].join("\n"),
+      ),
+    );
+    const e028 = diags.find((d) => d.code === "E028");
+    expect(e028).toBeDefined();
+    expect(e028?.severity).toBe("error");
+    expect(e028?.nodeId).toBe("exit");
+  });
+
+  test("E028 not raised for the canonical `exit: {type: exit}` declaration", () => {
+    const diags = validate(
+      parseYaml(
+        ["name: g", "nodes:", "  start: {type: start}", "  exit: {type: exit}", "edges:", "  - {from: start, to: exit}", ""].join("\n"),
+      ),
+    );
+    expect(diags.some((d) => d.code === "E028")).toBe(false);
+  });
+
   test("strict mode promotes warnings to errors", () => {
     const diags = validate(
       parseWorkflow(`
