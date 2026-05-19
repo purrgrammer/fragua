@@ -63,23 +63,25 @@ export interface SummarySeed {
   /** Text to prepend to the user prompt. Empty string means "no seed". */
   seed: string;
   /** Soft warnings to surface as `agent.warning` events. Non-fatal — the
-   * run continues with the best-effort seed. */
+   * run continues with the best-effort behaviour. */
   warnings: string[];
 }
 
-const DEFAULT_FALLBACK_TEXT_CAP = 600;
-
 /** Build the user-prompt seed when a node has opted into summarisation.
  *
- * - When `summary` is undefined → empty seed (raw thread is hydrated
+ * Behaviour is deliberately minimal — when a seed exists, it is exactly
+ * `<swarm-context summary="<level>">\n<text>\n</swarm-context>` and
+ * nothing else. No goal / run-id / role-census framing; the receiving
+ * agent has the workflow goal in its system prompt and the run id on
+ * every event envelope.
+ *
+ * - `summary === undefined` → empty seed (raw thread is hydrated
  *   separately via `shouldHydrateFromStore`; nothing to inject).
- * - When `summary` is set AND there's prior content AND a summariser is
- *   wired → make a real summariser call; the call emits its own events
- *   under a synthetic node id (cost.recorded + summary.*) so run cost
- *   attribution rolls up automatically.
- * - When `summary` is set but no summariser is wired OR the call fails →
- *   fall back to a deterministic template (role census + most-recent
- *   assistant text) and surface a soft warning. */
+ * - `priorMessages.length === 0` → empty seed (nothing to summarise).
+ * - Summariser wired + succeeds → seed wraps the summariser output.
+ * - Summariser unwired OR fails → empty seed + soft warning; the raw
+ *   thread is still hydrated, so the receiving node degrades to
+ *   uncompressed history rather than a fabricated template. */
 export async function buildSummarySeed(params: {
   summary: SummaryLevel | undefined;
   graphGoal: string | undefined;
@@ -94,12 +96,9 @@ export async function buildSummarySeed(params: {
 }): Promise<SummarySeed> {
   const { summary, graphGoal, runId, priorMessages } = params;
   if (summary === undefined) return { seed: "", warnings: [] };
+  if (priorMessages.length === 0) return { seed: "", warnings: [] };
 
-  const goalLine = graphGoal ? `Goal: ${graphGoal}` : "Goal: (unspecified)";
-  const runLine = `Run: ${runId}`;
-  const priorCount = priorMessages.length;
-
-  if (params.summariser && priorCount > 0 && params.callerNodeId) {
+  if (params.summariser && params.callerNodeId) {
     const syntheticNodeId = summarySyntheticNodeId(params.callerNodeId, params.iteration);
     const maxOutputTokens = summary === "high" ? 1500 : summary === "medium" ? 700 : 300;
     const transcriptForSummariser = renderTranscriptForSummariser(priorMessages);
@@ -119,31 +118,19 @@ export async function buildSummarySeed(params: {
     };
     const out = await params.summariser.summarise(built);
     if (out.ok && out.text.length > 0) {
-      const seed = [
-        `<swarm-context summary="${summary}">`,
-        goalLine,
-        runLine,
-        `Prior turns: ${priorCount}. Summariser: ${out.provider}/${out.model}.`,
-        `<summariser-narrative>`,
-        out.text,
-        `</summariser-narrative>`,
-        `</swarm-context>`,
-      ].join("\n");
-      return { seed, warnings: [] };
+      return { seed: `<swarm-context summary="${summary}">\n${out.text}\n</swarm-context>`, warnings: [] };
     }
     return {
-      seed: buildFallbackSeed(summary, goalLine, runLine, priorMessages, DEFAULT_FALLBACK_TEXT_CAP),
+      seed: "",
       warnings: [
-        `summary="${summary}" summariser failed (${out.error ?? "unknown error"}). Falling back to deterministic template.`,
+        `summary="${summary}" summariser failed (${out.error ?? "unknown error"}); falling back to raw thread.`,
       ],
     };
   }
 
   return {
-    seed: buildFallbackSeed(summary, goalLine, runLine, priorMessages, DEFAULT_FALLBACK_TEXT_CAP),
-    warnings: params.summariser
-      ? []
-      : [`summary="${summary}" requested but no summariser backend is wired. Falling back to deterministic template.`],
+    seed: "",
+    warnings: [`summary="${summary}" requested but no summariser backend is wired; falling back to raw thread.`],
   };
 }
 
@@ -158,48 +145,6 @@ function renderTranscriptForSummariser(messages: readonly AgentMessage[]): strin
 }
 
 type SummariseInvocation = Parameters<SummariserBackend["summarise"]>[0];
-
-function buildFallbackSeed(
-  tag: SummaryLevel,
-  goalLine: string,
-  runLine: string,
-  messages: readonly AgentMessage[],
-  textCap: number,
-): string {
-  const body =
-    messages.length === 0
-      ? "No prior turns."
-      : `Prior turns: ${messages.length}. Role census: ${countRoles(messages)
-          .map(([r, n]) => `${r}=${n}`)
-          .join(", ")}.\n${renderTail(messages, textCap)}`;
-  return `<swarm-context summary="${tag}">\n${goalLine}\n${runLine}\n${body}\n</swarm-context>`;
-}
-
-function renderTail(messages: readonly AgentMessage[], textCap: number): string {
-  const tail = extractLatestAssistantText(messages, textCap);
-  if (tail === undefined) return "Most recent assistant text: (none visible)";
-  return `Most recent assistant text (clamped ${textCap} chars):\n<prior-tail>\n${tail}\n</prior-tail>`;
-}
-
-function countRoles(messages: readonly AgentMessage[]): Array<[string, number]> {
-  const counts = new Map<string, number>();
-  for (const m of messages) {
-    const role = typeof (m as { role?: unknown }).role === "string" ? (m as { role: string }).role : "unknown";
-    counts.set(role, (counts.get(role) ?? 0) + 1);
-  }
-  return [...counts.entries()];
-}
-
-function extractLatestAssistantText(messages: readonly AgentMessage[], cap: number): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: string; content?: unknown };
-    if (m?.role !== "assistant") continue;
-    const text = flattenTextContent(m.content);
-    if (text.length === 0) continue;
-    return text.length > cap ? `${text.slice(0, cap)}…` : text;
-  }
-  return undefined;
-}
 
 function flattenTextContent(content: unknown): string {
   if (typeof content === "string") return content;
