@@ -1,19 +1,16 @@
 // Per-file viewer for SkillDetail. Dispatches on the server-asserted
 // Content-Type:
-//   text/markdown → Streamdown (rendered) with a Raw/Rendered toggle
-//   image/*        → inline <img> from a blob URL
-//   text/*         → monospace text
-//   everything else → 16-bytes-per-row hex-dump capped at 4 KB
+//   text/* (incl. markdown) → raw monospace text
+//   image/*                 → inline <img> from a blob URL
+//   everything else         → 16-bytes-per-row hex-dump capped at 4 KB
 //
 // Lazy-loaded via tanstack-query; cache key is `(locId, path)` so
 // re-mounting / clicking back to a file is O(1).
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { Streamdown } from "streamdown";
 import { ApiError } from "../../lib/api.ts";
 import { queries } from "../../lib/queries.ts";
-import { Button } from "../ui/button.tsx";
 
 export interface FileViewerProps {
   locId: string;
@@ -57,43 +54,9 @@ function Loaded({ locId, path }: { locId: string; path: string }): JSX.Element {
 
 function Dispatch({ path, bytes, contentType }: { path: string; bytes: Uint8Array; contentType: string }): JSX.Element {
   const ct = contentType.split(";", 1)[0]?.toLowerCase().trim() ?? "";
-  if (ct === "text/markdown") return <MarkdownView path={path} bytes={bytes} />;
   if (ct.startsWith("image/")) return <ImageView path={path} bytes={bytes} contentType={contentType} />;
   if (ct.startsWith("text/") || ct === "application/json") return <TextView path={path} bytes={bytes} />;
   return <HexDump path={path} bytes={bytes} />;
-}
-
-function MarkdownView({ path, bytes }: { path: string; bytes: Uint8Array }): JSX.Element {
-  const text = useMemo(() => new TextDecoder("utf-8").decode(bytes), [bytes]);
-  const [mode, setMode] = useState<"rendered" | "raw">("rendered");
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="file-viewer-markdown">
-      <Toolbar path={path}>
-        <ToggleGroup
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: "rendered", label: "Rendered" },
-            { value: "raw", label: "Raw" },
-          ]}
-          testId="file-viewer-mode"
-        />
-      </Toolbar>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        {mode === "rendered" ? (
-          <div data-testid="file-viewer-markdown-rendered">
-            <Streamdown className="prose prose-sm max-w-none prose-pre:bg-sw-surface-2 prose-pre:text-sw-text">
-              {text}
-            </Streamdown>
-          </div>
-        ) : (
-          <pre className="font-mono text-xs text-sw-text" data-testid="file-viewer-markdown-raw">
-            {text}
-          </pre>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function ImageView({
@@ -181,35 +144,6 @@ function Toolbar({ path, children }: { path: string; children?: React.ReactNode 
         {path}
       </code>
       {children}
-    </div>
-  );
-}
-
-function ToggleGroup<T extends string>({
-  value,
-  onChange,
-  options,
-  testId,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: ReadonlyArray<{ value: T; label: string }>;
-  testId: string;
-}): JSX.Element {
-  return (
-    <div className="flex gap-1" data-testid={testId}>
-      {options.map((o) => (
-        <Button
-          key={o.value}
-          size="sm"
-          variant={o.value === value ? "default" : "outline"}
-          onClick={() => onChange(o.value)}
-          data-testid={`${testId}-${o.value}`}
-          data-active={o.value === value ? "true" : undefined}
-        >
-          {o.label}
-        </Button>
-      ))}
     </div>
   );
 }

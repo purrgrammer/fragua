@@ -82,4 +82,14 @@ describe("SkillDetail", () => {
     expect(back.getAttribute("href")).toBe("/skills");
     expect(back.textContent).toContain("all skills");
   });
+
+  test("renders the ai-elements FileTree with SKILL.md auto-selected", async () => {
+    installSkillFetch();
+    const { container } = renderWithProviders();
+    // Wait for the tree pane to receive data and render the FileTree.
+    const tree = await waitFor(() => within(container).getByRole("tree"));
+    expect(tree).toBeTruthy();
+    // SKILL.md should be rendered as a tree entry.
+    expect(tree.textContent).toContain("SKILL.md");
+  });
 });

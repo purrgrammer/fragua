@@ -11,10 +11,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { FileTree } from "../components/skills/file-tree.tsx";
+import { FileTree } from "../components/ai-elements/file-tree.tsx";
 import { FileViewer } from "../components/skills/file-viewer.tsx";
 import { EmptyState } from "../components/ui/empty-state.tsx";
 import type { SkillSummary } from "../lib/api.ts";
+import { buildTree, TreeNodeView } from "../lib/file-tree.tsx";
 import { queries } from "../lib/queries.ts";
 
 export function SkillDetail(): JSX.Element {
@@ -38,6 +39,8 @@ export function SkillDetail(): JSX.Element {
       setAutoSelected(true);
     }
   }, [tree.data, autoSelected]);
+
+  const treeRoot = useMemo(() => (tree.data ? buildTree(tree.data.tree) : null), [tree.data]);
 
   if (detail.isPending) {
     return (
@@ -71,7 +74,13 @@ export function SkillDetail(): JSX.Element {
         <aside className="min-h-0 overflow-auto border-r border-sw-border" data-testid="skill-detail-tree-pane">
           {tree.isPending && <p className="p-3 text-xs text-sw-muted">Loading tree…</p>}
           {tree.isError && <p className="p-3 text-xs text-sw-accent-error">Couldn't load tree.</p>}
-          {tree.data && <FileTree entries={tree.data.tree} selectedPath={selectedPath} onSelect={setSelectedPath} />}
+          {treeRoot && (
+            <FileTree selectedPath={selectedPath ?? undefined} onSelect={setSelectedPath}>
+              {treeRoot.children.map((child) => (
+                <TreeNodeView key={child.path} node={child} />
+              ))}
+            </FileTree>
+          )}
         </aside>
         <div className="min-h-0 overflow-auto" data-testid="skill-detail-viewer-pane">
           <FileViewer locId={locId} path={selectedPath} />
