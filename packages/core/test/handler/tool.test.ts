@@ -346,13 +346,40 @@ describe("makeToolHandler — ExecutionEnvironment routing", () => {
     expect(ctx.__artifacts.find((a) => a.key.endsWith(":stdout"))?.content).toBe("from-spawner");
   });
 
-  test("no env, no spawner → falls back to Bun (process.cwd)", async () => {
+  test("no env, no spawner → halts with a clear error (no silent process.cwd fallback)", async () => {
+    // env-required contract: a dispatch without `ctx.env` and without
+    // an explicit `cfg.spawner` must halt rather than spawn against
+    // the daemon's pwd. The fallback we used to have was the
+    // worktree-isolation leak vector — a same-cwd daemon would write
+    // a tool node's edits straight into the main checkout.
     const ctx = stubCtx();
     const spec = makeToolHandler({ toolCommand: "echo no-env-fallback" });
     const result = await spec.handler(ctx);
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") {
+      expect(result.reason).toBe("error");
+      expect(result.detail).toContain("no execution environment");
+    }
+    expect(ctx.__emitted.find((e) => e.type === "tool.completed")).toBeUndefined();
+  });
+
+  test("no env but explicit cfg.spawner → dispatches through the spawner (test escape hatch preserved)", async () => {
+    // The env-required guard must not break the explicit-spawner test
+    // injection point: a test that wants a real subprocess (or a
+    // canned result) without standing up an ExecutionEnvironment
+    // passes `cfg.spawner` and the handler runs to a normal
+    // transition outcome.
+    const ctx = stubCtx();
+    const spec = makeToolHandler({
+      toolCommand: "anything",
+      spawner: fakeSpawner({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+    const result = await spec.handler(ctx);
     expect(result.kind).toBe("transition");
-    const evt = ctx.__emitted.find((e) => e.type === "tool.completed");
-    expect(evt?.payload["cwd"]).toBe(process.cwd());
+    if (result.kind === "transition") {
+      expect(result.outcomeStatus).toBe("success");
+    }
+    expect(ctx.__emitted.some((e) => e.type === "tool.completed")).toBe(true);
   });
 });
 
@@ -404,9 +431,9 @@ describe("makeToolHandler — output streaming", () => {
     expect(reassembled).toBe(big);
   });
 
-  test("no onData is wired when there's no env (Bun fallback path) — chunks aren't emitted", async () => {
-    // Test fallback: explicit spawner takes the place of env.exec, and
-    // the test spawner doesn't synthesise streaming. No tool.output_chunk
+  test("no onData is wired when an explicit spawner replaces env.exec — chunks aren't emitted", async () => {
+    // Explicit `cfg.spawner` takes the place of env.exec; the test
+    // spawner doesn't synthesise streaming. No tool.output_chunk
     // events should fire.
     const ctx = stubCtx();
     const spec = makeToolHandler({

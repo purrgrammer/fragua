@@ -23,9 +23,11 @@
 //   - Execution routes through `ctx.env.exec(...)` when an
 //     `ExecutionEnvironment` is wired (production; isolates per-run
 //     cwd to the worktree, and inherits the env adapter's blocklist
-//     and abort/timeout behaviour). Falls back to `Bun.spawn` against
-//     `process.cwd()` only when no env is available (bare daemon,
-//     unit tests). An explicit `cfg.spawner` overrides both for tests.
+//     and abort/timeout behaviour). An explicit `cfg.spawner`
+//     overrides for tests. A dispatch reaching the handler with
+//     `ctx.env === undefined` AND no `cfg.spawner` halts immediately
+//     — silently spawning against `process.cwd()` is the worktree-leak
+//     vector that motivated the env-required contract.
 //
 //   - AbortSignal is wired: ctx.signal abort → subprocess.kill() (Bun
 //     fallback) or env.exec abort (production path).
@@ -90,10 +92,24 @@ export function makeToolHandler(cfg: ToolConfig): HandlerSpec {
       escapeForShell: true,
     });
 
-    // cwd resolution: prefer the run's ExecutionEnvironment so concurrent
-    // runs each see their own worktree; fall back to the daemon's process
-    // cwd only when no env is wired (tests, bare-LocalEnv daemon).
-    const cwd = ctx.env?.cwd() ?? process.cwd();
+    // cwd resolution: every production dispatch MUST carry `ctx.env`
+    // — the executor wires the run-scoped `ExecutionEnvironment` onto
+    // the HandlerContext so concurrent runs each see their own
+    // worktree. The only legitimate path to a missing env is a test
+    // that supplies an explicit `cfg.spawner` (which bypasses cwd
+    // entirely). Anything else halts: a silent `process.cwd()`
+    // fallback would let a tool node leak edits to the daemon's pwd
+    // (the exact same-cwd worktree-isolation regression that motivated
+    // this contract).
+    if (ctx.env === undefined && explicitSpawner === undefined) {
+      return {
+        kind: "halt",
+        reason: "error",
+        detail:
+          "tool handler: no execution environment wired (this is a bug — every dispatch must carry ctx.env or cfg.spawner)",
+      } satisfies HandlerResult;
+    }
+    const cwd = ctx.env?.cwd() ?? "";
 
     // Per-(nodeId, kind) chunk index counters. Streamed to the UI as
     // `tool.output_chunk` observability events: arrival order is
@@ -217,8 +233,10 @@ function truncateTail(text: string, maxBytes: number): { text: string; truncated
 
 /** Dispatch resolution. Explicit `cfg.spawner` wins (test injection);
  * else `ctx.env.exec` (production worktree path; receives the
- * onData stream); else `runWithBun` against `process.cwd()`
- * (bare-daemon fallback, no streaming). */
+ * onData stream). No `process.cwd()` fallback — the top-of-handler
+ * guard rejects an env-less dispatch before this function is called.
+ * `runWithBun` remains exported as a turnkey `SpawnFn` for tests
+ * that want a real subprocess without standing up an env. */
 async function runCommand(
   command: string,
   signal: AbortSignal,
@@ -236,7 +254,7 @@ async function runCommand(
     });
     return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, durationMs: r.durationMs };
   }
-  return runWithBun(command, signal);
+  throw new Error("tool handler: unreachable — env-less dispatch without spawner should have halted earlier");
 }
 
 function isAbortError(err: unknown): boolean {

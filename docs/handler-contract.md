@@ -49,7 +49,7 @@ Emit an observability event — `agent.*`, `llm.*`, `tool.*`, `cost.recorded`, `
 
 ### `ctx.env?: ExecutionEnvironment`
 
-Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Unset under bare `LocalEnvironment` daemons and most tests; in that case handlers may fall back to a process-cwd default. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
+Per-run shell + filesystem environment. Set by the executor when a `WorktreeProvisioner` is wired — `ctx.env` then points at the run's isolated `git worktree`. Required for every production dispatch: the `tool` graph-step handler (`packages/core/src/handler/handlers/tool.ts`) halts immediately when invoked with `ctx.env === undefined` and no explicit `cfg.spawner`. Silently falling back to `process.cwd()` was the worktree-isolation leak vector under a same-cwd daemon (`bun run swarm harness` from a project root would write tool-node edits straight into the main checkout). The only legitimate env-less path is test code that injects `cfg.spawner` to bypass cwd entirely. Handlers that spawn subprocesses or read files MUST prefer `ctx.env` over `process.cwd()` so concurrent runs don't step on each other. The agent-tools section below covers how `ctx.env` is wrapped in a read-only proxy when the node's narrowed toolset carries no mutator.
 
 ### `ctx.budgetSnapshot?: BudgetSnapshotInput`
 
