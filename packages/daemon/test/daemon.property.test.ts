@@ -204,7 +204,7 @@ describe("P11 — HITL durability across simulated crash", () => {
     dispatcher.register(
       "wf",
       "ask",
-      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
     );
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
@@ -266,7 +266,7 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
     r.dispatcher.register(
       r.workflowSha,
       "ask",
-      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
     );
 
     // Prime: three runs all pause at HITL.

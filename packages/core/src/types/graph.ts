@@ -10,14 +10,14 @@ export type NodeShape =
   | "Mdiamond" // start
   | "Msquare" // exit
   | "box" // codergen (default)
-  | "hexagon" // wait.human
+  | "hexagon" // human
   | "parallelogram"; // tool
 
 export const HANDLER_BY_SHAPE = {
   Mdiamond: "start",
   Msquare: "exit",
   box: "codergen",
-  hexagon: "wait.human",
+  hexagon: "human",
   parallelogram: "tool",
 } as const satisfies Record<NodeShape, string>;
 

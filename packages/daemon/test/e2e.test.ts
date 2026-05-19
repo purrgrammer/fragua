@@ -119,7 +119,12 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     dispatcher.register(
       "wf-sha",
       "ask",
-      handler.makeWaitHumanHandler({ options: [{ key: "A", label: "[A] Approve", to: "__end__" }] }),
+      handler.makeHumanHandler({
+        nodeId: "ask",
+        text: "Approve?",
+        routes: ["A"],
+        edges: [{ route: "A", to: "__end__" }],
+      }),
     );
     const tools = new handler.InMemoryToolRegistry();
     const llmCall: handler.LlmCallFn = async () => ({
@@ -171,7 +176,12 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     dispatcher2.register(
       "wf-sha",
       "ask",
-      handler.makeWaitHumanHandler({ options: [{ key: "A", label: "[A] Approve", to: "__end__" }] }),
+      handler.makeHumanHandler({
+        nodeId: "ask",
+        text: "Approve?",
+        routes: ["A"],
+        edges: [{ route: "A", to: "__end__" }],
+      }),
     );
 
     wakePending(s2);

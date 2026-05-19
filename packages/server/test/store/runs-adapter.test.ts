@@ -339,37 +339,42 @@ describe("runStateToDetail — HITL projection", () => {
     return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
   }
 
-  test("paused_human projects nodeId/label/options from the latest fact.run_paused_human", () => {
+  test("paused_human projects nodeId/text/routes from the latest fact.run_paused_human", () => {
+    // Phase 7 of llm-routing.md changed the fact.run_paused_human
+    // payload from { label, options } to { text, routes }. The
+    // adapter still surfaces hitlLabel + hitlOptions to the web
+    // (transitional shim until Phase 10 web cleanup renames the
+    // fields) by mapping text -> hitlLabel and synthesising option
+    // rows from each route string.
     const state = makeState({ status: "paused_human", currentNode: "review" });
-    const options = [
-      { key: "A", label: "[A] Approve", to: "publish" },
-      { key: "R", label: "[R] Revise", to: "draft" },
-    ];
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
       evWithSeq(2, "fact.node_started", { nodeId: "review" }),
       evWithSeq(3, "fact.run_paused_human", {
         nodeId: "review",
-        label: "Review the draft",
-        options,
+        text: "Review the draft",
+        routes: ["approve", "revise"],
       }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.runStatus).toBe("paused_human");
     expect(detail.hitlNodeId).toBe("review");
     expect(detail.hitlLabel).toBe("Review the draft");
-    expect(detail.hitlOptions).toEqual(options);
+    expect(detail.hitlOptions).toEqual([
+      { key: "approve", label: "approve", to: "" },
+      { key: "revise", label: "revise", to: "" },
+    ]);
   });
 
   test("paused_human with multiple paused events picks the latest one (re-yield after revise)", () => {
     const state = makeState({ status: "paused_human", currentNode: "review" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", label: "first", options: [] }),
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "first", routes: [] }),
       evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
       evWithSeq(3, "fact.run_paused_human", {
         nodeId: "review",
-        label: "second iteration",
-        options: [{ key: "X", label: "X", to: "n" }],
+        text: "second iteration",
+        routes: ["X"],
       }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -382,7 +387,7 @@ describe("runStateToDetail — HITL projection", () => {
     const events: StoredEvent[] = [
       // A stale paused_human from earlier in the run shouldn't leak through
       // when the run has since resumed and is now running again.
-      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", label: "stale", options: [] }),
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", text: "stale", routes: [] }),
       evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
@@ -395,7 +400,7 @@ describe("runStateToDetail — HITL projection", () => {
   test("paused_human tolerates malformed payload (missing fields stay undefined)", () => {
     const state = makeState({ status: "paused_human" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_human", { nodeId: 42, label: null, options: "not an array" }),
+      evWithSeq(1, "fact.run_paused_human", { nodeId: 42, text: null, routes: "not an array" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlNodeId).toBeUndefined();

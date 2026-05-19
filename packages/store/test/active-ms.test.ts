@@ -56,7 +56,7 @@ const NODE_COMPLETED: FactEvent = {
 
 const RUN_PAUSED_HUMAN: FactEvent = {
   type: "fact.run_paused_human",
-  payload: { nodeId: "a", label: "pick", options: [] },
+  payload: { nodeId: "a", text: "pick", routes: [] },
 };
 
 const RUN_RESUMED: FactEvent = {

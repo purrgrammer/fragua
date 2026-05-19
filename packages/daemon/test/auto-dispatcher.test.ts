@@ -33,72 +33,104 @@ describe("autoDispatcherResolver", () => {
     store.close();
   });
 
-  test("hexagon nodes resolve to wait.human", async () => {
+  test("hexagon nodes resolve to human", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
       `digraph {
-         ask [shape=hexagon, prompt="ok?"];
-         end [shape=Msquare];
-         ask -> end;
+         start [shape=Mdiamond]
+         ask [shape=hexagon, text="ok?", routes="yes"]
+         done [shape=Msquare]
+         start -> ask
+         ask -> done [route=yes]
        }`,
     );
 
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
     const spec = dispatcher.get("sha", "ask");
-    expect(spec.kind).toBe("wait.human");
+    expect(spec.kind).toBe("human");
     store.close();
   });
 
-  test("hexagon question text comes from attrs.label (graphviz convention)", async () => {
-    // Authors put question text on `label=` (the visible-name attr in
-    // graphviz). Earlier code only read `prompt=`, so the UI showed
-    // "waiting at <id>" instead of the authored question. Verify both
-    // attrs work, with `label` winning.
+  test("kind=human (box shape with explicit kind) also resolves to human", async () => {
+    // Authoring-time kind= wins over shape-based derivation. A `box`
+    // node with `kind=human` is a valid alias for `shape=hexagon`.
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
       `digraph {
          start [shape=Mdiamond]
-         g1 [shape=hexagon, label="From label"]
-         g2 [shape=hexagon, prompt="From prompt"]
-         g3 [shape=hexagon, label="Label wins", prompt="From prompt"]
+         ask [kind=human, text="?", routes="a,b"]
+         x [shape=box]
          done [shape=Msquare]
-         start -> g1 -> g2 -> g3 -> done
+         start -> ask
+         ask -> x [route=a]
+         ask -> done [route=b]
+         x -> done
+       }`,
+    );
+    const dispatcher = new Dispatcher();
+    dispatcher.setResolver(autoDispatcherResolver({ store }));
+    expect(dispatcher.get("sha", "ask").kind).toBe("human");
+    store.close();
+  });
+
+  test("human node text comes from attrs.text (canonical, beats prompt and label)", async () => {
+    // Phase 7 of llm-routing.md makes `text=` the canonical operator
+    // prompt source on human nodes. `prompt=` / `label=` remain as
+    // fallbacks for partially-migrated graphs; validator E026 catches
+    // text= on non-human nodes.
+    const store = new SqliteStore({ path: ":memory:" });
+    store.saveWorkflow(
+      "sha",
+      "t",
+      `digraph {
+         start [shape=Mdiamond]
+         g1 [shape=hexagon, text="From text", routes="go"]
+         g2 [shape=hexagon, label="From label", routes="go"]
+         g3 [shape=hexagon, prompt="From prompt", routes="go"]
+         g4 [shape=hexagon, text="Text wins", label="From label", prompt="From prompt", routes="go"]
+         done [shape=Msquare]
+         start -> g1
+         g1 -> g2 [route=go]
+         g2 -> g3 [route=go]
+         g3 -> g4 [route=go]
+         g4 -> done [route=go]
        }`,
     );
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
     for (const [id, expected] of [
-      ["g1", "From label"],
-      ["g2", "From prompt"],
-      ["g3", "Label wins"],
+      ["g1", "From text"],
+      ["g2", "From label"],
+      ["g3", "From prompt"],
+      ["g4", "Text wins"],
     ] as const) {
       const spec = dispatcher.get("sha", id);
       const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-      expect(result.kind).toBe("yield_hitl");
-      if (result.kind === "yield_hitl") expect(result.label).toBe(expected);
+      expect(result.kind).toBe("yield_human");
+      if (result.kind === "yield_human") expect(result.text).toBe(expected);
     }
     store.close();
   });
 
-  test("hexagon yield_hitl carries options derived from outgoing edge labels", async () => {
+  test("human node yield_human carries routes derived from attrs.routes", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
       `digraph {
          start [shape=Mdiamond]
-         review [shape=hexagon, prompt="Approve?"]
+         review [shape=hexagon, text="Approve?", routes="approve,revise"]
          publish [shape=box]
          revise [shape=box]
          done [shape=Msquare]
          start -> review
-         review -> publish [label="[A] Approve"]
-         review -> revise [label="[R] Revise"]
+         review -> publish [route=approve, label="Approve"]
+         review -> revise [route=revise, label="Revise"]
          publish -> done
          revise -> done
        }`,
@@ -107,62 +139,32 @@ describe("autoDispatcherResolver", () => {
     dispatcher.setResolver(autoDispatcherResolver({ store }));
     const spec = dispatcher.get("sha", "review");
     const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-    expect(result.kind).toBe("yield_hitl");
-    if (result.kind === "yield_hitl") {
-      expect(result.label).toBe("Approve?");
-      expect(result.options).toHaveLength(2);
-      expect(result.options.map((o) => o.key)).toEqual(["A", "R"]);
-      expect(result.options.map((o) => o.to)).toEqual(["publish", "revise"]);
-      expect(result.options[0]?.label).toBe("[A] Approve");
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") {
+      expect(result.text).toBe("Approve?");
+      expect(result.routes).toEqual(["approve", "revise"]);
     }
     store.close();
   });
 
-  test("hexagon options fall back to first-char of target id when label is unset", async () => {
+  test("human node with duplicate route= on outgoing edges yields a halt spec at runtime", async () => {
+    // Validator E024 catches this at lint time; if a workflow slips
+    // past validation (raw insert, older bug), the auto-dispatcher
+    // must still produce a halt spec with a clear detail rather than
+    // crashing.
     const store = new SqliteStore({ path: ":memory:" });
     store.saveWorkflow(
       "sha",
       "t",
       `digraph {
          start [shape=Mdiamond]
-         gate [shape=hexagon]
-         next [shape=box]
-         done [shape=Msquare]
-         start -> gate
-         gate -> next
-         next -> done
-       }`,
-    );
-    const dispatcher = new Dispatcher();
-    dispatcher.setResolver(autoDispatcherResolver({ store }));
-    const spec = dispatcher.get("sha", "gate");
-    const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
-    expect(result.kind).toBe("yield_hitl");
-    if (result.kind === "yield_hitl") {
-      expect(result.options[0]?.key).toBe("N"); // first char of `next`
-      expect(result.options[0]?.label).toBe("next");
-    }
-    store.close();
-  });
-
-  test("hexagon with duplicate accelerator keys yields a halt spec at runtime", async () => {
-    // Construction-level safeguard — validator catches this at lint
-    // time with E010, but if a workflow somehow slipped past validation
-    // (raw insert, older bug), the auto-dispatcher must still produce a
-    // halt spec with a clear detail rather than crashing the dispatcher.
-    const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow(
-      "sha",
-      "t",
-      `digraph {
-         start [shape=Mdiamond]
-         gate [shape=hexagon]
+         gate [shape=hexagon, text="?", routes="apply"]
          a [shape=box]
          b [shape=box]
          done [shape=Msquare]
          start -> gate
-         gate -> a [label="Approve"]
-         gate -> b [label="Acknowledge"]
+         gate -> a [route=apply]
+         gate -> b [route=apply]
          a -> done
          b -> done
        }`,
@@ -170,11 +172,11 @@ describe("autoDispatcherResolver", () => {
     const dispatcher = new Dispatcher();
     dispatcher.setResolver(autoDispatcherResolver({ store }));
     const spec = dispatcher.get("sha", "gate");
-    expect(spec.kind).toBe("wait.human");
+    expect(spec.kind).toBe("human");
     const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") {
-      expect(result.detail).toMatch(/duplicate accelerator key/);
+      expect(result.detail).toMatch(/duplicate edge for route "apply"/);
       expect(result.detail).toMatch(/gate/);
     }
     store.close();
@@ -198,7 +200,12 @@ describe("autoDispatcherResolver", () => {
     const result = await spec.handler({} as Parameters<typeof spec.handler>[0]);
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") {
-      expect(result.detail).toMatch(/at least one option/);
+      // Without `routes=` the constructor refuses; with `routes=` but
+      // no edges, the constructor refuses on the route-without-edge
+      // path. Either way the dispatcher surfaces a halt with the node
+      // id, not a crash. Here the node has neither, so the empty-route
+      // path fires.
+      expect(result.detail).toMatch(/at least one route|no outgoing edge/);
     }
     store.close();
   });

@@ -63,7 +63,7 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
   const deniedTools = attrs.denied_tools ?? [];
   const contextFiles = attrs.context_files ?? [];
   const routes = Array.isArray(attrs.routes) ? (attrs.routes as string[]) : [];
-  const isHumanNode = attrs.kind === "human" || handler === "wait.human";
+  const isHumanNode = attrs.kind === "human" || handler === "human";
 
   return (
     <aside

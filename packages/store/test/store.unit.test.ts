@@ -798,7 +798,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     const s1 = store.getState(runId)!;
     store.appendFact(
       runId,
-      [{ type: "fact.run_paused_human", payload: { nodeId: "a", label: "p", options: [] } }],
+      [{ type: "fact.run_paused_human", payload: { nodeId: "a", text: "p", routes: [] } }],
       s1.version,
     );
     expect(store.getState(runId)!.status).toBe("paused_human");

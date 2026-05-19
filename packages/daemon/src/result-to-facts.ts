@@ -118,13 +118,13 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
       }
       return facts;
     }
-    case "yield_hitl": {
+    case "yield_human": {
       facts.push({
         type: "fact.run_paused_human",
         payload: {
           nodeId: ctx.state.currentNode ?? "",
-          label: result.label,
-          options: result.options,
+          text: result.text,
+          routes: result.routes,
         },
       });
       return facts;

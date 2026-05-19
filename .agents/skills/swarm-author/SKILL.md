@@ -145,12 +145,12 @@ Each node has a Graphviz shape; the shape picks the handler. Explicit `type="<ha
 | `Mdiamond` | `start` | Lifecycle marker. Exactly one per graph. | — |
 | `Msquare` | `exit` | Lifecycle marker. At least one. | — |
 | `box` (default) | `codergen` | One LLM turn with tools. | `prompt=` |
-| `hexagon` | `wait.human` | Pauses with `fact.run_paused_human`. | `prompt=` |
+| `hexagon` (alias `kind=human`) | `human` | Pauses with `fact.run_paused_human`. | `text=`, `routes=` |
 | `parallelogram` | `tool` | Deterministic shell step. | `tool_command=` |
 
 Concurrent dispatch lives inside a codergen via the `agent` tool, not as a graph shape (see Orchestrator-workers under §1).
 
-Loops and waits aren't primitives. Loops are backward conditional edges (§8). Waits are `wait.human` nodes.
+Loops and waits aren't primitives. Loops are backward conditional edges (§8). Waits are `kind=human` nodes (DOT alias: `shape=hexagon`).
 
 ### Minimal skeleton
 
@@ -376,25 +376,28 @@ Reference the *artifact* (PLAN_REALISED block, drift table, ground-truth report)
 
 ---
 
-## 14. wait.human (HITL nodes)
+## 14. Human nodes (operator gates)
 
-`hexagon`-shaped nodes pause and ask the operator a question. The `fact.run_paused_human` payload carries the node's `prompt` and edge labels as options. The operator resumes with `POST /runs/:id/human { route, note? }`; the structured handler picks the outgoing edge whose label matches by accelerator key.
+A human node pauses and asks the operator to pick one of a closed set of routes. Declare it with `kind=human` (canonical) plus `text=` for the prompt and `routes=` for the closed enum of route names; the DOT alias `shape=hexagon` lowers to the same node kind. The `fact.run_paused_human` payload carries `text` + `routes: string[]`; the web UI renders one button per route. The operator resumes with `POST /runs/:id/human { route, note? }`; the server validates `route` against the declared enum (400 on off-list), the handler re-checks as defense-in-depth, and the executor fires the outgoing edge whose `route=` attribute matches.
 
 ```dot
 signoff [
   shape  = hexagon
-  prompt = "Reviewers found issues. Approve to ship, or reject."
+  kind   = human
+  text   = "Drift report ready. Choose how to proceed."
+  routes = "apply,output_only,reject"
 ]
 
-signoff -> publish [label="[A] Approve"]
-signoff -> draft   [label="[R] Reject"]
+signoff -> apply [route=apply,       label="Apply edits"]
+signoff -> done  [route=output_only, label="Output only — preserve report"]
+signoff -> done  [route=reject]
 ```
 
-Accelerator keys must be unique across the hexagon's outgoing edges (E010).
+**Button label precedence.** The button text is the outgoing edge's `label=` if set, else `humanize(route)` (`output_only` → "Output Only"). Per D6 in `docs/proposals/llm-routing.md`, edge `label=` is pure UX — it never participates in routing. Two edges that share a target (e.g. both `done` in the example above) stay distinct because they carry different `route=` values; the engine's edge-selection Step-0 (route) case picks the right edge.
 
-**Don't** put `condition="context.hitl.<nodeId>=…"` on hexagon edges — that's the legacy codergen-driven path; the structured handler doesn't write `context.hitl.*` for label-routed gates. W004 flags it.
+**Validator rules.** Every declared route must have exactly one outgoing edge with the matching `route=` (E021); `kind=human` requires `routes=` (E022); `goal_gate=true` and `routes=` are mutually exclusive (E023); two edges from the same source can't share a `route=` value (E024).
 
-Keep the prompt to one sentence + the option set the labels imply. For free-text gates, omit edge labels and let a downstream codergen read the operator's input.
+Keep `text` to one sentence + the route set. For free-text gates, omit `routes=` and let a downstream codergen read the operator's input through `intent.steering_requested` instead.
 
 See `swarm-run` §5 for resume mechanics.
 
@@ -479,7 +482,7 @@ Run twice if you have the budget — once cold, once with prior artifacts cleare
 - **Don't re-invent the `abort` tool.** Force-included on every codergen node; downstream edges route on `outcome=fail`.
 - **Don't conditionally route on `outcome=error`.** States are `success` and `fail`. `fact.run_halted { reason:"error" }` is terminal, not edge-eligible.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Edits apply to future runs.
-- **Don't use legacy `context.hitl.<id>=…` on hexagon edges.** W004. Use `[K] Label`.
+- **Don't put `condition="context.hitl.<id>=…"` on human-node edges.** The condition DSL is being retired; route human-node edges with `route=<name>` against the source's `routes=` declaration instead. See §14.
 - **Don't pair `goal_gate=true` with no retarget.** W007.
 - **Don't use a tool node to gather data for a downstream codergen.** Tool nodes are side-effect-only. If you need to run a deterministic script and reason about its output, call the script from inside a codergen's `bash` tool — the codergen reads stdout in its own context. The `collect → analyze` (tool → codergen) chain is the anti-pattern that motivated retiring `$<node>.output` substitution.
 - **Don't run a heavy collector inside the same node that's a goal-gate retarget target.** Each retarget re-runs the collector and re-dumps its (often large) JSON into the thread, multiplying tokens for no information gain. Split `collect` into its own codergen node sharing `thread_id` with the analyser — the bash tool result stays in the thread across retries while only the analyser re-runs. Reference: `narrative-drift.dot`, `structural-drift.dot`.
@@ -521,7 +524,12 @@ digraph NAME {
 
   ci [shape=parallelogram, tool_command="bun run ci", max_retries=5]
 
-  signoff [shape=hexagon, prompt="Approve to ship, or reject."]
+  signoff [
+    shape  = hexagon
+    kind   = human
+    text   = "Approve to ship, or reject."
+    routes = "approve,reject"
+  ]
 
   done [shape=Msquare]
 
@@ -532,8 +540,8 @@ digraph NAME {
 
   ci -> signoff [condition="outcome=success"]
   ci -> done    [condition="outcome=fail"]
-  signoff -> done [label="[A] Approve"]
-  signoff -> done [label="[R] Reject"]
+  signoff -> done [route=approve, label="Approve"]
+  signoff -> done [route=reject,  label="Reject"]
 }
 ```
 

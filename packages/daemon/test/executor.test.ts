@@ -669,7 +669,7 @@ describe("executor — HITL yield and resume", () => {
     r.dispatcher.register(
       r.workflowSha,
       "ask",
-      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
     );
     enqueue(r, "run3", "ask");
     r.store.claimNextRun(1);

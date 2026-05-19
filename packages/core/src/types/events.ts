@@ -52,7 +52,7 @@ export interface NodeCompletedData {
  * (start, exit, conditional, fan_in) simply omit them.
  */
 export interface NodeStartedData {
-  /** Handler key — `codergen`, `loop`, `wait.human`, `parallel`, ... */
+  /** Handler key — `codergen`, `loop`, `human`, `parallel`, ... */
   node_type?: string;
   /** Raw `node.attrs.prompt` before any substitution. */
   prompt_template?: string;

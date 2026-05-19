@@ -123,23 +123,31 @@ return {
 
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
-### `yield_hitl`
-Handler needs a human to choose one of a structured set of options. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
+### `yield_human`
+Handler needs an operator to choose one of a closed set of routes. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `text` (operator-facing prompt) + `routes: string[]` (declared route names) so the web UI can render one button per route immediately. Per [docs/proposals/llm-routing.md](./proposals/llm-routing.md) D6, a human node declares `routes=` on the source node and `route=` on every outgoing edge; edge `label=` is pure UX (button text), never a routing input.
 
-When an operator writes `intent.human_input { route, note? }`, the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
+When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
-On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [chosen.to]` plus `preferredLabel: chosen.label`; edge selection routes via Step-2 label match (disambiguates parallel edges to the same target) falling through to Step-3 `suggestedNextIds`. No conditions involved.
+On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [<target>]` where `<target>` is the matching outgoing edge's `to`. Edge selection's Step-0 (route) case fires the edge whose `attrs.route` equals the operator's choice; `suggestedNextIds` is a fallthrough hint for when two route edges land on the same target node.
 
 ```typescript
 return {
-  kind: "yield_hitl",
-  label: "Review the draft:",
-  options: [
-    { key: "A", label: "[A] Approve", to: "publish" },
-    { key: "R", label: "[R] Revise",  to: "revise"  },
-  ],
+  kind: "yield_human",
+  text: "Review the draft. Choose how to proceed.",
+  routes: ["approve", "revise", "reject"],
 };
 ```
+
+`HumanInput` (the resume payload at `ctx.humanInput`):
+
+```typescript
+interface HumanInput {
+  route: string;        // must be one of the declared routes
+  note?: string;        // free-form audit text, ignored by routing
+}
+```
+
+Server-side enum validation: `POST /runs/:id/human` reads the latest `fact.run_paused_human` payload's `routes` and rejects off-list routes with 400 before any intent is written. The handler re-validates as defense-in-depth (a hand-crafted intent could bypass the server check) and halts with `reason: "error"` + a descriptive `detail` if an unknown route reaches it.
 
 ### `halt`
 Terminal failure. Emits `fact.run_halted`.

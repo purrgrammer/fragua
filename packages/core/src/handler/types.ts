@@ -289,7 +289,7 @@ export type HandlerResult =
       cacheWriteCostUsd?: number;
       /** Input/output/cache split accumulated across every `cost.recorded`
        * event the node emitted. Optional so legacy handlers that only
-       * report `tokens` + `costUsd` (e.g. tool handlers, wait.human)
+       * report `tokens` + `costUsd` (e.g. tool handlers, human)
        * keep compiling. The executor writes these straight into
        * `fact.node_completed` so the run-level reducer can compute a
        * cache-hit rate. */
@@ -300,9 +300,14 @@ export type HandlerResult =
       modelName?: string;
     }
   | {
-      kind: "yield_hitl";
-      label: string;
-      options: Array<{ key: string; label: string; to: string }>;
+      kind: "yield_human";
+      /** Operator-facing prompt; sourced from the human node's `text=`. */
+      text: string;
+      /** Declared route names. The daemon emits these verbatim into
+       * `fact.run_paused_human.payload.routes`; the server-side
+       * `/runs/:id/human` endpoint enforces the enum on inbound
+       * intents. */
+      routes: string[];
     }
   | {
       kind: "halt";

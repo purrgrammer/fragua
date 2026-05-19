@@ -158,10 +158,23 @@ export function runStateToDetail(
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
       if (ev.type === "fact.run_paused_human") {
-        const p = ev.payload as { nodeId?: unknown; label?: unknown; options?: unknown };
+        const p = ev.payload as { nodeId?: unknown; text?: unknown; routes?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
-        if (typeof p.label === "string") detail.hitlLabel = p.label;
-        if (Array.isArray(p.options)) detail.hitlOptions = p.options as HitlOption[];
+        if (typeof p.text === "string") detail.hitlLabel = p.text;
+        // Transitional projection: the new payload shape carries
+        // `routes: string[]`; the web still consumes the legacy
+        // `hitlOptions` shape with `{key,label,to}`. Synthesise each
+        // route as `key=label=route`, `to=""` (target is irrelevant
+        // to the operator-facing button; the engine's edge-selection
+        // Step-0 fires the matching `route=` edge on resume). The
+        // web `humanizeRouteName` reformats `output_only` -> "Output
+        // Only" for the button label.
+        if (Array.isArray(p.routes)) {
+          const synthesised: HitlOption[] = (p.routes as unknown[])
+            .filter((r): r is string => typeof r === "string")
+            .map((r) => ({ key: r, label: r, to: "" }));
+          detail.hitlOptions = synthesised;
+        }
         break;
       }
     }

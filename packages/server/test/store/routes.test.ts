@@ -616,7 +616,6 @@ describe("intent-write routes", () => {
     ["steer", "/steer", { text: "go" }, "intent.steering_requested"],
     ["pause", "/pause", undefined, "intent.pause_requested"],
     ["cancel", "/cancel", { reason: "stop" }, "intent.cancel_requested"],
-    ["human", "/human", { route: "A" }, "intent.human_input"],
     ["resume", "/resume", { note: "topped up" }, "intent.resume"],
     ["resume-noargs", "/resume", undefined, "intent.resume"],
     ["unquarantine", "/unquarantine", { resolution: "retry", note: "try again" }, "intent.unquarantine"],
@@ -627,6 +626,49 @@ describe("intent-write routes", () => {
     expect(res.status).toBe(200);
     const events = store.getEvents("r");
     expect(events.some((e) => e.type === type)).toBe(true);
+  });
+
+  test("POST /runs/:id/human writes an intent.human_input intent when route is in the declared enum", async () => {
+    // Phase 7 of llm-routing.md adds server-side enum validation:
+    // the endpoint reads the latest fact.run_paused_human payload to
+    // recover the declared routes and rejects off-list routes with
+    // 400. Setup: enqueue + pause with routes=["A","B"], then POST
+    // route="A" (in-enum, should succeed) and route="C" (off-list,
+    // should 400).
+    store.enqueueRun({ runId: "rh", workflowSha: "wf" });
+    const state = store.getState("rh")!;
+    store.appendFact(
+      "rh",
+      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: ["A", "B"] } }],
+      state.version,
+    );
+
+    const ok = await req("POST", "/runs/rh/human", { route: "A" });
+    expect(ok.status).toBe(200);
+    const events = store.getEvents("rh");
+    expect(events.some((e) => e.type === "intent.human_input")).toBe(true);
+  });
+
+  test("POST /runs/:id/human rejects an off-enum route with 400 and a descriptive error", async () => {
+    store.enqueueRun({ runId: "rh2", workflowSha: "wf" });
+    const state = store.getState("rh2")!;
+    store.appendFact(
+      "rh2",
+      [{ type: "fact.run_paused_human", payload: { nodeId: "ask", text: "?", routes: ["approve", "reject"] } }],
+      state.version,
+    );
+
+    const bad = await req("POST", "/runs/rh2/human", { route: "ship" });
+    expect(bad.status).toBe(400);
+    const body = (await bad.json()) as { error: string };
+    expect(body.error).toMatch(/unknown route "ship"/);
+    expect(body.error).toMatch(/approve, reject/);
+  });
+
+  test("POST /runs/:id/human returns 409 when the run is not paused at a human node", async () => {
+    store.enqueueRun({ runId: "rh3", workflowSha: "wf" });
+    const res = await req("POST", "/runs/rh3/human", { route: "A" });
+    expect(res.status).toBe(409);
   });
 
   test("POST /runs/:id/steer rejects empty text", async () => {

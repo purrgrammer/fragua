@@ -106,7 +106,7 @@ export interface ExecutorOpts {
   maxLeakedHandlers?: number;
   /** Maximum consecutive handler aborts on the same node before the
    * executor halts the run with `reason: "abort_loop"`. The counter
-   * resets on any non-abort handler return (transition / yield_hitl /
+   * resets on any non-abort handler return (transition / yield_human /
    * halt), which implicitly defines "progress" as "the handler ran
    * to completion at least once." Aborts always happen on the run's
    * current_node (fact.node_aborted doesn't transition), so consecutive

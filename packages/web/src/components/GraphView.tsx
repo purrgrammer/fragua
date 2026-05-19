@@ -875,8 +875,8 @@ export function toFlowGraph(
     const sourceNode = graph.nodes[e.from];
     const targetNode = graph.nodes[e.to];
     const isHumanEdge =
-      (sourceNode !== undefined && (sourceNode.attrs.kind === "human" || handlerOf(sourceNode) === "wait.human")) ||
-      (targetNode !== undefined && (targetNode.attrs.kind === "human" || handlerOf(targetNode) === "wait.human"));
+      (sourceNode !== undefined && (sourceNode.attrs.kind === "human" || handlerOf(sourceNode) === "human")) ||
+      (targetNode !== undefined && (targetNode.attrs.kind === "human" || handlerOf(targetNode) === "human"));
     const marker = isLoopChannel
       ? MARKER_RETRY
       : outcome === "success"

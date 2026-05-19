@@ -43,14 +43,14 @@ describe("NodeInspector", () => {
     expect(q.getByTestId("node-inspector-prompt").textContent).toBe("plan the work");
   });
 
-  it("renders a wait.human node header without a codergen prompt block", () => {
+  it("renders a human node header without a codergen prompt block", () => {
     const nodes = nodesFromDot();
     const b = nodes["b"];
     expect(b).toBeTruthy();
     if (!b) return;
     const { container } = render(<NodeInspector node={b} />);
     const panel = within(container).getByTestId("node-inspector");
-    expect(panel.getAttribute("data-handler")).toBe("wait.human");
+    expect(panel.getAttribute("data-handler")).toBe("human");
   });
 
   it("lists allowed tools and system prompt override", () => {

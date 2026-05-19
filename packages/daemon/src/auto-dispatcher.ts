@@ -100,12 +100,14 @@ function specsForGraph(
 ): Map<string, HandlerSpec> {
   const graph = parseDotSource(dotSource);
   prepareGraph(graph);
-  const outgoing = new Map<string, Array<{ to: string; label?: string }>>();
+  const outgoing = new Map<string, Array<{ to: string; label?: string; route?: string }>>();
   for (const edge of graph.edges) {
     const list = outgoing.get(edge.from) ?? [];
     const edgeLabel = typeof edge.attrs.label === "string" ? edge.attrs.label : undefined;
-    const entry: { to: string; label?: string } = { to: edge.to };
+    const edgeRoute = typeof edge.attrs.route === "string" ? edge.attrs.route : undefined;
+    const entry: { to: string; label?: string; route?: string } = { to: edge.to };
     if (edgeLabel !== undefined) entry.label = edgeLabel;
+    if (edgeRoute !== undefined) entry.route = edgeRoute;
     list.push(entry);
     outgoing.set(edge.from, list);
   }
@@ -153,46 +155,60 @@ function malformedTimeoutSpec(nodeId: string, message: string): HandlerSpec {
   };
 }
 
-function malformedWaitHumanSpec(nodeId: string, message: string): HandlerSpec {
+function malformedHumanSpec(nodeId: string, message: string): HandlerSpec {
   return {
-    kind: "wait.human",
+    kind: "human",
     sideEffect: "none",
     maxMs: 50,
     handler: async () => ({
       kind: "halt",
       reason: "error",
-      detail: `wait.human node "${nodeId}": ${message}`,
+      detail: `human node "${nodeId}": ${message}`,
     }),
   };
 }
 
 function specForNode(
   nodeId: string,
-  edges: Array<{ to: string; label?: string }>,
-  attrs: { shape?: string; type?: string; prompt?: string; label?: string; tool_command?: string },
+  edges: Array<{ to: string; label?: string; route?: string }>,
+  attrs: {
+    shape?: string;
+    type?: string;
+    kind?: string;
+    prompt?: string;
+    label?: string;
+    text?: string;
+    routes?: string[];
+    tool_command?: string;
+  },
   resolvedMaxMs: number | undefined,
 ): HandlerSpec {
   const first = edges[0]?.to ?? "__end__";
   const kind = handlerKindOf(attrs);
 
   switch (kind) {
-    case "wait.human": {
-      const options = edges.map((e) => {
-        const lbl = e.label ?? e.to;
-        return { key: handler.parseAcceleratorKey(lbl), label: lbl, to: e.to };
-      });
-      // Question text precedence: graphviz `label=` (the convention for
-      // visible node text) → `prompt=` (legacy / shared with codergen)
-      // → fallback. Authors who type `label="Approve?"` on a hexagon
-      // expect that to be the operator-facing question.
-      const questionLabel = attrs.label ?? attrs.prompt ?? `waiting at ${nodeId}`;
+    case "human": {
+      // Text precedence: explicit `text=` (canonical, post-Phase-7)
+      // wins; `prompt=` / `label=` retained as fallbacks for
+      // partially-migrated graphs. Validator E026 catches the inverse
+      // misuse (text= on non-human nodes).
+      const text = attrs.text ?? attrs.prompt ?? attrs.label ?? `waiting at ${nodeId}`;
+      const routes = Array.isArray(attrs.routes) ? attrs.routes : [];
+      // Only edges carrying `route=` participate; un-annotated edges
+      // on a human node would be E020 at upload and never reach here
+      // through the validated path.
+      const humanEdges = edges
+        .filter((e): e is { to: string; label?: string; route: string } => typeof e.route === "string")
+        .map((e) => ({ route: e.route, to: e.to }));
       try {
-        return handler.makeWaitHumanHandler({
-          label: questionLabel,
-          options,
+        return handler.makeHumanHandler({
+          nodeId,
+          text,
+          routes,
+          edges: humanEdges,
         });
       } catch (err) {
-        return malformedWaitHumanSpec(nodeId, err instanceof Error ? err.message : String(err));
+        return malformedHumanSpec(nodeId, err instanceof Error ? err.message : String(err));
       }
     }
     case "tool": {
@@ -243,15 +259,22 @@ function transitionSpec(kind: string, nextNode: string): HandlerSpec {
   };
 }
 
-function handlerKindOf(attrs: { shape?: string; type?: string }): string {
+function handlerKindOf(attrs: { shape?: string; type?: string; kind?: string }): string {
+  // `type=` is the legacy direct handler-dispatch override; keep it
+  // first for back-compat. `kind=` (Phase-7 first-class authoring
+  // attribute) wins over shape-based derivation but loses to `type=`.
   if (typeof attrs.type === "string" && attrs.type.length > 0) return attrs.type;
+  if (typeof attrs.kind === "string" && attrs.kind.length > 0) {
+    // Authoring-kind names align with handler kinds for human/codergen/tool.
+    return attrs.kind;
+  }
   switch (attrs.shape) {
     case "Mdiamond":
       return "start";
     case "Msquare":
       return "exit";
     case "hexagon":
-      return "wait.human";
+      return "human";
     case "parallelogram":
       return "tool";
     default:

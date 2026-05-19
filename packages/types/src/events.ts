@@ -466,8 +466,13 @@ export type FactEvent =
       type: "fact.run_paused_human";
       payload: {
         nodeId: string;
-        label: string;
-        options: Array<{ key: string; label: string; to: string }>;
+        /** Operator-facing prompt rendered above the route buttons.
+         * Sourced from the human node's `text=` attribute. */
+        text: string;
+        /** Declared route names, in DOT order. Each becomes one button;
+         * button label resolves via the matching outgoing edge's
+         * `label=` override, falling back to `humanize(route)`. */
+        routes: string[];
       };
     }
   | {

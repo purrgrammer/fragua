@@ -242,7 +242,7 @@ describe("executor + worktree provisioner", () => {
     r.dispatcher.register(
       r.workflowSha,
       "start",
-      handler.makeWaitHumanHandler({ options: [{ key: "O", label: "OK", to: "__end__" }] }),
+      handler.makeHumanHandler({ nodeId: "ask", text: "wait", routes: ["O"], edges: [{ route: "O", to: "__end__" }] }),
     );
     enqueue(r, "run-paused", "start");
     r.store.claimNextRun(4);

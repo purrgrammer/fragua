@@ -13,7 +13,7 @@
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
 - **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
-- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `yield_hitl`, the executor emits `fact.run_paused_human`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
+- **Durable HITL via unwind-and-rehydrate.** `kind=human` nodes return `yield_human`, the executor emits `fact.run_paused_human`, the process is free. Human input (`intent.human_input`) wakes the daemon; it rehydrates from the projection and resumes at the route-matched edge.
 - **Content-addressed blobs on disk.** Tool outputs never inline in event payloads or the WAL. Handlers write raw content to `<blobsDir>/<first2>/<sha256>`; a metadata row in `blobs` points at it. Events carry a ref + bounded preview. File-then-row commit ordering: a crash can leave orphan files (GC sweeps), never dangling rows.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
@@ -408,7 +408,7 @@ CREATE TABLE provider_config (
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / wait.human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
@@ -416,7 +416,7 @@ CREATE TABLE provider_config (
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId: string\|null`, `iteration` | Message metadata. `nodeId` is null for messages appended outside a node turn (e.g. seed messages) |
-| `fact.run_paused_human` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input on a workflow `wait.human` node; `options` mirrors the outgoing edge set with parsed accelerator keys |
+| `fact.run_paused_human` | `nodeId`, `text`, `routes: string[]` | Yielded for human input on a workflow `kind=human` node; `routes` is the closed enum of route names declared on the source node (one button per route in the web UI; button label comes from the matching outgoing edge's `label=` or `humanize(route)`). |
 | `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'\|'provider_retry'\|'handler_retry'\|'timeout_retry'\|'max_retries'\|'goal_gate'\|'max_loops'\|'abort_loop'\|'provider_exhausted'`, plus reason-specific fields. Operator-resumable arms: `operator` (no extras), `provider_error` (`nodeId`, `httpStatus`, `provider`, `errorMessage`), `payment_required` (`nodeId`, `provider`, `errorMessage`), `budget` (`nodeId`, `scope`, `metric`, `limit`, `actual`), `max_retries` (`nodeId`, `currentLimit`, `attempts`), `goal_gate` (`gateNodeId`, `currentLimit`), `max_loops` (`currentLimit`, `dispatches`), `abort_loop` (`nodeId`, `consecutiveAborts`), `provider_exhausted` (`nodeId`, `attempts`, `cumulativeMs`). Auto-wake arms (status `paused_auto`): `provider_retry` (`nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt`), `handler_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries`), `timeout_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs`). | Unified pause fact. Status follows reason 1:1: reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`, `timeout_retry`) project to `paused_auto` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, optionally preceded by a cap-adjustment intent: `intent.budget_adjusted`, `intent.max_retries_adjusted`, `intent.goal_gate_adjusted`, `intent.max_loops_adjusted`). `timeout_retry` re-categorises a watchdog `maxMs` overrun as system-initiated pause-retry — partial-spend metrics still accrue via a paired `fact.node_aborted{cause:"timeout"}` |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
@@ -753,9 +753,9 @@ export type HandlerResult =
       modelName?: string;
     }
   | {
-      kind: "yield_hitl";
-      label: string;
-      options: Array<{ key: string; label: string; to: string }>;
+      kind: "yield_human";
+      text: string;
+      routes: string[];
     }
   | {
       kind: "halt";
@@ -1262,7 +1262,7 @@ packages/
 ### 12.1 Handler coverage
 
 Five handler kinds dispatch end-to-end through `auto-dispatcher.ts`:
-`start`, `exit`, `codergen`, `wait.human`, `tool`. The pure reducers
+`start`, `exit`, `codergen`, `human`, `tool`. The pure reducers
 behind them (`retry-policy.ts`, `edge-selection.ts`,
 `external-call.ts`) are property-tested.
 

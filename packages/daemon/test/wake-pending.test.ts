@@ -24,7 +24,7 @@ function pause(r: ReturnType<typeof rig>, runId: string): void {
   const s = r.store.getState(runId)!;
   r.store.appendFact(
     runId,
-    [{ type: "fact.run_paused_human", payload: { nodeId: "start", label: "wait", options: [] } }],
+    [{ type: "fact.run_paused_human", payload: { nodeId: "start", text: "wait", routes: [] } }],
     s.version,
   );
 }

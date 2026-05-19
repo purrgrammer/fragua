@@ -396,13 +396,41 @@ export function createRoutes(deps: ServerDeps): Hono {
   });
 
   app.post("/runs/:id/human", async (c) => {
+    const runId = c.req.param("id");
     const body = await readJson<{ route?: string; note?: string }>(c);
     if (!body || typeof body.route !== "string" || body.route.length === 0) {
       return c.json({ error: "route required" }, 400);
     }
+    // Server-side enum check: read the paused-node descriptor from the
+    // latest fact.run_paused_human and reject off-list routes with 400.
+    // The handler validates the same enum (defense-in-depth — a
+    // hand-crafted intent could bypass this check), but the operator-
+    // facing path should fail loudly here so the UI surfaces the
+    // error instead of letting the daemon halt the run on resume.
+    // Per docs/proposals/llm-routing.md Phase 7 task F.
+    const state = deps.store.getState(runId);
+    if (state == null) return c.json({ error: "run not found" }, 404);
+    if (state.status !== "paused_human") {
+      return c.json({ error: `run not paused at a human node (status=${state.status})` }, 409);
+    }
+    const events = deps.store.getEvents(runId);
+    let declaredRoutes: string[] = [];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i]!;
+      if (ev.type === "fact.run_paused_human") {
+        const p = ev.payload as { routes?: unknown };
+        if (Array.isArray(p.routes)) {
+          declaredRoutes = p.routes.filter((r): r is string => typeof r === "string");
+        }
+        break;
+      }
+    }
+    if (declaredRoutes.length > 0 && !declaredRoutes.includes(body.route)) {
+      return c.json({ error: `unknown route "${body.route}" (expected one of: ${declaredRoutes.join(", ")})` }, 400);
+    }
     const payload: { route: string; note?: string } = { route: body.route };
     if (typeof body.note === "string" && body.note.length > 0) payload.note = body.note;
-    return appendIntentOr413(c, c.req.param("id"), {
+    return appendIntentOr413(c, runId, {
       type: "intent.human_input",
       payload,
     });

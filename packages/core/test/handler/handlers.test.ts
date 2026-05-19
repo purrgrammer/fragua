@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeWaitHumanHandler } from "../../src/handler/handlers/wait-human.ts";
+import { makeHumanHandler } from "../../src/handler/handlers/human.ts";
 import type { HandlerContext, ToolRegistry } from "../../src/handler/types.ts";
 
 const emptyRegistry: ToolRegistry = {
@@ -44,105 +44,155 @@ function stubCtx(
   return { ...base, ...overrides };
 }
 
-describe("wait.human handler", () => {
+describe("human handler", () => {
   const cfg = {
-    label: "Review PR",
-    options: [
-      { key: "A", label: "[A] Approve", to: "after" },
-      { key: "R", label: "[R] Revise", to: "draft" },
+    nodeId: "signoff",
+    text: "Drift report ready. Choose how to proceed.",
+    routes: ["apply", "reject"],
+    edges: [
+      { route: "apply", to: "after" },
+      { route: "reject", to: "draft" },
     ],
   };
 
-  test("first call yields for HITL with the configured label and options", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait" }));
-    expect(result.kind).toBe("yield_hitl");
-    if (result.kind === "yield_hitl") {
-      expect(result.label).toBe("Review PR");
-      expect(result.options).toHaveLength(2);
-      expect(result.options[0]?.key).toBe("A");
+  test("first call yields with the configured text and routes", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ nodeId: "signoff" }));
+    expect(result.kind).toBe("yield_human");
+    if (result.kind === "yield_human") {
+      expect(result.text).toBe("Drift report ready. Choose how to proceed.");
+      expect(result.routes).toEqual(["apply", "reject"]);
     }
   });
 
-  test("call with humanInput transitions to chosen option's target", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait", humanInput: { route: "A" } }));
+  test("resume with humanInput.route fires the matching route edge via suggestedNextIds", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.suggestedNextIds).toEqual(["after"]);
     }
   });
 
-  // The bug: when multiple HITL options route to the same target (e.g.
-  // `[O] Output only -> done` and `[R] Reject -> done`), the engine's
-  // edge selector falls through to Step 3 (`suggested_next_ids`) and
-  // picks the first edge to that target — silently ambiguating which
-  // option the operator chose in `selectedEdges` / UI highlighting.
-  // The fix surfaces the chosen option's label as `preferredLabel` so
-  // Step 2 disambiguates by edge label first.
-  test("transition carries preferredLabel so the engine disambiguates parallel edges to the same target", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ humanInput: { route: "R" } }));
+  test("resume picks the right target when two edges land on the same node", async () => {
+    const spec = makeHumanHandler({
+      nodeId: "signoff",
+      text: "?",
+      routes: ["output_only", "reject"],
+      edges: [
+        { route: "output_only", to: "done" },
+        { route: "reject", to: "done" },
+      ],
+    });
+    const result = await spec.handler(stubCtx({ humanInput: { route: "reject" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.preferredLabel).toBe("[R] Revise");
-      // Both fields stay populated — preferredLabel narrows when labels
-      // disambiguate; suggestedNextIds remains the fallback when an
-      // author hasn't labelled their HITL edges.
-      expect(result.suggestedNextIds).toEqual(["draft"]);
+      // Both routes target `done`; edge-selection's Step-0 (route attr)
+      // disambiguates which edge fires. suggestedNextIds is the
+      // route's resolved `to`.
+      expect(result.suggestedNextIds).toEqual(["done"]);
     }
   });
 
-  test("call with bare string humanInput resolves option by key", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait", humanInput: "R" }));
+  test("transition does NOT set preferredLabel", async () => {
+    // Per D6 in docs/proposals/llm-routing.md, edge `label=` is pure UX
+    // and never participates in selection. The handler must not surface
+    // a preferredLabel hint.
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.suggestedNextIds).toEqual(["draft"]);
+      expect(result.preferredLabel).toBeUndefined();
     }
   });
 
-  test("yield_hitl uses default label when cfg.label is unset", async () => {
-    const spec = makeWaitHumanHandler({ options: cfg.options });
-    const result = await spec.handler(stubCtx());
-    expect(result.kind).toBe("yield_hitl");
-    if (result.kind === "yield_hitl") {
-      expect(result.label).toBe("Select an option:");
+  test("resume with bare string humanInput is treated as the route name", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: "apply" }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.suggestedNextIds).toEqual(["after"]);
     }
   });
 
-  test("route matching is case-insensitive", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const lower = await spec.handler(stubCtx({ humanInput: { route: "a" } }));
-    expect(lower.kind).toBe("transition");
-    if (lower.kind === "transition") {
-      expect(lower.suggestedNextIds).toEqual(["after"]);
+  test("route matching is case-sensitive", async () => {
+    // Route names are identifier-shaped (D1). Upper/lower divergence is
+    // a typo, not a UI nicety — halt with the same descriptive detail
+    // an unknown route would produce.
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "APPLY" } }));
+    expect(result.kind).toBe("halt");
+    if (result.kind === "halt") {
+      expect(result.detail).toMatch(/unknown route "APPLY"/);
     }
   });
 
-  test("unknown route halts the run with a descriptive detail", async () => {
-    const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ humanInput: { route: "Z" } }));
+  test("unknown route halts with descriptive detail", async () => {
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "ship" } }));
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") {
       expect(result.reason).toBe("error");
-      expect(result.detail).toMatch(/unknown route "Z"/);
-      expect(result.detail).toMatch(/A, R/); // valid keys listed
+      expect(result.detail).toMatch(/human node "signoff": unknown route "ship" \(expected one of: apply, reject\)/);
     }
   });
 
-  test("construction throws when options are empty", () => {
-    expect(() => makeWaitHumanHandler({ options: [] })).toThrow(/at least one option/);
+  test("note is preserved into the audit envelope but ignored by routing", async () => {
+    // The note rides inside intent.human_input's payload; the handler
+    // sees it on `ctx.humanInput` but doesn't consume it. Sanity-check
+    // that a populated note doesn't break the resume path.
+    const spec = makeHumanHandler(cfg);
+    const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: "lgtm" } }));
+    expect(result.kind).toBe("transition");
+    if (result.kind === "transition") {
+      expect(result.suggestedNextIds).toEqual(["after"]);
+    }
   });
 
-  test("construction throws on duplicate accelerator keys", () => {
+  test("construction throws when routes is empty", () => {
+    expect(() => makeHumanHandler({ nodeId: "x", text: "?", routes: [], edges: [] })).toThrow(/at least one route/);
+  });
+
+  test("construction throws when a declared route has no matching edge", () => {
     expect(() =>
-      makeWaitHumanHandler({
-        options: [
-          { key: "A", label: "Approve", to: "x" },
-          { key: "a", label: "Acknowledge", to: "y" }, // collides after upper-casing
+      makeHumanHandler({
+        nodeId: "signoff",
+        text: "?",
+        routes: ["apply", "reject"],
+        edges: [{ route: "apply", to: "x" }],
+      }),
+    ).toThrow(/route "reject" declared but no outgoing edge/);
+  });
+
+  test("construction throws when two edges share a route", () => {
+    expect(() =>
+      makeHumanHandler({
+        nodeId: "signoff",
+        text: "?",
+        routes: ["apply"],
+        edges: [
+          { route: "apply", to: "x" },
+          { route: "apply", to: "y" },
         ],
       }),
-    ).toThrow(/duplicate accelerator key "A"/);
+    ).toThrow(/duplicate edge for route "apply"/);
+  });
+
+  test("construction throws when an edge references an undeclared route", () => {
+    expect(() =>
+      makeHumanHandler({
+        nodeId: "signoff",
+        text: "?",
+        routes: ["apply"],
+        edges: [{ route: "ship", to: "x" }],
+      }),
+    ).toThrow(/edge route="ship" is not in declared routes/);
+  });
+
+  test('spec metadata is { kind: "human", sideEffect: "none", maxMs: 1000 }', () => {
+    const spec = makeHumanHandler(cfg);
+    expect(spec.kind).toBe("human");
+    expect(spec.sideEffect).toBe("none");
+    expect(spec.maxMs).toBe(1_000);
   });
 });
