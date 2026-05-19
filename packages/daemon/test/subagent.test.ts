@@ -1512,6 +1512,98 @@ describe("makeSpawnSubagent", () => {
       store.close();
     });
 
+    test("multi-cycle: a bracket resumed then re-cancelled becomes pending again (live regression from run 01ks0gr40avtet7tw9)", async () => {
+      // Found live during a review.dot run: the first pause/resume
+      // cycle correctly resumed all 4 brackets via FIFO. The SECOND
+      // pause then re-cancelled those resumed brackets, and the
+      // third spawn batch minted fresh ids because the consumed
+      // check was binary ("ever resumed → forever consumed") rather
+      // than seq-relative ("resumed since the latest cancellation").
+      // Result: every pause past the first abandons sub-agent
+      // accumulated work. Same shape for raise & resume.
+      const store = freshStore();
+      seedParent(store, "parent-cx-multicycle");
+      const ARGS_HASH = "cccc0000aaaaeeeeffffbbbbdddd1111";
+      const SID = "abc0000000000000000000000000000a";
+      // Event sequence: start → end(cancelled) → resumed (first
+      // resume) → end(cancelled) (second pause re-cancels it).
+      // After this the bracket MUST be findable as pending again.
+      store.appendObservabilityEvents("parent-cx-multicycle", [
+        {
+          type: "subagent.start",
+          payload: {
+            subagent_id: SID,
+            parent_node_id: "dispatch",
+            iteration: 0,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            tool_call_id: "toolu_orig",
+            args_hash: ARGS_HASH,
+          },
+        },
+        {
+          type: "subagent.end",
+          payload: {
+            subagent_id: SID,
+            status: "cancelled",
+            summary_chars: 0,
+            total_tool_calls: 0,
+            costUsd: 0,
+            totalTokens: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        },
+        { type: "subagent.resumed", payload: { subagent_id: SID, reason: "transcript_hydrated" } },
+        {
+          type: "subagent.end",
+          payload: {
+            subagent_id: SID,
+            status: "cancelled",
+            summary_chars: 0,
+            total_tool_calls: 0,
+            costUsd: 0,
+            totalTokens: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        },
+      ]);
+
+      const registry = freshRegistry();
+      const ctrl = new AbortController();
+      const emit = async (type: EventType, data: Record<string, unknown>) => {
+        store.appendObservabilityEvents("parent-cx-multicycle", [{ type, payload: data }]);
+      };
+      const backend = new StubBackend(() => ok({ notes: "" }));
+      const spawn = makeSpawnSubagent(
+        { store, registry, backend, shutdownSignal: ctrl.signal },
+        {
+          parentRunId: "parent-cx-multicycle",
+          parentNodeId: "dispatch",
+          parentIteration: 0,
+          parentSystemPrompt: "P",
+          parentSkills: [],
+          parentProvider: "anthropic",
+          parentModel: "claude-opus-4-7",
+          parentEnv: STUB_ENV,
+          parentEmit: emit,
+        },
+      );
+      const r = await spawn({
+        prompt: "lens",
+        tool_call_id: "toolu_retry_after_second_pause",
+        args_hash: ARGS_HASH,
+      });
+      // Must reuse the re-cancelled bracket's id, NOT mint fresh.
+      expect(r.subagentId).toBe(SID);
+      store.close();
+    });
+
     test("six parallel siblings with same args_hash: each pops a distinct cancelled bracket, none collide", async () => {
       // The review.dot live shape: parent fans out 6 same-args
       // sub-agent calls. All get cancelled by a budget pause. On

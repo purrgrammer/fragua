@@ -570,18 +570,35 @@ function findPendingResumeCandidate(
   const starts = store.getEventsByType(parentCtx.parentRunId, "subagent.start");
   const ends = store.getEventsByType(parentCtx.parentRunId, "subagent.end");
   const resumes = store.getEventsByType(parentCtx.parentRunId, "subagent.resumed");
-  const subagentIdsConsumed = new Set<string>();
-  for (const r of resumes) {
-    const sid = (r.payload as { subagent_id?: string }).subagent_id;
-    if (typeof sid === "string") subagentIdsConsumed.add(sid);
-  }
-  // Map subagent_id → latest terminal status (last end event wins).
-  const latestStatus = new Map<string, string>();
+  // Per subagent_id, track:
+  //   - latest `subagent.end` (status + seq) — the bracket's current
+  //     terminal disposition;
+  //   - latest `subagent.resumed` seq — whether the most-recent
+  //     cancellation has already been claimed by a re-spawn.
+  // A bracket is pending iff its latest end is "cancelled" AND no
+  // subagent.resumed has fired SINCE that end. The previous "any
+  // resumed → forever consumed" check broke multi-pause cycles: a
+  // bracket that gets resumed, then re-cancelled by a second pause,
+  // should be pending again (its latest end is a fresh cancellation
+  // with no following resumed). Without the seq-relative check,
+  // every retry past the first mints fresh ids and the sub-agent's
+  // accumulated transcript is silently abandoned each subsequent
+  // pause/resume cycle (operator-resume AND raise-and-resume).
+  const latestEnd = new Map<string, { status: string; seq: number }>();
   for (const e of ends) {
     const p = e.payload as { subagent_id?: string; status?: string };
-    if (typeof p.subagent_id === "string" && typeof p.status === "string") {
-      latestStatus.set(p.subagent_id, p.status);
+    if (typeof p.subagent_id !== "string" || typeof p.status !== "string") continue;
+    const prior = latestEnd.get(p.subagent_id);
+    if (prior === undefined || e.seq > prior.seq) {
+      latestEnd.set(p.subagent_id, { status: p.status, seq: e.seq });
     }
+  }
+  const latestResumedSeq = new Map<string, number>();
+  for (const r of resumes) {
+    const sid = (r.payload as { subagent_id?: string }).subagent_id;
+    if (typeof sid !== "string") continue;
+    const prior = latestResumedSeq.get(sid);
+    if (prior === undefined || r.seq > prior) latestResumedSeq.set(sid, r.seq);
   }
   // Walk starts in seq order (getEventsByType returns ASC) so the
   // FIRST pending match is the oldest — the FIFO semantic.
@@ -596,8 +613,10 @@ function findPendingResumeCandidate(
     if (p.parent_node_id !== parentCtx.parentNodeId) continue;
     if (p.iteration !== parentCtx.parentIteration) continue;
     if (p.args_hash !== argsHash) continue;
-    if (latestStatus.get(p.subagent_id) !== "cancelled") continue;
-    if (subagentIdsConsumed.has(p.subagent_id)) continue;
+    const end = latestEnd.get(p.subagent_id);
+    if (end === undefined || end.status !== "cancelled") continue;
+    const resumedSeq = latestResumedSeq.get(p.subagent_id) ?? 0;
+    if (resumedSeq > end.seq) continue; // claimed since last cancel → consumed
     return p.subagent_id;
   }
   return undefined;
