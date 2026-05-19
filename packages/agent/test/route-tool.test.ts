@@ -41,12 +41,16 @@ describe("findRouteToolCall", () => {
     expect(findRouteToolCall([assistant(toolCall("read", { path: "x" }))])).toBeNull();
   });
 
-  test("first route call wins across responses", () => {
+  test("last route call wins across responses (shared-thread upstream routes don't shadow)", () => {
+    // The shared-thread case: an upstream routing node's `route` call
+    // appears earlier in the transcript than the current node's. The
+    // scan must return the current node's (latest) call, not the
+    // upstream one. Regression test for run 01ks012pq5jb5jyb0d.
     const r = findRouteToolCall([
-      assistant(toolCall("route", { name: "first" })),
-      assistant(toolCall("route", { name: "second" })),
+      assistant(toolCall("route", { name: "upstream" })),
+      assistant(toolCall("route", { name: "current" })),
     ]);
-    expect(r?.route).toBe("first");
+    expect(r?.route).toBe("current");
   });
 
   test("non-string route argument resolves to an empty route string", () => {
@@ -154,12 +158,14 @@ describe("PiCodergenBackend route tool synthesis", () => {
       });
       const routeTool = advertised.find((t) => t.name === "route");
       expect(routeTool).toBeDefined();
-      // Parameters schema: { type:"object", properties:{ name: union-of-literals } }
+      // Parameters schema: { type:"object", properties:{ name: { type:"string", enum:[...] } } }
+      // — a plain JSONSchema enum the provider enforces, not the
+      // anyOf+const shape Type.Union(Type.Literal) emits.
       const params = routeTool!.parameters as {
-        properties?: { name?: { anyOf?: Array<{ const?: string }> } };
+        properties?: { name?: { type?: string; enum?: string[] } };
       };
-      const literals = params.properties?.name?.anyOf?.map((a) => a.const).filter(Boolean) ?? [];
-      expect(new Set(literals)).toEqual(new Set(["small", "feature", "blocked"]));
+      expect(params.properties?.name?.type).toBe("string");
+      expect(new Set(params.properties?.name?.enum ?? [])).toEqual(new Set(["small", "feature", "blocked"]));
       // Sanity: the run did terminate via route.
       expect(outcome.status).toBe("success");
       expect(outcome.route).toBe("small");

@@ -1014,9 +1014,16 @@ export function findAbortToolCall(
  *    with the route exit — the model must commit to the route on a
  *    response of its own.
  *
- * First `route` call wins (the loop terminates on the tool's
- * `terminate: true`, so in practice there's only one). Returns `null`
- * when no `route` call is present in the transcript.
+ * **Last** `route` call wins. The transcript includes prior thread
+ * history (shared `thread_id=` nodes pass their messages through), so
+ * a forward scan would surface an UPSTREAM routing node's `route` call
+ * instead of the one the current node just made — exactly what
+ * happened in run `01ks012pq5jb5jyb0d` where `needs_human` correctly
+ * called `route({name:"yes"})` but the scan returned triage's earlier
+ * `route({name:"feature"})`. Iterating from the end recovers the
+ * current node's choice; the `terminate: true` on the tool means the
+ * current loop only emits one route call, so "last in transcript" is
+ * always "this node's".
  *
  * Exported so tests can rely on the exact contract without
  * reimplementing the scan.
@@ -1024,8 +1031,9 @@ export function findAbortToolCall(
 export function findRouteToolCall(
   messages: ReadonlyArray<{ role: string; content?: unknown }>,
 ): { route: string; isolated: boolean } | null {
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
     const blocks = message.content as Array<{ type: string; name?: string; arguments?: Record<string, unknown> }>;
     let routeBlock: { name?: string; arguments?: Record<string, unknown> } | undefined;
     let otherToolCalls = 0;
@@ -1055,7 +1063,14 @@ export function findRouteToolCall(
  * satisfy pi-agent-core's tool-result contract.
  */
 function buildRouteTool(routes: readonly string[]): AgentTool {
-  const nameSchema = Type.Union(routes.map((r) => Type.Literal(r)));
+  // Use a plain JSONSchema `enum` (via Type.Unsafe) rather than
+  // `Type.Union(Type.Literal(...))`. The Union form lowers to
+  // `anyOf: [{const: "yes"}, {const: "no"}]` which Anthropic's
+  // tool-use validator does not enforce — off-list `name` values
+  // reach the handler. A bare `{type:"string", enum:[...]}` is
+  // enforced at the provider layer, so a wayward
+  // `route({name:"feature"})` is rejected before it ever lands.
+  const nameSchema = Type.Unsafe<string>({ type: "string", enum: [...routes] });
   const parameters = Type.Object(
     {
       name: nameSchema,
