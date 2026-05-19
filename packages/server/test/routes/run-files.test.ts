@@ -49,7 +49,7 @@ async function setup(opts: { withWorktreeDir?: boolean } = {}): Promise<Fixture>
   }
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_run_files", "noop", "digraph G { a -> b }");
+  store.saveWorkflow("wf_run_files", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId, workflowSha: "wf_run_files", cwd });
 
   const reader = stubReader();
@@ -172,7 +172,7 @@ async function setupGitRun(opts: { withTip: boolean; runId: string; slug: string
   }
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_changes", "noop", "digraph G { a -> b }");
+  store.saveWorkflow("wf_changes", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId, workflowSha: "wf_changes", cwd });
   const enqueued = store.getState(runId);
   if (enqueued == null) throw new Error("run not enqueued");

@@ -37,7 +37,7 @@ function makeRepoWithBranchedRun(opts: { runId: string; ageMs: number }): string
 
   const dbPath = join(cwd, ".swarm/swarm.db");
   const store = new SqliteStore({ path: dbPath });
-  store.saveWorkflow("sha", "wf", "digraph{}");
+  store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: opts.runId, workflowSha: "sha" });
   store.close();
 

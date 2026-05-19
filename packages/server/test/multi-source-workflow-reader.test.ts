@@ -28,14 +28,26 @@ async function setup(): Promise<Fixture> {
   await mkdir(join(projectAlpha, ".swarm", "workflows"), { recursive: true });
   await mkdir(join(projectBeta, ".swarm", "workflows"), { recursive: true });
 
-  await writeFile(join(globalDir, "shared.yaml"), 'digraph shared { graph [ label = "Global shared" ] }\n');
-  await writeFile(join(projectAlpha, ".swarm", "workflows", "alpha-only.yaml"), "digraph aonly { a -> b }\n");
-  await writeFile(join(projectBeta, ".swarm", "workflows", "beta-only.yaml"), "digraph bonly { x -> y }\n");
+  await writeFile(
+    join(globalDir, "shared.yaml"),
+    "name: shared\ndescription: Global shared\nsteps:\n  work: {type: llm, prompt: x}\n",
+  );
+  await writeFile(
+    join(projectAlpha, ".swarm", "workflows", "alpha-only.yaml"),
+    "name: aonly\nsteps:\n  work: {type: llm, prompt: x}\n",
+  );
+  await writeFile(
+    join(projectBeta, ".swarm", "workflows", "beta-only.yaml"),
+    "name: bonly\nsteps:\n  work: {type: llm, prompt: x}\n",
+  );
   // Name collision across sources: `shared` exists globally + in alpha.
-  await writeFile(join(projectAlpha, ".swarm", "workflows", "shared.yaml"), "digraph shared { z -> w }\n");
+  await writeFile(
+    join(projectAlpha, ".swarm", "workflows", "shared.yaml"),
+    "name: shared\nsteps:\n  work: {type: llm, prompt: x}\n",
+  );
 
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("wf_sha_test", "noop", "digraph G { a -> b }");
+  store.saveWorkflow("wf_sha_test", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: "r1", workflowSha: "wf_sha_test", cwd: projectAlpha });
   store.enqueueRun({ runId: "r2", workflowSha: "wf_sha_test", cwd: projectBeta });
 
@@ -78,7 +90,7 @@ describe("MultiSourceWorkflowReader", () => {
     const detail = await reader.read("shared", { cwd: fx.projectAlpha });
     expect(detail).toBeDefined();
     expect(detail?.cwd).toBe(fx.projectAlpha);
-    expect(detail?.source).toContain("z -> w");
+    expect(detail?.source).toContain("name: shared");
   });
 
   test('read(name, { cwd: "" }) pins lookup to the global source', async () => {

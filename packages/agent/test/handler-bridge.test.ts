@@ -79,7 +79,7 @@ async function ctxFor(
   nodeId: string,
   args: Readonly<Record<string, string>> = {},
 ): Promise<handler.HandlerContext> {
-  store.saveWorkflow("sha", "t", "digraph{}");
+  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId, workflowSha: "sha" });
   const ac = new AbortController();
   const tools = new handler.InMemoryToolRegistry();
@@ -298,7 +298,7 @@ describe("makeCodergenHandler", () => {
     // have been duplicates the next priorMessages load already
     // covers via the prior bracket's row.
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "digraph{}");
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     store.enqueueRun({ runId: "run-dedup", workflowSha: "sha" });
     const ac = new AbortController();
     const buildCtx = (): handler.HandlerContext =>

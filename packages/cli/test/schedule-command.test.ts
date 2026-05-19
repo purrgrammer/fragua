@@ -103,7 +103,7 @@ describe("scheduleAddCommand", () => {
 describe("scheduleListCommand", () => {
   test("renders one row per schedule with workflow / cwd / interval / status / health-stripe columns", async () => {
     const sha = "wf_sha_list";
-    r.store.saveWorkflow(sha, "wf-a", "digraph G {}");
+    r.store.saveWorkflow(sha, "wf-a", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     r.store.createSchedule(
       { id: "sch_a", workflowRef: "wf-a", cwd: "/p", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),
@@ -128,7 +128,7 @@ describe("scheduleListCommand", () => {
 
   test("renders health stripe with ✅/❌/⏳ derived from terminal status of the last 10 runs", async () => {
     const sha = "wf_stripe";
-    r.store.saveWorkflow(sha, "wf", "digraph G {}");
+    r.store.saveWorkflow(sha, "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     r.store.createSchedule(
       { id: "sch_stripe", workflowRef: "wf", cwd: "/p", intervalMs: 3_600_000, intervalText: "1h" },
       Date.now(),

@@ -211,7 +211,7 @@ export interface Subgraph {
 
 export interface Graph {
   id: string;
-  /** "digraph" is the only supported graph kind. */
+  /** Directed graph (the only supported kind). */
   directed: true;
   attrs: GraphAttrs;
   nodes: Record<string, Node>;

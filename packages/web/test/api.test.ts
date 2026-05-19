@@ -71,8 +71,8 @@ describe("api — /runs", () => {
     expect(res.runId).toBe("abc/weird");
   });
 
-  it("getRun surfaces workflowSource (raw DOT) when present", async () => {
-    const source = "digraph g { a -> b }";
+  it("getRun surfaces workflowSource (raw YAML) when present", async () => {
+    const source = "name: t\nsteps:\n  work: {type: llm, prompt: x}\n";
     mock = installFetchMock({
       "/api/runs/r1": () =>
         json({

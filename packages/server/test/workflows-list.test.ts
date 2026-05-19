@@ -104,7 +104,7 @@ describe("GET /workflows/:name", () => {
       path: "workflows/alpha.yaml",
       sha: "abc1234",
       label: "Alpha",
-      source: "digraph alpha {\n  start [shape=Mdiamond]\n}\n",
+      source: "name: alpha\nsteps:\n  work: {type: llm, prompt: x}\n",
     };
     const app = createServer({
       store: freshStore(),

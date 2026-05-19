@@ -8,7 +8,7 @@ import type { SideEffectRecorder } from "../../src/handler/types.ts";
 
 function seedStore() {
   const store = new SqliteStore({ path: ":memory:" });
-  store.saveWorkflow("sha", "t", "digraph { a }");
+  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: "r1", workflowSha: "sha" });
   return store;
 }

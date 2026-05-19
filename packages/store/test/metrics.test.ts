@@ -3,7 +3,7 @@ import { ConcurrencyError, SqliteStore } from "../src/index.ts";
 
 function rig(): SqliteStore {
   const s = new SqliteStore({ path: ":memory:" });
-  s.saveWorkflow("sha", "t", "digraph{}");
+  s.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   return s;
 }
 

@@ -25,7 +25,7 @@ describe("resolveWorkflow", () => {
   });
 
   test("bare name in global wins", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
+    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
       dotPath: resolve(home, ".swarm/workflows/foo.yaml"),
@@ -35,7 +35,7 @@ describe("resolveWorkflow", () => {
   });
 
   test("bare name falls back to project when global misses", async () => {
-    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
+    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r).toEqual({
       dotPath: resolve(cwd, ".swarm/workflows/foo.yaml"),
@@ -45,15 +45,15 @@ describe("resolveWorkflow", () => {
   });
 
   test("global wins over local when both exist", async () => {
-    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "digraph foo {}", "utf8");
-    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "digraph different {}", "utf8");
+    await writeFile(join(home, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
+    await writeFile(join(cwd, ".swarm/workflows/foo.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
     const r = await resolveWorkflow(cwd, "foo", { homeDir: home });
     expect(r?.scope).toBe("global");
     expect(r?.dotPath).toBe(resolve(home, ".swarm/workflows/foo.yaml"));
   });
 
   test("explicit relative path resolves against cwd", async () => {
-    await writeFile(join(cwd, "scratch.yaml"), "digraph scratch {}", "utf8");
+    await writeFile(join(cwd, "scratch.yaml"), "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
     const r = await resolveWorkflow(cwd, "./scratch.yaml", { homeDir: home });
     expect(r).toEqual({
       dotPath: resolve(cwd, "scratch.yaml"),
@@ -64,7 +64,7 @@ describe("resolveWorkflow", () => {
 
   test("explicit absolute path resolves directly", async () => {
     const abs = resolve(cwd, "abs.yaml");
-    await writeFile(abs, "digraph abs {}", "utf8");
+    await writeFile(abs, "name: t\nsteps:\n  work: {type: llm, prompt: x}\n", "utf8");
     const r = await resolveWorkflow(cwd, abs, { homeDir: home });
     expect(r?.scope).toBe("path");
     expect(r?.dotPath).toBe(abs);

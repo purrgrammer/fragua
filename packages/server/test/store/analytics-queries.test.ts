@@ -22,8 +22,8 @@ beforeEach(() => {
     path: ":memory:",
     now: () => nowMs,
   });
-  store.saveWorkflow("wf1", "build-feature", "digraph { a -> b }");
-  store.saveWorkflow("wf2", "smoke", "digraph { x -> y }");
+  store.saveWorkflow("wf1", "build-feature", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
+  store.saveWorkflow("wf2", "smoke", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
 });
 
 afterEach(() => {

@@ -33,7 +33,7 @@ async function setup(): Promise<Fixture> {
 
   const store = new SqliteStore({ path: ":memory:" });
   // Register the project by routing a run through it so listCwds() returns it.
-  store.saveWorkflow("wf_for_proj", "noop", "digraph G { a -> b }");
+  store.saveWorkflow("wf_for_proj", "noop", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: "r-proj", workflowSha: "wf_for_proj", cwd });
 
   // Use the real adapter so the route + adapter integration is exercised

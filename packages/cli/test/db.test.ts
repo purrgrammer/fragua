@@ -21,7 +21,7 @@ function makeStore(): string {
   workdirs.push(cwd);
   mkdirSync(join(cwd, ".swarm"), { recursive: true });
   const store = new SqliteStore({ path: join(cwd, ".swarm/swarm.db") });
-  store.saveWorkflow("sha", "wf", "digraph{}");
+  store.saveWorkflow("sha", "wf", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   store.enqueueRun({ runId: "r", workflowSha: "sha" });
   store.close();
   return cwd;

@@ -15,7 +15,7 @@ export function nextId(prefix = "run"): string {
 }
 
 export async function seedWorkflow(store: SqliteStore, sha = "wf_sha_1"): Promise<string> {
-  store.saveWorkflow(sha, "test", "digraph G { a -> b }");
+  store.saveWorkflow(sha, "test", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   return sha;
 }
 

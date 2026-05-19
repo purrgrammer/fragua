@@ -20,7 +20,7 @@ const NOW_MS = Date.UTC(2026, 3, 28, 12, 0, 0);
 beforeEach(() => {
   nextRunId = 0;
   store = new SqliteStore({ path: ":memory:", now: () => NOW_MS });
-  store.saveWorkflow("wf", "t", "digraph {}");
+  store.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   app = new Hono();
   app.route("/", analyticsRoutes({ store }));
 });

@@ -37,7 +37,7 @@ function node(overrides: Partial<Node> = {}): Node {
 }
 
 async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
-  store.saveWorkflow("sha", "t", "digraph{}");
+  store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   try {
     store.enqueueRun({ runId, workflowSha: "sha" });
   } catch {
@@ -159,7 +159,7 @@ describe("messages table populates on persistMessage", () => {
 describe("handler-bridge priorMessages hydration", () => {
   test("loads rows from messages table into input.priorMessages", async () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "digraph{}");
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     store.enqueueRun({ runId: "r1", workflowSha: "sha" });
 
     store.appendMessage("r1", {
@@ -272,7 +272,7 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
 describe("daemon-boot inProcessWrites reconstruction", () => {
   test("seeded Set from listThreadsWithMessages() prevents resume=true on known threads", async () => {
     const store = new SqliteStore({ path: ":memory:" });
-    store.saveWorkflow("sha", "t", "digraph{}");
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     store.enqueueRun({ runId: "r1", workflowSha: "sha" });
     store.appendMessage("r1", {
       content: assistantMsg("prior turn"),

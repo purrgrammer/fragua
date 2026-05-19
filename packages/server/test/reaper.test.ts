@@ -51,7 +51,7 @@ describe("reapStaleDaemon", () => {
 
   test("stale heartbeat + a running orphan → run is requeued by the sweep", () => {
     const s = fresh();
-    s.saveWorkflow("wf", "t", "digraph {}");
+    s.saveWorkflow("wf", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
     s.enqueueRun({ runId: "orphan-run", workflowSha: "wf" });
     s.claimNextRun(1); // flips status → running
     s.forceAcquireDaemonLock(4242, "host-1");

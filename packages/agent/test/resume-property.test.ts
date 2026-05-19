@@ -38,7 +38,7 @@ function nodeOn(threadId: string): Node {
 
 async function ctxFor(runId: string, store: SqliteStore, nodeId: string): Promise<handler.HandlerContext> {
   try {
-    store.saveWorkflow("sha", "t", "digraph{}");
+    store.saveWorkflow("sha", "t", "name: t\nsteps:\n  work: {type: llm, prompt: x}\n");
   } catch {
     // already saved — same-in-memory-store loop
   }
@@ -83,11 +83,7 @@ function scriptedResponses(seed: number, n: number): FauxResponseStep[] {
 interface DaemonHarness {
   store: SqliteStore;
   makeBackend(inProcessWrites: Set<string>): PiCodergenBackend;
-  dispatch(
-    backend: PiCodergenBackend,
-    runId: string,
-    threadId: string,
-  ): Promise<{ finalMessages: AgentMessage[] }>;
+  dispatch(backend: PiCodergenBackend, runId: string, threadId: string): Promise<{ finalMessages: AgentMessage[] }>;
   /** Tears down the faux registration. */
   dispose(): void;
 }

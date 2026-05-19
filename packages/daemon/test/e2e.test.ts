@@ -20,7 +20,8 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
   test("enqueue via POST /runs → daemon runs → GET /runs/:id shows success", async () => {
     const dir = mkdtempSync(join(tmpdir(), "swarm-e2e-"));
     const store = new SqliteStore({ path: join(dir, "swarm.db") });
-    store.saveWorkflow("wf-sha", "echo-wf", "digraph Echo { start -> __end__ }");
+    const echoSource = "name: echo-wf\nsteps:\n  work: {type: llm, prompt: x}\n";
+    store.saveWorkflow("wf-sha", "echo-wf", echoSource);
 
     const dispatcher = new Dispatcher();
     dispatcher.register("wf-sha", "start", {
@@ -91,7 +92,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
     expect(detail.costUsd).toBeCloseTo(0.003, 6);
     expect(detail.inputTokens).toBe(30);
     expect(detail.workflowName).toBe("echo-wf");
-    expect(detail.workflowSource).toBe("digraph Echo { start -> __end__ }");
+    expect(detail.workflowSource).toBe(echoSource);
     expect(detail.nodes.some((n) => n.nodeId === "start" && n.state === "completed")).toBe(true);
 
     // 4. Metrics dashboard reflects the run.
@@ -114,7 +115,7 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
 
     // Phase 1 ─────────────────────────────────────────────────
     const s1 = new SqliteStore({ path: dbPath });
-    s1.saveWorkflow("wf-sha", "hitl-wf", "digraph { ask -> __end__ }");
+    s1.saveWorkflow("wf-sha", "hitl-wf", "name: hitl-wf\nsteps:\n  ask:\n    type: human\n    text: ok?\n    routes: {A: exit}\n");
     const dispatcher = new Dispatcher();
     dispatcher.register(
       "wf-sha",
