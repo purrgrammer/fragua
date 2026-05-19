@@ -3,7 +3,6 @@
 
 import { parseAcceleratorKey } from "../accelerator.ts";
 import { type Edge, type Graph, HANDLER_BY_SHAPE, type HandlerType, SHAPE_TO_KIND } from "../types/graph.ts";
-import { parseCondition } from "./condition.ts";
 import { isRetryPresetName } from "./retry-policy.ts";
 import { parseStylesheet, StylesheetParseError, selectorMatches } from "./stylesheet.ts";
 
@@ -60,8 +59,6 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
 const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set([
   "label",
-  "condition",
-  "weight",
   "fidelity",
   "thread_id",
   "loop_restart",
@@ -90,10 +87,6 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
 const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([
   ["loop_restart", "swarm's fidelity model (per-edge truncate/compact/summary) supersedes the run-restart use case"],
 ]);
-
-function isEmptyCondition(cond: string | undefined): boolean {
-  return !cond || cond.trim() === "";
-}
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -201,26 +194,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W003: no fail-edge (or unconditional fallback) from codergen/tool nodes
-  // with only conditional edges. A run can silently terminate otherwise.
-  // Skip Msquare/Mdiamond — start/exit shapes have their own structure rules.
-  for (const n of nodes) {
-    if (n.shape === "Mdiamond" || n.shape === "Msquare") continue;
-    const out = graph.edges.filter((e) => e.from === n.id);
-    if (out.length === 0) continue; // terminal behaviour ok; engine handles
-    const anyUnconditional = out.some((e) => isEmptyCondition(e.attrs.condition));
-    const anyFailCondition = out.some((e) => (e.attrs.condition ?? "").includes("outcome=fail"));
-    if (!anyUnconditional && !anyFailCondition) {
-      diags.push({
-        severity: "warning",
-        code: "W003",
-        message: `node "${n.id}" has only conditional edges and no "outcome=fail" catch-all; run may silently terminate on failure`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-
   // E012: start node must have no incoming edges (attractor §11.2). The
   // start handler is the entry point and is reached by the run-started
   // fact, not by any edge.
@@ -245,27 +218,6 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
         code: "E013",
         message: `exit node "${e.id}" must have no outgoing edges`,
         nodeId: e.id,
-        ...(e.loc !== undefined ? { loc: e.loc } : {}),
-      });
-    }
-  }
-
-  // E014: condition syntax — every edge `condition` parses cleanly.
-  // Surfaces author typos at validate-time instead of edge-selection
-  // failures mid-run.
-  for (const e of graph.edges) {
-    const cond = e.attrs.condition;
-    if (typeof cond !== "string" || cond.trim() === "") continue;
-    try {
-      parseCondition(cond);
-    } catch (err) {
-      diags.push({
-        severity: "error",
-        code: "E014",
-        message: `edge "${e.from}" → "${e.to}" condition="${cond}" failed to parse: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        edge: { from: e.from, to: e.to },
         ...(e.loc !== undefined ? { loc: e.loc } : {}),
       });
     }

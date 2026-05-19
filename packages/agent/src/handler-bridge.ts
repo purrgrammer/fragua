@@ -19,9 +19,9 @@ export interface MakeCodergenHandlerOpts {
    */
   node: Node;
   /**
-   * Fallback next-node id used only if the backend returns no
-   * `next_node_override` and the caller wants to bypass edge selection.
-   * Leave unset to defer to the executor's selectEdge. */
+   * Fallback next-node id. When set, the executor uses it verbatim and
+   * skips edge selection. Leave unset to defer to the executor's selectEdge.
+   */
   nextNode?: string;
   /** Backend instance used to drive the LLM. In production this is a
    * `PiCodergenBackend`; tests and mock workflows can pass any
@@ -201,35 +201,28 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
       return result satisfies HandlerResult;
     }
 
-    // retry / partial_success now flow through as transitions. The executor
-    // consults retryStep (engine/retry-policy.ts) on outcomeStatus="retry"
-    // to decide between sleep+re-dispatch, halt(max_retries_exceeded), or
-    // advance_partial (for nodes with allow_partial=true). partial_success
-    // is treated as success-like and advances via edge selection.
+    // retry outcomes flow through as transitions: the executor consults
+    // retryStep (engine/retry-policy.ts) on outcomeStatus="retry" to decide
+    // between sleep+re-dispatch, halt(max_retries_exceeded), or
+    // advance_partial (for nodes with allow_partial=true).
 
     // `fail` outcomes flow through as transitions so the executor's edge
-    // selector can route to a `condition="outcome=fail"` recovery edge
-    // (e.g. build-feature.dot: `review -> fix`). When no fail-edge exists,
-    // selectEdge returns undefined and the executor halts via
-    // result-to-facts' `outcomeStatus === "fail" → fact.run_halted` branch
-    // — same observable end state as before, just authored through the
-    // workflow graph instead of short-circuited here.
+    // selector can route to an `outcome=fail` recovery edge. When no
+    // fail-edge exists, selectEdge returns undefined and the executor halts.
     const failureReason =
       outcome.status === "fail" && outcome.failure_reason != null && outcome.failure_reason.length > 0
         ? outcome.failure_reason
         : undefined;
     // Only set `nextNode` for explicit overrides — otherwise the executor's
     // edge selector picks based on the outcome fields below. `opts.nextNode`
-    // stays as a legacy-compat fallback for auto-dispatcher code paths that
-    // pre-compute a single outgoing edge (noop transition nodes).
-    const explicitNext = outcome.next_node_override ?? opts.nextNode;
+    // is a fallback for auto-dispatcher code paths that pre-compute a single
+    // outgoing edge (noop transition nodes).
+    const explicitNext = opts.nextNode;
 
     const result: HandlerResult = {
       kind: "transition",
       outcomeStatus: outcome.status,
       ...(outcome.route !== undefined && outcome.route.length > 0 ? { route: outcome.route } : {}),
-      ...(outcome.preferred_label.length > 0 ? { preferredLabel: outcome.preferred_label } : {}),
-      ...(outcome.suggested_next_ids.length > 0 ? { suggestedNextIds: outcome.suggested_next_ids } : {}),
       ...(explicitNext != null ? { nextNode: explicitNext } : {}),
       ...(failureReason !== undefined ? { failureReason } : {}),
       tokens,

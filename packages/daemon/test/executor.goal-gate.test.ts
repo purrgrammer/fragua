@@ -69,7 +69,7 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
       fix [shape=box];
       done [shape=Msquare];
       start -> gate;
-      gate -> done [condition="outcome=fail"];
+      gate -> done [outcome=fail];
       gate -> done;
       fix -> gate;
     }`;
@@ -227,7 +227,7 @@ describe("executor — goal-gate enforcement (§3.4)", () => {
       fix [shape=box];
       done [shape=Msquare];
       start -> gate;
-      gate -> done [condition="outcome=fail"];
+      gate -> done [outcome=fail];
       gate -> done;
       fix -> gate;
     }`;

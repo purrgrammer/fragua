@@ -286,10 +286,10 @@ export interface BudgetBreachData {
 export interface EdgeSelectedData {
   from: string;
   to: string;
-  /** Which of the 5 priority rules picked this edge. */
-  rule: "condition" | "preferred_label" | "suggested_next_ids" | "weight" | "lexical";
-  matched_label?: string;
-  matched_condition?: string;
+  /** Which of the two selection cases picked this edge. */
+  rule: "route" | "outcome";
+  /** Route name when rule is "route". */
+  matched?: string;
 }
 
 // ───── Control channel ──────────────────────────────────────────────────

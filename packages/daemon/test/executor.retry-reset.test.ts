@@ -1,7 +1,7 @@
 // Retry counter reset on success — attractor §3.5.
 //
 // The per-node `internal.retry_count.<nodeId>` counter must be zeroed when
-// a node completes with outcomeStatus="success" or "partial_success". Without
+// a node completes with outcomeStatus="success". Without
 // the reset, the count survives a goal-gate retarget (§3.4) and a node that
 // retried once in pass 1 would start pass 2 with retry_count=1 — exhausting
 // max_retries one step earlier than authors expect.

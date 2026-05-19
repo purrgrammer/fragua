@@ -41,9 +41,8 @@ function graph(parts: { nodes: Node[]; attrs?: Graph["attrs"] }): Graph {
   };
 }
 
-const outcomes = (
-  entries: Record<string, "success" | "partial_success" | "fail" | "retry" | "skipped">,
-): GateOutcomes => new Map(Object.entries(entries));
+const outcomes = (entries: Record<string, "success" | "fail" | "retry">): GateOutcomes =>
+  new Map(Object.entries(entries));
 
 describe("checkGoalGates", () => {
   test("no gates → satisfied", () => {
@@ -56,11 +55,6 @@ describe("checkGoalGates", () => {
     expect(checkGoalGates(g, outcomes({ a: "success" }))).toEqual({ satisfied: true });
   });
 
-  test("gate partial_success → satisfied (attractor §3.4)", () => {
-    const g = graph({ nodes: [node("a", { goal_gate: true })] });
-    expect(checkGoalGates(g, outcomes({ a: "partial_success" }))).toEqual({ satisfied: true });
-  });
-
   test("gate failed → unsatisfied", () => {
     const g = graph({ nodes: [node("a", { goal_gate: true })] });
     expect(checkGoalGates(g, outcomes({ a: "fail" }))).toEqual({ satisfied: false, failedGate: "a" });
@@ -69,11 +63,6 @@ describe("checkGoalGates", () => {
   test("gate retry → unsatisfied", () => {
     const g = graph({ nodes: [node("a", { goal_gate: true })] });
     expect(checkGoalGates(g, outcomes({ a: "retry" }))).toEqual({ satisfied: false, failedGate: "a" });
-  });
-
-  test("gate skipped → unsatisfied (skipped is not success-like for gates)", () => {
-    const g = graph({ nodes: [node("a", { goal_gate: true })] });
-    expect(checkGoalGates(g, outcomes({ a: "skipped" }))).toEqual({ satisfied: false, failedGate: "a" });
   });
 
   test("unvisited gate → vacuously satisfied (run never reached it)", () => {

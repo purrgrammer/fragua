@@ -103,11 +103,9 @@ Handler finished; the executor commits a `fact.node_completed` + a `fact.node_st
 ```typescript
 return {
   kind: "transition",
-  nextNode?: "next",                    // omit to route via the 5-rule edge selector (condition → preferredLabel → suggestedNextIds → weight → lexical); set to "__end__" to terminate
-  outcomeStatus?: "success",            // matched against edge `condition="outcome=<s>"` clauses; defaults to "success"
-  route?: "feature",                    // set by the codergen backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's Step-0 edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
-  preferredLabel?: "go-on",             // matched against unconditional edges' `label` attr
-  suggestedNextIds?: ["publish"],       // matched against unconditional edges' `to` after label matching fails
+  nextNode?: "next",                    // omit to let edge selection decide; set to "__end__" to terminate
+  outcomeStatus?: "success",            // matched against edge `outcome=` attrs; defaults to "success". Unannotated edges default to outcome=success.
+  route?: "feature",                    // set by the codergen backend when the agent exited via the synthesised `route` tool (docs/proposals/llm-routing.md D2); the engine's route-case edge selector keys on this and the daemon persists it onto `fact.node_completed.payload.route`
   failureReason?: "validation failed: schema mismatch", // single-line; surfaces as fact.run_halted.detail on fail→__end__
   tokens: 0,                            // total tokens charged to this node
   costUsd: 0,                           // total dollars charged
@@ -128,7 +126,7 @@ Handler needs an operator to choose one of a closed set of routes. Run transitio
 
 When an operator writes `intent.human_input { route, note? }` the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
-On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [<target>]` where `<target>` is the matching outgoing edge's `to`. Edge selection's Step-0 (route) case fires the edge whose `attrs.route` equals the operator's choice; `suggestedNextIds` is a fallthrough hint for when two route edges land on the same target node.
+On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `route: <chosen>` so the engine's route-case edge selector fires the edge whose `attrs.route` equals the operator's choice.
 
 ```typescript
 return {

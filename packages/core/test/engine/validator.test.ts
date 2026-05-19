@@ -82,38 +82,6 @@ describe("validate", () => {
     expect(diags.find((d) => d.code === "W002" && d.nodeId === "unreachable")).toBeDefined();
   });
 
-  test("W003 all-conditional edges without fail catch-all", () => {
-    const diags = validate(
-      parseDotSource(`
-        digraph {
-          s [shape=Mdiamond]
-          mid
-          done [shape=Msquare]
-          s -> mid
-          mid -> done [condition="outcome=success"]
-        }
-      `),
-    );
-    expect(diags.find((d) => d.code === "W003")).toBeDefined();
-  });
-
-  test("W003 suppressed when an outcome=fail edge exists", () => {
-    const diags = validate(
-      parseDotSource(`
-        digraph {
-          s [shape=Mdiamond]
-          mid
-          done [shape=Msquare]
-          fix
-          s -> mid
-          mid -> done [condition="outcome=success"]
-          mid -> fix [condition="outcome=fail"]
-        }
-      `),
-    );
-    expect(diags.find((d) => d.code === "W003")).toBeUndefined();
-  });
-
   test("E006 cycle without reachable exit", () => {
     const diags = validate(
       parseDotSource(`
@@ -271,7 +239,7 @@ describe("HITL (wait.human) lint rules", () => {
           s -> gate
           gate -> a    [route=approve]
           gate -> done [route=reject]
-          a -> done    [condition="outcome=success"]
+          a -> done    [outcome=success]
         }
       `),
     );
@@ -456,22 +424,6 @@ describe("structural lints (attractor §11.2)", () => {
     const e013 = diags.find((d) => d.code === "E013");
     expect(e013).toBeDefined();
     expect(e013?.nodeId).toBe("done");
-  });
-
-  test("E014: edge condition fails to parse", () => {
-    const diags = validate(
-      parseDotSource(`
-        digraph {
-          s [shape=Mdiamond]
-          a [shape=box]
-          done [shape=Msquare]
-          s -> a [condition="this is not valid && && malformed"]
-          a -> done
-        }
-      `),
-    );
-    const e014 = diags.find((d) => d.code === "E014");
-    expect(e014).toBeDefined();
   });
 
   test("W009: codergen node with empty prompt and empty label", () => {
@@ -836,7 +788,7 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
           s [shape=Mdiamond]
           work [prompt="hi", allowed_tools="read", llm_model="claude-sonnet-4-6"]
           done [shape=Msquare]
-          s -> work -> done [label="ok", condition="outcome=success", weight=1]
+          s -> work -> done [label="ok", outcome=success]
         }
       `),
     );
@@ -1312,7 +1264,7 @@ describe("routing rule sanity checks", () => {
           s -> gate
           gate -> a    [route=approve]
           gate -> done [route=reject]
-          a -> done    [condition="outcome=success"]
+          a -> done    [outcome=success]
         }
       `),
     );

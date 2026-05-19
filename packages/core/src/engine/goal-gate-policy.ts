@@ -54,7 +54,7 @@ export function readGateOutcomes(routing: Record<string, unknown>): GateOutcomes
     if (!k.startsWith(GOAL_GATE_OUTCOME_KEY_PREFIX)) continue;
     if (k === GOAL_GATE_RETRIES_KEY) continue;
     if (typeof v !== "string") continue;
-    if (v === "success" || v === "partial_success" || v === "fail" || v === "retry" || v === "skipped") {
+    if (v === "success" || v === "fail" || v === "retry") {
       out.set(k.slice(GOAL_GATE_OUTCOME_KEY_PREFIX.length), v);
     }
   }
@@ -80,7 +80,7 @@ export function checkGoalGates(graph: Graph, outcomes: GateOutcomes): GateCheck 
     if (node.attrs.goal_gate !== true) continue;
     const status = outcomes.get(node.id);
     if (status === undefined) continue; // never executed → vacuously ok
-    if (status === "success" || status === "partial_success") continue;
+    if (status === "success") continue;
     return { satisfied: false, failedGate: node.id };
   }
   return { satisfied: true };

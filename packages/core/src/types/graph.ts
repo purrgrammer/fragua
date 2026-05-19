@@ -130,8 +130,6 @@ export interface NodeAttrs {
 
 export interface EdgeAttrs {
   label?: string;
-  condition?: string;
-  weight?: number;
   fidelity?: FidelityMode;
   thread_id?: string;
   /** Outcome-keyed edge — selected when the source node's last fact reports

@@ -179,14 +179,13 @@ describe("deriveNodeStates — outcomeStatus awareness", () => {
 describe("deriveSelectedEdges — edge.selected projection", () => {
   test("extracts (from, to, iteration) triples in event order", () => {
     const events: StoredEvent[] = [
-      { ...ev("edge.selected", { from: "start", to: "lint", iteration: 0, rule: "weight" }), seq: 1 },
+      { ...ev("edge.selected", { from: "start", to: "lint", iteration: 0, rule: "outcome" }), seq: 1 },
       {
         ...ev("edge.selected", {
           from: "lint",
           to: "done",
           iteration: 0,
-          rule: "condition",
-          matched_condition: "outcome=fail",
+          rule: "outcome",
         }),
         seq: 2,
       },
@@ -242,14 +241,14 @@ describe("deriveSelectedEdges — edge.selected projection", () => {
     const events: StoredEvent[] = [
       // Failing gate "selected" the configured fail-edge to done...
       {
-        ...ev("edge.selected", { from: "review", to: "done", iteration: 0, rule: "condition" }),
+        ...ev("edge.selected", { from: "review", to: "done", iteration: 0, rule: "outcome" }),
         seq: 100,
       },
       // ...but goal-gate retargeted to audit instead — the edge above was never traversed.
       { ...ev("goal_gate.retarget", { failedGate: "review", target: "audit", retries: 1 }), seq: 101 },
       { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 102 },
       // Second-attempt success does fire and IS retained verbatim.
-      { ...ev("edge.selected", { from: "review", to: "propose_patch", iteration: 0, rule: "weight" }), seq: 200 },
+      { ...ev("edge.selected", { from: "review", to: "propose_patch", iteration: 0, rule: "outcome" }), seq: 200 },
       { ...ev("fact.node_completed", { nodeId: "review", iteration: 0 }), seq: 201 },
     ];
     expect(deriveSelectedEdges(events)).toEqual([

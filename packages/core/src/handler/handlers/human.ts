@@ -14,20 +14,19 @@
 // the same node. The handler validates the route against its declared
 // list (defense-in-depth — the server-side endpoint validates the same
 // enum, but a hand-crafted intent could bypass that) and returns a
-// transition with `suggestedNextIds=[<edge.to>]`. The engine's Step-0
-// route case (packages/core/src/engine/edge-selection.ts) fires the
-// edge whose `attrs.route` matches; suggestedNextIds is a fallthrough
-// hint for when two route edges land on the same target node.
+// transition with `route` set to the chosen route name. The engine's
+// route-case edge selector (packages/core/src/engine/edge-selection.ts)
+// fires the edge whose `attrs.route` matches the chosen value.
 //
-// No `preferredLabel`: per D6 the per-edge `label=` is pure UX
-// (button text) and never participates in selection.
+// Per D6 the per-edge `label=` is pure UX (button text) and never
+// participates in selection.
 
 import type { Handler, HandlerResult, HandlerSpec, HumanInput } from "../types.ts";
 
 export interface HumanHandlerEdge {
   /** Route name (must appear in `routes`). */
   route: string;
-  /** Target node id — wired into `suggestedNextIds` on resume. */
+  /** Target node id for validation/error reporting. */
   to: string;
 }
 
@@ -66,7 +65,7 @@ export function makeHumanHandler(cfg: HumanHandlerConfig): HandlerSpec {
 
     return {
       kind: "transition",
-      suggestedNextIds: [target],
+      route,
       tokens: 0,
       costUsd: 0,
     } satisfies HandlerResult;

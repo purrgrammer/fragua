@@ -248,27 +248,19 @@ export type HandlerResult =
   | {
       kind: "transition";
       /** Explicit next node. When set, the executor uses it verbatim and
-       * skips edge selection entirely. Handlers that want the 5-rule
-       * selector (condition → preferred_label → suggested_next_ids →
-       * weight → lexical) should leave this unset and populate the
-       * `outcomeStatus` / `preferredLabel` / `suggestedNextIds` fields
-       * instead. */
+       * skips edge selection entirely. Otherwise edge selection fires:
+       * route-case when source declares `routes=`, outcome-case otherwise. */
       nextNode?: string;
-      /** Outcome status — matched against edge `condition="outcome=<s>"`
-       * clauses by the executor's edge selector. Defaults to "success". */
-      outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+      /** Outcome status — matched against edge `outcome=` attributes by
+       * the executor's edge selector. Defaults to "success". Unannotated
+       * edges default to `outcome=success`. */
+      outcomeStatus?: "success" | "fail" | "retry";
       /** Set by the codergen backend when the agent exited the node via
        * the synthesised `route` tool (see
-       * docs/proposals/llm-routing.md D2). The engine's Step-0 edge
+       * docs/proposals/llm-routing.md D2). The engine's route-case edge
        * selector keys on this; the daemon persists it onto
        * `fact.node_completed.payload.route`. */
       route?: string;
-      /** Preferred edge label — matched against unconditional edges'
-       * `label` attr after condition matching fails. */
-      preferredLabel?: string;
-      /** Suggested next node ids in priority order — matched against
-       * unconditional edges' `to` after label matching fails. */
-      suggestedNextIds?: string[];
       /** Single-line reason emitted by the handler when `outcomeStatus="fail"`.
        * Surfaces verbatim as `fact.run_halted.detail` when the fail outcome
        * routes to a terminal node (executor's `aborted_exit` path). Optional

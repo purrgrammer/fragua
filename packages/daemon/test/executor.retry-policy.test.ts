@@ -253,11 +253,12 @@ describe("executor — retry-policy enforcement", () => {
     const events = r.store.getEvents("rp3");
     const accept = events.find((e) => e.type === "node.retry_partial_accept");
     expect(accept).toBeDefined();
-    // The flaky node's node_completed payload reports outcome=partial_success.
+    // The flaky node's node_completed payload reports outcome=success
+    // (advance_partial rewrites the status to success under the simplified model).
     const completed = events
       .filter((e) => e.type === "fact.node_completed")
       .find((e) => (e.payload as { nodeId: string }).nodeId === "flaky");
-    expect((completed?.payload as { outcomeStatus?: string }).outcomeStatus).toBe("partial_success");
+    expect((completed?.payload as { outcomeStatus?: string }).outcomeStatus).toBe("success");
     r.store.close();
   });
 });

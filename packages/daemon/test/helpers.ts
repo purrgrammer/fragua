@@ -86,7 +86,7 @@ export interface MockCodergenOpts {
   /** Final transition's nextNode. Default `__end__`. */
   nextNode?: string;
   /** Outcome status on the result. Default `"success"`. */
-  outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+  outcomeStatus?: "success" | "fail" | "retry";
   /** Delay (ms) between calls. Lets supervisor / wake-pending interleave.
    *  Default 0 (synchronous). */
   delayMs?: number;

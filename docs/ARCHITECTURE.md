@@ -408,7 +408,7 @@ CREATE TABLE provider_config (
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
 | `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
-| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
+| `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'fail'\|'retry'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
 | `fact.intents_folded` | `intentSeq`, `folded` | Operator intents (steer / hitl / priority / pause) merged into routing/messages by the fold |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool about to run |
@@ -738,10 +738,9 @@ export interface ScopeOverrides {
 export type HandlerResult =
   | {
       kind: "transition";
-      nextNode?: string;                                // omit to route via the 5-rule edge selector
-      outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
-      preferredLabel?: string;
-      suggestedNextIds?: string[];
+      nextNode?: string;                                // omit to let edge selection decide
+      outcomeStatus?: "success" | "fail" | "retry";
+      route?: string;                                   // set by codergen on routing nodes
       tokens: number;
       costUsd: number;
       inputCostUsd?: number;
@@ -1195,7 +1194,7 @@ packages/
         context.ts                     ← buildHandlerContext (per-call env)
         external-call.ts               ← idempotency key + intent/done envelope
       engine/
-        edge-selection.ts              ← 5-rule priority (attractor §3.3)
+        edge-selection.ts              ← two-case algorithm: route-case | outcome-case (SPEC §3.6)
         retry-policy.ts                ← per-node retry counter (§3.6)
         fidelity.ts                    ← fidelity + thread_id resolution
         substitution.ts                ← $ARGUMENTS only (SPEC §3.8)

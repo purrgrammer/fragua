@@ -6,8 +6,8 @@
 //                       allow_partial is set).
 //   2. Counter monotonic — each "retry" action increments retries by exactly 1.
 //   3. No overshoot   — retries never exceeds maxRetries after a retry step.
-//   4. Success-like → advance — success / partial_success / skipped
-//                       unconditionally advance, regardless of state.
+//   4. Success-like → advance — success
+//                       unconditionally advances, regardless of state.
 //   5. Fail is terminal — status="fail" unconditionally returns fail,
 //                       regardless of retries remaining.
 //   6. non_retryable short-circuits any status to fail.
@@ -29,10 +29,10 @@ import {
 } from "../../src/engine/retry-policy.ts";
 import type { OutcomeStatus } from "../../src/types/outcome.ts";
 
-const SUCCESS_LIKE: OutcomeStatus[] = ["success", "partial_success", "skipped"];
+const SUCCESS_LIKE: OutcomeStatus[] = ["success"];
 
 describe("retryStep — success-like statuses", () => {
-  test("success / partial_success / skipped → advance from any state", () => {
+  test("success → advance from any state", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 0, max: 20 }),
@@ -64,7 +64,7 @@ describe("retryStep — non_retryable short-circuit", () => {
       fc.property(
         fc.integer({ min: 0, max: 20 }),
         fc.integer({ min: 0, max: 20 }),
-        fc.constantFrom<OutcomeStatus>("success", "partial_success", "fail", "retry", "skipped"),
+        fc.constantFrom<OutcomeStatus>("success", "fail", "retry"),
         (retries, maxRetries, status) => {
           const state: RetryState = { retries, maxRetries };
           expect(retryStep({ state, status, nonRetryable: true })).toEqual({ kind: "fail" });

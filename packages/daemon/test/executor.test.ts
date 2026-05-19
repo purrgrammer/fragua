@@ -26,7 +26,7 @@ describe("executor — edge selection", () => {
       verify [shape=box];
       done [shape=Msquare];
       start -> implement;
-      implement -> done [condition="outcome=fail"];
+      implement -> done [outcome=fail];
       implement -> verify;
       verify -> done;
     }`;
@@ -75,11 +75,12 @@ describe("executor — edge selection", () => {
 
     const edgeSelected = events.find((e) => e.type === "edge.selected");
     expect(edgeSelected).not.toBeUndefined();
-    const sel = edgeSelected!.payload as { from: string; to: string; rule: string; matched_condition?: string };
+    const sel = edgeSelected!.payload as { from: string; to: string; rule: string };
     expect(sel.from).toBe("implement");
     expect(sel.to).toBe("done");
-    expect(sel.rule).toBe("condition");
-    expect(sel.matched_condition).toBe("outcome=fail");
+    // Two-case algorithm (Phase 9): outcome=fail edge picked via the
+    // outcome attr; rule is "outcome", not the legacy "condition".
+    expect(sel.rule).toBe("outcome");
     r.store.close();
   });
 
@@ -90,7 +91,7 @@ describe("executor — edge selection", () => {
       verify [shape=box];
       done [shape=Msquare];
       start -> implement;
-      implement -> done [condition="outcome=fail"];
+      implement -> done [outcome=fail];
       implement -> verify;
       verify -> done;
     }`;
@@ -156,7 +157,7 @@ describe("executor — edge selection", () => {
       verify [shape=box];
       done [shape=Msquare];
       start -> implement;
-      implement -> done [condition="outcome=fail"];
+      implement -> done [outcome=fail];
       implement -> verify;
       verify -> done;
     }`;
@@ -221,7 +222,7 @@ describe("executor — edge selection", () => {
       check [shape=box];
       done [shape=Msquare];
       start -> check;
-      check -> done [condition="outcome=fail"];
+      check -> done [outcome=fail];
       check -> done;
     }`;
     const r = rig({ dot });
@@ -282,7 +283,7 @@ describe("executor — edge selection", () => {
       verify [shape=box];
       done [shape=Msquare];
       start -> review;
-      review -> fix [condition="outcome=fail", label="rejected"];
+      review -> fix [outcome=fail, label="rejected"];
       review -> verify;
       fix -> verify;
       verify -> done;
@@ -409,66 +410,6 @@ describe("executor — edge selection", () => {
     });
     expect(mergeHandlerCalls).toBe(0);
     expect(r.store.getState("no-fail-edge")?.status).toBe("halted");
-    r.store.close();
-  });
-
-  test("diamond-shape `conditional` node routes via edge conditions (no registered handler)", async () => {
-    // The auto-dispatcher's conditional case leaves nextNode unset so
-    // the executor's selector picks based on state.routing. Here we seed
-    // routing.approved=true and expect the edge tagged
-    // `condition="context.approved = true"` to win.
-    const dot = `digraph {
-      start [shape=Mdiamond];
-      gate [shape=diamond];
-      yes [shape=box];
-      no [shape=box];
-      done [shape=Msquare];
-      start -> gate;
-      gate -> yes [condition="context.approved = true"];
-      gate -> no;
-      yes -> done;
-      no -> done;
-    }`;
-    const r = rig({ dot });
-    // Use the auto-dispatcher for graph-driven handlers (start, gate,
-    // done) and manual register() for yes/no to keep the test terminal.
-    const { autoDispatcherResolver } = await import("../src/auto-dispatcher.ts");
-    r.dispatcher.setResolver(autoDispatcherResolver({ store: r.store }));
-    r.dispatcher.register(r.workflowSha, "yes", {
-      kind: "codergen",
-      sideEffect: "external",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
-    });
-    r.dispatcher.register(r.workflowSha, "no", {
-      kind: "codergen",
-      sideEffect: "external",
-      maxMs: 100,
-      handler: async () => ({ kind: "transition", nextNode: "__end__", tokens: 0, costUsd: 0 }),
-    });
-    r.store.enqueueRun({
-      runId: "cond-1",
-      workflowSha: r.workflowSha,
-      initialRouting: { start_node: "start", approved: true },
-    });
-    r.store.claimNextRun(1);
-    await runOne("cond-1", {
-      store: r.store,
-      dispatcher: r.dispatcher,
-      registry: new AbortRegistry(),
-      tools: r.tools,
-      llmCall: r.llmCall,
-      maxConcurrentRuns: 1,
-      maxTurnsForTesting: 10,
-      shutdownSignal: new AbortController().signal,
-    });
-    const events = r.store.getEvents("cond-1");
-    // From `gate`, the fact.node_completed should report nextNode=yes.
-    const gateRow = events.find(
-      (e) => e.type === "fact.node_completed" && (e.payload as { nodeId: string }).nodeId === "gate",
-    );
-    expect(gateRow).not.toBeUndefined();
-    expect((gateRow!.payload as { nextNode: string }).nextNode).toBe("yes");
     r.store.close();
   });
 

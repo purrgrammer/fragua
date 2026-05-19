@@ -400,7 +400,6 @@ const INT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 const NUMBER_KEYS: ReadonlySet<string> = new Set([
-  "weight",
   // Budget knobs (graph + node). Declared as numbers so DOT authors can
   // write `budget_usd = 0.75` without quoting and the runtime gets a real
   // number, not "0.75".

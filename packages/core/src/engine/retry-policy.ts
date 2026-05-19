@@ -3,7 +3,7 @@
 // Attractor has no loop primitive. Loops are backward edges, and iteration
 // is bounded by `max_retries` on the target node. Outcome semantics:
 //
-//   success / partial_success / skipped → advance (take successor edge)
+//   success → advance (take successor edge)
 //   retry                                → re-enter current node; counter++,
 //                                          delay computed from BackoffConfig
 //   fail                                 → fail (routing finds a fail edge
@@ -121,7 +121,7 @@ export function retryStep(input: RetryStepInput): RetryAction {
   // immediately when the boundary marked the failure terminal.
   if (input.nonRetryable === true) return { kind: "fail" };
 
-  if (status === "success" || status === "partial_success" || status === "skipped") {
+  if (status === "success") {
     return { kind: "advance" };
   }
   if (status === "fail") {

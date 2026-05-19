@@ -68,7 +68,7 @@ function stubBackend(
           timestamp: 2,
         });
       }
-      return ok({ notes: "done", context_updates: { result: "four" } });
+      return ok({ notes: "done" });
     },
   };
 }
@@ -169,9 +169,6 @@ describe("makeCodergenHandler", () => {
       async run() {
         return {
           status: "fail",
-          context_updates: { thing: "value" },
-          preferred_label: "",
-          suggested_next_ids: [],
           notes: "",
           failure_reason: "provider unreachable",
         };
@@ -198,9 +195,6 @@ describe("makeCodergenHandler", () => {
       async run() {
         return {
           status: "fail",
-          context_updates: {},
-          preferred_label: "",
-          suggested_next_ids: [],
           notes: "",
           failure_reason: "",
         };
@@ -231,9 +225,6 @@ describe("makeCodergenHandler", () => {
       async run() {
         return {
           status: "retry",
-          context_updates: {},
-          preferred_label: "",
-          suggested_next_ids: [],
           notes: "",
           failure_reason: "transient",
         };
@@ -292,25 +283,6 @@ describe("makeCodergenHandler", () => {
     expect(seenPrompt?.includes("$ARGUMENTS")).toBe(false);
     store.close();
   });
-
-  test("next_node_override supersedes the configured nextNode", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r4", store, "n1");
-    const overriding: CodergenBackend = {
-      async run() {
-        return ok({ next_node_override: "elsewhere" });
-      },
-    };
-    const spec = makeCodergenHandler({
-      node: node({ id: "n1" }),
-      nextNode: "__end__",
-      backend: overriding,
-    });
-    const result = await spec.handler(ctx);
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") expect(result.nextNode).toBe("elsewhere");
-    store.close();
-  });
 });
 
 // Regression / property suite for "codergen routing belongs to the edge
@@ -322,13 +294,8 @@ describe("makeCodergenHandler", () => {
 // just because that branch was declared first.
 //
 // The invariants these tests lock:
-//   (I1) No `nextNode` option + no `next_node_override`
-//        → HandlerResult.nextNode is undefined (selector decides).
-//   (I2) Setting `nextNode` option alone still works for the legacy
-//        transition-spec path (tool/transition nodes with a single
-//        outgoing edge).
-//   (I3) `next_node_override` always wins — even when both `nextNode`
-//        option is set AND outcomeStatus is non-success.
+//   (I1) No `nextNode` option → HandlerResult.nextNode is undefined (selector decides).
+//   (I2) Setting `nextNode` option propagates for transition-spec paths.
 describe("makeCodergenHandler — routing delegation invariants", () => {
   test("(I1) no nextNode option + no override → result.nextNode undefined", async () => {
     const store = new SqliteStore({ path: ":memory:" });
@@ -359,59 +326,30 @@ describe("makeCodergenHandler — routing delegation invariants", () => {
     store.close();
   });
 
-  test("(I3) next_node_override wins over the nextNode option", async () => {
-    const store = new SqliteStore({ path: ":memory:" });
-    const ctx = await ctxFor("r-inv-3", store, "n1");
-    const backend: CodergenBackend = {
-      async run() {
-        return ok({ next_node_override: "override-target" });
-      },
-    };
-    const spec = makeCodergenHandler({ node: node({ id: "n1" }), nextNode: "legacy-target", backend });
-    const result = await spec.handler(ctx);
-    if (result.kind === "transition") expect(result.nextNode).toBe("override-target");
-    store.close();
-  });
-
-  test("property: (I1) holds across arbitrary outcomeStatus + context_updates", async () => {
-    const statuses: OutcomeStatus[] = ["success", "partial_success", "skipped"];
-    // `fail` and `retry` route through a different handler-bridge branch
-    // (kind=halt), so they're excluded from this invariant — the "no
-    // nextNode forcing" property targets transition-kind results only.
+  test("property: (I1) holds across arbitrary outcomeStatus", async () => {
+    const statuses: OutcomeStatus[] = ["success", "fail", "retry"];
     await fc.assert(
-      fc.asyncProperty(
-        fc.constantFrom(...statuses),
-        fc.dictionary(fc.string({ minLength: 1, maxLength: 8 }), fc.oneof(fc.string(), fc.integer(), fc.boolean())),
-        async (status, updates) => {
-          const store = new SqliteStore({ path: ":memory:" });
-          try {
-            const ctx = await ctxFor(`r-prop-${Math.random()}`, store, "n1");
-            const backend: CodergenBackend = {
-              async run() {
-                return {
-                  status,
-                  context_updates: updates as Record<string, string | number | boolean>,
-                  preferred_label: "",
-                  suggested_next_ids: [],
-                  notes: "",
-                };
-              },
-            };
-            const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
-            const result = await spec.handler(ctx);
-            // Invariant: no forced nextNode when the caller didn't supply
-            // one and the outcome didn't override. The executor's edge
-            // selector must be free to pick based on outcomeStatus +
-            // condition matching.
-            if (result.kind === "transition") {
-              expect(result.nextNode).toBeUndefined();
-              expect(result.outcomeStatus).toBe(status);
-            }
-          } finally {
-            store.close();
+      fc.asyncProperty(fc.constantFrom(...statuses), async (status) => {
+        const store = new SqliteStore({ path: ":memory:" });
+        try {
+          const ctx = await ctxFor(`r-prop-${Math.random()}`, store, "n1");
+          const backend: CodergenBackend = {
+            async run() {
+              return { status, notes: "" };
+            },
+          };
+          const spec = makeCodergenHandler({ node: node({ id: "n1" }), backend });
+          const result = await spec.handler(ctx);
+          // Invariant: no forced nextNode when the caller didn't supply one.
+          // The executor's edge selector must be free to pick.
+          if (result.kind === "transition") {
+            expect(result.nextNode).toBeUndefined();
+            expect(result.outcomeStatus).toBe(status);
           }
-        },
-      ),
+        } finally {
+          store.close();
+        }
+      }),
       { numRuns: 30 },
     );
   });
@@ -530,7 +468,7 @@ describe("makeCodergenHandler — priorMessages thread loading", () => {
     const backend: CodergenBackend = {
       async run(input) {
         calls.push(input.priorMessages ?? []);
-        return ok({ notes: "done", context_updates: {} });
+        return ok({ notes: "done" });
       },
     };
     return { calls, backend };

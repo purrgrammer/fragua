@@ -102,7 +102,7 @@ function makeInstrumentedBackend(): {
         priorMessagesLen: input.priorMessages?.length ?? 0,
       });
       input.persistMessage?.(assistantMsg(`reply to ${input.prompt}`));
-      return ok({ notes: "ok", context_updates: {} });
+      return ok({ notes: "ok" });
     },
   };
   return { backend, calls };
@@ -136,7 +136,7 @@ describe("messages table populates on persistMessage", () => {
           isError: false,
           timestamp: 1,
         });
-        return ok({ notes: "", context_updates: {} });
+        return ok({ notes: "" });
       },
     };
     await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
@@ -407,7 +407,7 @@ describe("daemon-boot inProcessWrites reconstruction", () => {
     const inner: CodergenBackend = {
       async run(input) {
         input.persistMessage?.(assistantMsg("r1 dev"));
-        return ok({ notes: "", context_updates: {} });
+        return ok({ notes: "" });
       },
     };
     await makeCodergenHandler({ node: node({ id: "dev" }), backend: inner }).handler(ctx);
@@ -435,7 +435,7 @@ describe("event payload cap (§I7) survives unbounded message content", () => {
       async run(input) {
         input.persistMessage?.(assistantMsg(huge));
         await input.emit?.("agent.message_end", { role: "assistant" });
-        return ok({ notes: "", context_updates: {} });
+        return ok({ notes: "" });
       },
     };
     await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);

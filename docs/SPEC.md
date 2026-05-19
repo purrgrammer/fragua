@@ -160,26 +160,29 @@ The four cap-adjustment intents (`budget` / `max_retries` / `goal_gate` / `max_l
 
 ### 3.6 Edge selection
 
-After a node completes, the executor picks the next edge from the source node's outgoing edges. The five-step algorithm (`packages/core/src/engine/edge-selection.ts:60-124`) is:
+After a node completes, the executor picks the next edge using a two-case algorithm (`packages/core/src/engine/edge-selection.ts`). See also `docs/proposals/llm-routing.md` §D10.
 
-1. **Condition** — among edges with a non-empty `condition`, evaluate each against the current outcome + routing. Among those that match, pick by weight (highest wins), then lexical tiebreak on `edge.to`.
-2. **Preferred label** — among unconditional edges (no `condition`), first edge whose `label` normalises to `outcome.preferred_label` wins.
-3. **Suggested next ids** — first unconditional edge whose target matches one of `outcome.suggested_next_ids` (in order) wins.
-4. **Weight** — highest-weight unconditional edge.
-5. **Lexical** — tiebreak by `edge.to` (lower wins).
+**Route case** — when the source node declares `routes="a,b,c"`, it is a *routing node*. The codergen backend synthesises an ephemeral `route` tool constrained to those values; the LLM exits the turn with `route({name:"a"})`. Edge selection picks the edge whose `route=a` attribute matches the chosen value. An unmatched route halts with `edge_no_match`.
 
-**Fail routing.** When `outcome.status === "fail"` and step 1 produces no match, the executor does **not** fall through to steps 2–5 (those are reserved for success-path resolution). It follows the fail-routing chain (`packages/daemon/src/executor.ts:1031-1042`):
+**Outcome case** — for all other nodes, edge selection picks the edge whose `outcome=` attribute matches `handlerResult.outcomeStatus`. Unannotated edges default to `outcome=success`. If no edge matches a `fail` outcome the executor halts; no fall-through to success-path edges occurs.
 
-1. **Fail edge** — a condition-matched edge from step 1 above. If found, follow it.
-2. **`retry_target`** on the failing node — jump to that node id (validated against the graph).
-3. **`fallback_retry_target`** on the failing node — secondary jump target.
-4. **Halt** — `fact.run_halted` with the original failure reason.
+Fail recovery is authored explicitly: add an `outcome=fail` edge from the node to a recovery target. Absence of a fail-edge is the halt signal. Per-node `retry_target` / `fallback_retry_target` serve goal-gate retargeting (§3.7), not per-node failure.
 
-Authors recovering from failure declare a `condition="outcome=fail"` edge (step 1) or a per-node `retry_target` (steps 2-3); absence of all three is the halt signal. Graph-level `retry_target` / `fallback_retry_target` belong to goal-gate retargeting (§3.7), not per-node failure.
+**Outcome shape.** Every handler returns an `Outcome` (defined in `packages/core/src/types/outcome.ts`):
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `"success" \| "fail" \| "retry"` | Terminal disposition. `retry` re-enters the same node with backoff. |
+| `notes` | string | Free-form diagnostic. |
+| `failure_reason` | string? | Human-readable failure detail, surfaced as `fact.run_halted.detail`. |
+| `non_retryable` | boolean? | When true, suppresses goal-gate retry even on fail. |
+| `provider_error` | object? | Set by the codergen boundary on transport errors. |
+| `route` | string? | Chosen route name (routing nodes only). |
+| `halt_reason` | HaltReason? | Set by the codergen boundary for structural halts. |
 
 ### 3.7 Retries and goal gates
 
-**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}` unless the node sets `allow_partial=true` (advance carrying `partial_success`).
+**Per-node retries.** A handler returning `outcome.status="retry"` re-enters the same node with a backoff. `max_retries` (node attr, default 0) caps the count; exhaustion pauses the run with `fact.run_paused{reason:"max_retries"}` unless the node sets `allow_partial=true` (advance as `success`).
 
 `retry_policy` (node attr) names a backoff preset; `default_retry_policy` (graph attr) is the fallback.
 
@@ -195,7 +198,7 @@ Per-node overrides (`retry_initial_delay_ms`, `retry_backoff_factor`, `retry_max
 
 Boundary failures (auth, 4xx, validation) set `non_retryable=true` on the Outcome — the reducer treats the outcome as terminal regardless of status, so retry presets don't accidentally hammer a permanent failure.
 
-**Goal gates.** A node with `goal_gate=true` must reach `success` or `partial_success` before the run can exit. When a terminal `Msquare` node would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to:
+**Goal gates.** A node with `goal_gate=true` must reach `success` before the run can exit. When a terminal `Msquare` node would emit `fact.run_completed`, the executor first checks every visited gate; if any is unsatisfied, the run retargets to:
 
 1. The failing gate's `retry_target` (then `fallback_retry_target`).
 2. The graph-level `retry_target` (then `fallback_retry_target`).

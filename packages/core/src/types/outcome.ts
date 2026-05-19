@@ -1,29 +1,18 @@
-// Outcome: the result returned by every handler. See docs/SPEC.md §3.7.
+// Outcome: the result returned by every handler. See docs/SPEC.md §3.6.
 
 import { type Static, Type } from "@sinclair/typebox";
 import type { HaltReason } from "@swarm/types";
 
-export type OutcomeStatus = "success" | "partial_success" | "fail" | "retry" | "skipped";
+export type OutcomeStatus = "success" | "fail" | "retry";
 
 export type ContextValue = string | number | boolean | null | ContextValue[] | { [k: string]: ContextValue };
 
 /** Runtime schema kept for checkpoint validation; derived Outcome type matches. */
 export const OutcomeSchema = Type.Object(
   {
-    status: Type.Union([
-      Type.Literal("success"),
-      Type.Literal("partial_success"),
-      Type.Literal("fail"),
-      Type.Literal("retry"),
-      Type.Literal("skipped"),
-    ]),
-    context_updates: Type.Record(Type.String(), Type.Unsafe<ContextValue>(Type.Any())),
-    preferred_label: Type.String(),
-    suggested_next_ids: Type.Array(Type.String()),
+    status: Type.Union([Type.Literal("success"), Type.Literal("fail"), Type.Literal("retry")]),
     notes: Type.String(),
     failure_reason: Type.Optional(Type.String()),
-    /** Bypass edge selection entirely; jump to this node next. */
-    next_node_override: Type.Optional(Type.String()),
     /**
      * When true, an unrecovered failure must NOT trigger a goal-gate retry
      * via `graph.attrs.retry_target`. Used for intentional aborts (e.g. a
@@ -87,9 +76,6 @@ export type Outcome = Static<typeof OutcomeSchema>;
 export function ok(partial: Partial<Outcome> = {}): Outcome {
   return {
     status: "success",
-    context_updates: {},
-    preferred_label: "",
-    suggested_next_ids: [],
     notes: "",
     ...partial,
   };
@@ -99,9 +85,6 @@ export function ok(partial: Partial<Outcome> = {}): Outcome {
 export function fail(failure_reason: string, partial: Partial<Outcome> = {}): Outcome {
   return {
     status: "fail",
-    context_updates: {},
-    preferred_label: "",
-    suggested_next_ids: [],
     notes: "",
     failure_reason,
     ...partial,
@@ -121,9 +104,6 @@ export function failProvider(
 ): Outcome {
   return {
     status: "fail",
-    context_updates: {},
-    preferred_label: "",
-    suggested_next_ids: [],
     notes: errorMessage,
     failure_reason: errorMessage,
     non_retryable: true,
@@ -149,9 +129,6 @@ export function failProvider(
 export function failHalt(reason: HaltReason, message: string): Outcome {
   return {
     status: "fail",
-    context_updates: {},
-    preferred_label: "",
-    suggested_next_ids: [],
     notes: message,
     failure_reason: message,
     non_retryable: true,

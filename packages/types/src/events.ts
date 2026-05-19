@@ -386,7 +386,7 @@ export type FactEvent =
         /** Outcome status the handler (or edge selector) decided — lets the
          * UI distinguish "completed OK" from "completed with outcome=fail"
          * without walking `edge.selected` / `fact.run_halted`. */
-        outcomeStatus?: "success" | "partial_success" | "fail" | "retry" | "skipped";
+        outcomeStatus?: "success" | "fail" | "retry";
         /** Present iff the source node declared `routes=` and the codergen
          * agent exited via the synthesised `route` tool. The chosen route
          * name; the engine's Step-0 edge selector keys on this. */

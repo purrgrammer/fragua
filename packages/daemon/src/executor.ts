@@ -1106,17 +1106,14 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       if (result.modelName == null && lastModel != null) result.modelName = lastModel;
 
       // Edge selection: when the handler left `nextNode` unset, pick from
-      // the current node's outgoing edges via the 5-rule selector (SPEC
-      // §3.8). With it set, the handler is bypassing routing on purpose.
+      // the current node's outgoing edges via the two-case selector
+      // (SPEC §3.6). With it set, the handler is bypassing routing on purpose.
       if (result.nextNode == null) {
         const graph = graphFor(state.workflowSha);
         const srcNode = graph?.nodes[currentNode];
         if (graph != null && srcNode != null) {
           const selectorOutcome: Parameters<typeof selectEdge>[0]["outcome"] = {
             status: result.outcomeStatus ?? "success",
-            context_updates: {},
-            preferred_label: result.preferredLabel ?? "",
-            suggested_next_ids: result.suggestedNextIds ?? [],
             notes: "",
           };
           if (result.route !== undefined && result.route.length > 0) selectorOutcome.route = result.route;
@@ -1288,7 +1285,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     //     (transitions to paused_auto, freeing the slot);
     //     wake-pending re-queues the run after delayMs
     //   - halt → run halts with `max_retries_exceeded`
-    //   - advance_partial → rewrite outcomeStatus to "partial_success"
+    //   - advance_partial → rewrite outcomeStatus to "success"
     //     and let edge selection advance (allow_partial branch, §3.5)
     //
     // For the retry path we DO emit fact.node_completed first (metrics
@@ -1299,10 +1296,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // Per attractor §3.5: reset the counter when this node succeeds so
     // a re-entry via goal-gate retarget (§3.4) or a fail-edge loop
     // starts at zero instead of inheriting the prior pass's count.
-    if (
-      result.kind === "transition" &&
-      (result.outcomeStatus === "success" || result.outcomeStatus === "partial_success")
-    ) {
+    if (result.kind === "transition" && result.outcomeStatus === "success") {
       const counterKey = retryCountKey(currentNode);
       if (readNumber(state.routing[counterKey]) > 0) {
         retryCounterPatch = { [counterKey]: 0 };
@@ -1405,7 +1399,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
             type: "node.retry_partial_accept",
             payload: { nodeId: currentNode, attempts: priorRetries + 1, maxRetries },
           });
-          result.outcomeStatus = "partial_success";
+          result.outcomeStatus = "success";
         }
       }
     }
@@ -1940,9 +1934,7 @@ function recordEdgeSelected(
     rule: selection.rule,
   };
   if (selection.matched !== undefined) {
-    if (selection.rule === "condition") payload["matched_condition"] = selection.matched;
-    else if (selection.rule === "preferred_label") payload["matched_label"] = selection.matched;
-    else payload["matched"] = selection.matched;
+    payload["matched"] = selection.matched;
   }
   buffer.push({ type: "edge.selected", payload });
 }

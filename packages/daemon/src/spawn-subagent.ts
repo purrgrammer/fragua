@@ -448,7 +448,7 @@ export function makeSpawnSubagent(
 
 function mapOutcomeStatus(outcome: Outcome, aborted: boolean): SubagentResult["status"] {
   if (aborted) return "cancelled";
-  if (outcome.status === "success" || outcome.status === "partial_success") return "completed";
+  if (outcome.status === "success") return "completed";
   return "halted";
 }
 

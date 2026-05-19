@@ -65,16 +65,16 @@ describe("human handler", () => {
     }
   });
 
-  test("resume with humanInput.route fires the matching route edge via suggestedNextIds", async () => {
+  test("resume with humanInput.route sets transition.route for edge-selection", async () => {
     const spec = makeHumanHandler(cfg);
     const result = await spec.handler(stubCtx({ humanInput: { route: "apply" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.suggestedNextIds).toEqual(["after"]);
+      expect(result.route).toBe("apply");
     }
   });
 
-  test("resume picks the right target when two edges land on the same node", async () => {
+  test("resume picks the right route when two edges land on the same node", async () => {
     const spec = makeHumanHandler({
       nodeId: "signoff",
       text: "?",
@@ -87,22 +87,9 @@ describe("human handler", () => {
     const result = await spec.handler(stubCtx({ humanInput: { route: "reject" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      // Both routes target `done`; edge-selection's Step-0 (route attr)
-      // disambiguates which edge fires. suggestedNextIds is the
-      // route's resolved `to`.
-      expect(result.suggestedNextIds).toEqual(["done"]);
-    }
-  });
-
-  test("transition does NOT set preferredLabel", async () => {
-    // Per D6 in docs/proposals/llm-routing.md, edge `label=` is pure UX
-    // and never participates in selection. The handler must not surface
-    // a preferredLabel hint.
-    const spec = makeHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ humanInput: { route: "apply" } }));
-    expect(result.kind).toBe("transition");
-    if (result.kind === "transition") {
-      expect(result.preferredLabel).toBeUndefined();
+      // Both routes target `done`; the route name disambiguates which
+      // edge fires via edge-selection's Step-0 (route attr).
+      expect(result.route).toBe("reject");
     }
   });
 
@@ -111,7 +98,7 @@ describe("human handler", () => {
     const result = await spec.handler(stubCtx({ humanInput: "apply" }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.suggestedNextIds).toEqual(["after"]);
+      expect(result.route).toBe("apply");
     }
   });
 
@@ -145,7 +132,7 @@ describe("human handler", () => {
     const result = await spec.handler(stubCtx({ humanInput: { route: "apply", note: "lgtm" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
-      expect(result.suggestedNextIds).toEqual(["after"]);
+      expect(result.route).toBe("apply");
     }
   });
 

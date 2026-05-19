@@ -77,11 +77,6 @@ describe("parseDotSource", () => {
     expect(g.nodes["done"]!.attrs.goal_gate).toBe(true);
   });
 
-  test("weight coerced to number", () => {
-    const g = parseDotSource(`digraph { a -> b [weight=3] }`);
-    expect(g.edges[0]!.attrs.weight).toBe(3);
-  });
-
   test("allowed_tools parsed as string array", () => {
     const g = parseDotSource(`digraph { n [allowed_tools="read_file, write_file, bash"] }`);
     expect(g.nodes["n"]!.attrs.allowed_tools).toEqual(["read_file", "write_file", "bash"]);
@@ -142,12 +137,6 @@ describe("parseDotSource", () => {
     expect(g.nodes["n"]!.attrs.prompt).toBe("line1\nline2 α β γ");
   });
 
-  test("chained edge with chained attribute blocks", () => {
-    const g = parseDotSource(`digraph { a -> b [label="x"] [weight=5] }`);
-    expect(g.edges[0]!.attrs.label).toBe("x");
-    expect(g.edges[0]!.attrs.weight).toBe(5);
-  });
-
   test("comments ignored", () => {
     const g = parseDotSource(`
       // line comment
@@ -174,11 +163,6 @@ describe("parseDotSource", () => {
     const g = parseDotSource(`digraph { "hello world" -> b }`);
     expect(g.nodes["hello world"]).toBeDefined();
     expect(g.edges[0]!.from).toBe("hello world");
-  });
-
-  test("condition attribute passes through verbatim", () => {
-    const g = parseDotSource(`digraph { a -> b [condition="outcome=success && context.tests=true"] }`);
-    expect(g.edges[0]!.attrs.condition).toBe("outcome=success && context.tests=true");
   });
 
   test("fidelity attribute preserved", () => {
