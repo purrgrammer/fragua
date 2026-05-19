@@ -17,7 +17,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | E011 | `retry_target` / `fallback_retry_target` references an undefined node. |
 | E012 | Start node has incoming edges (attractor §11.2). |
 | E013 | Exit node has outgoing edges (attractor §11.2). |
-| E014 | Edge `condition` failed to parse — most often a literal containing whitespace. Quote the literal or use an underscored sentinel (e.g. `RANK_CLEAN`). |
+| E014 | *(removed)* Was: edge `condition=` failed to parse. The condition DSL has been deleted; use `outcome=success`/`outcome=fail` on edges instead. |
 | E015 | `model_stylesheet` syntax error. Surfaces parse failures at validate-time. |
 | E016 | Node `type=` names a handler outside the known set (`start | exit | codergen | human | tool`). Typo or invented type — there is no extension surface. |
 | E017 | Routing node (non-empty `routes=`) has an outgoing edge with `outcome=`. Routing nodes must discriminate via `route=` only. |
@@ -37,7 +37,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 |---|---|
 | W001 | Orphan node (no in-edges, not start). Usually a copy/paste leftover. |
 | W002 | Node unreachable from start. Dead code. |
-| W003 | Node has only conditional edges, no `outcome=fail` catch-all. |
+| W003 | *(removed)* Was: node has only conditional edges, no `outcome=fail` catch-all. Rule deleted along with the condition DSL; declare an `outcome=fail` edge explicitly to handle failure. |
 | W004 | *(removed)* Was: hexagon outgoing edge uses legacy `context.hitl.*` condition. Rule deleted; routing is now discriminated by `route=` / `routes=`. |
 | W005 | Duplicate edge. |
 | W006 | Reserved / unused. |

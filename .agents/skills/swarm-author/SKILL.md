@@ -43,15 +43,16 @@ Reference: `ci-gate.dot` (pure tool chain), `analyze.dot`, `structural-drift.dot
 
 ### Routing
 
-Classify upstream, then conditional edges fan to specialists.
+A node declares `routes="a,b,c"` and the codergen exits via `route({name:"billing"})`. Edges carry `route=<name>` to wire each branch:
 
 ```dot
-classify -> billing   [condition="context.kind=billing"]
-classify -> technical [condition="context.kind=technical"]
-classify -> fallback
+classify [routes="billing,technical,fallback"]
+classify -> billing   [route=billing]
+classify -> technical [route=technical]
+classify -> fallback  [route=fallback]
 ```
 
-Not currently represented in the catalog — `change.dot` + `feature.dot` would collapse into one routed graph cleanly.
+Non-routing nodes use `outcome=success` / `outcome=fail` edges (unannotated edges default to `outcome=success`).
 
 ### Orchestrator-workers
 
@@ -211,45 +212,36 @@ E008 rejects empty `tool_command`.
 
 ---
 
-## 7. Edges and conditions
+## 7. Edges and routing
 
-An edge with no `condition=` fires unconditionally when the source completes. Edges with conditions evaluate in source order; first match wins. Unconditional edges run only if nothing matched.
+Edge selection uses a two-case algorithm (SPEC §3.6):
 
-Condition grammar:
-
-```
-expr := term ("&&" term)*
-term := path op value
-op   := "=" | "!="
-path := "outcome" | "context.<key>" | "context.<key>.<sub>" | …
-```
-
-- `outcome=success | fail` — set by the handler. Codergen `fail` when the agent calls `abort`; tool from exit code.
-- `context.foo=bar` — reads run context KV.
-- `&&` conjunction only. No `||` — use a second edge.
+- **Route case** — source declares `routes="a,b,c"`: match the edge whose `route=` equals the chosen route.
+- **Outcome case** — all other nodes: match the edge whose `outcome=` equals the handler's outcome (`success` | `fail`). Unannotated edges default to `outcome=success`.
 
 ```dot
-verify -> commit [condition="outcome=success"]
-verify -> done   [condition="outcome=fail"]
-
-signoff -> publish [label="[A] Approve"]
-signoff -> draft   [label="[R] Revise"]
-
-gate -> escalate [condition="outcome=fail && context.severity=high"]
+verify -> commit [outcome=success]
+verify -> done   [outcome=fail]
 ```
 
-W003 warns when a node has only conditional edges and no `outcome=fail` catch-all.
+For human-checkpoint nodes, declare `routes=` on the node and `route=` on edges (see §14):
+
+```dot
+signoff [kind=human, routes="approve,revise"]
+signoff -> publish [route=approve, label="Approve"]
+signoff -> draft   [route=revise,  label="Revise"]
+```
 
 ---
 
 ## 8. Loops — backward conditional edges
 
-No `loop` primitive. A loop is an edge that points backward with a condition, bounded by `max_retries` on the target:
+No `loop` primitive. A loop is an edge that points backward on fail, bounded by `max_retries` on the target:
 
 ```dot
 verify [prompt = "…", max_retries = 3]
-verify -> verify [condition="outcome=fail"]
-verify -> commit [condition="outcome=success"]
+verify -> verify [outcome=fail]
+verify -> commit
 ```
 
 `max_retries=3` allows up to 3 backward firings before the runtime halts with `reason=max_retries_exceeded`. Counting resets when re-entered from a different source.
@@ -448,7 +440,6 @@ Common codes:
 - **E024** — two edges from the same source share the same `outcome=` or `route=` value.
 - **E025** — explicit `kind=` contradicts the shape's `SHAPE_TO_KIND` mapping.
 - **E026** — `text=` on a non-human node.
-- **W003** — only conditional edges, no `outcome=fail` catch-all.
 - **W007** — `goal_gate=true` with no retarget chain.
 - **W011** — bare `model=` / `provider=` (use `llm_model=` / `llm_provider=`).
 - **W013** — unrecognised attribute name (typo source).
@@ -482,7 +473,7 @@ Run twice if you have the budget — once cold, once with prior artifacts cleare
 - **Don't re-invent the `abort` tool.** Force-included on every codergen node; downstream edges route on `outcome=fail`.
 - **Don't conditionally route on `outcome=error`.** States are `success` and `fail`. `fact.run_halted { reason:"error" }` is terminal, not edge-eligible.
 - **Don't edit a workflow mid-run.** `workflow_sha` is pinned at enqueue (SPEC §5). Edits apply to future runs.
-- **Don't put `condition="context.hitl.<id>=…"` on human-node edges.** The condition DSL is being retired; route human-node edges with `route=<name>` against the source's `routes=` declaration instead. See §14.
+- **Don't use `condition=` on edges.** The condition DSL has been removed. Use `outcome=success` / `outcome=fail` for non-routing nodes, and `route=<name>` for routing nodes (`routes=` declared on the source).
 - **Don't pair `goal_gate=true` with no retarget.** W007.
 - **Don't use a tool node to gather data for a downstream codergen.** Tool nodes are side-effect-only. If you need to run a deterministic script and reason about its output, call the script from inside a codergen's `bash` tool — the codergen reads stdout in its own context. The `collect → analyze` (tool → codergen) chain is the anti-pattern that motivated retiring `$<node>.output` substitution.
 - **Don't run a heavy collector inside the same node that's a goal-gate retarget target.** Each retarget re-runs the collector and re-dumps its (often large) JSON into the thread, multiplying tokens for no information gain. Split `collect` into its own codergen node sharing `thread_id` with the analyser — the bash tool result stays in the thread across retries while only the analyser re-runs. Reference: `narrative-drift.dot`, `structural-drift.dot`.
@@ -535,11 +526,11 @@ digraph NAME {
 
   start -> plan -> implement -> review
 
-  review -> done [condition="outcome=fail"]
+  review -> done [outcome=fail]
   review -> ci
 
-  ci -> signoff [condition="outcome=success"]
-  ci -> done    [condition="outcome=fail"]
+  ci -> signoff
+  ci -> done    [outcome=fail]
   signoff -> done [route=approve, label="Approve"]
   signoff -> done [route=reject,  label="Reject"]
 }
