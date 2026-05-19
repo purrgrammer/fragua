@@ -2,9 +2,9 @@
 // cwd + node:fs + node:child_process + Bun.Glob. Blocked commands refused before spawn.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isBlockedCommand } from "./blocklist.ts";
 import type { DirEntry, ExecResult, ExecutionEnvironment } from "./types.ts";
 
@@ -48,15 +48,53 @@ export interface LocalEnvironmentOptions {
   extraBlockedPatterns?: string[];
 }
 
+/** Walk up `absolutePath` until a path component exists on disk, realpath
+ *  that, and re-append the non-existing suffix. Returns the original path
+ *  if no ancestor resolves (defensive — `/` always exists). Sync because
+ *  the callers (resolvePath fast-path) are sync. */
+function resolveExistingPrefixSync(absolutePath: string): string {
+  const trailing: string[] = [];
+  let current = absolutePath;
+  while (true) {
+    try {
+      const real = realpathSync(current);
+      return trailing.length > 0 ? join(real, ...trailing.reverse()) : real;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return absolutePath;
+      trailing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 export class LocalEnvironment implements ExecutionEnvironment {
   private readonly _cwd: string;
   private readonly defaultTimeoutMs: number;
   private readonly extraBlocked: string[];
 
   constructor(opts: LocalEnvironmentOptions = {}) {
-    this._cwd = opts.cwd ?? process.cwd();
+    this._cwd = resolve(opts.cwd ?? process.cwd());
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
     this.extraBlocked = opts.extraBlockedPatterns ?? [];
+  }
+
+  /** Memoised realpath(_cwd). Computed lazily because WorktreeEnvironment
+   * constructs a LocalEnvironment with a path that doesn't exist until
+   * init() runs `git worktree add`. realpathSync would throw on a missing
+   * directory at construction time, so we defer until the first check —
+   * by then the worktree has been provisioned. Falls back to the lexical
+   * path on persistent failure so checks still run (just without symlink
+   * dereferencing for the cwd itself). */
+  private cwdRealCache: string | undefined;
+  private cwdReal(): string {
+    if (this.cwdRealCache !== undefined) return this.cwdRealCache;
+    try {
+      this.cwdRealCache = realpathSync(this._cwd);
+    } catch {
+      return this._cwd;
+    }
+    return this.cwdRealCache;
   }
 
   cwd(): string {
@@ -83,8 +121,19 @@ export class LocalEnvironment implements ExecutionEnvironment {
   private resolvePath(path: string): string {
     const resolved = isAbsolute(path) ? path : resolve(this._cwd, path);
     const normalized = resolve(resolved);
-    if (normalized !== this._cwd && !normalized.startsWith(this._cwd + sep)) {
-      throw new PathEscapeError(path, normalized, this._cwd);
+    // Realpath check: walk the path up to the first existing ancestor,
+    // realpath that, re-append the non-existing suffix, and verify the
+    // result stays under realpath(_cwd). Covers three cases at once:
+    //   - `../escape.txt`: normalized lexically escapes; realpath on the
+    //     existing parent still produces a sibling-of-cwd path.
+    //   - absolute path outside cwd: realpath agrees, still escapes.
+    //   - symlink inside cwd pointing outside (the Phase 9 escape vector
+    //     a plain `resolve()` misses): lexical path stays under cwd, but
+    //     `realpathSync` dereferences the symlink and reveals the escape.
+    const cwdReal = this.cwdReal();
+    const real = resolveExistingPrefixSync(normalized);
+    if (real !== cwdReal && !real.startsWith(cwdReal + sep)) {
+      throw new PathEscapeError(path, real, cwdReal);
     }
     return normalized;
   }
@@ -284,14 +333,18 @@ export class LocalEnvironment implements ExecutionEnvironment {
    *  is outside the env's cwd. Returns the offending path or undefined.
    *  Used by {@link exec} to refuse the command before spawning. */
   private firstCdEscape(command: string): string | undefined {
-    const cwdNorm = this._cwd;
+    const cwdNorm = this.cwdReal();
     CD_ESCAPE_PATTERN.lastIndex = 0;
     let match: RegExpExecArray | null;
     // biome-ignore lint/suspicious/noAssignInExpressions: stdlib regex/exec idiom
     while ((match = CD_ESCAPE_PATTERN.exec(command)) !== null) {
       const target = match[2];
       if (target === undefined) continue;
-      const normalized = resolve(target);
+      // Realpath the existing prefix so a lexical-but-correct target
+      // under a symlinked ancestor (macOS /tmp → /private/tmp; mktemp
+      // dirs under /var/folders → /private/var/folders) is compared
+      // against cwd after symlink resolution.
+      const normalized = resolveExistingPrefixSync(resolve(target));
       if (normalized !== cwdNorm && !normalized.startsWith(cwdNorm + sep)) {
         return target;
       }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { writeFile as fsWriteFile, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalEnvironment, PathEscapeError } from "../src/local-env.ts";
@@ -92,6 +92,38 @@ describe("LocalEnvironment", () => {
       const r = await env.exec("pwd");
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("swarm-env-");
+    });
+
+    test("writeFile through a symlink inside cwd that targets outside throws PathEscapeError", async () => {
+      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-target-"));
+      try {
+        await symlink(outside, join(scratch, "linked"));
+        await expect(env.writeFile("linked/leak.txt", "data")).rejects.toBeInstanceOf(PathEscapeError);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    test("readFile through a symlink inside cwd that targets outside throws PathEscapeError", async () => {
+      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-read-"));
+      try {
+        await fsWriteFile(join(outside, "secret.txt"), "leaked");
+        await symlink(outside, join(scratch, "linked"));
+        await expect(env.readFile("linked/secret.txt")).rejects.toBeInstanceOf(PathEscapeError);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    test("symlink file inside cwd that targets outside throws PathEscapeError on read", async () => {
+      const outside = await mkdtemp(join(tmpdir(), "swarm-escape-file-"));
+      try {
+        await fsWriteFile(join(outside, "secret.txt"), "leaked");
+        await symlink(join(outside, "secret.txt"), join(scratch, "shortcut"));
+        await expect(env.readFile("shortcut")).rejects.toBeInstanceOf(PathEscapeError);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
     });
   });
 });
