@@ -23,10 +23,29 @@ const HALT_LABELS: Record<string, string> = {
   paused_auto: "Auto-retrying",
   running: "Running",
   queued: "Queued",
+  route_not_picked: "Route not picked",
+  route_call_not_isolated: "Route call not isolated",
+  edge_no_match: "No edge matched",
 };
 
 export function humanizeHaltReason(status: string): string {
   return HALT_LABELS[status] ?? titleCaseFromSnake(status);
+}
+
+/** Humanize a route name — title-cases snake/kebab identifiers.
+ *  Used by edge label fallback and HitlChoice button labels. */
+export function humanizeRouteName(route: string): string {
+  return titleCaseFromSnake(route);
+}
+
+/** Format a `fact.node_completed` payload suffix.
+ *  Returns `" → <route>"` when a route was chosen, `""` otherwise.
+ *  Callers rendering event-log rows append this to the outcome status. */
+export function humanizeNodeCompletedSuffix(payload: { route?: string; outcomeStatus?: string }): string {
+  if (typeof payload.route === "string" && payload.route.length > 0) {
+    return ` → ${payload.route}`;
+  }
+  return "";
 }
 
 // ── Status → category collapse (4 buckets) ─────────────────────────────

@@ -41,6 +41,7 @@ import { useCallback, useMemo } from "react";
 import type { NodeState, RunDetail } from "../lib/api.ts";
 import { cn } from "../lib/cn.ts";
 import { classifyGraph, edgeKey, type LayoutOrientation, layoutDag } from "../lib/graph-layout.ts";
+import { humanizeRouteName } from "../lib/humanize.ts";
 import { canRetry as canRetryHandler, showsLlm } from "../lib/node-metadata.ts";
 import { parseAndPrepare } from "../lib/parse-workflow.ts";
 import { queries } from "../lib/queries.ts";
@@ -406,6 +407,14 @@ function SwarmNode({ data }: FlowNodeProps): JSX.Element {
               <code className="text-sw-text">{d.maxRetries}</code>
             </span>
           ) : null}
+          {/* Routing-node badge — present when the node declares `routes=`.
+            Box shape is unchanged; this chip is the only differentiator. */}
+          {d.routeCount !== undefined ? (
+            <span className="truncate" title={`routes=${d.routeCount}`} data-testid="node-route-count">
+              <span className="uppercase tracking-[0.06em]">routes</span>{" "}
+              <code className="rounded-sw-default border border-sw-border px-1 text-sw-text">{d.routeCount}</code>
+            </span>
+          ) : null}
         </NodeContent>
       )}
     </AiNode>
@@ -494,11 +503,11 @@ type FlowEdgeRenderProps = Parameters<typeof AiEdge.Animated>[0] & {
      *  through the LEFT-side retarget handles (opposite the back-edge
      *  side) so the two retry channels read as separate visual lanes. */
     isRetargetEdge?: boolean;
-    /** Outgoing from a `wait.human` (hexagon) node — operator choice.
-     *  Renders in the idle-gray tone (same as retry edges) instead of
-     *  the very-faint default border so `[K] Label` accelerators are
-     *  legible at a glance. */
-    isHitlEdge?: boolean;
+    /** Adjacent to a `kind=human` node (either source or target has
+     *  `kind=human`). Renders in the idle-gray tone so operator-choice
+     *  route buttons are legible at a glance — same neutral channel
+     *  as retry edges. */
+    isHumanEdge?: boolean;
     /** Position of this loop / retarget / skip edge among edges on the
      *  same arc side. Drives the per-edge bulge offset so multiple
      *  arcs don't overlap. Set by `toFlowGraph` for any edge routed
@@ -569,6 +578,10 @@ interface SwarmNodeData extends Record<string, unknown> {
   /** Handler-level retry ceiling (DOT `max_retries`). Surfaced in the
    *  body so loop-prone nodes are visible without opening the inspector. */
   maxRetries: number | undefined;
+  /** Number of declared routes (`attrs.routes.length`). Non-zero only on
+   *  routing nodes; renders as a small chip so operators can spot routing
+   *  nodes without opening the inspector. */
+  routeCount: number | undefined;
   state: NodeState["state"] | "waiting" | null;
   hasIncoming: boolean;
   hasOutgoing: boolean;
@@ -745,6 +758,7 @@ export function toFlowGraph(
           ? a.retry_target
           : undefined,
       maxRetries: canRetry && typeof a?.max_retries === "number" ? a.max_retries : undefined,
+      routeCount: Array.isArray(a?.routes) && a.routes.length > 0 ? a.routes.length : undefined,
       state: resolvedState,
       hasIncoming: incoming.has(id),
       hasOutgoing: outgoing.has(id),
@@ -854,13 +868,15 @@ export function toFlowGraph(
     // push the arc bulge past a wide parallel fan (otherwise the curve
     // cuts through the rightmost / leftmost branch column).
     const arcExtent = useSideHandles || loopRestart ? arcExtentBetween(sd, td) : 0;
-    // HITL edges (outgoing from a hexagon `wait.human` node) carry
-    // operator choices via `[K] Label` accelerators. They're routinely
-    // overlooked at the default border tone, so promote them to the
-    // same neutral idle gray the retry channel uses — distinct from
-    // forward flow without claiming an outcome accent.
+    // Human-node edges (adjacent to a `kind=human` node) carry operator
+    // route choices. Promote them to the neutral idle-gray tone — same
+    // channel as retry edges — so they stand out without claiming an
+    // outcome accent. The flag is true when *either* endpoint has kind=human.
     const sourceNode = graph.nodes[e.from];
-    const isHitlEdge = sourceNode !== undefined && handlerOf(sourceNode) === "wait.human";
+    const targetNode = graph.nodes[e.to];
+    const isHumanEdge =
+      (sourceNode !== undefined && (sourceNode.attrs.kind === "human" || handlerOf(sourceNode) === "wait.human")) ||
+      (targetNode !== undefined && (targetNode.attrs.kind === "human" || handlerOf(targetNode) === "wait.human"));
     const marker = isLoopChannel
       ? MARKER_RETRY
       : outcome === "success"
@@ -869,7 +885,7 @@ export function toFlowGraph(
           ? MARKER_FAIL
           : taken && !isSkipEdge
             ? MARKER_ANIMATED
-            : isHitlEdge
+            : isHumanEdge
               ? MARKER_RETRY
               : MARKER_DEFAULT;
     return {
@@ -887,7 +903,7 @@ export function toFlowGraph(
         outcome,
         dim,
         loopRestart,
-        isHitlEdge,
+        isHumanEdge,
         ...(traversalCount > 0 ? { traversalCount } : {}),
         ...(arcIndex !== undefined ? { arcIndex } : {}),
         ...(arcExtent > 0 ? { arcExtent } : {}),
@@ -962,39 +978,24 @@ export function toFlowGraph(
   return { flowNodes, flowEdges: [...flowEdges, ...synthEdges] };
 }
 
-/** Surface DOT edge `condition` / `label` attrs as the edge's pill text.
- *  Prefer `condition` — that's where branching semantics live in Swarm
- *  DOT (`outcome=success`, `outcome=fail`, etc.). The `outcome=` prefix
- *  is dropped because the EdgeLabel component already uppercases the
- *  pill text — `outcome=success` reads cleaner as just `SUCCESS`. The
- *  rest of the condition is preserved verbatim so compound expressions
- *  like `outcome=fail && context.severity=high` still render. */
+/** Surface DOT edge attrs as the edge's pill text.
+ *  Precedence: `attrs.label` first (authored display string);
+ *  then `attrs.outcome` (typed "success" / "fail"); then `attrs.route`
+ *  (humanized via titleCaseFromSnake). `attrs.condition` is no longer
+ *  read — the condition DSL is removed per the LLM-routing proposal. */
 function edgeLabelOf(edge: GraphEdge): string | undefined {
-  const cond = edge.attrs.condition;
-  if (typeof cond === "string" && cond.trim().length > 0) return stripOutcomePrefix(cond);
   const label = edge.attrs.label;
   if (typeof label === "string" && label.trim().length > 0) return label;
+  const outcome = edge.attrs.outcome;
+  if (typeof outcome === "string" && outcome.trim().length > 0) return outcome;
+  const route = edge.attrs.route;
+  if (typeof route === "string" && route.trim().length > 0) return humanizeRouteName(route);
   return undefined;
 }
 
-/** `outcome=success` → `success`; `outcome=fail && context.x=1` →
- *  `fail && context.x=1`. Match is case-insensitive on the key only —
- *  the value is preserved verbatim so callers parsing the original
- *  condition aren't affected (only the rendered label). */
-function stripOutcomePrefix(cond: string): string {
-  return cond.replace(/\boutcome\s*=\s*/gi, "");
-}
-
-/** Parse `condition`/`label` for a success/fail outcome marker so the
- *  edge renderer can tone the stroke + pill in the matching accent. */
+/** Derive a success/fail outcome tone from typed `attrs.outcome`. */
 function outcomeOf(edge: GraphEdge): "success" | "fail" | undefined {
-  const src = [edge.attrs.condition, edge.attrs.label]
-    .filter((v): v is string => typeof v === "string")
-    .join(" ")
-    .toLowerCase();
-  if (/\boutcome\s*=\s*success\b/.test(src) || /\bsuccess\b/.test(src)) return "success";
-  if (/\boutcome\s*=\s*fail\b/.test(src) || /\bfail(ure)?\b/.test(src)) return "fail";
-  return undefined;
+  return edge.attrs.outcome;
 }
 
 /** Compact-display helper for long values (tool commands, prompts, …).

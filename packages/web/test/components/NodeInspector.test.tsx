@@ -141,6 +141,57 @@ describe("NodeInspector", () => {
     expect(text).not.toContain("retry target");
   });
 
+  it("renders attrs.routes as chips in a dedicated section", () => {
+    const src = `digraph g {
+      router [shape=box, routes="small,large,refactor"]
+    }`;
+    const router = parseDotSource(src).nodes["router"];
+    expect(router).toBeTruthy();
+    if (!router) return;
+    const { container } = render(<NodeInspector node={router} />);
+    const routesSection = within(container).getByTestId("node-inspector-routes");
+    expect(routesSection).toBeTruthy();
+    const text = routesSection.textContent ?? "";
+    expect(text).toContain("small");
+    expect(text).toContain("large");
+    expect(text).toContain("refactor");
+  });
+
+  it("surfaces attrs.text for kind=human nodes", () => {
+    const src = `digraph g {
+      review [kind=human, text="Please approve or reject the change."]
+    }`;
+    const review = parseDotSource(src).nodes["review"];
+    expect(review).toBeTruthy();
+    if (!review) return;
+    const { container } = render(<NodeInspector node={review} />);
+    const textBlock = within(container).getByTestId("node-inspector-text");
+    expect(textBlock.textContent?.trim()).toBe("Please approve or reject the change.");
+  });
+
+  it("surfaces attrs.text for legacy wait.human (shape=hexagon) nodes", () => {
+    const src = `digraph g {
+      gate [shape=hexagon, text="Approve the PR?"]
+    }`;
+    const gate = parseDotSource(src).nodes["gate"];
+    expect(gate).toBeTruthy();
+    if (!gate) return;
+    const { container } = render(<NodeInspector node={gate} />);
+    const textBlock = within(container).getByTestId("node-inspector-text");
+    expect(textBlock.textContent?.trim()).toBe("Approve the PR?");
+  });
+
+  it("does not render routes section when attrs.routes is absent", () => {
+    const src = `digraph g {
+      plan [shape=box]
+    }`;
+    const plan = parseDotSource(src).nodes["plan"];
+    if (!plan) return;
+    const { container } = render(<NodeInspector node={plan} />);
+    const routesSection = container.querySelector("[data-testid='node-inspector-routes']");
+    expect(routesSection).toBeNull();
+  });
+
   it("hides model/provider/reasoning/thread for a tool node but keeps tool_command", () => {
     // Tool handlers don't call an LLM — the cascade-resolved llm_model
     // is dead config. tool_command is the load-bearing attr.

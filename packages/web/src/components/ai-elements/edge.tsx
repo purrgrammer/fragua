@@ -158,10 +158,12 @@ type TemporaryData = {
   /** Lateral-extent floor (px) for the arc bulge. Set by the host when
    *  the arc has to clear a parallel fan; ignored when undefined or 0. */
   arcExtent?: number;
-  /** HITL edges (outgoing from `wait.human`) lift to the idle-gray retry
-   *  tone instead of the default very-faint border. Hosts that want this
-   *  signal set the flag; Temporary picks up the matching stroke + tone. */
-  isHitlEdge?: boolean;
+  /** Human-node edges (adjacent to a `kind=human` node) lift to the
+   *  idle-gray retry tone instead of the default very-faint border so
+   *  operator-choice routes stand out at a glance. Set by the host when
+   *  either the source or target has `kind=human`; Temporary picks up the
+   *  matching stroke. */
+  isHumanEdge?: boolean;
 };
 
 /** Outcome coloring — when set, the stroke + label pill track the
@@ -220,10 +222,10 @@ const Temporary = ({
   const outcomeStroke = strokeForOutcome(outcome);
   const outcomeTone = toneForOutcome(outcome);
 
-  // Hairline (1px). Stroke priority: outcome accent (semantic) > HITL
-  // idle-gray (visibility lift for operator-choice edges) > default
-  // border (the quietest tier, used for plain forward flow).
-  const stroke = outcomeStroke ?? (d?.isHitlEdge ? "var(--sw-accent-idle)" : "var(--sw-border)");
+  // Hairline (1px). Stroke priority: outcome accent (semantic) >
+  // human-node idle-gray (visibility lift for routes leaving or entering
+  // a `kind=human` node) > default border (the quietest tier, plain flow).
+  const stroke = outcomeStroke ?? (d?.isHumanEdge ? "var(--sw-accent-idle)" : "var(--sw-border)");
   return (
     <>
       <BaseEdge

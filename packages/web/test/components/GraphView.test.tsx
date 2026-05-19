@@ -186,24 +186,32 @@ describe("toFlowGraph — back-edge detection + edge labels", () => {
     expect(directData?.arcExtent).toBeUndefined();
   });
 
-  it("strips the `outcome=` prefix from condition labels (label CSS-uppercases the rest)", () => {
+  it("derives label from attrs.label > attrs.outcome > attrs.route; ignores attrs.condition", () => {
     const src = `digraph g {
       a [shape=box]
       b [shape=box]
       c [shape=box]
       d [shape=box]
-      a -> b [condition="outcome=success"]
-      a -> c [label="fallback"]
-      a -> d [condition="outcome=fail && context.severity=high"]
+      e [shape=box]
+      a -> b [label="custom label"]
+      a -> c [outcome=success]
+      a -> d [route=small_change]
+      a -> e [condition="outcome=success"]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
-    const byPair = new Map(flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { label?: string }]));
-    expect(byPair.get("a->b")?.label).toBe("success");
-    expect(byPair.get("a->c")?.label).toBe("fallback");
-    // Compound conditions: only the `outcome=` key gets stripped; the rest
-    // of the expression is preserved verbatim so authors can still read it.
-    expect(byPair.get("a->d")?.label).toBe("fail && context.severity=high");
+    const byPair = new Map(
+      flowEdges.map((e) => [`${e.source}->${e.target}`, e.data as { label?: string; outcome?: string }]),
+    );
+    // attrs.label is used verbatim.
+    expect(byPair.get("a->b")?.label).toBe("custom label");
+    // attrs.outcome falls back when no label.
+    expect(byPair.get("a->c")?.label).toBe("success");
+    // attrs.route humanized when no label/outcome.
+    expect(byPair.get("a->d")?.label).toBe("Small Change");
+    // attrs.condition is ignored entirely; no label, no outcome.
+    expect(byPair.get("a->e")?.label).toBeUndefined();
+    expect(byPair.get("a->e")?.outcome).toBeUndefined();
   });
 });
 
@@ -746,7 +754,7 @@ describe("toFlowGraph — handler-specific body fields", () => {
       review [shape=box]
       done [shape=Msquare]
       start -> plan -> review -> done
-      review -> plan [condition="outcome=fail", label="rejected"]
+      review -> plan [label="rejected"]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
@@ -754,10 +762,8 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(back).toBeDefined();
     const data = back?.data as { label?: string; isBackEdge?: boolean };
     expect(data.isBackEdge).toBe(true);
-    // Condition `outcome=fail` renders as just `fail` (CSS uppercases),
-    // with the cap appended.
-    expect(data.label).toContain("fail");
-    expect(data.label).not.toContain("outcome=");
+    // attrs.label "rejected" rendered; cap appended.
+    expect(data.label).toContain("rejected");
     expect(data.label).toContain("· cap 2");
   });
 
@@ -767,7 +773,7 @@ describe("toFlowGraph — handler-specific body fields", () => {
       verify [shape=box, max_retries=3]
       done [shape=Msquare]
       start -> verify -> done
-      verify -> verify [condition="outcome=fail"]
+      verify -> verify [outcome=fail]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
@@ -775,8 +781,8 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(self).toBeDefined();
     const data = self?.data as { label?: string; isBackEdge?: boolean };
     expect(data.isBackEdge).toBe(true); // routed as a loop
+    // attrs.outcome="fail" → label="fail"; cap appended.
     expect(data.label).toContain("fail");
-    expect(data.label).not.toContain("outcome=");
     expect(data.label).toContain("· cap 3");
     // Self-loops also route through the loop handles.
     expect(self?.sourceHandle).toBe("loop-source");
@@ -905,25 +911,40 @@ describe("toFlowGraph — handler-specific body fields", () => {
     expect(skipIndex).not.toBe(backIndex);
   });
 
-  it("flags HITL edges (from a wait.human source) so they render in idle-gray", () => {
+  it("flags edges from a wait.human (kind=human) source as isHumanEdge", () => {
     const src = `digraph g {
       start [shape=Mdiamond]
-      review [shape=hexagon, prompt="Approve or reject?"]
+      review [shape=hexagon]
       ship [shape=box]
       stop [shape=Msquare]
       start -> review
-      review -> ship [label="[A] Approve"]
-      review -> stop [label="[R] Reject"]
+      review -> ship [label="Approve"]
+      review -> stop [label="Reject"]
     }`;
     const graph = parseDotSource(src);
     const { flowEdges } = toFlowGraph(null, graph);
     const approve = flowEdges.find((e) => e.source === "review" && e.target === "ship");
     const reject = flowEdges.find((e) => e.source === "review" && e.target === "stop");
-    expect((approve?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(true);
-    expect((reject?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(true);
-    // Plain forward edges (start -> review) shouldn't be flagged.
+    expect((approve?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+    expect((reject?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+    // start -> review: start is not human, review IS human (target) → still flagged.
     const intoReview = flowEdges.find((e) => e.source === "start" && e.target === "review");
-    expect((intoReview?.data as { isHitlEdge?: boolean })?.isHitlEdge).toBe(false);
+    expect((intoReview?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+  });
+
+  it("does NOT flag plain codergen-only edges as isHumanEdge", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      plan [shape=box]
+      implement [shape=box]
+      done [shape=Msquare]
+      start -> plan -> implement -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    for (const e of flowEdges) {
+      expect((e.data as { isHumanEdge?: boolean })?.isHumanEdge).toBeFalsy();
+    }
   });
 });
 
@@ -1091,8 +1112,8 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
       review [shape=box]
       done [shape=Msquare]
       start -> audit
-      audit -> review [condition="outcome=success"]
-      audit -> done [condition="outcome=fail"]
+      audit -> review [outcome=success]
+      audit -> done [outcome=fail]
       review -> done
     }`;
     const graph = parseDotSource(src);
@@ -1132,5 +1153,70 @@ describe("toFlowGraph — edge traversal counts (looped edges)", () => {
     const detailEdges = toFlowGraph(null, graph).flowEdges;
     const failSkipDetail = detailEdges.find((e) => e.source === "audit" && e.target === "done");
     expect((failSkipDetail?.data as { outcome?: string }).outcome).toBe("fail");
+  });
+});
+
+describe("toFlowGraph — routing-node chip", () => {
+  it("stamps routeCount on nodes with non-empty attrs.routes", () => {
+    const src = `digraph g {
+      start [shape=Mdiamond]
+      router [shape=box, routes="small,large,refactor"]
+      done [shape=Msquare]
+      start -> router -> done
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const router = flowNodes.find((n) => n.id === "router");
+    const plain = flowNodes.find((n) => n.id === "start");
+    expect((router?.data as { routeCount?: number }).routeCount).toBe(3);
+    expect((plain?.data as { routeCount?: number }).routeCount).toBeUndefined();
+  });
+
+  it("leaves routeCount undefined when attrs.routes is empty or absent", () => {
+    const src = `digraph g {
+      plan [shape=box]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowNodes } = toFlowGraph(null, graph);
+    const plan = flowNodes.find((n) => n.id === "plan");
+    expect((plan?.data as { routeCount?: number }).routeCount).toBeUndefined();
+  });
+});
+
+describe("toFlowGraph — isHumanEdge flag (kind=human either endpoint)", () => {
+  it("flags edge where source is kind=human", () => {
+    const src = `digraph g {
+      review [kind=human]
+      ship [shape=box]
+      review -> ship [route=approve]
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const edge = flowEdges.find((e) => e.source === "review" && e.target === "ship");
+    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+  });
+
+  it("flags edge where target is kind=human", () => {
+    const src = `digraph g {
+      dispatch [shape=box]
+      gate [kind=human]
+      dispatch -> gate
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const edge = flowEdges.find((e) => e.source === "dispatch" && e.target === "gate");
+    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
+  });
+
+  it("falls back to handlerOf=wait.human for legacy shape=hexagon nodes", () => {
+    const src = `digraph g {
+      review [shape=hexagon]
+      ship [shape=box]
+      review -> ship
+    }`;
+    const graph = parseDotSource(src);
+    const { flowEdges } = toFlowGraph(null, graph);
+    const edge = flowEdges.find((e) => e.source === "review" && e.target === "ship");
+    expect((edge?.data as { isHumanEdge?: boolean })?.isHumanEdge).toBe(true);
   });
 });

@@ -62,6 +62,8 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
   const allowedTools = attrs.allowed_tools ?? [];
   const deniedTools = attrs.denied_tools ?? [];
   const contextFiles = attrs.context_files ?? [];
+  const routes = Array.isArray(attrs.routes) ? (attrs.routes as string[]) : [];
+  const isHumanNode = attrs.kind === "human" || handler === "wait.human";
 
   return (
     <aside
@@ -254,6 +256,30 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
             className="whitespace-pre-wrap break-words px-3 py-2 text-sw-xs text-sw-text"
           >
             {attrs.system_prompt}
+          </pre>
+        </Section>
+      )}
+
+      {/* Routing targets — nodes that declare `routes=` are routing nodes.
+       *  List the route names as chips so the operator can see what
+       *  branches this node can choose from. */}
+      {routes.length > 0 && (
+        <Section title="routes">
+          <div data-testid="node-inspector-routes">
+            <ListField label="targets" items={routes} />
+          </div>
+        </Section>
+      )}
+
+      {/* Human-node text — the freeform question or prompt shown to the
+       *  operator when a `kind=human` node is paused. */}
+      {isHumanNode && typeof attrs.text === "string" && attrs.text.length > 0 && (
+        <Section title="text">
+          <pre
+            data-testid="node-inspector-text"
+            className="whitespace-pre-wrap break-words px-3 py-2 text-sw-xs text-sw-text"
+          >
+            {attrs.text}
           </pre>
         </Section>
       )}

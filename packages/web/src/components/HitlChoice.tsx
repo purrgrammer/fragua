@@ -1,16 +1,15 @@
-// HitlChoice — structured operator input for a paused wait.human node.
+// HitlChoice — structured operator input for a paused human node.
 //
-// Renders the question label, one button per choice, and an optional
+// Renders the question label, one button per route, and an optional
 // freeform notes textarea. Notes are recorded in the intent.human_input
 // event payload for audit; they don't flow to downstream nodes via
-// routing. Accelerator keys (e.g. "[A]" in "[A] Approve") are stripped
-// from the visible label — they're TUI/CLI metadata, not useful on a
-// button-based UI.
+// routing. Button label uses the per-edge label when present; falls back
+// to a humanized form of the route key (titleCaseFromSnake).
 
-import { stripAcceleratorPrefix } from "@swarm/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { submitHitlChoice } from "../lib/api.ts";
+import { humanizeRouteName } from "../lib/humanize.ts";
 import { queries } from "../lib/queries.ts";
 import { Button } from "./ui/button.tsx";
 
@@ -58,7 +57,7 @@ export function HitlChoice({ runId, label, options }: HitlChoiceProps): JSX.Elem
             onClick={() => mutation.mutate(opt.key)}
             data-testid={`hitl-choice-${opt.key.toLowerCase()}`}
           >
-            {stripAcceleratorPrefix(opt.label)}
+            {opt.label.trim().length > 0 ? opt.label : humanizeRouteName(opt.key)}
           </Button>
         ))}
       </div>
