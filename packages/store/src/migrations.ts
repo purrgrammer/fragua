@@ -41,6 +41,7 @@ const STEP_MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [11, MIGRATION_011_PROVIDER_CREDENTIALS()],
   [12, MIGRATION_012_PROVIDER_CONFIG()],
   [13, MIGRATION_013_DROP_PARALLEL_SUBRUNS()],
+  [14, MIGRATION_014_PAUSED_HUMAN_RENAME()],
 ]);
 
 /**
@@ -1112,6 +1113,126 @@ function MIGRATION_008_AUTO_WAKE_UNIFICATION(): string {
 
     DROP TABLE run_state;
     ALTER TABLE run_state_v8 RENAME TO run_state;
+
+    CREATE INDEX idx_run_state_queue
+      ON run_state(priority DESC, ready_at ASC)
+      WHERE status = 'queued';
+    CREATE INDEX idx_run_state_status   ON run_state(status);
+    CREATE INDEX idx_run_state_workflow ON run_state(workflow_sha);
+    CREATE INDEX idx_run_state_updated  ON run_state(updated_at);
+    CREATE INDEX idx_run_state_cwd      ON run_state(cwd);
+    CREATE INDEX idx_runs_by_schedule
+      ON run_state(schedule_id)
+      WHERE schedule_id IS NOT NULL;
+  `;
+}
+
+/**
+ * v13 → v14: hitl → human wire-level rename (Phase 6 of
+ * `docs/proposals/llm-routing.md`).
+ *
+ * Pre-release rename of the workflow-question pause surface. Rewrites
+ * status / fact-type / intent-type literals across existing rows and
+ * rebuilds the `run_state` CHECK constraint to accept `paused_human`
+ * instead of `paused_hitl`. Per the proposal there is no behavioural
+ * change — same pause semantics, same wake-pending sweep, same fold
+ * rules — only the wire vocabulary moves.
+ *
+ * Affected event payloads carrying status as a sub-field also get
+ * patched: `fact.dispatch_started.payload.resumeOf` and
+ * `fact.run_resumed.payload.fromStatus`. Intent payload field
+ * `selected` is renamed to `route` on every `intent.human_input` row.
+ */
+function MIGRATION_014_PAUSED_HUMAN_RENAME(): string {
+  return `
+    -- CHECK rebuild first: the old CHECK forbids 'paused_human', so we
+    -- can't UPDATE rows in place. Build the new table with the new
+    -- CHECK, copy rows across with the status literal rewritten inline,
+    -- then swap. Event-type / payload rewrites follow on the events
+    -- table (no CHECK constraint there).
+
+    -- CHECK rebuild — table swap. Same shape as v13, status enum carries
+    -- 'paused_human' instead of 'paused_hitl'.
+    CREATE TABLE run_state_v14 (
+      run_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN (
+        'queued','running','paused','paused_human','paused_auto',
+        'completed','cancelled','halted','quarantined'
+      )),
+      current_node TEXT,
+      workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+      schema_version INTEGER NOT NULL,
+      routing TEXT NOT NULL CHECK (length(routing) < 8192),
+      metrics TEXT NOT NULL,
+      next_seq INTEGER NOT NULL DEFAULT 1,
+      last_applied_seq INTEGER NOT NULL DEFAULT 0,
+      priority INTEGER NOT NULL DEFAULT 0,
+      enqueued_at INTEGER NOT NULL,
+      ready_at INTEGER NOT NULL,
+      node_started_at INTEGER,
+      dispatch_started_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      cwd TEXT,
+      workflow_name TEXT,
+      workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+      workflow_path TEXT,
+      base_git_sha TEXT,
+      branch TEXT,
+      schedule_id TEXT,
+      total_cost_usd REAL GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+      billed_tokens INTEGER GENERATED ALWAYS AS
+        (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+    ) STRICT;
+
+    INSERT INTO run_state_v14 (
+      run_id, version, status, current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    )
+    SELECT
+      run_id, version,
+      CASE WHEN status = 'paused_hitl' THEN 'paused_human' ELSE status END AS status,
+      current_node, workflow_sha, schema_version,
+      routing, metrics, next_seq, last_applied_seq, priority, enqueued_at,
+      ready_at, node_started_at, dispatch_started_at, updated_at, title,
+      cwd, workflow_name, workflow_scope, workflow_path, base_git_sha,
+      branch, schedule_id
+    FROM run_state;
+
+    DROP INDEX IF EXISTS idx_run_state_queue;
+    DROP INDEX IF EXISTS idx_run_state_status;
+    DROP INDEX IF EXISTS idx_run_state_workflow;
+    DROP INDEX IF EXISTS idx_run_state_updated;
+    DROP INDEX IF EXISTS idx_run_state_cwd;
+    DROP INDEX IF EXISTS idx_runs_by_schedule;
+
+    DROP TABLE run_state;
+    ALTER TABLE run_state_v14 RENAME TO run_state;
+
+    -- Now rewrite event-type discriminators + payload-embedded literals
+    -- on the events log. No CHECK on events.type so direct UPDATE is fine.
+    UPDATE events SET type = 'fact.run_paused_human' WHERE type = 'fact.run_paused_hitl';
+    UPDATE events SET type = 'intent.human_input'    WHERE type = 'intent.hitl_input';
+
+    UPDATE events
+      SET payload = json_set(json_remove(payload, '$.selected'), '$.route', json_extract(payload, '$.selected'))
+      WHERE type = 'intent.human_input'
+        AND json_extract(payload, '$.selected') IS NOT NULL;
+
+    UPDATE events
+      SET payload = json_set(payload, '$.resumeOf', 'paused_human')
+      WHERE type = 'fact.dispatch_started'
+        AND json_extract(payload, '$.resumeOf') = 'paused_hitl';
+
+    UPDATE events
+      SET payload = json_set(payload, '$.fromStatus', 'paused_human')
+      WHERE type = 'fact.run_resumed'
+        AND json_extract(payload, '$.fromStatus') = 'paused_hitl';
 
     CREATE INDEX idx_run_state_queue
       ON run_state(priority DESC, ready_at ASC)

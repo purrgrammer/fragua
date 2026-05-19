@@ -2,7 +2,7 @@
 //
 // Specialized banners own the action for their substatus:
 //   - paused                → RunPausedNotice (Resume + Cancel; budget reason has Raise & Resume)
-//   - paused_hitl           → HitlChoice (option buttons)
+//   - paused_human           → HitlChoice (option buttons)
 // RunControls handles the "everything else" surface: generic operator
 // pause, resume of an operator-paused run, and cancel-from-anywhere on
 // non-terminal runs. Returns null when no action applies (terminal
@@ -23,7 +23,7 @@ export interface RunControlsProps {
   runId: string;
   status: RunDetail["status"];
   runStatus: RunDetail["runStatus"];
-  /** When the run is `paused_hitl` with non-empty options, HitlChoice
+  /** When the run is `paused_human` with non-empty options, HitlChoice
    * owns the action surface (operator picks one of the option buttons).
    * When options are empty, the pause was operator-driven (`POST /pause`)
    * and Resume becomes the right affordance. RunDetail passes the count;
@@ -99,14 +99,14 @@ export function RunControls({
   // Resume is the generic operator-pause path. The specialized
   // substatuses handle their own surface:
   //   - paused                  → RunPausedNotice (Resume + Cancel)
-  //   - paused_hitl with options → HitlChoice (option buttons)
-  // paused_hitl with NO options is the workflow-authored wait.human
+  //   - paused_human with options → HitlChoice (option buttons)
+  // paused_human with NO options is the workflow-authored wait.human
   // resume case (operator pauses route to `paused` now).
   // paused_auto auto-resumes on a timer; manual Resume short-circuits
   // the wait — handled in RunPausedNotice for those reasons.
-  const isOperatorHitlPause = runStatus === "paused_hitl" && (hitlOptionsCount ?? 0) === 0;
+  const isOperatorHitlPause = runStatus === "paused_human" && (hitlOptionsCount ?? 0) === 0;
   const canResume =
-    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_hitl" || isOperatorHitlPause);
+    status === "paused" && runStatus !== "paused" && (runStatus !== "paused_human" || isOperatorHitlPause);
   // Cancel is available everywhere non-terminal. RunPausedNotice
   // already exposes a Cancel for `paused` — hide ours there to avoid
   // two adjacent Cancel buttons.

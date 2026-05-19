@@ -76,7 +76,7 @@ const TERMINAL_TYPES = new Set<string>([
   "fact.run_completed",
   "fact.run_halted",
   "fact.run_cancelled",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
   "fact.run_quarantined",
 ]);
 
@@ -184,8 +184,8 @@ export async function runCommand(opts: RunCommandOptions): Promise<number> {
       if (TERMINAL_TYPES.has(parsed.type)) {
         if (parsed.type === "fact.run_halted") exit = 1;
         if (parsed.type === "fact.run_cancelled") exit = 130;
-        if (parsed.type === "fact.run_paused_hitl") {
-          console.log(chalk.yellow("run paused for HITL input — exiting."));
+        if (parsed.type === "fact.run_paused_human") {
+          console.log(chalk.yellow("run paused for human input — exiting."));
         }
         break outer;
       }

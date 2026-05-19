@@ -2,18 +2,19 @@
 //
 // First call: returns yield_hitl with the configured label and the
 // structured option list (one per outgoing edge, with parsed accelerator
-// keys). The executor commits fact.run_paused_hitl and frees the slot.
+// keys). The executor commits fact.run_paused_human and frees the slot.
 //
-// Second call (after intent.hitl_input arrives): ctx.hitlInput is populated
-// by the executor from the fold. The handler resolves the chosen option
-// (case-insensitive key match) and returns a transition with
-// suggestedNextIds=[chosen.to] + preferredLabel; edge selection routes
-// via Step-2 label match (disambiguates parallel edges to the same
-// target) falling through to Step-3 suggestedNextIds. No conditions
-// involved. No routing writes — the operator's selected key and
-// optional note are preserved verbatim in the intent.hitl_input event
-// payload for audit, and operators who need free-text input on a
-// running thread use intent.steer (docs/SPEC.md §6.4).
+// Second call (after intent.human_input arrives): ctx.humanInput is
+// populated by the executor from the fold. The handler resolves the
+// chosen option (case-insensitive key match against the wire `route`
+// value) and returns a transition with suggestedNextIds=[chosen.to]
+// + preferredLabel; edge selection routes via Step-2 label match
+// (disambiguates parallel edges to the same target) falling through
+// to Step-3 suggestedNextIds. No conditions involved. No routing
+// writes — the operator's chosen route and optional note are
+// preserved verbatim in the intent.human_input event payload for
+// audit, and operators who need free-text input on a running thread
+// use intent.steer (docs/SPEC.md §6.4).
 
 import { parseAcceleratorKey, stripAcceleratorPrefix } from "../../accelerator.ts";
 import type { Handler, HandlerResult, HandlerSpec } from "../types.ts";
@@ -26,8 +27,8 @@ export interface HitlOption {
   to: string;
 }
 
-export interface HitlInput {
-  selected: string;
+export interface HumanInput {
+  route: string;
   note?: string;
 }
 
@@ -42,18 +43,18 @@ export function makeWaitHumanHandler(cfg: WaitHumanConfig): HandlerSpec {
   const options = cfg.options;
 
   const handler: Handler = async (ctx) => {
-    if (ctx.hitlInput === undefined) {
+    if (ctx.humanInput === undefined) {
       return { kind: "yield_hitl", label, options } satisfies HandlerResult;
     }
 
-    const { selected } = normaliseHitlInput(ctx.hitlInput);
-    const chosen = options.find((o) => o.key.toUpperCase() === selected.toUpperCase());
+    const { route } = normaliseHumanInput(ctx.humanInput);
+    const chosen = options.find((o) => o.key.toUpperCase() === route.toUpperCase());
     if (chosen === undefined) {
       const valid = options.map((o) => o.key).join(", ");
       return {
         kind: "halt",
         reason: "error",
-        detail: `wait.human: unknown selected key "${selected}" (expected one of: ${valid})`,
+        detail: `wait.human: unknown route "${route}" (expected one of: ${valid})`,
       } satisfies HandlerResult;
     }
 
@@ -92,9 +93,9 @@ function validateOptions(options: HitlOption[]): void {
   }
 }
 
-function normaliseHitlInput(raw: HitlInput | string): HitlInput {
-  if (typeof raw === "string") return { selected: raw };
+function normaliseHumanInput(raw: HumanInput | string): HumanInput {
+  if (typeof raw === "string") return { route: raw };
   // Empty-string note is treated as absent (matches server-side trim).
-  if (raw.note !== undefined && raw.note.length > 0) return { selected: raw.selected, note: raw.note };
-  return { selected: raw.selected };
+  if (raw.note !== undefined && raw.note.length > 0) return { route: raw.route, note: raw.note };
+  return { route: raw.route };
 }

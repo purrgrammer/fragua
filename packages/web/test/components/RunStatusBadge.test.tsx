@@ -1,10 +1,10 @@
 // RunStatusBadge — paused-family colour partition.
 //
 // The badge takes the coarse `RunSummary["status"]` (which collapses
-// `paused`, `paused_auto`, `paused_hitl` to a single "paused" pill).
+// `paused`, `paused_auto`, `paused_human` to a single "paused" pill).
 // Callers thread the raw `RunDetail["runStatus"]` so the badge can
 // differentiate the three: paused yellow, paused_auto blue,
-// paused_hitl orange. This test pins the visual partition by checking
+// paused_human orange. This test pins the visual partition by checking
 // the rendered Tailwind classes — drift in the badge would shift
 // colours silently otherwise.
 
@@ -31,11 +31,11 @@ describe("RunStatusBadge — paused-family palette", () => {
     expect(el.getAttribute("data-run-status")).toBe("paused_auto");
   });
 
-  it("paused_hitl (workflow asks) → sw-accent-pause-hitl (orange)", () => {
-    const { getByTestId } = render(<RunStatusBadge status="paused" runStatus="paused_hitl" />);
+  it("paused_human (workflow asks) → sw-accent-pause-hitl (orange)", () => {
+    const { getByTestId } = render(<RunStatusBadge status="paused" runStatus="paused_human" />);
     const el = getByTestId("status-paused");
     expect(el.className).toContain("text-sw-accent-pause-hitl");
-    expect(el.getAttribute("data-run-status")).toBe("paused_hitl");
+    expect(el.getAttribute("data-run-status")).toBe("paused_human");
   });
 
   it("paused without runStatus falls through to operator-must-act default", () => {

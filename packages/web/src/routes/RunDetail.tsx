@@ -166,7 +166,7 @@ export function RunDetail(): JSX.Element {
       <DetailHeader detail={detail ?? null} id={id} isLive={isLive} liveCost={liveCost} runId={id} />
 
       {(detail?.runStatus === "paused" || detail?.runStatus === "paused_auto") && <RunPausedNotice runId={id} />}
-      {detail?.runStatus === "paused_hitl" && (
+      {detail?.runStatus === "paused_human" && (
         <HitlChoice runId={id} label={detail.hitlLabel} options={detail.hitlOptions ?? []} />
       )}
 
@@ -494,7 +494,7 @@ const RunGraphTab = memo(function RunGraphTab({
   }, [detail?.workflowSource]);
 
   const activeNodeId = detail?.nodes.find((n) => n.state === "running")?.nodeId ?? null;
-  const hitlNodeId = detail?.runStatus === "paused_hitl" ? (detail.hitlNodeId ?? null) : null;
+  const hitlNodeId = detail?.runStatus === "paused_human" ? (detail.hitlNodeId ?? null) : null;
   // Pass the multi-active-node Set through so parallel branches that
   // are running (alongside their parent component) all glow.
   const effectiveActiveNodeIds = activeNodeIds ?? (activeNodeId ? new Set([activeNodeId]) : undefined);

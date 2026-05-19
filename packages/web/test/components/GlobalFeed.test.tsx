@@ -10,7 +10,7 @@ function evt(type: string, payload: Record<string, unknown> = {}): FeedEvent {
 
 describe("metaForEvent", () => {
   test("fact.run_resumed verb varies by fromStatus", () => {
-    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_hitl" })).verb).toBe("resumed");
+    expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused_human" })).verb).toBe("resumed");
     expect(metaForEvent(evt("fact.run_resumed", { fromStatus: "paused" })).verb).toBe("retrying");
     expect(metaForEvent(evt("fact.run_resumed", {})).verb).toBe("resumed");
   });
@@ -18,7 +18,7 @@ describe("metaForEvent", () => {
   test("static verbs pass through unchanged", () => {
     expect(metaForEvent(evt("fact.run_started")).verb).toBe("started");
     expect(metaForEvent(evt("fact.run_completed")).verb).toBe("completed");
-    expect(metaForEvent(evt("fact.run_paused_hitl")).verb).toBe("awaiting input");
+    expect(metaForEvent(evt("fact.run_paused_human")).verb).toBe("awaiting input");
   });
 
   test("unknown event types fall back to empty verb", () => {
@@ -39,7 +39,7 @@ describe("metaForEvent", () => {
     expect(budgetMeta.iconClass).toBe("text-sw-accent-pause");
 
     // workflow-asks → hitl (orange)
-    const hitlMeta = metaForEvent(evt("fact.run_paused_hitl", { nodeId: "n", label: "?", options: [] }));
+    const hitlMeta = metaForEvent(evt("fact.run_paused_human", { nodeId: "n", label: "?", options: [] }));
     expect(hitlMeta.iconClass).toBe("text-sw-accent-pause-hitl");
     expect(hitlMeta.borderVar).toBe("var(--sw-accent-pause-hitl)");
 
@@ -98,6 +98,6 @@ describe("isFeedRowHidden", () => {
   test("keeps user-facing run lifecycle facts visible", () => {
     expect(isFeedRowHidden(evt("fact.run_started"))).toBe(false);
     expect(isFeedRowHidden(evt("fact.run_completed"))).toBe(false);
-    expect(isFeedRowHidden(evt("fact.run_paused_hitl"))).toBe(false);
+    expect(isFeedRowHidden(evt("fact.run_paused_human"))).toBe(false);
   });
 });

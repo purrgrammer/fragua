@@ -4,7 +4,7 @@ export type { MakeExternalCallOpts } from "./external-call.ts";
 export { makeExternalCall } from "./external-call.ts";
 export type { SpawnFn, ToolConfig, ToolRunResult } from "./handlers/tool.ts";
 export { makeToolHandler, runWithBun } from "./handlers/tool.ts";
-export type { HitlInput, HitlOption, WaitHumanConfig } from "./handlers/wait-human.ts";
+export type { HitlOption, HumanInput, WaitHumanConfig } from "./handlers/wait-human.ts";
 export { makeWaitHumanHandler, parseAcceleratorKey, stripAcceleratorPrefix } from "./handlers/wait-human.ts";
 export type { HttpClientOpts } from "./http-client.ts";
 export { makeHttpClient } from "./http-client.ts";

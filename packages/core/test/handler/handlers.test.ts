@@ -64,9 +64,9 @@ describe("wait.human handler", () => {
     }
   });
 
-  test("call with hitlInput transitions to chosen option's target", async () => {
+  test("call with humanInput transitions to chosen option's target", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: { selected: "A" } }));
+    const result = await spec.handler(stubCtx({ nodeId: "wait", humanInput: { route: "A" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.suggestedNextIds).toEqual(["after"]);
@@ -82,7 +82,7 @@ describe("wait.human handler", () => {
   // Step 2 disambiguates by edge label first.
   test("transition carries preferredLabel so the engine disambiguates parallel edges to the same target", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ hitlInput: { selected: "R" } }));
+    const result = await spec.handler(stubCtx({ humanInput: { route: "R" } }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.preferredLabel).toBe("[R] Revise");
@@ -93,9 +93,9 @@ describe("wait.human handler", () => {
     }
   });
 
-  test("call with bare string hitlInput resolves option by key", async () => {
+  test("call with bare string humanInput resolves option by key", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ nodeId: "wait", hitlInput: "R" }));
+    const result = await spec.handler(stubCtx({ nodeId: "wait", humanInput: "R" }));
     expect(result.kind).toBe("transition");
     if (result.kind === "transition") {
       expect(result.suggestedNextIds).toEqual(["draft"]);
@@ -111,22 +111,22 @@ describe("wait.human handler", () => {
     }
   });
 
-  test("selected key matching is case-insensitive", async () => {
+  test("route matching is case-insensitive", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const lower = await spec.handler(stubCtx({ hitlInput: { selected: "a" } }));
+    const lower = await spec.handler(stubCtx({ humanInput: { route: "a" } }));
     expect(lower.kind).toBe("transition");
     if (lower.kind === "transition") {
       expect(lower.suggestedNextIds).toEqual(["after"]);
     }
   });
 
-  test("unknown selected key halts the run with a descriptive detail", async () => {
+  test("unknown route halts the run with a descriptive detail", async () => {
     const spec = makeWaitHumanHandler(cfg);
-    const result = await spec.handler(stubCtx({ hitlInput: { selected: "Z" } }));
+    const result = await spec.handler(stubCtx({ humanInput: { route: "Z" } }));
     expect(result.kind).toBe("halt");
     if (result.kind === "halt") {
       expect(result.reason).toBe("error");
-      expect(result.detail).toMatch(/unknown selected key "Z"/);
+      expect(result.detail).toMatch(/unknown route "Z"/);
       expect(result.detail).toMatch(/A, R/); // valid keys listed
     }
   });

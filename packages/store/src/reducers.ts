@@ -120,9 +120,9 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       };
       return next;
     }
-    case "fact.run_paused_hitl": {
+    case "fact.run_paused_human": {
       closeDispatchInterval(next, now);
-      next.status = "paused_hitl";
+      next.status = "paused_human";
       next.nodeStartedAt = null;
       return next;
     }
@@ -136,7 +136,7 @@ export function applyFact(state: RunState, fact: FactEvent, now: number): RunSta
       return next;
     }
     case "fact.run_resumed": {
-      // Resumed from paused, paused_hitl, or quarantined. Go back to
+      // Resumed from paused, paused_human, or quarantined. Go back to
       // queued so the executor's claim loop picks the run up and
       // re-dispatches the same node — `paused` (provider-error /
       // payment-required reasons) preserves the same iteration since

@@ -180,8 +180,8 @@ export interface HandlerContext {
    * abort — buffered events flush even if the handler throws.
    */
   readonly emit: (type: string, payload: Record<string, unknown>) => void;
-  /** Optional: HITL input delivered to a resumed wait.human node. */
-  readonly hitlInput?: { selected: string; note?: string } | string;
+  /** Optional: human input delivered to a resumed wait.human node. */
+  readonly humanInput?: HumanInput | string;
   /** Optional: steering text folded in before this node run. */
   readonly steering?: string;
   /** Per-run shell + filesystem environment. Set by the executor when a
@@ -220,9 +220,19 @@ export interface ScopeOverrides {
   iteration: number;
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
-  hitlInput?: { selected: string; note?: string } | string;
+  humanInput?: HumanInput | string;
   steering?: string;
   budgetSnapshot?: BudgetSnapshotInput;
+}
+
+/** Operator-supplied input to a paused human node. Phase 6 rename of
+ * the legacy `HitlInput { selected }` shape: field `selected` becomes
+ * `route` so it matches the LLM-routing surface. The structured
+ * handler reads `ctx.humanInput.route` and routes to the matching
+ * outgoing edge. */
+export interface HumanInput {
+  route: string;
+  note?: string;
 }
 
 /** Subset of `BudgetSnapshot` populated by the executor and threaded

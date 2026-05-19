@@ -88,7 +88,7 @@ interface FeedKindMeta {
 // gutter. Hover tooltip on the row link carries the longer context.
 //
 // Pause-family palette (recoverable-budget-pause.md Stage 2):
-//   paused_hitl → orange  (workflow asks; answer the question)
+//   paused_human → orange  (workflow asks; answer the question)
 //   paused      → yellow  (operator must act)
 //   paused_auto → blue    (daemon timer; system on it) — applied
 //                          dynamically in `metaForEvent` based on
@@ -99,7 +99,7 @@ interface FeedKindMeta {
 const KIND_META: Readonly<Record<string, FeedKindMeta>> = {
   "fact.run_started": { Icon: Play, verb: "started", iconClass: "text-sw-accent-thinking" },
   "fact.run_completed": { Icon: Check, verb: "completed", iconClass: "text-sw-accent-success" },
-  "fact.run_paused_hitl": {
+  "fact.run_paused_human": {
     Icon: Pause,
     verb: "awaiting input",
     iconClass: "text-sw-accent-pause-hitl",
@@ -180,7 +180,7 @@ export function metaForEvent(event: FeedEvent): FeedKindMeta {
   }
   if (event.type === "fact.run_resumed") {
     const fromStatus = (event.payload as { fromStatus?: unknown } | null)?.fromStatus;
-    if (fromStatus === "paused_hitl") return { ...base, verb: "resumed" };
+    if (fromStatus === "paused_human") return { ...base, verb: "resumed" };
     if (fromStatus === "paused") return { ...base, verb: "retrying" };
     if (fromStatus === "paused_auto") return { ...base, verb: "retrying" };
   }

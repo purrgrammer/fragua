@@ -339,8 +339,8 @@ describe("runStateToDetail — HITL projection", () => {
     return { runId: "r1", seq, type, writer: "daemon", payload, ts: 1_000_000 + seq };
   }
 
-  test("paused_hitl projects nodeId/label/options from the latest fact.run_paused_hitl", () => {
-    const state = makeState({ status: "paused_hitl", currentNode: "review" });
+  test("paused_human projects nodeId/label/options from the latest fact.run_paused_human", () => {
+    const state = makeState({ status: "paused_human", currentNode: "review" });
     const options = [
       { key: "A", label: "[A] Approve", to: "publish" },
       { key: "R", label: "[R] Revise", to: "draft" },
@@ -348,25 +348,25 @@ describe("runStateToDetail — HITL projection", () => {
     const events: StoredEvent[] = [
       evWithSeq(1, "fact.run_started", { startNode: "start" }),
       evWithSeq(2, "fact.node_started", { nodeId: "review" }),
-      evWithSeq(3, "fact.run_paused_hitl", {
+      evWithSeq(3, "fact.run_paused_human", {
         nodeId: "review",
         label: "Review the draft",
         options,
       }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
-    expect(detail.runStatus).toBe("paused_hitl");
+    expect(detail.runStatus).toBe("paused_human");
     expect(detail.hitlNodeId).toBe("review");
     expect(detail.hitlLabel).toBe("Review the draft");
     expect(detail.hitlOptions).toEqual(options);
   });
 
-  test("paused_hitl with multiple paused events picks the latest one (re-yield after revise)", () => {
-    const state = makeState({ status: "paused_hitl", currentNode: "review" });
+  test("paused_human with multiple paused events picks the latest one (re-yield after revise)", () => {
+    const state = makeState({ status: "paused_human", currentNode: "review" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_hitl", { nodeId: "review", label: "first", options: [] }),
-      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_hitl" }),
-      evWithSeq(3, "fact.run_paused_hitl", {
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", label: "first", options: [] }),
+      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
+      evWithSeq(3, "fact.run_paused_human", {
         nodeId: "review",
         label: "second iteration",
         options: [{ key: "X", label: "X", to: "n" }],
@@ -380,10 +380,10 @@ describe("runStateToDetail — HITL projection", () => {
   test("non-paused statuses leave HITL fields undefined", () => {
     const state = makeState({ status: "running" });
     const events: StoredEvent[] = [
-      // A stale paused_hitl from earlier in the run shouldn't leak through
+      // A stale paused_human from earlier in the run shouldn't leak through
       // when the run has since resumed and is now running again.
-      evWithSeq(1, "fact.run_paused_hitl", { nodeId: "review", label: "stale", options: [] }),
-      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_hitl" }),
+      evWithSeq(1, "fact.run_paused_human", { nodeId: "review", label: "stale", options: [] }),
+      evWithSeq(2, "fact.run_resumed", { fromStatus: "paused_human" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.runStatus).toBe("running");
@@ -392,10 +392,10 @@ describe("runStateToDetail — HITL projection", () => {
     expect(detail.hitlOptions).toBeUndefined();
   });
 
-  test("paused_hitl tolerates malformed payload (missing fields stay undefined)", () => {
-    const state = makeState({ status: "paused_hitl" });
+  test("paused_human tolerates malformed payload (missing fields stay undefined)", () => {
+    const state = makeState({ status: "paused_human" });
     const events: StoredEvent[] = [
-      evWithSeq(1, "fact.run_paused_hitl", { nodeId: 42, label: null, options: "not an array" }),
+      evWithSeq(1, "fact.run_paused_human", { nodeId: 42, label: null, options: "not an array" }),
     ];
     const detail = runStateToDetail(state, events, undefined, undefined);
     expect(detail.hitlNodeId).toBeUndefined();

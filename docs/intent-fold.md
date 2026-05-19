@@ -20,9 +20,9 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 |---|---|---|---|
 | `intent.run_enqueued` | n/a | none — already projected at enqueue | n/a (never reaches the fold) |
 | `intent.cancel_requested` | non-terminal | terminal cancel; short-circuits the fold | n/a (terminal runs have no fold turn) |
-| `intent.pause_requested` | `queued` / `running` | `shouldPause = true` (or defers, see R3) | `paused_hitl` → drop `already_paused`; `quarantined` / terminal → drop `wrong_state` |
-| `intent.steering_requested` | `queued` / `running` / `paused_hitl` / `paused` / `paused_auto` | concat `text` into `steering` (commit-order, `\n`-separated) | `quarantined` / terminal → drop `wrong_state` |
-| `intent.hitl_input` | `queued` / `running` (post-wake) / `paused_hitl` / `paused` / `paused_auto` | set `hitlInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
+| `intent.pause_requested` | `queued` / `running` | `shouldPause = true` (or defers, see R3) | `paused_human` → drop `already_paused`; `quarantined` / terminal → drop `wrong_state` |
+| `intent.steering_requested` | `queued` / `running` / `paused_human` / `paused` / `paused_auto` | concat `text` into `steering` (commit-order, `\n`-separated) | `quarantined` / terminal → drop `wrong_state` |
+| `intent.human_input` | `queued` / `running` (post-wake) / `paused_human` / `paused` / `paused_auto` | set `humanInput` (last-wins on multiple) | `quarantined` / terminal → drop `wrong_state` |
 | `intent.priority_adjusted` | fold: any (accepted unconditionally — the fold only runs while the executor dispatches a turn, so terminal runs never reach it; no explicit per-state filter) | merge `newPriority` into `routingDelta` (last-wins) | n/a |
 | `intent.budget_adjusted` | fold: any (accepted unconditionally) | merge `routing.budget_override.<scope>.<metric> = newLimit` into `routingDelta`; the next turn-boundary budget check reads this before the graph/node attr | malformed payload (bad `scope`/`metric` or `newLimit ≤ 0`) → drop `wrong_state` |
 | `intent.unquarantine` | `quarantined` | handled outside the fold by `wakeUnquarantine` (`packages/daemon/src/wake-pending.ts`); resolves `cancel` / `retry` / `treat_as_done` (see *Pending-intent driver* below) | non-quarantined → drop `wrong_state` |
@@ -35,10 +35,10 @@ Each intent has a *required state* (a precondition) and an *effect*. If the prec
 |---|---|---|
 | **R1** | any `intent.cancel_requested` in the batch | terminal cancel; every other intent in the batch (and any later cancels) → `dropped` with `superseded_by_cancel` (or `later_input_won` for the later cancels) |
 | **R2** | multiple cancels | first-seq cancel wins for the recorded `reason`; the others drop with `later_input_won` |
-| **R3** | pause + (steer OR hitl) on a dispatching run | **specific wins, pause defers.** Steer and/or hitl apply to this turn's handler dispatch; on success the executor commits `fact.run_paused_hitl` instead of selecting the next edge. The pause IS effected (just on a different boundary), so it does NOT appear in `dropped` |
-| **R4** | pause-only (no specific intent) on a dispatching run | `shouldPause` this turn — executor commits `fact.run_paused_hitl` immediately, skips dispatch |
+| **R3** | pause + (steer OR human) on a dispatching run | **specific wins, pause defers.** Steer and/or human apply to this turn's handler dispatch; on success the executor commits `fact.run_paused_human` instead of selecting the next edge. The pause IS effected (just on a different boundary), so it does NOT appear in `dropped` |
+| **R4** | pause-only (no specific intent) on a dispatching run | `shouldPause` this turn — executor commits `fact.run_paused_human` immediately, skips dispatch |
 | **R5** | N steers (deduplicated within batch) | concat in seq-ascending order with `\n` separators; empty-text steers are a benign no-op (applied, not dropped) |
-| **R6** | multiple `hitl_input` | last-seq's `input` wins; earlier inputs drop with `later_input_won` |
+| **R6** | multiple `human_input` | last-seq's `input` wins; earlier inputs drop with `later_input_won` |
 | **R7** | multiple `priority_adjusted` | last-seq's `newPriority` wins; earlier drop with `later_input_won` |
 
 `shouldPause` and `shouldPauseAfterDispatch` are mutually exclusive — at most one is true on any decision.
@@ -66,12 +66,12 @@ The executor batches these via `appendObservabilityEvents` so they ride alongsid
 
 ## Pending-intent driver
 
-The fold runs only while the executor is dispatching a queued / running run. State-changing intents on `paused_hitl` and `quarantined` runs (cancel, unquarantine, hitl_input) reach the daemon via `wakePending` (`packages/daemon/src/wake-pending.ts`), called at the top of every executor loop tick.
+The fold runs only while the executor is dispatching a queued / running run. State-changing intents on `paused_human` and `quarantined` runs (cancel, unquarantine, human_input) reach the daemon via `wakePending` (`packages/daemon/src/wake-pending.ts`), called at the top of every executor loop tick.
 
 `wakePending` runs three sweeps in order:
 
-1. **cancel** — any `paused_hitl` / `quarantined` run with an unapplied `intent.cancel_requested` → `fact.run_cancelled`. First, so cancel always wins (matches fold rule R1).
-2. **hitl** — any `paused_hitl` run with an unapplied `intent.hitl_input` → `fact.run_resumed`. Intent stays unapplied so the next dispatch's fold consumes it as `decision.hitlInput`.
+1. **cancel** — any `paused_human` / `quarantined` run with an unapplied `intent.cancel_requested` → `fact.run_cancelled`. First, so cancel always wins (matches fold rule R1).
+2. **human** — any `paused_human` run with an unapplied `intent.human_input` → `fact.run_resumed`. Intent stays unapplied so the next dispatch's fold consumes it as `decision.humanInput`.
 3. **unquarantine** — quarantined runs with `intent.unquarantine`:
    - `cancel` → `fact.run_cancelled`
    - `retry` → `fact.run_resumed` (handler re-dispatches at the same iteration; provider dedups on the stable `idempotencyKey`)

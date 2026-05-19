@@ -152,20 +152,20 @@ describe("M5 end-to-end — fresh store to completed run via HTTP", () => {
       maxTurnsForTesting: 10,
       shutdownSignal: ac1.signal,
     });
-    expect(s1.getState(runId)!.status).toBe("paused_hitl");
+    expect(s1.getState(runId)!.status).toBe("paused_human");
 
     // Operator writes HITL input via HTTP.
-    const hitlRes = await app1.request(`/runs/${runId}/hitl`, {
+    const hitlRes = await app1.request(`/runs/${runId}/human`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ selected: "A" }),
+      body: JSON.stringify({ route: "A" }),
     });
     expect(hitlRes.status).toBe(200);
     s1.close();
 
     // Phase 2 — simulate daemon restart on a fresh store instance ─────
     const s2 = new SqliteStore({ path: dbPath });
-    expect(s2.getState(runId)!.status).toBe("paused_hitl");
+    expect(s2.getState(runId)!.status).toBe("paused_human");
     // Re-register the dispatcher (in-memory state doesn't survive).
     const dispatcher2 = new Dispatcher();
     dispatcher2.register(

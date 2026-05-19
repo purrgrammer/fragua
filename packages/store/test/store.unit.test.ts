@@ -779,7 +779,7 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     store.close();
   });
 
-  test("paused_hitl runs are included", async () => {
+  test("paused_human runs are included", async () => {
     const store = freshStore();
     const runId = await seedRun(store);
     const userMsg = { role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 1 };
@@ -798,10 +798,10 @@ describe("SqliteStore — listThreadsWithMessages", () => {
     const s1 = store.getState(runId)!;
     store.appendFact(
       runId,
-      [{ type: "fact.run_paused_hitl", payload: { nodeId: "a", label: "p", options: [] } }],
+      [{ type: "fact.run_paused_human", payload: { nodeId: "a", label: "p", options: [] } }],
       s1.version,
     );
-    expect(store.getState(runId)!.status).toBe("paused_hitl");
+    expect(store.getState(runId)!.status).toBe("paused_human");
     const rows = store.listThreadsWithMessages();
     expect(rows.some((r) => r.runId === runId && r.threadId === "t1")).toBe(true);
     store.close();

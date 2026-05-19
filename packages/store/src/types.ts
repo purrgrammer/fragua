@@ -732,7 +732,7 @@ export interface IEventReader {
   /**
    * The next unapplied intent of the given `type` strictly after
    * `sinceSeq`, or `null`. Payload is parsed JSON. Used by the daemon's
-   * wake-pending sweep (cancel / hitl_input / resume / unquarantine).
+   * wake-pending sweep (cancel / human_input / resume / unquarantine).
    */
   getNextPendingIntent(runId: string, type: IntentType, sinceSeq: number): PendingIntentRow | null;
   /**
@@ -769,8 +769,8 @@ export interface IEventReader {
    * remain active because they block parent fan-in until the operator
    * resolves them.
    * — their threads will never be dispatched again. Non-terminal pause
-   * states (paused, paused_hitl) are included since they resume to the
-   * same thread on `intent.resume`/`intent.hitl_input`.
+   * states (paused, paused_human) are included since they resume to the
+   * same thread on `intent.resume`/`intent.human_input`.
    */
   listThreadsWithMessages(): Array<{ runId: string; threadId: string }>;
 

@@ -170,7 +170,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
     const resolvedHitlNodeId =
       hitlNodeId !== undefined
         ? hitlNodeId
-        : readyDetail?.runStatus === "paused_hitl"
+        : readyDetail?.runStatus === "paused_human"
           ? (readyDetail.hitlNodeId ?? null)
           : null;
     return toFlowGraph(readyDetail, graph, {
@@ -256,7 +256,7 @@ export function GraphView(props: GraphViewProps): JSX.Element {
 //
 //   goal_gate     → success (green)       — "did we land it?"  (wins over handler)
 //   conditional   → warn    (orange)      — explicit decision split
-//   wait.human    → human   (steel blue)  — HITL / paused_hitl
+//   wait.human    → human   (steel blue)  — HITL / paused_human
 //   tool          → loop    (teal)        — deterministic shell step (no LLM)
 //   parallel*     → idle    (gray)        — structural fan-out / fan-in
 //   start / exit  → idle    (gray)        — lifecycle markers, dimmer presence

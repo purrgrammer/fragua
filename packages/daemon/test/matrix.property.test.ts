@@ -286,7 +286,7 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
         payload: fc.record({ text: fc.string({ minLength: 1, maxLength: 12 }) }),
       }),
       fc.record({
-        type: fc.constant("intent.hitl_input"),
+        type: fc.constant("intent.human_input"),
         payload: fc.record({ input: fc.oneof(fc.integer(), fc.string({ maxLength: 12 })) }),
       }),
       fc.record({
@@ -294,7 +294,7 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
         payload: fc.record({ newPriority: fc.integer(), note: fc.string({ maxLength: 8 }) }),
       }),
     );
-    const statusArb = fc.constantFrom<RunStatus>("queued", "running", "paused_hitl", "quarantined");
+    const statusArb = fc.constantFrom<RunStatus>("queued", "running", "paused_human", "quarantined");
 
     fc.assert(
       fc.property(fc.array(intentArb, { minLength: 0, maxLength: 6 }), statusArb, (intents, status) => {
@@ -348,18 +348,18 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
                 (e.type === "intent.steering_requested" &&
                   typeof (e.payload as { text?: string }).text === "string" &&
                   (e.payload as { text: string }).text.length > 0) ||
-                e.type === "intent.hitl_input",
+                e.type === "intent.human_input",
             );
           if (hasPauseInBatch && hasSteerOrHitlOnDispatching) {
             expect(decision.shouldPauseAfterDispatch).toBe(true);
             expect(decision.shouldPause).toBe(false);
           }
 
-          // Invariant 6: multiple hitl_input → only the last seq's input
-          // is in decision.hitlInput; others are dropped with later_input_won.
-          const hitlEvents = events.filter((e) => e.type === "intent.hitl_input");
-          if (hitlEvents.length > 1 && (status === "queued" || status === "running" || status === "paused_hitl")) {
-            const droppedHitl = decision.dropped.filter((d) => d.type === "intent.hitl_input");
+          // Invariant 6: multiple human_input → only the last seq's input
+          // is in decision.humanInput; others are dropped with later_input_won.
+          const hitlEvents = events.filter((e) => e.type === "intent.human_input");
+          if (hitlEvents.length > 1 && (status === "queued" || status === "running" || status === "paused_human")) {
+            const droppedHitl = decision.dropped.filter((d) => d.type === "intent.human_input");
             expect(droppedHitl.length).toBe(hitlEvents.length - 1);
             expect(droppedHitl.every((d) => d.reason === "later_input_won")).toBe(true);
           }
@@ -371,8 +371,8 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
             expect(droppedPrio.length).toBe(prioEvents.length - 1);
           }
 
-          // Invariant 8: pause on paused_hitl is always dropped with already_paused.
-          if (status === "paused_hitl") {
+          // Invariant 8: pause on paused_human is always dropped with already_paused.
+          if (status === "paused_human") {
             const pauseEvents = events.filter((e) => e.type === "intent.pause_requested");
             for (const p of pauseEvents) {
               expect(decision.dropped.some((d) => d.seq === p.seq && d.reason === "already_paused")).toBe(true);
@@ -381,13 +381,13 @@ describe("P27 — intent-fold truth table holds across random batches", () => {
             expect(decision.shouldPauseAfterDispatch).toBe(false);
           }
 
-          // Invariant 9: hitl_input on quarantined is always dropped wrong_state.
+          // Invariant 9: human_input on quarantined is always dropped wrong_state.
           if (status === "quarantined") {
-            const hitlInQuar = events.filter((e) => e.type === "intent.hitl_input");
+            const hitlInQuar = events.filter((e) => e.type === "intent.human_input");
             for (const h of hitlInQuar) {
               expect(decision.dropped.some((d) => d.seq === h.seq && d.reason === "wrong_state")).toBe(true);
             }
-            expect(decision.hitlInput).toBeUndefined();
+            expect(decision.humanInput).toBeUndefined();
           }
         }
       }),

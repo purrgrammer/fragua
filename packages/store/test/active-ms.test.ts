@@ -39,7 +39,7 @@ const RUN_STARTED: FactEvent = {
   payload: { workflowSha: "wf", schemaVersion: 1, startNode: "a" },
 };
 
-function dispatchStarted(now: number, resumeOf: "fresh" | "crash" | "paused_hitl" | "paused"): FactEvent {
+function dispatchStarted(now: number, resumeOf: "fresh" | "crash" | "paused_human" | "paused"): FactEvent {
   // `now` is a label only — the reducer reads its own `now` arg. Kept
   // here so call sites read like the timeline.
   void now;
@@ -54,14 +54,14 @@ const NODE_COMPLETED: FactEvent = {
   payload: { nodeId: "a", iteration: 0, tokens: 0, costUsd: 0, nextNode: "b" },
 };
 
-const RUN_PAUSED_HITL: FactEvent = {
-  type: "fact.run_paused_hitl",
+const RUN_PAUSED_HUMAN: FactEvent = {
+  type: "fact.run_paused_human",
   payload: { nodeId: "a", label: "pick", options: [] },
 };
 
 const RUN_RESUMED: FactEvent = {
   type: "fact.run_resumed",
-  payload: { fromStatus: "paused_hitl" },
+  payload: { fromStatus: "paused_human" },
 };
 
 const RUN_COMPLETED: FactEvent = {
@@ -97,7 +97,7 @@ describe("dispatch interval bookkeeping", () => {
 
   test("HITL pause-resume cycle: activeMs sums only the active spans", () => {
     let s = applyFact(blankState(), RUN_STARTED, 100);
-    s = applyFact(s, RUN_PAUSED_HITL, 200);
+    s = applyFact(s, RUN_PAUSED_HUMAN, 200);
     expect(s.metrics.activeMs).toBe(100);
     expect(s.dispatchStartedAt).toBeNull();
 
@@ -105,7 +105,7 @@ describe("dispatch interval bookkeeping", () => {
     expect(s.metrics.activeMs).toBe(100);
     expect(s.dispatchStartedAt).toBeNull();
 
-    s = applyFact(s, dispatchStarted(1100, "paused_hitl"), 1100);
+    s = applyFact(s, dispatchStarted(1100, "paused_human"), 1100);
     expect(s.dispatchStartedAt).toBe(1100);
 
     s = applyFact(s, RUN_COMPLETED, 1500);
@@ -163,7 +163,7 @@ describe("dispatch interval bookkeeping", () => {
     // active spans are credited via `lastAliveAt` (heartbeat captured
     // ~10ms before sweep time):
     //   t=100   run_started                       (span 1 begins)
-    //   t=300   paused_hitl                       (+200 → activeMs=200)
+    //   t=300   paused_human                       (+200 → activeMs=200)
     //   t=900   resumed
     //   t=1000  dispatch_started                  (span 2 begins)
     //   t=1500  requeued_after_crash @1490        (+490 → activeMs=690)
@@ -175,11 +175,11 @@ describe("dispatch interval bookkeeping", () => {
     //   t=4000  dispatch_started                  (span 5 begins)
     //   t=4300  run_completed                     (+300 → activeMs=1680)
     let s = applyFact(blankState(), RUN_STARTED, 100);
-    s = applyFact(s, RUN_PAUSED_HITL, 300);
+    s = applyFact(s, RUN_PAUSED_HUMAN, 300);
     expect(s.metrics.activeMs).toBe(200);
 
     s = applyFact(s, RUN_RESUMED, 900);
-    s = applyFact(s, dispatchStarted(1000, "paused_hitl"), 1000);
+    s = applyFact(s, dispatchStarted(1000, "paused_human"), 1000);
     s = applyFact(s, runRequeued(1490), 1500);
     expect(s.metrics.activeMs).toBe(690);
     expect(s.dispatchStartedAt).toBeNull();
@@ -209,9 +209,9 @@ describe("dispatch interval bookkeeping", () => {
   test("foldFacts is idempotent: same event list folded twice yields identical state", () => {
     const facts: FactEvent[] = [
       RUN_STARTED,
-      RUN_PAUSED_HITL,
+      RUN_PAUSED_HUMAN,
       RUN_RESUMED,
-      dispatchStarted(0, "paused_hitl"),
+      dispatchStarted(0, "paused_human"),
       RUN_COMPLETED,
     ];
     // The reducer reads `now` per-call, so to make folding deterministic

@@ -25,7 +25,7 @@ bun run swarm providers ls   # at least one provider shows ✓
 bun run swarm run change --input="rename foo() to bar() in packages/core"
 ```
 
-The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_hitl | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
+The CLI does three things: `POST /workflows` (uploads source, returns sha), `POST /runs` (enqueue), `GET /runs/:id/stream` (SSE tail until terminal). Terminal facts: `fact.run_completed | fact.run_halted | fact.run_cancelled | fact.run_paused_human | fact.run_paused | fact.run_quarantined`. CLI exits non-zero on halt/cancel; `paused_*` is suspensive (CLI exits 0; the run resumes on its own via retry timer or operator HITL response).
 
 If the fast path works, nothing else here matters.
 
@@ -120,7 +120,7 @@ curl -N "$URL/runs/$RUN/stream" -H 'Accept: text/event-stream'
 | `GET /runs/:id/steps` | Per-LLM-call snapshots (prompt, model, tokens, cost; rows for parallel branches carry `parentNodeId` + `parallelIndex`). |
 | `GET /runs/:id` | Projection summary (runStatus, status, current node, totals). Cheap status poll. |
 
-**Two status fields, don't conflate them.** `GET /runs/:id` returns BOTH `runStatus` (lifecycle: `queued | running | completed | halted | cancelled | paused | paused_hitl | paused_auto | quarantined`) AND `status` (the run's final *outcome*: `success | fail`, or `null` while not yet terminal). For "is the run still going?" checks use `runStatus`; for "did it succeed?" once terminal use `status`. The cheat sheet and the lifecycle table below use `runStatus` consistently.
+**Two status fields, don't conflate them.** `GET /runs/:id` returns BOTH `runStatus` (lifecycle: `queued | running | completed | halted | cancelled | paused | paused_human | paused_auto | quarantined`) AND `status` (the run's final *outcome*: `success | fail`, or `null` while not yet terminal). For "is the run still going?" checks use `runStatus`; for "did it succeed?" once terminal use `status`. The cheat sheet and the lifecycle table below use `runStatus` consistently.
 
 ```sh
 curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd, totalTokens: ((.inputTokens // 0) + (.outputTokens // 0))}'
@@ -128,7 +128,7 @@ curl -fsS "$URL/runs/$RUN/events.json" | jq '.[-20:] | map({seq, type, payload})
 curl -fsS "$URL/runs/$RUN/steps" | jq '.[] | {stepIdx, nodeId, model, durationMs, tokens, costUsd}'
 
 # Polling pattern — watch runStatus, not status.
-until curl -fsS "$URL/runs/$RUN" | jq -e '.runStatus | IN("completed","halted","cancelled","paused_hitl","paused","quarantined")' >/dev/null; do
+until curl -fsS "$URL/runs/$RUN" | jq -e '.runStatus | IN("completed","halted","cancelled","paused_human","paused","quarantined")' >/dev/null; do
   sleep 30
 done
 ```
@@ -138,7 +138,7 @@ For running-but-silent runs: if the last event is `fact.node_started` with no fo
 **`runStatus` lifecycle states beyond `running` / `completed`:**
 
 - `queued` — waiting for a daemon dispatch slot.
-- `paused_hitl` — `wait.human` gate yielded. Resume with `POST /runs/:id/hitl`.
+- `paused_human` — `wait.human` gate yielded. Resume with `POST /runs/:id/human`.
 - `paused` — operator-resumable. Reason on `fact.run_paused.payload.reason`: `operator` (operator paused), `provider_error` (manual-class HTTP failure: 400/401/403/404/413/422 — fix creds/request, then `/resume`), `payment_required` (402 — top up at the provider, then `/resume`), `budget` (local cap hit — raise via `POST /runs/:id/budget`, then `/resume`).
 - `paused_auto` — daemon owes a clock tick. Reason on `fact.run_paused.payload.reason`: `handler_retry` (node returned `outcome=retry`, engine scheduled a backoff), or `provider_retry` (auto-retryable provider transport error — 408/429/5xx/529/network). The run *frees its concurrency slot* during the wait. Wake-pending re-queues it once `routing.internal.auto_resume_at` (ms epoch) passes; you'll see `fact.run_resumed { fromStatus: "paused_auto" }` followed by the same node re-dispatched. No operator action unless the timer never fires (then check daemon heartbeat); operators can short-circuit with `POST /runs/:id/resume`.
 - `quarantined` — orphan side effect. Operator must resolve via `/unquarantine` (§6).
@@ -157,7 +157,7 @@ All endpoints return `{ seq }` — quote it in any follow-up so the user can fin
 | `/runs/:id/steer` | `{text}` | `intent.steering_requested` | Handler aborts (`cause:"steer"`); next dispatch sees the steering text in the thread. |
 | `/runs/:id/pause` | `{}` | `intent.pause_requested` | Handler aborts (`cause:"pause"`); `runStatus` → `paused` (`reason:"operator"`). |
 | `/runs/:id/cancel` | `{reason?}` | `intent.cancel_requested` | Handler aborts (`cause:"cancel"`); terminal `fact.run_cancelled`. |
-| `/runs/:id/hitl` | `{selected, note?}` | `intent.hitl_input` | For `wait.human`: routes to the outgoing edge whose `[K] Label` accelerator matches `selected`. 400 if missing/empty. |
+| `/runs/:id/human` | `{route, note?}` | `intent.human_input` | For `wait.human`: routes to the outgoing edge whose `[K] Label` accelerator matches `route`. 400 if missing/empty. |
 | `/runs/:id/resume` | `{note?}` | `intent.resume` | Wake-pending sweeper transitions any `paused_*` run back to `queued`. |
 | `/runs/:id/unquarantine` | `{resolution, note?}` | `intent.unquarantine` | Resolves the orphan side effect per `resolution` ∈ `treat_as_done | retry | cancel`. |
 | `/runs/:id/priority` | `{newPriority, note?}` | `intent.priority_adjusted` | Queue ordering updated. Already-running runs unaffected. |
@@ -177,7 +177,7 @@ Wait for `fact.node_aborted { cause:"steer", intentSeq: <returned seq> }` → `f
 
 ### Pause + resume
 
-Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/hitl` is for `wait.human` (structured) gates only; sending it to an operator-paused run is the wrong shape.
+Pause is steer-without-text: abort the current handler and flip to `paused` with `reason:"operator"`. Resume with `/resume`. `/human` is for `wait.human` (structured) gates only; sending it to an operator-paused run is the wrong shape.
 
 ### Cancel
 
@@ -185,7 +185,7 @@ Final: terminal `fact.run_cancelled`, no resume path. Prefer `pause` + decide la
 
 ### HITL inputs
 
-For `wait.human` (hexagon) gates. `selected` must match one of `fact.run_paused_hitl.payload.options[].key`. See §5 + swarm-author §12.
+For `wait.human` (hexagon) gates. `route` must match one of `fact.run_paused_human.payload.options[].key`. See §5 + swarm-author §12.
 
 ### Priority + budget
 
@@ -195,15 +195,15 @@ For `wait.human` (hexagon) gates. `selected` must match one of `fact.run_paused_
 
 ## 5. HITL resume protocol
 
-Runs sit in `paused_hitl` until you feed them. Read what they want:
+Runs sit in `paused_human` until you feed them. Read what they want:
 
 ```sh
 curl -fsS "$URL/runs/$RUN/events.json" \
-  | jq '[.[] | select(.type=="fact.run_paused_hitl")] | last'
+  | jq '[.[] | select(.type=="fact.run_paused_human")] | last'
 # { seq, type, payload: { nodeId, label, options: [{key, label, to}, …] }, … }
 ```
 
-`selected` must equal one of `options[].key`. Structured HITL is the only supported routing path (legacy `context.hitl.<nodeId>=…` raises validator W004 and isn't recognised by the structured handler).
+`route` must equal one of `options[].key`. Structured HITL is the only supported routing path (legacy `context.hitl.<nodeId>=…` raises validator W004 and isn't recognised by the structured handler).
 
 Present the decision to the user — don't answer HITL on their behalf unless they've explicitly delegated it.
 
@@ -301,7 +301,7 @@ curl -fsS "$URL/runs/$RUN" | jq '{runStatus, status, currentNode, costUsd}'
 curl -fsS -X POST "$URL/runs/$RUN/steer"        -d '{"text":"…"}'                                  -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/pause"        -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/cancel"       -d '{"reason":"…"}'                                -H 'content-type: application/json'
-curl -fsS -X POST "$URL/runs/$RUN/hitl"         -d '{"selected":"A"}'                              -H 'content-type: application/json'
+curl -fsS -X POST "$URL/runs/$RUN/human"        -d '{"route":"A"}'                                 -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/resume"       -d '{}'                                            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/unquarantine" -d '{"resolution":"cancel","note":"…"}'            -H 'content-type: application/json'
 curl -fsS -X POST "$URL/runs/$RUN/priority"     -d '{"newPriority":10}'                            -H 'content-type: application/json'

@@ -34,7 +34,7 @@ async function dispatchOnce(r: ReturnType<typeof rig>, runId: string): Promise<v
  * `cancelled`). `paused_auto` (handler_retry backoff) is skipped past
  * with a far-future wake clock. Bounded to keep tests honest. */
 async function driveUntilSettled(r: ReturnType<typeof rig>, runId: string): Promise<void> {
-  const SETTLED = new Set(["paused", "paused_hitl", "completed", "halted", "cancelled", "quarantined"]);
+  const SETTLED = new Set(["paused", "paused_human", "completed", "halted", "cancelled", "quarantined"]);
   for (let i = 0; i < 100; i++) {
     const s = r.store.getState(runId);
     if (s == null) return;

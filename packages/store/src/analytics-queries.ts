@@ -181,7 +181,7 @@ export interface RunsByBucketRow {
   completed: number;
   queued: number;
   running: number;
-  paused_hitl: number;
+  paused_human: number;
   paused: number;
   paused_auto: number;
   cancelled: number;
@@ -203,7 +203,7 @@ export function getRunsByBucket(db: Database, w: BucketedWindow): RunsByBucketRo
       SUM(CASE WHEN status = 'completed'             THEN 1 ELSE 0 END) AS completed,
       SUM(CASE WHEN status = 'queued'                THEN 1 ELSE 0 END) AS queued,
       SUM(CASE WHEN status = 'running'               THEN 1 ELSE 0 END) AS running,
-      SUM(CASE WHEN status = 'paused_hitl'           THEN 1 ELSE 0 END) AS paused_hitl,
+      SUM(CASE WHEN status = 'paused_human'          THEN 1 ELSE 0 END) AS paused_human,
       SUM(CASE WHEN status = 'paused'                THEN 1 ELSE 0 END) AS paused,
       SUM(CASE WHEN status = 'paused_auto'           THEN 1 ELSE 0 END) AS paused_auto,
       SUM(CASE WHEN status = 'cancelled'             THEN 1 ELSE 0 END) AS cancelled,
@@ -505,7 +505,7 @@ export interface DrilldownFilters extends AnalyticsWindow {
   /** Filter to runs whose lifecycle status matches. Coarse buckets
    *  mirror the four-category collapse the Runs / Outcomes charts
    *  surface: `'success'` → completed; `'failure'` → halted ∪
-   *  quarantined ∪ cancelled; `'paused'` → paused_hitl ∪ paused;
+   *  quarantined ∪ cancelled; `'paused'` → paused_human ∪ paused;
    *  `'queued'` → queued ∪ running. Any other
    *  string falls through as a literal RunStatus match. */
   haltCategory?: "success" | "failure" | "paused" | "queued" | string;
@@ -569,7 +569,7 @@ export function getDrilldownPage(
   if (filters.haltCategory) {
     if (filters.haltCategory === "success") where.push("rs.status = 'completed'");
     else if (filters.haltCategory === "failure") where.push("rs.status IN ('halted','quarantined','cancelled')");
-    else if (filters.haltCategory === "paused") where.push("rs.status IN ('paused_hitl','paused')");
+    else if (filters.haltCategory === "paused") where.push("rs.status IN ('paused_human','paused')");
     else if (filters.haltCategory === "queued") where.push("rs.status IN ('queued','running')");
     else {
       where.push("rs.status = ?");

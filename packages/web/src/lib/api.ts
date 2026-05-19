@@ -52,7 +52,7 @@ export interface RunSummary {
   startedAt: string;
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   /** Raw lifecycle status from the store. Used by Inbox and other
-   * fine-grained filters that need to distinguish e.g. `paused_hitl`
+   * fine-grained filters that need to distinguish e.g. `paused_human`
    * from `paused`. The coarse `status` above is what the badge
    * renders. Optional because older server builds may omit it —
    * mirrors the soft-validate pattern below. */
@@ -60,7 +60,7 @@ export interface RunSummary {
     | "queued"
     | "running"
     | "paused"
-    | "paused_hitl"
+    | "paused_human"
     | "paused_auto"
     | "completed"
     | "cancelled"
@@ -114,7 +114,7 @@ export interface RunDetail {
   startedAt: string;
   status: "queued" | "running" | "paused" | "success" | "fail" | "canceled" | "unknown";
   /** Raw lifecycle status from the store. Used by Inbox and other
-   * fine-grained filters that need to distinguish e.g. `paused_hitl`
+   * fine-grained filters that need to distinguish e.g. `paused_human`
    * from `paused`. The coarse `status` above is what the badge
    * renders. Optional because older server builds may omit it —
    * mirrors the soft-validate pattern below. */
@@ -122,7 +122,7 @@ export interface RunDetail {
     | "queued"
     | "running"
     | "paused"
-    | "paused_hitl"
+    | "paused_human"
     | "paused_auto"
     | "completed"
     | "cancelled"
@@ -776,10 +776,10 @@ export async function steerRun(id: string, message: string): Promise<{ seq: numb
   return postJson(`/runs/${encodeURIComponent(id)}/steer`, { text: message }, isAcceptedSeq);
 }
 
-export async function submitHitlChoice(runId: string, selected: string, note?: string): Promise<{ seq: number }> {
-  const body: { selected: string; note?: string } = { selected };
+export async function submitHitlChoice(runId: string, route: string, note?: string): Promise<{ seq: number }> {
+  const body: { route: string; note?: string } = { route };
   if (note) body.note = note;
-  return postJson(`/runs/${encodeURIComponent(runId)}/hitl`, body, isAcceptedSeq);
+  return postJson(`/runs/${encodeURIComponent(runId)}/human`, body, isAcceptedSeq);
 }
 
 export async function pauseRun(id: string, reason?: string): Promise<{ seq: number }> {

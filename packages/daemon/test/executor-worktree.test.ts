@@ -235,7 +235,7 @@ describe("executor + worktree provisioner", () => {
     r.store.close();
   });
 
-  test("dispose does not fire on paused_hitl — run can resume with the same env", async () => {
+  test("dispose does not fire on paused_human — run can resume with the same env", async () => {
     const r = rig();
     // Register a wait.human spec manually so the first dispatch pauses
     // the run — rig()'s auto-echo only covers trivial transitions.
@@ -260,7 +260,7 @@ describe("executor + worktree provisioner", () => {
       maxTurnsForTesting: 10,
       provisioner,
     });
-    expect(r.store.getState("run-paused")?.status).toBe("paused_hitl");
+    expect(r.store.getState("run-paused")?.status).toBe("paused_human");
     expect(provisioner.ensureCalls).toEqual(["run-paused"]);
     expect(provisioner.disposeCalls).toEqual([]); // NOT disposed on pause
 

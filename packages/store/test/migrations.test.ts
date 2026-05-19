@@ -404,3 +404,129 @@ describe("migrate — v6 → v7 drops conversation-run scaffolding", () => {
     db.close();
   });
 });
+
+describe("migration 014 — paused_human rename", () => {
+  function seedV13Db(): Database {
+    const db = freshDb();
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec(`
+      CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL) STRICT;
+      INSERT INTO schema_version (id, version) VALUES (1, 13);
+      CREATE TABLE workflows (sha TEXT PRIMARY KEY, name TEXT NOT NULL, dot_source TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
+      INSERT INTO workflows (sha, name, dot_source, created_at) VALUES ('wf-1', 't', 'digraph {}', 0);
+      CREATE TABLE run_state (
+        run_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'queued','running','paused','paused_hitl','paused_auto',
+          'completed','cancelled','halted','quarantined'
+        )),
+        current_node TEXT,
+        workflow_sha TEXT NOT NULL REFERENCES workflows(sha),
+        schema_version INTEGER NOT NULL,
+        routing TEXT NOT NULL CHECK (length(routing) < 8192),
+        metrics TEXT NOT NULL,
+        next_seq INTEGER NOT NULL DEFAULT 1,
+        last_applied_seq INTEGER NOT NULL DEFAULT 0,
+        priority INTEGER NOT NULL DEFAULT 0,
+        enqueued_at INTEGER NOT NULL,
+        ready_at INTEGER NOT NULL,
+        node_started_at INTEGER,
+        dispatch_started_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        title TEXT,
+        cwd TEXT,
+        workflow_name TEXT,
+        workflow_scope TEXT CHECK (workflow_scope IN ('global','local','path','ephemeral')),
+        workflow_path TEXT,
+        base_git_sha TEXT,
+        branch TEXT,
+        schedule_id TEXT,
+        total_cost_usd REAL GENERATED ALWAYS AS
+          (CAST(COALESCE(json_extract(metrics, '$.totalCostUsd'), 0) AS REAL)) STORED,
+        billed_tokens INTEGER GENERATED ALWAYS AS
+          (CAST(COALESCE(json_extract(metrics, '$.billedTokens'), 0) AS INTEGER)) STORED
+      ) STRICT;
+      CREATE TABLE events (
+        run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL, type TEXT NOT NULL,
+        writer TEXT NOT NULL CHECK (writer IN ('daemon','web')),
+        payload TEXT NOT NULL, ts INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE messages (
+        run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL, content TEXT NOT NULL,
+        role TEXT, node_id TEXT, iteration INTEGER NOT NULL DEFAULT 0, content_hash TEXT,
+        PRIMARY KEY (run_id, ordinal)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE blobs (
+        sha256 TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE artifacts (
+        run_id TEXT NOT NULL REFERENCES run_state(run_id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL, iteration INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL,
+        blob_sha TEXT NOT NULL REFERENCES blobs(sha256),
+        mime TEXT, created_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, node_id, iteration, key)
+      ) STRICT, WITHOUT ROWID;
+
+      INSERT INTO run_state (run_id, version, status, current_node, workflow_sha, schema_version,
+        routing, metrics, priority, enqueued_at, ready_at, updated_at)
+        VALUES ('r-paused', 1, 'paused_hitl', 'wait', 'wf-1', 13, '{}', '{}', 0, 0, 0, 0);
+
+      INSERT INTO events (run_id, seq, type, writer, payload, ts) VALUES
+        ('r-paused', 1, 'fact.run_paused_hitl',  'daemon', '{"nodeId":"wait","label":"pick","options":[]}', 0),
+        ('r-paused', 2, 'intent.hitl_input',     'web',    '{"selected":"A","note":"go"}',                  1),
+        ('r-paused', 3, 'fact.dispatch_started', 'daemon', '{"nodeId":"wait","iteration":0,"resumeOf":"paused_hitl"}', 2),
+        ('r-paused', 4, 'fact.run_resumed',      'daemon', '{"fromStatus":"paused_hitl"}',                  3);
+    `);
+    return db;
+  }
+
+  test("rewrites status + event-type + payload literals from paused_hitl → paused_human", () => {
+    const db = seedV13Db();
+    migrate(db);
+
+    const ver = db.query<{ version: number }, []>("SELECT version FROM schema_version WHERE id = 1").get();
+    expect(ver?.version).toBe(CURRENT_SCHEMA_VERSION);
+
+    const status = db.query<{ status: string }, []>("SELECT status FROM run_state WHERE run_id = 'r-paused'").get();
+    expect(status?.status).toBe("paused_human");
+
+    const rows = db
+      .query<{ seq: number; type: string; payload: string }, []>(
+        "SELECT seq, type, payload FROM events WHERE run_id = 'r-paused' ORDER BY seq",
+      )
+      .all();
+    expect(rows[0]?.type).toBe("fact.run_paused_human");
+    expect(rows[1]?.type).toBe("intent.human_input");
+    const intentPayload = JSON.parse(rows[1]?.payload ?? "{}") as { route?: string; selected?: string; note?: string };
+    expect(intentPayload.route).toBe("A");
+    expect(intentPayload.note).toBe("go");
+    expect(intentPayload.selected).toBeUndefined();
+    expect(rows[2]?.type).toBe("fact.dispatch_started");
+    const dsPayload = JSON.parse(rows[2]?.payload ?? "{}") as { resumeOf?: string };
+    expect(dsPayload.resumeOf).toBe("paused_human");
+    expect(rows[3]?.type).toBe("fact.run_resumed");
+    const rrPayload = JSON.parse(rows[3]?.payload ?? "{}") as { fromStatus?: string };
+    expect(rrPayload.fromStatus).toBe("paused_human");
+
+    db.close();
+  });
+
+  test("CHECK accepts paused_human and rejects paused_hitl after migration", () => {
+    const db = seedV13Db();
+    migrate(db);
+
+    // Accept paused_human via UPDATE.
+    db.query("UPDATE run_state SET status = 'paused_human' WHERE run_id = 'r-paused'").run();
+
+    // Reject paused_hitl.
+    expect(() => db.query("UPDATE run_state SET status = 'paused_hitl' WHERE run_id = 'r-paused'").run()).toThrow(
+      /CHECK constraint failed/,
+    );
+
+    db.close();
+  });
+});

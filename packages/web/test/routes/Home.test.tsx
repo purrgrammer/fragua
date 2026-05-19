@@ -48,11 +48,11 @@ function withRows(rows: RunSummary[]) {
     rows.filter((r) => r.status === "running"),
   );
   const inboxRows = rows.filter(
-    (r) => r.runStatus === "paused_hitl" || r.runStatus === "paused" || r.runStatus === "quarantined",
+    (r) => r.runStatus === "paused_human" || r.runStatus === "paused" || r.runStatus === "quarantined",
   );
   client.setQueryData(
     queries.runs.list({
-      status: ["paused_hitl", "paused", "quarantined"],
+      status: ["paused_human", "paused", "quarantined"],
       order: "oldest",
       limit: INBOX_HOME_LIMIT + 1,
     }).queryKey,

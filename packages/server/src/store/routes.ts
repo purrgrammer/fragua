@@ -395,15 +395,15 @@ export function createRoutes(deps: ServerDeps): Hono {
     });
   });
 
-  app.post("/runs/:id/hitl", async (c) => {
-    const body = await readJson<{ selected?: string; note?: string }>(c);
-    if (!body || typeof body.selected !== "string" || body.selected.length === 0) {
-      return c.json({ error: "selected required" }, 400);
+  app.post("/runs/:id/human", async (c) => {
+    const body = await readJson<{ route?: string; note?: string }>(c);
+    if (!body || typeof body.route !== "string" || body.route.length === 0) {
+      return c.json({ error: "route required" }, 400);
     }
-    const payload: { selected: string; note?: string } = { selected: body.selected };
+    const payload: { route: string; note?: string } = { route: body.route };
     if (typeof body.note === "string" && body.note.length > 0) payload.note = body.note;
     return appendIntentOr413(c, c.req.param("id"), {
-      type: "intent.hitl_input",
+      type: "intent.human_input",
       payload,
     });
   });

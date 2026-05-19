@@ -18,7 +18,7 @@ const HALT_LABELS: Record<string, string> = {
   halted: "Failure",
   quarantined: "Quarantined",
   cancelled: "Cancelled",
-  paused_hitl: "Paused",
+  paused_human: "Paused",
   paused: "Paused",
   paused_auto: "Auto-retrying",
   running: "Running",
@@ -47,7 +47,7 @@ const STATUS_TO_CATEGORY: Record<string, RunCategory> = {
   completed: "success",
   queued: "queued",
   running: "queued",
-  paused_hitl: "paused",
+  paused_human: "paused",
   paused: "paused",
   paused_auto: "paused",
   cancelled: "failure",
@@ -93,7 +93,7 @@ export function haltReasonAccentVar(status: string): string {
     case "halted":
     case "quarantined":
       return "--sw-accent-error";
-    case "paused_hitl":
+    case "paused_human":
     case "paused":
       return "--sw-accent-human";
     case "paused_auto":

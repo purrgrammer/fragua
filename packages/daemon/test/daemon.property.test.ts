@@ -68,8 +68,8 @@ describe("P3 — intents never lost", () => {
                 break;
               case "hitl":
                 r.store.appendIntent("rp3", {
-                  type: "intent.hitl_input",
-                  payload: { selected: "A" },
+                  type: "intent.human_input",
+                  payload: { route: "A" },
                 });
                 break;
               case "priority":
@@ -193,7 +193,7 @@ describe("P10 — concurrency cap honored", () => {
 });
 
 describe("P11 — HITL durability across simulated crash", () => {
-  test("paused_hitl run survives a full store reopen (in-memory: sim via two SqliteStore instances on same file)", async () => {
+  test("paused_human run survives a full store reopen (in-memory: sim via two SqliteStore instances on same file)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "swarm-hitl-"));
     const dbPath = join(dir, "swarm.db");
 
@@ -230,16 +230,16 @@ describe("P11 — HITL durability across simulated crash", () => {
       maxTurnsForTesting: 10,
       shutdownSignal: ac1.signal,
     });
-    expect(s1.getState("rp11")!.status).toBe("paused_hitl");
+    expect(s1.getState("rp11")!.status).toBe("paused_human");
     s1.appendIntent("rp11", {
-      type: "intent.hitl_input",
-      payload: { selected: "O" },
+      type: "intent.human_input",
+      payload: { route: "O" },
     });
     s1.close();
 
     // Phase 2: reopen, resume, finish.
     const s2 = new SqliteStore({ path: dbPath });
-    expect(s2.getState("rp11")!.status).toBe("paused_hitl");
+    expect(s2.getState("rp11")!.status).toBe("paused_human");
     wakePending(s2);
     expect(s2.getState("rp11")!.status).toBe("queued");
     s2.claimNextRun(1);
@@ -287,14 +287,14 @@ describe("P21 — queue fairness on simultaneous HITL wake", () => {
       });
     }
     for (const id of ids) {
-      expect(r.store.getState(id)!.status).toBe("paused_hitl");
+      expect(r.store.getState(id)!.status).toBe("paused_human");
     }
 
     // All three get HITL input in order q1, q2, q3.
     for (const id of ids) {
       r.store.appendIntent(id, {
-        type: "intent.hitl_input",
-        payload: { selected: "O" },
+        type: "intent.human_input",
+        payload: { route: "O" },
       });
     }
     wakePending(r.store);

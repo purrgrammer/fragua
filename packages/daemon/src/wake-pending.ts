@@ -1,14 +1,14 @@
 // Wake non-dispatching runs that have actionable pending intents.
 //
-// `paused`, `paused_hitl`, and `quarantined` runs are skipped by the
+// `paused`, `paused_human`, and `quarantined` runs are skipped by the
 // executor's dispatch loop, so the normal fold never runs for them.
 // Without this sweep four operator intents would be silently lost:
 //
 //   - `intent.cancel_requested` on any paused or quarantined run:
 //     the run sits forever even though the operator asked to kill it.
-//   - `intent.hitl_input` on `paused_hitl` runs: the run never wakes
+//   - `intent.human_input` on `paused_human` runs: the run never wakes
 //     to deliver the answer.
-//   - `intent.resume` on `paused` (any reason) or `paused_hitl` runs:
+//   - `intent.resume` on `paused` (any reason) or `paused_human` runs:
 //     the operator asked to retry the dispatch but no fact transitions
 //     the run back to `queued`.
 //   - `intent.unquarantine { resolution }` on quarantined runs:
@@ -20,14 +20,14 @@
 //
 // `wakePending` runs at the top of the executor loop. The internal
 // order is load-bearing: cancel runs first so a run with BOTH a cancel
-// intent and an unquarantine / hitl_input ends up cancelled (fold rule
+// intent and an unquarantine / human_input ends up cancelled (fold rule
 // R1: cancel beats everything).
 
 import { ConcurrencyError, type FactEvent, type IEventStore, type OrphanSideEffectRow } from "@swarm/store";
 
 export interface WakePendingResult {
   cancelled: string[];
-  hitlWoken: string[];
+  humanWoken: string[];
   resumed: string[];
   retryResumed: string[];
   unquarantined: string[];
@@ -40,11 +40,11 @@ export interface WakePendingResult {
  */
 export function wakePending(store: IEventStore, now: () => number = Date.now): WakePendingResult {
   const cancelled = wakeCancel(store);
-  const hitlWoken = wakeHitl(store);
+  const humanWoken = wakeHuman(store);
   const resumed = wakeResume(store);
   const retryResumed = wakeAutoResume(store, now);
   const unquarantined = wakeUnquarantine(store);
-  return { cancelled, hitlWoken, resumed, retryResumed, unquarantined };
+  return { cancelled, humanWoken, resumed, retryResumed, unquarantined };
 }
 
 /**
@@ -54,7 +54,7 @@ export function wakePending(store: IEventStore, now: () => number = Date.now): W
 function wakeCancel(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused", "paused_hitl", "paused_auto", "quarantined", "queued"],
+    statuses: ["paused", "paused_human", "paused_auto", "quarantined", "queued"],
   });
   for (const row of candidates) {
     const cancel = store.getNextPendingIntent(row.runId, "intent.cancel_requested", row.lastAppliedSeq);
@@ -72,24 +72,24 @@ function wakeCancel(store: IEventStore): string[] {
 }
 
 /**
- * Wake paused_hitl runs that have a pending `intent.hitl_input`.
+ * Wake paused_human runs that have a pending `intent.human_input`.
  * Emits `fact.run_resumed`. The intent is left UNAPPLIED — the next
- * dispatch's fold consumes it as `decision.hitlInput`. lastAppliedSeq
+ * dispatch's fold consumes it as `decision.humanInput`. lastAppliedSeq
  * stays put so the fold sees the intent.
  */
-function wakeHitl(store: IEventStore): string[] {
+function wakeHuman(store: IEventStore): string[] {
   const out: string[] = [];
-  const candidates = store.getWakeCandidates({ statuses: ["paused_hitl"] });
+  const candidates = store.getWakeCandidates({ statuses: ["paused_human"] });
   for (const row of candidates) {
-    const hasHitl = store.getNextPendingIntent(row.runId, "intent.hitl_input", row.lastAppliedSeq);
-    if (hasHitl == null) continue;
+    const hasHuman = store.getNextPendingIntent(row.runId, "intent.human_input", row.lastAppliedSeq);
+    if (hasHuman == null) continue;
     try {
       store.appendFact(
         row.runId,
         [
           {
             type: "fact.run_resumed",
-            payload: { fromStatus: "paused_hitl", inputIntentSeq: hasHitl.seq },
+            payload: { fromStatus: "paused_human", inputIntentSeq: hasHuman.seq },
           },
         ],
         row.version,
@@ -105,7 +105,7 @@ function wakeHitl(store: IEventStore): string[] {
 /**
  * Wake any paused_* run that has an unapplied `intent.resume`. Emits
  * `fact.run_resumed { fromStatus, inputIntentSeq }`. Generic counterpart
- * to `intent.hitl_input` — operators use this when there's no payload to
+ * to `intent.human_input` — operators use this when there's no payload to
  * deliver (the canonical case is short-circuiting an auto-wake timer or
  * resuming after a provider transport error). Quarantined runs are NOT
  * swept here; they require the typed `intent.unquarantine { resolution }`
@@ -114,7 +114,7 @@ function wakeHitl(store: IEventStore): string[] {
 function wakeResume(store: IEventStore): string[] {
   const out: string[] = [];
   const candidates = store.getWakeCandidates({
-    statuses: ["paused", "paused_hitl", "paused_auto"],
+    statuses: ["paused", "paused_human", "paused_auto"],
   });
   for (const row of candidates) {
     const intent = store.getNextPendingIntent(row.runId, "intent.resume", row.lastAppliedSeq);
@@ -165,7 +165,7 @@ function wakeResume(store: IEventStore): string[] {
  * because either `fact.node_completed` already pointed nextNode at
  * the retrying node (handler_retry) or the executor still has the
  * run on its current node (provider_retry). Manual-only pause states
- * (`paused`, `paused_hitl`) ignore this routing key — they wake on
+ * (`paused`, `paused_human`) ignore this routing key — they wake on
  * `intent.resume` only.
  */
 function wakeAutoResume(store: IEventStore, now: () => number): string[] {

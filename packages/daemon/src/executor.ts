@@ -355,7 +355,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
       state.status === "cancelled" ||
       state.status === "halted" ||
       state.status === "paused" ||
-      state.status === "paused_hitl" ||
+      state.status === "paused_human" ||
       state.status === "paused_auto" ||
       state.status === "quarantined"
     ) {
@@ -802,7 +802,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     };
     if (allowedTools !== undefined) ctxOpts.allowedTools = allowedTools;
     if (deniedTools !== undefined) ctxOpts.deniedTools = deniedTools;
-    if (decision.hitlInput !== undefined) ctxOpts.hitlInput = decision.hitlInput;
+    if (decision.humanInput !== undefined) ctxOpts.humanInput = decision.humanInput;
     if (decision.steering !== undefined) ctxOpts.steering = decision.steering;
     if (runEnv !== undefined) ctxOpts.env = runEnv;
     // Budget snapshot at dispatch time. The backend embeds this verbatim
@@ -1452,7 +1452,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     // R3 — pause defers when paired with steer/hitl: keep the
     // node_completed accounting, then pause instead of advancing to
     // the next node. wakePending will rouse the run on the next
-    // intent.hitl_input. Terminal halts (run_halted) beat pause; we
+    // intent.human_input. Terminal halts (run_halted) beat pause; we
     // only swap the success continuations (node_started / run_completed).
     // Mid-dispatch pause races (intent arrives AFTER the fold but
     // BEFORE the handler returned) flow through the abort-throw path:
@@ -1699,7 +1699,7 @@ async function runOneInner(runId: string, opts: ExecutorOpts, leakBudget: LeakBu
     }
   } finally {
     // Dispose the worktree env when the run reaches a hard-terminal
-    // status. We intentionally skip dispose on paused_hitl so the env
+    // status. We intentionally skip dispose on paused_human so the env
     // survives across HITL pauses and the same worktree can be reused
     // on resume. completed / cancelled / halted / quarantined are all
     // truly terminal — the run will never execute another node.
@@ -1839,7 +1839,7 @@ function nodeRetryCount(routing: Record<string, unknown>): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-type ResumeOf = "fresh" | "crash" | "paused" | "paused_hitl" | "paused_auto" | "quarantined";
+type ResumeOf = "fresh" | "crash" | "paused" | "paused_human" | "paused_auto" | "quarantined";
 
 /** Determine why this dispatch is starting, for fact.dispatch_started's
  * resumeOf field. Walks recent facts looking for the one that flipped
@@ -1860,7 +1860,7 @@ function deriveResumeOf(
     if (e == null) continue;
     if (e.type === "fact.run_resumed") {
       const fs = (e.payload as { fromStatus?: string } | null)?.fromStatus;
-      if (fs === "paused" || fs === "paused_hitl" || fs === "paused_auto" || fs === "quarantined") return fs;
+      if (fs === "paused" || fs === "paused_human" || fs === "paused_auto" || fs === "quarantined") return fs;
       return "fresh";
     }
     if (e.type === "fact.run_requeued_after_crash") return "crash";

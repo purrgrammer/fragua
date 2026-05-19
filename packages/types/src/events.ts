@@ -151,7 +151,7 @@ export const ALL_EVENT_TYPES: readonly EventType[] = [
  *
  * - `paused` — operator must act; reason on `fact.run_paused.payload.reason`
  * - `paused_auto` — daemon owes a clock tick; operator may short-circuit via `intent.resume`
- * - `paused_hitl` — workflow asked a question; answer via `intent.hitl_input`
+ * - `paused_human` — workflow asked a question; answer via `intent.human_input`
  *
  * Mirrored by `run_state.status` (CHECK constraint in schema.sql) and
  * the daemon's intent fold. See {@link PauseReason} for the reason
@@ -160,7 +160,7 @@ export type RunStatus =
   | "queued"
   | "running"
   | "paused"
-  | "paused_hitl"
+  | "paused_human"
   | "paused_auto"
   | "completed"
   | "cancelled"
@@ -256,7 +256,7 @@ export type IntentEvent =
   | { type: "intent.steering_requested"; payload: { text: string } }
   | { type: "intent.pause_requested"; payload: Record<string, never> }
   | { type: "intent.cancel_requested"; payload: { reason?: string } }
-  | { type: "intent.hitl_input"; payload: { selected: string; note?: string } }
+  | { type: "intent.human_input"; payload: { route: string; note?: string } }
   | { type: "intent.resume"; payload: { note?: string } }
   | {
       type: "intent.unquarantine";
@@ -321,7 +321,7 @@ export type IntentType = IntentEvent["type"];
  * an `artifacts` row and reference by sha or `(node, iteration, key)`.
  *
  * Operator-supplied intents (`intent.steering_requested.text`,
- * `intent.hitl_input.selected`, etc.) flow through the cap too; the
+ * `intent.human_input.route`, etc.) flow through the cap too; the
  * server translates `PayloadTooLargeError` to a 413 so callers see a
  * typed `code: "payload_too_large"` instead of a 500.
  */
@@ -349,7 +349,7 @@ export type FactEvent =
          * run; the others = resuming from the named prior state. Lets
          * analytics distinguish "ran straight through" from "had to be
          * woken up after X". */
-        resumeOf: "fresh" | "crash" | "paused" | "paused_hitl" | "paused_auto" | "quarantined";
+        resumeOf: "fresh" | "crash" | "paused" | "paused_human" | "paused_auto" | "quarantined";
       };
     }
   | {
@@ -463,7 +463,7 @@ export type FactEvent =
       };
     }
   | {
-      type: "fact.run_paused_hitl";
+      type: "fact.run_paused_human";
       payload: {
         nodeId: string;
         label: string;
@@ -852,7 +852,7 @@ export interface RawEvent extends EventEnvelope {
 /**
  * Operator-relevant event kinds for the global Home feed. Facts only —
  * the things that *happened*. Operator intents (pause, cancel, steer,
- * resume, hitl_input, unquarantine, priority) are intentionally excluded
+ * resume, human_input, unquarantine, priority) are intentionally excluded
  * because each request either has a corresponding fact that lands when
  * it takes effect (pause→paused, resume→resumed, cancel→cancelled), or
  * is a request the daemon may still be working through. Showing the
@@ -872,7 +872,7 @@ export const FEED_EVENT_KINDS: readonly AnyEventType[] = [
   // Run lifecycle facts — every transition that flips status.
   "fact.run_started",
   "fact.run_completed",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
   "fact.run_paused",
   "fact.provider_retry_attempted",
   "fact.run_resumed",

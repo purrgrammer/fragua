@@ -6,7 +6,7 @@
 // forces a TypeScript compile error here — the design's exhaustiveness
 // anchor.
 //
-// Hidden on `paused_hitl`-only pauses (no fact.run_paused in the trail).
+// Hidden on `paused_human`-only pauses (no fact.run_paused in the trail).
 
 import type { PauseReason } from "@swarm/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -98,7 +98,7 @@ interface FactRow {
  * any paused fact. */
 const RUN_STATE_FACTS = new Set([
   "fact.run_paused",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
   "fact.run_resumed",
   "fact.run_cancelled",
   "fact.run_completed",

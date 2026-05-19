@@ -36,7 +36,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
   }
 
-  // No `fact.run_resumed` emitted here. `wakeHitl` / `wakeResume` /
+  // No `fact.run_resumed` emitted here. `wakeHuman` / `wakeResume` /
   // `wakeUnquarantine` already commit the resume fact when the wake
   // intent is processed (see daemon/src/wake-pending.ts) — re-emitting
   // it on dispatch completion was a leftover from M3's earlier design
@@ -120,7 +120,7 @@ export function resultToFacts(result: HandlerResult, ctx: ResultContext): FactEv
     }
     case "yield_hitl": {
       facts.push({
-        type: "fact.run_paused_hitl",
+        type: "fact.run_paused_human",
         payload: {
           nodeId: ctx.state.currentNode ?? "",
           label: result.label,

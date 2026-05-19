@@ -7,7 +7,7 @@
 // until they reload.
 //
 // Adversarial scenarios covered:
-//   - basic: paused_hitl arrives → row appears in Inbox
+//   - basic: paused_human arrives → row appears in Inbox
 //   - basic: run_started → row appears in Running
 //   - basic: run_completed → row leaves Running, Activity gets the row
 //   - navigation: leave Home, return, SSE still drives updates
@@ -72,7 +72,7 @@ class FakeEventSource {
 interface FakeRun {
   runId: string;
   status: "running" | "paused" | "queued" | "success" | "fail" | "canceled";
-  runStatus: "running" | "paused_hitl" | "paused_provider_error" | "queued" | "completed" | "halted" | "cancelled";
+  runStatus: "running" | "paused_human" | "paused_provider_error" | "queued" | "completed" | "halted" | "cancelled";
   workflow?: string;
   workflowName?: string;
   startedAt: string;
@@ -205,7 +205,7 @@ describe("Control Center live updates", () => {
     FakeEventSource.instances = [];
   });
 
-  it("fact.run_paused_hitl pushes a row into Inbox without a reload", async () => {
+  it("fact.run_paused_human pushes a row into Inbox without a reload", async () => {
     const { container } = mount();
     await waitFor(() => {
       expect(container.querySelectorAll("[data-testid='global-feed']").length).toBeGreaterThan(0);
@@ -214,12 +214,12 @@ describe("Control Center live updates", () => {
     expect(container.textContent).toContain("All clear");
 
     state.runs = [
-      baseRun({ runId: "01rinbox001", status: "paused", runStatus: "paused_hitl", workflow: "hitl-tools" }),
+      baseRun({ runId: "01rinbox001", status: "paused", runStatus: "paused_human", workflow: "hitl-tools" }),
     ];
     emit(es, {
       runId: "01rinbox001",
       seq: 13,
-      type: "fact.run_paused_hitl",
+      type: "fact.run_paused_human",
       payload: { nodeId: "review", label: "Approve?", options: [] },
     });
 
@@ -373,17 +373,17 @@ describe("Control Center live updates", () => {
 
     // Three lifecycle events arrive back-to-back: another run starts,
     // a HITL pause arrives for a third run, and the original run
-    // completes. Final state: 1 running, 1 paused_hitl, 0 completed
+    // completes. Final state: 1 running, 1 paused_human, 0 completed
     // (the completed one drains).
     state.runs = [
       baseRun({ runId: "01rburst002", status: "running", runStatus: "running", workflow: "smoke-sleep" }),
-      baseRun({ runId: "01rburst003", status: "paused", runStatus: "paused_hitl", workflow: "hitl-tools" }),
+      baseRun({ runId: "01rburst003", status: "paused", runStatus: "paused_human", workflow: "hitl-tools" }),
     ];
     emit(es, { runId: "01rburst002", seq: 2, type: "fact.run_started", payload: { startNode: "start" } });
     emit(es, {
       runId: "01rburst003",
       seq: 13,
-      type: "fact.run_paused_hitl",
+      type: "fact.run_paused_human",
       payload: { nodeId: "review", label: "Approve?", options: [] },
     });
     emit(es, { runId: "01rburst001", seq: 18, type: "fact.run_completed", payload: { finalNode: "done" } });

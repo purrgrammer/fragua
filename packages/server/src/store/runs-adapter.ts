@@ -24,7 +24,7 @@ export function mapStatus(status: RunStatus): UiStatus {
     case "queued":
       return "queued";
     case "paused":
-    case "paused_hitl":
+    case "paused_human":
     case "paused_auto":
       return "paused";
     case "quarantined":
@@ -154,10 +154,10 @@ export function runStateToDetail(
     if (existsSync(candidate)) detail.worktreePath = candidate;
   }
 
-  if (state.status === "paused_hitl") {
+  if (state.status === "paused_human") {
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]!;
-      if (ev.type === "fact.run_paused_hitl") {
+      if (ev.type === "fact.run_paused_human") {
         const p = ev.payload as { nodeId?: unknown; label?: unknown; options?: unknown };
         if (typeof p.nodeId === "string") detail.hitlNodeId = p.nodeId;
         if (typeof p.label === "string") detail.hitlLabel = p.label;

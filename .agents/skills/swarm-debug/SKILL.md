@@ -115,7 +115,7 @@ SELECT seq, type, writer,
 FROM events
 WHERE run_id='$RUN' AND type IN (
   'fact.run_completed','fact.run_halted','fact.run_cancelled',
-  'fact.run_quarantined','fact.run_paused_hitl',
+  'fact.run_quarantined','fact.run_paused_human',
   'fact.node_aborted','fact.handler_timeout_leaked',
   'fact.side_effect_failed'
 )
@@ -170,13 +170,13 @@ Authoritative source: `FactEvent` union in `packages/types/src/swarm-events.ts`.
 | `fact.node_started` | `nodeId`, `iteration` | Node entered. Repeated rows on the same `(nodeId, iteration)` indicate a backward conditional edge looping; cap is the node's `max_retries`. |
 | `fact.node_completed` | `nodeId`, `iteration`, `outcomeStatus?`, `tokens`, `costUsd` + 4-bucket splits, `nextNode`, `outputRef?` | Node finished. `outcomeStatus="fail"` here matches against `condition="outcome=fail"` edges; the run can still continue. |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partial*` | Mid-flight abort. `cause`: `steer \| pause \| cancel \| timeout \| shutdown \| abort_loop \| error`. |
-| `fact.intents_folded` | `intentSeq`, `folded` | Intent fold landed. Useful when the timeline shows a steer/pause/hitl that didn't visibly change behaviour — read `folded` to see what the fold did. |
+| `fact.intents_folded` | `intentSeq`, `folded` | Intent fold landed. Useful when the timeline shows a steer/pause/human that didn't visibly change behaviour — read `folded` to see what the fold did. |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId\|null`, `iteration` | Message metadata. Don't read these raw; query `messages` (§6). |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result (skill-tool, agent-tool, read/edit/bash). The artifact at `artifactKey` carries the body. |
 | `fact.side_effect_intent` | `nodeId`, `iteration`, `toolName`, `argsHash`, `attempt`, `idempotencyKey` | External tool dispatched. Followed by exactly one `_done` or `_failed`; missing pair → orphan-side-effect quarantine on next daemon start. |
 | `fact.side_effect_done` | `idempotencyKey`, `artifactKey`, `tokens?`, `costUsd?` | External tool completed. Pair with the matching `_intent` row by `idempotencyKey`. |
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly. `retriable=true` → handler will redrive; `false` → permanent. |
-| `fact.run_paused_hitl` | `nodeId`, `label`, `options[]` | HITL yield. See §8 playbook. |
+| `fact.run_paused_human` | `nodeId`, `label`, `options[]` | HITL yield. See §8 playbook. |
 | `fact.run_paused` | `reason`, reason-specific fields | Unified pause. Reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`) project to `paused_auto`; rest → `paused`. See §8. |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus\|null`, `delayMs` | One per attempt in an auto-retry chain. Walk these to reconstruct the retry timeline before a `provider_exhausted` halt. |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Run left a paused/quarantined state. `inputIntentSeq` points back at the operator intent that drove the wake (when applicable). |
@@ -326,7 +326,7 @@ curl -fsS "$URL/runs/$RUN/changes"        | jq .                                
 | `fact.run_halted` | `"edge_no_match"` | Handler returned a route/outcome and no outgoing edge matched. Validator should make this unreachable for a pinned graph; runtime backstop. Cross-reference the graph (`SELECT pinned_graph FROM run_state WHERE run_id=…`) against the source node's outgoing edges. |
 | `fact.run_quarantined` | `"orphan_side_effect"` | Crash left `fact.side_effect_intent` without a matching `_done`/`_failed`. Payload: `orphanedIntents: seq[]`. Resolve via `intent.unquarantine`. |
 | `fact.run_cancelled` | — | Operator cancelled. `intentSeq` points to `intent.cancel_requested`. |
-| `fact.run_paused_hitl` | — | `wait.human` yielded. Payload: `{nodeId, label, options[]}`; resume via `/hitl`. |
+| `fact.run_paused_human` | — | `wait.human` yielded. Payload: `{nodeId, label, options[]}`; resume via `/human`. |
 | `fact.run_paused` | `reason: "operator"` | Operator hit Pause. Status: `paused`. Wake on `intent.resume`. |
 | `fact.run_paused` | `reason: "provider_error"` | Manual-class provider transport error (400/401/403/404/413/422). Status: `paused`. Wake on `intent.resume` after fixing creds/request. |
 | `fact.run_paused` | `reason: "payment_required"` | Provider returned 402. Status: `paused`. Top up, then `intent.resume`. |
@@ -468,7 +468,7 @@ sqlite3 -readonly "$DB" \
 sqlite3 -readonly "$DB" \
   "SELECT seq, type, payload FROM events WHERE run_id='$RUN'
    AND type IN ('fact.run_completed','fact.run_halted','fact.run_cancelled',
-                'fact.run_quarantined','fact.run_paused_hitl',
+                'fact.run_quarantined','fact.run_paused_human',
                 'fact.node_aborted','fact.handler_timeout_leaked',
                 'fact.side_effect_failed') ORDER BY seq;"
 
@@ -506,4 +506,4 @@ sqlite3 -readonly "$DB" \
    WHERE run_id='$RUN' AND type LIKE 'subagent.%' ORDER BY seq;"
 ```
 
-Intent writes (steer/pause/cancel/hitl/unquarantine/priority) change state — they're not debugging tools. Present evidence; let the user decide whether to write one.
+Intent writes (steer/pause/cancel/human/unquarantine/priority) change state — they're not debugging tools. Present evidence; let the user decide whether to write one.

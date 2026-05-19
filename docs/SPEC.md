@@ -99,15 +99,15 @@ The `events` log is the source of truth for run state; the `run_state` row is th
 ### 3.4 Run lifecycle
 
 ```
-queued → running → {completed, paused, paused_hitl, paused_auto, halted, cancelled, quarantined}
+queued → running → {completed, paused, paused_human, paused_auto, halted, cancelled, quarantined}
           ▲            │
-          └────── run_resumed (any paused_* → queued on intent.resume / intent.hitl_input / intent.unquarantine,
+          └────── run_resumed (any paused_* → queued on intent.resume / intent.human_input / intent.unquarantine,
                               or wake-pending timer for paused_auto)
 ```
 
 - **`queued`** — enqueued; ready to be claimed.
 - **`running`** — a daemon has claimed it and is dispatching handlers.
-- **`paused_hitl`** — a `wait.human` node yielded. `fact.run_paused_hitl` carries `label` + `options[]` (one per outgoing edge); awaits `intent.hitl_input { selected, note? }` or `intent.resume`.
+- **`paused_human`** — a `wait.human` node yielded. `fact.run_paused_human` carries `label` + `options[]` (one per outgoing edge); awaits `intent.human_input { route, note? }` or `intent.resume`.
 - **`paused`** — operator-resumable pause. `fact.run_paused.payload.reason` discriminates the action shape. All wake on `intent.resume`; some pauses pair `intent.resume` with a cap-adjustment intent. The full reason set:
 
   | Reason | Trigger | Operator action |
@@ -147,7 +147,7 @@ All operator actions are intent writes. Every endpoint validates its body and re
 | `POST /runs/:id/steer` | `{ text: string }` (length > 0) | Injects steering text; aborts the current handler so the next dispatch sees it. |
 | `POST /runs/:id/pause` | `{}` | Abort + transition to `paused{reason:"operator"}`. |
 | `POST /runs/:id/cancel` | `{ reason?: string }` | Abort + transition to `cancelled`. |
-| `POST /runs/:id/hitl` | `{ selected: string, note?: string }` | Wakes `paused_hitl`. `selected` must be an accelerator key from `fact.run_paused_hitl.options`. |
+| `POST /runs/:id/human` | `{ route: string, note?: string }` | Wakes `paused_human`. `route` must be an accelerator key from `fact.run_paused_human.options` (Phase 7 will repurpose against `routes=` declarations). |
 | `POST /runs/:id/resume` | `{ note?: string }` | Generic wake for any `paused_*` run. |
 | `POST /runs/:id/unquarantine` | `{ resolution: "treat_as_done" \| "retry" \| "cancel", note?: string }` | Operator decision on a quarantined run. |
 | `POST /runs/:id/priority` | `{ newPriority: number, note?: string }` | Appends `intent.priority_adjusted`; bumps queue priority. |
@@ -281,7 +281,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 
 - **`stack.manager_loop` / `house` shape** (attractor §4.11). Composition lives at the workflow level via separate runs sharing artifacts.
 - **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception.
-- **Interviewer interface** (attractor §6). Replaced by `wait.human` nodes plus the `intent.hitl_input` event.
+- **Interviewer interface** (attractor §6). Replaced by `wait.human` nodes plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
 - **`loop_restart` edge attribute** (attractor §2.7). Context resets happen via per-edge `fidelity=truncate|compact|summary:*`; full restarts happen by enqueueing a new run. Validator: `W014`.
 - **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). The `component` (parallel) and `tripleoctagon` (parallel.fan_in) shapes are not honored; the executor has no fan-out / fan-in primitive. Concurrent dispatch lives in the codergen `agent` tool — a single codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.dot` / `orchestrate.dot`).

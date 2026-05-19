@@ -91,12 +91,12 @@ describe("RunPausedNotice", () => {
     }
   });
 
-  it("renders nothing when no fact.run_paused is present (e.g., paused_hitl-only)", async () => {
+  it("renders nothing when no fact.run_paused is present (e.g., paused_human-only)", async () => {
     const { restore } = installFetchMock({
       [EVENTS_URL]: () =>
         json([
           { seq: 1, type: "fact.run_started", payload: {} },
-          { seq: 2, type: "fact.run_paused_hitl", payload: { nodeId: "n", prompt: "approve?" } },
+          { seq: 2, type: "fact.run_paused_human", payload: { nodeId: "n", prompt: "approve?" } },
         ]),
     });
     try {

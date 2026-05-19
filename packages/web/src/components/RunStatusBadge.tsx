@@ -13,7 +13,7 @@
 //
 //   paused      (yellow / amber) — operator must act
 //   paused_auto (steel blue)     — daemon timer; system on it
-//   paused_hitl (orange)         — workflow asks; answer the question
+//   paused_human (orange)         — workflow asks; answer the question
 //
 // Callers without the raw status (or with paused-family runStatus
 // missing) fall through to the operator-attention default (`paused`)
@@ -25,7 +25,7 @@ import { statusLabel } from "../lib/format.ts";
 export interface RunStatusBadgeProps {
   status: RunSummary["status"];
   /** Raw lifecycle status from the store. Lets the badge differentiate
-   * paused / paused_auto / paused_hitl; ignored for non-paused values.
+   * paused / paused_auto / paused_human; ignored for non-paused values.
    * Optional so existing call sites don't have to thread it through. */
   runStatus?: RunDetail["runStatus"];
   /** Optional override for the `data-testid` attribute.
@@ -39,7 +39,7 @@ function pausedTone(runStatus: RunDetail["runStatus"] | undefined): string {
   switch (runStatus) {
     case "paused_auto":
       return "bg-sw-accent-pause-auto/10 text-sw-accent-pause-auto border-sw-accent-pause-auto/30";
-    case "paused_hitl":
+    case "paused_human":
       return "bg-sw-accent-pause-hitl/10 text-sw-accent-pause-hitl border-sw-accent-pause-hitl/30";
     default:
       return "bg-sw-accent-pause/10 text-sw-accent-pause border-sw-accent-pause/30";

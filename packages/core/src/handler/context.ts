@@ -56,7 +56,7 @@ export interface BuildContextOpts {
    * store.appendObservabilityEvents after the node's terminal fact lands.
    * If omitted, ctx.emit becomes a no-op (useful for tests). */
   emitObservability?: (type: string, payload: Record<string, unknown>) => void;
-  hitlInput?: { selected: string; note?: string } | string;
+  humanInput?: { route: string; note?: string } | string;
   steering?: string;
   /** Per-run filesystem + shell environment. When set, handlers run
    * inside this env's cwd rather than the daemon's process cwd. Wired
@@ -120,7 +120,7 @@ export function buildHandlerContext(opts: BuildContextOpts): HandlerContext {
     iteration: opts.iteration,
     ...(opts.allowedTools !== undefined ? { allowedTools: opts.allowedTools } : {}),
     ...(opts.deniedTools !== undefined ? { deniedTools: opts.deniedTools } : {}),
-    ...(opts.hitlInput !== undefined ? { hitlInput: opts.hitlInput } : {}),
+    ...(opts.humanInput !== undefined ? { humanInput: opts.humanInput } : {}),
     ...(opts.steering !== undefined ? { steering: opts.steering } : {}),
     ...(opts.budgetSnapshot !== undefined ? { budgetSnapshot: opts.budgetSnapshot } : {}),
   };
@@ -242,7 +242,7 @@ function buildScopedContext(upstream: CtxUpstream, scope: ScopeOverrides): Handl
     args: upstream.args,
     emit,
     withScope,
-    ...(scope.hitlInput !== undefined ? { hitlInput: scope.hitlInput } : {}),
+    ...(scope.humanInput !== undefined ? { humanInput: scope.humanInput } : {}),
     ...(scope.steering !== undefined ? { steering: scope.steering } : {}),
     ...(effectiveEnv !== undefined ? { env: effectiveEnv } : {}),
     ...(scope.budgetSnapshot !== undefined ? { budgetSnapshot: scope.budgetSnapshot } : {}),

@@ -145,7 +145,7 @@ Each node has a Graphviz shape; the shape picks the handler. Explicit `type="<ha
 | `Mdiamond` | `start` | Lifecycle marker. Exactly one per graph. | — |
 | `Msquare` | `exit` | Lifecycle marker. At least one. | — |
 | `box` (default) | `codergen` | One LLM turn with tools. | `prompt=` |
-| `hexagon` | `wait.human` | Pauses with `fact.run_paused_hitl`. | `prompt=` |
+| `hexagon` | `wait.human` | Pauses with `fact.run_paused_human`. | `prompt=` |
 | `parallelogram` | `tool` | Deterministic shell step. | `tool_command=` |
 
 Concurrent dispatch lives inside a codergen via the `agent` tool, not as a graph shape (see Orchestrator-workers under §1).
@@ -378,7 +378,7 @@ Reference the *artifact* (PLAN_REALISED block, drift table, ground-truth report)
 
 ## 14. wait.human (HITL nodes)
 
-`hexagon`-shaped nodes pause and ask the operator a question. The `fact.run_paused_hitl` payload carries the node's `prompt` and edge labels as options. The operator resumes with `POST /runs/:id/hitl { selected, note? }`; the structured handler picks the outgoing edge whose label matches by accelerator key.
+`hexagon`-shaped nodes pause and ask the operator a question. The `fact.run_paused_human` payload carries the node's `prompt` and edge labels as options. The operator resumes with `POST /runs/:id/human { route, note? }`; the structured handler picks the outgoing edge whose label matches by accelerator key.
 
 ```dot
 signoff [

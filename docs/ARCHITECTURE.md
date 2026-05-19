@@ -13,7 +13,7 @@
 - **Event sourcing with projection-in-transaction.** Events are the immutable log of truth. A materialized projection (`run_state`) is updated inside the same transaction as the event append. Reads of current state are one row; event fold is only used for migration/debug.
 - **Intent/fact split.** Web writes intents (always-appendable, no OCC). Daemon writes facts (OCC-checked against `run_state.version`). 90% of retry pressure disappears.
 - **Hard abort for all interrupts.** Pause, cancel, and steer all trip a single `AbortSignal`. Handlers unwind, emit `fact.node_aborted` with partial metrics, executor re-enters (or halts) based on new state.
-- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `yield_hitl`, the executor emits `fact.run_paused_hitl`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
+- **Durable HITL via unwind-and-rehydrate.** `wait.human` nodes return `yield_hitl`, the executor emits `fact.run_paused_human`, the process is free. Human input (intent event) wakes the daemon; it rehydrates from the projection and resumes at the next node.
 - **Content-addressed blobs on disk.** Tool outputs never inline in event payloads or the WAL. Handlers write raw content to `<blobsDir>/<first2>/<sha256>`; a metadata row in `blobs` points at it. Events carry a ref + bounded preview. File-then-row commit ordering: a crash can leave orphan files (GC sweeps), never dangling rows.
 - **Orphan-side-effect quarantine.** External tools use provider idempotency keys; on crash-replay, orphaned `SIDE_EFFECT_INTENT` without matching `DONE` quarantines the run for operator review. No blind retry.
 - **No IPC.** Daemon↔web coordination is SQLite polling (50ms daemon supervisor, 100ms SSE). No unix socket. No stale `.sock` cleanup. No `EADDRINUSE`.
@@ -97,7 +97,7 @@ UPDATE run_state
 -- For each returned run_id, append fact.run_requeued_after_crash
 
 -- (b) Quarantine orphans (see 1.1)
--- (c) paused, paused_hitl, and quarantined runs are NOT touched
+-- (c) paused, paused_human, and quarantined runs are NOT touched
 ```
 
 Combined with the watchdog (1.10) and zombie detection (1.6), recovery is immediate rather than minute-delayed.
@@ -132,7 +132,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 **Resolution.**
 1. **HTTP-status capture.** `PiCodergenBackend` registers `StreamOptions.onResponse` to record the last `ProviderResponse.status` per LLM call. On stream `error`, the captured status (or `null` for pre-response network failures) is paired with the provider's `errorMessage` and bubbled out as a new outcome shape.
 2. **Handler-result kind `pause_provider`.** The handler-bridge translates the provider-error outcome to `HandlerResult.kind = "pause_provider"` carrying `{ httpStatus, provider, errorMessage }`. The executor commits `fact.run_paused` with `reason: "payment_required"` for 402 (top-up off-ledger) or `reason: "provider_error"` otherwise, and transitions the run to `paused`.
-3. **Generic resume intent.** Operator writes `intent.resume`. The daemon wakes the run back to `queued` and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript loaded as `priorMessages`. Worktree, branch, and message ordering all survive — same path as `paused_hitl` rehydration.
+3. **Generic resume intent.** Operator writes `intent.resume`. The daemon wakes the run back to `queued` and re-dispatches the same `(nodeId, iteration)` with the rehydrated transcript loaded as `priorMessages`. Worktree, branch, and message ordering all survive — same path as `paused_human` rehydration.
 4. **Manual + auto classes.** 408 / 429 / 5xx / 529 / network errors emit `fact.run_paused{reason:"provider_retry"}` (with `attempt`, `resumeAt`) and project to `paused_auto` for timer-driven wake. 400 / 401 / 402 / 403 / 404 / 413 / 422 stay manual (`paused{reason:"provider_error"}`, or `paused{reason:"payment_required"}` for 402); auto-retry against a busted account would burn money.
 
 ### 1.11 Remaining concerns
@@ -140,7 +140,7 @@ Covered by provider idempotency keys (1.1) and per-node iteration scoping (1.2).
 - **SSE push ordering** — not an issue in polling model. Consumers read `seq > lastSeen`, always consistent.
 - **Intent-flood DOS** — retry-storm ceiling (abort-loop detector emits `fact.run_paused{reason:"abort_loop"}` after K=5 consecutive aborts without progress; operator-resumable per Stage 3 of recoverable-budget-pause.md). HTTP rate-limit at web layer.
 - **WAL bloat from large artifacts** — `blobs` holds metadata only; content lives on the filesystem so multi-MiB writes never frame into the WAL. Live SSE readers can't pin large blob bytes in the WAL as a result. See §2.
-- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 13`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
+- **Schema drift across long pauses** — `schema_version` pinned per run; the daemon resumes any version inside the compatibility range `[MIN_COMPATIBLE_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION]`. Step-delta migrations live in `packages/store/src/migrations.ts` keyed by target version; existing DBs at `version < CURRENT` walk each delta in order. Halt only out-of-range pins with `fact.run_halted { reason: "schema_drift" }`. Current state: `MIN_COMPATIBLE_SCHEMA_VERSION = 1`, `CURRENT_SCHEMA_VERSION = 14`. See `packages/store/src/pragmas.ts` and `packages/store/src/migrations.ts`.
 - **Replay determinism under LLM non-determinism** — inherent; external-call safety via idempotency keys; pure/idempotent handlers fine.
 
 ---
@@ -181,7 +181,7 @@ CREATE TABLE run_state (                          -- projection + queue + seq co
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,                       -- OCC token
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_hitl','paused_auto',
+    'queued','running','paused','paused_human','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,
@@ -393,7 +393,7 @@ CREATE TABLE provider_config (
 | `intent.steering_requested` | `text: string` | Abort current node; inject steering before re-entry |
 | `intent.pause_requested` | — | Abort current node; transition to `paused` |
 | `intent.cancel_requested` | `reason?` | Abort current node; transition to `cancelled` |
-| `intent.hitl_input` | `selected: string`, `note?: string` | Wake a `paused_hitl` run; `selected` is the accelerator key chosen by the operator |
+| `intent.human_input` | `route: string`, `note?: string` | Wake a `paused_human` run; `route` is the accelerator key chosen by the operator (Phase 7 will repurpose this against `routes=` declarations) |
 | `intent.resume` | `note?: string` | Generic wake for any `paused_*` run; re-dispatches the same `(nodeId, iteration)` |
 | `intent.unquarantine` | `resolution: 'treat_as_done'\|'retry'\|'cancel'`, `note?: string` | Operator acknowledgement for a quarantined run |
 | `intent.priority_adjusted` | `newPriority: number`, `note?: string` | Operator bump |
@@ -406,7 +406,7 @@ CREATE TABLE provider_config (
 | Type | Payload fields | Semantics |
 |---|---|---|
 | `fact.run_started` | `workflowSha`, `schemaVersion`, `startNode`, `baseGitSha?` | Run enters `running` |
-| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_hitl'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
+| `fact.dispatch_started` | `nodeId`, `iteration`, `resumeOf: 'fresh'\|'crash'\|'paused'\|'paused_human'\|'paused_auto'\|'quarantined'` | Stamps `dispatchStartedAt` for activeMs accounting; lets analytics distinguish "ran straight through" from "had to be woken up" |
 | `fact.node_started` | `nodeId`, `iteration` | Node dispatched |
 | `fact.node_completed` | `nodeId`, `iteration`, `tokens`, `costUsd`, `inputCostUsd?`, `outputCostUsd?`, `cacheReadCostUsd?`, `cacheWriteCostUsd?`, `inputTokens?`, `outputTokens?`, `cacheReadTokens?`, `cacheWriteTokens?`, `modelName?`, `nextNode`, `outcomeStatus?: 'success'\|'partial_success'\|'fail'\|'retry'\|'skipped'`, `route?: string` (present iff the source node declared `routes=` and the codergen agent exited via the synthesised `route` tool — see docs/proposals/llm-routing.md) | Node succeeded. Cost / token splits are optional for back-compat; the run-level reducer defaults missing fields to 0. The four-bucket cost split (`inputCostUsd` / `outputCostUsd` / `cacheReadCostUsd` / `cacheWriteCostUsd`) sums to `costUsd` for codergen handlers; tool / wait.human handlers leave them unset. `outcomeStatus` lets the UI distinguish "completed OK" from "completed with outcome=fail" without walking edges |
 | `fact.node_aborted` | `nodeId`, `iteration`, `cause`, `partialTokens`, `partialCostUsd`, `partialInputCostUsd?`, `partialOutputCostUsd?`, `partialCacheReadCostUsd?`, `partialCacheWriteCostUsd?`, `partialInputTokens?`, `partialOutputTokens?`, `partialCacheReadTokens?`, `partialCacheWriteTokens?` | Mid-flight abort. Partial cost / token splits cover work done before the abort; optional for back-compat with pre-split runs |
@@ -416,7 +416,7 @@ CREATE TABLE provider_config (
 | `fact.side_effect_failed` | `idempotencyKey`, `errorCode`, `retriable: bool` | External tool failed cleanly |
 | `fact.tool_completed` | `toolName`, `argsHash`, `artifactKey`, `preview`, `summary?` | Non-external tool result |
 | `fact.message_appended` | `ordinal`, `role`, `nodeId: string\|null`, `iteration` | Message metadata. `nodeId` is null for messages appended outside a node turn (e.g. seed messages) |
-| `fact.run_paused_hitl` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input on a workflow `wait.human` node; `options` mirrors the outgoing edge set with parsed accelerator keys |
+| `fact.run_paused_human` | `nodeId`, `label`, `options: [{key,label,to}]` | Yielded for human input on a workflow `wait.human` node; `options` mirrors the outgoing edge set with parsed accelerator keys |
 | `fact.run_paused` | `reason: 'operator'\|'provider_error'\|'payment_required'\|'budget'\|'provider_retry'\|'handler_retry'\|'timeout_retry'\|'max_retries'\|'goal_gate'\|'max_loops'\|'abort_loop'\|'provider_exhausted'`, plus reason-specific fields. Operator-resumable arms: `operator` (no extras), `provider_error` (`nodeId`, `httpStatus`, `provider`, `errorMessage`), `payment_required` (`nodeId`, `provider`, `errorMessage`), `budget` (`nodeId`, `scope`, `metric`, `limit`, `actual`), `max_retries` (`nodeId`, `currentLimit`, `attempts`), `goal_gate` (`gateNodeId`, `currentLimit`), `max_loops` (`currentLimit`, `dispatches`), `abort_loop` (`nodeId`, `consecutiveAborts`), `provider_exhausted` (`nodeId`, `attempts`, `cumulativeMs`). Auto-wake arms (status `paused_auto`): `provider_retry` (`nodeId`, `httpStatus`, `provider`, `errorMessage`, `attempt`, `resumeAt`), `handler_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxRetries`), `timeout_retry` (`nodeId`, `attempt`, `delayMs`, `resumeAt`, `maxAttempts`, `attemptedMs`). | Unified pause fact. Status follows reason 1:1: reasons in `AUTO_WAKE_PAUSE_REASONS` (`provider_retry`, `handler_retry`, `timeout_retry`) project to `paused_auto` (wake-pending sweep auto-resumes at `resumeAt`); everything else → `paused` (operator must `intent.resume`, optionally preceded by a cap-adjustment intent: `intent.budget_adjusted`, `intent.max_retries_adjusted`, `intent.goal_gate_adjusted`, `intent.max_loops_adjusted`). `timeout_retry` re-categorises a watchdog `maxMs` overrun as system-initiated pause-retry — partial-spend metrics still accrue via a paired `fact.node_aborted{cause:"timeout"}` |
 | `fact.provider_retry_attempted` | `nodeId`, `attempt`, `httpStatus: number\|null`, `delayMs` | One per attempt in an auto-retry chain — separate fact rather than mutated payload preserves I3 (fact immutability) |
 | `fact.run_resumed` | `fromStatus: RunStatus`, `inputIntentSeq?` | Left a paused/quarantined state |
@@ -714,7 +714,7 @@ export interface HandlerContext {
   readonly externalCall: <T>(params: { toolName: string; args: unknown; attempt?: number }, fn: (idempotencyKey: string) => Promise<T>) => Promise<T>;
   readonly args: Readonly<Record<string, string>>;          // substitution args ($ARGUMENTS)
   readonly emit: (type: string, payload: Record<string, unknown>) => void;  // observability events (agent.* / llm.* / tool.* / cost.recorded / summary.*)
-  readonly hitlInput?: { selected: string; note?: string } | string;
+  readonly humanInput?: { route: string; note?: string } | string;
   readonly steering?: string;
   readonly env?: ExecutionEnvironment;                      // per-run worktree; falls back to process cwd when unset
   readonly budgetSnapshot?: BudgetSnapshotInput;            // cumulative cost / tokens vs configured ceilings
@@ -727,7 +727,7 @@ export interface ScopeOverrides {
   iteration: number;                                        // required — per-context retry counter
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
-  hitlInput?: { selected: string; note?: string } | string;
+  humanInput?: { route: string; note?: string } | string;
   steering?: string;
   budgetSnapshot?: BudgetSnapshotInput;
   // Run-level resources (store, llm, http, signal, routing, args,
@@ -850,7 +850,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
 
   while (!shutdownSignal.aborted) {
     const state = store.getState(runId);
-    if (!state || isTerminal(state.status) || state.status === "paused" || state.status === "paused_hitl" || state.status === "paused_auto" || state.status === "quarantined") return;
+    if (!state || isTerminal(state.status) || state.status === "paused" || state.status === "paused_human" || state.status === "paused_auto" || state.status === "quarantined") return;
 
     if (state.schema_version !== CURRENT_SCHEMA_VERSION) {
       store.appendFact(runId, [haltFact("schema_drift")], state.version);
@@ -872,7 +872,7 @@ async function runOne(runId: string, shutdownSignal: AbortSignal) {
     const nodeSignal = AbortSignal.any(sigs);
     registerAbort(runId, steerAbort);
 
-    const ctx = buildHandlerContext(runId, state, nodeSignal, decision.steering, decision.hitlInput);
+    const ctx = buildHandlerContext(runId, state, nodeSignal, decision.steering, decision.humanInput);
 
     let result: HandlerResult;
     try {
@@ -975,7 +975,7 @@ app.post("/runs", async (c) => {
 app.post("/runs/:id/steer",        async (c) => writeIntent(c, "intent.steering_requested"));
 app.post("/runs/:id/pause",        async (c) => writeIntent(c, "intent.pause_requested"));
 app.post("/runs/:id/cancel",       async (c) => writeIntent(c, "intent.cancel_requested"));
-app.post("/runs/:id/hitl",         async (c) => writeIntent(c, "intent.hitl_input"));
+app.post("/runs/:id/human",        async (c) => writeIntent(c, "intent.human_input"));
 app.post("/runs/:id/resume",       async (c) => writeIntent(c, "intent.resume"));
 app.post("/runs/:id/unquarantine", async (c) => writeIntent(c, "intent.unquarantine"));
 app.post("/runs/:id/priority",     async (c) => writeIntent(c, "intent.priority_adjusted"));
@@ -1093,7 +1093,7 @@ ORDER BY priority DESC, ready_at ASC, run_id ASC
 | **FIFO on `ready_at`** | Everyone queues fresh on transition | Simple; predictable; no starvation at single-machine scale |
 
 **Scenario — N priority-10 runs wake from HITL simultaneously:**
-SQLite serializes the N `intent.hitl_input` commits; each HITL-resume transaction sets `ready_at = now()` inside the same txn. Even at ms-level clustering, SQL commit order gives each a distinct `ready_at`; ties break by `run_id`. The claim index (`priority DESC, ready_at ASC, run_id ASC`) pops them deterministically in commit order. No thundering herd.
+SQLite serializes the N `intent.human_input` commits; each human-resume transaction sets `ready_at = now()` inside the same txn. Even at ms-level clustering, SQL commit order gives each a distinct `ready_at`; ties break by `run_id`. The claim index (`priority DESC, ready_at ASC, run_id ASC`) pops them deterministically in commit order. No thundering herd.
 
 **Not starvation-free in theory:** a relentless priority-11 stream starves priority-10. That's priority's point. If workflow-level fairness becomes a need, add `workflow_max_concurrent` per workflow (cheap partial-index count). Not needed day 1.
 
@@ -1102,7 +1102,7 @@ SQLite serializes the N `intent.hitl_input` commits; each HITL-resume transactio
 - `intent.priority_adjusted` is the operator escape hatch if something starves.
 
 **Edge — operator cancel mid-resume:**
-HITL-wake (`intent.hitl_input`) and `intent.cancel_requested` can arrive in either order. Both are intents, both non-OCC, both processed by the daemon supervisor's fold. The fold prioritizes `cancel` deterministically: if both present, run becomes `cancelled` regardless of order. Documented in fold semantics.
+Human-wake (`intent.human_input`) and `intent.cancel_requested` can arrive in either order. Both are intents, both non-OCC, both processed by the daemon supervisor's fold. The fold prioritizes `cancel` deterministically: if both present, run becomes `cancelled` regardless of order. Documented in fold semantics.
 
 ---
 
@@ -1163,13 +1163,13 @@ Harness: `fast-check` with seed-reproducible runs. Clock injected. SQLite in-mem
 | P18 | Zombie daemon commit | Force-acquire; original commits | Commit fails (OCC or lock check); original exits |
 | P19 | SSE replay | Reconnect with `Last-Event-ID=N` | Receives `seq > N` in order |
 | P20 | Abort loop ceiling | K>5 consecutive aborts, no progress | `fact.run_paused{reason:"abort_loop"}` (operator-resumable per Stage 3) |
-| P21 | Queue fairness | N priority-10 HITL wakes | Claim order = commit order of `intent.hitl_input` |
+| P21 | Queue fairness | N priority-10 HITL wakes | Claim order = commit order of `intent.human_input` |
 | P22 | Cascade delete | Delete run_state row | events/messages/artifacts for that run all gone; blobs unchanged |
 | P23 | STRICT enforcement | Insert string into integer column | Throws; no row inserted |
 | P24 | Claim atomicity | K fibers racing `claimNextRun` | Each popped run claimed by exactly one fiber |
 | P25 | Pre-commit recorder durability | `recordIntent` then no `recordDone` (simulated hard crash) | Intent fact in `events` before recorder returns; sweep quarantines without a matching done having ever existed |
 | P26 | Artifact replay safety | Same-scope `putArtifact` calls with identical / differing content | Identical → no-op (existing ref); differing → `ArtifactCollisionError` unless `{ replace: true }`; only one row per scope |
-| P27 | Intent fold truth table | Random batches of intents × all `RunStatus` values | Cancel always wins if present; pause coexists with steer/hitl as `shouldPauseAfterDispatch`; multi-instance hitl/priority last-wins; every intent ends up applied or in `dropped`; per-state preconditions enforced. See [`docs/intent-fold.md`](./intent-fold.md) |
+| P27 | Intent fold truth table | Random batches of intents × all `RunStatus` values | Cancel always wins if present; pause coexists with steer/human as `shouldPauseAfterDispatch`; multi-instance human/priority last-wins; every intent ends up applied or in `dropped`; per-state preconditions enforced. See [`docs/intent-fold.md`](./intent-fold.md) |
 
 ---
 

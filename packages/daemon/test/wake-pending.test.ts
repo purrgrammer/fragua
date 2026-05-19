@@ -1,5 +1,5 @@
 // wakePending — drives operator intents to a terminal/queued state on
-// non-dispatching runs (paused_hitl + quarantined). Closes top.md #23.
+// non-dispatching runs (paused_human + quarantined). Closes top.md #23.
 
 import { describe, expect, test } from "bun:test";
 import { wakePending } from "../src/wake-pending.ts";
@@ -24,7 +24,7 @@ function pause(r: ReturnType<typeof rig>, runId: string): void {
   const s = r.store.getState(runId)!;
   r.store.appendFact(
     runId,
-    [{ type: "fact.run_paused_hitl", payload: { nodeId: "start", label: "wait", options: [] } }],
+    [{ type: "fact.run_paused_human", payload: { nodeId: "start", label: "wait", options: [] } }],
     s.version,
   );
 }
@@ -45,11 +45,11 @@ function quarantine(r: ReturnType<typeof rig>, runId: string, idempotencyKey: st
 }
 
 describe("wakePending — cancel on non-dispatching runs", () => {
-  test("intent.cancel_requested on a paused_hitl run → fact.run_cancelled, status=cancelled", async () => {
+  test("intent.cancel_requested on a paused_human run → fact.run_cancelled, status=cancelled", async () => {
     const r = rig();
     startRun(r, "rwc1");
     pause(r, "rwc1");
-    expect(r.store.getState("rwc1")!.status).toBe("paused_hitl");
+    expect(r.store.getState("rwc1")!.status).toBe("paused_human");
 
     r.store.appendIntent("rwc1", { type: "intent.cancel_requested", payload: { reason: "operator stop" } });
     const result = wakePending(r.store);
@@ -231,11 +231,11 @@ describe("wakePending — precedence", () => {
     r.store.close();
   });
 
-  test("cancel runs before hitl: a paused_hitl run with both ends cancelled (not resumed)", async () => {
+  test("cancel runs before hitl: a paused_human run with both ends cancelled (not resumed)", async () => {
     const r = rig();
     startRun(r, "rp2");
     pause(r, "rp2");
-    r.store.appendIntent("rp2", { type: "intent.hitl_input", payload: { selected: "A" } });
+    r.store.appendIntent("rp2", { type: "intent.human_input", payload: { route: "A" } });
     r.store.appendIntent("rp2", { type: "intent.cancel_requested", payload: {} });
     wakePending(r.store);
     expect(r.store.getState("rp2")!.status).toBe("cancelled");
@@ -282,7 +282,7 @@ describe("wakePending — resume on paused (payment_required)", () => {
     r.store.close();
   });
 
-  test("intent.resume on a paused_hitl run also resumes (generic verb)", async () => {
+  test("intent.resume on a paused_human run also resumes (generic verb)", async () => {
     const r = rig();
     startRun(r, "rr2");
     pause(r, "rr2");

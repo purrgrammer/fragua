@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 
 /** Schema version this code emits for new DBs and pins on new runs. */
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 /**
  * Lowest schema version `migrate()` knows how to walk forward from.

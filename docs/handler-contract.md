@@ -85,7 +85,7 @@ interface ScopeOverrides {
   iteration: number;                    // required
   allowedTools?: readonly string[];
   deniedTools?: readonly string[];
-  hitlInput?: { selected: string; note?: string } | string;
+  humanInput?: { route: string; note?: string } | string;
   steering?: string;
   budgetSnapshot?: BudgetSnapshotInput;
 }
@@ -124,11 +124,11 @@ return {
 `failureReason` is the canonical channel for a handler that wants to fail with a quotable cause. Set it on `outcomeStatus="fail"` returns; ignored on every other outcome. When the fail outcome routes to a terminal node (`__end__`, the executor's `aborted_exit` path), the string surfaces verbatim as `fact.run_halted.detail` — which is what operators read in §8 of the swarm-debug playbook. A fail without a quotable reason (e.g. retry-policy exhaustion, programmatic gate) leaves it unset and the executor synthesises a generic detail string. This replaces an earlier convention of smuggling the reason through routing keys (commit `dd4850f`); new handlers should not reintroduce that pattern. Source: `packages/core/src/handler/types.ts` (the `kind: "transition"` arm).
 
 ### `yield_hitl`
-Handler needs a human to choose one of a structured set of options. Run transitions to `paused_hitl`, the executor frees the process. The `fact.run_paused_hitl` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
+Handler needs a human to choose one of a structured set of options. Run transitions to `paused_human`, the executor frees the process. The `fact.run_paused_human` event carries `label` + `options[]` so the web UI can render choice buttons immediately.
 
-When an operator writes `intent.hitl_input { selected, note? }`, `wakePendingHitl` moves the run back to `queued`; the handler re-enters with `ctx.hitlInput` set to `{ selected: string; note?: string }`.
+When an operator writes `intent.human_input { route, note? }`, the wake-pending sweep moves the run back to `queued`; the handler re-enters with `ctx.humanInput` set to `{ route: string; note?: string }`.
 
-On resume the handler emits **no routing writes** — the operator's selected key and optional `note` from `intent.hitl_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [chosen.to]` plus `preferredLabel: chosen.label`; edge selection routes via Step-2 label match (disambiguates parallel edges to the same target) falling through to Step-3 `suggestedNextIds`. No conditions involved.
+On resume the handler emits **no routing writes** — the operator's chosen route and optional `note` from `intent.human_input` are preserved verbatim in the resume event's payload for audit. The handler returns `suggestedNextIds: [chosen.to]` plus `preferredLabel: chosen.label`; edge selection routes via Step-2 label match (disambiguates parallel edges to the same target) falling through to Step-3 `suggestedNextIds`. No conditions involved.
 
 ```typescript
 return {

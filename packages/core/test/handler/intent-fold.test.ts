@@ -18,7 +18,7 @@ describe("foldIntents", () => {
         ev(1, "intent.pause_requested", {}),
         ev(2, "intent.steering_requested", { text: "hi" }),
         ev(3, "intent.cancel_requested", { reason: "user" }),
-        ev(4, "intent.hitl_input", { selected: "A" }),
+        ev(4, "intent.human_input", { route: "A" }),
       ],
       "running",
     );
@@ -30,24 +30,24 @@ describe("foldIntents", () => {
       expect(dropped).toEqual([
         "1:intent.pause_requested:superseded_by_cancel",
         "2:intent.steering_requested:superseded_by_cancel",
-        "4:intent.hitl_input:superseded_by_cancel",
+        "4:intent.human_input:superseded_by_cancel",
       ]);
     }
   });
 
-  test("merges steering texts and surfaces hitlInput", () => {
+  test("merges steering texts and surfaces humanInput", () => {
     const out = foldIntents(
       [
         ev(1, "intent.steering_requested", { text: "focus tests" }),
         ev(2, "intent.steering_requested", { text: "skip lint" }),
-        ev(3, "intent.hitl_input", { selected: "A" }),
+        ev(3, "intent.human_input", { route: "A" }),
       ],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.steering).toBe("focus tests\nskip lint");
-      expect(out.hitlInput).toEqual({ selected: "A" });
+      expect(out.humanInput).toEqual({ route: "A" });
       expect(out.shouldPause).toBe(false);
       expect(out.shouldPauseAfterDispatch).toBe(false);
       expect(out.appliedSeqs).toEqual([1, 2, 3]);
@@ -81,12 +81,12 @@ describe("foldIntents", () => {
 
   test("pause + hitl → hitl applies, pause defers", () => {
     const out = foldIntents(
-      [ev(1, "intent.pause_requested", {}), ev(2, "intent.hitl_input", { selected: "A", note: "answer" })],
+      [ev(1, "intent.pause_requested", {}), ev(2, "intent.human_input", { route: "A", note: "answer" })],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toEqual({ selected: "A", note: "answer" });
+      expect(out.humanInput).toEqual({ route: "A", note: "answer" });
       expect(out.shouldPause).toBe(false);
       expect(out.shouldPauseAfterDispatch).toBe(true);
       expect(out.dropped).toEqual([]);
@@ -100,7 +100,7 @@ describe("foldIntents", () => {
       expect(out.shouldPause).toBe(false);
       expect(out.shouldPauseAfterDispatch).toBe(false);
       expect(out.steering).toBeUndefined();
-      expect(out.hitlInput).toBeUndefined();
+      expect(out.humanInput).toBeUndefined();
       expect(out.dropped).toEqual([]);
     }
   });
@@ -113,18 +113,18 @@ describe("foldIntents", () => {
     }
   });
 
-  test("multiple hitl_input → last-wins, earlier dropped with later_input_won", () => {
+  test("multiple human_input → last-wins, earlier dropped with later_input_won", () => {
     const out = foldIntents(
       [
-        ev(1, "intent.hitl_input", { selected: "A" }),
-        ev(2, "intent.hitl_input", { selected: "B" }),
-        ev(3, "intent.hitl_input", { selected: "C" }),
+        ev(1, "intent.human_input", { route: "A" }),
+        ev(2, "intent.human_input", { route: "B" }),
+        ev(3, "intent.human_input", { route: "C" }),
       ],
       "running",
     );
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toEqual({ selected: "C" });
+      expect(out.humanInput).toEqual({ route: "C" });
       const dropped = out.dropped.map((d) => `${d.seq}:${d.reason}`).sort();
       expect(dropped).toEqual(["1:later_input_won", "2:later_input_won"]);
     }
@@ -148,7 +148,7 @@ describe("foldIntents", () => {
   });
 
   test("pause on already-paused run is dropped with reason already_paused", () => {
-    const out = foldIntents([ev(1, "intent.pause_requested", {})], "paused_hitl");
+    const out = foldIntents([ev(1, "intent.pause_requested", {})], "paused_human");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
       expect(out.shouldPause).toBe(false);
@@ -156,12 +156,12 @@ describe("foldIntents", () => {
     }
   });
 
-  test("hitl_input on a quarantined run is dropped with reason wrong_state", () => {
-    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "quarantined");
+  test("human_input on a quarantined run is dropped with reason wrong_state", () => {
+    const out = foldIntents([ev(1, "intent.human_input", { route: "A" })], "quarantined");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toBeUndefined();
-      expect(out.dropped).toEqual([{ seq: 1, type: "intent.hitl_input", reason: "wrong_state" }]);
+      expect(out.humanInput).toBeUndefined();
+      expect(out.dropped).toEqual([{ seq: 1, type: "intent.human_input", reason: "wrong_state" }]);
     }
   });
 
@@ -172,12 +172,12 @@ describe("foldIntents", () => {
       expect(out.appliedSeqs).toEqual([1]);
       expect(out.dropped).toEqual([]);
       expect(out.steering).toBeUndefined();
-      expect(out.hitlInput).toBeUndefined();
+      expect(out.humanInput).toBeUndefined();
       expect(out.shouldPause).toBe(false);
     }
   });
 
-  test("steer on paused is buffered (treated like paused_hitl)", () => {
+  test("steer on paused is buffered (treated like paused_human)", () => {
     const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
@@ -186,7 +186,7 @@ describe("foldIntents", () => {
     }
   });
 
-  test("steer on paused_auto is buffered (treated like paused_hitl)", () => {
+  test("steer on paused_auto is buffered (treated like paused_human)", () => {
     const out = foldIntents([ev(1, "intent.steering_requested", { text: "hint" })], "paused_auto");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
@@ -195,11 +195,11 @@ describe("foldIntents", () => {
     }
   });
 
-  test("hitl_input on paused_auto is buffered, not dropped", () => {
-    const out = foldIntents([ev(1, "intent.hitl_input", { selected: "A" })], "paused_auto");
+  test("human_input on paused_auto is buffered, not dropped", () => {
+    const out = foldIntents([ev(1, "intent.human_input", { route: "A" })], "paused_auto");
     expect(out.kind).toBe("proceed");
     if (out.kind === "proceed") {
-      expect(out.hitlInput).toEqual({ selected: "A" });
+      expect(out.humanInput).toEqual({ route: "A" });
       expect(out.dropped).toEqual([]);
     }
   });
@@ -248,7 +248,7 @@ describe("foldIntents — purity contract", () => {
     "queued",
     "running",
     "paused",
-    "paused_hitl",
+    "paused_human",
     "paused_auto",
     "completed",
     "halted",
@@ -273,9 +273,9 @@ describe("foldIntents — purity contract", () => {
       payload: fc.record({ text: fc.string() }),
     }),
     fc.record({
-      type: fc.constant("intent.hitl_input" as const),
+      type: fc.constant("intent.human_input" as const),
       payload: fc.record({
-        selected: fc.string({ minLength: 1, maxLength: 5 }),
+        route: fc.string({ minLength: 1, maxLength: 5 }),
         note: fc.option(fc.string(), { nil: undefined }),
       }),
     }),
@@ -370,7 +370,7 @@ describe("foldIntents — purity contract", () => {
         expect(out.dropped).toEqual([]);
         expect(out.routingDelta).toEqual({});
         expect(out.steering).toBeUndefined();
-        expect(out.hitlInput).toBeUndefined();
+        expect(out.humanInput).toBeUndefined();
       }
     }
   });

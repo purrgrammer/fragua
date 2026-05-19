@@ -35,9 +35,9 @@ export interface DetailOverlay {
   /** Latest run-level status from `fact.run_*` events; null when no
    * status-changing event has arrived since mount. */
   status: UiStatus | null;
-  /** Raw run status, for distinguishing paused_hitl vs paused. */
+  /** Raw run status, for distinguishing paused_human vs paused. */
   runStatus: RunDetail["runStatus"] | null;
-  /** Node id of the active HITL gate (from fact.run_paused_hitl). */
+  /** Node id of the active HITL gate (from fact.run_paused_human). */
   hitlNodeId: string | null;
   /** Question label for the active HITL gate. */
   hitlLabel: string | null;
@@ -78,7 +78,7 @@ const DETAIL_TYPES = new Set<string>([
   "fact.run_halted",
   "fact.run_cancelled",
   "fact.run_quarantined",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
   "fact.run_paused",
   "fact.run_resumed",
 ]);
@@ -122,7 +122,7 @@ export function foldDetailFrame(
       return { ...prev, status: "canceled", haltSeq: prev.haltSeq ?? seq };
     case "fact.run_quarantined":
       return { ...prev, status: "fail", haltSeq: prev.haltSeq ?? seq };
-    case "fact.run_paused_hitl": {
+    case "fact.run_paused_human": {
       const nodeId = stringField(payload, "nodeId");
       const label = stringField(payload, "label");
       const rawOptions = payload?.["options"];
@@ -138,7 +138,7 @@ export function foldDetailFrame(
       return {
         ...nextOverlay,
         status: "paused",
-        runStatus: "paused_hitl",
+        runStatus: "paused_human",
         hitlNodeId: nodeId ?? null,
         hitlLabel: label ?? null,
         hitlOptions: options,

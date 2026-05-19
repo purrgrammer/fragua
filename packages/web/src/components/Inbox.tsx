@@ -1,6 +1,6 @@
 // Inbox — runs that need operator attention.
 //
-// "Attention" is anything in `paused_hitl` (awaiting input on a
+// "Attention" is anything in `paused_human` (awaiting input on a
 // wait.human gate), `paused` (operator-resumable: provider error,
 // payment required, budget hit, or operator pause), or `quarantined`
 // (sweep marked the run unreachable). `halted` is terminal,
@@ -34,7 +34,7 @@ import { Skeleton } from "./ui/skeleton.tsx";
 /** Raw lifecycle statuses an operator can act on. Module-scope so the
  * queryKey reference stays stable across renders. */
 const ATTENTION_STATUSES: ReadonlyArray<NonNullable<RunSummary["runStatus"]>> = [
-  "paused_hitl",
+  "paused_human",
   "paused",
   "quarantined",
 ];
@@ -49,12 +49,12 @@ interface ReasonMeta {
 }
 
 // Pause-family palette (recoverable-budget-pause.md Stage 2):
-//   paused_hitl → orange  (workflow asks; answer the question)
+//   paused_human → orange  (workflow asks; answer the question)
 //   paused      → yellow  (operator must act)
 // quarantined stays destructive (red): it's a code-contract failure,
 // not a recoverable pause.
 const REASON_META: Record<NonNullable<RunSummary["runStatus"]>, ReasonMeta | undefined> = {
-  paused_hitl: {
+  paused_human: {
     Icon: Pause,
     label: "awaiting input",
     iconClass: "text-sw-accent-pause-hitl",

@@ -1,7 +1,7 @@
 // HitlChoice — structured operator input for a paused wait.human node.
 //
 // Renders the question label, one button per choice, and an optional
-// freeform notes textarea. Notes are recorded in the intent.hitl_input
+// freeform notes textarea. Notes are recorded in the intent.human_input
 // event payload for audit; they don't flow to downstream nodes via
 // routing. Accelerator keys (e.g. "[A]" in "[A] Approve") are stripped
 // from the visible label — they're TUI/CLI metadata, not useful on a

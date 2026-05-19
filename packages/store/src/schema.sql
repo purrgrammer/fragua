@@ -1,4 +1,4 @@
--- swarm event store schema — Revision 13
+-- swarm event store schema — Revision 14
 -- All tables STRICT. Run-scoped tables cascade on run deletion.
 -- `blobs` is a rowid table so BLOB overflow pages handle large values efficiently.
 -- This file is the canonical shape every new DB starts at; the migration
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS run_state (
   run_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
-    'queued','running','paused','paused_hitl','paused_auto',
+    'queued','running','paused','paused_human','paused_auto',
     'completed','cancelled','halted','quarantined'
   )),
   current_node TEXT,

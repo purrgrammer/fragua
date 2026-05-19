@@ -28,7 +28,7 @@ const RUN_INVALIDATE_KINDS = new Set<string>([
   "intent.run_enqueued",
   "fact.run_started",
   "fact.run_completed",
-  "fact.run_paused_hitl",
+  "fact.run_paused_human",
   "fact.run_paused",
   "fact.run_resumed",
   "fact.run_cancelled",
@@ -128,7 +128,7 @@ export function useGlobalEventStream(opts: UseGlobalEventStreamOptions = {}): vo
       if (RUN_INVALIDATE_KINDS.has(evt.type)) {
         // Prefix-match every list variant — unfiltered (Stats),
         // `{status:["running"]}` (Control Center's Running), and
-        // `{status:["paused_hitl",...]}` (Inbox) all refetch from one
+        // `{status:["paused_human",...]}` (Inbox) all refetch from one
         // invalidate.
         void qc.invalidateQueries({ queryKey: queries.runs.lists() });
         void qc.invalidateQueries({ queryKey: queries.runs.detail(evt.runId).queryKey });

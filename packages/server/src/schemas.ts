@@ -24,13 +24,13 @@ const UiStatus = Type.Union([
 
 /** Raw run lifecycle status, mirrored from `@swarm/types` `RunStatus`.
  * Carried alongside the coarse `status` so the web can distinguish
- * `paused_hitl` vs `paused` (Inbox) and `halted` vs `quarantined`
+ * `paused_human` vs `paused` (Inbox) and `halted` vs `quarantined`
  * (Inbox vs Feed) without re-reading the event log. */
 const RawRunStatus = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
   Type.Literal("paused"),
-  Type.Literal("paused_hitl"),
+  Type.Literal("paused_human"),
   Type.Literal("paused_auto"),
   Type.Literal("completed"),
   Type.Literal("cancelled"),

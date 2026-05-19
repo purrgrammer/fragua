@@ -327,12 +327,12 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     r.cleanup();
   });
 
-  test("pause-resume cycle emits fact.dispatch_started with resumeOf=paused_hitl", async () => {
+  test("pause-resume cycle emits fact.dispatch_started with resumeOf=paused_human", async () => {
     const dot = `digraph { start [shape=Mdiamond]; start -> __end__ }`;
     const r = makeRig(dot);
 
     // Pause the run programmatically by appending an intent that the
-    // executor's foldIntents will turn into fact.run_paused_hitl.
+    // executor's foldIntents will turn into fact.run_paused_human.
     r.dispatcher.register(r.workflowSha, "start", {
       kind: "start",
       sideEffect: "none",
@@ -357,10 +357,10 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     const s1 = r.store.getState("pr-1")!;
     r.store.appendFact(
       "pr-1",
-      [{ type: "fact.run_paused_hitl", payload: { nodeId: "start", label: "wait", options: [] } }],
+      [{ type: "fact.run_paused_human", payload: { nodeId: "start", label: "wait", options: [] } }],
       s1.version,
     );
-    expect(r.store.getState("pr-1")!.status).toBe("paused_hitl");
+    expect(r.store.getState("pr-1")!.status).toBe("paused_human");
     // The pause closed the dispatch interval; activeMs > 0 from
     // run_started → paused (folded with the same `now`, so accumulation
     // is whatever wall-clock elapsed in the appendFact pair).
@@ -368,7 +368,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
     expect(pausedActive).toBeGreaterThanOrEqual(0);
 
     // Operator resumes via HITL input intent.
-    r.store.appendIntent("pr-1", { type: "intent.hitl_input", payload: { selected: "go" } });
+    r.store.appendIntent("pr-1", { type: "intent.human_input", payload: { route: "go" } });
     wakePending(r.store);
     expect(r.store.getState("pr-1")!.status).toBe("queued");
 
@@ -379,7 +379,7 @@ describe("resume integration — activeMs, dispatch_started, crash recovery", ()
 
     const dispatchStarted = r.store.getEvents("pr-1").filter((e) => e.type === "fact.dispatch_started");
     expect(dispatchStarted.length).toBe(1);
-    expect((dispatchStarted[0]!.payload as { resumeOf: string }).resumeOf).toBe("paused_hitl");
+    expect((dispatchStarted[0]!.payload as { resumeOf: string }).resumeOf).toBe("paused_human");
     r.cleanup();
   });
 

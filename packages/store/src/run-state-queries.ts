@@ -612,7 +612,7 @@ const SELECT_GLOBAL_METRICS_TOTALS_SQL = `
     SUM(CASE WHEN status = 'halted'      THEN 1 ELSE 0 END) AS halted,
     SUM(CASE WHEN status = 'running'     THEN 1 ELSE 0 END) AS running,
     SUM(CASE WHEN status = 'queued'      THEN 1 ELSE 0 END) AS queued,
-    SUM(CASE WHEN status = 'paused_hitl' THEN 1 ELSE 0 END) AS paused,
+    SUM(CASE WHEN status = 'paused_human' THEN 1 ELSE 0 END) AS paused,
     SUM(CASE WHEN status = 'quarantined' THEN 1 ELSE 0 END) AS quarantined
   FROM run_state
   WHERE updated_at >= ?
