@@ -1,46 +1,84 @@
-// YAML workflow parser. Lowers an authoring-time YAML document to the
-// canonical in-memory `Graph` shape (`../types/graph.ts`).
+// YAML workflow parser — GHA-style authoring shape.
 //
-// Authoring shape (high level):
+//   name: my-workflow
+//   description: |
+//     Optional prose explaining what this workflow does.
+//   goal: One-sentence goal.
 //
-//   name: my-workflow              # required — Graph.id
-//   goal: |                        # optional — graph-level attrs
-//     Prose intent for the workflow.
-//   label: my-workflow             # optional
-//   budget_usd: 5.0
-//   budget_policy: pause
+//   inputs:
+//     ticket:
+//       type: string
+//       required: true
+//       description: Bug ticket id
+//     dry-run:
+//       type: boolean
+//       default: false
+//     env:
+//       type: choice
+//       options: [dev, staging, prod]
 //
-//   nodes:
-//     start:
-//       type: start                # discriminator: start | exit | llm | human | tool
-//     do_work:
+//   budget: 5.00
+//   budget-policy: pause
+//   thread: dev
+//
+//   defaults:
+//     model: claude-sonnet-4-6
+//     provider: anthropic
+//
+//   steps:
+//     plan:
 //       type: llm
 //       prompt: |
-//         Block-scalar prompts read cleanly, no quote-escaping.
-//       thread_id: dev
-//       summary: medium            # opt-in summariser (validator E027 if thread_id absent)
-//       allowed_tools: [read, bash]
-//     done:
-//       type: exit
+//         Plan ticket ${{ inputs.ticket }}.
+//       # implicit next: implement (next declared step)
 //
-//   edges:
-//     - {from: start, to: do_work}
-//     - {from: do_work, to: done, outcome: success}
-//     - {from: do_work, to: done, outcome: fail}
+//     implement:
+//       type: llm
+//       prompt: |
+//         Implement.
 //
-// Phase 1 mapping to the in-memory Graph:
+//     review:
+//       type: llm
+//       prompt: |
+//         Review.
+//       retry: implement
+//       max-retries: 3
 //
-//   YAML `type:`           Graph Node.shape
-//   ─────────────────────  ────────────────
-//   start                  Mdiamond
-//   exit                   Msquare
-//   llm                    box
-//   human                  hexagon
-//   tool                   parallelogram
+//     ci:
+//       type: tool
+//       run: bun run ci
+//       max-retries: 5
+//       on: {success: commit, fail: fix}
 //
-// The shape field stays in the in-memory IR so the engine code that
-// already reads it doesn't change. Phase 2 collapses shape into `type`
-// outright; Phase 1 keeps both for minimum-blast-radius migration.
+//     fix:
+//       type: llm
+//       prompt: |
+//         Fix CI.
+//       next: ci
+//
+//     commit:
+//       type: llm
+//       prompt: |
+//         Commit.
+//
+// Authoring rules:
+//   - Linear by default: a step with no `next:`/`on:`/`routes:` flows to the
+//     next declared step (last step flows to `exit`).
+//   - `next: X` ≡ `on: {success: X}`. Both forms also synthesize an implicit
+//     `fail → exit` edge so unhandled fails terminate the run gracefully.
+//   - `routes:` is for human nodes and llm nodes that use the `route` tool.
+//     Compact form `{a: X, b: Y}`; expanded form `{a: {to: X, label: "..."}}`.
+//   - `type: exit` is a reserved sink. Authors target it via `next: exit`,
+//     `on: {fail: exit}`, or `routes: {x: exit}` — no explicit step needed.
+//   - First declared step IS the entry point. Parser synthesizes a hidden
+//     `__start__` node that the engine treats as the run's first transition.
+//   - Template substitution: `${{ inputs.name }}` substitutes in `prompt:`,
+//     `text:`, `run:` strings. Validator E029 catches references to
+//     undeclared inputs.
+//
+// Mapping from authoring kebab-case to IR snake_case lives in
+// AUTHORING_KEY_TO_IR and is centralised so the validator + tests can
+// reuse the same name table.
 
 import * as YAML from "yaml";
 import type { Edge, EdgeAttrs, Graph, GraphAttrs, Node, NodeAttrs, NodeShape } from "../types/graph.ts";
@@ -56,67 +94,75 @@ export class ParseError extends Error {
   }
 }
 
-/** Map authoring-time `type:` discriminator to the in-memory `Node.shape`.
- * Phase 1 keeps the shape field because the engine + validator read it
- * directly; Phase 2 will collapse the IR to a `type`-only model. */
+// ---- Type → shape lowering --------------------------------------------
+
 const TYPE_TO_SHAPE: Readonly<Record<string, NodeShape>> = {
-  start: "Mdiamond",
-  exit: "Msquare",
   llm: "box",
   human: "hexagon",
   tool: "parallelogram",
+  exit: "Msquare",
 };
 
-const KNOWN_TYPES = Object.keys(TYPE_TO_SHAPE);
+const KNOWN_TYPES = new Set(Object.keys(TYPE_TO_SHAPE));
 
-// ---- attribute coercion (lifted from the DOT parser; same rules) ------
+// ---- Authoring-key → IR-key rename table ------------------------------
+//
+// Authors write kebab-case (GHA-aligned); the IR keeps snake_case so the
+// rest of the codebase (engine, validator, agent backend) doesn't churn.
+// One-way lowering at parse time; nothing reads the kebab name after.
 
-const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
-  "goal_gate",
-  "auto_status",
-  "allow_partial",
-  "skills_disabled",
-  "retry_jitter",
-  "loop_restart",
-]);
+const STEP_KEY_TO_IR: Readonly<Record<string, string>> = {
+  // identity (already canonical)
+  prompt: "prompt",
+  text: "text",
+  type: "type",
+  summary: "summary",
+  skills: "skills",
 
-const INT_KEYS: ReadonlySet<string> = new Set([
-  "max_retries",
-  "default_max_retries",
-  "idle_timeout",
-  "max_goal_gate_retries",
-  "max_ms",
-  "retry_initial_delay_ms",
-  "retry_max_delay_ms",
-]);
+  // kebab → snake
+  thread: "thread_id",
+  model: "llm_model",
+  provider: "llm_provider",
+  effort: "reasoning_effort",
+  "allowed-tools": "allowed_tools",
+  "denied-tools": "denied_tools",
+  "max-cost": "max_cost_usd",
+  "max-tokens": "max_tokens",
+  "max-retries": "max_retries",
+  run: "tool_command",
+};
 
-const NUMBER_KEYS: ReadonlySet<string> = new Set([
-  "max_cost_usd",
-  "max_tokens",
-  "budget_usd",
-  "budget_tokens",
-  "retry_backoff_factor",
-]);
+const GRAPH_KEY_TO_IR: Readonly<Record<string, string>> = {
+  goal: "goal",
+  description: "label",
+  thread: "thread_id",
+  budget: "budget_usd",
+  "budget-policy": "budget_policy",
+};
 
-const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set([
-  "allowed_tools",
-  "denied_tools",
-  "context_files",
-  "skills",
-  "routes",
-]);
+// Keys consumed by the parser at the step level (not stored in attrs):
+const STEP_RESERVED = new Set(["type", "next", "on", "routes", "retry", "timeout-minutes"]);
+// Keys consumed at the graph level (not stored in attrs):
+const GRAPH_RESERVED = new Set(["name", "steps", "inputs", "defaults"]);
+
+// ---- Attribute coercion -----------------------------------------------
+
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set(["goal_gate"]);
+
+const INT_KEYS: ReadonlySet<string> = new Set(["max_retries", "max_tokens", "max_ms"]);
+
+const NUMBER_KEYS: ReadonlySet<string> = new Set(["max_cost_usd", "budget_usd"]);
+
+const STRING_ARRAY_KEYS: ReadonlySet<string> = new Set(["allowed_tools", "denied_tools", "skills", "routes"]);
 
 const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
   ["outcome", new Set(["success", "fail"])],
   ["kind", new Set(["codergen", "tool", "human"])],
   ["summary", new Set(["low", "medium", "high"])],
+  ["reasoning_effort", new Set(["low", "medium", "high"])],
 ]);
 
-/** Coerce a YAML-parsed scalar to the typed shape the IR expects. YAML
- * already gives us booleans, numbers, and arrays natively, so this is
- * mostly a sanity-check + enum-validation layer rather than a coercion
- * one. */
 function coerceScalar(
   key: string,
   raw: unknown,
@@ -126,7 +172,6 @@ function coerceScalar(
     if (typeof raw === "boolean") return raw;
     if (raw === "true") return true;
     if (raw === "false") return false;
-    if (raw === 0 || raw === 1) return raw === 1;
     return undefined;
   }
   if (INT_KEYS.has(key)) {
@@ -162,26 +207,7 @@ function coerceScalar(
   return undefined;
 }
 
-interface AttrSource {
-  pairs: Iterable<[string, unknown]>;
-  locOf(key: string): { line: number; col: number };
-}
-
-function coerceAttrs<T extends NodeAttrs | EdgeAttrs | GraphAttrs>(src: AttrSource): T {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of src.pairs) {
-    const coerced = coerceScalar(k, v, src.locOf(k));
-    if (coerced !== undefined) out[k] = coerced;
-  }
-  return out as T;
-}
-
-// ---- YAML document walker ---------------------------------------------
-
-interface YamlDocLike {
-  errors: ReadonlyArray<{ message: string; pos?: readonly [number, number] }>;
-  contents: unknown;
-}
+// ---- YAML helpers -----------------------------------------------------
 
 function locOf(node: unknown, lineCounter: YAML.LineCounter): { line: number; col: number } {
   if (node && typeof node === "object" && "range" in node && Array.isArray((node as { range?: unknown }).range)) {
@@ -195,9 +221,91 @@ function locOf(node: unknown, lineCounter: YAML.LineCounter): { line: number; co
   return { line: 0, col: 0 };
 }
 
-/** Top-level entry point. Parses a YAML workflow source and returns the
- * in-memory Graph the engine consumes. Throws `ParseError` on syntactic
- * errors with line/col anchors. */
+function locArr(loc: { line: number; col: number }): [number, number] {
+  return [loc.line, loc.col];
+}
+
+function scalarValue(node: unknown): unknown {
+  if (YAML.isScalar(node)) return node.value;
+  if (YAML.isSeq(node) || YAML.isMap(node)) return (node as unknown as YAML.Node).toJSON?.() ?? node;
+  return node;
+}
+
+// ---- Input declarations -----------------------------------------------
+
+export interface InputDecl {
+  name: string;
+  type: "string" | "boolean" | "number" | "choice";
+  required: boolean;
+  description?: string;
+  default?: string | number | boolean;
+  options?: string[];
+}
+
+function parseInputs(node: unknown, lineCounter: YAML.LineCounter): InputDecl[] {
+  if (node === undefined) return [];
+  if (!YAML.isMap(node)) {
+    throw new ParseError("`inputs:` must be a mapping", ...locArr(locOf(node, lineCounter)));
+  }
+  const out: InputDecl[] = [];
+  for (const item of node.items) {
+    const name = (item.key as YAML.Scalar)?.value;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new ParseError("input name must be a non-empty string", ...locArr(locOf(item.key, lineCounter)));
+    }
+    const body = item.value;
+    if (!YAML.isMap(body)) {
+      throw new ParseError(`input "${name}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
+    }
+    const tRaw = scalarValue(body.get("type", true));
+    const type = typeof tRaw === "string" ? tRaw : "string";
+    if (!["string", "boolean", "number", "choice"].includes(type)) {
+      throw new ParseError(
+        `input "${name}" has unknown type ${JSON.stringify(type)} (expected string / boolean / number / choice)`,
+        ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
+      );
+    }
+    const decl: InputDecl = {
+      name,
+      type: type as InputDecl["type"],
+      required: scalarValue(body.get("required", true)) === true,
+    };
+    const desc = scalarValue(body.get("description", true));
+    if (typeof desc === "string" && desc.length > 0) decl.description = desc;
+    const def = scalarValue(body.get("default", true));
+    if (def !== undefined && def !== null) decl.default = def as string | number | boolean;
+    const opts = scalarValue(body.get("options", true));
+    if (Array.isArray(opts)) decl.options = opts.filter((v): v is string => typeof v === "string");
+    if (decl.type === "choice" && (!decl.options || decl.options.length === 0)) {
+      throw new ParseError(
+        `input "${name}" has type=choice but no options[]`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+    out.push(decl);
+  }
+  return out;
+}
+
+// ---- Defaults block ---------------------------------------------------
+
+function parseDefaults(node: unknown, lineCounter: YAML.LineCounter): Record<string, unknown> {
+  if (node === undefined) return {};
+  if (!YAML.isMap(node)) {
+    throw new ParseError("`defaults:` must be a mapping", ...locArr(locOf(node, lineCounter)));
+  }
+  const out: Record<string, unknown> = {};
+  for (const item of node.items) {
+    const k = (item.key as YAML.Scalar)?.value;
+    if (typeof k !== "string") continue;
+    const irKey = STEP_KEY_TO_IR[k] ?? k;
+    out[irKey] = scalarValue(item.value);
+  }
+  return out;
+}
+
+// ---- Top-level parser -------------------------------------------------
+
 export function parseWorkflow(source: string): Graph {
   const lineCounter = new YAML.LineCounter();
   const doc = YAML.parseDocument(source, { lineCounter, prettyErrors: true });
@@ -217,140 +325,243 @@ export function parseWorkflow(source: string): Graph {
     throw new ParseError("workflow missing required `name:` field", 1, 1);
   }
 
-  const nodesNode = root.get("nodes", true);
-  const edgesNode = root.get("edges", true);
-  if (!YAML.isMap(nodesNode)) {
-    throw new ParseError("workflow missing `nodes:` mapping", 1, 1);
-  }
-  if (!YAML.isSeq(edgesNode)) {
-    throw new ParseError("workflow missing `edges:` sequence", 1, 1);
+  const stepsNode = root.get("steps", true);
+  if (!YAML.isMap(stepsNode)) {
+    throw new ParseError("workflow missing `steps:` mapping", 1, 1);
   }
 
-  // Graph-level attrs: every top-level key OTHER than name / nodes / edges
-  // is treated as a GraphAttr. Matches the DOT convention of putting these
-  // under `graph [ ... ]` — flat at the top level in YAML reads more
-  // naturally.
-  const RESERVED = new Set(["name", "nodes", "edges"]);
-  const graphPairs: Array<[string, unknown]> = [];
+  const inputs = parseInputs(root.get("inputs", true), lineCounter);
+  const defaults = parseDefaults(root.get("defaults", true), lineCounter);
+
+  // Graph-level attrs: anything top-level not in GRAPH_RESERVED.
+  const graphAttrs: Record<string, unknown> = {};
   const graphAttrLocs = new Map<string, { line: number; col: number }>();
   for (const item of root.items) {
     const k = (item.key as YAML.Scalar)?.value;
-    if (typeof k !== "string" || RESERVED.has(k)) continue;
-    const v = YAML.isScalar(item.value)
-      ? item.value.value
-      : ((item.value as unknown as YAML.Node)?.toJSON?.() ?? item.value);
-    graphPairs.push([k, v]);
-    graphAttrLocs.set(k, locOf(item.value, lineCounter));
+    if (typeof k !== "string" || GRAPH_RESERVED.has(k)) continue;
+    const irKey = GRAPH_KEY_TO_IR[k] ?? k;
+    graphAttrLocs.set(irKey, locOf(item.value, lineCounter));
+    const coerced = coerceScalar(irKey, scalarValue(item.value), graphAttrLocs.get(irKey) ?? { line: 0, col: 0 });
+    if (coerced !== undefined) graphAttrs[irKey] = coerced;
   }
-  const graphAttrs = coerceAttrs<GraphAttrs>({
-    pairs: graphPairs,
-    locOf: (k) => graphAttrLocs.get(k) ?? { line: 0, col: 0 },
-  });
+  if (inputs.length > 0) graphAttrs.inputs = inputs;
+
+  // Walk steps in declaration order — order matters for implicit linear flow.
+  const stepIds: string[] = [];
+  const stepBodies = new Map<string, YAML.YAMLMap>();
+  for (const item of stepsNode.items) {
+    const stepId = (item.key as YAML.Scalar)?.value;
+    if (typeof stepId !== "string") {
+      throw new ParseError("step id must be a string", ...locArr(locOf(item.key, lineCounter)));
+    }
+    if (!YAML.isMap(item.value)) {
+      throw new ParseError(`step "${stepId}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
+    }
+    stepIds.push(stepId);
+    stepBodies.set(stepId, item.value);
+  }
+  if (stepIds.length === 0) {
+    throw new ParseError("workflow has no steps", 1, 1);
+  }
 
   const nodes: Record<string, Node> = {};
-  for (const item of nodesNode.items) {
-    const nodeId = (item.key as YAML.Scalar)?.value;
-    if (typeof nodeId !== "string") {
-      throw new ParseError("node id must be a string", ...locArr(locOf(item.key, lineCounter)));
-    }
-    const body = item.value;
-    if (!YAML.isMap(body)) {
-      throw new ParseError(`node "${nodeId}" must be a mapping`, ...locArr(locOf(item.value, lineCounter)));
-    }
-    const typeNode = body.get("type", true) as YAML.Scalar | undefined;
-    const typeStr = typeNode ? String(typeNode.value ?? "") : "";
-    if (!KNOWN_TYPES.includes(typeStr)) {
+  const edges: Edge[] = [];
+
+  // Synthesise the hidden start node and an edge to the first step. The
+  // engine still consumes Mdiamond entry; the operator never sees this.
+  nodes.__start__ = {
+    id: "__start__",
+    shape: "Mdiamond",
+    attrs: { shape: "Mdiamond", type: "start", label: "start" } as NodeAttrs,
+    classes: [],
+  };
+  edges.push({ from: "__start__", to: stepIds[0]!, attrs: {} });
+
+  // Track which user-defined step ids exist so `next: exit` is recognised
+  // as the reserved sink and synthesised on demand.
+  const userStepIds = new Set(stepIds);
+  let needExit = false;
+
+  for (let i = 0; i < stepIds.length; i++) {
+    const stepId = stepIds[i]!;
+    const body = stepBodies.get(stepId)!;
+
+    // ---- type discrimination ----
+    const typeRaw = scalarValue(body.get("type", true));
+    const typeStr = typeof typeRaw === "string" ? typeRaw : "llm"; // implicit llm
+    if (!KNOWN_TYPES.has(typeStr)) {
       throw new ParseError(
-        `node "${nodeId}" has unknown type ${JSON.stringify(typeStr)} (expected one of ${KNOWN_TYPES.join(", ")})`,
-        ...locArr(locOf(typeNode ?? body, lineCounter)),
+        `step "${stepId}" has unknown type ${JSON.stringify(typeStr)} (expected one of llm / human / tool / exit)`,
+        ...locArr(locOf(body.get("type", true) ?? body, lineCounter)),
       );
     }
     const shape = TYPE_TO_SHAPE[typeStr] as NodeShape;
 
-    const nodePairs: Array<[string, unknown]> = [];
-    const nodeAttrLocs = new Map<string, { line: number; col: number }>();
+    // ---- attribute walk ----
+    const attrs: Record<string, unknown> = {};
     for (const sub of body.items) {
       const k = (sub.key as YAML.Scalar)?.value;
-      if (typeof k !== "string" || k === "type") continue;
-      const v = YAML.isScalar(sub.value)
-        ? sub.value.value
-        : YAML.isSeq(sub.value) || YAML.isMap(sub.value)
-          ? (sub.value as unknown as YAML.Node).toJSON()
-          : sub.value;
-      nodePairs.push([k, v]);
-      nodeAttrLocs.set(k, locOf(sub.value, lineCounter));
+      if (typeof k !== "string") continue;
+      if (STEP_RESERVED.has(k)) continue;
+      const irKey = STEP_KEY_TO_IR[k] ?? k;
+      const loc = locOf(sub.value, lineCounter);
+      const coerced = coerceScalar(irKey, scalarValue(sub.value), loc);
+      if (coerced !== undefined) attrs[irKey] = coerced;
     }
-    const attrs = coerceAttrs<NodeAttrs>({
-      pairs: nodePairs,
-      locOf: (k) => nodeAttrLocs.get(k) ?? { line: 0, col: 0 },
-    });
+    // Apply `defaults:` for llm steps where the attr is absent.
+    if (typeStr === "llm") {
+      for (const [k, v] of Object.entries(defaults)) {
+        if (attrs[k] === undefined) attrs[k] = v;
+      }
+    }
+    // `timeout-minutes` → max_ms.
+    const tm = scalarValue(body.get("timeout-minutes", true));
+    if (typeof tm === "number" && Number.isFinite(tm)) {
+      attrs.max_ms = Math.trunc(tm * 60_000);
+    }
+    // `retry: <step>` → goal_gate=true + retry_target=<step>.
+    const retryTo = scalarValue(body.get("retry", true));
+    if (typeof retryTo === "string" && retryTo.length > 0) {
+      attrs.goal_gate = true;
+      attrs.retry_target = retryTo;
+    }
+    // Lower type to IR kind/type for engine consumers.
     attrs.shape = shape;
-    // Lower the YAML discriminator to the engine's pre-cutover kind
-    // vocabulary (`codergen` / `human` / `tool`). The author writes
-    // `type: llm` but internally we still call it `codergen` until
-    // Phase 2 retires `kind` outright. Setting both `kind` and `type`
-    // here means handlerOf() resolves correctly without depending on
-    // SHAPE_TO_KIND back-derivation, and the validator's E025
-    // shape/kind-contradiction check passes.
     if (typeStr === "llm") {
       attrs.kind = "codergen";
       attrs.type = "codergen";
     } else if (typeStr === "human" || typeStr === "tool") {
       attrs.kind = typeStr;
       attrs.type = typeStr;
-    } else if (typeStr === "start" || typeStr === "exit") {
-      attrs.type = typeStr;
+    } else if (typeStr === "exit") {
+      attrs.type = "exit";
     }
 
-    nodes[nodeId] = {
-      id: nodeId,
+    // ---- edge synthesis ----
+    const nextNode = scalarValue(body.get("next", true));
+    const onNode = body.get("on", true);
+    const routesNode = body.get("routes", true);
+
+    // Mutex check.
+    const directives = [nextNode !== undefined, onNode !== undefined, routesNode !== undefined].filter(Boolean).length;
+    if (directives > 1) {
+      throw new ParseError(
+        `step "${stepId}" has more than one of \`next:\` / \`on:\` / \`routes:\` (choose one)`,
+        ...locArr(locOf(body, lineCounter)),
+      );
+    }
+
+    if (routesNode !== undefined) {
+      if (!YAML.isMap(routesNode)) {
+        throw new ParseError(`step "${stepId}" routes: must be a mapping`, ...locArr(locOf(routesNode, lineCounter)));
+      }
+      const routeNames: string[] = [];
+      for (const r of routesNode.items) {
+        const rName = (r.key as YAML.Scalar)?.value;
+        if (typeof rName !== "string") continue;
+        routeNames.push(rName);
+        let to: string | undefined;
+        let label: string | undefined;
+        if (YAML.isMap(r.value)) {
+          const toRaw = scalarValue(r.value.get("to", true));
+          const labelRaw = scalarValue(r.value.get("label", true));
+          if (typeof toRaw === "string") to = toRaw;
+          if (typeof labelRaw === "string") label = labelRaw;
+        } else {
+          const v = scalarValue(r.value);
+          if (typeof v === "string") to = v;
+        }
+        if (!to) {
+          throw new ParseError(
+            `route "${rName}" on step "${stepId}" must have a target (compact form: \`${rName}: <step>\` or expanded \`${rName}: {to: <step>}\`)`,
+            ...locArr(locOf(r.value, lineCounter)),
+          );
+        }
+        if (to === "exit") needExit = true;
+        const edgeAttrs: Record<string, unknown> = { route: rName };
+        if (label !== undefined) edgeAttrs.label = label;
+        edges.push({ from: stepId, to, attrs: edgeAttrs as EdgeAttrs });
+      }
+      attrs.routes = routeNames;
+    } else if (onNode !== undefined) {
+      if (!YAML.isMap(onNode)) {
+        throw new ParseError(`step "${stepId}" on: must be a mapping`, ...locArr(locOf(onNode, lineCounter)));
+      }
+      const successTo = scalarValue((onNode as YAML.YAMLMap).get("success", true));
+      const failTo = scalarValue((onNode as YAML.YAMLMap).get("fail", true));
+      if (typeof successTo === "string" && successTo.length > 0) {
+        if (successTo === "exit") needExit = true;
+        edges.push({ from: stepId, to: successTo, attrs: { outcome: "success" } });
+      }
+      if (typeof failTo === "string" && failTo.length > 0) {
+        if (failTo === "exit") needExit = true;
+        edges.push({ from: stepId, to: failTo, attrs: { outcome: "fail" } });
+      } else {
+        // Implicit fail → exit on outcome-based steps with explicit success route.
+        needExit = true;
+        edges.push({ from: stepId, to: "exit", attrs: { outcome: "fail" } });
+      }
+    } else if (typeStr !== "exit") {
+      // No explicit routing → linear default: success to next declared step
+      // (or exit if last), implicit fail to exit.
+      const successTo = typeof nextNode === "string" && nextNode.length > 0 ? nextNode : (stepIds[i + 1] ?? "exit");
+      if (successTo === "exit") needExit = true;
+      edges.push({ from: stepId, to: successTo, attrs: { outcome: "success" } });
+      needExit = true;
+      edges.push({ from: stepId, to: "exit", attrs: { outcome: "fail" } });
+    }
+
+    // ---- materialise the node ----
+    nodes[stepId] = {
+      id: stepId,
       shape,
-      attrs,
-      classes: typeof attrs.class === "string" && attrs.class.length > 0 ? attrs.class.split(/\s+/) : [],
-      loc: locOf(item.key, lineCounter),
+      attrs: attrs as NodeAttrs,
+      classes: [],
+      loc: locOf(stepBodies.get(stepId), lineCounter),
     };
   }
 
-  const edges: Edge[] = [];
-  for (const item of edgesNode.items) {
-    if (!YAML.isMap(item)) {
-      throw new ParseError("each edge must be a mapping with `from` and `to`", ...locArr(locOf(item, lineCounter)));
-    }
-    const from = (item.get("from", true) as YAML.Scalar | undefined)?.value;
-    const to = (item.get("to", true) as YAML.Scalar | undefined)?.value;
-    if (typeof from !== "string" || typeof to !== "string") {
-      throw new ParseError("edge must have string `from` and `to` ids", ...locArr(locOf(item, lineCounter)));
-    }
-    const edgePairs: Array<[string, unknown]> = [];
-    const edgeLocs = new Map<string, { line: number; col: number }>();
-    for (const sub of item.items) {
-      const k = (sub.key as YAML.Scalar)?.value;
-      if (typeof k !== "string" || k === "from" || k === "to") continue;
-      const v = YAML.isScalar(sub.value)
-        ? sub.value.value
-        : YAML.isSeq(sub.value) || YAML.isMap(sub.value)
-          ? (sub.value as unknown as YAML.Node).toJSON()
-          : sub.value;
-      edgePairs.push([k, v]);
-      edgeLocs.set(k, locOf(sub.value, lineCounter));
-    }
-    const attrs = coerceAttrs<EdgeAttrs>({
-      pairs: edgePairs,
-      locOf: (k) => edgeLocs.get(k) ?? { line: 0, col: 0 },
-    });
-    edges.push({ from, to, attrs, loc: locOf(item, lineCounter) });
+  // Synthesise the reserved exit sink iff anything routes to it.
+  if (needExit && !nodes.exit) {
+    nodes.exit = {
+      id: "exit",
+      shape: "Msquare",
+      attrs: { shape: "Msquare", type: "exit", label: "exit" } as NodeAttrs,
+      classes: [],
+    };
   }
 
   return {
     id,
     directed: true,
-    attrs: graphAttrs,
+    attrs: graphAttrs as GraphAttrs,
     nodes,
     edges,
     subgraphs: [],
   };
 }
 
-function locArr(loc: { line: number; col: number }): [number, number] {
-  return [loc.line, loc.col];
+// ---- Template substitution -------------------------------------------
+
+/** Replace `${{ inputs.foo }}` references in a string with the input values
+ * from `bindings`. References that resolve to `undefined` are left in place
+ * — the validator catches undeclared refs (E029) at validate-time. */
+export function substituteInputs(source: string, bindings: Record<string, string | number | boolean>): string {
+  return source.replace(/\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g, (whole, name) => {
+    const v = bindings[name];
+    return v === undefined ? whole : String(v);
+  });
+}
+
+/** Extract every `${{ inputs.X }}` reference name from a string. Used by
+ * the validator (E029) to flag undeclared inputs at validate-time. */
+export function inputReferences(source: string): string[] {
+  const out: string[] = [];
+  const re = /\$\{\{\s*inputs\.([a-zA-Z][a-zA-Z0-9_-]*)\s*\}\}/g;
+  let m: RegExpExecArray | null = re.exec(source);
+  while (m !== null) {
+    if (m[1] !== undefined) out.push(m[1]);
+    m = re.exec(source);
+  }
+  return out;
 }

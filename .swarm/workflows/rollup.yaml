@@ -5,39 +5,32 @@
 # workflow (structural-drift, narrative-drift, analyze) and a fresh health
 # snapshot. `synthesize` then produces a prioritised findings table + Idea /
 # Architecture / Execution ratings + top recommendations from that snapshot.
-# `verify` is the goal-gated reviewer; all three share `thread_id: rollup`.
+# `verify` is the goal-gated reviewer; all three share `thread: rollup`.
 #
 # The split keeps the heavy collector off the goal-gate retarget path:
-# `verify` retargets `synthesize`, so a REJECT does not re-run the collector
-# script and re-dump its JSON into the thread.
+# `verify` retargets `synthesize`, so a REJECT does not re-run the collector.
 #
 #   bun run swarm run rollup
 #
-# Cadence: weekly. Pairs with the per-probe cadences:
-#   structural-drift  — daily
-#   narrative-drift   — weekly
-#   health            — hourly (for trend storage; rollup re-runs it inline)
-#   analyze           — daily (already scheduled in this project)
+# Cadence: weekly.
 
 name: rollup
 goal: Consume the latest terminal run of each drift workflow + a fresh health snapshot; produce a prioritised findings table, Idea/Architecture/Execution ratings, and top recommendations.
-label: rollup
-budget_usd: 3.50
-budget_policy: warn
-max_goal_gate_retries: 2
+budget: 3.50
+budget-policy: warn
 
-nodes:
-  start: {type: start}
+defaults:
+  provider: anthropic
 
+steps:
   collect:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: rollup
-    allowed_tools: [bash]
-    max_cost_usd: 0.10
+    model: claude-haiku-4-5
+    thread: rollup
+    allowed-tools: [bash]
+    max-cost: 0.10
     prompt: |
-      Run `bun .swarm/scripts/rollup/latest.ts $ARGUMENTS` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
+      Run `bun .swarm/scripts/rollup/latest.ts` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
 
       If the script exits non-zero or returns malformed JSON, call the `abort` tool with reason `collector failed: <exit code or parse error>`.
 
@@ -45,12 +38,11 @@ nodes:
 
   synthesize:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    reasoning_effort: high
-    thread_id: rollup
-    allowed_tools: [read]
-    max_cost_usd: 2.50
+    model: claude-opus-4-7
+    effort: high
+    thread: rollup
+    allowed-tools: [read]
+    max-cost: 2.50
     prompt: |
       Final assessment across the latest terminal run of each drift workflow plus a fresh operational-health snapshot.
 
@@ -74,14 +66,13 @@ nodes:
 
   verify:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    reasoning_effort: high
-    thread_id: rollup
-    goal_gate: true
-    retry_target: synthesize
-    max_cost_usd: 0.75
-    allowed_tools: [read]
+    model: claude-opus-4-7
+    effort: high
+    thread: rollup
+    retry: synthesize
+    max-retries: 2
+    max-cost: 0.75
+    allowed-tools: [read]
     prompt: |
       Evidence-quality gate for the synthesise report. Judge it on its own merits.
 
@@ -96,13 +87,3 @@ nodes:
       4. Idea / Architecture / Execution ratings each have rationale that cites specific finding IDs from the report. Ratings whose rationale is generic prose with no finding-ID anchor are a fail.
 
       If all four invariants pass, reply with EXACTLY the single word APPROVE and nothing else. If any invariant fails, call the abort tool with reason `REJECT: <one-line summary of the worst violation>`. Do not rewrite the report. Do not soften failures.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: collect}
-  - {from: collect, to: exit, outcome: fail}
-  - {from: collect, to: synthesize}
-  - {from: synthesize, to: exit, outcome: fail}
-  - {from: synthesize, to: verify}
-  - {from: verify, to: exit}

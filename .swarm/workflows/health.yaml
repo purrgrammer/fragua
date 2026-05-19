@@ -1,27 +1,27 @@
 # health.yaml — operational health snapshot of the swarm SQLite store.
 #
-# A single llm node runs .swarm/scripts/health/collect.ts via the
+# A single llm step runs .swarm/scripts/health/collect.ts via the
 # bash tool, then summarises the OK/WATCH/ALERT verdicts in its own
 # reply. The script already labels each metric; the llm narrates.
 #
-# Why an llm, not a tool node: a workflow without an LLM has nothing
-# to read its own output. Tool nodes are for side effects (CI gates,
+# Why an llm, not a tool step: a workflow without an LLM has nothing
+# to read its own output. Tool steps are for side effects (CI gates,
 # idempotent commands); data-gathering belongs inside an llm.
 #
 #   bun run swarm run health
 
 name: health
 goal: Snapshot operational health of the swarm event store and narrate the OK/WATCH/ALERT verdicts.
-label: health
-model_stylesheet: "* { llm_provider: anthropic; llm_model: claude-haiku-4-5; }"
 
-nodes:
-  start: {type: start}
+defaults:
+  provider: anthropic
+  model: claude-haiku-4-5
 
+steps:
   snapshot:
     type: llm
-    allowed_tools: [bash, read]
-    max_cost_usd: 0.05
+    allowed-tools: [bash, read]
+    max-cost: 0.05
     prompt: |
       Run `bun .swarm/scripts/health/collect.ts` and read its JSON output. Summarise as a short markdown report — your FINAL assistant message, no preamble:
 
@@ -36,9 +36,3 @@ nodes:
       | <OK|WATCH|ALERT> | <id> | <value> | <note or —> |
 
       Quote the script's labels verbatim. If `db_status` is `missing` or `empty`, surface that under Status and skip the Metrics table.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: snapshot}
-  - {from: snapshot, to: exit}

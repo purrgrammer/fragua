@@ -1,44 +1,40 @@
 # research.yaml — fetch a list of URLs, return raw markdown per URL,
 # synthesise across all of them.
 #
-# Two-node research/synthesis pipeline driven by the `web_fetch` core
-# tool. The user's input carries both the question and the source
-# URLs; the agent splits them and dispatches one `web_fetch` per URL
-# in raw mode (no per-URL summariser cost), then the synthesise node
-# reads the full markdown of every source via the shared thread and
-# produces the answer directly. Higher fidelity than per-URL
-# summarisation because the final-answer model sees the cross-source
-# picture.
+# Two-step research/synthesis pipeline driven by the `web_fetch` core
+# tool. The user supplies a question + URLs in `request:`; the agent
+# splits them, dispatches one `web_fetch` per URL in raw mode, then
+# synthesise reads the full markdown of every source via the shared
+# thread and produces the answer directly.
 #
-# Usage:
-#   bun run swarm run research --input='What changed in React 19? \
+#   bun run swarm run research --input request="What changed in React 19? \
 #     https://react.dev/blog/2024/12/05/react-19 \
-#     https://react.dev/blog/2024/04/25/react-19-upgrade-guide'
-#
-# Both nodes share `thread_id: research`. Research emits only a
-# brief manifest as its assistant text; synthesise hydrates the full
-# shared thread (with web_fetch tool results carrying the raw markdown)
-# into its context — no markdown duplication into output tokens.
+#     https://react.dev/blog/2024/04/25/react-19-upgrade-guide"
 
 name: research
-goal: Fetch a set of URLs supplied in $ARGUMENTS, extract material relevant to the user's question, and synthesise a unified answer with inline citations.
-label: research
-budget_usd: 0.50
+goal: Fetch URLs supplied in `request`, extract material relevant to the user's question, and synthesise a unified answer with inline citations.
+budget: 0.50
 
-nodes:
-  start: {type: start}
+inputs:
+  request:
+    type: string
+    required: true
+    description: Question plus one or more URLs (space-separated)
 
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
   research:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: research
-    allowed_tools: [web_fetch]
-    max_cost_usd: 0.15
+    thread: research
+    allowed-tools: [web_fetch]
+    max-cost: 0.15
     prompt: |
       Fetch the URLs the user supplied so a downstream answer can quote them.
 
-      User input: $ARGUMENTS
+      User input: ${{ inputs.request }}
 
       Procedure:
         1. The user input contains a question and one or more URLs.
@@ -64,12 +60,10 @@ nodes:
 
   synthesize:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: research
-    allowed_tools: []
-    reasoning_effort: medium
-    max_cost_usd: 0.20
+    thread: research
+    allowed-tools: []
+    effort: medium
+    max-cost: 0.20
     prompt: |
       Answer the user's question using the web_fetch tool results — they carry the FULL raw markdown of each fetched URL and are the highest-fidelity content available. The manifest gives the canonical URL ordering for citations.
 
@@ -97,11 +91,3 @@ nodes:
         - Don't fabricate. If the sources don't cover something the question asks about, say so — 'sources don't address X'.
         - Don't synthesise from absence. If only one source says something, attribute it; don't promote a single-source claim to a consensus.
         - Be terse. The TL;DR is the headline; the Detail section earns its length only by adding cross-source insight.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: research}
-  - {from: research, to: exit, outcome: fail}
-  - {from: research, to: synthesize}
-  - {from: synthesize, to: exit}

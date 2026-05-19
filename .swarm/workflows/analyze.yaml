@@ -8,31 +8,43 @@
 #
 # Defaults: --since-days 7 --limit 200. Picks up low-traffic drift
 # workflows that run 1–2×/week; capped so cost stays bounded on
-# high-traffic projects. Override via $ARGUMENTS as needed.
+# high-traffic projects. Override via inputs as needed.
 #
-#   bun run swarm run analyze                                     # last 7 days, ≤200 runs
-#   bun run swarm run analyze --input="--workflow change"         # filter to one workflow
-#   bun run swarm run analyze --input="--since-days 30"           # widen the window
-#   bun run swarm run analyze --input="--limit 50"                # tighten the cap
+#   bun run swarm run analyze
+#   bun run swarm run analyze --input workflow=change
+#   bun run swarm run analyze --input since-days=30
+#   bun run swarm run analyze --input limit=50
 
 name: analyze
 goal: Mine recent swarm runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements.
-label: analyze
-budget_usd: 1.50
-model_stylesheet: "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
+budget: 1.50
 
-nodes:
-  start: {type: start}
+inputs:
+  workflow:
+    type: string
+    description: Filter to a single workflow name (optional)
+    default: ""
+  since-days:
+    type: number
+    default: 7
+  limit:
+    type: number
+    default: 200
 
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
   analyze:
     type: llm
-    allowed_tools: [bash, read]
-    reasoning_effort: high
-    max_cost_usd: 1.20
+    allowed-tools: [bash, read]
+    effort: high
+    max-cost: 1.20
     prompt: |
       Audit recent swarm runs and emit ranked, evidence-backed improvement hypotheses.
 
-      First: run `bun .swarm/scripts/analyze/collect.ts $ARGUMENTS` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
+      First: run `bun .swarm/scripts/analyze/collect.ts --workflow=${{ inputs.workflow }} --since-days=${{ inputs.since-days }} --limit=${{ inputs.limit }}` via the bash tool and read its JSON report. Fields: `totals`, `by_workflow[]` (aggregates + `node_profiles[]`), `runs[]` (per-run records + `per_node[]`). Trust its numbers; quote only them; never invent fields.
 
       Field caveats: `partial`/`partial_in_runs` figures are lower bounds (node still running). `dispatch_seconds` = wall − llm − tool (setup/queue/network, not compute). `node_type` of `tool`/`start`/`exit` is non-LLM — zero tokens is expected, not a gap.
 
@@ -46,7 +58,7 @@ nodes:
       ## Per-workflow findings
       Per workflow with n_runs >= 3, a `### <workflow>` subsection:
       **Health.** One paragraph: status mix, cost p50/p90, token p50/p90, mean duration, models.
-      **Hypotheses.** Up to 5, ranked by impact * confidence. Each a numbered item with labelled lines — **Claim:** the pattern in one sentence. **Evidence:** specific run_ids and >=2 numbers from the JSON. **Proposed change:** one concrete edit (prompt reword, max_retries, model swap, context_files, node split, tool removal), naming the .yaml file and node. **Confidence:** low|medium|high + one sentence why. **Estimated impact:** cost delta $/%, or token delta, or reliability with a number.
+      **Hypotheses.** Up to 5, ranked by impact * confidence. Each a numbered item with labelled lines — **Claim:** the pattern in one sentence. **Evidence:** specific run_ids and >=2 numbers from the JSON. **Proposed change:** one concrete edit (prompt reword, max-retries, model swap, step split, tool removal), naming the .yaml file and step. **Confidence:** low|medium|high + one sentence why. **Estimated impact:** cost delta $/%, or token delta, or reliability with a number.
       Zero confusion signals (no aborts/steers/retargets/halts) + tight cost variance → 'no actionable hypotheses; workflow appears healthy'. Don't manufacture findings.
 
       ## Workflows below sample threshold
@@ -56,10 +68,3 @@ nodes:
       Only if something holds across workflows; else omit.
 
       Rules: cite numbers not vibes; one run = low confidence, probably skip; a wanted-but-absent signal goes under a final '## Signals not collected'.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: analyze}
-  - {from: analyze, to: exit, outcome: fail}
-  - {from: analyze, to: exit}

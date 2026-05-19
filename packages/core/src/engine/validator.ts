@@ -61,16 +61,10 @@ const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set(["label", "thread_id", "lo
 const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "goal",
   "label",
-  "default_max_retries",
-  "default_max_retry", // attractor §2.5 legacy alias
-  "default_retry_policy",
-  "retry_target",
-  "fallback_retry_target",
-  "max_goal_gate_retries",
   "thread_id",
   "budget_usd",
-  "budget_tokens",
   "budget_policy",
+  "inputs",
 ]);
 
 const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([

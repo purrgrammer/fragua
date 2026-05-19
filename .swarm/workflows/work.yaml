@@ -1,52 +1,54 @@
 # work.yaml — triage → plan → implement → review → format → ci → commit.
 #
-# Replaces change.dot + feature.dot with one routed workflow. A triage
-# node classifies the task (small / feature / blocked) via the `route`
-# tool, and the wider pipeline shapes itself accordingly through shared
-# thread context. After review, a small classifier (`needs_human`)
-# decides whether the diff is contract-touching enough to warrant a
-# human approver before CI.
+# Replaces change + feature with one routed workflow. A triage step classifies
+# the task (small / feature / blocked) via the `route` tool, and the wider
+# pipeline shapes itself accordingly through shared thread context. After
+# review, a small classifier (`needs_human`) decides whether the diff is
+# contract-touching enough to warrant a human approver before CI.
 #
 # Demonstrates the routing primitives in one workflow:
 #   - LLM-directed routing (`routes:` + ephemeral `route` tool) on
 #     `triage` and `needs_human`.
-#   - Human-node routing (`type: human` + `routes:`) on `approve`.
-#   - Per-edge `label: "..."` overriding the derived button text on
-#     human-node edges.
+#   - Human-step routing (`type: human` + `routes:`) on `approve`.
 #
-#   bun run swarm run work --input="add a `touch` tool to @swarm/workspace"
+#   bun run swarm run work --input task="add a touch tool to @swarm/workspace"
 
 name: work
 goal: Triage a task and route it through the right plan/implement/review/ci pipeline.
-label: work
-max_goal_gate_retries: 3
 
-nodes:
-  start: {type: start}
+inputs:
+  task:
+    type: string
+    required: true
+    description: The task to work on
 
+defaults:
+  provider: anthropic
+  thread: dev
+
+steps:
   triage:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    thread_id: dev
-    routes: [small, feature, blocked]
-    allowed_tools: [read, grep, find]
+    model: claude-opus-4-7
+    allowed-tools: [read, grep, find]
     prompt: |
-      Task: $ARGUMENTS.
+      Task: ${{ inputs.task }}.
 
       Classify with the `route` tool (call it exactly once on a response of its own):
         - small: ≤3 packages, no shared-contract changes (HandlerContext, executor internals, store schema, event envelope), ≤500 lines non-test
         - feature: multi-package OR shared contracts OR backed by a docs/proposals/*.md file
         - blocked: empty / ambiguous / shipped (check proposal frontmatter `status: shipped`)
 
-      Read just enough to decide. Don't plan or implement; the downstream nodes do that.
+      Read just enough to decide. Don't plan or implement; the downstream steps do that.
+    routes:
+      small:   {to: plan, label: "Small change"}
+      feature: {to: plan, label: "Feature scope"}
+      blocked: {to: exit, label: "Blocked"}
 
   plan:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    thread_id: dev
-    allowed_tools: [read, grep, find, ls]
+    model: claude-opus-4-7
+    allowed-tools: [read, grep, find, ls]
     prompt: |
       Read triage's classification from the prior message in this shared thread. Produce a numbered plan suited to that scope:
 
@@ -60,10 +62,8 @@ nodes:
 
   implement:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: dev
-    allowed_tools: [read, write, edit, grep, bash]
+    model: claude-sonnet-4-6
+    allowed-tools: [read, write, edit, grep, bash]
     prompt: |
       Implement the plan. Stay inside the package(s) it names. After edits, `bun run --filter='@swarm/<pkg>' typecheck` per modified package; cap typecheck-fix at 5 cycles per package, then abort with `typecheck blocked: <top error>`.
 
@@ -73,12 +73,10 @@ nodes:
 
   review:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: dev
-    goal_gate: true
-    retry_target: implement
-    allowed_tools: [read, grep, bash]
+    model: claude-sonnet-4-6
+    retry: implement
+    max-retries: 3
+    allowed-tools: [read, grep, bash]
     prompt: |
       Judge `git diff HEAD` against PLAN_REALISED.
 
@@ -91,15 +89,14 @@ nodes:
 
       Reply `APPROVE: <one line>` on success. Abort with `REJECT: <one line>. fixes: <numbered list, 1-5 items>` on rejection.
 
-  format: {type: tool, tool_command: "bun run format"}
+  format:
+    type: tool
+    run: bun run format
 
   needs_human:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: dev
-    routes: [yes, no]
-    allowed_tools: [read, bash]
+    model: claude-haiku-4-5
+    allowed-tools: [read, bash]
     prompt: |
       Look at `git diff HEAD` and the triage classification in the shared thread. Use the `route` tool to decide whether a human should approve this before CI:
 
@@ -107,66 +104,43 @@ nodes:
         - no: contained change, no contract surface, triage said `small`.
 
       Call route() exactly once on a response of its own.
+    routes:
+      no:  {to: ci,      label: "Auto-promote"}
+      yes: {to: approve, label: "Needs human"}
 
   approve:
     type: human
     text: "Reviewer approved this change. Promote to CI?"
-    routes: [yes, no, defer]
+    routes:
+      yes:   {to: ci,   label: "Promote"}
+      no:    {to: exit, label: "Send back"}
+      defer: {to: exit, label: "Defer"}
 
-  ci: {type: tool, tool_command: "bun run ci", max_retries: 5}
+  ci:
+    type: tool
+    run: bun run ci
+    max-retries: 5
+    on:
+      success: commit
+      fail: fix
 
   fix:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    allowed_tools: [read, write, edit, bash]
-    max_cost_usd: 0.30
-    max_tokens: 800000
+    model: claude-sonnet-4-6
+    allowed-tools: [read, write, edit, bash]
+    max-cost: 0.30
+    max-tokens: 800000
     prompt: |
       CI failed. Re-run `bun run ci` via the bash tool, read the failure log from its output, then make the minimal fix and stop — the next CI run is automatic. Don't disable tests, lower assertions, or relax linters.
+    next: ci
 
   commit:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    allowed_tools: [read, write, edit, bash]
+    model: claude-sonnet-4-6
+    allowed-tools: [read, write, edit, bash]
     prompt: |
       Commit per AGENTS.md §Commit conventions. Fresh thread — read state via git.
 
       If `git status --short` is empty, emit `COMMITTED: no changes`.
 
       Else: `git add` explicit paths (group related files; multi-package work may warrant multiple commits, one per logical chunk), commit each with a HEREDOC message — `[<subsystem>] imperative subject ≤72 chars` then a body that stands alone. No --amend, no --no-verify, no Co-Authored-By. On hook failure, fix the root cause and create a NEW commit. Emit `COMMITTED: <short sha or sha list>`. Don't push.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: triage}
-
-  - {from: triage, to: plan, route: small,   label: "Small change"}
-  - {from: triage, to: plan, route: feature, label: "Feature scope"}
-  - {from: triage, to: exit, route: blocked, label: "Blocked"}
-
-  - {from: plan, to: exit, outcome: fail}
-  - {from: plan, to: implement}
-
-  - {from: implement, to: exit, outcome: fail}
-  - {from: implement, to: review}
-
-  - {from: review, to: exit, outcome: fail}
-  - {from: review, to: format}
-
-  - {from: format, to: exit, outcome: fail}
-  - {from: format, to: needs_human}
-
-  - {from: needs_human, to: ci,      route: no,  label: "Auto-promote"}
-  - {from: needs_human, to: approve, route: yes, label: "Needs human"}
-
-  - {from: approve, to: ci,   route: yes,   label: "Promote"}
-  - {from: approve, to: exit, route: no,    label: "Send back"}
-  - {from: approve, to: exit, route: defer, label: "Defer"}
-
-  - {from: ci, to: commit, outcome: success}
-  - {from: ci, to: fix,    outcome: fail}
-  - {from: fix, to: ci}
-
-  - {from: commit, to: exit}

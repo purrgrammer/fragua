@@ -1,7 +1,6 @@
 ---
 name: swarm-author
 description: Author or edit a swarm workflow. Load this when the user says "write a workflow that …", "add a node to <file>.dot", "turn this task into a workflow", "why does my .dot fail to validate", "how do I wire a loop/HITL here", "what does condition= accept", or otherwise asks about shaping a workflow under `~/.swarm/workflows/` or `<project>/.swarm/workflows/`. Teaches agent-design patterns first (chaining/routing/orchestrator-workers/evaluator-optimizer/autonomous/augmented), then the DOT primitives, then the two input channels (shared thread, environment re-derivation), then idiomatic prompts, validator diagnostics, and a smoke recipe. Assumes Claude Code with Read / Edit / Write and a local swarm repo.
-version: 0.4.0
 ---
 
 # swarm-author — pattern-first workflow authoring

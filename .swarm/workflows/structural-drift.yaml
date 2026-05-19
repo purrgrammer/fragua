@@ -9,41 +9,38 @@
 # auto-applied doc fixes, use doc-sync.yaml — it's the apply-tail variant
 # scoped to a single doc.
 #
-# The collector is its own dedicated llm so a goal-gate retry on `review`
-# does NOT re-run the collect script. `collect`, `drift`, and `review` share
-# `thread_id: drift` — the bash tool result from `collect` lives in the
-# thread, and the heavy reasoning node reads the snapshot directly without
-# re-paying its cost on each retry.
+# The collector is its own dedicated llm so a `retry: drift` from `review`
+# does NOT re-run the collect script. `collect`, `drift`, and `review`
+# share `thread: drift`.
 #
 #   bun run swarm run structural-drift
-#   bun run swarm run structural-drift --input="focus on event taxonomy"
+#   bun run swarm run structural-drift --input focus="event taxonomy"
 #
-# Cadence: daily. The findings churn fastest after enum changes land;
-# daily catches drift before it accumulates. No HITL gate — the cadence
-# runs unattended.
-#
-# Models: opus + reasoning_effort:high for `drift` (the genuine cross-ref
-# reasoning); sonnet for collect / review (mid-tier judgement).
+# Cadence: daily. No HITL gate — the cadence runs unattended.
 
 name: structural-drift
 goal: Cross-reference contract code surfaces against the docs that describe them; emit a severity-grouped findings table for the rollup to consume.
-label: structural-drift
-budget_usd: 5.00
-budget_policy: warn
-max_goal_gate_retries: 2
+budget: 5.00
+budget-policy: warn
 
-nodes:
-  start: {type: start}
+inputs:
+  focus:
+    type: string
+    default: ""
+    description: Optional focus area (e.g. "event taxonomy")
 
+defaults:
+  provider: anthropic
+
+steps:
   collect:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: drift
-    allowed_tools: [bash]
-    max_cost_usd: 0.10
+    model: claude-haiku-4-5
+    thread: drift
+    allowed-tools: [bash]
+    max-cost: 0.10
     prompt: |
-      Run `bun .swarm/scripts/structural-drift/collect.ts $ARGUMENTS` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
+      Run `bun .swarm/scripts/structural-drift/collect.ts ${{ inputs.focus }}` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
 
       If the script exits non-zero or returns malformed JSON, call the `abort` tool with reason `collector failed: <exit code or parse error>`.
 
@@ -51,12 +48,11 @@ nodes:
 
   drift:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    reasoning_effort: high
-    thread_id: drift
-    allowed_tools: [read, grep, find]
-    max_cost_usd: 4.00
+    model: claude-opus-4-7
+    effort: high
+    thread: drift
+    allowed-tools: [read, grep, find]
+    max-cost: 4.00
     prompt: |
       Cross-reference code↔docs. Read-only; you may re-read files for confirmation but do not modify.
 
@@ -71,20 +67,19 @@ nodes:
         2. Event taxonomy — every member of `taxonomy.*` (intent / fact / daemon types, halt-reason and quarantine-reason enums, pause reasons, run statuses) against ARCHITECTURE.md §3 and the SPEC §3.4 status table where applicable.
         3. Handler contract — return-kind enum / halt reasons handlers can return / HandlerContext fields / messages / artifacts API shapes (handler/types.ts) against handler-contract.md.
         4. Intent fold — precedence rules R1–R7, per-intent table including the required-state column (intent-fold.ts vs docs/intent-fold.md).
-        5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures (e.g. `messages.append(role, content)` when code is `messages.append(message)`).
+        5. Doc code examples — every block in `doc_code_blocks[]` must call APIs that exist in current code. Flag examples using removed signatures.
         6. Recent commits hygiene — for each contract file in `contract_file_history`, walk the listed commits and check whether they ALSO touched the corresponding doc per AGENTS.md ground rule #1's same-PR table. Flag any landed commit that did not.
 
       Output a findings table grouped by severity, with file:line refs and the exact discrepancy. No prose preamble.
 
   review:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: drift
-    goal_gate: true
-    retry_target: drift
-    allowed_tools: [read]
-    max_cost_usd: 0.80
+    model: claude-sonnet-4-6
+    thread: drift
+    retry: drift
+    max-retries: 2
+    allowed-tools: [read]
+    max-cost: 0.80
     prompt: |
       Judge the drift findings table for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.
 
@@ -97,13 +92,3 @@ nodes:
       If the table passes, reply with EXACTLY one line: `APPROVE`.
 
       If it fails, call the `abort` tool with reason `REJECT: <one-line reason>`.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: collect}
-  - {from: collect, to: exit, outcome: fail}
-  - {from: collect, to: drift}
-  - {from: drift, to: exit, outcome: fail}
-  - {from: drift, to: review}
-  - {from: review, to: exit}

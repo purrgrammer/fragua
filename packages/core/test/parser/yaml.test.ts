@@ -3,37 +3,42 @@
 // at the engine layer with Graph objects constructed via mkGraph.
 
 import { describe, expect, test } from "bun:test";
-import { ParseError, parseWorkflow } from "../../src/parser/yaml.ts";
+import { ParseError, inputReferences, parseWorkflow, substituteInputs } from "../../src/parser/yaml.ts";
 
 describe("parseWorkflow — basics", () => {
-  test("minimal workflow with name + start/exit", () => {
+  test("minimal workflow with single llm step", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  start: {type: start}
-  done:  {type: exit}
-edges:
-  - {from: start, to: done}
+steps:
+  work:
+    type: llm
+    prompt: hi
 `);
     expect(g.id).toBe("t");
     expect(g.directed).toBe(true);
-    expect(g.nodes["start"]?.shape).toBe("Mdiamond");
-    expect(g.nodes["done"]?.shape).toBe("Msquare");
-    expect(g.edges).toHaveLength(1);
-    expect(g.edges[0]?.from).toBe("start");
-    expect(g.edges[0]?.to).toBe("done");
+    // Synthetic start node + user step + synthetic exit (linear default → exit).
+    expect(g.nodes["__start__"]?.shape).toBe("Mdiamond");
+    expect(g.nodes["work"]?.shape).toBe("box");
+    expect(g.nodes["exit"]?.shape).toBe("Msquare");
   });
 
-  test("llm / human / tool types map to in-memory shapes", () => {
+  test("llm / human / tool / exit types map to in-memory shapes", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
-  a: {type: llm, prompt: hi}
-  b: {type: human, routes: [yes, no]}
-  c: {type: tool, tool_command: ls}
-  done: {type: exit}
-edges: [{from: s, to: a}]
+steps:
+  a:
+    type: llm
+    prompt: hi
+    next: b
+  b:
+    type: human
+    text: choose
+    routes:
+      yes: c
+      no:  exit
+  c:
+    type: tool
+    run: ls
 `);
     expect(g.nodes["a"]?.shape).toBe("box");
     expect(g.nodes["b"]?.shape).toBe("hexagon");
@@ -43,15 +48,12 @@ edges: [{from: s, to: a}]
   test("block-scalar prompts read cleanly without escaping", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
+steps:
   work:
     type: llm
     prompt: |
       Line one with "quotes" and a backtick \`.
       Line two follows naturally.
-  done: {type: exit}
-edges: [{from: s, to: work}]
 `);
     const prompt = g.nodes["work"]?.attrs.prompt;
     expect(typeof prompt).toBe("string");
@@ -63,196 +65,279 @@ edges: [{from: s, to: work}]
     const g = parseWorkflow(`
 name: t
 goal: ship it
-label: build
-budget_usd: 0.5
-budget_policy: warn
-nodes:
-  s: {type: start}
-  done: {type: exit}
-edges: [{from: s, to: done}]
+description: build pipeline
+budget: 0.5
+budget-policy: warn
+steps:
+  work: {type: llm, prompt: hi}
 `);
     expect(g.attrs.goal).toBe("ship it");
-    expect(g.attrs.label).toBe("build");
+    expect(g.attrs.label).toBe("build pipeline");
     expect(g.attrs.budget_usd).toBe(0.5);
     expect(g.attrs.budget_policy).toBe("warn");
   });
 });
 
-describe("parseWorkflow — attribute coercion", () => {
-  test("boolean coercion via YAML native types", () => {
+describe("parseWorkflow — kebab-case lowering", () => {
+  test("authoring kebab attrs lower to snake_case IR keys", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
-  work: {type: llm, prompt: hi, goal_gate: true}
-  done: {type: exit}
-edges: [{from: s, to: work}]
-`);
-    expect(g.nodes["work"]?.attrs.goal_gate).toBe(true);
-  });
-
-  test("number coercion (max_cost_usd, budget_usd)", () => {
-    const g = parseWorkflow(`
-name: t
-budget_usd: 1.25
-nodes:
-  s: {type: start}
-  work: {type: llm, prompt: hi, max_cost_usd: 0.10}
-  done: {type: exit}
-edges: [{from: s, to: work}]
-`);
-    expect(g.attrs.budget_usd).toBe(1.25);
-    expect(g.nodes["work"]?.attrs.max_cost_usd).toBe(0.1);
-  });
-
-  test("integer coercion (max_retries, idle_timeout)", () => {
-    const g = parseWorkflow(`
-name: t
-nodes:
-  s: {type: start}
-  work: {type: llm, prompt: hi, max_retries: 3, idle_timeout: 60}
-  done: {type: exit}
-edges: [{from: s, to: work}]
-`);
-    expect(g.nodes["work"]?.attrs.max_retries).toBe(3);
-    expect(g.nodes["work"]?.attrs.idle_timeout).toBe(60);
-  });
-
-  test("string arrays accept YAML array form", () => {
-    const g = parseWorkflow(`
-name: t
-nodes:
-  s: {type: start}
+steps:
   work:
     type: llm
+    model: claude-sonnet-4-6
+    provider: anthropic
+    thread: dev
+    effort: high
+    allowed-tools: [read, bash]
+    denied-tools: [agent]
+    max-cost: 0.50
+    max-tokens: 80000
+    max-retries: 3
+    timeout-minutes: 5
     prompt: hi
-    allowed_tools: [read, bash, edit]
-    skills: [frontend, backend]
-  done: {type: exit}
-edges: [{from: s, to: work}]
 `);
-    expect(g.nodes["work"]?.attrs.allowed_tools).toEqual(["read", "bash", "edit"]);
-    expect(g.nodes["work"]?.attrs.skills).toEqual(["frontend", "backend"]);
+    const a = g.nodes["work"]!.attrs;
+    expect(a.llm_model).toBe("claude-sonnet-4-6");
+    expect(a.llm_provider).toBe("anthropic");
+    expect(a.thread_id).toBe("dev");
+    expect(a.reasoning_effort).toBe("high");
+    expect(a.allowed_tools).toEqual(["read", "bash"]);
+    expect(a.denied_tools).toEqual(["agent"]);
+    expect(a.max_cost_usd).toBe(0.5);
+    expect(a.max_tokens).toBe(80000);
+    expect(a.max_retries).toBe(3);
+    expect(a.max_ms).toBe(300_000);
   });
 
-  test("string arrays also accept comma-separated string form (back-compat)", () => {
+  test("`run:` lowers to tool_command on tool steps", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
-  work:
+steps:
+  build: {type: tool, run: "bun run build"}
+`);
+    expect(g.nodes["build"]?.attrs.tool_command).toBe("bun run build");
+  });
+
+  test("defaults: block populates llm steps when attr is absent", () => {
+    const g = parseWorkflow(`
+name: t
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+steps:
+  a: {type: llm, prompt: x}
+  b: {type: llm, prompt: y, model: claude-haiku-4-5}
+`);
+    expect(g.nodes["a"]?.attrs.llm_provider).toBe("anthropic");
+    expect(g.nodes["a"]?.attrs.llm_model).toBe("claude-sonnet-4-6");
+    // explicit overrides default
+    expect(g.nodes["b"]?.attrs.llm_provider).toBe("anthropic");
+    expect(g.nodes["b"]?.attrs.llm_model).toBe("claude-haiku-4-5");
+  });
+});
+
+describe("parseWorkflow — edge synthesis", () => {
+  test("implicit linear: step with no routing flows to next declared step", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  a: {type: llm, prompt: x}
+  b: {type: llm, prompt: y}
+  c: {type: llm, prompt: z}
+`);
+    // __start__ -> a, a -> b (success), a -> exit (fail), b -> c (success), b -> exit (fail), c -> exit (success), c -> exit (fail)
+    const edgeKeys = g.edges.map((e) => `${e.from}->${e.to}:${e.attrs.outcome ?? ""}:${e.attrs.route ?? ""}`);
+    expect(edgeKeys).toContain("__start__->a::");
+    expect(edgeKeys).toContain("a->b:success:");
+    expect(edgeKeys).toContain("a->exit:fail:");
+    expect(edgeKeys).toContain("b->c:success:");
+    expect(edgeKeys).toContain("c->exit:success:");
+  });
+
+  test("`next: X` is shorthand for on.success, with implicit fail→exit", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  a:
     type: llm
-    prompt: hi
-    allowed_tools: "read, bash, edit"
-  done: {type: exit}
-edges: [{from: s, to: work}]
+    prompt: x
+    next: c
+  b: {type: llm, prompt: y}
+  c: {type: llm, prompt: z}
 `);
-    expect(g.nodes["work"]?.attrs.allowed_tools).toEqual(["read", "bash", "edit"]);
+    const aOut = g.edges.filter((e) => e.from === "a");
+    expect(aOut.length).toBe(2);
+    expect(aOut.find((e) => e.attrs.outcome === "success")?.to).toBe("c");
+    expect(aOut.find((e) => e.attrs.outcome === "fail")?.to).toBe("exit");
   });
 
-  test("enum: summary accepts low|medium|high", () => {
+  test("`on: {success: X, fail: Y}` produces two outcome edges", () => {
     const g = parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
-  work: {type: llm, prompt: hi, thread_id: x, summary: medium}
-  done: {type: exit}
-edges: [{from: s, to: work}]
+steps:
+  ci:
+    type: tool
+    run: bun test
+    on:
+      success: ship
+      fail: fix
+  ship: {type: llm, prompt: s}
+  fix: {type: llm, prompt: f, next: ci}
 `);
-    expect(g.nodes["work"]?.attrs.summary).toBe("medium");
+    const ciOut = g.edges.filter((e) => e.from === "ci");
+    expect(ciOut.find((e) => e.attrs.outcome === "success")?.to).toBe("ship");
+    expect(ciOut.find((e) => e.attrs.outcome === "fail")?.to).toBe("fix");
   });
 
-  test("enum: summary rejects unknown values at parse time", () => {
+  test("`routes:` compact form maps each key to a route edge", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  triage:
+    type: llm
+    prompt: classify
+    routes:
+      small: plan
+      blocked: exit
+  plan: {type: llm, prompt: p}
+`);
+    const triageOut = g.edges.filter((e) => e.from === "triage");
+    expect(triageOut.find((e) => e.attrs.route === "small")?.to).toBe("plan");
+    expect(triageOut.find((e) => e.attrs.route === "blocked")?.to).toBe("exit");
+    expect(g.nodes["triage"]?.attrs.routes).toEqual(["small", "blocked"]);
+  });
+
+  test("`routes:` expanded form preserves label", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  approve:
+    type: human
+    text: ok?
+    routes:
+      yes: {to: ship, label: "Promote"}
+      no:  {to: exit, label: "Send back"}
+  ship: {type: llm, prompt: s}
+`);
+    const yes = g.edges.find((e) => e.from === "approve" && e.attrs.route === "yes");
+    expect(yes?.to).toBe("ship");
+    expect(yes?.attrs.label).toBe("Promote");
+  });
+
+  test("`retry: <step>` lowers to goal_gate + retry_target", () => {
+    const g = parseWorkflow(`
+name: t
+steps:
+  implement: {type: llm, prompt: i}
+  review:
+    type: llm
+    prompt: r
+    retry: implement
+    max-retries: 3
+`);
+    expect(g.nodes["review"]?.attrs.goal_gate).toBe(true);
+    expect(g.nodes["review"]?.attrs.retry_target).toBe("implement");
+    expect(g.nodes["review"]?.attrs.max_retries).toBe(3);
+  });
+
+  test("mutex: next/on/routes triple is rejected", () => {
     expect(() =>
       parseWorkflow(`
 name: t
-nodes:
-  s: {type: start}
-  work: {type: llm, prompt: hi, thread_id: x, summary: huge}
-  done: {type: exit}
-edges: [{from: s, to: work}]
+steps:
+  a:
+    type: llm
+    prompt: x
+    next: b
+    on: {success: c}
+  b: {type: llm, prompt: b}
+  c: {type: llm, prompt: c}
 `),
-    ).toThrow(ParseError);
+    ).toThrow(/more than one of/);
+  });
+});
+
+describe("parseWorkflow — inputs", () => {
+  test("typed inputs block parses with all field kinds", () => {
+    const g = parseWorkflow(`
+name: t
+inputs:
+  ticket:
+    type: string
+    required: true
+    description: Bug ticket id
+  dry-run:
+    type: boolean
+    default: false
+  env:
+    type: choice
+    options: [dev, staging, prod]
+steps:
+  work: {type: llm, prompt: hi}
+`);
+    const inputs = g.attrs.inputs as Array<{ name: string; type: string; required: boolean; options?: string[] }>;
+    expect(inputs).toHaveLength(3);
+    const byName = Object.fromEntries(inputs.map((i) => [i.name, i]));
+    expect(byName.ticket?.type).toBe("string");
+    expect(byName.ticket?.required).toBe(true);
+    expect(byName["dry-run"]?.type).toBe("boolean");
+    expect(byName.env?.type).toBe("choice");
+    expect(byName.env?.options).toEqual(["dev", "staging", "prod"]);
   });
 
-  test("enum: budget_policy rejects unknown values", () => {
+  test("type=choice without options[] is a parse error", () => {
     expect(() =>
       parseWorkflow(`
 name: t
-budget_policy: halt
-nodes:
-  s: {type: start}
-  done: {type: exit}
-edges: [{from: s, to: done}]
+inputs:
+  env:
+    type: choice
+steps:
+  work: {type: llm, prompt: hi}
 `),
-    ).toThrow(/budget_policy/);
+    ).toThrow(/no options/);
   });
 
-  test("edge outcome and route as separate fields", () => {
-    const g = parseWorkflow(`
-name: t
-nodes:
-  s: {type: start}
-  a: {type: llm, prompt: x, routes: [yes, no]}
-  done: {type: exit}
-edges:
-  - {from: s, to: a}
-  - {from: a, to: done, outcome: fail}
-  - {from: a, to: done, route: yes}
-`);
-    expect(g.edges[1]?.attrs.outcome).toBe("fail");
-    expect(g.edges[2]?.attrs.route).toBe("yes");
+  test("substituteInputs replaces \${{ inputs.x }} references", () => {
+    const out = substituteInputs("Hello ${{ inputs.name }}, you have ${{ inputs.count }} items.", {
+      name: "World",
+      count: 5,
+    });
+    expect(out).toBe("Hello World, you have 5 items.");
+  });
+
+  test("inputReferences extracts every reference name from a string", () => {
+    const refs = inputReferences("a=${{ inputs.foo }} b=${{ inputs.bar }} c=${{ inputs.foo }}");
+    expect(refs).toEqual(["foo", "bar", "foo"]);
   });
 });
 
 describe("parseWorkflow — error paths", () => {
-  test("missing name", () => {
-    expect(() =>
-      parseWorkflow(`
-nodes: {s: {type: start}, done: {type: exit}}
-edges: [{from: s, to: done}]
-`),
-    ).toThrow(/name/);
+  test("missing name field", () => {
+    expect(() => parseWorkflow(`steps: {a: {type: llm, prompt: x}}`)).toThrow(/missing required `name:`/);
   });
 
-  test("missing nodes mapping", () => {
+  test("missing steps mapping", () => {
+    expect(() => parseWorkflow(`name: t`)).toThrow(/missing `steps:`/);
+  });
+
+  test("unknown step type", () => {
     expect(() =>
       parseWorkflow(`
 name: t
-edges: [{from: s, to: done}]
-`),
-    ).toThrow(/nodes/);
-  });
-
-  test("missing edges sequence", () => {
-    expect(() =>
-      parseWorkflow(`
-name: t
-nodes: {s: {type: start}, done: {type: exit}}
-`),
-    ).toThrow(/edges/);
-  });
-
-  test("unknown node type", () => {
-    expect(() =>
-      parseWorkflow(`
-name: t
-nodes:
-  s: {type: start}
+steps:
   weird: {type: subgraph}
-  done: {type: exit}
-edges: [{from: s, to: weird}]
 `),
     ).toThrow(/unknown type/);
   });
 
   test("malformed YAML throws with line/col", () => {
     try {
-      parseWorkflow(`name: t\nnodes:\n  bad: [unclosed`);
-      throw new Error("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(ParseError);
-      expect((err as ParseError).line).toBeGreaterThan(0);
+      parseWorkflow(`name: t\nsteps:\n  a: : invalid`);
+      throw new Error("expected ParseError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ParseError);
     }
   });
 });

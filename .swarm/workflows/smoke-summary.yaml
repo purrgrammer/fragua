@@ -1,4 +1,4 @@
-# smoke-summary.yaml — exercise the per-node `summary=` knob end-to-end.
+# smoke-summary.yaml — exercise the per-step `summary=` knob end-to-end.
 #
 # emit writes a long-ish paragraph onto the shared "smoke" thread.
 # consume sets `summary: medium`, so the summariser compresses the prior
@@ -6,41 +6,30 @@
 # `<swarm-context summary="medium">` block prepended to consume's user
 # prompt; consume reports SAW_SUMMARY if that block is present, SAW_RAW
 # otherwise. Run-level cost should include one extra summariser call
-# under the synthetic node id `__summary.consume`.
+# under the synthetic step id `__summary.consume`.
 #
 #   bun run swarm run smoke-summary
 
 name: smoke-summary
-goal: Smoke-test the per-node summary= path under thread sharing.
-label: smoke-summary
-budget_usd: 0.20
+goal: Smoke-test the per-step summary= path under thread sharing.
+budget: 0.20
 
-nodes:
-  start: {type: start}
+defaults:
+  provider: anthropic
+  model: claude-haiku-4-5
 
+steps:
   emit:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: smoke
-    max_cost_usd: 0.05
+    thread: smoke
+    max-cost: 0.05
     prompt: |
       Write a single paragraph of ~250 words about water. Include 10 specific numerical facts (boiling point 100°C, freezing point 0°C, density 1 g/cm³ at 4°C, molecular weight 18.015, oceans cover ~71% of Earth, etc). Plain prose, no headings, no bullets. Emit the paragraph and stop.
 
   consume:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: smoke
+    thread: smoke
     summary: medium
-    max_cost_usd: 0.05
+    max-cost: 0.05
     prompt: |
       Inspect the user message you just received. If it contains a literal `<swarm-context summary="medium">` opening tag, reply with EXACTLY one line: SAW_SUMMARY. Otherwise reply with EXACTLY one line: SAW_RAW. No other text.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: emit}
-  - {from: emit, to: exit, outcome: fail}
-  - {from: emit, to: consume}
-  - {from: consume, to: exit}

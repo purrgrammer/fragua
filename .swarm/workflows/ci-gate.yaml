@@ -1,27 +1,28 @@
 # ci-gate.yaml — lint → typecheck → test, halt on first failure.
 #
-# All tool nodes, no LLM. `tool_command` substitutes $ARGUMENTS;
-# exit 0 → success, non-zero → fail.
+# All tool steps, no LLM. Exit 0 → success, non-zero → fail. Linear
+# default flow handles the halt-on-first-failure: an unhandled fail
+# halts the run with fail status.
 #
 #   bun run swarm run ci-gate
+#   bun run swarm run ci-gate --input pattern="packages/store"
 
 name: ci-gate
 goal: Run lint, typecheck, and tests in sequence. Halt on first failure.
-label: ci-gate
 
-nodes:
-  start: {type: start}
+inputs:
+  pattern:
+    type: string
+    description: Test pattern (passed to `bun test`)
+    default: ""
 
-  lint:      {type: tool, tool_command: "bun run lint"}
-  typecheck: {type: tool, tool_command: "bun run --filter='*' typecheck"}
-  test:      {type: tool, tool_command: "bun test $ARGUMENTS"}
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: lint}
-  - {from: lint, to: typecheck, outcome: success}
-  - {from: lint, to: exit, outcome: fail}
-  - {from: typecheck, to: test, outcome: success}
-  - {from: typecheck, to: exit, outcome: fail}
-  - {from: test, to: exit}
+steps:
+  lint:
+    type: tool
+    run: bun run lint
+  typecheck:
+    type: tool
+    run: bun run --filter='*' typecheck
+  test:
+    type: tool
+    run: bun test ${{ inputs.pattern }}

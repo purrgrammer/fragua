@@ -2,44 +2,46 @@
 # per-skill SKILL.md vs the code each skill documents, STATUS.md "delivers
 # today" claims vs current code, and proposal hygiene.
 #
-# Read-only by design. The collector is its own dedicated llm node so a
-# goal-gate retry on `review` does NOT re-run the collect script. `collect`,
-# `audit`, and `review` share `thread_id: audit` — the collector's bash
-# tool result lives in the thread, and downstream nodes reason directly
-# over that snapshot.
+# Read-only by design. The collector is its own dedicated llm step so a
+# `retry: collect` from `review` does NOT re-run the collect script.
+# `collect`, `audit`, and `review` share `thread: audit` — the collector's
+# bash tool result lives in the thread, and downstream steps reason
+# directly over that snapshot.
 #
-# `audit` then fans out N parallel `agent` toolcalls in ONE turn (the
-# doc-sync.yaml pattern): one subagent per swarm-* SKILL.md, plus one for
-# the claims + proposals pass. Each subagent's full file reads stay in its
-# own context; only a structured ~350-word summary returns.
+# `audit` fans out N parallel `agent` toolcalls in ONE turn (the doc-sync
+# pattern): one subagent per swarm-* SKILL.md, plus one for the claims +
+# proposals pass. Each subagent's full file reads stay in its own context;
+# only a structured ~350-word summary returns.
 #
 #   bun run swarm run narrative-drift
-#   bun run swarm run narrative-drift --input="only swarm-author"
+#   bun run swarm run narrative-drift --input filter="only swarm-author"
 #
-# Cadence: weekly. Findings are reasoning-heavy and would generate
-# questionable auto-rewrites — the operator reviews and applies by hand.
-# Pairs with structural-drift.yaml (literal cross-ref + apply tail) and
-# rollup.yaml (weekly senior-engineer post-mortem consuming both).
+# Cadence: weekly. Pairs with structural-drift (literal cross-ref + apply
+# tail) and rollup (weekly post-mortem consuming both).
 
 name: narrative-drift
-goal: Audit swarm-* SKILL.md files against the code they document, STATUS.md 'delivers today' claims against reality, and proposal hygiene; surface drift as a findings-only report.
-label: narrative-drift
-budget_usd: 4.50
-budget_policy: warn
-max_goal_gate_retries: 2
+goal: Audit swarm-* SKILL.md files against the code they document, STATUS.md claims against reality, and proposal hygiene; surface drift as a findings-only report.
+budget: 4.50
+budget-policy: warn
 
-nodes:
-  start: {type: start}
+inputs:
+  filter:
+    type: string
+    default: ""
+    description: Optional scope filter (e.g. "only swarm-author")
 
+defaults:
+  provider: anthropic
+
+steps:
   collect:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-haiku-4-5
-    thread_id: audit
-    allowed_tools: [bash]
-    max_cost_usd: 0.10
+    model: claude-haiku-4-5
+    thread: audit
+    allowed-tools: [bash]
+    max-cost: 0.10
     prompt: |
-      Run `bun .swarm/scripts/narrative-drift/collect.ts $ARGUMENTS` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
+      Run `bun .swarm/scripts/narrative-drift/collect.ts ${{ inputs.filter }}` via the bash tool — once. Do not interpret, summarise, or reformat the JSON.
 
       If the script exits non-zero or returns malformed JSON, call the `abort` tool with reason `collector failed: <exit code or parse error>`.
 
@@ -47,18 +49,17 @@ nodes:
 
   audit:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: audit
-    allowed_tools: [agent, read, grep, find]
-    max_cost_usd: 2.50
+    model: claude-sonnet-4-6
+    thread: audit
+    allowed-tools: [agent, read, grep, find]
+    max-cost: 2.50
     prompt: |
       Build a drift report by fanning out per-area subagents in parallel.
 
       The collector snapshot contains `skills[]` ({path, name, description, target_hint, lines, sha256_12} — swarm-* only), `status` and `readme` (each with delivers_today / does_not_deliver — STATUS.md preferred, README.md fallback if STATUS is empty), `proposals[]` ({file, title, status, maturity, last_reviewed}), `proposals_index` (verbatim docs/proposals/README.md). Trust those values verbatim.
 
       Fan-out plan:
-        1. For each entry in `skills[]` (subject to $ARGUMENTS filter), dispatch ONE `agent` toolcall using SKILL TEMPLATE below.
+        1. For each entry in `skills[]` (subject to ${{ inputs.filter }} filter), dispatch ONE `agent` toolcall using SKILL TEMPLATE below.
         2. ALSO dispatch ONE agent for claims + proposals using CLAIMS TEMPLATE below.
         3. Issue all `agent` toolcalls in parallel; do not serialise.
         4. After all subagents return, consolidate their summaries into a single drift table — see TABLE SHAPE.
@@ -116,13 +117,12 @@ nodes:
 
   review:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: audit
-    goal_gate: true
-    retry_target: audit
-    max_cost_usd: 0.80
-    allowed_tools: [read]
+    model: claude-sonnet-4-6
+    thread: audit
+    retry: audit
+    max-retries: 2
+    allowed-tools: [read]
+    max-cost: 0.80
     prompt: |
       Judge the drift table for completeness and evidence quality. You are the goal-gate: this run does not advance unless you APPROVE.
 
@@ -135,13 +135,3 @@ nodes:
       If the table passes, reply with EXACTLY one line: `APPROVE`.
 
       If it fails, call the `abort` tool with reason `REJECT: <one-line reason>`.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: collect}
-  - {from: collect, to: exit, outcome: fail}
-  - {from: collect, to: audit}
-  - {from: audit, to: exit, outcome: fail}
-  - {from: audit, to: review}
-  - {from: review, to: exit}

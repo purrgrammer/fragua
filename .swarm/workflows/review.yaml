@@ -1,59 +1,49 @@
 # review.yaml — multi-lens code review with parallel sub-agents.
 #
 # PRECONDITION for PR / branch inputs: working tree must be clean. The scope
-# node will `gh pr checkout <n>` (or `git checkout <branch>`) so lenses can
+# step will `gh pr checkout <n>` (or `git checkout <branch>`) so lenses can
 # read files on disk directly. If the tree is dirty, scope aborts with a
 # suggestion to commit / stash. After the run, your checkout will be on the
 # PR / target branch — `git checkout -` to return.
 #
-# scope:      resolves $ARGUMENTS into TARGET / PATHS / LOC / FOCUS / CONTEXT
-#             / CHECKOUT; checks out PR/branch when applicable; CHECKOUT
-#             surfaces the side-effect so the operator sees it.
+# scope:      resolves `target:` into TARGET / PATHS / LOC / FOCUS / CONTEXT /
+#             CHECKOUT; checks out PR/branch when applicable.
 # dispatch:   fans out four named lens agents in parallel — lens-correctness
-#             / lens-security / lens-performance / lens-architecture (see
-#             .agents/agents/lens-*.md). Stops at LENSES_DONE.
+#             / lens-security / lens-performance / lens-architecture.
 # synthesize: reads the lens results off the shared thread, dedupes, ranks,
 #             and emits the final review (severity sections + next steps).
 # verify:     goal-gate. Spot-checks evidence + severity calibration. REJECT
-#             retargets synthesize (lens results are still in the thread, no
-#             dispatch re-run).
+#             retargets synthesize (lens results are still in the thread).
 #
-# All four nodes share `thread_id: review`. Only `synthesize` runs on opus +
-# reasoning_effort=high; everything else stays on sonnet. The four lens
-# profiles set their own model in frontmatter — correctness/security on
-# opus, performance/architecture on sonnet.
-#
-# Input forms ($ARGUMENTS resolved by the `scope` node):
+# Input forms:
 #   - empty                             → uncommitted changes (`git diff HEAD`)
-#   - "<commitish>"                     → e.g. "HEAD~3..HEAD", a sha, "main..feature"
-#   - "<path-or-glob>"                  → e.g. "packages/server/src", "src/auth.ts"
-#   - "PR <n>" / "<branch>"             → checks out branch, diff vs base
-#   - any of the above + free-text hint → e.g. "src/auth.ts focus on session handling"
-#
-# Examples:
-#   bun run swarm run review
-#   bun run swarm run review --input="HEAD~5..HEAD"
-#   bun run swarm run review --input="packages/server/src/store"
-#   bun run swarm run review --input="feat/oauth focus on token storage"
+#   - "<commitish>"                     → e.g. "HEAD~3..HEAD", a sha
+#   - "<path-or-glob>"                  → e.g. "packages/server/src"
+#   - "PR <n>" / "<branch>"             → checks out, diff vs base
+#   - any of the above + free-text hint → e.g. "src/auth.ts focus on session"
 
 name: review
 goal: Multi-lens code review (correctness, security, performance, architecture) with deduped, ranked synthesis and an evidence-quality gate.
-label: review
-budget_usd: 2.50
-max_goal_gate_retries: 2
+budget: 2.50
 
-nodes:
-  start: {type: start}
+inputs:
+  target:
+    type: string
+    default: ""
+    description: PR number, branch, path, commitish, or free-form hint
 
+defaults:
+  provider: anthropic
+  model: claude-sonnet-4-6
+
+steps:
   scope:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: review
-    allowed_tools: [read, grep, find, bash]
-    max_cost_usd: 0.30
+    thread: review
+    allowed-tools: [read, grep, find, bash]
+    max-cost: 0.30
     prompt: |
-      Determine review target from $ARGUMENTS and prep the tree.
+      Determine review target from `${{ inputs.target }}` and prep the tree.
 
       Classify into: DIFF <base>..<head> | FILES <paths> | UNCOMMITTED. Defaults: empty→UNCOMMITTED, ref/range/sha→DIFF, path/glob→FILES, 'PR <n>'/branch→DIFF (with checkout).
 
@@ -74,11 +64,9 @@ nodes:
 
   dispatch:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: review
-    allowed_tools: [agent]
-    max_cost_usd: 1.20
+    thread: review
+    allowed-tools: [agent]
+    max-cost: 1.20
     prompt: |
       Dispatch the four lenses against the scope resolved above.
 
@@ -93,12 +81,11 @@ nodes:
 
   synthesize:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-opus-4-7
-    reasoning_effort: high
-    thread_id: review
-    allowed_tools: [read]
-    max_cost_usd: 0.60
+    model: claude-opus-4-7
+    effort: high
+    thread: review
+    allowed-tools: [read]
+    max-cost: 0.60
     prompt: |
       Integrate the four lens results into a single ranked code review — emit it verbatim as your reply. Use exactly these headings:
 
@@ -136,13 +123,11 @@ nodes:
 
   verify:
     type: llm
-    llm_provider: anthropic
-    llm_model: claude-sonnet-4-6
-    thread_id: review
-    goal_gate: true
-    retry_target: synthesize
-    allowed_tools: [read, grep]
-    max_cost_usd: 0.30
+    thread: review
+    retry: synthesize
+    max-retries: 2
+    allowed-tools: [read, grep]
+    max-cost: 0.30
     prompt: |
       Evidence-quality gate for the code review. Judge it on its own merits.
 
@@ -157,15 +142,3 @@ nodes:
       If all three pass, reply with EXACTLY: `APPROVE`.
 
       If any fail, call the `abort` tool with reason `REJECT: <one-line summary of the worst violation>`.
-
-  exit: {type: exit}
-
-edges:
-  - {from: start, to: scope}
-  - {from: scope, to: exit, outcome: fail}
-  - {from: scope, to: dispatch}
-  - {from: dispatch, to: exit, outcome: fail}
-  - {from: dispatch, to: synthesize}
-  - {from: synthesize, to: exit, outcome: fail}
-  - {from: synthesize, to: verify}
-  - {from: verify, to: exit}
