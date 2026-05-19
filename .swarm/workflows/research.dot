@@ -19,10 +19,9 @@
 //   start → research → synthesize → done
 //
 // Both nodes share `thread_id="research"`. Research emits only a
-// brief manifest as its assistant text; synthesise loads
-// `fidelity=full` so the prior thread (with web_fetch tool results
-// carrying the raw markdown) is in its context — no markdown
-// duplication into output tokens.
+// brief manifest as its assistant text; synthesise hydrates the full
+// shared thread (with web_fetch tool results carrying the raw markdown)
+// into its context — no markdown duplication into output tokens.
 //
 // research:
 //   - Has access to web_fetch only.
@@ -33,15 +32,14 @@
 //     synthesise reads via the shared thread.
 //
 // synthesize:
-//   - No tools, fidelity=full — sees research's web_fetch tool
-//     results in its context.
+//   - No tools; shares `thread_id="research"` so it sees research's
+//     web_fetch tool results in its context.
 //   - Produces the final answer with `[#N]` citations.
 
 digraph research {
   graph [
     goal             = "Fetch a set of URLs supplied in $ARGUMENTS, extract material relevant to the user's question, and synthesise a unified answer with inline citations."
     label            = "research"
-    default_fidelity = "compact"
     budget_usd       = 0.50
     model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
   ]
@@ -58,7 +56,6 @@ digraph research {
   synthesize [
     prompt = "Answer the user's question using the web_fetch tool results — they carry the FULL raw markdown of each fetched URL and are the highest-fidelity content available. The manifest gives the canonical URL ordering for citations.\n\nProcedure:\n  1. Read every web_fetch tool-result carefully.\n  2. Cross-reference: where do sources agree? disagree? what's only in one source?\n  3. Write the final reply in the shape below. Emit it verbatim — no file writes, no preamble, no postscript.\n\n# Answer\n\n## TL;DR\nOne short paragraph (3-5 sentences) answering the question directly. State confidence — high if multiple sources align, medium if one source carries the load, low if sources conflict or coverage is thin.\n\n## Detail\nThe full answer in prose, organised by sub-topic rather than by source. Cite sources inline as `[#N]` matching the URL ordering in the manifest; multiple citations as `[#1, #3]`. Quote source-specific terms verbatim when precision matters — you have the raw markdown so quotation is honest.\n\n## Sources\nA numbered list reproducing each URL from the manifest:\n  1. <URL>\n  2. <URL>\n  ...\n\nWriting rules:\n  - Cite. Every non-trivial claim must point to at least one source by [#N].\n  - Don't fabricate. If the sources don't cover something the question asks about, say so — 'sources don't address X'.\n  - Don't synthesise from absence. If only one source says something, attribute it; don't promote a single-source claim to a consensus.\n  - Be terse. The TL;DR is the headline; the Detail section earns its length only by adding cross-source insight."
     thread_id        = "research"
-    fidelity         = "full"
     allowed_tools    = ""
     reasoning_effort = "medium"
     max_cost_usd     = 0.20

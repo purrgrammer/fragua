@@ -197,7 +197,7 @@ export function buildFrameworkBlocks({
 
 /** Assemble the final system prompt for a single agent call. Isolated from
  * the backend so tests can round-trip the combinator without standing up
- * pi-agent-core, and so the fidelity/cache layer in `./fidelity.ts` can
+ * pi-agent-core, and so the thread/cache layer in `./thread.ts` can
  * compose it without duplicating the merge rules. */
 export function buildSystemPrompt({
   global,

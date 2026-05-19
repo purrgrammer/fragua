@@ -251,7 +251,7 @@ export const webFetchTool: Tool<WebFetchArgs, Record<string, unknown>> = {
       return errorResult("internal: summariser unset reached the summarise branch");
     }
     const summarisation = await ctx.summarise({
-      purpose: "fidelity",
+      purpose: "thread",
       input: markdown,
       run_id: ctx.runId,
       workflow_sha: "",

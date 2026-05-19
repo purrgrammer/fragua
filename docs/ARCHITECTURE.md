@@ -1197,7 +1197,7 @@ packages/
       engine/
         edge-selection.ts              ← two-case algorithm: route-case | outcome-case (SPEC §3.6)
         retry-policy.ts                ← per-node retry counter (§3.6)
-        fidelity.ts                    ← fidelity + thread_id resolution
+        thread.ts                      ← thread_id resolution
         substitution.ts                ← $ARGUMENTS only (SPEC §3.8)
       types/
         execution.ts                   ← ExecutionEnvironment interface
@@ -1223,7 +1223,7 @@ packages/
       backend.ts                       ← PiCodergenBackend (pi-agent-core)
       handler-bridge.ts                ← makeCodergenHandler (CodergenBackend → HandlerSpec)
       summariser.ts                    ← PiSummariserBackend
-      fidelity.ts                      ← buildFidelitySeed (summariser-backed)
+      thread.ts                        ← buildSummarySeed (summariser-backed)
       event-bridge.ts                  ← pi-agent AgentEvent → swarm EventType
       tool-adapter.ts                  ← swarm Tool → pi AgentTool
       message-store.ts                 ← in-process per-thread transcript cache

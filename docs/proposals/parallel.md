@@ -50,7 +50,7 @@ The shipped patches (`292267b` durationMs stamp, `a4739fc` summary aggregation) 
 - Branches can be **multi-node subgraphs** (`component -> nodeA -> nodeB -> tripleoctagon`).
 - **HITL inside a branch works** — one branch pauses without aborting siblings; operator resumes; rest of run unaffected.
 - **Per-branch retry across the subgraph** — `outcomeStatus="retry"` on any branch node behaves identically to a top-level retry.
-- **Per-branch budgets / watchdog / fidelity / provider-retry** — automatic, inherited from the same machinery top-level nodes use.
+- **Per-branch budgets / watchdog / thread / provider-retry** — automatic, inherited from the same machinery top-level nodes use.
 
 ## Decision
 

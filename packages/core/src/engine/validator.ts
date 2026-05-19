@@ -24,7 +24,7 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "system_prompt",
   "llm_model",
   "llm_provider",
-  "fidelity",
+  "summary",
   "thread_id",
   "goal_gate",
   "max_retries",
@@ -37,7 +37,6 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
   "max_ms",
   "idle_timeout",
   "reasoning_effort",
-  "context",
   "allowed_tools",
   "denied_tools",
   "context_files",
@@ -59,7 +58,6 @@ const KNOWN_NODE_ATTRS: ReadonlySet<string> = new Set([
 /** Whitelist of known edge attribute names. See KNOWN_NODE_ATTRS. */
 const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set([
   "label",
-  "fidelity",
   "thread_id",
   "loop_restart",
   "outcome",
@@ -70,7 +68,6 @@ const KNOWN_EDGE_ATTRS: ReadonlySet<string> = new Set([
 const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
   "goal",
   "label",
-  "default_fidelity",
   "default_max_retries",
   "default_max_retry", // attractor §2.5 legacy alias
   "default_retry_policy",
@@ -85,7 +82,7 @@ const KNOWN_GRAPH_ATTRS: ReadonlySet<string> = new Set([
 ]);
 
 const ATTRACTOR_ONLY_EDGE_ATTRS: ReadonlyMap<string, string> = new Map([
-  ["loop_restart", "swarm's fidelity model (per-edge truncate/compact/summary) supersedes the run-restart use case"],
+  ["loop_restart", "swarm's thread model (thread_id + per-node summary=) supersedes the run-restart use case"],
 ]);
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -242,29 +239,25 @@ export function validate(graph: Graph, opts: ValidateOptions = {}): Diagnostic[]
     }
   }
 
-  // W010: fidelity value not recognised. Falls back to "compact" at
-  // runtime; W010 surfaces typos like "compcat".
-  const VALID_FIDELITY = new Set(["full", "truncate", "compact", "summary:low", "summary:medium", "summary:high"]);
+  // E027: summary= requires thread_id. Summarising nothing makes no sense —
+  // fresh nodes have no prior thread to compress. Value-set validation is
+  // parser-side via ENUM_KEYS (low|medium|high), so by the time we reach
+  // here `summary` is already one of the three valid levels.
   for (const n of nodes) {
-    const f = n.attrs.fidelity;
-    if (typeof f === "string" && (f as string) !== "" && !VALID_FIDELITY.has(f as string)) {
-      diags.push({
-        severity: "warning",
-        code: "W010",
-        message: `node "${n.id}" fidelity="${f}" is not a known mode (full|truncate|compact|summary:low|summary:medium|summary:high)`,
-        nodeId: n.id,
-        ...(n.loc !== undefined ? { loc: n.loc } : {}),
-      });
-    }
-  }
-  {
-    const df = graph.attrs.default_fidelity;
-    if (typeof df === "string" && (df as string) !== "" && !VALID_FIDELITY.has(df as string)) {
-      diags.push({
-        severity: "warning",
-        code: "W010",
-        message: `graph default_fidelity="${df}" is not a known mode`,
-      });
+    const s = n.attrs.summary;
+    if (typeof s === "string" && (s as string) !== "") {
+      const hasNodeThread = typeof n.attrs.thread_id === "string" && (n.attrs.thread_id as string) !== "";
+      const hasGraphThread =
+        typeof graph.attrs.thread_id === "string" && (graph.attrs.thread_id as string) !== "";
+      if (!hasNodeThread && !hasGraphThread) {
+        diags.push({
+          severity: "error",
+          code: "E027",
+          message: `node "${n.id}" sets summary="${s}" but has no thread_id — summarising nothing has no effect`,
+          nodeId: n.id,
+          ...(n.loc !== undefined ? { loc: n.loc } : {}),
+        });
+      }
     }
   }
 

@@ -1,7 +1,6 @@
 export * from "./backend.ts";
 export * from "./credentials/index.ts";
 export * from "./event-bridge.ts";
-export * from "./fidelity.ts";
 export * from "./handler-bridge.ts";
 export * from "./message-store.ts";
 export * from "./mock.ts";
@@ -9,5 +8,6 @@ export type { SteerableAgent } from "./steering-registry.ts";
 export { SteeringRegistry } from "./steering-registry.ts";
 export * from "./summariser.ts";
 export * from "./system-prompt.ts";
+export * from "./thread.ts";
 export * from "./tool-adapter.ts";
 export * from "./workflow-model-validator.ts";

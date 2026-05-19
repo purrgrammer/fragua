@@ -108,16 +108,17 @@ export function makeCodergenHandler(opts: MakeCodergenHandlerOpts): HandlerSpec 
     // that are already in the messages table. This is the daemon-
     // restart path — in-process MessageStore is empty but the DB has
     // the pre-crash transcript. The backend compares the size of this
-    // load against its `inProcessWrites` set to decide whether to
-    // apply SPEC §3.6 degrade on fidelity=full.
+    // load against its `inProcessWrites` set to decide whether the
+    // dispatch is a post-restart resume.
     const priorMessages = threadId ? loadPriorMessagesForThread(ctx, threadId) : undefined;
 
+    const summary = node.attrs.summary;
     const outcome: Outcome = await backend.run({
       node,
       prompt,
       ...(graphGoal !== undefined ? { goal: graphGoal } : {}),
       thread_id: threadId,
-      fidelity: (node.attrs.fidelity ?? "full") as NonNullable<Node["attrs"]["fidelity"]>,
+      ...(summary !== undefined ? { summary } : {}),
       signal: ctx.signal,
       run_id: ctx.runId,
       workflow_sha: "",

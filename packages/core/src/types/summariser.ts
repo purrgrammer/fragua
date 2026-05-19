@@ -5,24 +5,24 @@
 // 1. Summarisation runs on a different (cheaper) model than the node
 //    being summarised — exposing it as its own port makes that swap
 //    explicit rather than implicit.
-// 2. It's invoked by both `execute()` (run title) and backends
-//    (fidelity=summary:medium/high), so it lives in core so both sides
-//    can depend on it.
+// 2. It's invoked by both `execute()` (run title) and llm-node backends
+//    (per-node `summary=low|medium|high`), so it lives in core so both
+//    sides can depend on it.
 // 3. It has its own event surface (summary.started / summary.completed /
 //    cost.recorded under a synthetic node id) — keeping the contract
 //    narrow makes that surface enforceable.
 
 import type { EventType } from "./events.ts";
-import type { FidelityMode } from "./fidelity.ts";
+import type { SummaryLevel } from "./summary.ts";
 
-export type SummaryPurpose = "title" | "fidelity";
+export type SummaryPurpose = "title" | "thread";
 
 /** Input to a single summariser call. The caller constructs this per
  * invocation — there's no persistent state on the backend. */
 export interface SummariseInput {
   purpose: SummaryPurpose;
   /** Raw text to summarise. For `purpose="title"` this is the user's
-   * `$ARGUMENTS`; for `purpose="fidelity"` this is a pre-digest of the
+   * `$ARGUMENTS`; for `purpose="thread"` this is a pre-digest of the
    * prior transcript (role census + last N messages). Summariser impls
    * must accept arbitrary length and clip/chunk internally. */
   input: string;
@@ -34,15 +34,15 @@ export interface SummariseInput {
   /** Workflow sha, for the event envelope. */
   workflow_sha: string;
   /** Where the event should say it originated. For `purpose="title"` this
-   * is `__summary.title`. For `purpose="fidelity"` it's
+   * is `__summary.title`. For `purpose="thread"` it's
    * `__summary.<caller_node_id>` (+ `#<iter>` when inside a loop). */
   synthetic_node_id: string;
-  /** Real caller — only set for `purpose="fidelity"`. Surfaced on
+  /** Real caller — only set for `purpose="thread"`. Surfaced on
    * summary.started / summary.completed so UIs can link the synthetic
    * step to the real node that asked for it. */
   caller_node_id?: string;
   iteration?: { n: number; max: number };
-  fidelity?: FidelityMode;
+  summary?: SummaryLevel;
   /** Optional per-call cap on the output length in tokens. Defaults to
    * the backend's `default_max_output_tokens`. */
   max_output_tokens?: number;
@@ -95,7 +95,7 @@ export function titleSyntheticNodeId(): string {
   return `${SYNTHETIC_NODE_PREFIX}.title`;
 }
 
-export function fidelitySyntheticNodeId(callerNodeId: string, iteration?: { n: number }): string {
+export function summarySyntheticNodeId(callerNodeId: string, iteration?: { n: number }): string {
   const base = `${SYNTHETIC_NODE_PREFIX}.${callerNodeId}`;
   return iteration ? `${base}#${iteration.n}` : base;
 }

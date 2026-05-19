@@ -2,7 +2,8 @@
 //
 // One token: `$ARGUMENTS` — the run's input string (CLI positional or
 // POST /runs body). Cross-node data transfer happens through shared
-// threads + fidelity (SPEC §3.3), not through prompt substitution.
+// thread_id + optional per-node summary= (SPEC §3.3), not through
+// prompt substitution.
 //
 // Shell-safe mode wraps the substituted value in single quotes, escaping
 // embedded quotes per POSIX (close quote, escaped quote, reopen).

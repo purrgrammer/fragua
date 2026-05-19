@@ -459,7 +459,7 @@ describe("SqliteStore — appendObservabilityEvents", () => {
     store.close();
   });
 
-  test("truncation preserves provider / model / thread_id / fidelity on llm.start", async () => {
+  test("truncation preserves provider / model / thread_id / summary on llm.start", async () => {
     // Without these fields the step inspector can't render the model
     // name, look up the context window, or join back to the right
     // thread — and the screenshot bug was: long-prompt steps showed up
@@ -476,7 +476,7 @@ describe("SqliteStore — appendObservabilityEvents", () => {
           provider: "ppq",
           model: "claude-sonnet-4.6",
           thread_id: "dev",
-          fidelity: "compact",
+          summary: "medium",
           prompt: huge,
           system_prompt: huge,
         },
@@ -490,7 +490,7 @@ describe("SqliteStore — appendObservabilityEvents", () => {
     expect(payload["provider"]).toBe("ppq");
     expect(payload["model"]).toBe("claude-sonnet-4.6");
     expect(payload["thread_id"]).toBe("dev");
-    expect(payload["fidelity"]).toBe("compact");
+    expect(payload["summary"]).toBe("medium");
     // Loop iteration object survives in its `{ n, max }` shape.
     expect(payload["iteration"]).toEqual({ n: 1, max: 3 });
     // Bulky fields are still dropped.

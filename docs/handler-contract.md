@@ -41,7 +41,7 @@ The context object the executor hands to every handler. The fields below are the
 
 ### `ctx.args: Readonly<Record<string, string>>`
 
-Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. The only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Cross-node data transfer happens through shared threads + fidelity (SPEC §3.3), not through prompt substitution.
+Substitution args for prompt templating. Passed to `substitute()` before the prompt hits the LLM. The only key is `$ARGUMENTS`, sourced from `run_state.routing.input` (the CLI positional or `POST /runs` body). Cross-node data transfer happens through shared `thread_id` (SPEC §3.3), with optional per-node `summary=low|medium|high` for compression, not through prompt substitution.
 
 ### `ctx.emit(type, payload): void`
 
@@ -240,7 +240,7 @@ Declare your handler's risk level on the spec:
 ### 4. No state outside the projection
 `ctx.routing` is the only cross-turn state surface, fed by the intent fold (budget overrides, max_retries adjustments, priority). A handler that stashes data on `this`, a module-level `Map`, or a file will silently lose it on daemon restart. If you need to surface data that another turn must read, write it to:
 
-- **Messages** (`ctx.messages.append`) when downstream nodes share a thread — the next turn loads the prior conversation via fidelity (full / compact / summary).
+- **Messages** (`ctx.messages.append`) when downstream nodes share a thread — the next turn loads the raw prior conversation by default, or a summariser-compressed view when the receiving node sets `summary=low|medium|high`.
 - **Artifacts** (`ctx.artifacts.put(key, content)`) for blob-shaped output — 16MB max, deduplicated by sha256, addressable by `(run, node, iteration, key)`.
 
 ---

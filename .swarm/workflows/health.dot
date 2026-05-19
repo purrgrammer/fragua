@@ -14,7 +14,6 @@ digraph health {
   graph [
     goal             = "Snapshot operational health of the swarm event store and narrate the OK/WATCH/ALERT verdicts."
     label            = "health"
-    default_fidelity = "compact"
     model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-haiku-4-5; }"
   ]
 

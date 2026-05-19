@@ -207,7 +207,7 @@ If you're wiring a new event type, decide which lane it's on **before** writing 
 
 ### Payload cap
 
-Observability event payloads are capped at 4KB (`length(payload) < 4096`). Oversized payloads are replaced with `truncationMarker(...)` which preserves routing fields (`nodeId`, `iteration`, `content_index`, plus `provider`, `model`, `fidelity`, `thread_id` for `llm.start`). Full LLM content is reconstructable from the `messages` table (uncapped). When you add a high-value, low-bytes field to an observability event, also add it to the truncation marker — otherwise it will randomly disappear on long prompts.
+Observability event payloads are capped at 4KB (`length(payload) < 4096`). Oversized payloads are replaced with `truncationMarker(...)` which preserves routing fields (`nodeId`, `iteration`, `content_index`, plus `provider`, `model`, `summary`, `thread_id` for `llm.start`). Full LLM content is reconstructable from the `messages` table (uncapped). When you add a high-value, low-bytes field to an observability event, also add it to the truncation marker — otherwise it will randomly disappear on long prompts.
 
 ---
 

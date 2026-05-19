@@ -6,9 +6,9 @@ import type { AgentMessage } from "@swarm/types";
 import type { BudgetSnapshotInput } from "../handler/types.ts";
 import type { EventType } from "../types/events.ts";
 import type { ExecutionEnvironment } from "../types/execution.ts";
-import type { FidelityMode } from "../types/fidelity.ts";
 import type { Node } from "../types/graph.ts";
 import type { Outcome } from "../types/outcome.ts";
+import type { SummaryLevel } from "../types/summary.ts";
 
 export type { BudgetSnapshotInput };
 
@@ -23,7 +23,11 @@ export interface CodergenInput {
    * framing. Optional; absent for graphs with no `goal=`. */
   goal?: string;
   thread_id: string | undefined;
-  fidelity: FidelityMode;
+  /** Optional thread-summary level. Requires `thread_id` to be set; when
+   * present, the backend invokes the summariser on the prior thread
+   * before the node sees it (low/medium/high cap the output tokens).
+   * When absent on a threaded node, the raw thread is hydrated. */
+  summary?: SummaryLevel;
   signal: AbortSignal;
   run_id: string;
   workflow_sha: string;
@@ -36,8 +40,8 @@ export interface CodergenInput {
   /** Persisted prior transcript for this (runId, threadId), loaded
    * from the messages table by the handler-bridge. When set and
    * non-empty, the backend treats it as the authoritative history — it
-   * overrides the in-process MessageStore cache. This is how
-   * `fidelity=full` survives a daemon restart: the in-memory cache is
+   * overrides the in-process MessageStore cache. This is how a
+   * threaded node survives a daemon restart: the in-memory cache is
    * empty after restart but the messages table still has the rows. */
   priorMessages?: readonly AgentMessage[];
   /** Sink for persisting LLM-visible messages as they complete. The

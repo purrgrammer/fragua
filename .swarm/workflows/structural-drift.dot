@@ -29,7 +29,6 @@ digraph structural_drift {
   graph [
     goal                  = "Cross-reference contract code surfaces against the docs that describe them; emit a severity-grouped findings table for the rollup to consume."
     label                 = "structural-drift"
-    default_fidelity      = "compact"
     budget_usd            = 5.00
     budget_policy         = "warn"
     max_goal_gate_retries = 2
@@ -55,7 +54,6 @@ digraph structural_drift {
 
   review [
     thread_id     = "drift"
-    fidelity      = "full"
     goal_gate     = true
     retry_target  = "drift"
     max_cost_usd  = 0.80

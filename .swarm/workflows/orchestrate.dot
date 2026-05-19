@@ -13,7 +13,6 @@ digraph orchestrate {
   graph [
     goal             = "Decompose a task, dispatch to named or ad-hoc sub-agents, synthesize."
     label            = "orchestrate"
-    default_fidelity = "compact"
     budget_usd       = 5.00
     budget_policy    = "stop"
     model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-opus-4-7; }"
@@ -33,7 +32,6 @@ digraph orchestrate {
     prompt        = "Synthesize a final answer from the sub-agent results. Reconcile conflicts; write ONE unified answer that addresses $ARGUMENTS. Don't list reports — produce a unified result."
     allowed_tools = ""
     thread_id     = "orchestrate"
-    fidelity      = "full"
     max_cost_usd  = 1.50
   ]
 

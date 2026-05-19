@@ -1,6 +1,6 @@
 // Graph model: Nodes, Edges, and the Graph itself. See docs/SPEC.md §3.1.
 
-import type { FidelityMode } from "./fidelity.ts";
+import type { SummaryLevel } from "./summary.ts";
 
 /** Node shapes, each mapping to a handler. Loops are backward conditional
  * edges bounded by `max_retries` on the target node (SPEC §3.6 / §5.2);
@@ -36,8 +36,6 @@ export const SHAPE_TO_KIND = {
   parallelogram: "tool",
 } as const satisfies Partial<Record<NodeShape, NodeKind>>;
 
-export type ContextMode = "fresh" | "shared";
-
 /** Attribute values that survive DOT parsing + coercion. */
 type AttrScalar = string | number | boolean | string[];
 
@@ -56,7 +54,11 @@ export interface NodeAttrs {
   llm_model?: string;
   /** Provider key (attractor §2.6). E.g. `anthropic`, `openai`. */
   llm_provider?: string;
-  fidelity?: FidelityMode;
+  /** Summarise the prior thread before this node sees it. Requires
+   * `thread_id` to be set (validator enforces). Three levels map to
+   * summariser output-token caps (low ~300 / medium ~700 / high ~1500).
+   * Without `summary=`, a node on a thread sees the full raw history. */
+  summary?: SummaryLevel;
   thread_id?: string;
   goal_gate?: boolean;
   max_retries?: number;
@@ -82,7 +84,6 @@ export interface NodeAttrs {
   max_ms?: number;
   idle_timeout?: number;
   reasoning_effort?: "low" | "medium" | "high";
-  context?: ContextMode;
   allowed_tools?: string[];
   denied_tools?: string[];
   /** Files read from the target project root and prepended to the agent's
@@ -130,7 +131,6 @@ export interface NodeAttrs {
 
 export interface EdgeAttrs {
   label?: string;
-  fidelity?: FidelityMode;
   thread_id?: string;
   /** Outcome-keyed edge — selected when the source node's last fact reports
    * this outcome. Phase 1: parsed and validated, no runtime selection effect
@@ -146,7 +146,6 @@ export interface EdgeAttrs {
 export interface GraphAttrs {
   goal?: string;
   label?: string;
-  default_fidelity?: FidelityMode;
   default_max_retries?: number;
   /** Default retry preset for nodes that omit `retry_policy`. Falls back
    * to "none" when unset. */

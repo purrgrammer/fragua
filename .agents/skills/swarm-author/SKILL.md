@@ -98,28 +98,30 @@ Workflows live in two places, resolved in this order:
 
 A node's input comes from one of two places. Pick consciously per node.
 
-### Shared thread + fidelity (continuity)
+### Shared thread (continuity)
 
 Two nodes with the same `thread_id="…"` share an LLM conversation. The downstream node sees the upstream's reply as a regular assistant message in its context — no substitution, no copy-paste. The data is naturally present.
 
-The downstream node controls how much of that conversation it sees via `fidelity=`:
+By default the downstream node sees the **raw prior transcript**. To compress instead, set `summary=low|medium|high` on the receiving node: a summariser call produces a narrative replacing the raw turns. Use when the thread is long enough that token cost matters more than verbatim recall.
 
-| Mode | Meaning |
+| Knob | Meaning |
 |---|---|
-| `full` | The complete prior transcript. Default for evaluators / reviewers that need every turn. |
-| `compact` | Compact replay format (default for most nodes). Cheaper than full; tool result content is preserved. |
-| `truncate` | Headers + tail only. |
-| `summary:low\|medium\|high` | A summariser-generated narrative tail in place of the older turns. Use when the thread is long enough that fidelity matters more than verbatim recall. |
+| no `summary=` | Raw transcript (default — full history, verbatim). |
+| `summary=low` | Summariser narrative capped at ~300 output tokens. |
+| `summary=medium` | ~700 output tokens. |
+| `summary=high` | ~1500 output tokens. |
+
+Setting `summary=` without `thread_id` is a validator error (E027) — summarising nothing has no effect.
 
 Idiomatic uses:
 
-- `implement` + `review` share `dev` — the reviewer judges from the conversation, with `fidelity=full` so it sees every diff turn. The implementer's `PLAN_REALISED` block sits in the thread as the last assistant message.
+- `implement` + `review` share `dev` — the reviewer judges from the raw conversation, seeing every diff turn. The implementer's `PLAN_REALISED` block sits in the thread as the last assistant message.
 - `collect` + `audit` + `review` share `audit` — the collector dumps a deterministic JSON snapshot via `bash`; the analyser reads it from the thread; a goal-gate review retargets back to the analyser without re-running the script.
 
 **Split heavy collectors into their own node.** When the first step runs a data-gathering script whose output is large (a `bun .swarm/scripts/foo/collect.ts` dumping JSON), make `collect` a dedicated codergen node with `allowed_tools = "bash"` and the same `thread_id` as the analyser. Two payoffs:
 
 - **Retries don't repay the collector.** When a downstream goal-gate retargets back to the analyser, only the analyser re-runs — `collect` stays put. Without the split, the collector runs every retry and re-dumps the same JSON into the thread, multiplying tokens.
-- **The thread carries the JSON.** The bash tool result lives in the shared thread; the analyser sees it under `fidelity=compact` (tool-result content is preserved) without any substitution. Reference the snapshot by name in the analyser prompt ("the collector snapshot contains …"), not by where it lives ("the prior turn", "$collect.output").
+- **The thread carries the JSON.** The bash tool result lives in the shared thread; the analyser sees it on the raw transcript (tool-result content is preserved) without any substitution. Reference the snapshot by name in the analyser prompt ("the collector snapshot contains …"), not by where it lives ("the prior turn", "$collect.output").
 
 Keep the collect node's prompt minimal — run the script, `abort` on non-zero exit, otherwise reply `collected`. It does almost nothing; pin it to your cheapest tier via an id-selector in the stylesheet (`#collect { llm_model: …; }`). Don't ask it to summarise: the analyser reasons over the JSON itself.
 
@@ -133,7 +135,7 @@ When the source of truth is the environment, re-derive. It's cheaper than thread
 
 ### Prompt substitution
 
-Exactly one token expands in node `prompt` and `tool_command` strings: `$ARGUMENTS` — the run's `--input` (CLI positional or `POST /runs` body). Cross-node data transfer is **not** a substitution surface; use a shared thread + fidelity.
+Exactly one token expands in node `prompt` and `tool_command` strings: `$ARGUMENTS` — the run's `--input` (CLI positional or `POST /runs` body). Cross-node data transfer is **not** a substitution surface; use a shared `thread_id` (optionally with `summary=` for compression).
 
 ---
 

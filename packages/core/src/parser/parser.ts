@@ -427,6 +427,7 @@ const ENUM_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["budget_policy", new Set(["warn", "stop", "pause"])],
   ["outcome", new Set(["success", "fail"])],
   ["kind", new Set(["codergen", "tool", "human"])],
+  ["summary", new Set(["low", "medium", "high"])],
 ]);
 
 function coerceScalar(key: string, raw: string | number | boolean): string | number | boolean | string[] | undefined {

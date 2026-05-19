@@ -65,7 +65,6 @@ describe("PiCodergenBackend — cancel signal (fetch wedged)", () => {
             node: { id: "n", shape: "box", attrs: {}, classes: [] },
             prompt: "do work",
             thread_id: undefined,
-            fidelity: "compact",
             signal: controller.signal,
             run_id: "test-cancel-stuck",
             workflow_sha: "sha",

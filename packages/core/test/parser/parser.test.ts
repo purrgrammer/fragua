@@ -68,8 +68,8 @@ describe("parseDotSource", () => {
   });
 
   test("graph attr block", () => {
-    const g = parseDotSource(`digraph { graph [default_fidelity="compact"] }`);
-    expect(g.attrs.default_fidelity).toBe("compact");
+    const g = parseDotSource(`digraph { graph [budget_policy="warn"] }`);
+    expect(g.attrs.budget_policy).toBe("warn");
   });
 
   test("boolean coercion: goal_gate=true", () => {
@@ -165,9 +165,18 @@ describe("parseDotSource", () => {
     expect(g.edges[0]!.from).toBe("hello world");
   });
 
-  test("fidelity attribute preserved", () => {
-    const g = parseDotSource(`digraph { a -> b [fidelity="summary:medium"] }`);
-    expect(g.edges[0]!.attrs.fidelity).toBe("summary:medium");
+  test("summary attribute accepted as enum on nodes", () => {
+    const g = parseDotSource(`digraph { a [thread_id="x", summary="medium"]; a -> b }`);
+    expect(g.nodes["a"]!.attrs.summary).toBe("medium");
+  });
+
+  test("summary rejects unknown values at parse time", () => {
+    try {
+      parseDotSource(`digraph { a [summary="huge"] }`);
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ParseError);
+    }
   });
 
   test("malformed parse throws ParseError with position", () => {

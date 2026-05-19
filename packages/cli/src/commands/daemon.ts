@@ -188,9 +188,9 @@ export async function daemonCommand(opts: DaemonCommandOptions = {}): Promise<nu
 
   // Shared summariser — one PiSummariserBackend per daemon process, used
   // by BOTH the AutoTitler (run-title generation) AND every codergen
-  // backend's `fidelity=summary:medium/high` path. Without reuse the
-  // fidelity path has no backend wired and degrades to the deterministic
-  // `summary:low` template with a soft warning (visible in events.jsonl).
+  // backend's per-node `summary=low|medium|high` path. Without reuse the
+  // summary path has no backend wired and degrades to a deterministic
+  // role-census + tail template with a soft warning (visible in events.jsonl).
   const summariserInfo = buildSummariserBackend({
     config,
     primaryProvider: provider,
@@ -537,10 +537,10 @@ interface SummariserInfo {
 }
 
 /** Construct the shared `PiSummariserBackend` used by AutoTitler + every
- * codergen backend's fidelity=summary:* path. Returns `{ backend:
+ * codergen backend's per-node `summary=` path. Returns `{ backend:
  * undefined }` when there's no usable provider/model combination — the
  * caller decides how to surface that (AutoTitler disables itself;
- * fidelity paths already warn + fall back to `summary:low`). */
+ * summary paths already warn + fall back to the deterministic template). */
 function buildSummariserBackend(args: {
   config: Awaited<ReturnType<typeof loadConfig>>;
   primaryProvider: string | undefined;
@@ -554,7 +554,7 @@ function buildSummariserBackend(args: {
   if (!sumModel) return { backend: undefined, label: `no default model for ${sumProvider}` };
   // Validate at boot — the summariser's resolveModel throws lazily on
   // first call, which surfaces deep inside whatever path triggered it
-  // (autoTitler / fidelity=summary:*) and looks like a tool failure
+  // (autoTitler / per-node `summary=`) and looks like a tool failure
   // rather than a config error. Catching it here gives the operator
   // one obvious "fix this in config.jsonc" line at startup.
   // `swarm providers` lists valid ids per provider.

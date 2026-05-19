@@ -10,6 +10,12 @@ last-reviewed: 2026-05-06
 > hydration on respawn, and already-completed-transcript detection
 > all landed in `packages/daemon/src/spawn-subagent.ts`. The
 > `subagent.resumed` event (`{reason: "already_completed" |
+>
+> **Doc note (post-shipped).** Body references `fidelity=full` /
+> `FidelityMode` — the runtime knob has since collapsed to "node has
+> a thread_id ⇒ raw hydration; optional `summary=low|medium|high` for
+> a summariser-compressed view." The shipped resilience behaviour is
+> unchanged; only the authoring surface differs.
 > "transcript_hydrated"}`) brackets the resume path; tests in
 > `packages/daemon/test/subagent.test.ts:924,1036` cover both
 > branches. The narrative below is preserved as the design record.

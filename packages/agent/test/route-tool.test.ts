@@ -116,7 +116,6 @@ async function runWithRoute(opts: RunWithRouteOpts): Promise<{
       node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
       prompt: "decide a route",
       thread_id: undefined,
-      fidelity: "compact",
       signal: new AbortController().signal,
       run_id: "test-route-tool",
       workflow_sha: "sha",

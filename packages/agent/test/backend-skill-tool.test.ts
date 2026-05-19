@@ -83,7 +83,6 @@ async function runOnce(opts: {
       node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
       prompt: "load the frontend skill",
       thread_id: undefined,
-      fidelity: "compact",
       signal: new AbortController().signal,
       run_id: "test-skill-wiring",
       workflow_sha: "sha",

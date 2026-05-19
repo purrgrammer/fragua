@@ -1282,7 +1282,7 @@ function truncationMarker(original: unknown, originalBytes: number): Record<stri
     if (typeof src["provider"] === "string") out["provider"] = src["provider"];
     if (typeof src["model"] === "string") out["model"] = src["model"];
     if (typeof src["thread_id"] === "string") out["thread_id"] = src["thread_id"];
-    if (typeof src["fidelity"] === "string") out["fidelity"] = src["fidelity"];
+    if (typeof src["summary"] === "string") out["summary"] = src["summary"];
   }
   return out;
 }

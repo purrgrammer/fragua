@@ -56,7 +56,6 @@ describe("PiCodergenBackend — cancel signal", () => {
           node: { id: "n", shape: "box", attrs: {}, classes: [] },
           prompt: "do work",
           thread_id: undefined,
-          fidelity: "compact",
           signal: controller.signal,
           run_id: "test-cancel",
           workflow_sha: "sha",

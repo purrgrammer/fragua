@@ -25,7 +25,6 @@ digraph narrative_drift {
   graph [
     goal                  = "Audit swarm-* SKILL.md files against the code they document, STATUS.md 'delivers today' claims against reality, and proposal hygiene; surface drift as a findings-only report."
     label                 = "narrative-drift"
-    default_fidelity      = "compact"
     budget_usd            = 4.50
     budget_policy         = "warn"
     max_goal_gate_retries = 2
@@ -50,7 +49,6 @@ digraph narrative_drift {
 
   review [
     thread_id     = "audit"
-    fidelity      = "full"
     goal_gate     = true
     retry_target  = "audit"
     max_cost_usd  = 0.80

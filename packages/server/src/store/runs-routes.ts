@@ -55,7 +55,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
     return c.json(detail);
   });
 
-  // Full-fidelity event log. Returns raw store events as-is (fact.* and
+  // Full event log. Returns raw store events as-is (fact.* and
   // intent.* payloads); the web adapter translates. Uncapped — this is
   // the canonical "give me everything that happened" endpoint, used for
   // ad-hoc debugging (`curl /api/runs/:id/events.json | jq …`) and as
@@ -109,7 +109,7 @@ export function storeRunsRoutes(opts: RunsRoutesOpts): Hono {
   // Optional `?nodeId=` filter for per-thread history; `?sinceOrdinal=`
   // for resume-style pagination. AgentMessage JSON round-trips
   // losslessly — the messages table is the source of truth for
-  // rehydrating prior turns across daemon restarts at fidelity=full.
+  // rehydrating prior turns on threaded nodes across daemon restarts.
   //
   // Returns the *narrow* wire shape: `{ ordinal, nodeId, content }` —
   // `runId` (already pinned by the URL) and `iteration` (unused by the

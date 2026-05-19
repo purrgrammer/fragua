@@ -114,7 +114,7 @@ export const SwarmConfigSchema = Type.Object(
     bootstrapTimeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     defaults: Type.Optional(Defaults),
     // Weak-model summariser. Powers async run-title generation (autoTitle)
-    // and fidelity=summary:medium|high transcript compression. Always
+    // and per-node `summary=low|medium|high` transcript compression. Always
     // cheaper than the primary coding model. Omit to disable both paths.
     summariser: Type.Optional(Summariser),
     // Auto-generated run titles from $ARGUMENTS. true (default) kicks off

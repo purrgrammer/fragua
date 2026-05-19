@@ -282,7 +282,7 @@ export interface StepSnapshot {
   durationMs?: number;
   provider?: string;
   model?: string;
-  fidelity?: string;
+  summary?: string;
   /** Set when this step ran as a branch of a parallel/component fan-out:
    * the parent component's nodeId. Drives the indented child rows under
    * the parent in CostInspector. */

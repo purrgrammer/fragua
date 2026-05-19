@@ -42,7 +42,8 @@ describe("eventsToSteps", () => {
     expect(s.iteration).toEqual({ n: 1, max: 3 });
     expect(s.provider).toBe("openrouter");
     expect(s.model).toBe("anthropic/claude-haiku-4.5");
-    expect(s.fidelity).toBe("compact");
+    // The summary field is undefined when no per-node summary= is set.
+    expect(s.summary).toBeUndefined();
     // `startedAt` anchors to fact.node_started.ts (truthful), not
     // llm.start.ts (pi-agent-core-buffered).
     expect(s.startedAt).toBe(new Date(900_000).toISOString());

@@ -3,7 +3,7 @@
 // titles / narratives as they arrive. Used by:
 //
 //   - execute() to generate the async run title from $ARGUMENTS
-//   - PiCodergenBackend to produce the tail for fidelity=summary:medium/high
+//   - PiCodergenBackend to produce the tail for `summary=low|medium|high`
 //
 // Each call rides as a synthetic node (see @swarm/core/types/summariser.ts).
 // Events are emitted via the `emit` callback on SummariseInput so the
@@ -90,7 +90,7 @@ export class PiSummariserBackend implements SummariserBackend {
         model: this.modelId,
         caller_node_id: input.caller_node_id,
         iteration: input.iteration,
-        fidelity: input.fidelity,
+        summary: input.summary,
       }),
       input.synthetic_node_id,
     );
@@ -188,7 +188,7 @@ export class PiSummariserBackend implements SummariserBackend {
         model: this.modelId,
         caller_node_id: input.caller_node_id,
         iteration: input.iteration,
-        fidelity: input.fidelity,
+        summary: input.summary,
         input_tokens: output.input_tokens,
         output_tokens: output.output_tokens,
         cost_usd: output.cost_usd,
@@ -227,7 +227,7 @@ export class PiSummariserBackend implements SummariserBackend {
         model: this.modelId,
         caller_node_id: input.caller_node_id,
         iteration: input.iteration,
-        fidelity: input.fidelity,
+        summary: input.summary,
         input_tokens: 0,
         output_tokens: 0,
         cost_usd: 0,
@@ -249,7 +249,7 @@ function systemPromptFor(input: SummariseInput): string {
       "Keep it human-readable and specific to the task. Plain English.",
     ].join("\n");
   }
-  // fidelity
+  // thread summary
   return [
     "You produce a compressed summary of a prior conversation between an AI agent and a user.",
     "Preserve: the goal, explicit constraints, decisions already made, open questions, and any file paths / identifiers referenced.",

@@ -117,7 +117,6 @@ async function runWithAbort(opts: {
       node: { id: "n1", shape: "box", attrs: opts.attrs, classes: [] },
       prompt: "do the thing",
       thread_id: undefined,
-      fidelity: "compact",
       signal: new AbortController().signal,
       run_id: "test-abort-tool",
       workflow_sha: "sha",

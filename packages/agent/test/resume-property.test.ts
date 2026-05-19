@@ -1,10 +1,9 @@
-// Property-based tests pinning the "fidelity is invariant across daemon
-// restarts" contract. The prior SPEC §3.6 auto-degrade has been removed;
-// rehydration from the messages table is byte-identical and provider
-// caches either content-hash (Anthropic / OpenAI Completions / Google)
-// or key off the stable thread_id (OpenAI Responses). These properties
-// lock the invariant in place so a future change that reintroduces a
-// fidelity flip on resume fails loudly.
+// Property-based tests pinning the "threaded transcript is invariant
+// across daemon restarts" contract. Rehydration from the messages table
+// is byte-identical and provider caches either content-hash (Anthropic /
+// OpenAI Completions / Google) or key off the stable thread_id (OpenAI
+// Responses). These properties lock the invariant in place so a future
+// change that reintroduces a thread-content flip on resume fails loudly.
 //
 // Scripted faux responses keep the Agent loop deterministic: each
 // `PiCodergenBackend.run()` invocation pops exactly one AssistantMessage
@@ -15,23 +14,22 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { type FauxResponseStep, fauxAssistantMessage, fauxText, registerFauxProvider } from "@mariozechner/pi-ai";
-import type { FidelityMode, Node } from "@swarm/core";
+import type { Node } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
 import fc from "fast-check";
-import { computeResumeDecision, PiCodergenBackend } from "../src/backend.ts";
+import { PiCodergenBackend } from "../src/backend.ts";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";
 
 // ───── Helpers ─────────────────────────────────────────────────────────
 
-function nodeOn(threadId: string, fidelity: FidelityMode = "full"): Node {
+function nodeOn(threadId: string): Node {
   return {
     id: threadId,
     attrs: {
       shape: "box",
       prompt: `turn on ${threadId}`,
-      fidelity,
       thread_id: threadId,
     },
     classes: [],
@@ -89,7 +87,6 @@ interface DaemonHarness {
     backend: PiCodergenBackend,
     runId: string,
     threadId: string,
-    fidelity?: FidelityMode,
   ): Promise<{ finalMessages: AgentMessage[] }>;
   /** Tears down the faux registration. */
   dispose(): void;
@@ -110,9 +107,9 @@ function newDaemon(store: SqliteStore, responses: FauxResponseStep[]): DaemonHar
         inProcessWrites,
       });
     },
-    async dispatch(backend, runId, threadId, fidelity = "full") {
+    async dispatch(backend, runId, threadId) {
       const ctx = await ctxFor(runId, store, threadId);
-      const spec = makeCodergenHandler({ node: nodeOn(threadId, fidelity), backend });
+      const spec = makeCodergenHandler({ node: nodeOn(threadId), backend });
       await spec.handler(ctx);
       // Return the full persisted transcript for this run (all threads).
       const rows = store.getMessages(runId);
@@ -148,7 +145,7 @@ function reseedInProcessWrites(store: SqliteStore): Set<string> {
 
 // ───── Property 1 — byte-identical transcript across arbitrary restart pattern ─
 
-describe("fidelity=full is content-invariant across daemon restart patterns", () => {
+describe("threaded transcript is content-invariant across daemon restart patterns", () => {
   test("identical scripted responses → identical final transcript regardless of restart mask", async () => {
     await fc.assert(
       fc.asyncProperty(
@@ -166,7 +163,7 @@ describe("fidelity=full is content-invariant across daemon restart patterns", ()
               const backend = h.makeBackend(writes);
               let last: AgentMessage[] = [];
               for (let i = 0; i < turns; i++) {
-                ({ finalMessages: last } = await h.dispatch(backend, "r", "dev", "full"));
+                ({ finalMessages: last } = await h.dispatch(backend, "r", "dev"));
               }
               return last;
             } finally {
@@ -186,7 +183,7 @@ describe("fidelity=full is content-invariant across daemon restart patterns", ()
               const h = newDaemon(store, scriptedResponses(7, turns).slice(i, i + lifeTurns));
               try {
                 const backend = h.makeBackend(writes);
-                ({ finalMessages: last } = await h.dispatch(backend, "r", "dev", "full"));
+                ({ finalMessages: last } = await h.dispatch(backend, "r", "dev"));
               } finally {
                 h.dispose();
               }
@@ -229,7 +226,7 @@ describe("inProcessWrites boot reconstruction matches live in-process state", ()
             const writes = new Set<string>();
             const backend = h.makeBackend(writes);
             for (const op of ops) {
-              await h.dispatch(backend, op.runId, op.threadId, "full");
+              await h.dispatch(backend, op.runId, op.threadId);
             }
             const rebuilt = reseedInProcessWrites(store);
             // Rebuilt is derived from persisted messages + llm.start events:
@@ -280,20 +277,15 @@ describe("resume detection never false-positives within a live daemon", () => {
             for (const op of ops) {
               const key = `${op.runId}::${op.threadId}`;
               const hadBefore = seen.has(key);
-              // Snapshot the decision at dispatch time. We reuse the pure
-              // helper against the same Set + the persisted transcript.
+              // Snapshot resume detection (inlined in backend.run) against
+              // the same Set + persisted transcript. Formula:
+              //   resumed = priorLen > 0 && !inProcessWrites.has(key)
               const priorBefore = store.getMessages(op.runId).filter((m) => m.nodeId === op.threadId).length;
-              const decision = computeResumeDecision({
-                fidelity: "full",
-                isFresh: false,
-                threadId: op.threadId,
-                externalPriorLen: priorBefore,
-                hasInProcessWrite: writes.has(key),
-              });
+              const resumed = priorBefore > 0 && !writes.has(key);
               if (hadBefore) {
-                expect(decision.resumed).toBe(false);
+                expect(resumed).toBe(false);
               }
-              await h.dispatch(backend, op.runId, op.threadId, "full");
+              await h.dispatch(backend, op.runId, op.threadId);
               seen.add(key);
             }
           } finally {
@@ -323,7 +315,7 @@ describe("restart-at-turn-k preserves the final transcript byte-for-byte", () =>
             const backend = h.makeBackend(writes);
             let last: AgentMessage[] = [];
             for (let i = 0; i < turns; i++) {
-              ({ finalMessages: last } = await h.dispatch(backend, "r", "dev", "full"));
+              ({ finalMessages: last } = await h.dispatch(backend, "r", "dev"));
             }
             return last;
           } finally {
@@ -340,7 +332,7 @@ describe("restart-at-turn-k preserves the final transcript byte-for-byte", () =>
             const writes = new Set<string>();
             const backend = pre.makeBackend(writes);
             for (let i = 0; i < restartAt; i++) {
-              ({ finalMessages: last } = await pre.dispatch(backend, "r", "dev", "full"));
+              ({ finalMessages: last } = await pre.dispatch(backend, "r", "dev"));
             }
           } finally {
             pre.dispose();
@@ -352,7 +344,7 @@ describe("restart-at-turn-k preserves the final transcript byte-for-byte", () =>
             const writes = reseedInProcessWrites(store);
             const backend = post.makeBackend(writes);
             for (let i = restartAt; i < turns; i++) {
-              ({ finalMessages: last } = await post.dispatch(backend, "r", "dev", "full"));
+              ({ finalMessages: last } = await post.dispatch(backend, "r", "dev"));
             }
           } finally {
             post.dispose();
@@ -384,7 +376,7 @@ describe("restart walkthrough — example-based", () => {
       try {
         const writes = new Set<string>();
         const backend = h.makeBackend(writes);
-        await h.dispatch(backend, "r", "dev", "full");
+        await h.dispatch(backend, "r", "dev");
       } finally {
         h.dispose();
       }
@@ -401,7 +393,7 @@ describe("restart walkthrough — example-based", () => {
         // restart signal stays observational.
         expect(writes.has("r::dev")).toBe(true);
         const backend = h.makeBackend(writes);
-        await h.dispatch(backend, "r", "dev", "full");
+        await h.dispatch(backend, "r", "dev");
       } finally {
         h.dispose();
       }
@@ -426,19 +418,14 @@ describe("restart walkthrough — example-based", () => {
       // Same pattern as the daemon: one backend per node, shared Set.
       const implement = h.makeBackend(writes);
       const verify = h.makeBackend(writes);
-      await h.dispatch(implement, "r", "dev", "full");
+      await h.dispatch(implement, "r", "dev");
       // At dispatch time for `verify`, the shared Set already has r::dev.
       expect(writes.has("r::dev")).toBe(true);
-      const decision = computeResumeDecision({
-        fidelity: "full",
-        isFresh: false,
-        threadId: "dev",
-        externalPriorLen: store.getMessages("r").length,
-        hasInProcessWrite: writes.has("r::dev"),
-      });
-      expect(decision.resumed).toBe(false);
-      expect(decision.effectiveFidelity).toBe("full");
-      await h.dispatch(verify, "r", "dev", "full");
+      // Inlined resume detection: resumed iff priorLen > 0 AND not in writes.
+      const priorLen = store.getMessages("r").length;
+      const resumed = priorLen > 0 && !writes.has("r::dev");
+      expect(resumed).toBe(false);
+      await h.dispatch(verify, "r", "dev");
     } finally {
       h.dispose();
       store.close();

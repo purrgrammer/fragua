@@ -44,7 +44,7 @@ Errors fail validation; warnings are strong hints. Source: `packages/core/src/en
 | W007 | `goal_gate=true` node has no retarget at any level — failure can only halt. |
 | W008 | `retry_policy` / `default_retry_policy` is not a known preset (`none|standard|aggressive|linear|patient`). |
 | W009 | Codergen (`box`) node has empty `prompt` and empty `label`. |
-| W010 | `fidelity` value not recognised — runtime falls back to `compact`; surfaces typos like `compcat`. |
+| E027 | `summary=low\|medium\|high` set on a node without `thread_id` — summarising nothing has no effect. |
 | W011 | Codergen (`box`) node declares bare `model` / `provider` without the `llm_` prefix. The agent backend reads only `llm_model` / `llm_provider`; bare keys are silently dropped and the run falls through to the daemon default. Suppressed when the prefixed form is set OR a graph `model_stylesheet` rule covers the node. |
 | W012 | Node `type=` and shape resolve to different handlers. `type=` wins at dispatch (attractor §2.6 + §4.2); the warning flags the divergence. Suppress by aligning shape with `type=` or by dropping `type=` when it duplicates the shape's canonical handler. |
 | W013 | Unrecognised attribute name on a node, edge, or graph. The parser passes unknown attributes through silently (`NodeAttrs[extra: string]`); this lint catches typos like `goalgate=true` or `max_ms=…` (the runtime expects `maxMs`). Canonical list: `packages/core/src/types/graph.ts` (`NodeAttrs` / `EdgeAttrs` / `GraphAttrs`). |

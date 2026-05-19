@@ -456,35 +456,34 @@ describe("structural lints (attractor §11.2)", () => {
     expect(diags.some((d) => d.code === "W009")).toBe(false);
   });
 
-  test("W010: fidelity not a known mode", () => {
+  test("E027: summary= requires thread_id", () => {
     const diags = validate(
       parseDotSource(`
         digraph {
           s [shape=Mdiamond]
-          work [shape=box, fidelity="compcat"]
+          work [shape=box, prompt="hi", summary="medium"]
           done [shape=Msquare]
           s -> work -> done
         }
       `),
     );
-    const w010 = diags.find((d) => d.code === "W010");
-    expect(w010).toBeDefined();
-    expect(w010?.nodeId).toBe("work");
+    const e027 = diags.find((d) => d.code === "E027");
+    expect(e027).toBeDefined();
+    expect(e027?.nodeId).toBe("work");
   });
 
-  test("W010: graph default_fidelity not a known mode", () => {
+  test("E027 not raised when summary paired with thread_id", () => {
     const diags = validate(
       parseDotSource(`
         digraph {
-          graph [default_fidelity="weird"]
           s [shape=Mdiamond]
-          a [shape=box]
+          work [shape=box, prompt="hi", thread_id="t1", summary="medium"]
           done [shape=Msquare]
-          s -> a -> done
+          s -> work -> done
         }
       `),
     );
-    expect(diags.some((d) => d.code === "W010" && d.message.includes("graph"))).toBe(true);
+    expect(diags.some((d) => d.code === "E027")).toBe(false);
   });
 });
 
@@ -784,9 +783,9 @@ describe("type override + unknown-attribute lints (attractor §2.6 / §4.2)", ()
     const diags = validate(
       parseDotSource(`
         digraph {
-          graph [goal="x", default_fidelity="compact", budget_usd=5.0]
+          graph [goal="x", budget_usd=5.0]
           s [shape=Mdiamond]
-          work [prompt="hi", allowed_tools="read", llm_model="claude-sonnet-4-6"]
+          work [prompt="hi", allowed_tools="read", llm_model="claude-sonnet-4-6", thread_id="t1", summary="low"]
           done [shape=Msquare]
           s -> work -> done [label="ok", outcome=success]
         }

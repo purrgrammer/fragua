@@ -19,7 +19,6 @@ digraph analyze {
   graph [
     goal             = "Mine recent swarm runs for cost, confusion, and redundancy patterns; emit ranked, evidence-backed hypotheses for workflow improvements."
     label            = "analyze"
-    default_fidelity = "compact"
     budget_usd       = 1.50
     model_stylesheet = "* { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }"
   ]

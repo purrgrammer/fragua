@@ -12,7 +12,7 @@
 //   - `summary.started` / `summary.text_delta` / `summary.completed` and
 //     `cost.recorded` ride under the synthetic node id `__summary.title`
 //     via `appendObservabilityEvents`. This is the same event trail
-//     fidelity-mode summaries produce — cost flows into the same run-
+//     per-node `summary=` calls produce — cost flows into the same run-
 //     level ledger with no bespoke aggregation.
 //   - On success we append one more observability event
 //     `run.title_generated` and project the title onto

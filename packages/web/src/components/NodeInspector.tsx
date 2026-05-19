@@ -106,7 +106,7 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
        *  conditional / heuristic parallel.fan_in) even when the
        *  stylesheet cascade resolved an llm_model. */}
       {llmRelevant &&
-        (attrs.llm_model || attrs.llm_provider || attrs.context || attrs.fidelity || attrs.reasoning_effort) && (
+        (attrs.llm_model || attrs.llm_provider || attrs.summary || attrs.reasoning_effort) && (
           <Section title="model & context">
             {attrs.llm_model && <Field label="model" value={<code className="text-sw-text">{attrs.llm_model}</code>} />}
             {attrs.llm_provider && (
@@ -120,9 +120,8 @@ export function NodeInspector({ node, state, className }: NodeInspectorProps): J
                 }
               />
             )}
-            {attrs.context && <Field label="context" value={<code className="text-sw-text">{attrs.context}</code>} />}
-            {attrs.fidelity && (
-              <Field label="fidelity" value={<code className="text-sw-text">{attrs.fidelity}</code>} />
+            {attrs.summary && (
+              <Field label="summary" value={<code className="text-sw-text">{attrs.summary}</code>} />
             )}
             {attrs.reasoning_effort && (
               <Field label="reasoning" value={<code className="text-sw-text">{attrs.reasoning_effort}</code>} />

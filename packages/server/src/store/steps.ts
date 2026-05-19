@@ -84,7 +84,7 @@ export interface StepSnapshot {
   // ---- what the agent was asked ----
   provider?: string;
   model?: string;
-  fidelity?: string;
+  summary?: string;
   /** Set on sub-agent steps to the parent step's nodeId so the UI
    *  renders sub-agent rows indented under the calling parent. */
   parentNodeId?: string;
@@ -509,8 +509,8 @@ function assignOptional(step: StepSnapshot, data: Record<string, unknown>): void
   if (provider) step.provider = provider;
   const model = stringField(data, "model");
   if (model) step.model = model;
-  const fidelity = stringField(data, "fidelity");
-  if (fidelity) step.fidelity = fidelity;
+  const summary = stringField(data, "summary");
+  if (summary) step.summary = summary;
   const iteration = iterationField(data, "iteration");
   if (iteration) step.iteration = iteration;
 }

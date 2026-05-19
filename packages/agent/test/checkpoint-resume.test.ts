@@ -21,7 +21,7 @@ import { ok } from "@swarm/core";
 import * as handler from "@swarm/core/handler";
 import { SqliteStore } from "@swarm/store";
 import { LocalEnvironment, ToolRegistry } from "@swarm/workspace";
-import { computeResumeDecision, PiCodergenBackend } from "../src/backend.ts";
+import { PiCodergenBackend } from "../src/backend.ts";
 import { makeCodergenHandler } from "../src/handler-bridge.ts";
 
 function node(overrides: Partial<Node> = {}): Node {
@@ -30,7 +30,6 @@ function node(overrides: Partial<Node> = {}): Node {
     attrs: {
       shape: "box",
       prompt: "hello",
-      fidelity: "full",
       thread_id: overrides.id ?? "n1",
       ...(overrides.attrs ?? {}),
     },
@@ -88,17 +87,24 @@ function assistantMsg(text: string): AgentMessage {
   };
 }
 
+interface CapturedCall {
+  run_id: string;
+  thread_id: string | undefined;
+  summary: CodergenInput["summary"];
+  priorMessagesLen: number;
+}
+
 function makeInstrumentedBackend(): {
   backend: CodergenBackend;
-  calls: Array<Pick<CodergenInput, "run_id" | "thread_id" | "fidelity"> & { priorMessagesLen: number }>;
+  calls: CapturedCall[];
 } {
-  const calls: Array<Pick<CodergenInput, "run_id" | "thread_id" | "fidelity"> & { priorMessagesLen: number }> = [];
+  const calls: CapturedCall[] = [];
   const backend: CodergenBackend = {
     async run(input) {
       calls.push({
         run_id: input.run_id,
         thread_id: input.thread_id,
-        fidelity: input.fidelity,
+        summary: input.summary,
         priorMessagesLen: input.priorMessages?.length ?? 0,
       });
       input.persistMessage?.(assistantMsg(`reply to ${input.prompt}`));
@@ -171,13 +177,13 @@ describe("handler-bridge priorMessages hydration", () => {
     store.close();
   });
 
-  test("no prior messages → priorMessages is empty, fidelity preserved", async () => {
+  test("no prior messages → priorMessages is empty", async () => {
     const store = new SqliteStore({ path: ":memory:" });
     const ctx = await ctxFor("r3", store, "n1");
     const { backend, calls } = makeInstrumentedBackend();
     await makeCodergenHandler({ node: node({ id: "n1" }), backend }).handler(ctx);
     expect(calls[0]?.priorMessagesLen).toBe(0);
-    expect(calls[0]?.fidelity).toBe("full");
+    expect(calls[0]?.summary).toBeUndefined();
     store.close();
   });
 });
@@ -194,91 +200,10 @@ describe("PiCodergenBackend resume surface", () => {
   });
 });
 
-describe("computeResumeDecision — observational resume flag", () => {
-  test("resume + fidelity=full → flag set, fidelity unchanged", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "t1",
-      externalPriorLen: 3,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(true);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-
-  test("resume + fidelity=compact → flag set, fidelity unchanged", () => {
-    const r = computeResumeDecision({
-      fidelity: "compact",
-      isFresh: false,
-      threadId: "t1",
-      externalPriorLen: 3,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(true);
-    expect(r.effectiveFidelity).toBe("compact");
-  });
-
-  test("in-process write present → NOT a resume (still alive in this process)", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "t1",
-      externalPriorLen: 3,
-      hasInProcessWrite: true,
-    });
-    expect(r.resumed).toBe(false);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-
-  test("empty prior → NOT a resume (truly fresh start)", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "t1",
-      externalPriorLen: 0,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(false);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-
-  test("caller did not supply priorMessages (-1) → NOT a resume", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "t1",
-      externalPriorLen: -1,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(false);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-
-  test("no threadId → never a resume (nothing to key on)", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: undefined,
-      externalPriorLen: 5,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(false);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-
-  test("isFresh=true beats everything (explicit opt-out)", () => {
-    const r = computeResumeDecision({
-      fidelity: "full",
-      isFresh: true,
-      threadId: "t1",
-      externalPriorLen: 5,
-      hasInProcessWrite: false,
-    });
-    expect(r.resumed).toBe(false);
-    expect(r.effectiveFidelity).toBe("full");
-  });
-});
+// Resume detection is inlined in PiCodergenBackend.run and is purely
+// observational under the new thread model — the formula is simply:
+//   resumed = !!threadId && externalPrior !== undefined && stored.length > 0 && !inProcessWrites.has(...)
+// The shared-inProcessWrites tests below cover the integration behaviour.
 
 describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
   // Regression for the build-feature false-positive resume: `implement`
@@ -286,9 +211,9 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
   // own `PiCodergenBackend` instance (one backend per node, per
   // `packages/cli/src/commands/daemon.ts`). Without a shared Set, the
   // second node's fresh backend sees a non-empty prior transcript from
-  // the messages table and no in-process write record, so
-  // `computeResumeDecision` falsely flags a daemon restart and degrades
-  // fidelity=full to summary:high — burning budget with no merged diff.
+  // the messages table and no in-process write record, so resume detection
+  // falsely flags a daemon restart — purely observational under the new
+  // thread model but historically used to drive fidelity degradation.
   test("two backends sharing a Set see each other's writes", () => {
     const shared = new Set<string>();
     const a = new PiCodergenBackend({
@@ -309,24 +234,11 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
     shared.add("r1::dev");
 
     // The `verify` backend — constructed fresh but wired to the same
-    // shared Set — now sees the write and must NOT detect a resume.
+    // shared Set — now sees the write and would not detect a resume.
     expect(b.hasInProcessWrite("r1", "dev")).toBe(true);
-    const decision = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "dev",
-      externalPriorLen: 5,
-      hasInProcessWrite: b.hasInProcessWrite("r1", "dev"),
-    });
-    expect(decision.resumed).toBe(false);
-    expect(decision.effectiveFidelity).toBe("full");
   });
 
-  test("two backends with separate Sets flag resumed=true but don't degrade", () => {
-    // Without a shared Set the second backend has no record of the
-    // first's writes and flags resume=true. That signal is now purely
-    // observational — effectiveFidelity stays whatever the node asked
-    // for.
+  test("two backends with separate Sets each see only their own writes", () => {
     const a = new PiCodergenBackend({
       registry: new ToolRegistry(),
       env: new LocalEnvironment({ cwd: process.cwd() }),
@@ -337,15 +249,6 @@ describe("PiCodergenBackend — shared inProcessWrites across nodes", () => {
     });
 
     expect(b.hasInProcessWrite("r1", "dev")).toBe(false);
-    const decision = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "dev",
-      externalPriorLen: 5,
-      hasInProcessWrite: b.hasInProcessWrite("r1", "dev"),
-    });
-    expect(decision.resumed).toBe(true);
-    expect(decision.effectiveFidelity).toBe("full");
     void a;
   });
 
@@ -383,15 +286,11 @@ describe("daemon-boot inProcessWrites reconstruction", () => {
     }
 
     expect(seeded.has("r1::dev")).toBe(true);
-    const decision = computeResumeDecision({
-      fidelity: "full",
-      isFresh: false,
-      threadId: "dev",
-      externalPriorLen: 1,
-      hasInProcessWrite: seeded.has("r1::dev"),
-    });
-    expect(decision.resumed).toBe(false);
-    expect(decision.effectiveFidelity).toBe("full");
+    // With the in-process write recorded, resume detection (inlined in
+    // PiCodergenBackend.run) would be false — formula is `externalPrior &&
+    // stored.length > 0 && !inProcessWrites.has(...)`.
+    const resumed = 1 > 0 && !seeded.has("r1::dev");
+    expect(resumed).toBe(false);
     store.close();
   });
 

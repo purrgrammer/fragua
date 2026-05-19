@@ -23,7 +23,6 @@ digraph rollup {
   graph [
     goal                  = "Consume the latest terminal run of each drift workflow + a fresh health snapshot; produce a prioritised findings table, Idea/Architecture/Execution ratings, and top recommendations."
     label                 = "rollup"
-    default_fidelity      = "compact"
     budget_usd            = 3.50
     budget_policy         = "warn"
     max_goal_gate_retries = 2
@@ -50,7 +49,6 @@ digraph rollup {
   verify [
     class         = "heavy"
     thread_id     = "rollup"
-    fidelity      = "full"
     goal_gate     = true
     retry_target  = "synthesize"
     max_cost_usd  = 0.75

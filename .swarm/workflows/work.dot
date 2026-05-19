@@ -26,7 +26,6 @@ digraph work {
   graph [
     goal                  = "Triage a task and route it through the right plan/implement/review/ci pipeline."
     label                 = "work"
-    default_fidelity      = "compact"
     max_goal_gate_retries = 3
     model_stylesheet      = "
       *             { llm_provider: anthropic; llm_model: claude-sonnet-4-6; }
@@ -61,7 +60,6 @@ digraph work {
 
     review [
       thread_id     = "dev"
-      fidelity      = "full"
       goal_gate     = true
       retry_target  = "implement"
       allowed_tools = "read, grep, bash"

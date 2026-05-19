@@ -3,7 +3,7 @@
 // a `thread_id` can actually share a transcript — pi-agent-core's
 // `sessionId` is only a provider cache hint, it does NOT restore messages
 // on its own. Without this store, every `backend.run()` would start with
-// an empty transcript and `fidelity=full` (the SPEC's "session reused via
+// an empty transcript and threaded nodes (the SPEC's "session reused via
 // thread_id") would be a lie.
 //
 // The runId is part of the key because backends are shared across runs

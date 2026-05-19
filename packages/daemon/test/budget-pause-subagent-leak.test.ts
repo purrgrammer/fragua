@@ -118,7 +118,6 @@ describe("budget-pause sub-agent leak — overshoot measurement", () => {
           node: { id: "n_parent", shape: "box", attrs: { allowed_tools: ["agent", "read"] }, classes: [] },
           prompt: "spawn a slow sub-agent",
           thread_id: undefined,
-          fidelity: "compact",
           signal: parentSignal.signal,
           run_id: "test-leak",
           workflow_sha: "sha",

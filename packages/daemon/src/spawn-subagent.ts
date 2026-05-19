@@ -84,19 +84,39 @@ export function makeSpawnSubagent(
   parentCtx: SpawnSubagentParentCtx,
 ): (spec: SubagentSpec) => Promise<SubagentResult> {
   return async (spec) => {
-    // Deterministic subagent_id: sha256(parentRunId, parentNodeId,
-    // parentIteration, tool_call_id) truncated to 32 hex chars. Survives
-    // a daemon crash because pi-ai preserves `tool_call_id` byte-identically
-    // on the wire (anthropic.js:847), and the other inputs are stable
-    // across restarts. Two parallel siblings on one assistant message
-    // share parentIteration but get distinct tool_call_ids from pi-ai,
-    // so they hash to distinct ids without collision-handling.
-    const subagentId = createHash("sha256")
+    // Subagent identity, two paths:
+    //
+    //   1. Content-addressed pending-resume lookup. When `spec.args_hash`
+    //      is set, look for a prior bracket in this parent's
+    //      `(parent_node_id, iteration)` scope whose `subagent.start`
+    //      carries a matching `args_hash` AND whose latest terminal is
+    //      `subagent.end{status:"cancelled"}` with no subsequent
+    //      `subagent.resumed`. Pop the OLDEST such bracket — its
+    //      `subagent_id` becomes ours, so the existing hydration path
+    //      below replays its transcript and the spawn emits
+    //      `subagent.resumed` instead of `subagent.start`. This is what
+    //      lets a parent retry that uses byte-identical agent-tool args
+    //      automatically resume the sub-agent's work-so-far after a
+    //      budget pause / provider error / operator pause, without the
+    //      LLM having to remember a resume id.
+    //
+    //   2. Fresh deterministic id: sha256(parentRunId, parentNodeId,
+    //      parentIteration, tool_call_id) truncated to 32 hex chars.
+    //      Survives a daemon crash because pi-ai preserves `tool_call_id`
+    //      byte-identically on the wire (anthropic.js:847), and the other
+    //      inputs are stable across restarts. Two parallel siblings on
+    //      one assistant message share parentIteration but get distinct
+    //      tool_call_ids from pi-ai, so they hash to distinct ids
+    //      without collision-handling.
+    const resumeCandidateId =
+      spec.args_hash !== undefined ? findPendingResumeCandidate(deps.store, parentCtx, spec.args_hash) : undefined;
+    const freshSubagentId = createHash("sha256")
       .update(
         `${parentCtx.parentRunId}\u0000${parentCtx.parentNodeId}\u0000${parentCtx.parentIteration}\u0000${spec.tool_call_id}`,
       )
       .digest("hex")
       .slice(0, 32);
+    const subagentId = resumeCandidateId ?? freshSubagentId;
     const subagentNodeId = `${SUBAGENT_NODE_PREFIX}${subagentId}`;
 
     // Crash-resilience: hydrate the prior transcript for this
@@ -152,22 +172,37 @@ export function makeSpawnSubagent(
       0,
     );
 
+    // Resume decision: either we matched a content-addressed pending
+    // candidate (resumeCandidateId) or this id already has a persisted
+    // transcript (crash-resilience). Emit `subagent.resumed` once,
+    // EAGERLY — before any await that could let a parallel sibling's
+    // findPendingResumeCandidate observe this bracket as still
+    // pending. bun:sqlite writes are synchronous, so the resumed
+    // event lands in the store inside the call below; sibling
+    // findPendingResumeCandidate calls running on the next microtask
+    // see it as consumed (subagentIdsConsumed) and pick a different
+    // candidate or fall back to a fresh id.
+    const isAlreadyComplete = priorMessages.length > 0 && isTranscriptComplete(priorMessages);
+    const isResume = resumeCandidateId !== undefined || priorMessages.length > 0;
+    if (isResume) {
+      await parentCtx.parentEmit("subagent.resumed", {
+        subagent_id: subagentId,
+        reason: isAlreadyComplete ? "already_completed" : "transcript_hydrated",
+      });
+    }
+
     // Already-completed short-circuit: the sub-agent finished pre-crash
     // (last assistant message has stopReason ∈ {stop, endTurn} and no
     // pending toolCalls), but the daemon died before the parent's tool-
     // execute promise resolved. Skip the LLM call entirely; synthesise
-    // SubagentResult from the persisted transcript and emit the
-    // resumed→end pair on the parent's stream. We do NOT re-emit
-    // subagent.start — the original start is still in the event log
-    // from the pre-crash bracket; the new resumed event closes the
-    // gap and the new end carries the cumulative totals (commit 6).
-    if (priorMessages.length > 0 && isTranscriptComplete(priorMessages)) {
+    // SubagentResult from the persisted transcript and emit the close
+    // marker. `subagent.resumed` already fired above. We do NOT emit
+    // `subagent.start` — the original start is still in the event log
+    // from the pre-crash bracket; the new resumed→end pair closes the
+    // gap and the new end carries the cumulative totals.
+    if (isAlreadyComplete) {
       const summary = extractAssistantText(priorMessages[priorMessages.length - 1]!);
       const totalToolCalls = countToolCalls(priorMessages);
-      await parentCtx.parentEmit("subagent.resumed", {
-        subagent_id: subagentId,
-        reason: "already_completed",
-      });
       await parentCtx.parentEmit("subagent.end", {
         subagent_id: subagentId,
         status: "completed",
@@ -271,16 +306,28 @@ export function makeSpawnSubagent(
     // (`agent({ agent: "reviewer", name: "reviewer-1" })`), either
     // alone, or neither (a bare `agent({ prompt })` spawn). See
     // SubagentStartData in @swarm/core/types/events for the schema.
-    await parentCtx.parentEmit("subagent.start", {
-      subagent_id: subagentId,
-      parent_node_id: parentCtx.parentNodeId,
-      iteration: parentCtx.parentIteration,
-      provider: childProvider,
-      model: childModel,
-      ...(spec.name !== undefined ? { name: spec.name } : {}),
-      ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
-      tool_call_id: spec.tool_call_id,
-    });
+    //
+    // Skipped on resume (content-addressed pending-resume match OR
+    // crash-resilience rehydrate): the original `subagent.start` is
+    // already in the event log from the pre-resume bracket carrying
+    // this same `subagent_id`, and the `subagent.resumed` event
+    // emitted above closes the gap. Emitting a second `subagent.start`
+    // would create the appearance of two distinct spawns sharing an
+    // id, which UI grouping + cumulative-cost folds aren't designed
+    // to handle.
+    if (!isResume) {
+      await parentCtx.parentEmit("subagent.start", {
+        subagent_id: subagentId,
+        parent_node_id: parentCtx.parentNodeId,
+        iteration: parentCtx.parentIteration,
+        provider: childProvider,
+        model: childModel,
+        ...(spec.name !== undefined ? { name: spec.name } : {}),
+        ...(spec.agentName !== undefined ? { agent_def: spec.agentName } : {}),
+        tool_call_id: spec.tool_call_id,
+        ...(spec.args_hash !== undefined ? { args_hash: spec.args_hash } : {}),
+      });
+    }
 
     // Forward every observability event the sub-agent emits to the
     // parent's stream. Two payload stamps happen here:
@@ -383,7 +430,6 @@ export function makeSpawnSubagent(
         // separate from the parent's main thread. The backend keys its
         // in-process MessageStore by (runId, threadId).
         thread_id: subagentNodeId,
-        fidelity: "full",
         signal: childCtrl.signal,
         run_id: parentCtx.parentRunId,
         // No workflow document for a sub-agent. Empty string is the
@@ -499,4 +545,60 @@ function countToolCalls(messages: readonly AgentMessage[]): number {
     }
   }
   return n;
+}
+
+/** Find the oldest cancelled-pending sub-agent bracket for this
+ *  parent's `(parent_node_id, iteration)` scope whose `subagent.start`
+ *  carries a matching `args_hash`. "Cancelled-pending" = latest
+ *  terminal is `subagent.end{status:"cancelled"}` with no subsequent
+ *  `subagent.resumed{subagent_id}` consuming it.
+ *
+ *  Returns the matched `subagent_id` so the caller can reuse it as
+ *  the new spawn's id — the existing hydration path then replays the
+ *  prior transcript and emits `subagent.resumed`, which makes the
+ *  next call see this bracket as consumed.
+ *
+ *  Same-args parallel siblings: each consumes ONE pending entry per
+ *  spawn (FIFO). The caller's existing fresh-id path handles the
+ *  overflow when more new spawns arrive than there are pending ones
+ *  to match. */
+function findPendingResumeCandidate(
+  store: IEventStore,
+  parentCtx: SpawnSubagentParentCtx,
+  argsHash: string,
+): string | undefined {
+  const starts = store.getEventsByType(parentCtx.parentRunId, "subagent.start");
+  const ends = store.getEventsByType(parentCtx.parentRunId, "subagent.end");
+  const resumes = store.getEventsByType(parentCtx.parentRunId, "subagent.resumed");
+  const subagentIdsConsumed = new Set<string>();
+  for (const r of resumes) {
+    const sid = (r.payload as { subagent_id?: string }).subagent_id;
+    if (typeof sid === "string") subagentIdsConsumed.add(sid);
+  }
+  // Map subagent_id → latest terminal status (last end event wins).
+  const latestStatus = new Map<string, string>();
+  for (const e of ends) {
+    const p = e.payload as { subagent_id?: string; status?: string };
+    if (typeof p.subagent_id === "string" && typeof p.status === "string") {
+      latestStatus.set(p.subagent_id, p.status);
+    }
+  }
+  // Walk starts in seq order (getEventsByType returns ASC) so the
+  // FIRST pending match is the oldest — the FIFO semantic.
+  for (const s of starts) {
+    const p = s.payload as {
+      subagent_id?: string;
+      parent_node_id?: string;
+      iteration?: number;
+      args_hash?: string;
+    };
+    if (typeof p.subagent_id !== "string") continue;
+    if (p.parent_node_id !== parentCtx.parentNodeId) continue;
+    if (p.iteration !== parentCtx.parentIteration) continue;
+    if (p.args_hash !== argsHash) continue;
+    if (latestStatus.get(p.subagent_id) !== "cancelled") continue;
+    if (subagentIdsConsumed.has(p.subagent_id)) continue;
+    return p.subagent_id;
+  }
+  return undefined;
 }

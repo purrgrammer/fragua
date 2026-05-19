@@ -214,7 +214,7 @@ One token expands in node `prompt` and `tool_command` strings before the handler
 |---|---|
 | `$ARGUMENTS` | The run's `--input` text (CLI positional or `POST /runs` body). |
 
-Cross-node data transfer happens through **shared threads + fidelity** (§3.3), not through prompt substitution. Two codergens with the same `thread_id="…"` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
+Cross-node data transfer happens through **shared threads** (§3.3), not through prompt substitution. Two codergens with the same `thread_id="…"` share the LLM conversation — downstream nodes see upstream replies as regular assistant messages in their context. A receiving node may set `summary=low|medium|high` to see a summariser-compressed view of the prior thread instead of the raw history. When the producer doesn't share a thread with the consumer (rare; usually a sign to redesign), the consumer re-derives the data inside its own turn via the `bash` / `read` tools.
 
 Tool nodes (parallelogram, §3.1) are side-effect-only: exit 0 → `outcome=success`, non-zero → `outcome=fail`. They do not feed data forward. Workflows that need to run a deterministic script and reason about its output should call the script from inside a codergen's `bash` tool instead of synthesising a tool-node-then-codergen chain.
 
@@ -286,7 +286,7 @@ Enforced by structural lints (`packages/store/test/lint.test.ts`, `packages/core
 - **`tool_hooks.pre` / `tool_hooks.post`** (attractor §9.7). The agent backend handles tool interception.
 - **Interviewer interface** (attractor §6). Replaced by `human` nodes (DOT alias: `shape=hexagon`) plus the `intent.human_input` event.
 - **`auto_status` node attribute** (attractor §2.6 / Appendix C). Swarm handlers return a typed `HandlerResult`; there is no missing-status path to synthesize. Validator: `W014`.
-- **`loop_restart` edge attribute** (attractor §2.7). Context resets happen via per-edge `fidelity=truncate|compact|summary:*`; full restarts happen by enqueueing a new run. Validator: `W014`.
+- **`loop_restart` edge attribute** (attractor §2.7). Context isolation happens at the node level: a node without `thread_id` runs fresh, a threaded node may set `summary=low|medium|high` for a summariser-compressed view. Full restarts happen by enqueueing a new run. Validator: `W014`.
 - **Graph-level parallel / fan-in primitive** (attractor §4.8 / §4.9). The `component` (parallel) and `tripleoctagon` (parallel.fan_in) shapes are not honored; the executor has no fan-out / fan-in primitive. Concurrent dispatch lives in the codergen `agent` tool — a single codergen with `agent` in `allowed_tools` spawns N sub-agents in one turn and synthesises in its own thread (see `review.dot` / `orchestrate.dot`).
 
 **Surfaced as warnings, not errors:**

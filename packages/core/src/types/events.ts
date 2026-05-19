@@ -5,11 +5,11 @@
 // so web + agent + daemon can import it without pulling in core's
 // pure-reducer dep tree. Envelope shapes (data payloads, EventPayloadMap,
 // FactEvent / IntentEvent / ObservabilityEvent) stay here — they carry
-// core-specific types (Outcome, FidelityMode, SummaryPurpose).
+// core-specific types (Outcome, SummaryLevel, SummaryPurpose).
 
 import type { EventType } from "@swarm/types";
-import type { FidelityMode } from "./fidelity.ts";
 import type { Outcome } from "./outcome.ts";
+import type { SummaryLevel } from "./summary.ts";
 
 export type { EventType } from "@swarm/types";
 
@@ -60,10 +60,10 @@ export interface NodeStartedData {
   model?: string;
   /** Provider hint from `node.attrs.llm_provider`. */
   provider?: string;
-  /** Resolved thread id (see engine/fidelity.ts). */
+  /** Resolved thread id (see engine/thread.ts). */
   thread_id?: string;
-  /** Resolved fidelity mode (see engine/fidelity.ts). */
-  fidelity?: FidelityMode;
+  /** Resolved summary level (see node.attrs.summary). */
+  summary?: SummaryLevel;
   /** Tool allowlist from `node.attrs.allowed_tools`. */
   allowed_tools?: string[];
   /** Tool denylist from `node.attrs.denied_tools`. */
@@ -192,13 +192,13 @@ export interface SummaryStartedData {
   purpose: SummaryPurpose;
   provider?: string;
   model?: string;
-  /** Real node id that triggered this compression, when purpose="fidelity". */
+  /** Real node id that triggered this compression, when purpose="thread". */
   caller_node_id?: string;
   /** Iteration metadata if the caller is a loop (copied from the caller's
    * own `llm.start.iteration`). */
   iteration?: { n: number; max: number };
-  /** The fidelity mode that caused the call (e.g. `summary:medium`). */
-  fidelity?: FidelityMode;
+  /** The summary level that caused the call (e.g. `medium`). */
+  summary?: SummaryLevel;
 }
 
 /** Streaming delta from a summariser call. Fires N times between
@@ -225,15 +225,15 @@ export interface SummaryCompletedData {
   model?: string;
   caller_node_id?: string;
   iteration?: { n: number; max: number };
-  fidelity?: FidelityMode;
+  summary?: SummaryLevel;
   /** Tokens in — prior messages + goal + any purpose-specific framing. */
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
   duration_ms: number;
   /** For `purpose="title"` this is the full title (≤80 chars by convention).
-   * For `purpose="fidelity"` this is the narrative tail embedded in the
-   * caller's fidelity seed. UIs may clamp. */
+   * For `purpose="thread"` this is the narrative tail embedded in the
+   * caller's prompt seed. UIs may clamp. */
   output_text: string;
   /** Populated when the summariser refused / failed. Paired with
    * `output_text === ""` so a replay consumer can tell "no summary" from
@@ -413,6 +413,17 @@ export interface SubagentStartData {
    *  the canonical link in `details.data.subagent_id` — has landed.
    *  Optional for back-compat with hand-rolled test events. */
   tool_call_id?: string;
+  /** Content-addressed hash of the spawn's canonical args (prompt,
+   *  system_prompt, allowed_tools, disallowed_tools, skills,
+   *  max_iterations, agent_def, model, provider). Lets a re-spawn
+   *  with identical args find this bracket as a pending-resume
+   *  candidate when the prior spawn ended `cancelled` — the FIFO
+   *  queue keyed by `(parent_run, parent_node_id, iteration,
+   *  args_hash)` is what powers automatic sub-agent resume across a
+   *  pause/abort without requiring the LLM to thread an explicit
+   *  resume id. Optional only because tests / pre-feature events
+   *  can lack it; production spawns always set it. */
+  args_hash?: string;
 }
 
 /** `subagent.end.data` — closes the bracket. Carries terminal status

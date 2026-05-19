@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import { type AssistantMessage, getModel, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import type { CodergenBackend, CodergenInput, EventType, FidelityMode, Outcome, SummariserBackend } from "@swarm/core";
+import type { CodergenBackend, CodergenInput, EventType, Outcome, SummariserBackend } from "@swarm/core";
 import { fail, failHalt, failProvider, ok } from "@swarm/core";
 import { makeHttpClient } from "@swarm/core/handler";
 import type {
@@ -26,7 +26,7 @@ import {
   toCatalogRecord,
 } from "@swarm/workspace";
 import { bridgeAgentEvent, costPayload } from "./event-bridge.ts";
-import { buildFidelitySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./fidelity.ts";
+import { buildSummarySeed, resolveSessionId, shouldHydrateFromStore, shouldPersistToStore } from "./thread.ts";
 import { MessageStore } from "./message-store.ts";
 import { SteeringRegistry } from "./steering-registry.ts";
 import { applyDefaultContextFiles, buildSystemPrompt, loadContextFiles, type RunEnvironment } from "./system-prompt.ts";
@@ -52,9 +52,9 @@ export interface PiCodergenBackendOptions {
   defaultModel?: { provider: string; model: string };
   /** Optional system prompt prepended to every run. Tests may omit this. */
   systemPrompt?: string;
-  /** Optional summariser used for `fidelity=summary:medium/high`. When
-   * omitted those modes fall back to the deterministic `summary:low`
-   * template with a soft warning. */
+  /** Optional summariser used for per-node `summary=low|medium|high`.
+   * When omitted, the summary path falls back to a deterministic
+   * role-census + tail template with a soft warning. */
   summariser?: SummariserBackend;
   /** Skills discovered by the CLI at startup (see @swarm/workspace
    * `discoverSkills`). Filtered per-node via `node.attrs.skills` and
@@ -180,11 +180,11 @@ export class PiCodergenBackend implements CodergenBackend {
   private readonly runEnv: RunEnvironment | undefined;
   /** Per-(runId, threadId) flags marking threads this daemon has dispatched
    * on. A load of a non-empty transcript for a (run, thread) whose key is
-   * missing is the resume signal — purely observational now: fidelity is
-   * invariant across restarts, rehydration is byte-identical, and provider
-   * caches either key off the stable thread_id (OpenAI Responses) or the
-   * content itself (Anthropic / OpenAI Completions / Google). Shared across
-   * every PiCodergenBackend in the daemon when the caller wires
+   * missing is the resume signal — purely observational: thread hydration
+   * is invariant across restarts, rehydration is byte-identical, and
+   * provider caches either key off the stable thread_id (OpenAI Responses)
+   * or the content itself (Anthropic / OpenAI Completions / Google). Shared
+   * across every PiCodergenBackend in the daemon when the caller wires
    * `opts.inProcessWrites` (see `packages/cli/src/commands/daemon.ts`);
    * per-instance otherwise. Purely in-memory — never persisted. */
   private readonly inProcessWrites: Set<string>;
@@ -460,14 +460,13 @@ export class PiCodergenBackend implements CodergenBackend {
       Object.assign(swarmContext, { spawnSubagent: this.spawnSubagentFactory(parentCtx) });
     }
 
-    // Fidelity policy gates. `context="fresh"` on a node is a hard opt-out
-    // of any cross-node transcript sharing — it wins over thread_id and
-    // fidelity=full alike. Anything else follows the per-mode rules in
-    // ./fidelity.ts.
-    const isFresh = input.node.attrs["context"] === "fresh";
+    // Thread policy gates. A node with a resolved thread_id participates
+    // in the shared transcript: hydrate prior turns on dispatch, persist
+    // own transcript on completion. A node without a thread_id runs fresh.
     const threadId = input.thread_id;
-    const hydrate = shouldHydrateFromStore(input.fidelity, isFresh);
-    const persist = shouldPersistToStore(input.fidelity, isFresh);
+    const hasThread = !!threadId;
+    const hydrate = shouldHydrateFromStore(hasThread);
+    const persist = shouldPersistToStore(hasThread);
 
     // Pull the prior transcript. `input.priorMessages` is populated by
     // the executor from the messages table when a prior transcript
@@ -477,30 +476,27 @@ export class PiCodergenBackend implements CodergenBackend {
     // skip priorMessages still see consistent behaviour inside one
     // process.
     const externalPrior = Array.isArray(input.priorMessages) ? (input.priorMessages as AgentMessage[]) : undefined;
-    const storedForThread: AgentMessage[] =
-      !isFresh && threadId ? (externalPrior ?? this.messageStore.get(input.run_id, threadId)) : [];
+    const storedForThread: AgentMessage[] = threadId
+      ? (externalPrior ?? this.messageStore.get(input.run_id, threadId))
+      : [];
     if (externalPrior !== undefined && threadId) {
       // Keep the in-memory cache in sync so a subsequent same-process
       // call that omits priorMessages still sees the right history.
       this.messageStore.set(input.run_id, threadId, storedForThread);
     }
 
-    // Resume detection — purely observational. Fidelity is invariant
-    // across daemon restarts: rehydration from the messages table is
-    // byte-identical, so Anthropic / OpenAI-Completions / Google hit their
-    // content-addressed prompt caches on identical prefixes, and the
-    // OpenAI-Responses family's `prompt_cache_key` is derived from the
+    // Resume detection — purely observational. Thread hydration is
+    // invariant across daemon restarts: rehydration from the messages
+    // table is byte-identical, so Anthropic / OpenAI-Completions / Google
+    // hit their content-addressed prompt caches on identical prefixes, and
+    // the OpenAI-Responses family's `prompt_cache_key` is derived from the
     // stable `thread_id`. The flag lets us log "this thread was last
     // written by a prior process" without changing any behaviour.
-    const decision = computeResumeDecision({
-      fidelity: input.fidelity,
-      isFresh,
-      threadId,
-      externalPriorLen: externalPrior !== undefined ? storedForThread.length : -1,
-      hasInProcessWrite: threadId != null && this.inProcessWrites.has(sessionKey(input.run_id, threadId)),
-    });
-    const resumed = decision.resumed;
-    const effectiveFidelity = decision.effectiveFidelity;
+    const resumed =
+      threadId != null &&
+      externalPrior !== undefined &&
+      storedForThread.length > 0 &&
+      !this.inProcessWrites.has(sessionKey(input.run_id, threadId));
     const effectiveHydrate = hydrate;
     if (resumed && input.emit && threadId) {
       await input.emit("agent.info", {
@@ -529,23 +525,22 @@ export class PiCodergenBackend implements CodergenBackend {
       });
     }
 
-    // Build the fidelity seed prepended to the user prompt for non-full
-    // modes. `full` returns "" and the user prompt is unchanged. `truncate`
-    // / `compact` / `summary:*` produce a <swarm-context> block framing
-    // the agent with goal + run + digest of priorMessages.
+    // Build the summary seed prepended to the user prompt when a node
+    // opted into `summary=low|medium|high`. Otherwise the seed is empty
+    // and the user prompt is unchanged.
     const graphGoal = typeof input.goal === "string" && input.goal.length > 0 ? input.goal : undefined;
     // Summariser events land under synthetic node ids (see
-    // @swarm/core/types/summariser.ts). `buildFidelitySeed` wires the
+    // @swarm/core/types/summariser.ts). `buildSummarySeed` wires the
     // emit callback so `summary.started` / `summary.completed` /
-    // `cost.recorded` for a summary:medium/high call carry the right
-    // node_id on their envelope — not the caller's.
+    // `cost.recorded` for a summary call carry the right node_id on
+    // their envelope — not the caller's.
     const syntheticEmit = input.emit
       ? async (type: EventType, data: Record<string, unknown>, _node_id: string) => {
           await input.emit?.(type, data);
         }
       : undefined;
-    const { seed, warnings: fidelityWarnings } = await buildFidelitySeed({
-      fidelity: effectiveFidelity,
+    const { seed, warnings: summaryWarnings } = await buildSummarySeed({
+      summary: input.summary,
       graphGoal,
       runId: input.run_id,
       priorMessages: storedForThread,
@@ -557,14 +552,14 @@ export class PiCodergenBackend implements CodergenBackend {
       ...(syntheticEmit !== undefined ? { emit: syntheticEmit } : {}),
     });
     if (input.emit) {
-      for (const msg of fidelityWarnings) await input.emit("agent.warning", { message: msg });
+      for (const msg of summaryWarnings) await input.emit("agent.warning", { message: msg });
     }
     const effectivePrompt = seed.length > 0 ? `${seed}\n\n${input.prompt}` : input.prompt;
 
     // sessionId is a provider-cache hint (not a message restore). Pick
-    // the right bucket so cache hits work and different fidelities don't
-    // clobber each other's cache under the same thread.
-    const sessionId = resolveSessionId({ fidelity: effectiveFidelity, threadId, isFresh });
+    // the right bucket so cache hits work and a summary level doesn't
+    // clobber the raw-thread cache under the same thread_id.
+    const sessionId = resolveSessionId({ threadId, summary: input.summary });
 
     // Capture the last HTTP response status pi-ai received per LLM call.
     // Pi-agent-core wires `onResponse` through to its `streamFn`, which in
@@ -757,17 +752,14 @@ export class PiCodergenBackend implements CodergenBackend {
       if (input.signal) input.signal.removeEventListener("abort", abortListener);
     }
 
-    // Persist the final transcript for `full` fidelity on a shared thread
-    // so subsequent nodes with the same thread_id actually see it. Every
-    // other mode is explicitly fresh (SPEC §3.3) and must not contaminate
-    // the full-mode cache under the same thread.
+    // Persist the final transcript on a shared thread so subsequent nodes
+    // with the same thread_id actually see it. Fresh nodes (no thread_id)
+    // never persist — there's no shared transcript to contribute to.
     if (persist && threadId) {
       this.messageStore.set(input.run_id, threadId, agent.state.messages);
     }
     // Stamp `inProcessWrites` whenever a threaded node runs so the next
-    // call in this process isn't misread as a resume. This has to fire
-    // regardless of `persist` — e.g. a compact-mode node on the same
-    // thread still proves "we're alive and past any pre-crash state".
+    // call in this process isn't misread as a resume.
     if (threadId) {
       this.inProcessWrites.add(sessionKey(input.run_id, threadId));
     }
@@ -952,26 +944,9 @@ export function deriveRunEnv(env: ExecutionEnvironment, runId: string): RunEnvir
 }
 
 /** Pure resume-decision helper, extracted for unit testability.
- *
- * `resumed` is purely observational: true when the caller supplied a
- * non-empty prior transcript for a (runId, threadId) that this process
- * has no record of writing. Fidelity is invariant across restarts —
- * rehydration is byte-identical and provider caches either content-hash
- * or key off the stable `thread_id`, so a resumed dispatch and a
- * same-process dispatch produce the same effective context. The flag
- * exists to emit an `agent.info` `thread_rehydrated` signal, not to
- * drive behaviour.
- */
-export function computeResumeDecision(args: {
-  fidelity: FidelityMode;
-  isFresh: boolean;
-  threadId: string | undefined;
-  externalPriorLen: number;
-  hasInProcessWrite: boolean;
-}): { resumed: boolean; effectiveFidelity: FidelityMode } {
-  const resumed = !args.isFresh && args.threadId != null && args.externalPriorLen > 0 && !args.hasInProcessWrite;
-  return { resumed, effectiveFidelity: args.fidelity };
-}
+/** Inlined into PiCodergenBackend.run; kept as a no-op export for the
+ * handful of callers that imported it for type only. Pre-release; will
+ * be removed once those callers are updated. */
 
 function summarizeMessage(message: { role: string; content?: unknown }): string {
   return fullAssistantText(message).slice(0, 4_000);
